@@ -284,23 +284,75 @@ candidate for the sparse case — a competitor to the packed tail, measured in
 the same table — and not a codec. Its cost is the one the reports admit: one
 late sample rewrites an object belonging to fifty series.
 
-## Entropy coding
+## Entropy coding — measured, and larger than expected
 
-Measure the entropy of the residual stream before reaching for a range coder.
-If the residuals are 90% zero, 5% `+1`, 4% `-1` and 1% other, then
+The version of this section that guessed put the prize at 0.056 bytes a sample
+and filed it under P3. The measurement in [measurements.md](measurements.md)
+says otherwise: between what we write and the order-0 entropy of the delta
+alphabet there is 20 to 35 percent, and `huff0` reaches within 6 to 9 percent
+of that bound with its table included.
 
 ```text
-H = 0.605 bits a value
-Simple8b at width 1 = 1 bit + the selector ≈ 1.07
+counter deltas    5.36 bits today   3.77 with huff0   3.46 is the bound
+integer deltas    4.26              3.36              3.17
 ```
 
-so the entire prize is 0.45 bits, or 0.056 bytes a sample — about 5% of a file
-at 1.1 bytes a sample, in exchange for an entropy coder and its tables. A
-cheaper thing to check first is our own selector table: selectors 0 and 1 spend
-themselves on runs of *ones*, but after zigzag the common run is *zeros*, and
-60 zeros currently cost a full 8-byte word. A zero-run selector would make 240
-of them cost eight bytes. Check what the fixtures actually contain before
-changing the table — a released format version cannot move.
+In bytes a sample that is 0.199 off a counter's payload and 0.113 off an
+integer walk's — a fifth to a quarter of the whole payload, on the data class
+this store exists for. It is also the cheapest thing on this page to reach for:
+`huff0` is a package of `klauspost/compress`, already in the module because of
+zstd, so it costs no dependency and no new graph.
+
+What has to be established before it goes in:
+
+```text
+decode cost per sample, against the 2.6 microseconds a block costs now
+the table's cost on a short block — 8 and 16 samples, not only 240
+a corpus, because our alphabets are synthetic and real ones are more skewed
+behaviour when the alphabet is not small, where it must decline rather than bloat
+```
+
+And it is a stream sub-encoding rather than a new value representation: the
+integer and the scaled paths both produce ZigZag deltas, and either can be
+written with Simple8b, with a fixed width, or with `huff0`, whichever comes out
+smallest.
+
+## A fixed width beside Simple8b
+
+Worth having, worth nothing on its own. Simple8b charges the widest value in
+each word, a fixed width charges the widest in the block, and the measurement
+says that is 0.26 to 0.36 bits a delta on three fixtures and a loss on the
+fourth. So it is a second candidate, not a replacement, and its real value is
+that it removes the ladder's gaps — `… 15, 20, 30, 60` — which is what would
+otherwise send a 44-bit ordered-integer residual to 60 bits.
+
+## Stop paying twice for what the block row already holds
+
+The payload begins with eight bytes of first timestamp and eight bytes of first
+value. The row it will live in has `start_ts` as its primary key and `first` as
+a summary column. The payload also carries its own sample count, which the row
+has as `count`, and a fixed step, which is `(end_ts - start_ts) / (count - 1)`.
+
+```text
+first timestamp   8 bytes
+first value       8
+count             2
+step             ~3
+                ────
+                ~21 bytes a block, or 0.0875 a sample
+```
+
+That is 13 percent of a dense integer payload and 23 percent of a decimal one,
+for no new algorithm at all. The envelope has a little more in it: three mode
+bytes fit in one, the `TS` magic duplicates what the checksum already proves,
+and of the two stream lengths the second is the body minus the first — call it
+seven bytes more.
+
+The cost is that the codec stops being self-contained: it has to be told that
+the caller is keeping the first sample. That is not a boundary violation if it
+is stated properly — a block is metadata and a body, and the body need not
+repeat the metadata — but it is an API decision and it belongs to whoever is
+building the store, not to the codec.
 
 ## Corpora, and what beating another engine would have to mean
 
@@ -431,8 +483,11 @@ P1   a real corpus and an analyzer  without them, "we beat X" means nothing
 P1   order-preserving integers      only if the analyzer finds the gap
 P2   one object for many series     a layout question, against the packed tail
 P2   a summary shaped by kind       two columns of waste, after the corpus says
-P2   zero runs, Rice                cheap, after predictors
-P3   Chimp, entropy coding          only against a measured entropy gap
+P1   huff0 over the delta stream    measured at a fifth to a quarter of the payload
+P1   stop repeating the block row   0.0875 a sample, and an API decision first
+P2   a fixed width beside simple8b  0.26 bits, and it unblocks ordered integers
+P2   exceptions in the scaled path  all-or-nothing is the decimal path's weakness
+P3   Chimp, ALP-RD                  against a bound our noisy fixture is already near
 ```
 
 The bar has moved with the floor. `≤1.0 bytes a sample` on dense whole numbers

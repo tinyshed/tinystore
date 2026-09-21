@@ -151,6 +151,50 @@ does not justify making a third storage level mandatory yet. It remains a spike
 until sparse-to-dense transitions, idle-series expiry, concurrent late writes
 and mixed values prove the complexity worthwhile. Mutable BLOBs are unmeasured.
 
+## Where the value stream still has meat
+
+`TestWhereTheValueStreamStillHasMeat`, 64 blocks of 240 samples per workload,
+the same fixtures as everywhere else, measured on Windows. Every column is bits
+per delta over the block's ZigZag deltas, and every compressed column includes
+whatever table or frame that coder needs, one per block — because one per block
+is what the codec writes.
+
+| workload            | simple8b | fixed width | zstd | huff0 | order-0 entropy | distinct symbols |
+|---------------------|----------|-------------|------|-------|-----------------|------------------|
+| integer walk        | 4.26     | 4.00        | 8.44 | 3.36  | 3.17            | 9                |
+| integer counter     | 5.36     | 5.00        | 8.44 | 3.77  | 3.46            | 11               |
+| temperature, tenths | 1.87     | 2.00        | 2.74 | 1.71  | 1.56            | 3                |
+| integers, jittered  | 4.24     | 4.00        | 8.44 | 3.36  | 3.17            | 9                |
+
+Four things.
+
+**Simple8b pays for the widest value in each word**, so a fixed width over the
+whole block is 0.26 to 0.36 bits a delta cheaper on three of the four. On
+temperature it is the other way round, because long runs of narrow values let
+the selector take a more capacious word. Neither wins everywhere, which is an
+argument for both being candidates rather than for replacing one with the other.
+
+**zstd refuses to entropy-code a block this small.** Fed one byte per delta it
+returns 8.44 bits a delta — the 239 bytes stored raw plus a 13-byte frame. So
+"let the general compressor do the entropy coding" does not work at 240 samples,
+which is worth knowing before anyone proposes it again.
+
+**`huff0` lands within 6 to 9 percent of the order-0 entropy, table included**,
+and it is not a new dependency: it is a package of `klauspost/compress`, which
+is already in the module for zstd. On a counter that is 5.36 bits a delta down
+to 3.77, which is 0.199 bytes a sample off the payload.
+
+**The bound itself is the news.** The gap between what we write and the order-0
+entropy of the delta alphabet is 20 to 35 percent, on alphabets of three to
+eleven symbols. That is larger than anything the XOR-family candidates are
+expected to find on the same data.
+
+Two corrections to this measurement, both caught by rerunning it rather than by
+reading it. The first version compared the width of each delta on its own,
+which is not what Simple8b charges; the second compressed all 64 blocks as one
+stream, so zstd found repetition between blocks that a per-block encoder cannot
+have, and reported a triumphant 0.05 bits a delta for temperature.
+
 ## Where a dense block's bytes actually are
 
 `TestWhereADenseBlocksBytesAre`, 10 000 blocks of 240 whole-number samples,
