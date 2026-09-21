@@ -24,15 +24,14 @@ type denseShare struct {
 }
 
 type denseResult struct {
-	class          string
-	blocks         int
-	samples        int
-	payload        int64
-	file           int64
-	shares         []denseShare
-	summaryScan    time.Duration
-	pointQuery     time.Duration
-	decodedPerScan int
+	class       string
+	blocks      int
+	samples     int
+	payload     int64
+	file        int64
+	shares      []denseShare
+	summaryScan time.Duration
+	pointQuery  time.Duration
 }
 
 func (r denseResult) perSample(bytes int64) float64 { return float64(bytes) / float64(r.samples) }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+
+	"github.com/klauspost/compress/huff0"
 )
 
 const (
@@ -29,7 +31,7 @@ func rawValues(samples []Sample) []byte {
 	return out
 }
 
-func encodeValues(samples []Sample) (byte, []byte) {
+func (c *Codec) encodeValues(samples []Sample) (byte, []byte) {
 	first := math.Float64bits(samples[0].Value)
 	constant := true
 	for _, s := range samples[1:] {
@@ -39,10 +41,10 @@ func encodeValues(samples []Sample) (byte, []byte) {
 		return valueConst, binary.LittleEndian.AppendUint64(nil, first)
 	}
 	mode, best := valueRaw, rawValues(samples)
-	if integer := encodeIntegers(samples); integer != nil && len(integer) < len(best) {
+	if integer := c.encodeIntegers(samples); integer != nil && len(integer) < len(best) {
 		mode, best = valueInteger, integer
 	}
-	if scaled := encodeScaled(samples); scaled != nil && len(scaled) < len(best) {
+	if scaled := c.encodeScaled(samples); scaled != nil && len(scaled) < len(best) {
 		mode, best = valueScaled, scaled
 	}
 	if xor := encodeXOR(samples); len(xor) < len(best) {
@@ -54,7 +56,7 @@ func encodeValues(samples []Sample) (byte, []byte) {
 // encodeScaled turns decimals into the integers they were written as, and
 // refuses the block unless the decoder's own expression returns the original
 // bits for every sample.
-func encodeScaled(samples []Sample) []byte {
+func (c *Codec) encodeScaled(samples []Sample) []byte {
 	scale := 0
 	for _, s := range samples {
 		needed := exactScale(s.Value)
@@ -94,7 +96,7 @@ func encodeScaled(samples []Sample) []byte {
 		previous = current
 	}
 	out := binary.LittleEndian.AppendUint64([]byte{byte(scale)}, uint64(first)) //nolint:gosec // the signed bit pattern is what travels
-	return packIntegers(out, deltas)
+	return c.packDeltas(out, deltas)
 }
 
 // exactScale is the smallest power of ten that survives the round trip, or -1
@@ -115,7 +117,7 @@ func exactScale(v float64) int {
 	return -1
 }
 
-func encodeIntegers(samples []Sample) []byte {
+func (c *Codec) encodeIntegers(samples []Sample) []byte {
 	deltas := make([]uint64, 0, len(samples)-1)
 	var first, previous int64
 	for i, s := range samples {
@@ -141,13 +143,45 @@ func encodeIntegers(samples []Sample) []byte {
 		}
 		previous = current
 	}
-	return packIntegers(binary.LittleEndian.AppendUint64(nil, uint64(first)), deltas)
+	return c.packDeltas(binary.LittleEndian.AppendUint64(nil, uint64(first)), deltas)
 }
 
 var (
 	wordCounts = [...]int{240, 120, 60, 30, 20, 15, 12, 10, 8, 7, 6, 5, 4, 3, 2, 1}
 	wordWidths = [...]uint8{0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 30, 60}
 )
+
+const (
+	deltasInWords byte = iota
+	deltasInHuffman
+)
+
+// packDeltas writes the deltas both ways and keeps the smaller, because
+// Simple8b pays for the widest value in a word and Huffman for the rarest
+func (c *Codec) packDeltas(prefix []byte, deltas []uint64) []byte {
+	words := packIntegers(append([]byte{deltasInWords}, prefix...), deltas)
+	huffman := c.packHuffman(append([]byte{deltasInHuffman}, prefix...), deltas)
+	if huffman != nil && len(huffman) < len(words) {
+		return huffman
+	}
+	return words
+}
+
+func (c *Codec) packHuffman(out []byte, deltas []uint64) []byte {
+	if len(deltas) == 0 {
+		return nil
+	}
+	symbols := make([]byte, 0, len(deltas))
+	for _, delta := range deltas {
+		symbols = binary.AppendUvarint(symbols, delta)
+	}
+	c.huffman.Reuse = huff0.ReusePolicyNone // a block that borrows another block's table is not a block
+	compressed, _, err := huff0.Compress1X(symbols, &c.huffman)
+	if err != nil {
+		return nil
+	}
+	return append(out, compressed...)
+}
 
 func packIntegers(out []byte, values []uint64) []byte {
 	for len(values) > 0 {
@@ -195,6 +229,13 @@ func (it *Iterator) fromInteger() error {
 }
 
 func (it *Iterator) nextInteger() error {
+	if it.deltas == deltasInHuffman {
+		zigzag, err := takeUnsigned(&it.values)
+		if err != nil {
+			return err
+		}
+		return it.addDelta(zigzag)
+	}
 	if it.wordLeft == 0 {
 		if it.word != 0 {
 			return fmt.Errorf("%w: integer word padding", ErrInvalid)
@@ -216,7 +257,11 @@ func (it *Iterator) nextInteger() error {
 		it.word >>= it.wordBits
 	}
 	it.wordLeft--
-	delta := int64(zigzag>>1) ^ -int64(zigzag&1)
+	return it.addDelta(zigzag)
+}
+
+func (it *Iterator) addDelta(zigzag uint64) error {
+	delta := int64(zigzag>>1) ^ -int64(zigzag&1) //nolint:gosec // zigzag unfolds to the signed delta
 	if (delta > 0 && it.integer > math.MaxInt64-delta) || (delta < 0 && it.integer < math.MinInt64-delta) {
 		return fmt.Errorf("%w: integer overflow", ErrInvalid)
 	}

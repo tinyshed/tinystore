@@ -65,3 +65,43 @@ one line here that has nothing to do with compression.
 
 The three structured classes waste 0.05 to 0.07, so their road to 0.70 runs
 through the payload, the summary row and the two indexes instead.
+
+## Huffman over the delta stream
+
+The integer and the scaled paths both end in ZigZag deltas, and both now write
+them either as Simple8b words or through `huff0`, whichever comes out smaller.
+`huff0` is a package of `klauspost/compress`, already in the module for zstd,
+so this cost no dependency.
+
+| 240-sample payload  | before | after | change |
+|---------------------|--------|-------|--------|
+| integer walk        | 0.671  | 0.564 | -16%   |
+| integer counter     | 0.808  | 0.615 | -24%   |
+| temperature, tenths | 0.379  | 0.362 | -4.5%  |
+| integers, jittered  | 2.590  | 2.485 | -4%    |
+
+In the whole file, same schema as the baseline:
+
+| class       | before | after |
+|-------------|--------|-------|
+| integers    | 1.147  | 1.024 |
+| counter     | 1.258  | 1.087 |
+| decimal     | 0.865  | 0.847 |
+| noisy float | 9.119  | 9.119 |
+| mixed       | 3.097  | 3.019 |
+
+What it costs, on the benchmark rather than the spike's coarse timer: encoding
+a 240-sample integer block goes from 25.4 to 27.1 microseconds, decoding from
+2.19 to 3.32. The summary scan is untouched, because it never decodes a
+payload. Decoding half a microsecond slower per block for a sixth of the
+payload is a trade worth making, and it is recorded here rather than hidden.
+
+The first attempt was four times slower to decode, not fifty percent: `huff0`'s
+`Scratch` is a large struct and I was allocating one per block. Holding one on
+the codec, under the same mutex the rest of it uses, was the whole difference.
+
+**The format moved for this.** A sub-encoding byte now says how the deltas were
+written, so version 1 payloads written before tonight no longer read. That was
+allowed exactly once: nothing has ever persisted a payload, there is no tag and
+no store. From the first release the rule in `AGENTS.md` applies and this
+becomes a version 2.

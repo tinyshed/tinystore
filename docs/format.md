@@ -53,6 +53,17 @@ Values use one of five representations:
 The integer path rejects values that cannot reproduce the original float bits,
 including negative zero. Oversized deltas fall back to another representation.
 
+Representations 2 and 4 both end in ZigZag deltas, and one byte ahead of them
+says how those were written: `0` for Simple8b words, `1` for a `huff0` Huffman
+block over their varint bytes, table included. The encoder writes both and
+keeps the smaller. A Huffman block never borrows another block's table, because
+a block that cannot be read on its own is not a block.
+
+Version 1 changed once, on 21 September 2026, to add that byte. It was
+permissible because nothing had ever been written to a disk: no release, no
+tag, no store. From the first tag the rule holds and the next change is a
+version 2.
+
 The scaled path is for numbers that were written as decimals. Its stream starts
 with one byte, the power of ten, and continues exactly as the integer path; the
 decoder divides by that power. It divides rather than multiplying by a

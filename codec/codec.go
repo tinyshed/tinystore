@@ -8,6 +8,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/klauspost/compress/huff0"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -30,10 +31,12 @@ type Sample struct {
 
 // Codec owns one bounded encoder and decoder; returned iterators own their buffers.
 type Codec struct {
-	mu     sync.Mutex
-	writer *zstd.Encoder
-	reader *zstd.Decoder
-	closed bool
+	mu       sync.Mutex
+	writer   *zstd.Encoder
+	reader   *zstd.Decoder
+	huffman  huff0.Scratch
+	unpacked huff0.Scratch
+	closed   bool
 }
 
 func New() (*Codec, error) {
@@ -78,7 +81,7 @@ func (c *Codec) Encode(samples []Sample) ([]byte, error) {
 		return nil, errors.New("metric codec is closed")
 	}
 	tsMode, timestamps := encodeTimes(samples)
-	valueMode, values := encodeValues(samples)
+	valueMode, values := c.encodeValues(samples)
 	best := c.envelope(samples, tsMode, valueMode, timestamps, values)
 	// byte compression sometimes prefers raw values to an already packed bitstream
 	if (valueMode == valueXOR && len(samples) >= 8) ||
@@ -129,8 +132,11 @@ func (c *Codec) Decode(payload []byte) (*Iterator, error) {
 	timeBytes := int(binary.LittleEndian.Uint16(payload[8:]))
 	valueBytes := int(binary.LittleEndian.Uint16(payload[10:]))
 	leastValueBytes := 8
-	if payload[4] == valueScaled {
+	if payload[4] == valueInteger {
 		leastValueBytes = 9
+	}
+	if payload[4] == valueScaled {
+		leastValueBytes = 10
 	}
 	if count < 1 || count > MaxSamples || timeBytes < 8 || valueBytes < leastValueBytes ||
 		timeBytes+valueBytes > maxBody {
@@ -158,18 +164,49 @@ func (c *Codec) Decode(payload []byte) (*Iterator, error) {
 		count: count, timeMode: payload[3], valueMode: payload[4],
 		times: body[:timeBytes], values: body[timeBytes:],
 	}
+	if it.valueMode == valueInteger || it.valueMode == valueScaled {
+		if it.deltas = it.values[0]; it.deltas > deltasInHuffman {
+			return nil, fmt.Errorf("%w: delta packing", ErrInvalid)
+		}
+		it.values = it.values[1:]
+	}
 	if it.valueMode == valueScaled {
 		if it.scale = int(it.values[0]); it.scale > maxScale {
 			return nil, fmt.Errorf("%w: scale", ErrInvalid)
 		}
 		it.values = it.values[1:]
 	}
+	if len(it.values) < 8 {
+		return nil, fmt.Errorf("%w: value stream", ErrInvalid)
+	}
+	if it.deltas == deltasInHuffman && it.count > 1 {
+		expanded, huffErr := c.readHuffman(it.values)
+		if huffErr != nil {
+			return nil, huffErr
+		}
+		it.values = expanded
+	}
 	it.xor = bitReader{data: it.values[8:]}
 	return it, nil
 }
 
+// readHuffman keeps the first value in place and expands the deltas behind it
+func (c *Codec) readHuffman(values []byte) ([]byte, error) {
+	table, rest, err := huff0.ReadTable(values[8:], &c.unpacked)
+	if err != nil {
+		return nil, fmt.Errorf("%w: huffman table: %w", ErrInvalid, err)
+	}
+	table.MaxDecodedSize = maxBody
+	expanded, err := table.Decompress1X(rest)
+	if err != nil {
+		return nil, fmt.Errorf("%w: huffman stream: %w", ErrInvalid, err)
+	}
+	return append(append(make([]byte, 0, 8+len(expanded)), values[:8]...), expanded...), nil
+}
+
 type Iterator struct {
 	count, index, scale int
+	deltas              byte
 	timeMode, valueMode byte
 	times, values       []byte
 	at                  int64
@@ -234,8 +271,8 @@ func (it *Iterator) finish() error {
 		if !it.xor.finished() {
 			return fmt.Errorf("%w: trailing XOR bits", ErrInvalid)
 		}
-	} else if len(it.values) != 0 ||
-		((it.valueMode == valueInteger || it.valueMode == valueScaled) && it.word != 0) {
+	} else if len(it.values) != 0 || (it.deltas == deltasInWords &&
+		(it.valueMode == valueInteger || it.valueMode == valueScaled) && it.word != 0) {
 		return fmt.Errorf("%w: trailing values", ErrInvalid)
 	}
 	return nil
