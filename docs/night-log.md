@@ -105,3 +105,56 @@ written, so version 1 payloads written before tonight no longer read. That was
 allowed exactly once: nothing has ever persisted a payload, there is no tag and
 no store. From the first release the rule in `AGENTS.md` applies and this
 becomes a version 2.
+
+## The retention debt, settled
+
+`TestWhatRetentionCostsWhenItWalksSeries`. Both paths carry `series_state`,
+because a store needs the frontier however it finds its due work, so what
+differs is only the index beside it. The sweep deletes every block whose last
+sample is behind a cutoff **and its payload**, which the first version of this
+measurement forgot to do and was flattered by.
+
+Dense, ten blocks a series:
+
+| schema                                          | file      | sweep a block |
+|-------------------------------------------------|-----------|---------------|
+| as it stands today                              | 1.038     | 12.0 us       |
+| without the foreign-key index, foreign key kept | 0.956     | 678 us        |
+| and retention that walks series, key kept       | 0.864     | 677 us        |
+| no foreign key, retention walks series          | **0.864** | **6.4 us**    |
+
+Sparse, one block a series:
+
+| schema                                 | file      | sweep a block |
+|----------------------------------------|-----------|---------------|
+| as it stands today                     | 1.154     | 8.6 us        |
+| without the foreign-key index          | 1.072     | 667 us        |
+| and retention that walks series        | 1.038     | 686 us        |
+| no foreign key, retention walks series | **1.038** | **21.8 us**   |
+
+**Dropping the foreign key's index while keeping the foreign key is a
+catastrophe, not a saving.** Deleting a payload makes SQLite look for the
+blocks pointing at it, and without the index that is a scan of the whole block
+table — a hundredfold slower sweep, 678 microseconds a block instead of six.
+The index is not decoration; it is what makes the constraint usable. So the
+choice is not "index or no index", it is "the database enforces this or the
+transaction does".
+
+Taking the key out and deleting both objects in one transaction gives the same
+file and a sweep **faster than today's** on dense data, 6.4 against 12.0
+microseconds a block. On sparse data it is 21.8 against 8.6, slower but still a
+tenth of a second for five thousand blocks.
+
+The global expiry index costs 0.1007 bytes a sample and the per-series index
+that replaces it costs 0.0085 — one entry a series against one a block. On
+sparse data, where a series has one block, that collapses to 0.0683 against
+0.1024 and the structural win is mostly gone, which is the shape the packed
+tail is for anyway.
+
+What this buys, and what it costs:
+
+```text
+integers      1.024 → 0.864 bytes a sample, with a faster retention pass
+the price     the database no longer enforces that a payload has a block
+the gate      a deleted block leaves no payload, and no payload outlives a block
+```
