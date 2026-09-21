@@ -95,7 +95,10 @@ What it costs to look for a scale, measured against the same code without it,
 | float    | 18.0 us       | 18.9 us |
 
 Decoding is unchanged: a scaled sample costs one division more than an integer
-one. The first version of this had no ceiling on the scale, and a noisy float
+one. The product is rounded rather than truncated, and that is not a detail:
+573 of the 9999 two-place decimals multiply to just under the integer they were
+written as, so truncating would refuse a 240-sample block of them with
+probability about one minus seven in ten million. The first version of this had no ceiling on the scale, and a noisy float
 walk — where every value happens to have a thirteen-digit decimal form that
 divides back exactly — took **95.9 us** to encode a block it then discarded for
 being too large. Capping the scale at nine places returned that to 15.3 us and

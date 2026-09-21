@@ -15,8 +15,8 @@ const (
 	valueScaled
 )
 
-// nine decimal places is a nanosecond, and a value written finer than that was
-// computed rather than written, where a scale cannot win anything
+// how far the scale search goes: past nine, our fixtures gained no bytes and
+// cost five times the encode, which is a measurement and not a law
 const maxScale = 9
 
 var pow10 = [maxScale + 1]float64{1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9}
@@ -70,7 +70,7 @@ func encodeScaled(samples []Sample) []byte {
 	deltas := make([]uint64, 0, len(samples)-1)
 	var first, previous int64
 	for i, s := range samples {
-		scaled := math.Round(s.Value * factor)
+		scaled := math.Round(s.Value * factor) // truncating loses 0.29, whose product is 28.999999999999996
 		if scaled < -0x1p63 || scaled >= 0x1p63 {
 			return nil
 		}

@@ -58,8 +58,9 @@ with one byte, the power of ten, and continues exactly as the integer path; the
 decoder divides by that power. It divides rather than multiplying by a
 reciprocal, because `10^-k` is not representable while `10^k` is, and one
 correctly rounded division is one chance to differ instead of two. The scale is
-at most nine: that is a nanosecond, and a value written finer was computed
-rather than written, where a scale cannot win anything. The encoder accepts a
+at most nine, which is how far the encoder searches and not a statement about
+what a metric may contain: past nine, our fixtures gained no bytes and cost
+five times the encode. A corpus may move that number. The encoder accepts a
 scale only when the decoder's own expression returns the original bits for
 every sample in the block, so negative zero, NaN, the infinities and anything
 that does not divide back exactly fall out into another representation without

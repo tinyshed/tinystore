@@ -149,3 +149,26 @@ func TestPayloadsWrittenBeforeStillRead(t *testing.T) {
 		}
 	}
 }
+
+// 573 of the 9999 two-place decimals have a product that lands just under the
+// integer they were written as, so truncating instead of rounding would refuse
+// very nearly every block of them
+func TestADecimalWhoseProductFallsShortIsStillFound(t *testing.T) {
+	c := testCodec(t)
+	for _, value := range []float64{0.29, 0.57, 1.15, 2.01, 4.35} {
+		product := value * 100
+		if int64(product) == int64(math.Round(product)) {
+			t.Fatalf("%v no longer exercises the difference between truncating and rounding", value)
+		}
+		if scale := exactScale(value); scale != 2 {
+			t.Errorf("%v was written with two places and got scale %d", value, scale)
+		}
+	}
+	samples := make([]Sample, 64)
+	for i := range samples {
+		samples[i] = Sample{At: 1220227200000 + int64(i)*15000, Value: math.Round(float64(2900+i*7)) / 100}
+	}
+	if encoded := assertRoundTrip(t, c, samples); encoded[4] != valueScaled {
+		t.Errorf("a block of two-place decimals chose encoding %d", encoded[4])
+	}
+}

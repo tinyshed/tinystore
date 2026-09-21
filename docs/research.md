@@ -130,6 +130,12 @@ until both are measured at a million series with their throughput and their
 p99, `0.964` is a number with a debt against it. What is safe today is
 `1.046`: that one only drops the foreign-key index.
 
+The measurement has one more obligation, and it is the one easiest to skip:
+**it reports the size of the index it introduces.** Deleting 24.2 bytes a block
+and creating an unmeasured number of bytes a series is moving bytes into the
+next pocket and calling it a saving. `dbstat` divides the file by object, so
+there is no excuse for reporting a total.
+
 What this does **not** license is deleting the summary. It is 24.6 bytes a
 block on whole numbers and 61.4 on noisy floats — the largest single item after
 the payload — and it exists so that a whole-block query never decodes. Its cost
@@ -165,13 +171,32 @@ from 2.342 to 0.865 with the schema untouched.
 
 Three things the build settled that the estimate had not.
 
-**The ceiling is not decoration.** With no limit on the scale, a noisy float
-walk also has a decimal form that divides back exactly — thirteen digits of it
-— so the encoder spent 95.9 microseconds building a representation it then
-threw away for being too large. Nine places is a nanosecond; finer than that a
-number was computed rather than written, and no scale can win. With the ceiling
-the same block encodes in 15.3 microseconds and no payload anywhere changed
-size.
+**The ceiling is not decoration, and it is not a law either.** With no limit on
+the scale, a noisy float walk also has a decimal form that divides back exactly
+— thirteen digits of it — so the encoder spent 95.9 microseconds building a
+representation it then threw away for being too large. Nine places brought that
+back to 15.3 and changed no payload size anywhere, which is all the evidence
+there is: it says an unbounded search is expensive, not that nothing useful
+lives past the ninth place. An exporter may well emit ten or twelve exact
+decimal places. So the analyzer below owes a distribution before this number is
+defended:
+
+```text
+the best exact scale of each block in the corpus
+    k = 0, 1, 2 … 9, more than 9, none at all
+```
+
+If more than nine is a rounding error, the ceiling stays. If it is four
+percent of a real corpus, it moves, or the search gets cleverer than counting
+upward.
+
+**Rounding the product, not truncating it, is what makes it work at all.** Of
+the 9999 two-place decimals, 573 have a product that lands just under the
+integer they were written as — `0.29 × 100` is `28.999999999999996`. Truncating
+refuses each of those, and a block is all or nothing, so a 240-sample block of
+two-place decimals would survive truncation with probability about seven in ten
+million. The bitwise round trip is what keeps rounding honest: it decides, not
+the multiplication.
 
 **The selector has to stay in charge.** A fixture of what looked like
 hundredths turned out to be whole numbers in disguise, and raw values under

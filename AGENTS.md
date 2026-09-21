@@ -202,6 +202,13 @@ economics from a measurement and not the explanation of the mechanism: the
 number is evidence, the story about why is a hypothesis until a second
 measurement separates it from the alternatives.
 
+**A storage measurement is a division of the file, not a total.** `dbstat`
+reports every b-tree's own pages, so a change that claims to save space says
+which object it took the bytes from and which object it gave them to. The
+failure it exists to prevent is moving bytes to the next pocket and calling it
+a saving: an index deleted here and an index created there net to zero, and
+only a per-object report shows it.
+
 **A payload's size is not a file's size.** SQLite stores rows in fixed pages,
 so a payload that shrinks by a tenth can leave the file exactly as large, and
 one that shrinks by a fiftieth can shrink it sharply by fitting one more row on
