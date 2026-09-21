@@ -1,0 +1,21 @@
+# Go
+/bin/
+.task/
+*.exe
+*.test
+*.out
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# measurements
+*.db
+*.db-shm
+*.db-wal
+/bench/corpus/

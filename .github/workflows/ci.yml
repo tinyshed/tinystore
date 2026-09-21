@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      # a cgo dependency must fail on the pull request that introduces it
+      - name: Build (CGO-free)
+        env:
+          CGO_ENABLED: 0
+        run: go build ./...
+
+      # the race detector needs cgo, which the windows runner cannot provide
+      - name: Test
+        if: matrix.os == 'windows-latest'
+        run: go test -shuffle=on ./...
+
+      - name: Test (race)
+        if: matrix.os != 'windows-latest'
+        env:
+          CGO_ENABLED: 1
+        run: go test -race -shuffle=on ./...
+
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - uses: arduino/setup-task@v3
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build pinned tools
+        run: task setup
+
+      - name: Formatting
+        run: task fmt:check
+
+      - name: Lint
+        run: task lint
+
+      - name: Vulnerabilities
+        run: task vuln
+
+      # naming the shell is what adds pipefail, without which tee hides a failure
+      - name: Import weight
+        shell: bash
+        run: task size | tee -a "$GITHUB_STEP_SUMMARY"
+
+  tidy:
+    name: tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Verify both module files are tidy
+        run: |
+          go mod tidy -diff
+          go -C tools mod tidy -diff

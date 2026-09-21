@@ -1,0 +1,131 @@
+# https://taskfile.dev
+version: '3'
+
+vars:
+  BIN: bin
+  GOLANGCI: '{{.BIN}}/golangci-lint{{exeExt}}'
+  GOVULNCHECK: '{{.BIN}}/govulncheck{{exeExt}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: Build the pinned developer tools into ./bin
+    sources:
+      - tools/go.mod
+      - tools/go.sum
+    generates:
+      - '{{.GOLANGCI}}'
+      - '{{.GOVULNCHECK}}'
+    cmds:
+      - go -C tools build -o ../{{.GOLANGCI}} github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+      - go -C tools build -o ../{{.GOVULNCHECK}} golang.org/x/vuln/cmd/govulncheck
+
+  test:
+    # measurements skip unless TINYSTORE_SPIKE is set; task spike runs one
+    desc: Run tests (also runs go vet)
+    cmds:
+      - go test -shuffle=on ./...
+
+  test:race:
+    # needs a c toolchain, which a cgo-free project never otherwise installs
+    desc: Run tests with the race detector (requires a C toolchain)
+    env:
+      CGO_ENABLED: 1
+    cmds:
+      - go test -race -shuffle=on ./...
+
+  test:cover:
+    desc: Run tests and write a coverage profile to coverage.out
+    cmds:
+      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - go tool cover -func=coverage.out | tail -1
+
+  spike:
+    desc: Run one opt-in measurement, e.g. task spike -- TestAdaptiveCodecAgainstTheBaseline
+    env:
+      TINYSTORE_SPIKE: 1
+    cmds:
+      - go test ./spike -run '{{.CLI_ARGS}}' -v -count=1
+
+  size:
+    desc: Report what importing the public API costs a binary
+    vars:
+      PROBE: '{{.BIN}}/sizeprobe'
+      BASELINE: '{{.BIN}}/sizeprobe-baseline'
+    env:
+      CGO_ENABLED: 0
+      GOOS: linux
+      GOARCH: amd64
+    cmds:
+      - mkdir -p {{.BIN}}
+      - go build -trimpath -ldflags="-s -w" -o {{.PROBE}} ./internal/sizeprobe
+      - go build -trimpath -ldflags="-s -w" -o {{.BASELINE}} ./internal/sizeprobe/baseline
+      - |
+        probe=$(wc -c < {{.PROBE}})
+        baseline=$(wc -c < {{.BASELINE}})
+        echo "linux/amd64 probe: $(( probe / 1024 )) KiB, of which the import added $(( (probe - baseline) / 1024 )) KiB"
+
+  lint:
+    desc: Run golangci-lint
+    deps: [setup]
+    cmds:
+      - '{{.GOLANGCI}} run ./...'
+
+  fmt:
+    desc: Format code (gofumpt + goimports via golangci-lint)
+    deps: [setup]
+    cmds:
+      - '{{.GOLANGCI}} fmt ./...'
+
+  fmt:check:
+    desc: Verify formatting without writing changes
+    deps: [setup]
+    cmds:
+      - '{{.GOLANGCI}} fmt --diff ./...'
+
+  fix:
+    desc: Apply Go 1.27 modernizers (go fix)
+    cmds:
+      - go fix ./...
+
+  vuln:
+    desc: Scan dependencies for known vulnerabilities
+    deps: [setup]
+    cmds:
+      - '{{.GOVULNCHECK}} ./...'
+
+  tidy:
+    desc: Tidy both module files
+    cmds:
+      - go mod tidy
+      - go -C tools mod tidy
+
+  tidy:check:
+    # -diff reports untidiness without writing, so this does not fail merely
+    # because the working tree has uncommitted changes
+    desc: Fail when either module file is untidy
+    cmds:
+      - go mod tidy -diff
+      - go -C tools mod tidy -diff
+
+  check:
+    desc: Everything CI gates on
+    cmds:
+      - task: tidy:check
+      - task: fmt:check
+      - task: lint
+      - task: test
+      - task: vuln
+      - task: size
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - go clean -cache -testcache
+      - cmd: rm -rf {{.BIN}} coverage.out
+        ignore_error: true
