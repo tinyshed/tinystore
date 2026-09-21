@@ -382,3 +382,23 @@ too wide a span  the event-time ceiling
 An integer block never reaches 1300 bytes — it is 109 — so this changes nothing
 for the classes that were already packing well, and takes 15 percent off the
 one that was not.
+
+## Everything at once
+
+`TestWhereTheNightEnded`: the codec as it now is, no foreign key, retention
+that walks series, a summary shaped by the kind of series, a span instead of an
+absolute end, and a block closed before its payload stops fitting a page. Same
+2.4 million samples a class, 4 KiB pages.
+
+| class             | samples a block | total     | payload | metadata | indexes | page waste |
+|-------------------|-----------------|-----------|---------|----------|---------|------------|
+| integers          | 240             | **0.727** | 0.455   | 0.215    | 0.017   | 0.039      |
+| counter           | 240             | **0.746** | 0.507   | 0.194    | 0.017   | 0.027      |
+| decimal           | 240             | **0.521** | 0.254   | 0.218    | 0.017   | 0.031      |
+| noisy float       | 200             | **7.508** | 6.471   | 0.433    | 0.017   | 0.585      |
+| the four averaged | —               | **2.375** | 1.922   | 0.265    | 0.017   | 0.171      |
+
+Against where the night started — 1.147, 1.258, 0.865, 9.119 and 3.097 — that
+is 37, 41, 40 and 18 percent, and 23 percent of the mixed file. The target of
+0.70 was met by one class of four, missed by 0.027 and 0.046 on two more, and
+was never available on the fourth.
