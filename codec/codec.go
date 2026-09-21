@@ -15,7 +15,7 @@ import (
 const (
 	MaxSamples    = 240
 	maxBody       = 8192
-	headerSize    = 12
+	headerSize    = 4
 	checksumSize  = 4
 	formatVersion = 1
 )
@@ -27,6 +27,35 @@ var ErrInvalid = errors.New("invalid metric payload")
 type Sample struct {
 	At    int64
 	Value float64
+}
+
+// Head is what the row around a body already holds. Encode returns it, the
+// caller stores it, and Decode is given it back; nothing in the body repeats it.
+type Head struct {
+	Start, End int64
+	Count      int
+	First      float64
+}
+
+func (h Head) bytes() []byte {
+	out := make([]byte, 0, 26)
+	out = binary.LittleEndian.AppendUint64(out, uint64(h.Start)) //nolint:gosec // signed timestamp bits travel as they are
+	out = binary.LittleEndian.AppendUint64(out, uint64(h.End))   //nolint:gosec // signed timestamp bits travel as they are
+	out = binary.LittleEndian.AppendUint16(out, uint16(h.Count)) //nolint:gosec // the count is checked against MaxSamples
+	return binary.LittleEndian.AppendUint64(out, math.Float64bits(h.First))
+}
+
+// step is what a fixed-step block does not write down
+func (h Head) step() (uint64, bool) {
+	if h.Count < 2 {
+		return 0, false
+	}
+	span := uint64(h.End) - uint64(h.Start) //nolint:gosec // modular subtraction spans the whole signed range
+	divisor := uint64(h.Count - 1)          //nolint:gosec // Count is at least two here
+	if span == 0 || span%divisor != 0 {
+		return 0, false
+	}
+	return span / divisor, true
 }
 
 // Codec owns one bounded encoder and decoder; returned iterators own their buffers.
@@ -66,36 +95,42 @@ func (c *Codec) Close() error {
 }
 
 // Encode requires strictly increasing timestamps and preserves every float64 bit.
-func (c *Codec) Encode(samples []Sample) ([]byte, error) {
+func (c *Codec) Encode(samples []Sample) (Head, []byte, error) {
 	if len(samples) == 0 || len(samples) > MaxSamples {
-		return nil, fmt.Errorf("encode %d samples: expected 1..%d", len(samples), MaxSamples)
+		return Head{}, nil, fmt.Errorf("encode %d samples: expected 1..%d", len(samples), MaxSamples)
 	}
 	for i := 1; i < len(samples); i++ {
 		if samples[i].At <= samples[i-1].At {
-			return nil, errors.New("encode samples: timestamps must increase strictly")
+			return Head{}, nil, errors.New("encode samples: timestamps must increase strictly")
 		}
+	}
+	head := Head{
+		Start: samples[0].At,
+		End:   samples[len(samples)-1].At,
+		Count: len(samples),
+		First: samples[0].Value,
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, errors.New("metric codec is closed")
+		return Head{}, nil, errors.New("metric codec is closed")
 	}
-	tsMode, timestamps := encodeTimes(samples)
+	tsMode, timestamps := encodeTimes(head, samples)
 	valueMode, values := c.encodeValues(samples)
-	best := c.envelope(samples, tsMode, valueMode, timestamps, values)
+	best := c.envelope(head, tsMode, valueMode, timestamps, values)
 	// byte compression sometimes prefers raw values to an already packed bitstream
 	if (valueMode == valueXOR && len(samples) >= 8) ||
 		((valueMode == valueInteger || valueMode == valueScaled) && len(samples) >= 32) {
 		raw := rawValues(samples)
-		alternative := c.envelope(samples, tsMode, valueRaw, timestamps, raw)
+		alternative := c.envelope(head, tsMode, valueRaw, timestamps, raw)
 		if len(alternative) < len(best) {
 			best = alternative
 		}
 	}
-	return best, nil
+	return head, best, nil
 }
 
-func (c *Codec) envelope(samples []Sample, tsMode, valueMode byte, timestamps, values []byte) []byte {
+func (c *Codec) envelope(head Head, tsMode, valueMode byte, timestamps, values []byte) []byte {
 	body := append(append(make([]byte, 0, len(timestamps)+len(values)), timestamps...), values...)
 	flags := byte(0)
 	if len(body) >= 48 {
@@ -106,93 +141,111 @@ func (c *Codec) envelope(samples []Sample, tsMode, valueMode byte, timestamps, v
 		}
 	}
 	out := make([]byte, headerSize, headerSize+len(body)+checksumSize)
-	out[0], out[1], out[2] = 'T', 'S', formatVersion
-	out[3], out[4], out[5] = tsMode, valueMode, flags
-	binary.LittleEndian.PutUint16(out[6:], uint16(len(samples)))    //nolint:gosec // encode caps the count at 240
-	binary.LittleEndian.PutUint16(out[8:], uint16(len(timestamps))) //nolint:gosec // at most 240 ten-byte varints
-	binary.LittleEndian.PutUint16(out[10:], uint16(len(values)))    //nolint:gosec // the raw fallback caps this at 1920 bytes
+	out[0] = formatVersion
+	out[1] = tsMode | valueMode<<2 | flags<<5
+	binary.LittleEndian.PutUint16(out[2:], uint16(len(timestamps))) //nolint:gosec // at most 240 ten-byte varints
 	out = append(out, body...)
-	return binary.LittleEndian.AppendUint32(out, crc32.Checksum(out, checksumTable))
+	sum := crc32.Update(crc32.Checksum(head.bytes(), checksumTable), checksumTable, out)
+	return binary.LittleEndian.AppendUint32(out, sum)
 }
 
-// Decode copies the bounded payload; iteration needs neither a lock nor an open Codec.
-func (c *Codec) Decode(payload []byte) (*Iterator, error) {
-	if len(payload) < headerSize+checksumSize || len(payload) > maxBody+headerSize+checksumSize {
-		return nil, fmt.Errorf("%w: payload length", ErrInvalid)
+// Decode copies the bounded body; iteration needs neither a lock nor an open Codec.
+func (c *Codec) Decode(head Head, body []byte) (*Iterator, error) {
+	if head.Count < 1 || head.Count > MaxSamples || head.End < head.Start ||
+		(head.Count == 1 && head.End != head.Start) {
+		return nil, fmt.Errorf("%w: head", ErrInvalid)
 	}
-	if payload[0] != 'T' || payload[1] != 'S' || payload[2] != formatVersion ||
-		payload[3] > timeDeltaDelta || payload[4] > valueScaled || payload[5] > 1 {
+	if len(body) < headerSize+checksumSize || len(body) > maxBody+headerSize+checksumSize {
+		return nil, fmt.Errorf("%w: body length", ErrInvalid)
+	}
+	if body[0] != formatVersion {
+		return nil, fmt.Errorf("%w: format version", ErrInvalid)
+	}
+	timeMode, valueMode, compressed := body[1]&3, body[1]>>2&7, body[1]>>5
+	if timeMode > timeDeltaDelta || valueMode > valueScaled || compressed > 1 {
 		return nil, fmt.Errorf("%w: format header", ErrInvalid)
 	}
-	end := len(payload) - checksumSize
-	if crc32.Checksum(payload[:end], checksumTable) != binary.LittleEndian.Uint32(payload[end:]) {
+	end := len(body) - checksumSize
+	sum := crc32.Update(crc32.Checksum(head.bytes(), checksumTable), checksumTable, body[:end])
+	if sum != binary.LittleEndian.Uint32(body[end:]) {
 		return nil, fmt.Errorf("%w: checksum", ErrInvalid)
 	}
-	count := int(binary.LittleEndian.Uint16(payload[6:]))
-	timeBytes := int(binary.LittleEndian.Uint16(payload[8:]))
-	valueBytes := int(binary.LittleEndian.Uint16(payload[10:]))
-	leastValueBytes := 8
-	if payload[4] == valueInteger {
-		leastValueBytes = 9
-	}
-	if payload[4] == valueScaled {
-		leastValueBytes = 10
-	}
-	if count < 1 || count > MaxSamples || timeBytes < 8 || valueBytes < leastValueBytes ||
-		timeBytes+valueBytes > maxBody {
-		return nil, fmt.Errorf("%w: decoded bounds", ErrInvalid)
-	}
+	timeBytes := int(binary.LittleEndian.Uint16(body[2:]))
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil, errors.New("metric codec is closed")
 	}
-	var body []byte
-	if payload[5] == 1 {
+	var stream []byte
+	if compressed == 1 {
 		var err error
-		body, err = c.reader.DecodeAll(payload[headerSize:end], nil)
+		stream, err = c.reader.DecodeAll(body[headerSize:end], nil)
 		if err != nil {
 			return nil, fmt.Errorf("%w: zstd: %w", ErrInvalid, err)
 		}
 	} else {
-		body = append([]byte(nil), payload[headerSize:end]...)
+		stream = append([]byte(nil), body[headerSize:end]...)
 	}
-	if len(body) != timeBytes+valueBytes {
+	if timeBytes > len(stream) || len(stream) > maxBody {
 		return nil, fmt.Errorf("%w: stream lengths", ErrInvalid)
 	}
+
 	it := &Iterator{
-		count: count, timeMode: payload[3], valueMode: payload[4],
-		times: body[:timeBytes], values: body[timeBytes:],
+		count: head.Count, head: head, timeMode: timeMode, valueMode: valueMode,
+		times: stream[:timeBytes], values: stream[timeBytes:],
+		at: head.Start, value: math.Float64bits(head.First),
 	}
-	if it.valueMode == valueInteger || it.valueMode == valueScaled {
-		if it.deltas = it.values[0]; it.deltas > deltasInHuffman {
-			return nil, fmt.Errorf("%w: delta packing", ErrInvalid)
-		}
-		it.values = it.values[1:]
+	if err := c.prepare(it); err != nil {
+		return nil, err
 	}
-	if it.valueMode == valueScaled {
-		if it.scale = int(it.values[0]); it.scale > maxScale {
-			return nil, fmt.Errorf("%w: scale", ErrInvalid)
-		}
-		it.values = it.values[1:]
-	}
-	if len(it.values) < 8 {
-		return nil, fmt.Errorf("%w: value stream", ErrInvalid)
-	}
-	if it.deltas == deltasInHuffman && it.count > 1 {
-		expanded, huffErr := c.readHuffman(it.values)
-		if huffErr != nil {
-			return nil, huffErr
-		}
-		it.values = expanded
-	}
-	it.xor = bitReader{data: it.values[8:]}
 	return it, nil
 }
 
-// readHuffman keeps the first value in place and expands the deltas behind it
+// prepare reads whatever each representation keeps ahead of its samples
+func (c *Codec) prepare(it *Iterator) error {
+	if it.timeMode == timeFixed && it.count > 1 {
+		step, ok := it.head.step()
+		if !ok {
+			return fmt.Errorf("%w: fixed step", ErrInvalid)
+		}
+		it.delta = step
+	}
+	switch it.valueMode {
+	case valueInteger, valueScaled:
+		if len(it.values) < 1 {
+			return fmt.Errorf("%w: value stream", ErrInvalid)
+		}
+		if it.deltas = it.values[0]; it.deltas > deltasInHuffman {
+			return fmt.Errorf("%w: delta packing", ErrInvalid)
+		}
+		it.values = it.values[1:]
+		if it.valueMode == valueScaled {
+			if len(it.values) < 1 {
+				return fmt.Errorf("%w: value stream", ErrInvalid)
+			}
+			if it.scale = int(it.values[0]); it.scale > maxScale {
+				return fmt.Errorf("%w: scale", ErrInvalid)
+			}
+			it.values = it.values[1:]
+		}
+		if it.deltas == deltasInHuffman && it.count > 1 {
+			expanded, err := c.readHuffman(it.values)
+			if err != nil {
+				return err
+			}
+			it.values = expanded
+		}
+		return it.seedInteger()
+	case valueXOR:
+		it.xor = bitReader{data: it.values}
+	}
+	return nil
+}
+
+// readHuffman expands the deltas, table and all
 func (c *Codec) readHuffman(values []byte) ([]byte, error) {
-	table, rest, err := huff0.ReadTable(values[8:], &c.unpacked)
+	table, rest, err := huff0.ReadTable(values, &c.unpacked)
 	if err != nil {
 		return nil, fmt.Errorf("%w: huffman table: %w", ErrInvalid, err)
 	}
@@ -201,12 +254,13 @@ func (c *Codec) readHuffman(values []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: huffman stream: %w", ErrInvalid, err)
 	}
-	return append(append(make([]byte, 0, 8+len(expanded)), values[:8]...), expanded...), nil
+	return append(make([]byte, 0, len(expanded)), expanded...), nil
 }
 
 type Iterator struct {
 	count, index, scale int
 	deltas              byte
+	head                Head
 	timeMode, valueMode byte
 	times, values       []byte
 	at                  int64
@@ -227,28 +281,14 @@ func (it *Iterator) Next() bool {
 	if it.err != nil || it.index >= it.count {
 		return false
 	}
-	if it.index == 0 {
-		it.at = int64(binary.LittleEndian.Uint64(it.times)) //nolint:gosec // signed timestamp bits are preserved deliberately
-		it.times = it.times[8:]
-		it.value = binary.LittleEndian.Uint64(it.values)
-		it.values = it.values[8:]
-		if it.valueMode == valueInteger || it.valueMode == valueScaled {
-			it.integer = int64(it.value) //nolint:gosec // signed integer bits are preserved deliberately
-			if it.err = it.fromInteger(); it.err != nil {
-				return false
-			}
-		}
-		if it.timeMode == timeFixed && it.count > 1 {
-			it.delta, it.err = takeUnsigned(&it.times)
-		}
-	} else {
+	if it.index > 0 {
 		it.err = it.nextTime()
 		if it.err == nil {
 			it.err = it.nextValue()
 		}
-	}
-	if it.err != nil {
-		return false
+		if it.err != nil {
+			return false
+		}
 	}
 	it.index++
 	if it.index == it.count {
@@ -264,16 +304,22 @@ func (it *Iterator) Sample() Sample { return it.sample }
 func (it *Iterator) Err() error     { return it.err }
 
 func (it *Iterator) finish() error {
+	if it.at != it.head.End {
+		return fmt.Errorf("%w: last timestamp is not the head's", ErrInvalid)
+	}
 	if len(it.times) != 0 {
 		return fmt.Errorf("%w: trailing timestamps", ErrInvalid)
 	}
-	if it.valueMode == valueXOR {
+	switch {
+	case it.valueMode == valueXOR:
 		if !it.xor.finished() {
 			return fmt.Errorf("%w: trailing XOR bits", ErrInvalid)
 		}
-	} else if len(it.values) != 0 || (it.deltas == deltasInWords &&
-		(it.valueMode == valueInteger || it.valueMode == valueScaled) && it.word != 0) {
+	case len(it.values) != 0:
 		return fmt.Errorf("%w: trailing values", ErrInvalid)
+	case it.deltas == deltasInWords && it.word != 0 &&
+		(it.valueMode == valueInteger || it.valueMode == valueScaled):
+		return fmt.Errorf("%w: integer word padding", ErrInvalid)
 	}
 	return nil
 }

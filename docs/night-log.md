@@ -158,3 +158,55 @@ integers      1.024 → 0.864 bytes a sample, with a faster retention pass
 the price     the database no longer enforces that a payload has a block
 the gate      a deleted block leaves no payload, and no payload outlives a block
 ```
+
+## Stop paying twice for what the row already holds
+
+A block lives in a row that already carries its first timestamp as the primary
+key, its last as `end_ts`, its sample count and its first value as `first`. The
+body used to repeat all four. Now it repeats none of them:
+
+```text
+the head       start, end, count, first — returned by Encode, given back to Decode
+fixed step     derived from (end - start) / (count - 1), so the whole timestamp
+               stream of an evenly spaced block is now empty
+the envelope   twelve header bytes down to four: a version, one byte of modes,
+               and the length of the timestamp stream
+the checksum   now covers the head as well as the body
+```
+
+That last line is what makes the trade safe. Moving the first value into a
+column would otherwise mean a corrupted column silently changes every sample in
+the block; checksumming the head with the body catches it, and a test feeds
+`Decode` four heads that do not belong to the body to prove it. The last
+timestamp must also equal `end_ts`, which is a second free check.
+
+Payloads, 240 samples:
+
+| workload            | before | after | against the original encoder |
+|---------------------|--------|-------|------------------------------|
+| one repeated value  | 0.142  | 0.033 | 0.171                        |
+| integer walk        | 0.564  | 0.456 | 1.266                        |
+| integer counter     | 0.615  | 0.507 | 1.424                        |
+| temperature, tenths | 0.362  | 0.254 | 1.719                        |
+| noisy float         | 6.644  | 6.536 | 7.415                        |
+
+Twenty-six bytes a block, everywhere, for no new algorithm.
+
+## Where the night stands after three changes
+
+The whole file, ten thousand blocks a class, with the codec as it now is and
+the schema the retention measurement chose — no foreign key, retention that
+walks series:
+
+| class       | baseline | tonight   | payload | metadata | indexes | waste |
+|-------------|----------|-----------|---------|----------|---------|-------|
+| integers    | 1.147    | **0.756** | 0.455   | 0.244    | 0.017   | 0.039 |
+| counter     | 1.258    | **0.795** | 0.507   | 0.236    | 0.017   | 0.035 |
+| decimal     | 0.865    | **0.573** | 0.254   | 0.268    | 0.017   | 0.034 |
+| noisy float | 9.119    | 8.958     | 6.486   | 0.422    | 0.017   | 2.032 |
+| mixed       | 3.097    | 2.771     | 1.926   | 0.293    | 0.017   | 0.535 |
+
+The decimal class is under the night's target. The other two structured classes
+are 0.056 and 0.095 above it, and the payload is no longer where the remaining
+bytes are: for an integer walk it is 0.455 of payload against 0.300 of
+everything else.

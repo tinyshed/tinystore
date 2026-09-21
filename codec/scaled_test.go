@@ -23,8 +23,8 @@ func TestDecimalsTravelAsTheIntegersTheyWereWrittenAs(t *testing.T) {
 		for i := range samples {
 			samples[i] = Sample{At: 1220227200000 + int64(i)*15000, Value: workload.value(i)}
 		}
-		encoded := assertRoundTrip(t, c, samples)
-		if encoded[4] != valueScaled {
+		_, encoded := assertRoundTrip(t, c, samples)
+		if encoded[1]>>2&7 != valueScaled {
 			t.Errorf("%s chose encoding %d, not the scaled one", workload.name, encoded[4])
 		}
 		t.Logf("%-22s %.3f B/sample", workload.name, float64(len(encoded))/float64(len(samples)))
@@ -58,8 +58,8 @@ func TestAValueNoScaleReproducesIsRefusedRatherThanRounded(t *testing.T) {
 		samples[i] = Sample{At: 1220227200000 + int64(i)*15000, Value: math.Round(float64(200+i)) / 10}
 	}
 	samples[7].Value = math.Copysign(0, -1)
-	encoded := assertRoundTrip(t, c, samples)
-	if encoded[4] == valueScaled {
+	_, encoded := assertRoundTrip(t, c, samples)
+	if encoded[1]>>2&7 == valueScaled {
 		t.Error("negative zero survived as a scaled decimal")
 	}
 }
@@ -96,27 +96,27 @@ func TestPayloadsWrittenBeforeStillRead(t *testing.T) {
 	}{
 		{
 			"one repeated value", valueConst, 4,
-			"54530100010004000a0008000074351b1c0100009875000000000000f03fccd0a605",
+			"01040000c4a73278",
 			func(int) float64 { return 1 },
 		},
 		{
 			"whole numbers", valueInteger, 12,
-			"5453010002000c000a0010000074351b1c010000987501e80300000000000004f00de65e4208c481f6e3",
+			"010800000104f00de65e42087318c09f",
 			func(i int) float64 { return float64(1000 + i*3 - i%5) },
 		},
 		{
 			"tenths", valueScaled, 12,
-			"5453010004000c000a0012000074351b1c01000098750001e803000000000000b66ddbb60100004010bf377e",
+			"011000000001b66ddbb601000040355bbf46",
 			func(i int) float64 { return math.Round(float64(1000+i*3)) / 10 },
 		},
 		{
 			"neighbouring bit patterns", valueXOR, 12,
-			"5453010003000c000a003a000074351b1c0100009875408cb5781daf1544ff080000000600000001c0000000180000000f00000000600000001c0000000180000001f00000000600000001c0000000104f78b95f",
+			"010c0000ff080000000600000001c0000000180000000f00000000600000001c0000000180000001f00000000600000001c000000010469fefef",
 			func(i int) float64 { return 1e20 + float64(i)*16384 },
 		},
 		{
 			"values with nothing in common", valueRaw, 12,
-			"5453010000000c000a0060000074351b1c010000987588239606ab10db3e580ec261819fa34683aa728d47ca54239af8c5e7605816e16c1b45fad673b2ca0c74fd4124cab1029abf168406fcf7ef734f1afe7dd46eed2dfa78d030b805efb5232fbbfa7c244017e539491294ed51d8b6f5aeebb2f64e379aaec0",
+			"01000000580ec261819fa34683aa728d47ca54239af8c5e7605816e16c1b45fad673b2ca0c74fd4124cab1029abf168406fcf7ef734f1afe7dd46eed2dfa78d030b805efb5232fbbfa7c244017e539491294ed51d8b6f5aeebb2f64e2233bd40",
 			func(i int) float64 { return math.Float64frombits(raw[i]) },
 		},
 	} {
@@ -124,10 +124,14 @@ func TestPayloadsWrittenBeforeStillRead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if payload[4] != golden.mode {
-			t.Errorf("%s: the frozen payload says encoding %d, not %d", golden.name, payload[4], golden.mode)
+		if payload[1]>>2&7 != golden.mode {
+			t.Errorf("%s: the frozen payload says encoding %d, not %d", golden.name, payload[1]>>2&7, golden.mode)
 		}
-		it, err := c.Decode(payload)
+		head := Head{
+			Start: at(0), End: at(golden.count - 1),
+			Count: golden.count, First: golden.value(0),
+		}
+		it, err := c.Decode(head, payload)
 		if err != nil {
 			t.Fatalf("%s: %v", golden.name, err)
 		}
@@ -168,7 +172,7 @@ func TestADecimalWhoseProductFallsShortIsStillFound(t *testing.T) {
 	for i := range samples {
 		samples[i] = Sample{At: 1220227200000 + int64(i)*15000, Value: math.Round(float64(2900+i*7)) / 100}
 	}
-	if encoded := assertRoundTrip(t, c, samples); encoded[4] != valueScaled {
+	if _, encoded := assertRoundTrip(t, c, samples); encoded[1]>>2&7 != valueScaled {
 		t.Errorf("a block of two-place decimals chose encoding %d", encoded[4])
 	}
 }

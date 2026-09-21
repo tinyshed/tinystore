@@ -62,7 +62,7 @@ type denseSchema struct {
 }
 
 func measureDense(t *testing.T, class string, blocks, perBlock int, schema denseSchema,
-	encode func(samples []codec.Sample) ([]byte, error),
+	encode func(samples []codec.Sample) (codec.Head, []byte, error),
 ) denseResult {
 	t.Helper()
 
@@ -84,12 +84,18 @@ func measureDense(t *testing.T, class string, blocks, perBlock int, schema dense
 		for j, s := range samples {
 			old[j] = sample{at: s.At, value: s.Value}
 		}
-		packed, encodeErr := encode(samples)
+		head, packed, encodeErr := encode(samples)
 		if encodeErr != nil {
 			t.Fatal(encodeErr)
 		}
+		row := summarise(old)
+		// the row is the head: if they ever disagree the body is unreadable
+		if head.Start != row.startTS || head.End != row.endTS ||
+			head.Count != row.count || head.First != row.first {
+			t.Fatalf("block %d: the head and the row it lives in disagree", i)
+		}
 		result.payload += int64(len(packed))
-		if err = schema.insert(tx, i, int64(i%1000)+1, summarise(old), packed); err != nil {
+		if err = schema.insert(tx, i, int64(i%1000)+1, row, packed); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -238,9 +244,19 @@ func TestTonightsBaseline(t *testing.T) {
 	}
 	defer blocks.Close()
 
-	results := make([]denseResult, 0, len(denseClasses))
-	for _, class := range denseClasses {
-		results = append(results, measureDense(t, class, 10000, 240, todaysSchema(), blocks.Encode))
+	for _, schema := range []denseSchema{todaysSchema(), tonightsSchema()} {
+		t.Logf("---- %s", schema.name)
+		results := make([]denseResult, 0, len(denseClasses))
+		for _, class := range denseClasses {
+			results = append(results, measureDense(t, class, 10000, 240, schema, blocks.Encode))
+		}
+		reportDense(t, results)
 	}
-	reportDense(t, results)
+}
+
+// what the night arrived at: no foreign key, and retention that walks series
+func tonightsSchema() denseSchema {
+	schema := plainSchema()
+	schema.name = "tonight: no foreign key, due work per series"
+	return schema
 }

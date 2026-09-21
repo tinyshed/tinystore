@@ -12,18 +12,18 @@ const (
 	timeDeltaDelta
 )
 
-func encodeTimes(samples []Sample) (byte, []byte) {
-	first := binary.LittleEndian.AppendUint64(nil, uint64(samples[0].At)) //nolint:gosec // encode the signed timestamp bits
+// encodeTimes writes nothing at all for an evenly spaced block, because the
+// head's first and last timestamp and its count already say what the step was
+func encodeTimes(head Head, samples []Sample) (byte, []byte) {
 	if len(samples) == 1 {
-		return timeFixed, first
+		return timeFixed, nil
 	}
-	step := uint64(samples[1].At) - uint64(samples[0].At) //nolint:gosec // ordered signed timestamps can span the full uint64 range
-	fixed := true
-	deltas := append([]byte(nil), first...)
-	second := append([]byte(nil), first...)
-	second = binary.AppendUvarint(second, step)
-	previous := step
-	secondOK := step <= math.MaxInt64
+	step, divides := head.step()
+	fixed := divides
+	var deltas, second []byte
+	second = binary.AppendUvarint(second, uint64(samples[1].At)-uint64(samples[0].At)) //nolint:gosec // modular subtraction preserves a positive distance
+	previous := uint64(samples[1].At) - uint64(samples[0].At)                          //nolint:gosec // modular subtraction preserves a positive distance
+	secondOK := previous <= math.MaxInt64
 	for i := 1; i < len(samples); i++ {
 		delta := uint64(samples[i].At) - uint64(samples[i-1].At) //nolint:gosec // modular subtraction preserves a positive full-width distance
 		fixed = fixed && delta == step
@@ -35,7 +35,7 @@ func encodeTimes(samples []Sample) (byte, []byte) {
 		previous = delta
 	}
 	if fixed {
-		return timeFixed, binary.AppendUvarint(first, step)
+		return timeFixed, nil
 	}
 	if secondOK && len(second) < len(deltas) {
 		return timeDeltaDelta, second

@@ -38,18 +38,19 @@ func TestAdaptiveCodecAgainstTheBaseline(t *testing.T) {
 					old[i] = sample{at: s.At, value: s.Value}
 				}
 				oldBytes += len(encode(old, baseline))
-				packed, encodeErr := c.Encode(samples)
+				head, packed, encodeErr := c.Encode(samples)
 				if encodeErr != nil {
 					t.Fatal(encodeErr)
 				}
 				newBytes += len(packed)
-				verifyAdaptivePayload(t, c, packed, samples)
+				verifyAdaptivePayload(t, c, head, packed, samples)
 			}
 			const runs = 200
 			start := time.Now()
 			var packed []byte
+			var head codec.Head
 			for range runs {
-				packed, err = c.Encode(samples)
+				head, packed, err = c.Encode(samples)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -57,7 +58,7 @@ func TestAdaptiveCodecAgainstTheBaseline(t *testing.T) {
 			encodeTime := time.Since(start) / runs
 			start = time.Now()
 			for range runs {
-				it, decodeErr := c.Decode(packed)
+				it, decodeErr := c.Decode(head, packed)
 				if decodeErr != nil {
 					t.Fatal(decodeErr)
 				}
@@ -117,7 +118,7 @@ func TestAdaptiveDenseSQLite(t *testing.T) {
 				}
 				packed := encode(old, baseline)
 				if mode != "baseline" {
-					packed, err = c.Encode(samples)
+					_, packed, err = c.Encode(samples)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -201,9 +202,9 @@ func adaptiveSamples(kind string, n, seed int) []codec.Sample {
 	return samples
 }
 
-func verifyAdaptivePayload(t *testing.T, c *codec.Codec, payload []byte, want []codec.Sample) {
+func verifyAdaptivePayload(t *testing.T, c *codec.Codec, head codec.Head, payload []byte, want []codec.Sample) {
 	t.Helper()
-	it, err := c.Decode(payload)
+	it, err := c.Decode(head, payload)
 	if err != nil {
 		t.Fatal(err)
 	}

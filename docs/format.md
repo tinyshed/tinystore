@@ -20,25 +20,35 @@ neither and may outlive the codec that produced it.
 
 ## Version 1
 
-All multibyte fixed-width integers are little-endian. Payloads have this layout:
+A payload is the body of a block, and a block is a row with a body. What the
+row holds, the body does not repeat:
 
-| offset | bytes    | meaning                                                    |
-|--------|----------|------------------------------------------------------------|
-| 0      | 2        | `TS` magic                                                 |
-| 2      | 1        | version, currently 1                                       |
-| 3      | 1        | timestamp encoding: fixed step / delta / delta-of-delta    |
-| 4      | 1        | value encoding: raw / constant / integer / XOR             |
-| 5      | 1        | body compression: none / zstd                              |
-| 6      | 2        | sample count, 1..240                                       |
-| 8      | 2        | decoded timestamp-stream length                            |
-| 10     | 2        | decoded value-stream length                                |
-| 12     | variable | timestamp stream followed by value stream, optionally zstd |
-| end-4  | 4        | CRC32C of the preceding bytes                              |
+```text
+head       start, end, count, first
+body       everything else
+```
 
-The first timestamp occupies eight bytes. Fixed-step stores one unsigned delta;
-delta stores positive unsigned distances; delta-of-delta stores the first
-distance and signed changes thereafter. All arithmetic is checked when decoding,
-including the full signed timestamp range. A single-sample stream has no delta.
+`Encode` returns the head beside the body; `Decode` is given it back. All
+multibyte fixed-width integers are little-endian.
+
+| offset | bytes    | meaning                                                         |
+|--------|----------|-----------------------------------------------------------------|
+| 0      | 1        | version, currently 1                                            |
+| 1      | 1        | bits 0-1 the timestamp encoding, 2-4 the value encoding, 5 zstd |
+| 2      | 2        | length of the decoded timestamp stream                          |
+| 4      | variable | timestamp stream then value stream, optionally zstd             |
+| end-4  | 4        | CRC32C of the head's bytes followed by everything above         |
+
+The checksum covers the head because the head is no longer inside the body: a
+row whose `first` was corrupted would otherwise change every sample silently.
+A decoder also requires the last timestamp it produces to equal the head's
+`end`, which catches the same class of damage a second way.
+
+An evenly spaced block writes **no timestamps at all**: the step is
+`(end - start) / (count - 1)`, and a decoder refuses a head where that division
+is not exact. Otherwise the stream holds either the positive distances between
+samples or the first distance and the signed changes after it, and all of that
+arithmetic is checked when decoding, over the full signed range.
 
 Values use one of five representations:
 

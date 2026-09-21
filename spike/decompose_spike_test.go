@@ -143,7 +143,7 @@ func TestWhereADenseBlocksBytesAre(t *testing.T) {
 			for j, s := range samples {
 				old[j] = sample{at: s.At, value: s.Value}
 			}
-			packed, encodeErr := blocks.Encode(samples)
+			_, packed, encodeErr := blocks.Encode(samples)
 			if encodeErr != nil {
 				t.Fatal(encodeErr)
 			}
@@ -342,7 +342,7 @@ func TestWhatASummaryCostsWhenItIsNotWholeNumbers(t *testing.T) {
 				for j, s := range samples {
 					old[j] = sample{at: s.At, value: s.Value}
 				}
-				packed, encodeErr := blocks.Encode(samples)
+				_, packed, encodeErr := blocks.Encode(samples)
 				if encodeErr != nil {
 					t.Fatal(encodeErr)
 				}

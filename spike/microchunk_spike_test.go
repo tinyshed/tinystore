@@ -25,7 +25,8 @@ func TestImmutableMicrochunkLifecycle(t *testing.T) {
 		db := openSparseHead(t)
 		sparseExec(t, db, `alter table series_state rename column oldest_head_ts to next_gc_ts`)
 		sparseExec(t, db, `create table microchunks(series_id integer not null, start_ts integer not null,
-		 end_ts integer not null, count integer not null, body blob not null, primary key(series_id,start_ts)) strict, without rowid`)
+		 end_ts integer not null, count integer not null, first real not null, body blob not null,
+		 primary key(series_id,start_ts)) strict, without rowid`)
 		seedSparseSeries(t, db, seriesCount)
 		sparseExec(t, db, `pragma wal_autocheckpoint=0`)
 		checkpoint(t, db)
@@ -128,12 +129,13 @@ func microchunkDay(t *testing.T, db *sql.DB, c *codec.Codec, chunkSize, from, to
 			for j, s := range safe {
 				samples[j] = codec.Sample{At: s.at, Value: s.value}
 			}
-			payload, encodeErr := c.Encode(samples)
+			head, payload, encodeErr := c.Encode(samples)
 			if encodeErr != nil {
 				t.Fatal(encodeErr)
 			}
 			last := safe[len(safe)-1].at
-			if _, err = tx.Exec(`insert into microchunks values(?,?,?,?,?)`, id, safe[0].at, last, len(safe), payload); err != nil {
+			if _, err = tx.Exec(`insert into microchunks values(?,?,?,?,?,?)`,
+				id, safe[0].at, last, len(safe), head.First, payload); err != nil {
 				t.Fatal(err)
 			}
 			if _, err = tx.Exec(`delete from head where series_id=? and at<=?`, id, last); err != nil {
@@ -183,8 +185,8 @@ func verifyMicroSeries(t *testing.T, db *sql.DB, c *codec.Codec, id int, tick in
 	for _, s := range head {
 		add(s.at, s.value)
 	}
-	for _, body := range bodies {
-		it, decodeErr := c.Decode(body)
+	for _, chunk := range bodies {
+		it, decodeErr := c.Decode(chunk.head, chunk.body)
 		if decodeErr != nil {
 			t.Fatal(decodeErr)
 		}
@@ -207,19 +209,26 @@ func verifyMicroSeries(t *testing.T, db *sql.DB, c *codec.Codec, id int, tick in
 	}
 }
 
-func microBodies(tx *sql.Tx, id int64) ([][]byte, error) {
-	rows, err := tx.Query(`select body from microchunks where series_id=? order by start_ts`, id)
+type microChunk struct {
+	head codec.Head
+	body []byte
+}
+
+func microBodies(tx *sql.Tx, id int64) ([]microChunk, error) {
+	rows, err := tx.Query(`select start_ts, end_ts, count, first, body from microchunks
+	  where series_id=? order by start_ts`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out [][]byte
+	var out []microChunk
 	for rows.Next() {
-		var body []byte
-		if err = rows.Scan(&body); err != nil {
+		var chunk microChunk
+		if err = rows.Scan(&chunk.head.Start, &chunk.head.End, &chunk.head.Count,
+			&chunk.head.First, &chunk.body); err != nil {
 			return nil, err
 		}
-		out = append(out, body)
+		out = append(out, chunk)
 	}
 	return out, rows.Err()
 }

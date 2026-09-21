@@ -14,8 +14,11 @@ func main() {
 	}
 	defer func() { _ = blocks.Close() }()
 
-	payload, err := blocks.Encode([]codec.Sample{{At: 1, Value: 1}})
+	head, payload, err := blocks.Encode([]codec.Sample{{At: 1, Value: 1}})
 	if err != nil {
+		panic(err)
+	}
+	if _, err = blocks.Decode(head, payload); err != nil {
 		panic(err)
 	}
 	fmt.Println(len(payload))

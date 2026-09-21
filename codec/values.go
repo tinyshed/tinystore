@@ -23,9 +23,10 @@ const maxScale = 9
 
 var pow10 = [maxScale + 1]float64{1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9}
 
+// rawValues leaves the first value out, because the head already carries it
 func rawValues(samples []Sample) []byte {
-	out := make([]byte, 0, 8*len(samples))
-	for _, s := range samples {
+	out := make([]byte, 0, 8*(len(samples)-1))
+	for _, s := range samples[1:] {
 		out = binary.LittleEndian.AppendUint64(out, math.Float64bits(s.Value))
 	}
 	return out
@@ -38,7 +39,7 @@ func (c *Codec) encodeValues(samples []Sample) (byte, []byte) {
 		constant = constant && math.Float64bits(s.Value) == first
 	}
 	if constant {
-		return valueConst, binary.LittleEndian.AppendUint64(nil, first)
+		return valueConst, nil
 	}
 	mode, best := valueRaw, rawValues(samples)
 	if integer := c.encodeIntegers(samples); integer != nil && len(integer) < len(best) {
@@ -70,7 +71,7 @@ func (c *Codec) encodeScaled(samples []Sample) []byte {
 	}
 	factor := pow10[scale]
 	deltas := make([]uint64, 0, len(samples)-1)
-	var first, previous int64
+	var previous int64
 	for i, s := range samples {
 		scaled := math.Round(s.Value * factor) // truncating loses 0.29, whose product is 28.999999999999996
 		if scaled < -0x1p63 || scaled >= 0x1p63 {
@@ -80,9 +81,7 @@ func (c *Codec) encodeScaled(samples []Sample) []byte {
 		if math.Float64bits(float64(current)/factor) != math.Float64bits(s.Value) {
 			return nil
 		}
-		if i == 0 {
-			first = current
-		} else {
+		if i > 0 {
 			delta := current - previous
 			if (current > previous && delta < 0) || (current < previous && delta > 0) {
 				return nil
@@ -95,8 +94,7 @@ func (c *Codec) encodeScaled(samples []Sample) []byte {
 		}
 		previous = current
 	}
-	out := binary.LittleEndian.AppendUint64([]byte{byte(scale)}, uint64(first)) //nolint:gosec // the signed bit pattern is what travels
-	return c.packDeltas(out, deltas)
+	return c.packDeltas([]byte{byte(scale)}, deltas)
 }
 
 // exactScale is the smallest power of ten that survives the round trip, or -1
@@ -119,7 +117,7 @@ func exactScale(v float64) int {
 
 func (c *Codec) encodeIntegers(samples []Sample) []byte {
 	deltas := make([]uint64, 0, len(samples)-1)
-	var first, previous int64
+	var previous int64
 	for i, s := range samples {
 		if math.IsNaN(s.Value) || s.Value < -0x1p63 || s.Value >= 0x1p63 {
 			return nil
@@ -128,9 +126,7 @@ func (c *Codec) encodeIntegers(samples []Sample) []byte {
 		if math.Float64bits(float64(current)) != math.Float64bits(s.Value) {
 			return nil
 		}
-		if i == 0 {
-			first = current
-		} else {
+		if i > 0 {
 			delta := current - previous
 			if (current > previous && delta < 0) || (current < previous && delta > 0) {
 				return nil
@@ -143,7 +139,7 @@ func (c *Codec) encodeIntegers(samples []Sample) []byte {
 		}
 		previous = current
 	}
-	return c.packDeltas(binary.LittleEndian.AppendUint64(nil, uint64(first)), deltas)
+	return c.packDeltas(nil, deltas)
 }
 
 var (
@@ -213,6 +209,29 @@ func packIntegers(out []byte, values []uint64) []byte {
 	return out
 }
 
+// seedInteger turns the head's first value into the integer the deltas walk from
+func (it *Iterator) seedInteger() error {
+	if it.valueMode == valueScaled {
+		scaled := math.Round(it.head.First * pow10[it.scale])
+		if scaled < -0x1p63 || scaled >= 0x1p63 {
+			return fmt.Errorf("%w: first scaled value", ErrInvalid)
+		}
+		it.integer = int64(scaled)
+		if math.Float64bits(float64(it.integer)/pow10[it.scale]) != math.Float64bits(it.head.First) {
+			return fmt.Errorf("%w: first scaled value", ErrInvalid)
+		}
+		return nil
+	}
+	if math.IsNaN(it.head.First) || it.head.First < -0x1p63 || it.head.First >= 0x1p63 {
+		return fmt.Errorf("%w: first integer", ErrInvalid)
+	}
+	it.integer = int64(it.head.First)
+	if math.Float64bits(float64(it.integer)) != math.Float64bits(it.head.First) {
+		return fmt.Errorf("%w: first integer", ErrInvalid)
+	}
+	return nil
+}
+
 // a scaled value is not integral, so only the checksum stands between a
 // corrupted word and a wrong number
 func (it *Iterator) fromInteger() error {
@@ -271,7 +290,7 @@ func (it *Iterator) addDelta(zigzag uint64) error {
 
 func encodeXOR(samples []Sample) []byte {
 	previous := math.Float64bits(samples[0].Value)
-	writer := bitWriter{data: binary.LittleEndian.AppendUint64(nil, previous)}
+	var writer bitWriter
 	var leading, trailing uint8
 	window := false
 	for _, s := range samples[1:] {

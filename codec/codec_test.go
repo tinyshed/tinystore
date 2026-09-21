@@ -2,7 +2,6 @@ package codec
 
 import (
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"math"
 	"math/rand/v2"
@@ -24,13 +23,13 @@ func testCodec(t testing.TB) *Codec {
 	return c
 }
 
-func assertRoundTrip(t testing.TB, c *Codec, samples []Sample) []byte {
+func assertRoundTrip(t testing.TB, c *Codec, samples []Sample) (Head, []byte) {
 	t.Helper()
-	encoded, err := c.Encode(samples)
+	head, encoded, err := c.Encode(samples)
 	if err != nil {
 		t.Fatal(err)
 	}
-	it, err := c.Decode(encoded)
+	it, err := c.Decode(head, encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +44,7 @@ func assertRoundTrip(t testing.TB, c *Codec, samples []Sample) []byte {
 	if it.Err() != nil || i != len(samples) {
 		t.Fatalf("read %d/%d: %v", i, len(samples), it.Err())
 	}
-	return encoded
+	return head, encoded
 }
 
 func TestExactBitsAndTimestampExtremes(t *testing.T) {
@@ -117,7 +116,7 @@ func TestWorkloadRoundTrips(t *testing.T) {
 func TestRejectsUnorderedAndOversizedInput(t *testing.T) {
 	c := testCodec(t)
 	for _, samples := range [][]Sample{nil, make([]Sample, MaxSamples+1), {{At: 1}, {At: 1}}, {{At: 2}, {At: 1}}} {
-		if _, err := c.Encode(samples); err == nil {
+		if _, _, err := c.Encode(samples); err == nil {
 			t.Fatal("accepted invalid samples")
 		}
 	}
@@ -129,37 +128,67 @@ func TestPayloadCorruptionIsRefused(t *testing.T) {
 	for i := range samples {
 		samples[i] = Sample{At: int64(i) * 15000, Value: float64(i % 9)}
 	}
-	payload := assertRoundTrip(t, c, samples)
+	head, payload := assertRoundTrip(t, c, samples)
 	for i := range payload {
-		if _, err := c.Decode(payload[:i]); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("truncation %d: %v", i, err)
+		if refused := readsBack(c, head, payload[:i]); refused == nil {
+			t.Fatalf("truncation %d was read back", i)
 		}
 		broken := slices.Clone(payload)
 		broken[i] ^= 0x80
-		if _, err := c.Decode(broken); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("bit flip %d: %v", i, err)
+		if refused := readsBack(c, head, broken); refused == nil {
+			t.Fatalf("bit flip %d was read back", i)
 		}
 	}
 	for _, change := range []func([]byte){
-		func(p []byte) { p[2] = 99 }, func(p []byte) { p[3] = 99 },
-		func(p []byte) { p[4] = 99 }, func(p []byte) { p[5] = 99 },
-		func(p []byte) { binary.LittleEndian.PutUint16(p[6:], 65535) },
-		func(p []byte) { binary.LittleEndian.PutUint16(p[8:], 65535) },
+		func(p []byte) { p[0] = 99 }, func(p []byte) { p[1] ^= 1 },
+		func(p []byte) { p[1] ^= 4 }, func(p []byte) { p[1] ^= 32 },
+		func(p []byte) { binary.LittleEndian.PutUint16(p[2:], 65535) },
 	} {
 		broken := slices.Clone(payload)
 		change(broken)
-		checksum(broken)
-		if _, err := c.Decode(broken); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("header corruption: %v", err)
+		checksum(head, broken)
+		if refused := readsBack(c, head, broken); refused == nil {
+			t.Fatal("a corrupted header was read back")
 		}
 	}
+	// the head is no longer in the body, so the checksum has to cover it too
+	for _, moved := range []Head{
+		{Start: head.Start + 1, End: head.End, Count: head.Count, First: head.First},
+		{Start: head.Start, End: head.End + 1, Count: head.Count, First: head.First},
+		{Start: head.Start, End: head.End, Count: head.Count - 1, First: head.First},
+		{Start: head.Start, End: head.End, Count: head.Count, First: head.First + 1},
+	} {
+		if refused := readsBack(c, moved, payload); refused == nil {
+			t.Fatal("a head that does not belong to this body was accepted")
+		}
+	}
+}
+
+// readsBack returns the error a damaged block produces, from opening it or
+// from walking it, and nil when it came back whole
+func readsBack(c *Codec, head Head, payload []byte) error {
+	it, err := c.Decode(head, payload)
+	if err != nil {
+		return err
+	}
+	read := 0
+	for it.Next() {
+		read++
+	}
+	if it.Err() != nil {
+		return it.Err()
+	}
+	if read != head.Count {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func TestIteratorOwnsItsBytesAndOutlivesTheCodec(t *testing.T) {
 	c := testCodec(t)
 	samples := []Sample{{At: 1, Value: -1}, {At: 3, Value: 7}}
-	payload := assertRoundTrip(t, c, samples)
-	it, err := c.Decode(payload)
+	head, payload := assertRoundTrip(t, c, samples)
+	it, err := c.Decode(head, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +204,7 @@ func TestIteratorOwnsItsBytesAndOutlivesTheCodec(t *testing.T) {
 	if it.Next() || it.Err() != nil {
 		t.Fatal(it.Err())
 	}
-	if _, err = c.Encode(samples); err == nil {
+	if _, _, err = c.Encode(samples); err == nil {
 		t.Fatal("used a closed codec")
 	}
 }
@@ -221,11 +250,11 @@ func BenchmarkCodec(b *testing.B) {
 			}
 			samples[i] = Sample{At: int64(i) * 15000, Value: v}
 		}
-		payload := assertRoundTrip(b, c, samples)
+		head, payload := assertRoundTrip(b, c, samples)
 		b.Run(kind+"/encode", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := c.Encode(samples); err != nil {
+				if _, _, err := c.Encode(samples); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -233,7 +262,7 @@ func BenchmarkCodec(b *testing.B) {
 		b.Run(kind+"/decode", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				it, err := c.Decode(payload)
+				it, err := c.Decode(head, payload)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -248,9 +277,10 @@ func BenchmarkCodec(b *testing.B) {
 	}
 }
 
-func checksum(payload []byte) {
+func checksum(head Head, payload []byte) {
 	end := len(payload) - checksumSize
-	binary.LittleEndian.PutUint32(payload[end:], crc32.Checksum(payload[:end], checksumTable))
+	sum := crc32.Update(crc32.Checksum(head.bytes(), checksumTable), checksumTable, payload[:end])
+	binary.LittleEndian.PutUint32(payload[end:], sum)
 }
 
 func FuzzDecode(f *testing.F) {
@@ -260,17 +290,25 @@ func FuzzDecode(f *testing.F) {
 		for i := range samples {
 			samples[i] = Sample{At: int64(i) * 15000, Value: float64(i % 5)}
 		}
-		f.Add(assertRoundTrip(f, c, samples))
+		head, body := assertRoundTrip(f, c, samples)
+		f.Add(append(head.bytes(), body...))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) > maxBody+headerSize+checksumSize {
+		const headBytes = 26
+		if len(data) < headBytes || len(data) > headBytes+maxBody+headerSize+checksumSize {
 			return
 		}
-		payload := slices.Clone(data)
-		if len(payload) >= headerSize+checksumSize {
-			checksum(payload)
+		head := Head{
+			Start: int64(binary.LittleEndian.Uint64(data)),
+			End:   int64(binary.LittleEndian.Uint64(data[8:])),
+			Count: int(binary.LittleEndian.Uint16(data[16:])),
+			First: math.Float64frombits(binary.LittleEndian.Uint64(data[18:])),
 		}
-		it, err := c.Decode(payload)
+		payload := slices.Clone(data[headBytes:])
+		if len(payload) >= headerSize+checksumSize {
+			checksum(head, payload)
+		}
+		it, err := c.Decode(head, payload)
 		if err != nil {
 			return
 		}
