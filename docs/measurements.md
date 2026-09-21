@@ -40,9 +40,10 @@ not concurrent throughput. Payload figures include the new envelope and checksum
 | integer walk, jittered times | 3.538                | 2.590    | 23.11 / 2.47 us |
 
 At 8/16 samples, integer payloads changed from 7.342/4.793 to 5.230/2.625
-bytes per sample. Temperature changed from 9.125/6.312 to 10.625/7.085: that
-regression is real and keeps a blanket compression claim out of the contract.
-Chimp, scaled decimals and lossy transforms are not implemented.
+bytes per sample. Temperature changed from 9.125/6.312 to 10.625/7.085. That
+regression was real, and it was the hole scaled decimals were written to close;
+the section below is the same fixture after they existed. Chimp and lossy
+transforms are still not implemented.
 
 The SQLite comparison writes 10 000 blocks of 240 samples per case, with foreign
 keys and expiry/reference indexes enabled. Main-file sizes are measured after
@@ -62,6 +63,55 @@ for integer existing/shared-key tables, 0.768/0.781 ms for counters and
 0.897/0.904 ms for noisy floats. Cascade cleanup was checked. Shared keys are a
 promising schema candidate; these are not production migrations or range-query
 benchmarks, and changing clustering still needs representative range reads.
+
+## Decimals as the integers they were written as
+
+Sizes are platform-independent and were measured on Windows, on the same
+fixtures as the section above; the times were measured there too and are
+comparable only with each other, not with the docker numbers.
+
+| 240-sample workload | before the scaled path | after | what it chose |
+|---------------------|------------------------|-------|---------------|
+| temperature, tenths | 1.792 B/sample         | 0.379 | scaled        |
+| everything else     | unchanged              |       | unchanged     |
+
+Five decimal shapes, 240 samples each, all of which the encoder chose the
+scaled representation for and every one of which round-trips bit for bit:
+
+| written as             | payload        |
+|------------------------|----------------|
+| tenths of a degree     | 0.379 B/sample |
+| hundredths, walking    | 0.258          |
+| money, two places      | 0.287          |
+| a percentage in tenths | 0.229          |
+| thousandths, walking   | 0.275          |
+
+What it costs to look for a scale, measured against the same code without it,
+300 encodes of a 240-sample block on a Ryzen 7 7700:
+
+| workload | encode before | after   |
+|----------|---------------|---------|
+| integer  | 23.6 us       | 25.0 us |
+| float    | 18.0 us       | 18.9 us |
+
+Decoding is unchanged: a scaled sample costs one division more than an integer
+one. The first version of this had no ceiling on the scale, and a noisy float
+walk — where every value happens to have a thirteen-digit decimal form that
+divides back exactly — took **95.9 us** to encode a block it then discarded for
+being too large. Capping the scale at nine places returned that to 15.3 us and
+changed no payload size anywhere, which is the measurement behind the ceiling
+rather than a taste for round numbers.
+
+In the file, with the schema unchanged and both maintenance indexes still in
+place, `TestWhatASummaryCostsWhenItIsNotWholeNumbers` on 10 000 blocks:
+
+| workload            | before         | after |
+|---------------------|----------------|-------|
+| temperature, tenths | 2.342 B/sample | 0.865 |
+
+Dropping the foreign-key index, which is the removal that owes nothing, puts
+that at 0.783; dropping the expiry index as well would put it at 0.682, with
+the debt described in [research.md](research.md).
 
 ## Immutable microchunks against a row head
 
@@ -160,13 +210,13 @@ counts say why rather than leaving it to a story: the block b-tree grows from
 as many pages.
 
 What reaches 0.964 is neither a codec nor a clustering change: it is dropping
-two maintenance indexes. `block_payload` exists only so that deleting a payload
-can find the block that points at it; `block_expiry` exists to find expired
-blocks across the whole file, which a primary key of `(series_id, start_ts)`
-plus one timestamp per series already answers. Neither is free to remove —
-the first needs both deletes in one transaction and a gate that proves no
-payload outlives its block, the second needs the per-series timestamp the head
-already maintains — but neither costs a byte of payload.
+two maintenance indexes, and the two are not equally free. `block_payload`
+exists only so that deleting a payload can find the block pointing at it, which
+two deletes in one transaction do for nothing, so `1.046` is available against
+one gate — that no payload outlives its block. `block_expiry` finds expired
+blocks across the whole file, and removing it is a claim about a retention pass
+that walks series instead, which is not measured here. Until it is, `0.964` is
+a number with a debt against it and `1.046` is the one to quote.
 
 ## A million series
 

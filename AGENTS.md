@@ -227,24 +227,27 @@ to violate belongs here.
 
 Every rule worth keeping is worth the twenty lines that make it fail loudly.
 
-| Promise                                        | What enforces it                                                                |
-|------------------------------------------------|---------------------------------------------------------------------------------|
-| no cgo                                         | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
-| the module carries only the engine             | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
-| importing this stays cheap                     | `task size` links a probe and reports what it cost                              |
-| a sample survives the codec exactly            | `TestSamplesSurviveTheCodecExactly`, on bits and not on values                  |
-| the extremes survive too                       | `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time |
-| a corrupt payload is refused                   | `TestPayloadCorruptionIsRefused` and `FuzzDecode`                               |
-| a decode stays bounded                         | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling                          |
-| an iterator outlives its codec                 | `TestIteratorOwnsItsBytesAndOutlivesTheCodec`                                   |
-| unordered or oversized input is refused        | `TestRejectsUnorderedAndOversizedInput`                                         |
-| a counter's increase survives a reset          | `TestACounterKeepsItsIncreaseAcrossAReset`                                      |
-| only the safe prefix is sealed                 | `TestOnlyTheSafePrefixIsSealed`, on the strict edge                             |
-| a late sample cannot enter a sealed block      | `TestALateCounterSampleWouldRewriteASealedBlock`                                |
-| a partial range is not answered from a summary | `TestAPartialRangeNeedsTheRawEdges`                                             |
-| retention clips before it summarises           | `TestRetentionClipsAPersistedBlockBeforeSummarising`                            |
-| a quiet tail expires without becoming a block  | `TestASilentTailExpiresWithoutBecomingABlock`                                   |
-| one expired sample does not delete a block     | `TestWholeBlockRetentionOvershoot`                                              |
+| Promise                                             | What enforces it                                                                |
+|-----------------------------------------------------|---------------------------------------------------------------------------------|
+| no cgo                                              | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
+| the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
+| importing this stays cheap                          | `task size` links a probe and reports what it cost                              |
+| a sample survives the codec exactly                 | `TestSamplesSurviveTheCodecExactly`, on bits and not on values                  |
+| the extremes survive too                            | `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time |
+| a corrupt payload is refused                        | `TestPayloadCorruptionIsRefused` and `FuzzDecode`                               |
+| bytes written once still read                       | `TestPayloadsWrittenBeforeStillRead`, one vector per representation             |
+| a decimal travels as the integer it was written as  | `TestDecimalsTravelAsTheIntegersTheyWereWrittenAs`                              |
+| a value no scale reproduces is refused, not rounded | `TestAValueNoScaleReproducesIsRefusedRatherThanRounded`                         |
+| a decode stays bounded                              | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling                          |
+| an iterator outlives its codec                      | `TestIteratorOwnsItsBytesAndOutlivesTheCodec`                                   |
+| unordered or oversized input is refused             | `TestRejectsUnorderedAndOversizedInput`                                         |
+| a counter's increase survives a reset               | `TestACounterKeepsItsIncreaseAcrossAReset`                                      |
+| only the safe prefix is sealed                      | `TestOnlyTheSafePrefixIsSealed`, on the strict edge                             |
+| a late sample cannot enter a sealed block           | `TestALateCounterSampleWouldRewriteASealedBlock`                                |
+| a partial range is not answered from a summary      | `TestAPartialRangeNeedsTheRawEdges`                                             |
+| retention clips before it summarises                | `TestRetentionClipsAPersistedBlockBeforeSummarising`                            |
+| a quiet tail expires without becoming a block       | `TestASilentTailExpiresWithoutBecomingABlock`                                   |
+| one expired sample does not delete a block          | `TestWholeBlockRetentionOvershoot`                                              |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

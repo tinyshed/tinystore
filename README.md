@@ -51,6 +51,7 @@ result:
         │
         └── values ──────┬── all the same          →  one bit pattern
                          ├── exact integers        →  delta, zigzag, simple8b
+                         ├── written as decimals   →  a scale, then the same
                          ├── float, moving smoothly →  xor against the last
                          └── anything else         →  raw, eight bytes each
                                    │
@@ -66,6 +67,7 @@ and infinities come back as the bits that went in.
 | one repeated value     | 0.142          |
 | whole numbers, walking | 0.671          |
 | a counter              | 0.808          |
+| tenths of a degree     | 0.379          |
 | a smooth float         | 7.946          |
 | random IEEE-754 bits   | 8.108          |
 

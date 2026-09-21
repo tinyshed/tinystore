@@ -111,18 +111,37 @@ longer enforcing it, so it needs a test that a deleted block leaves no payload,
 and a second one that the reverse cannot happen either.
 
 `block_expiry` is 24.2 bytes a block for finding expired blocks across the
-whole file. The head already needs one oldest-timestamp-per-series column,
-indexed, to find its own due work; blocks are keyed `(series_id, start_ts)`, so
-the same column plus a prefix range answers for them too. That is one index
-entry per series instead of one per block — a large win where a series has many
-blocks and a wash where it has one, which is the sparse case and is the packed
-tail's business anyway. The cost is one row update per sealed block, which the
-lifecycle measurement has to carry rather than assume.
+whole file, and this one is **not** yet safe to remove. The size measurement
+answers "does SQL still work without it", which was never the question. The
+question is what finds due work instead:
+
+```text
+series_state.next_gc_ts, partial index where it is not null
+        ↓  which series are due
+primary key (series_id, start_ts)
+        ↓  which of its blocks are old
+delete
+```
+
+That is one index entry per series instead of one per block — a large win where
+a series has many blocks, a wash where it has one. Its costs are a row update
+per sealed block and a retention pass that walks series rather than blocks, and
+until both are measured at a million series with their throughput and their
+p99, `0.964` is a number with a debt against it. What is safe today is
+`1.046`: that one only drops the foreign-key index.
 
 What this does **not** license is deleting the summary. It is 24.6 bytes a
 block on whole numbers and 61.4 on noisy floats — the largest single item after
 the payload — and it exists so that a whole-block query never decodes. Its cost
 is the answer to a different question: whether a coarse tier is worth it.
+
+There is a smaller question underneath it. A gauge is answered by `min`, `max`,
+`sum`, `first` and `last`; a counter by `first`, `last`, `increase` and
+`resets`. Carrying all seven for both is about two columns of waste, which on a
+noisy float is 16 bytes a block. Whether that is worth a second row shape
+depends on facts we do not have — how many series of each kind a real
+installation holds, and how often a whole-block summary is what a query
+actually reads. That belongs after the corpus, not before it.
 
 Two numbers follow from the same measurement. On tenths of a degree the file is
 2.342 today, so the same two index removals put it at 2.159; with the scaled
@@ -135,36 +154,37 @@ The page sweep the reports asked for is still worth running, but it answers a
 different question: not what a row is made of, which `dbstat` now answers
 exactly, but where the packing cliffs are between one payload size and the next.
 
-## Exact decimals
+## Exact decimals — built
 
-The clearest hole the codec has. On tenths of a degree it is *worse* than the
-generic encoding it replaced, 1.792 against 1.719 bytes a sample, because
-nothing in it notices that
+`codec/` has a fifth value representation: a decimal scale and then the integer
+path. [format.md](format.md) says what it writes, [measurements.md](measurements.md)
+what it cost. The short version is that the arithmetic in this section was
+close and slightly pessimistic — it predicted 0.42 bytes a sample on tenths of
+a degree and the measurement is 0.379, and the whole file for that fixture went
+from 2.342 to 0.865 with the schema untouched.
 
-```text
-21.3  21.4  21.4  21.5      is      213  214  214  215   at 10^1
-```
+Three things the build settled that the estimate had not.
 
-Arithmetic, not a measurement: 239 zigzag deltas of 0, 1 or 2 fit two bits, 30
-to a Simple8b word, so 8 words are 64 bytes; with the first value, a fixed-step
-timestamp stream and the envelope that is about 100 bytes, or 0.42 bytes a
-sample against 1.792. Four times, on a shape that real gauges have constantly.
+**The ceiling is not decoration.** With no limit on the scale, a noisy float
+walk also has a decimal form that divides back exactly — thirteen digits of it
+— so the encoder spent 95.9 microseconds building a representation it then
+threw away for being too large. Nine places is a nanosecond; finer than that a
+number was computed rather than written, and no scale can win. With the ceiling
+the same block encodes in 15.3 microseconds and no payload anywhere changed
+size.
 
-It is only lossless if the check is per value and the decoder is the check:
+**The selector has to stay in charge.** A fixture of what looked like
+hundredths turned out to be whole numbers in disguise, and raw values under
+zstd beat the scaled path on it. That is the right answer, and it is the reason
+the encoder compares finished candidates rather than classifying the data.
 
-```text
-encode    m = int64(v * 10^k)
-verify    float64(m) * 10^-k  is bit for bit v,  for every sample
-decode    exactly the expression the verification used
-```
+**Golden vectors now exist**, one per value representation, and they are the
+gate that a released format cannot move: fixed bytes, the samples they must
+read back as, on every platform CI runs.
 
-Two traps. Go permits an implementation to fuse a multiply and an add into one
-operation, so a fused expression can round differently on different
-architectures; a bare multiply cannot, and the round trip has to be pinned by a
-test on all three CI platforms. And `10^k` is exactly representable as a
-`float64` only up to `k = 22`, so a candidate beyond that refuses. `-0`, NaN
-and the infinities fail the check and fall back, which is the behaviour we
-want rather than a special case to write.
+What is left here is not the codec. Decimal gauges are at 0.865 in the file
+today and 0.783 once the foreign-key index goes, and the remaining two thirds
+of that is the block row and the page it sits on.
 
 ## Predictors and residuals
 
@@ -200,9 +220,23 @@ It has one blocker in our own format: Simple8b's width ladder runs
 `… 15, 20, 30, 60`, so a 44-bit residual rounds up to 60 and loses to raw. The
 idea needs a bit-packer of arbitrary width, which `bitWriter` already is.
 
-And one honest caveat: the smooth signal is our own generator. Real monitoring
-is mostly decimals and whole numbers, where scaled integers win and this does
-nothing. Validate it on a real corpus before writing it.
+**Nothing of this gets written before an analyzer says there is meat in it.**
+The smooth signal above is our own generator, and real monitoring is mostly
+decimals and whole numbers, where scaled integers win and this does nothing.
+The instrument comes first, and it is small: run over real blocks and report,
+per block and in aggregate,
+
+```text
+bits a sample under XOR, as we encode it now
+bits a sample under an ordered-integer first difference
+bits a sample under an ordered-integer second difference
+the same three packed ideally, against the same three packed as we pack them
+```
+
+The last pair is the one that decides whether the work is a codec or a packer.
+If the ideal is 3.8 bytes a sample against the 6.2 we have, an arbitrary-width
+packer is worth writing. If it is 5.9 against 6.2, the idea dies without
+costing a line of storage code.
 
 ## One time axis for many series
 
@@ -364,12 +398,20 @@ for the XOR transform. None of them is a dependency.
 ## Order of work
 
 ```text
-P0   decompose the 103 bytes        done: two indexes, 0.964 B/sample
-P0   exact decimals                 a measured hole, arithmetic says ×4
+done decompose the 103 bytes        two indexes, and 1.046 is safe today
+done exact decimals                 1.792 to 0.379, and the file to 0.865
+P0   retention that walks series    what 0.964 is owed before it may be claimed
 P0   the packed tail                the largest sparse prize, and the riskiest
-P1   order-preserving integers      after a real corpus says smooth floats exist
-P1   a real corpus                  without it, "we beat X" means nothing
-P2   one object for many series     a layout question, in the sparse table
+P1   a real corpus and an analyzer  without them, "we beat X" means nothing
+P1   order-preserving integers      only if the analyzer finds the gap
+P2   one object for many series     a layout question, against the packed tail
+P2   a summary shaped by kind       two columns of waste, after the corpus says
 P2   zero runs, Rice                cheap, after predictors
 P3   Chimp, entropy coding          only against a measured entropy gap
 ```
+
+The bar has moved with the floor. `≤1.0 bytes a sample` on dense whole numbers
+was taken by deleting two indexes, which is not a compression result and should
+not be reported as one. The threshold worth defending is **0.8 bytes a sample
+over a real mixed corpus**, measured whole, against another engine keeping the
+same samples exactly.

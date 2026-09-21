@@ -81,7 +81,8 @@ func (c *Codec) Encode(samples []Sample) ([]byte, error) {
 	valueMode, values := encodeValues(samples)
 	best := c.envelope(samples, tsMode, valueMode, timestamps, values)
 	// byte compression sometimes prefers raw values to an already packed bitstream
-	if (valueMode == valueXOR && len(samples) >= 8) || (valueMode == valueInteger && len(samples) >= 32) {
+	if (valueMode == valueXOR && len(samples) >= 8) ||
+		((valueMode == valueInteger || valueMode == valueScaled) && len(samples) >= 32) {
 		raw := rawValues(samples)
 		alternative := c.envelope(samples, tsMode, valueRaw, timestamps, raw)
 		if len(alternative) < len(best) {
@@ -117,7 +118,7 @@ func (c *Codec) Decode(payload []byte) (*Iterator, error) {
 		return nil, fmt.Errorf("%w: payload length", ErrInvalid)
 	}
 	if payload[0] != 'T' || payload[1] != 'S' || payload[2] != formatVersion ||
-		payload[3] > timeDeltaDelta || payload[4] > valueXOR || payload[5] > 1 {
+		payload[3] > timeDeltaDelta || payload[4] > valueScaled || payload[5] > 1 {
 		return nil, fmt.Errorf("%w: format header", ErrInvalid)
 	}
 	end := len(payload) - checksumSize
@@ -127,7 +128,12 @@ func (c *Codec) Decode(payload []byte) (*Iterator, error) {
 	count := int(binary.LittleEndian.Uint16(payload[6:]))
 	timeBytes := int(binary.LittleEndian.Uint16(payload[8:]))
 	valueBytes := int(binary.LittleEndian.Uint16(payload[10:]))
-	if count < 1 || count > MaxSamples || timeBytes < 8 || valueBytes < 8 || timeBytes+valueBytes > maxBody {
+	leastValueBytes := 8
+	if payload[4] == valueScaled {
+		leastValueBytes = 9
+	}
+	if count < 1 || count > MaxSamples || timeBytes < 8 || valueBytes < leastValueBytes ||
+		timeBytes+valueBytes > maxBody {
 		return nil, fmt.Errorf("%w: decoded bounds", ErrInvalid)
 	}
 	c.mu.Lock()
@@ -152,12 +158,18 @@ func (c *Codec) Decode(payload []byte) (*Iterator, error) {
 		count: count, timeMode: payload[3], valueMode: payload[4],
 		times: body[:timeBytes], values: body[timeBytes:],
 	}
+	if it.valueMode == valueScaled {
+		if it.scale = int(it.values[0]); it.scale > maxScale {
+			return nil, fmt.Errorf("%w: scale", ErrInvalid)
+		}
+		it.values = it.values[1:]
+	}
 	it.xor = bitReader{data: it.values[8:]}
 	return it, nil
 }
 
 type Iterator struct {
-	count, index        int
+	count, index, scale int
 	timeMode, valueMode byte
 	times, values       []byte
 	at                  int64
@@ -183,14 +195,11 @@ func (it *Iterator) Next() bool {
 		it.times = it.times[8:]
 		it.value = binary.LittleEndian.Uint64(it.values)
 		it.values = it.values[8:]
-		if it.valueMode == valueInteger {
+		if it.valueMode == valueInteger || it.valueMode == valueScaled {
 			it.integer = int64(it.value) //nolint:gosec // signed integer bits are preserved deliberately
-			converted := float64(it.integer)
-			if converted >= 0x1p63 || int64(converted) != it.integer {
-				it.err = fmt.Errorf("%w: inexact first integer", ErrInvalid)
+			if it.err = it.fromInteger(); it.err != nil {
 				return false
 			}
-			it.value = math.Float64bits(converted)
 		}
 		if it.timeMode == timeFixed && it.count > 1 {
 			it.delta, it.err = takeUnsigned(&it.times)
@@ -225,7 +234,8 @@ func (it *Iterator) finish() error {
 		if !it.xor.finished() {
 			return fmt.Errorf("%w: trailing XOR bits", ErrInvalid)
 		}
-	} else if len(it.values) != 0 || (it.valueMode == valueInteger && it.word != 0) {
+	} else if len(it.values) != 0 ||
+		((it.valueMode == valueInteger || it.valueMode == valueScaled) && it.word != 0) {
 		return fmt.Errorf("%w: trailing values", ErrInvalid)
 	}
 	return nil

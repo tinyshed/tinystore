@@ -40,15 +40,30 @@ delta stores positive unsigned distances; delta-of-delta stores the first
 distance and signed changes thereafter. All arithmetic is checked when decoding,
 including the full signed timestamp range. A single-sample stream has no delta.
 
-Values use one of four representations:
+Values use one of five representations:
 
-- raw IEEE-754 bits, eight bytes each;
-- one constant bit pattern;
-- an exact signed integer followed by ZigZag deltas in Simple8b words;
-- the first IEEE-754 value followed by Gorilla-style XOR windows.
+| byte | representation                                                |
+|------|---------------------------------------------------------------|
+| 0    | raw IEEE-754 bits, eight bytes each                           |
+| 1    | one constant bit pattern                                      |
+| 2    | an exact signed integer, then ZigZag deltas in Simple8b words |
+| 3    | the first IEEE-754 value, then Gorilla-style XOR windows      |
+| 4    | a decimal scale, then the same integers as 2                  |
 
 The integer path rejects values that cannot reproduce the original float bits,
 including negative zero. Oversized deltas fall back to another representation.
+
+The scaled path is for numbers that were written as decimals. Its stream starts
+with one byte, the power of ten, and continues exactly as the integer path; the
+decoder divides by that power. It divides rather than multiplying by a
+reciprocal, because `10^-k` is not representable while `10^k` is, and one
+correctly rounded division is one chance to differ instead of two. The scale is
+at most nine: that is a nanosecond, and a value written finer was computed
+rather than written, where a scale cannot win anything. The encoder accepts a
+scale only when the decoder's own expression returns the original bits for
+every sample in the block, so negative zero, NaN, the infinities and anything
+that does not divide back exactly fall out into another representation without
+a rule of their own.
 Simple8b uses the four high bits as selector, the lower sixty for packed values;
 selectors 0 and 1 represent runs of 240 and 120 ones. Partial final words are
 zero-padded. XOR uses a zero-difference bit, an existing/new-window bit, five
