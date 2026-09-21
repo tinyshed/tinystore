@@ -49,7 +49,7 @@ result:
         │                ├── nearly equal          →  delta of delta
         │                └── arbitrary             →  delta
         │
-        └── values ──────┬── all the same          →  one bit pattern
+        └── values ──────┬── all the same          →  nothing at all
                          ├── exact integers        →  delta, zigzag, simple8b
                          ├── written as decimals   →  a scale, then the same
                          ├── float, moving smoothly →  xor against the last
@@ -64,15 +64,17 @@ and infinities come back as the bits that went in.
 
 | 240 samples of         | bytes a sample |
 |------------------------|----------------|
-| one repeated value     | 0.142          |
-| whole numbers, walking | 0.671          |
-| a counter              | 0.808          |
-| tenths of a degree     | 0.379          |
-| a smooth float         | 7.946          |
-| random IEEE-754 bits   | 8.108          |
+| one repeated value     | 0.033          |
+| tenths of a degree     | 0.254          |
+| whole numbers, walking | 0.456          |
+| a counter              | 0.507          |
+| a smooth float         | 7.838          |
+| random IEEE-754 bits   | 8.000          |
 
-Payload only; a whole SQLite file costs more. The environment, the fixtures and
-the command that reproduces each number are in
+Payload only. A whole SQLite file holding those blocks costs 0.72 bytes a
+sample for the whole numbers and 0.52 for the decimals, with the summaries,
+the indexes and the pages they sit in counted. The environment, the fixtures
+and the command that reproduces each number are in
 [docs/measurements.md](docs/measurements.md).
 
 ## Layout

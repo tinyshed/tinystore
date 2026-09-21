@@ -195,6 +195,37 @@ which is not what Simple8b charges; the second compressed all 64 blocks as one
 stream, so zstd found repetition between blocks that a per-block encoder cannot
 have, and reported a triumphant 0.05 bits a delta for temperature.
 
+## The whole file, after the night of 21 September
+
+Ten thousand blocks of 240 samples a class, one thousand series, measured after
+a checkpoint with `dbstat` dividing the file by object. The schema is the one
+the retention measurement chose — no foreign key, retention that walks series —
+with a summary shaped by the kind of series and a span in place of the absolute
+last timestamp. [night-log.md](night-log.md) has every step that got here,
+including the ones that failed.
+
+| class             | at the start of the night | 4 KiB pages | 8 KiB pages |
+|-------------------|---------------------------|-------------|-------------|
+| integer walk      | 1.147                     | 0.727       | **0.720**   |
+| integer counter   | 1.258                     | **0.746**   | 0.761       |
+| decimal gauge     | 0.865                     | **0.521**   | 0.532       |
+| noisy float       | 9.119                     | 8.909       | **7.281**   |
+| the four averaged | 3.097                     | 2.726       | **2.324**   |
+
+Where an integer walk's 0.720 goes:
+
+| part       | bytes a sample | what it is                                          |
+|------------|----------------|-----------------------------------------------------|
+| payload    | 0.455          | 3.38 bits a delta, against an entropy bound of 3.17 |
+| metadata   | 0.213          | 51 bytes of block row                               |
+| indexes    | 0.017          | one entry a series                                  |
+| page waste | 0.034          | bought and unused                                   |
+
+Eight kibibyte pages are worth fifteen percent of a mixed file, almost all of
+it the float class, whose page waste falls from 2.033 bytes a sample to 0.426.
+The cost that has not been measured is the write-ahead log, which writes whole
+pages.
+
 ## Where a dense block's bytes actually are
 
 `TestWhereADenseBlocksBytesAre`, 10 000 blocks of 240 whole-number samples,

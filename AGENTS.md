@@ -11,10 +11,11 @@ should be a fact a ten-second grep would answer.
 
 ## Status
 
-`codec/` is built, tested and measured: 1..240 ordered samples in, one bounded
-payload out, every IEEE-754 bit preserved, a versioned header, a checksum, an
-iterator that owns its bytes and a fuzzed decoder that refuses corruption. It
-has no opinion about when a block is sealed or how long one is kept.
+`codec/` is built, tested and measured: 1..240 ordered samples in, a head and a
+bounded body out, every IEEE-754 bit preserved, five value representations, a
+checksum over both halves, an iterator that owns its bytes and a fuzzed decoder
+that refuses corruption. It has no opinion about when a block is sealed or how
+long one is kept.
 
 Nothing else is built. There is no store, no registry, no compactor, no query
 and no schema. `spike/` holds prototypes that measured the shape the store will
@@ -243,6 +244,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the extremes survive too                            | `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time |
 | a corrupt payload is refused                        | `TestPayloadCorruptionIsRefused` and `FuzzDecode`                               |
 | bytes written once still read                       | `TestPayloadsWrittenBeforeStillRead`, one vector per representation             |
+| a head that does not fit its body is refused        | the four moved heads in `TestPayloadCorruptionIsRefused`                        |
 | a decimal travels as the integer it was written as  | `TestDecimalsTravelAsTheIntegersTheyWereWrittenAs`                              |
 | a value no scale reproduces is refused, not rounded | `TestAValueNoScaleReproducesIsRefusedRatherThanRounded`                         |
 | a decode stays bounded                              | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling                          |

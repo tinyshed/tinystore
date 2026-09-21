@@ -490,8 +490,10 @@ P2   exceptions in the scaled path  all-or-nothing is the decimal path's weaknes
 P3   Chimp, ALP-RD                  against a bound our noisy fixture is already near
 ```
 
-The bar has moved with the floor. `≤1.0 bytes a sample` on dense whole numbers
-was taken by deleting two indexes, which is not a compression result and should
-not be reported as one. The threshold worth defending is **0.8 bytes a sample
-over a real mixed corpus**, measured whole, against another engine keeping the
-same samples exactly.
+The bar has moved twice. `≤1.0 bytes a sample` on dense whole numbers was taken
+by deleting two indexes, which is not a compression result; `0.72` came from the
+codec and the row together, and the payload is now at the order-0 entropy of its
+own delta alphabet. The threshold worth defending is **0.7 bytes a sample over a
+real mixed corpus**, measured whole, against another engine keeping the same
+samples exactly — and on our own fixtures two classes of four are still above
+it, by 0.02 and 0.046.
