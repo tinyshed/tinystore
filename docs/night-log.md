@@ -210,3 +210,122 @@ The decimal class is under the night's target. The other two structured classes
 are 0.056 and 0.095 above it, and the payload is no longer where the remaining
 bytes are: for an integer walk it is 0.455 of payload against 0.300 of
 everything else.
+
+## What a block size costs a query
+
+`TestWhatABlockSizeCostsAQuery`, 2.4 million samples a case, tonight's schema.
+
+| samples a block | integers | payload | metadata | decode a block | a quarter hour decodes |
+|-----------------|----------|---------|----------|----------------|------------------------|
+| 30              | 2.877    | 0.832   | 1.854    | 1.0 us         | 1x what it answers     |
+| 60              | 1.674    | 0.626   | 0.935    | ~1 us          | 2x                     |
+| 120             | 1.067    | 0.512   | 0.479    | 2.0 us         | 4x                     |
+| 240             | 0.756    | 0.455   | 0.244    | 4.0 us         | 8x                     |
+
+Metadata halves with every doubling, exactly as arithmetic says it must, and
+the payload improves too because the envelope and the Huffman table amortise.
+Extrapolating one more step puts an integer walk near **0.57** at 480 samples a
+block — under the night's target, and the reason I did not take it:
+
+```text
+480 samples a block would need the decode ceiling raised from 8 to 16 KiB
+a narrow query would decode sixteen times what it answers, against eight
+a block is deleted whole, so retention gets coarser
+```
+
+Two of those are exactly the rules this night was given. The lever is real, it
+is priced, and it is somebody's decision rather than a number to quietly bank.
+
+## What is left in the block row
+
+Two squeezes that change no semantics: a gauge has no `increase` or `resets`
+and a counter no `min`, `max` or `sum`, so those columns are null rather than
+zero; and the row stores the span to its last sample rather than the absolute
+timestamp, which is a smaller integer.
+
+| class       | tonight | unused columns null | a span, not an end | both      |
+|-------------|---------|---------------------|--------------------|-----------|
+| integers    | 0.756   | 0.739               | 0.739              | **0.727** |
+| counter     | 0.795   | 0.761               | 0.782              | **0.746** |
+| decimal     | 0.573   | 0.534               | 0.563              | **0.521** |
+| noisy float | 8.958   | 8.917               | 8.946              | **8.909** |
+
+## The page size, and the biggest single win of the night
+
+A page is bought whole. A noisy block encodes to about 1557 bytes, two of them
+fit a 4 KiB page, and the remaining 962 bytes are paid for and empty.
+
+| class             | 4 KiB     | 8 KiB     | 16 KiB | 32 KiB |
+|-------------------|-----------|-----------|--------|--------|
+| integers          | 0.727     | **0.720** | 0.744  | 0.778  |
+| counter           | **0.746** | 0.761     | 0.758  | 0.778  |
+| decimal           | **0.521** | 0.532     | 0.532  | 0.560  |
+| noisy float       | 8.909     | **7.281** | 7.216  | 7.059  |
+| the four averaged | 2.726     | **2.324** | 2.312  | 2.294  |
+
+Eight kibibytes takes the float class from 8.909 to 7.281 — its page waste
+falls from 2.033 bytes a sample to 0.426 — and moves the three structured
+classes by less than two percent either way. On the mixed workload that is
+fifteen percent of the whole file for one pragma.
+
+It is not free and the cost was not measured tonight: a page is also the unit
+the write-ahead log writes, so a dirty page costs eight kibibytes instead of
+four. That measurement has to happen before this is adopted, and it is the
+first thing on the list below.
+
+The first attempt at this sweep reported that the page size changed nothing at
+all, because `_pragma=page_size` in the connection string never took effect —
+the file was 4 KiB in every case. A page size has to be set before the file
+exists and before WAL, as its own statement, and the measurement only became
+real once it printed the size the database actually had.
+
+## Where the night ended
+
+| class             | at the start | tonight, 4 KiB pages | tonight, 8 KiB pages | the target |
+|-------------------|--------------|----------------------|----------------------|------------|
+| integers          | 1.147        | 0.727                | **0.720**            | 0.70       |
+| counter           | 1.258        | **0.746**            | 0.761                | 0.70       |
+| decimal           | 0.865        | **0.521**            | 0.532                | 0.70 ✓     |
+| noisy float       | 9.119        | 8.909                | **7.281**            | —          |
+| the four averaged | 3.097        | 2.726                | **2.324**            |            |
+
+**The target was missed on two classes of four and beaten on one.** An integer
+walk is 0.020 over it and a counter 0.046; a decimal gauge is 0.18 under. The
+float class was never a candidate: its floor, measured at the top of this file,
+is 6.404 bytes a sample against the 6.486 we write, so it is within one and a
+half percent of what any lossless encoding can do with those bits.
+
+Where an integer walk's 0.720 sits:
+
+```text
+0.455  payload     already at the order-0 entropy of its delta alphabet:
+                   3.38 bits a delta written, 3.36 measured for huff0, 3.17 the bound
+0.213  metadata    51 bytes of SQLite row: the key, the span, the count,
+                   five summary columns, the payload reference and the record header
+0.017  indexes     one entry a series
+0.034  page waste
+```
+
+So the payload is done until somebody finds a better model than "the previous
+value", and that is what the corpus and the analyzer are for. Everything left
+is the row, and the two levers on the row are both priced above: a bigger block
+halves it and costs query latency and the decode ceiling; a page size moves it
+by a couple of percent and costs write-ahead log volume.
+
+What I would do next, in order:
+
+```text
+1  measure the write-ahead log at 4 and 8 KiB pages, on the same batches
+   — one pragma is worth fifteen percent of a mixed file, and its only
+     unmeasured cost is there
+2  a corpus and the analyzer, because every remaining codec idea is now
+   arguing about a model of the data we have never actually looked at
+3  the block size decision, deliberately, with a range-query benchmark rather
+   than the arithmetic above
+4  the packed tail, which is the sparse story and untouched tonight
+```
+
+And two things this night refused to do, recorded so nobody has to re-derive
+them: a bigger block was not taken silently, and no summary was dropped that a
+query would have needed. The only semantic change made at all was that a gauge
+now stores null where it used to store a zero it did not mean.

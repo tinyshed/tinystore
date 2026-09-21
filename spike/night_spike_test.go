@@ -30,6 +30,7 @@ type denseResult struct {
 	payload     int64
 	file        int64
 	shares      []denseShare
+	pageSize    int64
 	summaryScan time.Duration
 	pointQuery  time.Duration
 }
@@ -54,11 +55,12 @@ func (r denseResult) lines() (payload, metadata, indexes, waste float64) {
 }
 
 type denseSchema struct {
-	name    string
-	create  []string
-	indexes []string
-	insert  func(tx *sql.Tx, i int, seriesID int64, s summary, packed []byte) error
-	body    string
+	name     string
+	pageSize int
+	create   []string
+	indexes  []string
+	insert   func(tx *sql.Tx, i int, seriesID int64, s summary, packed []byte) error
+	body     string
 }
 
 func measureDense(t *testing.T, class string, blocks, perBlock int, schema denseSchema,
@@ -105,6 +107,9 @@ func measureDense(t *testing.T, class string, blocks, perBlock int, schema dense
 	checkpoint(t, db)
 
 	result.shares, result.file = nightShares(t, db, schema.body)
+	if err = db.QueryRow(`pragma page_size`).Scan(&result.pageSize); err != nil {
+		t.Fatal(err)
+	}
 	result.summaryScan = timeNight(t, db, `select sum(count), sum(sum) from blocks`)
 	result.pointQuery = timeNight(t, db,
 		`select count(*) from blocks where series_id = 7 and start_ts >= 0`)
@@ -116,14 +121,19 @@ func openNight(t *testing.T, path string, schema denseSchema) *sql.DB {
 
 	dsn := "file:" + path + "?_dqs=0&_defensive=1&_pragma=busy_timeout(5000)" +
 		"&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_txlock=immediate" +
-		"&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+		"&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	for _, statement := range append(append([]string{}, schema.create...), schema.indexes...) {
+	// the page size has to be chosen before the file exists and before WAL
+	first := []string{"pragma journal_mode=WAL"}
+	if schema.pageSize > 0 {
+		first = []string{fmt.Sprintf("pragma page_size=%d", schema.pageSize), "pragma journal_mode=WAL"}
+	}
+	for _, statement := range append(first, append(append([]string{}, schema.create...), schema.indexes...)...) {
 		if _, err = db.Exec(statement); err != nil {
 			t.Fatalf("%s: %v", schema.name, err)
 		}
