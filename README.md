@@ -61,13 +61,13 @@ result:
 Nothing is rounded, scaled or approximated on the way in. `-0`, NaN payloads
 and infinities come back as the bits that went in.
 
-| 240 samples of | bytes a sample |
-|----------------|---------------:|
-| one repeated value | 0.142 |
-| whole numbers, walking | 0.671 |
-| a counter | 0.808 |
-| a smooth float | 7.946 |
-| random IEEE-754 bits | 8.108 |
+| 240 samples of         | bytes a sample |
+|------------------------|----------------|
+| one repeated value     | 0.142          |
+| whole numbers, walking | 0.671          |
+| a counter              | 0.808          |
+| a smooth float         | 7.946          |
+| random IEEE-754 bits   | 8.108          |
 
 Payload only; a whole SQLite file costs more. The environment, the fixtures and
 the command that reproduces each number are in
@@ -75,12 +75,12 @@ the command that reproduces each number are in
 
 ## Layout
 
-| Path | What it is |
-|------|------------|
-| `codec/` | the block codec: what a payload looks like and how to read one |
+| Path     | What it is                                                      |
+|----------|-----------------------------------------------------------------|
+| `codec/` | the block codec: what a payload looks like and how to read one  |
 | `spike/` | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
-| `docs/` | the design, the format, the numbers and what is still unknown |
-| `tools/` | a second module pinning developer tools |
+| `docs/`  | the design, the format, the numbers and what is still unknown   |
+| `tools/` | a second module pinning developer tools                         |
 
 ## License
 

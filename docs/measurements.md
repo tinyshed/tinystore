@@ -98,6 +98,76 @@ does not justify making a third storage level mandatory yet. It remains a spike
 until sparse-to-dense transitions, idle-series expiry, concurrent late writes
 and mixed values prove the complexity worthwhile. Mutable BLOBs are unmeasured.
 
+## Where a dense block's bytes actually are
+
+`TestWhereADenseBlocksBytesAre`, 10 000 blocks of 240 whole-number samples,
+1 000 series, written in one transaction and measured after a checkpoint. The
+breakdown is `dbstat`, which reports each b-tree's own pages, so it is a
+division of the file rather than a difference between runs. Sizes do not depend
+on the platform, so this one was run on Windows; the timings are warm local
+runs of `select sum(count), sum(sum) from blocks`, twenty of them, and are
+comparable only with each other.
+
+| layout                                         | file           | summary scan |
+|------------------------------------------------|----------------|--------------|
+| as measured                                    | 1.147 B/sample | 0.73 ms      |
+| summary columns declared `integer`             | 1.147          | 0.73 ms      |
+| no summary columns                             | 1.044          | n/a          |
+| payload keyed by the block, not by a surrogate | 1.147          | 0.75 ms      |
+| the same, without the expiry index             | 1.046          | 0.80 ms      |
+| without either maintenance index               | **0.964**      | 0.74 ms      |
+| body inside the block row                      | 1.094          | 2.13 ms      |
+| the same, without the expiry index             | 0.993          | 2.16 ms      |
+| key and body only                              | 0.833          | n/a          |
+
+The 275.3 bytes a block of the first row divide like this:
+
+| object                                           | bytes a block | bytes a sample |
+|--------------------------------------------------|---------------|----------------|
+| `payloads`, of which 160.8 is the payload itself | 176.5         | 0.736          |
+| `blocks`                                         | 54.5          | 0.227          |
+| `block_expiry`, over `end_ts`                    | 24.2          | 0.101          |
+| `block_payload`, over the foreign key            | 19.7          | 0.082          |
+| schema                                           | 0.4           | 0.002          |
+
+Three results, each against an expectation.
+
+**SQLite already stores an integral value in a `real` column as an integer, in
+a `STRICT` table too.** Declaring the summary columns `integer` changed nothing,
+byte for byte. What the summary really costs is the difference against dropping
+it, and that depends on the data rather than on the declaration —
+`TestWhatASummaryCostsWhenItIsNotWholeNumbers`, same fixture:
+
+| values             | `blocks` b-tree | the summary's share |
+|--------------------|-----------------|---------------------|
+| whole numbers      | 54.5 B/block    | 24.6                |
+| tenths of a degree | 60.6            | 30.7                |
+| noisy `float64`    | 91.3            | 61.4                |
+
+Eight bytes a column when the value is not integral, which is 0.256 bytes a
+sample for a noisy series.
+
+**Giving the payload the block's own key saves nothing.** It removes the
+19.7-byte foreign-key index and 3.3 bytes of `payload_id`, and the composite
+key it puts in the payload table costs 23. The earlier 0.051 came from a
+different schema — a rowid block table with a unique index — and does not
+generalise.
+
+**The body inside the block row is worse on both counts.** It is larger
+(0.993 against 0.964) and its summary scan is three times slower, and the page
+counts say why rather than leaving it to a story: the block b-tree grows from
+54.5 to 238 bytes a block, so a scan that wants eleven columns turns four times
+as many pages.
+
+What reaches 0.964 is neither a codec nor a clustering change: it is dropping
+two maintenance indexes. `block_payload` exists only so that deleting a payload
+can find the block that points at it; `block_expiry` exists to find expired
+blocks across the whole file, which a primary key of `(series_id, start_ts)`
+plus one timestamp per series already answers. Neither is free to remove —
+the first needs both deletes in one transaction and a gate that proves no
+payload outlives its block, the second needs the per-series timestamp the head
+already maintains — but neither costs a byte of payload.
+
 ## A million series
 
 The design target is that the format and the query model hold about a million
@@ -292,12 +362,12 @@ The codec table reports 2.61 bytes for a noisy gauge and 1.96 for a counter.
 Measuring four shapes at 240 samples a block says the axis is not the kind of
 metric at all:
 
-| the values are            | bytes per sample |
-|---------------------------|------------------|
-| a constant                | 0.18             |
-| whole numbers             | 1.25             |
-| a noisy `float64` walk    | 7.43             |
-| a counter of `float64`    | 8.13             |
+| the values are         | bytes per sample |
+|------------------------|------------------|
+| a constant             | 0.18             |
+| whole numbers          | 1.25             |
+| a noisy `float64` walk | 7.43             |
+| a counter of `float64` | 8.13             |
 
 A counter coming out worst than a gauge is the giveaway. Both of the expensive
 rows are full-entropy `float64`: every mantissa bit is noise, and `zstd` has

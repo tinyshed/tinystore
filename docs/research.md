@@ -93,30 +93,47 @@ measured with identical batching and checkpoint policy on both sides, and with
 a dense series and a filled lateness window in the same run as the daily one.
 The daily case alone would only prove it is a good format for telemetry.
 
-## Where the rest of a dense block's bytes are
+## Where the rest of a dense block's bytes are — answered
 
-Two measured numbers, one subtraction:
+Measured rather than argued about, and the section that used to stand here
+guessed wrong twice. [measurements.md](measurements.md) has the division of the
+file; what it leaves for this document is what to do about it.
 
-```text
-payload      0.671 B/sample × 240 = 161 B a block
-whole file   1.101 B/sample × 240 = 264 B a block
-                                  ───────────────
-overhead                            103 B a block
-```
+`≤1.0 bytes a sample` on dense whole numbers is reached without touching the
+codec: **0.964, by removing two maintenance indexes.** Neither removal is free,
+and each one is a design change with a gate attached rather than a tuning
+knob.
 
-Reaching 1.00 bytes a sample means taking 24 bytes off a block. The obvious
-place to look is not the codec — it is the summary row, whose six floating
-columns are up to 48 bytes beside a payload of 161. Whether they really cost 48
-depends on something we have not checked: SQLite can store an integral value in
-a column of real affinity as an integer, and whether it still does so in a
-`STRICT` table decides whether those columns cost 48 bytes or nearer 12.
+`block_payload` is an index over a foreign key, 19.7 bytes a block, whose only
+job is to let a deleted payload find the block pointing at it. Deleting both in
+one transaction does the same job for nothing — at the price of the database no
+longer enforcing it, so it needs a test that a deleted block leaves no payload,
+and a second one that the reverse cannot happen either.
 
-So the cheap first experiment is a decomposition rather than another codec: the
-same ten thousand blocks, with one component removed at a time — the summary
-columns, the expiry index, the series index, the separate payload row — and the
-file measured after each. That says where the 103 bytes are instead of guessing
-at them. A payload-to-page sweep comes second: it shows the packing cliffs, but
-it cannot say what a row is made of.
+`block_expiry` is 24.2 bytes a block for finding expired blocks across the
+whole file. The head already needs one oldest-timestamp-per-series column,
+indexed, to find its own due work; blocks are keyed `(series_id, start_ts)`, so
+the same column plus a prefix range answers for them too. That is one index
+entry per series instead of one per block — a large win where a series has many
+blocks and a wash where it has one, which is the sparse case and is the packed
+tail's business anyway. The cost is one row update per sealed block, which the
+lifecycle measurement has to carry rather than assume.
+
+What this does **not** license is deleting the summary. It is 24.6 bytes a
+block on whole numbers and 61.4 on noisy floats — the largest single item after
+the payload — and it exists so that a whole-block query never decodes. Its cost
+is the answer to a different question: whether a coarse tier is worth it.
+
+Two numbers follow from the same measurement. On tenths of a degree the file is
+2.342 today, so the same two index removals put it at 2.159; with the scaled
+integers below at their estimated 0.42 payload it would be about **0.787 bytes
+a sample** — the stretch target, by arithmetic, on the shape real gauges have.
+On noisy floats the same removals give 8.936, and nothing short of losing bits
+moves that much further.
+
+The page sweep the reports asked for is still worth running, but it answers a
+different question: not what a row is made of, which `dbstat` now answers
+exactly, but where the packing cliffs are between one payload size and the next.
 
 ## Exact decimals
 
@@ -347,7 +364,7 @@ for the XOR transform. None of them is a dependency.
 ## Order of work
 
 ```text
-P0   decompose the 103 bytes        24 of them decide ≤1.0 B/sample
+P0   decompose the 103 bytes        done: two indexes, 0.964 B/sample
 P0   exact decimals                 a measured hole, arithmetic says ×4
 P0   the packed tail                the largest sparse prize, and the riskiest
 P1   order-preserving integers      after a real corpus says smooth floats exist

@@ -34,13 +34,13 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path | What it is |
-|------|------------|
-| `codec/` | the block codec and the payload format. Knows samples and bytes, nothing else |
-| `spike/` | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
-| `tools/` | a second module pinning developer tools. Two files, never hand-edited |
-| `docs/` | the design, the format, the numbers, the open questions |
-| `.github/workflows/` | the authoritative clean builds |
+| Path                 | What it is                                                                    |
+|----------------------|-------------------------------------------------------------------------------|
+| `codec/`             | the block codec and the payload format. Knows samples and bytes, nothing else |
+| `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
+| `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
+| `docs/`              | the design, the format, the numbers, the open questions                       |
+| `.github/workflows/` | the authoritative clean builds                                                |
 
 Planned, and not yet written:
 
@@ -213,12 +213,12 @@ payload, and bytes a sample in a real file.
 This file holds what gets broken: rules, invariants and traps. Read it before
 changing something, not to look something up.
 
-| | |
-|---|---|
-| [docs/design.md](docs/design.md) | how the store is meant to work, and why that shape |
-| [docs/format.md](docs/format.md) | the bytes: the payload's layout, version by version |
-| [docs/measurements.md](docs/measurements.md) | every number, its environment and how to reproduce it |
-| [docs/research.md](docs/research.md) | what is not built: the open questions and their acceptance gates |
+|                                              |                                                                  |
+|----------------------------------------------|------------------------------------------------------------------|
+| [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape               |
+| [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
+| [docs/measurements.md](docs/measurements.md) | every number, its environment and how to reproduce it            |
+| [docs/research.md](docs/research.md)         | what is not built: the open questions and their acceptance gates |
 
 A reference a contributor returns to belongs in `docs/`. A rule they are about
 to violate belongs here.
@@ -227,24 +227,24 @@ to violate belongs here.
 
 Every rule worth keeping is worth the twenty lines that make it fail loudly.
 
-| Promise | What enforces it |
-|---------|------------------|
-| no cgo | `CGO_ENABLED=0` in the build, on all three CI platforms |
-| the module carries only the engine | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod |
-| importing this stays cheap | `task size` links a probe and reports what it cost |
-| a sample survives the codec exactly | `TestSamplesSurviveTheCodecExactly`, on bits and not on values |
-| the extremes survive too | `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time |
-| a corrupt payload is refused | `TestPayloadCorruptionIsRefused` and `FuzzDecode` |
-| a decode stays bounded | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling |
-| an iterator outlives its codec | `TestIteratorOwnsItsBytesAndOutlivesTheCodec` |
-| unordered or oversized input is refused | `TestRejectsUnorderedAndOversizedInput` |
-| a counter's increase survives a reset | `TestACounterKeepsItsIncreaseAcrossAReset` |
-| only the safe prefix is sealed | `TestOnlyTheSafePrefixIsSealed`, on the strict edge |
-| a late sample cannot enter a sealed block | `TestALateCounterSampleWouldRewriteASealedBlock` |
-| a partial range is not answered from a summary | `TestAPartialRangeNeedsTheRawEdges` |
-| retention clips before it summarises | `TestRetentionClipsAPersistedBlockBeforeSummarising` |
-| a quiet tail expires without becoming a block | `TestASilentTailExpiresWithoutBecomingABlock` |
-| one expired sample does not delete a block | `TestWholeBlockRetentionOvershoot` |
+| Promise                                        | What enforces it                                                                |
+|------------------------------------------------|---------------------------------------------------------------------------------|
+| no cgo                                         | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
+| the module carries only the engine             | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
+| importing this stays cheap                     | `task size` links a probe and reports what it cost                              |
+| a sample survives the codec exactly            | `TestSamplesSurviveTheCodecExactly`, on bits and not on values                  |
+| the extremes survive too                       | `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time |
+| a corrupt payload is refused                   | `TestPayloadCorruptionIsRefused` and `FuzzDecode`                               |
+| a decode stays bounded                         | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling                          |
+| an iterator outlives its codec                 | `TestIteratorOwnsItsBytesAndOutlivesTheCodec`                                   |
+| unordered or oversized input is refused        | `TestRejectsUnorderedAndOversizedInput`                                         |
+| a counter's increase survives a reset          | `TestACounterKeepsItsIncreaseAcrossAReset`                                      |
+| only the safe prefix is sealed                 | `TestOnlyTheSafePrefixIsSealed`, on the strict edge                             |
+| a late sample cannot enter a sealed block      | `TestALateCounterSampleWouldRewriteASealedBlock`                                |
+| a partial range is not answered from a summary | `TestAPartialRangeNeedsTheRawEdges`                                             |
+| retention clips before it summarises           | `TestRetentionClipsAPersistedBlockBeforeSummarising`                            |
+| a quiet tail expires without becoming a block  | `TestASilentTailExpiresWithoutBecomingABlock`                                   |
+| one expired sample does not delete a block     | `TestWholeBlockRetentionOvershoot`                                              |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before
