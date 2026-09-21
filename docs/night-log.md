@@ -329,3 +329,56 @@ And two things this night refused to do, recorded so nobody has to re-derive
 them: a bigger block was not taken silently, and no summary was dropped that a
 query would have needed. The only semantic change made at all was that a gauge
 now stores null where it used to store a zero it did not mean.
+
+## The log answers the page size, and a block answers it better
+
+`TestWhatAPageSizeCostsTheLog`. Six thousand blocks in batches of a hundred,
+autocheckpoint off, the write-ahead log measured before each truncate and
+summed, identical batching on both sides.
+
+| class       | page  | log a sample | file a sample |
+|-------------|-------|--------------|---------------|
+| integers    | 4 KiB | 2.84         | 0.740         |
+| integers    | 8 KiB | **4.19**     | 0.751         |
+| noisy float | 4 KiB | 11.42        | 8.926         |
+| noisy float | 8 KiB | 11.05        | **7.310**     |
+
+So the eight-kibibyte page is not a free fifteen percent. It helps the float
+class on both counts and it costs the integer class **forty-seven percent more
+journal** for a file that is slightly larger. A page size is one choice for one
+file, so taking it would be paying the classes that behave well to subsidise
+the one that does not.
+
+The float class's waste is better fixed from the other end — by choosing the
+block, not the page:
+
+| noisy float, samples a block | total     | page waste | decode a block |
+|------------------------------|-----------|------------|----------------|
+| 100                          | 7.852     | 0.456      | 3.1 us         |
+| 120                          | 7.743     | 0.493      | 3.1 us         |
+| 150                          | 7.607     | 0.492      | 4.0 us         |
+| 180                          | 8.139     | 1.112      | 4.0 us         |
+| **200**                      | **7.574** | 0.592      | 6.0 us         |
+| 208                          | 8.179     | 1.208      | 7.5 us         |
+| 220                          | 9.774     | 2.817      | 6.0 us         |
+| 240                          | 8.958     | 2.032      | 7.2 us         |
+
+It is not monotonic, and that is the whole point. At 200 samples a noisy block
+encodes to about 1294 bytes and three rows fit a 4 KiB page; at 240 it is 1557
+and only two do, so nearly a kilobyte of every page is bought and thrown away.
+Two hundred samples gets **7.574 against 8.958** — almost everything the bigger
+page offered, with no extra journal and a faster decode.
+
+That is the evidence the design's byte threshold was waiting for. A block
+should close on the first of three conditions, and the byte one should be set
+so that a whole number of rows lands in a page, not at a round number:
+
+```text
+enough samples   240, a bounded worst case for one row
+enough bytes     about 1300, so three rows fill a 4 KiB page instead of two
+too wide a span  the event-time ceiling
+```
+
+An integer block never reaches 1300 bytes — it is 109 — so this changes nothing
+for the classes that were already packing well, and takes 15 percent off the
+one that was not.

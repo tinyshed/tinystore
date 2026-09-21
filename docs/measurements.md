@@ -221,10 +221,12 @@ Where an integer walk's 0.720 goes:
 | indexes    | 0.017          | one entry a series                                  |
 | page waste | 0.034          | bought and unused                                   |
 
-Eight kibibyte pages are worth fifteen percent of a mixed file, almost all of
-it the float class, whose page waste falls from 2.033 bytes a sample to 0.426.
-The cost that has not been measured is the write-ahead log, which writes whole
-pages.
+Eight kibibyte pages looked like fifteen percent of a mixed file until the
+write-ahead log was measured beside them: they cost an integer workload 47
+percent more journal, 2.84 bytes a sample against 4.19, for a file that is
+slightly larger. The float class's waste is better removed by closing its
+blocks at about 1300 bytes, where three rows fill a 4 KiB page instead of two —
+that alone takes it from 8.958 to 7.574 with no extra journal at all.
 
 ## Where a dense block's bytes actually are
 

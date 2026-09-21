@@ -22,8 +22,8 @@ func TestWhatABlockSizeCostsAQuery(t *testing.T) {
 
 	const totalSamples = 2400000
 	const window = 60
-	for _, class := range []string{"integers", "counter", "temperature"} {
-		for _, perBlock := range []int{30, 60, 120, 240} {
+	for _, class := range denseClasses {
+		for _, perBlock := range []int{30, 60, 120, 150, 200, 240} {
 			count := totalSamples / perBlock
 			result := measureDense(t, class, count, perBlock, tonightsSchema(), blocks.Encode)
 

@@ -195,7 +195,7 @@ A block closes on whichever comes first:
 
 ```text
 enough samples      a bounded worst case for one row
-enough bytes        so that reading one point does not decompress a megabyte
+enough bytes        so that a whole number of rows fills a page, about 1300
 too wide a span     limits the event-time range of one block
 ```
 
