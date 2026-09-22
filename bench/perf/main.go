@@ -15,7 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,28 +51,32 @@ func buildSeries(n int) []metrics.Series {
 }
 
 type watcher struct {
-	stop                 chan struct{}
-	done                 chan struct{}
-	peakHeap, peakSystem uint64
-	walWritten, walPeak  int64
+	stop, done          chan struct{}
+	peakHeap, peakGoSys uint64
+	peakRSS             uint64
+	walGrowth, walPeak  int64
 }
 
-// watch samples what no counter reports: the high water mark of a pure Go
-// process and the bytes its write-ahead log took while the stage ran
+// watch observes Go memory, OS RSS when available, and WAL file growth
 func watch(path string) *watcher {
 	w := &watcher{stop: make(chan struct{}), done: make(chan struct{})}
+	previous := int64(0)
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		previous = info.Size()
+		w.walPeak = previous
+	}
 	go func() {
 		defer close(w.done)
 		var stats runtime.MemStats
-		previous := int64(0)
 		for {
 			runtime.ReadMemStats(&stats)
 			w.peakHeap = max(w.peakHeap, stats.HeapAlloc)
-			w.peakSystem = max(w.peakSystem, stats.Sys)
+			w.peakGoSys = max(w.peakGoSys, stats.Sys)
+			w.peakRSS = max(w.peakRSS, processRSS())
 			if info, err := os.Stat(path + "-wal"); err == nil {
 				size := info.Size()
 				if size > previous {
-					w.walWritten += size - previous
+					w.walGrowth += size - previous
 				}
 				w.walPeak = max(w.walPeak, size)
 				previous = size
@@ -87,6 +91,29 @@ func watch(path string) *watcher {
 		}
 	}()
 	return w
+}
+
+func processRSS() uint64 {
+	data, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return 0
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return pages * uint64(os.Getpagesize())
+}
+
+func rssMiB(w *watcher) string {
+	if w.peakRSS == 0 {
+		return "unavailable"
+	}
+	return strconv.FormatFloat(float64(w.peakRSS)/(1<<20), 'f', 1, 64)
 }
 
 func (w *watcher) finish() *watcher {
@@ -113,7 +140,7 @@ func (l *latencies) quantiles() (p50, p95, p99, worst time.Duration) {
 		return 0, 0, 0, 0
 	}
 	sorted := append([]time.Duration(nil), l.values...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	at := func(q float64) time.Duration {
 		index := int(q * float64(len(sorted)-1))
 		return sorted[index]
@@ -133,13 +160,18 @@ func report(stage string, fields ...any) {
 func micros(d time.Duration) string { return strconv.FormatFloat(d.Seconds()*1e6, 'f', 1, 64) }
 
 func openStore(ctx context.Context, path string, series, readers int) *metrics.Store {
+	return openStoreWithAdmission(ctx, path, series, readers, 0)
+}
+
+func openStoreWithAdmission(ctx context.Context, path string, series, readers, activeReads int) *metrics.Store {
 	store, err := metrics.Open(ctx, path, metrics.Options{
-		Retention:       365 * 24 * time.Hour,
-		MaxReaders:      readers,
-		MaxSeries:       2 * series,
-		MaxHeadSamples:  8192,
-		MaxBatchSamples: 200000,
-		MaxBatchBytes:   64 << 20,
+		Retention:          365 * 24 * time.Hour,
+		MaxReaders:         readers,
+		MaxConcurrentReads: activeReads,
+		MaxSeries:          2 * series,
+		MaxHeadSamples:     8192,
+		MaxBatchSamples:    200000,
+		MaxBatchBytes:      64 << 20,
 		Limits: metrics.Limits{
 			Series: 2 * series, Blocks: 1 << 20, PayloadBytes: 1 << 30,
 			DecodedSamples: 1 << 24, OutputSamples: 1 << 24,
@@ -188,8 +220,9 @@ func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch,
 	for written < seriesCount*samples {
 		size := min(batch, seriesCount*samples-written)
 		batches := make([]metrics.Batch, 0, size)
-		for len(batches) < 1 || countSamples(batches) < size {
-			take := min(size-countSamples(batches), samples-offset)
+		batchSamples := 0
+		for batchSamples < size {
+			take := min(size-batchSamples, samples-offset)
 			if take <= 0 {
 				next, offset = next+1, 0
 				continue
@@ -200,6 +233,7 @@ func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch,
 				points[i] = metrics.Sample{At: start + int64(offset+i)*step, Value: float64(values[next])}
 			}
 			batches = append(batches, metrics.Batch{Series: all[next], Samples: points})
+			batchSamples += take
 			offset += take
 			if offset == samples {
 				next, offset = next+1, 0
@@ -216,7 +250,7 @@ func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch,
 			log.Fatalf("ingest: %v", err)
 		}
 		calls.add(time.Since(at))
-		written += countSamples(batches)
+		written += batchSamples
 		rounds++
 		if maintainEvery > 0 && rounds%maintainEvery == 0 {
 			at = time.Now()
@@ -256,34 +290,32 @@ func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch,
 		"sealed_blocks", sealed,
 		"allocs_per_sample", strconv.FormatFloat(float64(after.Mallocs-before.Mallocs)/float64(written), 'f', 2, 64),
 		"bytes_alloc_per_sample", strconv.FormatFloat(float64(after.TotalAlloc-before.TotalAlloc)/float64(written), 'f', 1, 64),
-		"wal_bytes_per_sample", strconv.FormatFloat(float64(w.walWritten)/float64(written), 'f', 2, 64),
+		"observed_wal_growth_bytes_per_sample", strconv.FormatFloat(float64(w.walGrowth)/float64(written), 'f', 2, 64),
 		"wal_peak_bytes", w.walPeak,
 		"peak_heap_mib", strconv.FormatFloat(float64(w.peakHeap)/(1<<20), 'f', 1, 64),
-		"peak_process_mib", strconv.FormatFloat(float64(w.peakSystem)/(1<<20), 'f', 1, 64),
+		"peak_go_sys_mib", strconv.FormatFloat(float64(w.peakGoSys)/(1<<20), 'f', 1, 64),
+		"peak_os_rss_mib", rssMiB(w),
 		"file_bytes_open", live,
 		"file_bytes_closed", fileBytes(path),
 		"bytes_per_sample", strconv.FormatFloat(float64(fileBytes(path))/float64(written), 'f', 4, 64),
 	)
 }
 
-func countSamples(batches []metrics.Batch) int {
-	total := 0
-	for _, b := range batches {
-		total += len(b.Samples)
-	}
-	return total
-}
-
 type readShape struct {
 	name     string
 	matchers []metrics.Label
 	span     time.Duration
+	rotate   bool
 }
 
 // read replays one shape of query at a chosen reader concurrency
-func read(ctx context.Context, dir, label, only string, seriesCount, readers, seconds int) {
-	path := filepath.Join(dir, "read.db")
-	store := openStore(ctx, path, seriesCount, readers)
+func read(ctx context.Context, dir, label, only string, seriesCount, readers, activeReads, seconds int) {
+	path, cleanup, err := copiedReadFixture(dir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cleanup()
+	store := openStoreWithAdmission(ctx, path, seriesCount, readers, activeReads)
 	defer store.Close(ctx)
 	step := int64(10000)
 	var first, last int64
@@ -298,23 +330,33 @@ func read(ctx context.Context, dir, label, only string, seriesCount, readers, se
 	last = results[0].Samples[len(results[0].Samples)-1].At
 
 	shapes := []readShape{
-		{"point", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, time.Duration(step) * time.Millisecond},
-		{"hour", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, time.Hour},
-		{"day", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, 24 * time.Hour},
-		{"series_full", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, 0},
-		{"selector_low_cardinality", []metrics.Label{{Name: "region", Value: regions[0]}}, time.Hour},
-		{"selector_high_cardinality", []metrics.Label{{Name: "host", Value: "host_1"}}, time.Hour},
-		{"scan_all", []metrics.Label{{Name: "job", Value: "bench"}}, 0},
+		{"point", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, time.Duration(step) * time.Millisecond, false},
+		{"hour", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, time.Hour, false},
+		{"all_labels_hour", buildSeries(seriesCount)[0].Labels, time.Hour, false},
+		{"four_labels_hour", buildSeries(seriesCount)[0].Labels[:4], time.Hour, false},
+		{"rotating_hour", nil, time.Hour, true},
+		{"day", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, 24 * time.Hour, false},
+		{"series_full", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, 0, false},
+		{"selector_low_cardinality", []metrics.Label{{Name: "region", Value: regions[0]}}, time.Hour, false},
+		{"selector_high_cardinality", []metrics.Label{{Name: "host", Value: "host_1"}}, time.Hour, false},
+		{"scan_all", []metrics.Label{{Name: "job", Value: "bench"}}, 0, false},
 	}
 	for _, shape := range shapes {
 		if only != "" && shape.name != only {
 			continue
 		}
-		runShape(ctx, store, label, seriesCount, readers, seconds, shape, first, last)
+		runShape(ctx, store, label, seriesCount, readers, activeReads, seconds, shape, first, last)
 	}
 }
 
-func runShape(ctx context.Context, store *metrics.Store, label string, seriesCount, readers, seconds int, shape readShape, first, last int64) {
+func runShape(ctx context.Context, store *metrics.Store, label string, seriesCount, readers, activeReads, seconds int, shape readShape, first, last int64) {
+	var rotating [][]metrics.Label
+	if shape.rotate {
+		rotating = make([][]metrics.Label, seriesCount)
+		for id := range rotating {
+			rotating[id] = []metrics.Label{{Name: "__name__", Value: "metric_" + strconv.Itoa(id%20)}, {Name: "host", Value: "host_" + strconv.Itoa(id/20)}}
+		}
+	}
 	calls := &latencies{}
 	var queries, points atomic.Int64
 	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
@@ -330,6 +372,10 @@ func runShape(ctx context.Context, store *metrics.Store, label string, seriesCou
 			defer wg.Done()
 			source := rand.New(rand.NewPCG(uint64(seed), 7))
 			for time.Now().Before(deadline) {
+				matchers := shape.matchers
+				if shape.rotate {
+					matchers = rotating[source.IntN(len(rotating))]
+				}
 				from, to := first, last+1
 				if shape.span > 0 {
 					width := shape.span.Milliseconds()
@@ -339,7 +385,7 @@ func runShape(ctx context.Context, store *metrics.Store, label string, seriesCou
 					to = from + width
 				}
 				at := time.Now()
-				result, err := store.Read(ctx, metrics.Range{Matchers: shape.matchers, From: from, To: to})
+				result, err := store.Read(ctx, metrics.Range{Matchers: matchers, From: from, To: to})
 				if err != nil {
 					log.Fatalf("read %s: %v", shape.name, err)
 				}
@@ -358,7 +404,7 @@ func runShape(ctx context.Context, store *metrics.Store, label string, seriesCou
 	p50, p95, p99, worst := calls.quantiles()
 	total := queries.Load()
 	report("read",
-		"label", label, "series", seriesCount, "shape", shape.name, "readers", readers,
+		"label", label, "series", seriesCount, "shape", shape.name, "readers", readers, "active_read_limit", activeReads,
 		"queries", total,
 		"queries_per_second", strconv.FormatFloat(float64(total)/elapsed.Seconds(), 'f', 1, 64),
 		"samples_returned", points.Load(),
@@ -366,15 +412,20 @@ func runShape(ctx context.Context, store *metrics.Store, label string, seriesCou
 		"p50_us", micros(p50), "p95_us", micros(p95), "p99_us", micros(p99), "max_us", micros(worst),
 		"allocs_per_query", strconv.FormatFloat(float64(after.Mallocs-before.Mallocs)/float64(max(total, 1)), 'f', 1, 64),
 		"peak_heap_mib", strconv.FormatFloat(float64(w.peakHeap)/(1<<20), 'f', 1, 64),
-		"peak_process_mib", strconv.FormatFloat(float64(w.peakSystem)/(1<<20), 'f', 1, 64),
+		"peak_go_sys_mib", strconv.FormatFloat(float64(w.peakGoSys)/(1<<20), 'f', 1, 64),
+		"peak_os_rss_mib", rssMiB(w),
 	)
 }
 
 // mixed is the shape an installation actually has: one writer that never stops
 // and readers behaving like panels
-func mixed(ctx context.Context, dir, label string, seriesCount, readers, seconds int) {
-	path := filepath.Join(dir, "read.db")
-	store := openStore(ctx, path, seriesCount, readers)
+func mixed(ctx context.Context, dir, label string, seriesCount, readers, activeReads, seconds int) {
+	path, cleanup, err := copiedReadFixture(dir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cleanup()
+	store := openStoreWithAdmission(ctx, path, seriesCount, readers, activeReads)
 	all := buildSeries(seriesCount)
 	step := int64(10000)
 	// a repeated run must start after what an earlier one already sealed
@@ -395,9 +446,7 @@ func mixed(ctx context.Context, dir, label string, seriesCount, readers, seconds
 	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
 	w := watch(path)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		round := int64(0)
 		for time.Now().Before(deadline) {
 			batches := make([]metrics.Batch, 0, 256)
@@ -419,7 +468,7 @@ func mixed(ctx context.Context, dir, label string, seriesCount, readers, seconds
 				}
 			}
 		}
-	}()
+	})
 	for worker := range readers {
 		wg.Add(1)
 		go func(seed int) {
@@ -446,12 +495,13 @@ func mixed(ctx context.Context, dir, label string, seriesCount, readers, seconds
 	i50, i95, i99, imax := ingestCalls.quantiles()
 	r50, r95, r99, rmax := readCalls.quantiles()
 	report("mixed",
-		"label", label, "series", seriesCount, "readers", readers, "seconds", seconds,
+		"label", label, "series", seriesCount, "readers", readers, "active_read_limit", activeReads, "seconds", seconds,
 		"ingested_samples", written.Load(), "queries", queries.Load(),
 		"ingest_p50_us", micros(i50), "ingest_p95_us", micros(i95), "ingest_p99_us", micros(i99), "ingest_max_us", micros(imax),
 		"read_p50_us", micros(r50), "read_p95_us", micros(r95), "read_p99_us", micros(r99), "read_max_us", micros(rmax),
 		"wal_peak_bytes", w.walPeak,
-		"peak_process_mib", strconv.FormatFloat(float64(w.peakSystem)/(1<<20), 'f', 1, 64),
+		"peak_go_sys_mib", strconv.FormatFloat(float64(w.peakGoSys)/(1<<20), 'f', 1, 64),
+		"peak_os_rss_mib", rssMiB(w),
 	)
 }
 
@@ -519,13 +569,16 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 
 func main() {
 	dir := flag.String("dir", ".", "directory for the database")
-	stage := flag.String("stage", "ingest", "ingest, populate, steady, read or mixed")
+	file := flag.String("file", "read.db", "database filename for the objects stage")
+	stage := flag.String("stage", "ingest", "ingest, register, append, ready_churn, maintenance_batch, churn_prepare, churn_expire, populate, steady, read, mixed or objects")
 	label := flag.String("label", "run", "name for this run")
 	seriesCount := flag.Int("series", 1000, "series to write")
 	samples := flag.Int("samples", 1000, "samples per series")
 	batch := flag.Int("batch", 100, "samples in one Ingest call")
+	seedSamples := flag.Int("seed-samples", 1, "initial samples per series before append timing")
 	maintainEvery := flag.Int("maintain-every", 16, "run Maintain after this many batches, zero to skip")
 	readers := flag.Int("readers", 1, "concurrent readers")
+	activeReads := flag.Int("active-reads", 0, "admitted reads including decode; zero follows the reader pool")
 	shape := flag.String("shape", "", "run only this read shape, empty for all")
 	seconds := flag.Int("seconds", 10, "how long a read or mixed stage runs")
 	flag.Parse()
@@ -537,14 +590,26 @@ func main() {
 	switch *stage {
 	case "ingest":
 		ingest(ctx, *dir, *label, *seriesCount, *samples, *batch, *maintainEvery)
+	case "register", "append":
+		writePath(ctx, *dir, *stage, *seriesCount, *samples, *batch, *seedSamples)
+	case "objects":
+		objects(ctx, *dir, *file)
+	case "ready_churn":
+		readyChurn(ctx, *dir, *samples)
+	case "maintenance_batch":
+		maintenanceBatch(ctx, *dir, *seriesCount, *samples)
+	case "churn_prepare":
+		churnPrepare(ctx, *dir, *seriesCount)
+	case "churn_expire":
+		churnExpire(ctx, *dir, *seriesCount)
 	case "populate":
 		populate(ctx, *dir, *seriesCount, *samples)
 	case "steady":
 		steady(ctx, *dir, *label, *seriesCount, *samples)
 	case "read":
-		read(ctx, *dir, *label, *shape, *seriesCount, *readers, *seconds)
+		read(ctx, *dir, *label, *shape, *seriesCount, *readers, *activeReads, *seconds)
 	case "mixed":
-		mixed(ctx, *dir, *label, *seriesCount, *readers, *seconds)
+		mixed(ctx, *dir, *label, *seriesCount, *readers, *activeReads, *seconds)
 	default:
 		log.Fatalf("unknown stage %q", *stage)
 	}
