@@ -150,7 +150,7 @@ func encodeClock(w *zstd.Encoder, times []int64) []byte {
 		}
 	}
 	var best []byte
-	for mode := byte(0); mode < 3; mode++ {
+	for mode := range byte(3) {
 		raw := binary.AppendUvarint([]byte{mode}, gcd)
 		switch mode {
 		case 0:
@@ -226,7 +226,7 @@ func decodeClock(t *testing.T, r *zstd.Decoder, h codec.Head, body []byte) []int
 			if n < 1 || n > len(deltas)-i {
 				t.Fatal("clock run")
 			}
-			for j := 0; j < n; j++ {
+			for j := range n {
 				deltas[i+j] = d
 			}
 			i += n

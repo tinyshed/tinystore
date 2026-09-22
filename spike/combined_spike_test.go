@@ -78,7 +78,7 @@ func combinedEvents(points []codec.Sample) []byte {
 		return nil
 	}
 	var best []byte
-	for kind := byte(0); kind < 3; kind++ {
+	for kind := range byte(3) {
 		factor := 1.0
 		if kind == 1 {
 			factor = 100

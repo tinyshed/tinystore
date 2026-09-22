@@ -82,7 +82,7 @@ func readPromDump(t *testing.T, path string) map[string][]point {
 			t.Fatalf("unexpected dump line: %.80s", line)
 		}
 		labels := map[string]string{}
-		for _, pair := range strings.Split(line[1:close], ", ") {
+		for pair := range strings.SplitSeq(line[1:close], ", ") {
 			key, quoted, ok := strings.Cut(pair, "=")
 			if !ok {
 				t.Fatalf("unexpected label: %s", pair)

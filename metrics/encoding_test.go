@@ -98,7 +98,7 @@ func TestEveryValueRepresentationPreservesBits(t *testing.T) {
 func TestResidualModesAreBoundedAndExact(t *testing.T) {
 	s := encodingStore(t)
 	random := rand.New(rand.NewPCG(7, 8))
-	for count := 0; count < 240; count++ {
+	for count := range 240 {
 		values := make([]int64, count)
 		for i := range values {
 			switch count % 4 {

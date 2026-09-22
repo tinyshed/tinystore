@@ -300,13 +300,14 @@ func rankMatchers(ctx context.Context, tx *sql.Tx, matchers []Label) ([]matcherP
 // postingsFilter drives from the shortest posting list; driving from the
 // alphabetically first matcher scanned a hundred times the rows at 100k series
 func postingsFilter(ranked []matcherPosting) (string, []any) {
-	query := `select p.series_id as series_id from postings p where p.label_id=?`
+	var query strings.Builder
+	query.WriteString(`select p.series_id as series_id from postings p where p.label_id=?`)
 	arguments := []any{ranked[0].labelID}
 	for _, posting := range ranked[1:] {
-		query += ` and exists(select 1 from postings q where q.label_id=? and q.series_id=p.series_id)`
+		query.WriteString(` and exists(select 1 from postings q where q.label_id=? and q.series_id=p.series_id)`)
 		arguments = append(arguments, posting.labelID)
 	}
-	return query, arguments
+	return query.String(), arguments
 }
 
 // the source is named once, so the budget can refuse it before SQLite

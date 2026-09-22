@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"testing"
 
@@ -110,7 +111,7 @@ func TestSharedModelsAgainstCrossSeriesPrediction(t *testing.T) {
 				common = append(common, at)
 			}
 		}
-		sort.Slice(common, func(i, j int) bool { return common[i] < common[j] })
+		slices.Sort(common)
 		length := len(common)
 		if length < researchBlock || len(instances) < 2 {
 			misaligned++

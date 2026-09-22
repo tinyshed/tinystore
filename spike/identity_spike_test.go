@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -30,7 +30,7 @@ func labelIDs(labels map[string]string, dictionary map[string]int64) []int64 {
 	for name, value := range labels {
 		ids = append(ids, dictionary[name+"\x00"+value])
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 

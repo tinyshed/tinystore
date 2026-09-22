@@ -69,9 +69,7 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 	problems := make(chan string, 64)
 	var working sync.WaitGroup
 
-	working.Add(1)
-	go func() {
-		defer working.Done()
+	working.Go(func() {
 		defer close(done)
 
 		at := time.Now().UnixMilli()
@@ -91,12 +89,9 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 			// a scrape does not arrive as fast as the disk allows
 			time.Sleep(50 * time.Millisecond)
 		}
-	}()
+	})
 
-	working.Add(1)
-	go func() {
-		defer working.Done()
-
+	working.Go(func() {
 		for {
 			select {
 			case <-done:
@@ -107,7 +102,7 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 			compactOnce(t, db, packer, perBlock, allowedLateness, &compacted, problems)
 			time.Sleep(200 * time.Millisecond)
 		}
-	}()
+	})
 
 	watchers := []*watcher{
 		{name: "every second", every: time.Second, holds: 0},
@@ -115,10 +110,7 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 		{name: "heavy, holds half a second", every: 2 * time.Second, holds: 500 * time.Millisecond},
 	}
 	for _, w := range watchers {
-		working.Add(1)
-		go func() {
-			defer working.Done()
-
+		working.Go(func() {
 			ticker := time.NewTicker(w.every)
 			defer ticker.Stop()
 			for {
@@ -131,14 +123,11 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 					w.taken = append(w.taken, time.Since(start))
 				}
 			}
-		}()
+		})
 	}
 
 	// the reader everybody warns about: one snapshot held open for twenty seconds
-	working.Add(1)
-	go func() {
-		defer working.Done()
-
+	working.Go(func() {
 		time.Sleep(longStart)
 		tx, opened := reader.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 		if opened != nil {
@@ -152,7 +141,7 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 		}
 		time.Sleep(longHolds)
 		_ = tx.Rollback()
-	}()
+	})
 
 	// the observer: the log's size over time, without asking for a checkpoint
 	pages := pageSize(t, db)
@@ -161,10 +150,7 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 		bytes float64
 	}
 	marks := []mark{}
-	working.Add(1)
-	go func() {
-		defer working.Done()
-
+	working.Go(func() {
 		start := time.Now()
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -176,7 +162,7 @@ func TestTheLogUnderARealisticReadLoad(t *testing.T) {
 				marks = append(marks, mark{at: time.Since(start), bytes: walBytes(t, path)})
 			}
 		}
-	}()
+	})
 
 	working.Wait()
 	close(problems)
