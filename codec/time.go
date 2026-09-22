@@ -20,22 +20,29 @@ func encodeTimes(head Head, samples []Sample) (byte, []byte) {
 	}
 	step, divides := head.step()
 	fixed := divides
+	if fixed {
+		for i := 1; i < len(samples); i++ {
+			if uint64(samples[i].At)-uint64(samples[i-1].At) != step { //nolint:gosec // modular subtraction preserves the full signed range
+				fixed = false
+				break
+			}
+		}
+		if fixed {
+			return timeFixed, nil
+		}
+	}
 	var deltas, second []byte
 	second = binary.AppendUvarint(second, uint64(samples[1].At)-uint64(samples[0].At)) //nolint:gosec // modular subtraction preserves a positive distance
 	previous := uint64(samples[1].At) - uint64(samples[0].At)                          //nolint:gosec // modular subtraction preserves a positive distance
 	secondOK := previous <= math.MaxInt64
 	for i := 1; i < len(samples); i++ {
 		delta := uint64(samples[i].At) - uint64(samples[i-1].At) //nolint:gosec // modular subtraction preserves a positive full-width distance
-		fixed = fixed && delta == step
 		deltas = binary.AppendUvarint(deltas, delta)
 		secondOK = secondOK && delta <= math.MaxInt64
 		if i > 1 && secondOK {
 			second = binary.AppendVarint(second, int64(delta)-int64(previous)) //nolint:gosec // secondOK bounds both deltas by MaxInt64
 		}
 		previous = delta
-	}
-	if fixed {
-		return timeFixed, nil
 	}
 	if secondOK && len(second) < len(deltas) {
 		return timeDeltaDelta, second

@@ -42,11 +42,14 @@ func (c *Codec) encodeValues(samples []Sample) (byte, []byte) {
 		return valueConst, nil
 	}
 	mode, best := valueRaw, rawValues(samples)
-	if integer := c.encodeIntegers(samples); integer != nil && len(integer) < len(best) {
+	integer := c.encodeIntegers(samples)
+	if integer != nil && len(integer) < len(best) {
 		mode, best = valueInteger, integer
 	}
-	if scaled := c.encodeScaled(samples); scaled != nil && len(scaled) < len(best) {
-		mode, best = valueScaled, scaled
+	if integer == nil {
+		if scaled := c.encodeScaled(samples); scaled != nil && len(scaled) < len(best) {
+			mode, best = valueScaled, scaled
+		}
 	}
 	if xor := encodeXOR(samples); len(xor) < len(best) {
 		mode, best = valueXOR, xor
