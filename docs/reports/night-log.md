@@ -1,8 +1,8 @@
 # The night of 21 September
 
 A running log of one autonomous session: what was tried, what it measured, and
-what was kept. Survivors move into [measurements.md](measurements.md) and
-[research.md](research.md); this file keeps the failures too, because the
+what was kept. Survivors move into [measurements.md](../measurements.md) and
+[research.md](../research.md); this file keeps the failures too, because the
 expensive thing is repeating them.
 
 The goal set for the night: **0.70 bytes a sample over the whole SQLite file**

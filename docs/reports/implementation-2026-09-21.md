@@ -10,7 +10,7 @@ future consumers, with no placeholder packages or universal object manager.
 
 ## Reading the code in order
 
-Start with [the executable example](../metrics/example_test.go), then follow:
+Start with [the executable example](../../metrics/example_test.go), then follow:
 
 ```text
 Open       open.go → internal/sqlite → embedded SQL migrations

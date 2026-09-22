@@ -207,7 +207,7 @@ alone and both have an obvious fix; neither fix is made here.
 
 ```powershell
 docker run --rm -v <repo>:/src -v tsperf:/perf `
-  -v dashbin-gocache:/go -e GOCACHE=/go/build-cache -e GOMODCACHE=/go/mod-cache `
+  -v tinystore-gocache:/go -e GOCACHE=/go/build-cache -e GOMODCACHE=/go/mod-cache `
   -w /src/bench/perf golang:1.27 sh -c 'go build -o /perf/perf . && sh run.sh populate'
 ```
 

@@ -105,7 +105,7 @@ comparison. It establishes a substantial lossless reduction on identical input.
 ## Reproduce
 
 ```powershell
-docker run --rm -v <repo>:/src -v <corpus>:/corpus -v dashbin-gocache:/go -w /src -e TINYSTORE_CORPUS=/corpus -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestModelAndGroupsOnCorpus$' -v -count=1
+docker run --rm -v <repo>:/src -v <corpus>:/corpus -v tinystore-gocache:/go -w /src -e TINYSTORE_CORPUS=/corpus -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestModelAndGroupsOnCorpus$' -v -count=1
 ```
 
 Fetch the pinned corpus first with `bench/run-nab.ps1` if needed. The new code

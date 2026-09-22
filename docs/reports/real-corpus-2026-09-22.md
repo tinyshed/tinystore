@@ -253,7 +253,7 @@ in the corpus are 2 to 4 for host metrics, 17 to 29 for most container metrics,
 and 36 to 37 for the rest; TSBS has 10 to 14 for everything, so the benchmark
 could never have found this.
 
-`maxLabels = 32` in [registry.go:17](../metrics/registry.go:17) is not a
+`maxLabels = 32` in [registry.go:17](../../metrics/registry.go:17) is not a
 degradation, it is a refusal, and it makes the engine unable to ingest a stock
 telegraf watching stock containers. The engine measurement above is on a corpus
 with those 58 series left out, which is 1.3% of series and 0.44% of samples.

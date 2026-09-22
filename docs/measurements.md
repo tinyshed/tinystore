@@ -201,7 +201,7 @@ Ten thousand blocks of 240 samples a class, one thousand series, measured after
 a checkpoint with `dbstat` dividing the file by object. The schema is the one
 the retention measurement chose — no foreign key, retention that walks series —
 with a summary shaped by the kind of series and a span in place of the absolute
-last timestamp. [night-log.md](night-log.md) has every step that got here,
+last timestamp. [night-log.md](reports/night-log.md) has every step that got here,
 including the ones that failed.
 
 | class             | at the start of the night | 4 KiB pages | 8 KiB pages |
@@ -331,7 +331,7 @@ map from a label set to a series id, and it is the part that does not fit a
 small container.
 
 So the split follows the measurement rather than taste. SQLite holds the truth,
-which is what the tables in [tinystore.md](tinystore.md) already said and what
+which is what the tables in [design.md](design.md) already said and what
 a 17 ms cold open makes free. Postings are held in memory, because 20 MiB buys
 a selector four thousand times faster. Resolving a label set to a series id is
 a bounded cache over the file, because at an embedded twenty thousand series it

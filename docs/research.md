@@ -9,7 +9,7 @@ than a measurement, it says so; the measured ones are in
 ## The physical shape of the head
 
 Update: the first public-engine packed head is now implemented and measured in
-[packed-head-2026-09-21.md](packed-head-2026-09-21.md). The rationale and sparse
+[packed-head-2026-09-21.md](reports/packed-head-2026-09-21.md). The rationale and sparse
 acceptance targets below predate it; the million-series sparse experiment and
 full WAL/RSS comparison are still outstanding.
 
@@ -440,7 +440,7 @@ Events and metrics take a file each:
 
 ```text
 data/
-├── dashbin.db     sources, queries, dashboards, accounts
+├── app.db         sources, queries, dashboards, accounts
 ├── events.db      event types, dictionaries, the per-type tables
 └── metrics.db     series, postings, the head, blocks and payloads
 ```

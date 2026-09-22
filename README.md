@@ -1,16 +1,19 @@
 # TinyStore
 
-An embedded time-series store for Go, on SQLite. Every sample is kept bit for
-bit and every range is answered exactly. It is written for one machine watching
-tens of thousands of series, not for a cluster, and it exists because
-[Dashbin](https://github.com/tinyshed/dashbin) needs somewhere to put metrics
-that does not cost more memory than the thing it is watching.
+An experimental embedded time-series store for Go, on SQLite. Every sample is
+kept bit for bit and every range is answered exactly. It is written for one
+machine watching tens of thousands of series, not for a cluster, and it was
+built in the first place to give [Dashbin](https://github.com/tinyshed/dashbin)
+somewhere to put telemetry that does not cost more memory than the thing it is
+watching.
 
-**The first embedded metrics slice works.** `metrics.Open` provides atomic
-ingestion, label matching, exact range reads, explicit bounded maintenance and
-reopen. The API is unreleased. See [the walkthrough](metrics/README.md) and its
-[runnable example](metrics/example_test.go); Records, KV and SQL helpers remain
-future work.
+**Experimental and unreleased: the API moves without notice.** The first
+embedded metrics slice works. `metrics.Open` provides atomic ingestion, label
+matching, exact range reads, explicit bounded maintenance and reopen. See
+[the walkthrough](metrics/README.md) and its
+[runnable example](metrics/example_test.go). Aggregate queries, sealed-group
+merging and steady-state performance are unfinished; Records, KV and SQL
+helpers are future work.
 
 ## Where a sample goes
 
@@ -89,7 +92,18 @@ and the command that reproduces each number are in
 | `internal/sqlite/` | file handles, transactions and checked migrations      |
 | `spike/` | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
 | `docs/`  | the design, the format, the numbers and what is still unknown   |
+| `bench/` | a module of its own: corpus runners and the engines compared to |
 | `tools/` | a second module pinning developer tools                         |
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/design.md](docs/design.md) | how the store is meant to work, and why that shape |
+| [docs/format.md](docs/format.md) | the bytes: the payload's layout, version by version |
+| [docs/measurements.md](docs/measurements.md) | every number, its environment, and how to reproduce it |
+| [docs/research.md](docs/research.md) | what is not built: the open questions and their gates |
+| [docs/reports/](docs/reports/README.md) | the dated measurement rounds each number came from |
 
 ## License
 

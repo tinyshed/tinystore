@@ -46,7 +46,7 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
-| `docs/`              | the design, the format, the numbers, the open questions                       |
+| `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
 | `.github/workflows/` | the authoritative clean builds                                                |
 
 The first engine keeps its implementation in one package; split it only when
@@ -224,13 +224,15 @@ changing something, not to look something up.
 |----------------------------------------------|------------------------------------------------------------------|
 | [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape               |
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
-| [docs/implementation-2026-09-21.md](docs/implementation-2026-09-21.md) | the first slice and its measured limits |
+| [docs/reports/implementation-2026-09-21.md](docs/reports/implementation-2026-09-21.md) | the first slice and its measured limits |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
 | [docs/measurements.md](docs/measurements.md) | every number, its environment and how to reproduce it            |
 | [docs/research.md](docs/research.md)         | what is not built: the open questions and their acceptance gates |
+| [docs/reports/](docs/reports/README.md)      | the dated rounds every number above came from                    |
 
-A reference a contributor returns to belongs in `docs/`. A rule they are about
-to violate belongs here.
+A reference a contributor returns to belongs in `docs/`, and a dated measurement
+round belongs in `docs/reports/` with the environment and command that reproduce
+it. A rule they are about to violate belongs here.
 
 ## Rules that are gates
 

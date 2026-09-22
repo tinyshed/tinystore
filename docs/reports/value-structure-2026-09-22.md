@@ -157,7 +157,7 @@ neighbour's noise to your own; mean correlation between one host's deltas and
 host_0's is 0.359, which is not enough to pay for it. The second line answers a
 separate proposal with the same measurement: **a second difference is already
 worse than the first on this corpus**, which is the noise arithmetic in
-[research.md](research.md) now measured rather than argued.
+[research.md](../research.md) now measured rather than argued.
 
 **Sharing a compression context across a family does not work either.** The
 same own-delta stream through five packers, value bytes a sample:

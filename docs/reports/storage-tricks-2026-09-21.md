@@ -103,7 +103,7 @@ whole groups. No production codec or released format changed in this round.
 ## Reproduce
 
 ```powershell
-docker run --rm -m 6g -v <repo>:/src -v <corpus>:/corpus -v dashbin-gocache:/go -w /src -e TINYSTORE_JSONL=/corpus/series.jsonl -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestStorageTricks$' -parallel 4 -v -count=1
+docker run --rm -m 6g -v <repo>:/src -v <corpus>:/corpus -v tinystore-gocache:/go -w /src -e TINYSTORE_JSONL=/corpus/series.jsonl -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestStorageTricks$' -parallel 4 -v -count=1
 ```
 
 Use `tinystore-tsbs` as the corpus directory for the other run. Code is in

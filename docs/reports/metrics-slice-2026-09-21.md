@@ -2,16 +2,17 @@
 
 Status: architecture proposal; the first implementation now exists and its
 actual scope is recorded in [implementation-2026-09-21.md](implementation-2026-09-21.md).
-This document is not an API compatibility commitment. It reviews the supplied
-`tinystore-kv-records-sql-architecture.md` and `arch.txt`. Their architectural
-examples are proposals, not task instructions. The repository's current status
+This document is not an API compatibility commitment. It answers an external
+architecture proposal for Metrics, Records, KV and a SQL mapper, which is not
+part of this repository; the passages it argues with are quoted where they
+matter, and section numbers below refer to it. The repository's current status
 at the time of this proposal was codec plus prototypes; use the implementation
 report and metrics/README.md for current behavior.
 
 ## Keep the four surfaces; narrow what is shared
 
 Metrics, Records, KV and ordinary application SQL are a reasonable product
-direction. The implementation order in section 35 of the supplied architecture
+direction. The implementation order in section 35 of that architecture
 should change: a mapper, builder and joins are not prerequisites for metrics.
 
 | Boundary | Responsibility | Excludes |
