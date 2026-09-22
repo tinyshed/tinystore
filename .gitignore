@@ -9,6 +9,9 @@ coverage.out
 # IDE
 .idea/
 .vscode/
+# a local workspace so an editor resolves the bench modules; task sets GOWORK=off
+go.work
+go.work.sum
 
 # OS
 .DS_Store

@@ -1,6 +1,11 @@
 # https://taskfile.dev
 version: '3'
 
+# a contributor may keep a local go.work so an editor resolves bench/; every
+# check here must still see exactly the module graph CI sees
+env:
+  GOWORK: off
+
 vars:
   BIN: bin
   GOLANGCI: '{{.BIN}}/golangci-lint{{exeExt}}'
