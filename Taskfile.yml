@@ -62,18 +62,13 @@ tasks:
     vars:
       PROBE: '{{.BIN}}/sizeprobe'
       BASELINE: '{{.BIN}}/sizeprobe-baseline'
-    env:
-      CGO_ENABLED: 0
-      GOOS: linux
-      GOARCH: amd64
     cmds:
       - mkdir -p {{.BIN}}
-      - go build -trimpath -ldflags="-s -w" -o {{.PROBE}} ./internal/sizeprobe
-      - go build -trimpath -ldflags="-s -w" -o {{.BASELINE}} ./internal/sizeprobe/baseline
-      - |
-        probe=$(wc -c < {{.PROBE}})
-        baseline=$(wc -c < {{.BASELINE}})
-        echo "linux/amd64 probe: $(( probe / 1024 )) KiB, of which the import added $(( (probe - baseline) / 1024 )) KiB"
+      - cmd: go build -trimpath -ldflags="-s -w" -o {{.PROBE}} ./internal/sizeprobe
+        env: {CGO_ENABLED: '0', GOOS: linux, GOARCH: amd64}
+      - cmd: go build -trimpath -ldflags="-s -w" -o {{.BASELINE}} ./internal/sizeprobe/baseline
+        env: {CGO_ENABLED: '0', GOOS: linux, GOARCH: amd64}
+      - go run ./internal/sizeprobe/report
 
   lint:
     desc: Run golangci-lint
