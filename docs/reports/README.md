@@ -49,3 +49,4 @@ fetch and normalise them.
 | [performance-2026-09-22.md](performance-2026-09-22.md) | what the engine costs in time rather than in bytes |
 | [selectivity-2026-09-22.md](selectivity-2026-09-22.md) | closing the two defects that round named, and what the fix costs |
 | [prepared-reads-2026-09-22.md](prepared-reads-2026-09-22.md) | profiling repeated SQL compilation, bounded statement reuse and the parameterized-limit trap |
+| [group-merging-2026-09-22.md](group-merging-2026-09-22.md) | incremental grouping without payload relocation, file accounting and the short-read trade |
