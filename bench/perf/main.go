@@ -570,7 +570,7 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 func main() {
 	dir := flag.String("dir", ".", "directory for the database")
 	file := flag.String("file", "read.db", "database filename for the objects stage")
-	stage := flag.String("stage", "ingest", "ingest, register, append, ready_churn, maintenance_batch, churn_prepare, churn_expire, populate, steady, read, mixed or objects")
+	stage := flag.String("stage", "ingest", "ingest, register, append, ready_churn, maintenance_batch, churn_prepare, churn_expire, narrow_populate, populate, steady, read, mixed or objects")
 	label := flag.String("label", "run", "name for this run")
 	seriesCount := flag.Int("series", 1000, "series to write")
 	samples := flag.Int("samples", 1000, "samples per series")
@@ -602,6 +602,8 @@ func main() {
 		churnPrepare(ctx, *dir, *seriesCount)
 	case "churn_expire":
 		churnExpire(ctx, *dir, *seriesCount)
+	case "narrow_populate":
+		narrowPopulate(ctx, *dir, *seriesCount, *samples)
 	case "populate":
 		populate(ctx, *dir, *seriesCount, *samples)
 	case "steady":
