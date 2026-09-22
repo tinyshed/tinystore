@@ -1,0 +1,102 @@
+package metrics
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+)
+
+func TestAuditExpiredRegistryKeepsCapacity(t *testing.T) {
+	s, _ := openTestStore(t, Options{MaxSeries: 1, Retention: time.Second})
+	if err := s.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: testSamples(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.UnixMilli(testEpoch + 2001) }
+	if _, err := s.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	other := Series{Labels: []Label{{Name: "__name__", Value: "new"}}}
+	err := s.Ingest(t.Context(), []Batch{{Series: other, Samples: []Sample{{At: testEpoch + 2001, Value: 1}}}})
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("expected retained registry to consume capacity: %v", err)
+	}
+	t.Log("all samples expired; a new series still hits MaxSeries")
+}
+
+func TestAuditCappedRankingLosesSelectivity(t *testing.T) {
+	s, _ := openTestStore(t, Options{MaxSeries: 3000})
+	batches := make([]Batch, 2048)
+	for i := range batches {
+		zone := "other"
+		if i < 1025 {
+			zone = "hot"
+		}
+		batches[i] = Batch{Series: Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprint(i)}, {Name: "zone", Value: zone}}}, Samples: testSamples(1)}
+	}
+	if err := s.Ingest(t.Context(), batches); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.file.View(t.Context(), func(tx *sql.Tx) error {
+		ranked, _, err := rankMatchers(t.Context(), tx, []Label{{Name: "__name__", Value: "cpu"}, {Name: "zone", Value: "hot"}})
+		if err != nil {
+			return err
+		}
+		var name string
+		if err = tx.QueryRowContext(t.Context(), `select name from label_values where id=?`, ranked[0].labelID).Scan(&name); err != nil {
+			return err
+		}
+		if name != "__name__" || ranked[0].names != 1024 || ranked[1].names != 1024 {
+			t.Fatalf("unexpected ranking: %s %v", name, ranked)
+		}
+		t.Log("2048-row matcher drives over 1025-row matcher; both ranked as 1024")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuditReadySeriesCanStarve(t *testing.T) {
+	s, _ := openTestStore(t, Options{MaintenanceSeries: 1})
+	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}
+	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
+	points := testSamples(1441)
+	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: points[:241]}, {Series: b, Samples: points[:241]}}); err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 5; round++ {
+		if _, err := s.Maintain(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		start := 241 + round*240
+		if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: points[start : start+240]}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.file.View(t.Context(), func(tx *sql.Tx) error {
+		var frontier sql.NullInt64
+		if err := tx.QueryRowContext(t.Context(), `select sealed_before from series_state where series_id=2`).Scan(&frontier); err != nil {
+			return err
+		}
+		if frontier.Valid {
+			t.Fatal("expected later series still waiting")
+		}
+		t.Log("five maintenance rounds seal replenished series 1; ready series 2 never selected")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuditBlockSumsHaveDifferentRounding(t *testing.T) {
+	points := make([]Sample, 480)
+	points[0].Value, points[1].Value = 1e16, 1
+	points[240].Value, points[241].Value = -1e16, 1
+	sequential := summarize(points, Gauge).sum
+	byBlock := summarize(points[:240], Gauge).sum + summarize(points[240:], Gauge).sum
+	if sequential != 1 || byBlock != 0 {
+		t.Fatalf("unexpected sums %v %v", sequential, byBlock)
+	}
+	t.Log("the same 480 values sum to 1 sequentially and 0 through two stored block sums")
+}

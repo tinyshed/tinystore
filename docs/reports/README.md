@@ -50,3 +50,6 @@ fetch and normalise them.
 | [selectivity-2026-09-22.md](selectivity-2026-09-22.md) | closing the two defects that round named, and what the fix costs |
 | [prepared-reads-2026-09-22.md](prepared-reads-2026-09-22.md) | profiling repeated SQL compilation, bounded statement reuse and the parameterized-limit trap |
 | [group-merging-2026-09-22.md](group-merging-2026-09-22.md) | incremental grouping without payload relocation, file accounting and the short-read trade |
+| [engine-audit-2026-09-22.md](engine-audit-2026-09-22.md) | remaining costs, reproduced operational limits, aggregate rounding and corrections to RSS/WAL interpretation |
+| [execution-review-2026-09-22.md](execution-review-2026-09-22.md) | where the reader plateau waits, per-ingest index churn, writer and maintenance defects, and runtime proposals split into work packages |
+| [execution-review-verdict-2026-09-22.md](execution-review-verdict-2026-09-22.md) | decisions and corrections for the execution review's proposed optimization sequence |

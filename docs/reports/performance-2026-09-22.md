@@ -1,5 +1,12 @@
 # What the engine costs in time, not in bytes
 
+Interpretation correction: [the engine audit](engine-audit-2026-09-22.md)
+shows that the harness's WAL counter measures observed file growth, not bytes
+written, and Go Sys is not process RSS, including with modernc. The high-cardinality
+ingest fixture also registers new series rather than repeatedly updating their
+heads. The historical observations below remain, but the write-amplification,
+process-memory and causal explanations must be read with those corrections.
+
 Density stopped being the suspicious number: on real telemetry the whole file is
 about 1.1 bytes a sample, mutable state, indexes and SQLite included. This is the
 first measurement of the other axis — how fast the thing chews, what it allocates,

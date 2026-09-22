@@ -1,0 +1,41 @@
+package sqlite
+
+import (
+	"errors"
+	"path/filepath"
+	"testing"
+)
+
+func TestAuditSequentialReadsOpenEverySlot(t *testing.T) {
+	f, err := Open(t.Context(), filepath.Join(t.TempDir(), "audit.db"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for range 4 {
+		if err = f.ViewPrepared(t.Context(), func(r Reader) error { var n int; return QueryRow(t.Context(), r, `select 1`).Scan(&n) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := f.reader.Stats().OpenConnections; n != 4 {
+		t.Fatalf("got %d connections", n)
+	}
+	t.Log("four sequential reads opened four reader connections")
+}
+
+func TestAuditApplicationErrorDiscardsPreparedCache(t *testing.T) {
+	f := openReaderTestFile(t)
+	if err := f.ViewPrepared(t.Context(), func(r Reader) error { var n int; return QueryRow(t.Context(), r, `select 1`).Scan(&n) }); err != nil {
+		t.Fatal(err)
+	}
+	rejected := errors.New("application budget rejected")
+	if err := f.ViewPrepared(t.Context(), func(Reader) error { return rejected }); !errors.Is(err, rejected) {
+		t.Fatal(err)
+	}
+	slot := <-f.readers
+	f.readers <- slot
+	if slot.conn != nil || len(slot.statements) != 0 {
+		t.Fatal("expected discarded connection and cache")
+	}
+	t.Log("ordinary callback error drops a healthy connection and prepared cache")
+}
