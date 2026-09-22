@@ -13,7 +13,7 @@ foreach ($line in Get-Content (Join-Path $PSScriptRoot 'nab-sha256.txt')) {
     }
     if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLower() -ne $hash) { throw "Checksum mismatch: $relative" }
 }
-docker run --rm -v "${repo}:/src" -v "${Corpus}:/corpus" -v dashbin-gocache:/go -w /src -e TINYSTORE_CORPUS=/corpus -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestRealCorpus$' -v -count=1
+docker run --rm -v "${repo}:/src" -v "${Corpus}:/corpus" -v tinystore-gocache:/go -w /src -e TINYSTORE_CORPUS=/corpus -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestRealCorpus$' -v -count=1
 if ($LASTEXITCODE) { throw 'Corpus benchmark failed' }
 if (!$Victoria) { return }
 $suffix = [guid]::NewGuid().ToString('N').Substring(0,8)
@@ -30,7 +30,7 @@ try {
     Invoke-WebRequest -Method Post http://127.0.0.1:18428/internal/force_flush | Out-Null
     Invoke-WebRequest 'http://127.0.0.1:18428/api/v1/export?match%5B%5D=nab&start=2010-01-01T00%3A00%3A00Z&end=2020-01-01T00%3A00%3A00Z&reduce_mem_usage=1' -OutFile (Join-Path $Corpus 'export.jsonl')
     Invoke-WebRequest -Method Post 'http://127.0.0.1:18428/internal/force_merge?partition_prefix=' | Out-Null
-    docker run --rm -v "${repo}:/src" -v "${Corpus}:/corpus" -v dashbin-gocache:/go -w /src -e TINYSTORE_CORPUS=/corpus -e TINYSTORE_VM_EXPORT=/corpus/export.jsonl -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestVictoriaCorpusRoundTrip$' -v -count=1
+    docker run --rm -v "${repo}:/src" -v "${Corpus}:/corpus" -v tinystore-gocache:/go -w /src -e TINYSTORE_CORPUS=/corpus -e TINYSTORE_VM_EXPORT=/corpus/export.jsonl -e GOCACHE=/go/build-cache golang:1.27 go test ./spike -run '^TestVictoriaCorpusRoundTrip$' -v -count=1
     if ($LASTEXITCODE) { throw 'VictoriaMetrics export validation failed' }
 } finally {
     docker stop $name | Out-Null

@@ -17,7 +17,7 @@ New-Item -ItemType Directory -Force $Corpus | Out-Null
 $Corpus = (Resolve-Path $Corpus).Path
 # docker gets argument arrays below, not an inline argument list: inline,
 # PowerShell splits -in=/out/x.csv into -in=/out/x and .csv
-$goCache = @('-v', 'dashbin-gocache:/go', '-e', 'GOCACHE=/go/build-cache', '-e', 'GOMODCACHE=/go/mod-cache')
+$goCache = @('-v', 'tinystore-gocache:/go', '-e', 'GOCACHE=/go/build-cache', '-e', 'GOMODCACHE=/go/mod-cache')
 
 if (!(Test-Path (Join-Path $Corpus 'tsbs-devops.lp'))) {
     Write-Output '== generating the TSBS DevOps corpus =='
@@ -48,7 +48,7 @@ Write-Output '== TinyStore =='
 $package = './metrics'
 $test = '^TestCorpusThroughPublicStore$'
 if ($Prototype) { $package = './spike'; $test = '^TestTSBSCorpus$' }
-docker run --rm -v "${repo}:/src" -v "${Corpus}:/corpus" -v dashbin-gocache:/go -w /src `
+docker run --rm -v "${repo}:/src" -v "${Corpus}:/corpus" -v tinystore-gocache:/go -w /src `
     -e TINYSTORE_JSONL=/corpus/series.jsonl -e GOCACHE=/go/build-cache golang:1.27 `
     go test $package -run $test -v -count=1 -timeout 60m
 if ($LASTEXITCODE) { throw 'TinyStore measurement failed' }
@@ -82,7 +82,7 @@ try {
     docker stop -t 120 tinystore-vm-tsbs | Out-Null
     docker rm tinystore-vm-tsbs | Out-Null
 }
-docker run --rm -m 8g -v "${repo}:/src" -v "${Corpus}:/corpus" -v dashbin-gocache:/go -w /src `
+docker run --rm -m 8g -v "${repo}:/src" -v "${Corpus}:/corpus" -v tinystore-gocache:/go -w /src `
     -e TINYSTORE_JSONL=/corpus/series.jsonl -e TINYSTORE_ENGINE_EXPORT=/corpus/vm-export.jsonl `
     -e GOCACHE=/go/build-cache golang:1.27 `
     go test ./spike -run '^TestEngineExportIsBitExact$' -v -count=1 -timeout 60m
@@ -100,7 +100,7 @@ if ($LASTEXITCODE) { throw 'Prometheus backfill failed' }
 New-Item -ItemType Directory -Force (Join-Path $promData 'wal') | Out-Null
 docker run --rm -v "${Corpus}:/corpus" --entrypoint sh $promImage -c 'promtool tsdb dump /corpus/prom-one > /corpus/prom-dump.txt'
 if ($LASTEXITCODE) { throw 'Prometheus dump failed' }
-docker run --rm -m 8g -v "${repo}:/src" -v "${Corpus}:/corpus" -v dashbin-gocache:/go -w /src `
+docker run --rm -m 8g -v "${repo}:/src" -v "${Corpus}:/corpus" -v tinystore-gocache:/go -w /src `
     -e TINYSTORE_JSONL=/corpus/series.jsonl -e TINYSTORE_PROM_DUMP=/corpus/prom-dump.txt `
     -e GOCACHE=/go/build-cache golang:1.27 `
     go test ./spike -run '^TestEngineExportIsBitExact$' -v -count=1 -timeout 60m
