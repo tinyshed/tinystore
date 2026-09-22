@@ -162,7 +162,7 @@ func TestClockSharingAndLastOwnerRetention(t *testing.T) {
 	for _, series := range result {
 		assertSamples(t, series.Samples, points)
 	}
-	if _, err = store.expireSeries(t.Context(), 1, testEpoch+900); err != nil {
+	if _, _, err = store.expireSeries(t.Context(), 1, testEpoch+900); err != nil {
 		t.Fatal(err)
 	}
 	check(1, 1)
@@ -171,7 +171,7 @@ func TestClockSharingAndLastOwnerRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSamples(t, result[0].Samples, points)
-	if _, err = store.expireSeries(t.Context(), 2, testEpoch+900); err != nil {
+	if _, _, err = store.expireSeries(t.Context(), 2, testEpoch+900); err != nil {
 		t.Fatal(err)
 	}
 	check(0, 0)

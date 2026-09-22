@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -19,17 +20,21 @@ import (
 var migrationFiles embed.FS
 
 type Store struct {
-	file                                         *sqlite.File
-	encoder, decoder                             *codec.Codec
-	metadata                                     *metadataCodec
-	opts                                         Options
-	now                                          func() time.Time
-	mu                                           sync.Mutex
-	active                                       int
-	closing                                      bool
-	drained, closed                              chan struct{}
-	closeErr                                     error
-	ingested, rejected, queried, sealed, expired atomic.Uint64
+	file                                                    *sqlite.File
+	encoder, decoder                                        *codec.Codec
+	metadata                                                *metadataCodec
+	opts                                                    Options
+	now                                                     func() time.Time
+	mu                                                      sync.Mutex
+	active                                                  int
+	closing                                                 bool
+	drained, closed                                         chan struct{}
+	maintenanceGate                                         chan struct{}
+	closeErr                                                error
+	ingested, rejected, queried, sealed, expired, reclaimed atomic.Uint64
+	readyCursor                                             atomic.Int64
+	quarantined                                             atomic.Int64
+	readSlots, ingestSlots                                  chan struct{}
 }
 
 func Open(ctx context.Context, path string, options Options) (*Store, error) {
@@ -48,6 +53,12 @@ func Open(ctx context.Context, path string, options Options) (*Store, error) {
 	if err = f.Migrate(ctx, 0x544d4554, scripts); err != nil {
 		return nil, errors.Join(fmt.Errorf("migrate metrics: %w", err), f.Close())
 	}
+	var quarantined int64
+	if err = f.View(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `select count(*) from series_state where failed_at is not null`).Scan(&quarantined)
+	}); err != nil {
+		return nil, errors.Join(fmt.Errorf("count suspended maintenance: %w", err), f.Close())
+	}
 	encoder, err := codec.New()
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("create metrics encoder: %w", err), f.Close())
@@ -60,7 +71,10 @@ func Open(ctx context.Context, path string, options Options) (*Store, error) {
 	if err != nil {
 		return nil, errors.Join(err, encoder.Close(), decoder.Close(), f.Close())
 	}
-	return &Store{file: f, encoder: encoder, decoder: decoder, metadata: metadata, opts: opts, now: time.Now, drained: make(chan struct{}), closed: make(chan struct{})}, nil
+	store := &Store{file: f, encoder: encoder, decoder: decoder, metadata: metadata, opts: opts, now: time.Now, drained: make(chan struct{}), closed: make(chan struct{}), maintenanceGate: make(chan struct{}, 1), readSlots: make(chan struct{}, opts.MaxConcurrentReads), ingestSlots: make(chan struct{}, opts.MaxConcurrentIngest)}
+	store.maintenanceGate <- struct{}{}
+	store.quarantined.Store(quarantined)
+	return store, nil
 }
 
 func (s *Store) enter(ctx context.Context) error {
@@ -109,7 +123,7 @@ func (s *Store) Close(ctx context.Context) error {
 }
 
 func (s *Store) Stats() Stats {
-	return Stats{IngestedSamples: s.ingested.Load(), RejectedBatches: s.rejected.Load(), Queries: s.queried.Load(), SealedBlocks: s.sealed.Load(), ExpiredSamples: s.expired.Load()}
+	return Stats{IngestedSamples: s.ingested.Load(), RejectedBatches: s.rejected.Load(), Queries: s.queried.Load(), SealedBlocks: s.sealed.Load(), ExpiredSamples: s.expired.Load(), QuarantinedSeries: uint64(s.quarantined.Load()), ReclaimedSeries: s.reclaimed.Load()} //nolint:gosec // count is loaded and changed only by committed maintenance transactions
 }
 
 func normalizeOptions(o Options) (Options, error) {
@@ -137,6 +151,15 @@ func normalizeOptions(o Options) (Options, error) {
 		if *p == 0 {
 			*p = defaults[i]
 		}
+	}
+	if o.MaxConcurrentReads < 0 || o.MaxConcurrentIngest < 0 || o.MaxConcurrentReads > 1<<16 || o.MaxConcurrentIngest > 1<<16 {
+		return o, fmt.Errorf("%w: concurrent work capacity", ErrInvalid)
+	}
+	if o.MaxConcurrentReads == 0 {
+		o.MaxConcurrentReads = o.MaxReaders
+	}
+	if o.MaxConcurrentIngest == 0 {
+		o.MaxConcurrentIngest = 1
 	}
 	if o.MaxHeadBytes == 0 {
 		o.MaxHeadBytes = 256 << 10

@@ -16,6 +16,9 @@ after reopening. No binary-format knowledge is needed to use or follow it.
    series through `registry.go`, merges incoming points into its packed head,
    then advances its state. `head.go` owns reading and replacing that tail.
    Everything commits together. Last input wins for duplicate mutable timestamps.
+   Ordered unique input skips the timestamp map and sort; a duplicate or late
+   point uses the same last-input-wins fallback. The writer reuses up to 32
+   prepared SQL programs on its one connection.
 3. **Read** (`query.go`) resolves exact label matches through postings and copies
    the required directories, payloads and encoded heads from one snapshot. It ends
    that snapshot before decoding. An error returns no partial answer.
@@ -23,9 +26,15 @@ after reopening. No binary-format knowledge is needed to use or follow it.
    prefix, encodes it outside the writer, and publishes only if its version is
    unchanged. Publication writes payloads, removes those exact head samples and
    moves the sealed frontier in the same transaction.
+   It stages at most eight series and 1 MiB for a publication transaction;
+   savepoints isolate conflicts, and counters advance after the outer commit.
+   A local corrupt or over-limit series is suspended and recorded so later series
+   can continue; `RetryFailedMaintenance` re-enables a bounded group after repair
+   or a limit change. File and I/O failures still stop the pass.
 5. **Expire** (`retention.go`) removes expired head points and whole expired
    microblocks. A partly expired group keeps its original payload addresses.
-   Empty series keep their registration and count toward the cardinality limit.
+   Once a series has no head or groups, retention removes its registration,
+   postings and unreferenced dictionary pairs in the same transaction.
 
 The value encoder in `values.go` compares the ordinary codec with constant,
 change-event and decimal-grid candidates. `clocks.go` stores time separately
@@ -35,6 +44,8 @@ transaction. None of these choices appear in the public request types.
 For example, 241 timestamps `0..240` with zero lateness give a watermark of 240.
 Only timestamps strictly below it may seal. The first 240 form one block; sample
 240 remains in the head. A quiet series does not seal merely because time passes.
+The ready queue is entered only when 240 retained samples are strictly before
+the watermark; a full but unsafe head does not cause repeated empty passes.
 
 ## Public use
 
@@ -73,6 +84,14 @@ result, err := store.Read(ctx, metrics.Range{
 Call `Maintain(ctx)` from the embedding application's maintenance loop. Each
 call considers at most `MaintenanceSeries` due series for expiry and that many
 ready series for packing. There is no hidden maintenance timer yet.
+`Maintenance.QuarantinedSeries` counts newly suspended series in that call;
+`Stats.QuarantinedSeries` reports the persisted current count, including after
+reopen. `ListMaintenanceFailures(ctx, afterID)` pages through stored reasons,
+at most `MaintenanceSeries` rows per call; start with `afterID=0` and continue
+from the last returned `SeriesID`. Those IDs are diagnostic cursors, not handles.
+`RetryFailedMaintenance(ctx)` clears at most `MaintenanceSeries` failures per
+call. A still damaged series will be suspended again on the next pass, and
+ingestion into a suspended series returns `ErrSuspended`.
 
 ## Contracts and defaults
 
@@ -93,7 +112,7 @@ ready series for packing. There is no hidden maintenance timer yet.
   force a quiet sparse head to produce small blocks on a timer.
 - An entire admitted `Ingest` call is atomic, including new series and postings.
   No input is silently dropped. Errors are returned and rejected batches counted.
-- Defaults are 100000 registered series, 4096 head samples per series, 10000
+- Defaults are 100000 currently registered series, 4096 head samples per series, 10000
   input samples / 4 MiB accounted batch data, and 64 maintenance series per pass.
   Replacements do not consume another head slot. A full head returns `ErrLimit`;
   callers can run maintenance and retry if a safe prefix exists.
@@ -110,6 +129,11 @@ ready series for packing. There is no hidden maintenance timer yet.
   that queue rather than fail, so raising it widens read concurrency; it also
   lengthens the write-ahead log, because a checkpoint cannot advance past the
   oldest open snapshot. One writer connection is not configurable.
+- `MaxConcurrentReads` defaults to `MaxReaders` and holds a slot through decode,
+  after the snapshot has ended. `MaxConcurrentIngest` defaults to one and holds
+  a slot from before batch preparation through commit. The slots bound active
+  work per Store; callers waiting for one can cancel through their context.
+  Separate stores do not share an aggregate memory budget.
 - A narrow query can spend 240 decoded samples on one returned point. Resource
   errors never silently truncate the result or choose another resolution.
   A query touching a packed head currently decodes that whole bounded head;
@@ -117,7 +141,12 @@ ready series for packing. There is no hidden maintenance timer yet.
 - `Close(ctx)` stops admission and waits for admitted work. Canceling that wait
   does not cancel cleanup; another Close can wait for its completion.
 - Statistics are per opened handle. Aggregate query semantics, external series
-  deletion, regex matchers and a network API are not implemented.
+  deletion, regex matchers and a network API are not implemented. Retention can
+  reclaim an empty series and free a cardinality slot; `Maintenance.ReclaimedSeries`
+  reports that pass and `Stats.ReclaimedSeries` counts this handle's committed
+  reclamations. Re-registering the same labels starts a new lifecycle: kind and
+  sealed frontier belong to the new registration. Samples below the current
+  retention cutoff remain inadmissible.
 
 ## Binary details are behind one boundary
 
@@ -126,8 +155,11 @@ once, and postings contain only its id and a series id. Migration 0005 converts
 existing postings transactionally. A series row then stores the same dictionary
 ids as a gap-coded blob rather than its canonical label text, and a query
 rebuilds the labels from one dictionary read for the whole match. Matching,
-identity and cardinality semantics do not change: the ids are the labels, so
-comparing them is the full equality check a digest match still requires.
+identity checks still compare the full ids behind a digest. Retention decrements
+posting counts and removes dictionary pairs after their last series disappears.
+Each dictionary pair also stores an exact posting count, backfilled by migration
+0009 and advanced in the registration transaction. Multi-label reads use those
+counts to choose the shortest posting list without scanning a capped prefix.
 
 The packed head uses independently decodable existing-codec chunks of at most
 240 samples, a version and a checksum bound to the series. A batch rewrites one

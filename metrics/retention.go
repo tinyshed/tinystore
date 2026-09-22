@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -53,11 +54,12 @@ func (s *Store) refreshDue(ctx context.Context, tx *sql.Tx, id int64) error {
 	return nil
 }
 
-func (s *Store) expireSeries(ctx context.Context, id, cutoff int64) (int, error) {
+func (s *Store) expireSeries(ctx context.Context, id, cutoff int64) (int, bool, error) {
 	expired := 0
+	reclaimed := false
 	err := s.file.Update(ctx, func(tx *sql.Tx) error {
-		var version int64
-		if err := tx.QueryRowContext(ctx, `select version from series_state where series_id=?`, id).Scan(&version); err != nil {
+		var version, maxSeen int64
+		if err := tx.QueryRowContext(ctx, `select version,max_seen_ts from series_state where series_id=?`, id).Scan(&version, &maxSeen); err != nil {
 			return fmt.Errorf("read expiry version: %w", err)
 		}
 		if version == math.MaxInt64 {
@@ -126,15 +128,92 @@ func (s *Store) expireSeries(ctx context.Context, id, cutoff int64) (int, error)
 				}
 			}
 		}
+		if headExpired == len(points) {
+			var hasGroup bool
+			if groupErr := tx.QueryRowContext(ctx, `select exists(select 1 from groups where series_id=?)`, id).Scan(&hasGroup); groupErr != nil {
+				return fmt.Errorf("check empty series groups: %w", groupErr)
+			}
+			if !hasGroup {
+				if reclaimErr := reclaimSeries(ctx, tx, id); reclaimErr != nil {
+					return reclaimErr
+				}
+				reclaimed = true
+				return nil
+			}
+		}
 		if expired > 0 {
-			if _, err = tx.ExecContext(ctx, `update series_state set version=version+1,ready=case when head_count<? then 0 else ready end where series_id=?`, blockSamples, id); err != nil {
+			ready := 0
+			if s.headReady(points[headExpired:], maxSeen, cutoff) {
+				ready = 1
+			}
+			if _, err = tx.ExecContext(ctx, `update series_state set version=version+1,ready=? where series_id=?`, ready, id); err != nil {
 				return fmt.Errorf("advance expiry state: %w", err)
 			}
 		}
 		return s.refreshDue(ctx, tx, id)
 	})
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return expired, nil
+	return expired, reclaimed, nil
+}
+
+func reclaimSeries(ctx context.Context, tx *sql.Tx, id int64) error {
+	rows, err := tx.QueryContext(ctx, `select p.label_id,v.posting_count from postings p join label_values v on v.id=p.label_id where p.series_id=? order by p.label_id`, id)
+	if err != nil {
+		return fmt.Errorf("read series postings: %w", err)
+	}
+	var labelIDs []int64
+	for rows.Next() {
+		var labelID, count int64
+		if err = rows.Scan(&labelID, &count); err != nil {
+			break
+		}
+		if count < 1 {
+			err = fmt.Errorf("%w: posting count before reclamation", ErrCorrupt)
+			break
+		}
+		labelIDs = append(labelIDs, labelID)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	closeErr := rows.Close() //nolint:sqlclosecheck // release rows before updating the same tables
+	if err != nil {
+		return fmt.Errorf("read series postings: %w", errors.Join(err, closeErr))
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close series postings: %w", closeErr)
+	}
+	if len(labelIDs) == 0 {
+		return fmt.Errorf("%w: empty series postings", ErrCorrupt)
+	}
+	result, err := tx.ExecContext(ctx, `update label_values set posting_count=posting_count-1 where id in (select label_id from postings where series_id=?)`, id)
+	if err != nil {
+		return fmt.Errorf("decrement posting counts: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != int64(len(labelIDs)) { //nolint:gosec // each registered series has at most 128 labels
+		return errors.Join(fmt.Errorf("%w: posting count update", ErrCorrupt), err)
+	}
+	if _, err = tx.ExecContext(ctx, `delete from postings where series_id=?`, id); err != nil {
+		return fmt.Errorf("remove series postings: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `delete from series_state where series_id=?`, id); err != nil {
+		return fmt.Errorf("remove series state: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `delete from series where id=?`, id); err != nil {
+		return fmt.Errorf("remove expired series: %w", err)
+	}
+	encoded, err := json.Marshal(labelIDs)
+	if err != nil {
+		return fmt.Errorf("encode expired labels: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `delete from label_values where posting_count=0 and id in (select cast(value as integer) from json_each(?))`, string(encoded)); err != nil {
+		return fmt.Errorf("remove unused labels: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `update store_state set series_count=series_count-1 where id=1`); err != nil {
+		return fmt.Errorf("decrease cardinality: %w", err)
+	}
+	return nil
 }

@@ -31,14 +31,22 @@ func headChecksum(id int64, data []byte) uint32 {
 
 // each chunk stays within the existing codec's decode bound; the whole tail has its own budget
 func (s *Store) encodeHead(ctx context.Context, id int64, points []Sample) ([]byte, error) {
+	return s.encodeHeadPrefix(ctx, id, points, nil, 0)
+}
+
+func (s *Store) encodeHeadPrefix(ctx context.Context, id int64, points []Sample, prefix []byte, prefixCount int) ([]byte, error) {
 	if len(points) == 0 {
 		return nil, nil
 	}
-	if len(points) > s.opts.MaxHeadSamples {
+	if len(points) > s.opts.MaxHeadSamples || prefixCount < 0 || prefixCount > len(points) || prefixCount%blockSamples != 0 {
 		return nil, fmt.Errorf("%w: mutable samples in one series", ErrLimit)
 	}
 	out := binary.AppendUvarint([]byte{1}, uint64(len(points)))
-	for start := 0; start < len(points); start += blockSamples {
+	out = append(out, prefix...)
+	if len(out) > s.opts.MaxHeadBytes-4 {
+		return nil, fmt.Errorf("%w: mutable head bytes", ErrLimit)
+	}
+	for start := prefixCount; start < len(points); start += blockSamples {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -57,6 +65,44 @@ func (s *Store) encodeHead(ctx context.Context, id int64, points []Sample) ([]by
 		}
 	}
 	return binary.LittleEndian.AppendUint32(out, headChecksum(id, out)), nil
+}
+
+func reusableHeadPrefix(packed []byte, before int64, maximumSamples int) ([]byte, int, error) {
+	if len(packed) == 0 {
+		return nil, 0, nil
+	}
+	if len(packed) < 6 {
+		return nil, 0, fmt.Errorf("%w: mutable head size", ErrCorrupt)
+	}
+	content := packed[:len(packed)-4]
+	r := binaryReader{data: content}
+	if r.byte() != 1 {
+		return nil, 0, fmt.Errorf("%w: mutable head version", ErrCorrupt)
+	}
+	count := r.size(maximumSamples)
+	if r.err != nil || count == 0 {
+		return nil, 0, fmt.Errorf("%w: mutable head count", ErrCorrupt)
+	}
+	begin := len(content) - len(r.data)
+	end := begin
+	reused := 0
+	for reused < count {
+		start := unfoldSigned(r.unsigned())
+		span := r.unsigned()
+		chunkCount := r.size(min(blockSamples, count-reused))
+		r.word()
+		length := r.size(maxPayloadBytes)
+		r.take(length)
+		if r.err != nil || chunkCount == 0 || span > uint64(math.MaxInt64)-uint64(start) {
+			return nil, 0, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
+		}
+		if chunkCount < blockSamples || int64(uint64(start)+span) >= before {
+			break
+		}
+		reused += chunkCount
+		end = len(content) - len(r.data)
+	}
+	return content[begin:end], reused, nil
 }
 
 func (s *Store) decodeHead(ctx context.Context, head headSnapshot) ([]Sample, error) {
@@ -201,7 +247,7 @@ func (s *Store) fetchHead(ctx context.Context, tx sqlite.Reader, id, from, to in
 	return head, nil
 }
 
-func (s *Store) mutablePoints(ctx context.Context, tx *sql.Tx, id int64) ([]Sample, error) {
+func (s *Store) mutablePoints(ctx context.Context, tx sqlite.Reader, id int64) ([]Sample, error) {
 	head, err := s.fetchHead(ctx, tx, id, math.MinInt64, math.MaxInt64, nil)
 	if err != nil {
 		return nil, err

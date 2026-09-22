@@ -9,12 +9,13 @@ import (
 )
 
 var (
-	ErrInvalid  = errors.New("invalid metrics request")
-	ErrLimit    = errors.New("metrics resource limit")
-	ErrClosed   = errors.New("metrics store is closed")
-	ErrTooOld   = errors.New("sample is expired or sealed")
-	ErrConflict = errors.New("metrics state changed")
-	ErrCorrupt  = errors.New("corrupt metrics data")
+	ErrInvalid   = errors.New("invalid metrics request")
+	ErrLimit     = errors.New("metrics resource limit")
+	ErrClosed    = errors.New("metrics store is closed")
+	ErrTooOld    = errors.New("sample is expired or sealed")
+	ErrConflict  = errors.New("metrics state changed")
+	ErrCorrupt   = errors.New("corrupt metrics data")
+	ErrSuspended = errors.New("metrics maintenance is suspended for this series")
 )
 
 type Sample = codec.Sample
@@ -47,18 +48,20 @@ type Limits struct {
 }
 
 type Options struct {
-	Retention         time.Duration
-	Lateness          time.Duration
-	MaxBlockSpan      time.Duration
-	MaxSeries         int
-	MaxHeadSamples    int
-	MaxHeadBytes      int
-	MaxBatchSamples   int
-	MaxBatchBytes     int
-	MaintenanceSeries int
-	MaxReaders        int
-	SnapshotTimeout   time.Duration
-	Limits            Limits
+	Retention           time.Duration
+	Lateness            time.Duration
+	MaxBlockSpan        time.Duration
+	MaxSeries           int
+	MaxHeadSamples      int
+	MaxHeadBytes        int
+	MaxBatchSamples     int
+	MaxBatchBytes       int
+	MaintenanceSeries   int
+	MaxReaders          int
+	MaxConcurrentReads  int
+	MaxConcurrentIngest int
+	SnapshotTimeout     time.Duration
+	Limits              Limits
 }
 
 // Range selects exact labels and an exclusive upper timestamp bound; limits may only narrow the store's limits.
@@ -73,7 +76,14 @@ type Result struct {
 	Samples []Sample
 }
 
-type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts int }
+type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts, QuarantinedSeries, ReclaimedSeries int }
 
-// Stats counts work committed or returned by this handle, not historical rows in the file.
-type Stats struct{ IngestedSamples, RejectedBatches, Queries, SealedBlocks, ExpiredSamples uint64 }
+// Stats counts this handle's work; QuarantinedSeries is the current persisted count.
+type Stats struct{ IngestedSamples, RejectedBatches, Queries, SealedBlocks, ExpiredSamples, QuarantinedSeries, ReclaimedSeries uint64 }
+
+// MaintenanceFailure is a persisted diagnostic; SeriesID is a file-local cursor, not a series handle.
+type MaintenanceFailure struct {
+	SeriesID int64
+	FailedAt int64
+	Reason   string
+}

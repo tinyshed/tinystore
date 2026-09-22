@@ -38,16 +38,30 @@ type seriesRead struct {
 	head   headSnapshot
 }
 
+type groupRow struct {
+	start, end, clockID int64
+	data                []byte
+}
+
 // Read returns owned samples, or an error with no partial result; the caller holds no SQLite snapshot.
 func (s *Store) Read(ctx context.Context, request Range) ([]Result, error) {
 	if err := s.enter(ctx); err != nil {
 		return nil, err
 	}
 	defer s.leave()
+	select {
+	case s.readSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-s.readSlots }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if request.To < request.From {
 		return nil, fmt.Errorf("%w: inverted time range", ErrInvalid)
 	}
-	matchers, _, err := canonicalLabels(request.Matchers, false)
+	matchers, err := orderedLabels(request.Matchers, false)
 	if err != nil {
 		return nil, err
 	}
@@ -81,8 +95,26 @@ func (s *Store) fetchSnapshot(ctx context.Context, matchers []Label, from, to in
 		if err != nil {
 			return err
 		}
+		if len(matched) >= 16 {
+			heads, headErr := s.fetchHeads(ctx, tx, matched, from, to, &budget)
+			if headErr != nil {
+				return headErr
+			}
+			groups, groupErr := fetchGroupRows(ctx, tx, matched, from, to, &budget)
+			if groupErr != nil {
+				return groupErr
+			}
+			for i, series := range matched {
+				blocks, readErr := s.decodeGroupRows(ctx, tx, series.id, groups[series.id], from, to, &budget, true)
+				if readErr != nil {
+					return readErr
+				}
+				reads = append(reads, seriesRead{series: series, blocks: blocks, head: heads[i]})
+			}
+			return fetchPayloads(ctx, tx, reads)
+		}
 		for _, series := range matched {
-			blocks, readErr := s.fetchBlocks(ctx, tx, series.id, from, to, &budget)
+			blocks, readErr := s.fetchBlocks(ctx, tx, series.id, from, to, &budget, false)
 			if readErr != nil {
 				return readErr
 			}
@@ -100,12 +132,8 @@ func (s *Store) fetchSnapshot(ctx context.Context, matchers []Label, from, to in
 	return reads, nil
 }
 
-func (s *Store) fetchBlocks(ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget) ([]storedBlock, error) {
+func (s *Store) fetchBlocks(ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget, deferPayloads bool) ([]storedBlock, error) {
 	// inspect bounded directories before requesting any external value bytes
-	type groupRow struct {
-		start, end, clockID int64
-		data                []byte
-	}
 	var rowsToRead []groupRow
 	err := func() error {
 		rows, err := tx.QueryContext(ctx, `select start_ts,end_ts,length(directory),case when length(directory)<=? then directory else null end,clock_id from groups where series_id=? and start_ts>=coalesce((select start_ts from groups where series_id=? and start_ts<=? order by start_ts desc limit 1),?) and start_ts<? and end_ts>=? order by start_ts limit cast(? as integer)`, budget.limits.PayloadBytes-budget.bytes, id, id, from, from, to, from, budget.limits.Blocks+1)
@@ -138,8 +166,13 @@ func (s *Store) fetchBlocks(ctx context.Context, tx sqlite.Reader, id, from, to 
 	if err != nil {
 		return nil, err
 	}
+	return s.decodeGroupRows(ctx, tx, id, rowsToRead, from, to, budget, deferPayloads)
+}
+
+func (s *Store) decodeGroupRows(ctx context.Context, tx sqlite.Reader, id int64, rowsToRead []groupRow, from, to int64, budget *queryBudget, deferPayloads bool) ([]storedBlock, error) {
 	var blocks []storedBlock
 	for _, row := range rowsToRead {
+		var err error
 		clock, clockErr := loadClock(ctx, tx, row.clockID, budget)
 		if clockErr != nil {
 			return nil, clockErr
@@ -163,15 +196,18 @@ func (s *Store) fetchBlocks(ctx context.Context, tx sqlite.Reader, id, from, to 
 				if err = budget.takeBytes(block.bodyBytes); err != nil {
 					return nil, err
 				}
-				var size int
-				if err = sqlite.QueryRow(ctx, tx, `select length(body),case when length(body)=? then body else null end from payloads where id=?`, block.bodyBytes, group.payloadID(slot)).Scan(&size, &block.body); err != nil {
-					if errors.Is(err, sql.ErrNoRows) {
-						return nil, fmt.Errorf("%w: payload missing", ErrCorrupt)
+				block.payload = group.payloadID(slot)
+				if !deferPayloads {
+					var size int
+					if err = sqlite.QueryRow(ctx, tx, `select length(body),case when length(body)=? then body else null end from payloads where id=?`, block.bodyBytes, block.payload).Scan(&size, &block.body); err != nil {
+						if errors.Is(err, sql.ErrNoRows) {
+							return nil, fmt.Errorf("%w: payload missing", ErrCorrupt)
+						}
+						return nil, fmt.Errorf("read block payload: %w", err)
 					}
-					return nil, fmt.Errorf("read block payload: %w", err)
-				}
-				if size != block.bodyBytes || len(block.body) != size {
-					return nil, fmt.Errorf("%w: payload size", ErrCorrupt)
+					if size != block.bodyBytes || len(block.body) != size {
+						return nil, fmt.Errorf("%w: payload size", ErrCorrupt)
+					}
 				}
 			}
 			blocks = append(blocks, block)

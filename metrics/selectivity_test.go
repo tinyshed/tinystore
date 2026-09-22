@@ -1,11 +1,26 @@
 package metrics
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
+
+type countingReader struct {
+	sqlite.Reader
+	calls int
+}
+
+func (r *countingReader) QueryContext(ctx context.Context, query string, arguments ...any) (*sql.Rows, error) {
+	r.calls++
+	return r.Reader.QueryContext(ctx, query, arguments...)
+}
 
 // the driving matcher decides how many posting rows the match scans, and a
 // matcher ordered by label name drove from `__name__` at any cardinality
@@ -58,5 +73,121 @@ func TestAMatcherNamingNothingEndsTheMatch(t *testing.T) {
 	}
 	if len(result) != 0 {
 		t.Fatalf("matched %d series on a label nobody carries", len(result))
+	}
+}
+
+func TestPostingCountsRankAboveTheOldProbeCap(t *testing.T) {
+	store, _ := openTestStore(t, Options{MaxSeries: 2048})
+	batches := make([]Batch, 2048)
+	for i := range batches {
+		zone := "other"
+		if i < 1025 {
+			zone = "hot"
+		}
+		batches[i] = Batch{Series: Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprint(i)}, {Name: "zone", Value: zone}}}, Samples: testSamples(1)}
+	}
+	if err := store.Ingest(t.Context(), batches); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
+		ranked, possible, err := rankMatchers(t.Context(), tx, []Label{{Name: "__name__", Value: "cpu"}, {Name: "zone", Value: "hot"}})
+		if err != nil {
+			return err
+		}
+		if !possible || len(ranked) != 2 || ranked[0].names != 1025 || ranked[1].names != 2048 {
+			t.Fatalf("ranked posting counts: %+v, possible %v", ranked, possible)
+		}
+		var name string
+		if err = tx.QueryRowContext(t.Context(), `select name from label_values where id=?`, ranked[0].labelID).Scan(&name); err != nil {
+			return err
+		}
+		if name != "zone" {
+			t.Fatalf("drove from %s instead of the shorter zone posting", name)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newSeries := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "overflow"}}}
+	if err := store.Ingest(t.Context(), []Batch{{Series: newSeries, Samples: testSamples(1)}}); !errors.Is(err, ErrLimit) {
+		t.Fatalf("cardinality rejection: %v", err)
+	}
+	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRowContext(t.Context(), `select posting_count from label_values where name='__name__' and value='cpu'`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 2048 {
+			t.Fatalf("failed registration changed posting count to %d", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMatcherLookupBatchesOnlyLargeSelectors(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	labels := []Label{{Name: "__name__", Value: "cpu"}}
+	for i := range 7 {
+		labels = append(labels, Label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})
+	}
+	if err := store.Ingest(t.Context(), []Batch{{Series: Series{Labels: labels}, Samples: testSamples(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		count, calls int
+	}{
+		{count: 2, calls: 2},
+		{count: 8, calls: 1},
+	} {
+		if err := store.file.ViewPrepared(t.Context(), func(reader sqlite.Reader) error {
+			counted := &countingReader{Reader: reader}
+			ranked, possible, err := rankMatchers(t.Context(), counted, labels[:test.count])
+			if err != nil {
+				return err
+			}
+			if !possible || len(ranked) != test.count || counted.calls != test.calls {
+				t.Fatalf("%d matchers: %d ranked, %d SQL calls", test.count, len(ranked), counted.calls)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRankThirtyTwoMatchers(b *testing.B) {
+	store, err := Open(b.Context(), filepath.Join(b.TempDir(), "matchers.db"), Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := store.Close(context.Background()); err != nil {
+			b.Error(err)
+		}
+	})
+	labels := []Label{{Name: "__name__", Value: "cpu"}}
+	for i := range 31 {
+		labels = append(labels, Label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})
+	}
+	if err := store.Ingest(b.Context(), []Batch{{Series: Series{Labels: labels}, Samples: []Sample{{At: time.Now().UnixMilli(), Value: 1}}}}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := store.file.ViewPrepared(b.Context(), func(reader sqlite.Reader) error {
+			ranked, possible, err := rankMatchers(b.Context(), reader, labels)
+			if err != nil {
+				return err
+			}
+			if !possible || len(ranked) != len(labels) {
+				b.Fatal("lost a matcher")
+			}
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

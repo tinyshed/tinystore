@@ -82,7 +82,7 @@ func TestMergeSkipsExpiredSlotsAndRollsBackAsOnePublication(t *testing.T) {
 	}
 	cutoff := testEpoch + blockSamples
 	store.now = func() time.Time { return time.UnixMilli(cutoff + 1000) }
-	if _, err := store.expireSeries(t.Context(), 1, cutoff); err != nil {
+	if _, _, err := store.expireSeries(t.Context(), 1, cutoff); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points[2*blockSamples+1:]}}); err != nil {

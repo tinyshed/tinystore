@@ -28,29 +28,9 @@ const (
 )
 
 func canonicalLabels(labels []Label, requireMetric bool) ([]Label, string, error) {
-	if len(labels) == 0 || len(labels) > maxLabels {
-		return nil, "", fmt.Errorf("%w: expected 1..%d labels", ErrInvalid, maxLabels)
-	}
-	ordered := slices.Clone(labels)
-	slices.SortFunc(ordered, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
-	bytes, hasMetric := 0, false
-	for i, label := range ordered {
-		if len(label.Name) > maxLabelNameBytes || len(label.Value) > maxLabelValueBytes {
-			return nil, "", fmt.Errorf("%w: label %q is over its own budget", ErrInvalid, label.Name)
-		}
-		bytes += len(label.Name) + len(label.Value)
-		if bytes > maxLabelBytes || label.Name == "" || !utf8.ValidString(label.Name) || !utf8.ValidString(label.Value) {
-			return nil, "", fmt.Errorf("%w: label name, encoding or size", ErrInvalid)
-		}
-		if i > 0 && ordered[i-1].Name == label.Name {
-			return nil, "", fmt.Errorf("%w: duplicate label %q", ErrInvalid, label.Name)
-		}
-		if label.Name == "__name__" {
-			hasMetric = label.Value != ""
-		}
-	}
-	if requireMetric && !hasMetric {
-		return nil, "", fmt.Errorf("%w: a nonempty __name__ label is required", ErrInvalid)
+	ordered, err := orderedLabels(labels, requireMetric)
+	if err != nil {
+		return nil, "", err
 	}
 	pairs := make([][2]string, len(ordered))
 	for i, label := range ordered {
@@ -61,6 +41,34 @@ func canonicalLabels(labels []Label, requireMetric bool) ([]Label, string, error
 		return nil, "", fmt.Errorf("encode labels: %w", err)
 	}
 	return ordered, string(encoded), nil
+}
+
+func orderedLabels(labels []Label, requireMetric bool) ([]Label, error) {
+	if len(labels) == 0 || len(labels) > maxLabels {
+		return nil, fmt.Errorf("%w: expected 1..%d labels", ErrInvalid, maxLabels)
+	}
+	ordered := slices.Clone(labels)
+	slices.SortFunc(ordered, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
+	bytes, hasMetric := 0, false
+	for i, label := range ordered {
+		if len(label.Name) > maxLabelNameBytes || len(label.Value) > maxLabelValueBytes {
+			return nil, fmt.Errorf("%w: label %q is over its own budget", ErrInvalid, label.Name)
+		}
+		bytes += len(label.Name) + len(label.Value)
+		if bytes > maxLabelBytes || label.Name == "" || !utf8.ValidString(label.Name) || !utf8.ValidString(label.Value) {
+			return nil, fmt.Errorf("%w: label name, encoding or size", ErrInvalid)
+		}
+		if i > 0 && ordered[i-1].Name == label.Name {
+			return nil, fmt.Errorf("%w: duplicate label %q", ErrInvalid, label.Name)
+		}
+		if label.Name == "__name__" {
+			hasMetric = label.Value != ""
+		}
+	}
+	if requireMetric && !hasMetric {
+		return nil, fmt.Errorf("%w: a nonempty __name__ label is required", ErrInvalid)
+	}
+	return ordered, nil
 }
 
 type registeredSeries struct {
@@ -110,7 +118,7 @@ func decodeLabelIDs(blob []byte) ([]int64, error) {
 
 // lookupLabelIDs asks for every pair at once; a short answer means the
 // dictionary does not hold them all yet
-func lookupLabelIDs(ctx context.Context, tx *sql.Tx, labels []Label) ([]int64, bool, error) {
+func lookupLabelIDs(ctx context.Context, tx sqlite.Writer, labels []Label) ([]int64, bool, error) {
 	query := `select id from label_values where (name,value) in (values ` + //nolint:gosec // only placeholders are concatenated, every value is bound
 		strings.Repeat("(?,?),", len(labels)-1) + `(?,?))`
 	arguments := make([]any, 0, 2*len(labels))
@@ -137,7 +145,7 @@ func lookupLabelIDs(ctx context.Context, tx *sql.Tx, labels []Label) ([]int64, b
 	return ids, len(ids) == len(labels), nil
 }
 
-func registerLabels(ctx context.Context, tx *sql.Tx, labels []Label) ([]int64, error) {
+func registerLabels(ctx context.Context, tx sqlite.Writer, labels []Label) ([]int64, error) {
 	ids, complete, err := lookupLabelIDs(ctx, tx, labels)
 	if err != nil {
 		return nil, err
@@ -160,6 +168,26 @@ func registerLabels(ctx context.Context, tx *sql.Tx, labels []Label) ([]int64, e
 	return ids, nil
 }
 
+func increasePostingCounts(ctx context.Context, tx sqlite.Writer, ids []int64) error {
+	query := `update label_values set posting_count=posting_count+1 where id in (?` + strings.Repeat(",?", len(ids)-1) + `)` //nolint:gosec // only placeholders are concatenated
+	arguments := make([]any, len(ids))
+	for i, id := range ids {
+		arguments[i] = id
+	}
+	result, err := tx.ExecContext(ctx, query, arguments...)
+	if err != nil {
+		return fmt.Errorf("count new series postings: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count updated postings: %w", err)
+	}
+	if changed != int64(len(ids)) { //nolint:gosec // a validated series has at most 128 labels
+		return fmt.Errorf("%w: missing posting counter", ErrCorrupt)
+	}
+	return nil
+}
+
 type storedIdentity struct {
 	identity string
 	text     sql.NullString
@@ -168,7 +196,7 @@ type storedIdentity struct {
 
 // confirms is the invariant a digest cannot carry on its own: a lookup key may
 // only resolve a series once the labels themselves have been compared in full
-func (s storedIdentity) confirms(ctx context.Context, tx *sql.Tx, batch preparedBatch) error {
+func (s storedIdentity) confirms(ctx context.Context, tx sqlite.Writer, batch preparedBatch) error {
 	if s.identity == batch.identity || (s.text.Valid && s.text.String == batch.identity) {
 		return nil
 	}
@@ -205,7 +233,7 @@ func (s storedIdentity) confirms(ctx context.Context, tx *sql.Tx, batch prepared
 	return nil
 }
 
-func (s *Store) resolveSeries(ctx context.Context, tx *sql.Tx, batch preparedBatch) (int64, error) {
+func (s *Store) resolveSeries(ctx context.Context, tx sqlite.Writer, batch preparedBatch) (int64, error) {
 	legacy, err := json.Marshal(batch.labels)
 	if err != nil {
 		return 0, fmt.Errorf("encode legacy identity: %w", err)
@@ -214,7 +242,7 @@ func (s *Store) resolveSeries(ctx context.Context, tx *sql.Tx, batch preparedBat
 	var id int64
 	var kind Kind
 	var stored storedIdentity
-	err = tx.QueryRowContext(ctx, `select id,kind,identity,labels,label_ids from series where identity in (?,?,?)`,
+	err = sqlite.QueryRow(ctx, tx, `select id,kind,identity,labels,label_ids from series where identity in (?,?,?)`,
 		identity, batch.identity, string(legacy)).Scan(&id, &kind, &stored.identity, &stored.text, &stored.ids)
 	if err == nil {
 		if kind != batch.kind {
@@ -238,7 +266,7 @@ func (s *Store) resolveSeries(ctx context.Context, tx *sql.Tx, batch preparedBat
 		return 0, fmt.Errorf("resolve series: %w", err)
 	}
 	var count int
-	if err = tx.QueryRowContext(ctx, `select series_count from store_state where id=1`).Scan(&count); err != nil {
+	if err = sqlite.QueryRow(ctx, tx, `select series_count from store_state where id=1`).Scan(&count); err != nil {
 		return 0, fmt.Errorf("read cardinality: %w", err)
 	}
 	if count >= s.opts.MaxSeries {
@@ -260,6 +288,9 @@ func (s *Store) resolveSeries(ctx context.Context, tx *sql.Tx, batch preparedBat
 			return 0, fmt.Errorf("index series label: %w", err)
 		}
 	}
+	if err = increasePostingCounts(ctx, tx, ids); err != nil {
+		return 0, err
+	}
 	if _, err = tx.ExecContext(ctx, `insert into series_state(series_id,max_seen_ts) values(?,?)`, id, batch.samples[0].At); err != nil {
 		return 0, fmt.Errorf("initialize series state: %w", err)
 	}
@@ -269,31 +300,74 @@ func (s *Store) resolveSeries(ctx context.Context, tx *sql.Tx, batch preparedBat
 	return id, nil
 }
 
-// the probe stops at the cap because the matchers are being ranked, not counted
-const selectivityProbe = 1024
-
 type matcherPosting struct {
 	labelID int64
 	names   int
 }
 
-const rankShape = `select v.id,(select count(*) from (select 1 from postings p where p.label_id=v.id limit cast(? as integer))) from label_values v where v.name=? and v.value=?`
-
 // rankMatchers resolves every matcher to its dictionary id, shortest posting
 // list first. The second result is false when a matcher names no series at all,
 // which makes the whole match empty without running it.
 func rankMatchers(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]matcherPosting, bool, error) {
-	ranked := make([]matcherPosting, 0, len(matchers))
-	for _, matcher := range matchers {
+	if len(matchers) == 1 {
 		var posting matcherPosting
-		row := sqlite.QueryRow(ctx, tx, rankShape, selectivityProbe, matcher.Name, matcher.Value)
-		switch err := row.Scan(&posting.labelID, &posting.names); {
-		case errors.Is(err, sql.ErrNoRows):
+		err := sqlite.QueryRow(ctx, tx, `select id from label_values where name=? and value=?`, matchers[0].Name, matchers[0].Value).Scan(&posting.labelID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
-		case err != nil:
-			return nil, false, fmt.Errorf("rank matcher %q: %w", matcher.Name, err)
 		}
-		ranked = append(ranked, posting)
+		if err != nil {
+			return nil, false, fmt.Errorf("resolve matcher %q: %w", matchers[0].Name, err)
+		}
+		return []matcherPosting{posting}, true, nil
+	}
+	if len(matchers) < 8 {
+		ranked := make([]matcherPosting, 0, len(matchers))
+		for _, matcher := range matchers {
+			var posting matcherPosting
+			err := sqlite.QueryRow(ctx, tx, `select id,posting_count from label_values where name=? and value=?`, matcher.Name, matcher.Value).Scan(&posting.labelID, &posting.names)
+			if errors.Is(err, sql.ErrNoRows) || posting.names == 0 && err == nil {
+				return nil, false, nil
+			}
+			if err != nil {
+				return nil, false, fmt.Errorf("rank matcher %q: %w", matcher.Name, err)
+			}
+			ranked = append(ranked, posting)
+		}
+		slices.SortStableFunc(ranked, func(a, b matcherPosting) int { return a.names - b.names })
+		return ranked, true, nil
+	}
+	pairs := make([][2]string, len(matchers))
+	for i, matcher := range matchers {
+		pairs[i] = [2]string{matcher.Name, matcher.Value}
+	}
+	encoded, err := json.Marshal(pairs)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode matchers: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `select v.id,v.posting_count from json_each(?) j left join label_values v on v.name=json_extract(j.value,'$[0]') and v.value=json_extract(j.value,'$[1]') order by cast(j.key as integer)`, string(encoded))
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve matchers: %w", err)
+	}
+	defer rows.Close()
+	ranked := make([]matcherPosting, 0, len(matchers))
+	for rows.Next() {
+		var id, names sql.NullInt64
+		if err = rows.Scan(&id, &names); err != nil {
+			return nil, false, fmt.Errorf("read matcher: %w", err)
+		}
+		if !id.Valid || !names.Valid || names.Int64 == 0 {
+			return nil, false, nil
+		}
+		if names.Int64 < 0 || names.Int64 > math.MaxInt {
+			return nil, false, fmt.Errorf("%w: posting count", ErrCorrupt)
+		}
+		ranked = append(ranked, matcherPosting{labelID: id.Int64, names: int(names.Int64)})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate matchers: %w", err)
+	}
+	if len(ranked) != len(matchers) {
+		return nil, false, fmt.Errorf("%w: matcher resolution count", ErrCorrupt)
 	}
 	slices.SortStableFunc(ranked, func(a, b matcherPosting) int { return a.names - b.names })
 	return ranked, true, nil
@@ -431,7 +505,7 @@ func fillLabels(ctx context.Context, tx sqlite.Reader, matched []registeredSerie
 			}
 			labels = append(labels, label)
 		}
-		ordered, _, err := canonicalLabels(labels, true)
+		ordered, err := orderedLabels(labels, true)
 		if err != nil {
 			return fmt.Errorf("%w: registry labels: %w", ErrCorrupt, err)
 		}
@@ -456,7 +530,7 @@ func decodeLabels(encoded string) ([]Label, error) {
 	} else if err := json.Unmarshal([]byte(encoded), &labels); err != nil {
 		return nil, fmt.Errorf("decode legacy labels: %w", err)
 	}
-	if _, _, err := canonicalLabels(labels, true); err != nil {
+	if _, err := orderedLabels(labels, true); err != nil {
 		return nil, fmt.Errorf("%w: stored labels: %w", ErrCorrupt, err)
 	}
 	return labels, nil
