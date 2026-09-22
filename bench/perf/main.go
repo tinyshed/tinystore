@@ -132,9 +132,10 @@ func report(stage string, fields ...any) {
 
 func micros(d time.Duration) string { return strconv.FormatFloat(d.Seconds()*1e6, 'f', 1, 64) }
 
-func openStore(ctx context.Context, path string, series int) *metrics.Store {
+func openStore(ctx context.Context, path string, series, readers int) *metrics.Store {
 	store, err := metrics.Open(ctx, path, metrics.Options{
 		Retention:       365 * 24 * time.Hour,
+		MaxReaders:      readers,
 		MaxSeries:       2 * series,
 		MaxHeadSamples:  8192,
 		MaxBatchSamples: 200000,
@@ -164,7 +165,7 @@ func fileBytes(path string) int64 {
 func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch, maintainEvery int) {
 	path := filepath.Join(dir, "ingest.db")
 	os.Remove(path)
-	store := openStore(ctx, path, seriesCount)
+	store := openStore(ctx, path, seriesCount, 2)
 	all := buildSeries(seriesCount)
 	values := make([]int64, seriesCount)
 	for i := range values {
@@ -282,7 +283,7 @@ type readShape struct {
 // read replays one shape of query at a chosen reader concurrency
 func read(ctx context.Context, dir, label, only string, seriesCount, readers, seconds int) {
 	path := filepath.Join(dir, "read.db")
-	store := openStore(ctx, path, seriesCount)
+	store := openStore(ctx, path, seriesCount, readers)
 	defer store.Close(ctx)
 	step := int64(10000)
 	var first, last int64
@@ -373,7 +374,7 @@ func runShape(ctx context.Context, store *metrics.Store, label string, seriesCou
 // and readers behaving like panels
 func mixed(ctx context.Context, dir, label string, seriesCount, readers, seconds int) {
 	path := filepath.Join(dir, "read.db")
-	store := openStore(ctx, path, seriesCount)
+	store := openStore(ctx, path, seriesCount, readers)
 	all := buildSeries(seriesCount)
 	step := int64(10000)
 	// a repeated run must start after what an earlier one already sealed
@@ -460,7 +461,7 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 	os.Remove(path)
 	os.Remove(path + "-wal")
 	os.Remove(path + "-shm")
-	store := openStore(ctx, path, seriesCount)
+	store := openStore(ctx, path, seriesCount, 2)
 	all := buildSeries(seriesCount)
 	step := int64(10000)
 	start := time.Now().UnixMilli() - int64(samples)*step

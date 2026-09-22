@@ -106,6 +106,10 @@ ready series for packing. There is no hidden maintenance timer yet.
   five-second snapshot timeout. Byte accounting includes labels, directories,
   external bodies and encoded head bytes; it is not total process RSS or disk I/O.
   Store options can change capacities; a request can only lower its limits.
+- `MaxReaders` sizes the reader connection pool and defaults to 2. Queries beyond
+  that queue rather than fail, so raising it widens read concurrency; it also
+  lengthens the write-ahead log, because a checkpoint cannot advance past the
+  oldest open snapshot. One writer connection is not configurable.
 - A narrow query can spend 240 decoded samples on one returned point. Resource
   errors never silently truncate the result or choose another resolution.
   A query touching a packed head currently decodes that whole bounded head;

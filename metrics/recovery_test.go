@@ -21,7 +21,7 @@ import (
 func TestSchemaOneFileUpgradesWithoutChangingSamples(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "old.db")
-	file, err := sqlite.Open(ctx, path)
+	file, err := sqlite.Open(ctx, path, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

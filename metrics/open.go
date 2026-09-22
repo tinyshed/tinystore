@@ -37,7 +37,7 @@ func Open(ctx context.Context, path string, options Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := sqlite.Open(ctx, path)
+	f, err := sqlite.Open(ctx, path, opts.MaxReaders)
 	if err != nil {
 		return nil, fmt.Errorf("open metrics file: %w", err)
 	}
@@ -128,8 +128,8 @@ func normalizeOptions(o Options) (Options, error) {
 	if o.Retention < time.Millisecond || o.Retention%time.Millisecond != 0 || o.Lateness < 0 || o.Lateness%time.Millisecond != 0 || o.SnapshotTimeout < 0 {
 		return o, fmt.Errorf("%w: durations", ErrInvalid)
 	}
-	fields := []*int{&o.MaxSeries, &o.MaxHeadSamples, &o.MaxBatchSamples, &o.MaxBatchBytes, &o.MaintenanceSeries}
-	defaults := []int{100000, 4096, 10000, 4 << 20, 64}
+	fields := []*int{&o.MaxSeries, &o.MaxHeadSamples, &o.MaxBatchSamples, &o.MaxBatchBytes, &o.MaintenanceSeries, &o.MaxReaders}
+	defaults := []int{100000, 4096, 10000, 4 << 20, 64, 2}
 	for i, p := range fields {
 		if *p < 0 {
 			return o, fmt.Errorf("%w: negative capacity", ErrInvalid)

@@ -56,6 +56,7 @@ type Options struct {
 	MaxBatchSamples   int
 	MaxBatchBytes     int
 	MaintenanceSeries int
+	MaxReaders        int
 	SnapshotTimeout   time.Duration
 	Limits            Limits
 }

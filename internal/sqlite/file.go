@@ -18,9 +18,14 @@ type File struct {
 	reader *sql.DB
 }
 
-func Open(ctx context.Context, path string) (*File, error) {
+// Open takes the reader-pool size because every pragma here is per connection,
+// so the pool is sized once and never allowed to expire and reopen.
+func Open(ctx context.Context, path string, readers int) (*File, error) {
 	if path == "" || path == ":memory:" {
 		return nil, errors.New("open SQLite: a file path is required")
+	}
+	if readers < 1 {
+		return nil, fmt.Errorf("open SQLite: %d readers", readers)
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -57,8 +62,8 @@ func Open(ctx context.Context, path string) (*File, error) {
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open SQLite reader: %w", err), f.Close())
 	}
-	f.reader.SetMaxOpenConns(2)
-	f.reader.SetMaxIdleConns(2)
+	f.reader.SetMaxOpenConns(readers)
+	f.reader.SetMaxIdleConns(readers)
 	if err = f.reader.PingContext(ctx); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect SQLite reader: %w", err), f.Close())
 	}

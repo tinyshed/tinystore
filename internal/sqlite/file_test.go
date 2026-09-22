@@ -15,7 +15,7 @@ func testMigrations(text string) fs.FS {
 
 func TestFileEnforcesReadOnlyAndTransactionalWrites(t *testing.T) {
 	ctx := context.Background()
-	file, err := Open(ctx, filepath.Join(t.TempDir(), "a # b & c.db"))
+	file, err := Open(ctx, filepath.Join(t.TempDir(), "a # b & c.db"), 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestMigrationHistoryIsVerifiedOnReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "schema.db")
 	scripts := testMigrations(`create table example(n integer) strict;`)
-	file, err := Open(ctx, path)
+	file, err := Open(ctx, path, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestMigrationHistoryIsVerifiedOnReopen(t *testing.T) {
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	file, err = Open(ctx, path)
+	file, err = Open(ctx, path, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
