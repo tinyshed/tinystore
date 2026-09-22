@@ -1,5 +1,10 @@
 # Closing the two defects the performance round named
 
+Follow-up: [prepared reads](prepared-reads-2026-09-22.md) profiles the remaining
+cost and compares both revisions in one session. It supersedes the unprofiled
+diagnosis below and corrects the attribution of broad-query overhead to matcher
+count; the historical measurements below are unchanged.
+
 [The performance round](performance-2026-09-22.md) named two findings as defects
 rather than characteristics: a match driven by the alphabetically first matcher,
 and a read concurrency ceiling that was a constant. Both are fixed here and
