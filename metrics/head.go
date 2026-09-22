@@ -20,8 +20,16 @@ type headSnapshot struct {
 	seriesID   int64
 	count      int
 	start, end int64
+	from, to   int64
+	filtered   bool
 	packed     []byte
 	legacy     []Sample
+	chunks     []headChunk
+}
+
+type headChunk struct {
+	header codec.Head
+	body   []byte
 }
 
 func headChecksum(id int64, data []byte) uint32 {
@@ -172,6 +180,100 @@ func (s *Store) decodeHead(ctx context.Context, head headSnapshot) ([]Sample, er
 	return out, nil
 }
 
+func (s *Store) decodeSelectedHead(ctx context.Context, head headSnapshot) ([]Sample, error) {
+	if !head.filtered || head.packed == nil {
+		return s.decodeHead(ctx, head)
+	}
+	chunks := head.chunks
+	if chunks == nil {
+		var err error
+		chunks, err = s.inspectHead(head)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out := make([]Sample, 0, selectedHeadSamples(chunks, head.from, head.to))
+	for _, chunk := range chunks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if chunk.header.End < head.from || chunk.header.Start >= head.to {
+			continue
+		}
+		iterator, err := s.decoder.Decode(chunk.header, chunk.body)
+		if err != nil {
+			return nil, fmt.Errorf("%w: mutable chunk: %w", ErrCorrupt, err)
+		}
+		for iterator.Next() {
+			out = append(out, iterator.Sample())
+		}
+		if err = iterator.Err(); err != nil {
+			return nil, fmt.Errorf("%w: mutable values: %w", ErrCorrupt, err)
+		}
+	}
+	return out, nil
+}
+
+func selectedHeadSamples(chunks []headChunk, from, to int64) int {
+	count := 0
+	for _, chunk := range chunks {
+		if chunk.header.End >= from && chunk.header.Start < to {
+			count += chunk.header.Count
+		}
+	}
+	return count
+}
+
+func (s *Store) inspectHead(head headSnapshot) ([]headChunk, error) {
+	data := head.packed
+	if len(data) < 6 || len(data) > s.opts.MaxHeadBytes {
+		return nil, fmt.Errorf("%w: mutable head size", ErrCorrupt)
+	}
+	content := data[:len(data)-4]
+	if headChecksum(head.seriesID, content) != binary.LittleEndian.Uint32(data[len(data)-4:]) {
+		return nil, fmt.Errorf("%w: mutable head checksum", ErrCorrupt)
+	}
+	r := binaryReader{data: content}
+	if r.byte() != 1 {
+		return nil, fmt.Errorf("%w: mutable head version", ErrCorrupt)
+	}
+	count := r.size(s.opts.MaxHeadSamples)
+	if count != head.count || count == 0 {
+		return nil, fmt.Errorf("%w: mutable head count", ErrCorrupt)
+	}
+	chunks := make([]headChunk, 0, (count+blockSamples-1)/blockSamples)
+	parsed := 0
+	var firstStart, previousEnd int64
+	for parsed < count {
+		start := unfoldSigned(r.unsigned())
+		span := r.unsigned()
+		n := r.size(min(blockSamples, count-parsed))
+		first := math.Float64frombits(r.word())
+		length := r.size(maxPayloadBytes)
+		body := r.take(length)
+		if r.err != nil || n == 0 || length < 8 || (n == 1 && span != 0) || (n > 1 && span == 0) || span > uint64(math.MaxInt64)-uint64(start) {
+			return nil, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
+		}
+		chunk := codec.Head{Start: start, End: int64(uint64(start) + span), Count: n, First: first}
+		if chunk.End == math.MaxInt64 || (parsed > 0 && start <= previousEnd) {
+			return nil, fmt.Errorf("%w: mutable chunk ordering", ErrCorrupt)
+		}
+		if parsed == 0 {
+			firstStart = start
+		}
+		previousEnd = chunk.End
+		parsed += n
+		chunks = append(chunks, headChunk{header: chunk, body: body})
+	}
+	if err := r.finish(); err != nil {
+		return nil, err
+	}
+	if firstStart != head.start || previousEnd != head.end {
+		return nil, fmt.Errorf("%w: mutable head endpoints", ErrCorrupt)
+	}
+	return chunks, nil
+}
+
 // the snapshot owns encoded bytes; normal queries decode them only after releasing SQLite
 func (s *Store) fetchHead(ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget) (headSnapshot, error) {
 	head := headSnapshot{seriesID: id}
@@ -204,11 +306,11 @@ func (s *Store) fetchHead(ctx context.Context, tx sqlite.Reader, id, from, to in
 		return head, fmt.Errorf("%w: mutable head capacity", ErrLimit)
 	}
 	if budget != nil {
-		if err = budget.takeSamples(head.count); err != nil {
-			return head, err
-		}
 		bytes := size
 		if size == 0 {
+			if err = budget.takeSamples(head.count); err != nil {
+				return head, err
+			}
 			bytes = 16 * head.count
 		}
 		if err = budget.takeBytes(bytes); err != nil {
@@ -218,6 +320,16 @@ func (s *Store) fetchHead(ctx context.Context, tx sqlite.Reader, id, from, to in
 	if size > 0 {
 		if len(head.packed) != size {
 			return head, fmt.Errorf("%w: mutable body missing", ErrCorrupt)
+		}
+		if budget != nil {
+			head.filtered, head.from, head.to = true, from, to
+			head.chunks, err = s.inspectHead(head)
+			if err != nil {
+				return head, err
+			}
+			if err = budget.takeSamples(selectedHeadSamples(head.chunks, from, to)); err != nil {
+				return head, err
+			}
 		}
 		return head, nil
 	}

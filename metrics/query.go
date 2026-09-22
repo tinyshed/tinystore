@@ -249,7 +249,7 @@ func (s *Store) decodeResults(ctx context.Context, reads []seriesRead, from, to 
 				}
 			}
 		}
-		head, headErr := s.decodeHead(ctx, read.head)
+		head, headErr := s.decodeSelectedHead(ctx, read.head)
 		if headErr != nil {
 			return nil, headErr
 		}

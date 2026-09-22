@@ -74,9 +74,6 @@ func (s *Store) fetchHeads(ctx context.Context, tx sqlite.Reader, matched []regi
 				legacyIDs = append(legacyIDs, id)
 				continue
 			}
-			if err = budget.takeSamples(count); err != nil {
-				break
-			}
 			if err = budget.takeBytes(size); err != nil {
 				break
 			}
@@ -141,6 +138,17 @@ func (s *Store) fetchHeads(ctx context.Context, tx sqlite.Reader, matched []regi
 		}
 		if fetched != len(packedIDs) {
 			return nil, fmt.Errorf("%w: mutable body missing", ErrCorrupt)
+		}
+		for _, id := range packedIDs {
+			head := &heads[positions[id]]
+			head.filtered, head.from, head.to = true, from, to
+			head.chunks, err = s.inspectHead(*head)
+			if err != nil {
+				return nil, err
+			}
+			if err = budget.takeSamples(selectedHeadSamples(head.chunks, from, to)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return heads, nil
