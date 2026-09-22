@@ -6,6 +6,8 @@ first measurement of the other axis — how fast the thing chews, what it alloca
 what it writes to the log, and how it behaves when readers and a writer share it.
 
 Two findings here are defects rather than characteristics, and both are named.
+Both are fixed and re-measured in [the selectivity round](selectivity-2026-09-22.md);
+the two tables below are the state before that fix.
 
 ## Environment
 

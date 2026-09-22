@@ -47,3 +47,4 @@ fetch and normalise them.
 | [value-structure-2026-09-22.md](value-structure-2026-09-22.md) | what is left in TSBS values, measured |
 | [real-corpus-2026-09-22.md](real-corpus-2026-09-22.md) | the same census on telemetry nobody shaped for us |
 | [performance-2026-09-22.md](performance-2026-09-22.md) | what the engine costs in time rather than in bytes |
+| [selectivity-2026-09-22.md](selectivity-2026-09-22.md) | closing the two defects that round named, and what the fix costs |
