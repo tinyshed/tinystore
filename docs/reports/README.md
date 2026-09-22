@@ -77,3 +77,4 @@ fetch and normalise them.
 | [batched-maintenance-2026-09-23.md](batched-maintenance-2026-09-23.md) | byte-bounded savepoint publication and the 64-series maintenance comparison |
 | [active-work-admission-2026-09-23.md](active-work-admission-2026-09-23.md) | bound active work per store and measure the wide-read memory/throughput tradeoff |
 | [series-reclamation-2026-09-23.md](series-reclamation-2026-09-23.md) | reclaim empty registrations and dictionary ownership, with per-object page accounting |
+| [prepared-eviction-2026-09-23.md](prepared-eviction-2026-09-23.md) | retain recently used prepared programs without a measured stable-query QPS change |
