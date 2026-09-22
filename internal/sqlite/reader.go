@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 )
@@ -13,13 +14,17 @@ type Reader interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-type readConnection struct {
+type preparedConnection struct {
 	conn       *sql.Conn
 	statements map[string]*sql.Stmt
 	order      []string
 }
 
-func (r *readConnection) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+type readConnection struct {
+	preparedConnection
+}
+
+func (r *preparedConnection) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	statement, err := r.prepare(ctx, query) //nolint:sqlclosecheck // retained until eviction or connection close
 	if err != nil {
 		return nil, err
@@ -27,7 +32,7 @@ func (r *readConnection) QueryContext(ctx context.Context, query string, args ..
 	return statement.QueryContext(ctx, args...)
 }
 
-func (r *readConnection) prepare(ctx context.Context, query string) (*sql.Stmt, error) {
+func (r *preparedConnection) prepare(ctx context.Context, query string) (*sql.Stmt, error) {
 	if statement := r.statements[query]; statement != nil {
 		return statement, nil
 	}
@@ -51,7 +56,7 @@ func (r *readConnection) prepare(ctx context.Context, query string) (*sql.Stmt, 
 	return statement, nil
 }
 
-func (r *readConnection) close() error {
+func (r *preparedConnection) close() error {
 	var err error
 	for _, statement := range r.statements {
 		err = errors.Join(err, statement.Close())
@@ -71,13 +76,27 @@ func (f *File) ViewPrepared(ctx context.Context, read func(Reader) error) error 
 }
 
 func (f *File) view(ctx context.Context, read func(*sql.Tx, *readConnection) error) error {
-	var connection *readConnection
 	select {
-	case connection = <-f.readers:
+	case f.readSlots <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	defer func() { f.readers <- connection }()
+	f.readersMu.Lock()
+	var connection *readConnection
+	if last := len(f.idleReaders) - 1; last >= 0 {
+		connection = f.idleReaders[last]
+		f.idleReaders = f.idleReaders[:last]
+	}
+	f.readersMu.Unlock()
+	if connection == nil {
+		connection = &readConnection{}
+	}
+	defer func() {
+		f.readersMu.Lock()
+		f.idleReaders = append(f.idleReaders, connection)
+		f.readersMu.Unlock()
+		<-f.readSlots
+	}()
 	if connection.conn == nil {
 		var err error
 		connection.conn, err = f.reader.Conn(ctx)
@@ -85,11 +104,11 @@ func (f *File) view(ctx context.Context, read func(*sql.Tx, *readConnection) err
 			return fmt.Errorf("acquire SQLite reader: %w", err)
 		}
 	}
-	err := transact(ctx, connection.conn, func(tx *sql.Tx) error { return read(tx, connection) })
-	if err != nil {
+	err, reusable := transactReusable(ctx, connection.conn, func(tx *sql.Tx) error { return read(tx, connection) })
+	if !reusable || ctx.Err() != nil || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return errors.Join(err, connection.close())
 	}
-	return nil
+	return err
 }
 
 type Row struct {

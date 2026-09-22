@@ -96,6 +96,68 @@ func TestPreparedReadCacheIsBoundedAndRebindsValues(t *testing.T) {
 	}
 }
 
+func TestSequentialReadsReuseOneWarmConnection(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := file.Migrate(t.Context(), 1234, testMigrations(`create table example(n integer) strict; insert into example values(1);`)); err != nil {
+		t.Fatal(err)
+	}
+	var first *readConnection
+	for range 4 {
+		if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
+			connection := reader.(*readConnection)
+			if first == nil {
+				first = connection
+			} else if connection != first {
+				t.Fatal("sequential read acquired a cold connection")
+			}
+			var value int
+			return QueryRow(t.Context(), reader, `select n from example`).Scan(&value)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := file.reader.Stats().OpenConnections; got != 1 {
+		t.Fatalf("opened %d reader connections for sequential reads", got)
+	}
+}
+
+func TestApplicationErrorKeepsPreparedReader(t *testing.T) {
+	file := openReaderTestFile(t)
+	const query = `select n from example`
+	callbackError := errors.New("application rejected result")
+	var first *readConnection
+	var statement *sql.Stmt
+	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
+		first = reader.(*readConnection)
+		var value int
+		if err := QueryRow(t.Context(), reader, query).Scan(&value); err != nil {
+			return err
+		}
+		statement = first.statements[query]
+		return callbackError
+	}); !errors.Is(err, callbackError) {
+		t.Fatal(err)
+	}
+	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
+		connection := reader.(*readConnection)
+		if connection != first || connection.statements[query] != statement {
+			t.Fatal("application error discarded a healthy reader")
+		}
+		var value int
+		return QueryRow(t.Context(), reader, query).Scan(&value)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCancelledPreparedReadReleasesItsConnection(t *testing.T) {
 	file := openReaderTestFile(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -124,5 +186,39 @@ func TestCancelledPreparedReadReleasesItsConnection(t *testing.T) {
 		return QueryRow(t.Context(), reader, `select n from example`).Scan(&value)
 	}); err != nil {
 		t.Fatalf("read after cancellation: %v", err)
+	}
+}
+
+func BenchmarkPreparedReadAfterApplicationError(b *testing.B) {
+	ctx := b.Context()
+	file, err := Open(ctx, filepath.Join(b.TempDir(), "read.db"), 4)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	if err := file.Migrate(ctx, 1234, testMigrations(`create table example(n integer) strict; insert into example values(1);`)); err != nil {
+		b.Fatal(err)
+	}
+	callbackError := errors.New("application rejected result")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		err := file.ViewPrepared(ctx, func(reader Reader) error {
+			var value int
+			if err := QueryRow(ctx, reader, `select n from example limit cast(? as integer)`, 1).Scan(&value); err != nil {
+				return err
+			}
+			if value != 1 {
+				b.Fatalf("value %d", value)
+			}
+			return callbackError
+		})
+		if !errors.Is(err, callbackError) {
+			b.Fatal(err)
+		}
 	}
 }
