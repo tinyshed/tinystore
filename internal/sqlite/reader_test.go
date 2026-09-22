@@ -96,6 +96,37 @@ func TestPreparedReadCacheIsBoundedAndRebindsValues(t *testing.T) {
 	}
 }
 
+func TestPreparedReadCacheKeepsRecentlyUsedProgram(t *testing.T) {
+	file := openReaderTestFile(t)
+	const hot = `select n from example`
+	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
+		connection := reader.(*readConnection)
+		var value int
+		if err := QueryRow(t.Context(), reader, hot).Scan(&value); err != nil {
+			return err
+		}
+		original := connection.statements[hot]
+		for i := range readerStatements - 1 {
+			query := fmt.Sprintf(`select %d`, i)
+			if err := QueryRow(t.Context(), reader, query).Scan(&value); err != nil {
+				return err
+			}
+		}
+		if err := QueryRow(t.Context(), reader, hot).Scan(&value); err != nil {
+			return err
+		}
+		if err := QueryRow(t.Context(), reader, `select 999`).Scan(&value); err != nil {
+			return err
+		}
+		if connection.statements[hot] != original || len(connection.statements) != readerStatements {
+			t.Fatal("recently used read program was evicted")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSequentialReadsReuseOneWarmConnection(t *testing.T) {
 	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"), 4)
 	if err != nil {

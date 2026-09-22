@@ -34,6 +34,13 @@ func (r *preparedConnection) QueryContext(ctx context.Context, query string, arg
 
 func (r *preparedConnection) prepare(ctx context.Context, query string) (*sql.Stmt, error) {
 	if statement := r.statements[query]; statement != nil {
+		for i, text := range r.order {
+			if text == query {
+				copy(r.order[i:], r.order[i+1:])
+				r.order[len(r.order)-1] = query
+				break
+			}
+		}
 		return statement, nil
 	}
 	if len(r.order) == readerStatements {
