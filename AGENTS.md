@@ -27,6 +27,28 @@ preserving payload addresses. Aggregate queries and steady-state performance
 remain unfinished. Prototype density figures are not engine guarantees.
 `spike/` preserves the experiments behind those decisions.
 
+Maintenance suspends one series after a local corruption or capacity failure,
+records the reason, and continues other series. Ingest rejects a suspended
+series; bounded explicit retry re-enables it after repair or a limit change.
+File and I/O errors still stop the pass.
+The common ingest path reads one packed state and writes one merged UPDATE;
+indexed maintenance fields are assigned only when their values change.
+Completed encoded head chunks before an incoming timestamp are reused; the
+intersecting suffix is rebuilt and the whole-head checksum renewed.
+Postings carry transactional exact counts for matcher ranking; a new series
+increments its label counters with the registration transaction.
+Ready marks a retained 240-sample prefix strictly before the series watermark,
+not merely a head with 240 samples.
+The one pinned writer connection retains at most 32 prepared programs; ingestion
+uses them inside one immediate transaction, and an uncertain connection is closed.
+Maintenance stages at most eight series and 1 MiB before a savepoint batch;
+publication counters move only after the outer commit succeeds.
+Read admission lasts through decode and ingest admission begins before batch
+preparation. These limits apply per Store handle, not across handles in a process.
+Complete retention removes empty series registrations and postings, decrements
+dictionary ownership and frees `MaxSeries` capacity. Re-registration begins a
+new kind and frontier lifecycle; the retention cutoff still rejects old samples.
+
 The mutable **head** is a bounded packed tail in `series_state`, rewritten once
 per touched series inside a transaction. Each encoded chunk has at most 240
 samples; the whole head has separate byte and sample budgets. Legacy head rows
@@ -281,6 +303,17 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | retention clips before it summarises                | `TestRetentionClipsAPersistedBlockBeforeSummarising`                            |
 | a quiet tail expires without becoming a block       | `TestASilentTailExpiresWithoutBecomingABlock`                                   |
 | one expired sample does not delete a block          | `TestWholeBlockRetentionOvershoot`                                              |
+| one damaged series does not stop its neighbors      | `TestCorruptSeriesDoesNotStopOtherMaintenance`                                   |
+| a raised limit can resume suspended maintenance     | `TestSuspendedLimitCanRecoverAfterReopen`                                        |
+| an append need not churn due indexes                | `TestExistingSeriesIngestAvoidsUnchangedDueIndexes`                             |
+| untouched head chunks keep their bytes             | `TestUnchangedHeadChunksKeepTheirEncodedBytes`                                   |
+| a posting above the old cap still ranks exactly    | `TestPostingCountsRankAboveTheOldProbeCap`                                       |
+| ready waits for a safe prefix                       | `TestReadyWaitsForASealableWatermarkPrefix`                                      |
+| writer programs stay bounded and transactional     | `TestPreparedWriterUsesOneTransactionAndRetainsPrograms` and `TestPreparedWriterCacheStaysBounded` |
+| one bad publication does not count its neighbors   | `TestPublicationBatchRollsBackOneConflictingSeries` and `TestPublicationBatchDoesNotCountRolledBackTransaction` |
+| cancelled callers do not bypass active-work slots   | `TestActiveReadAndIngestAdmissionHonorsCancellation`                         |
+| expired series return a cardinality slot            | `TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle`                  |
+| live siblings keep shared dictionary pairs          | `TestReclaimKeepsLabelsUsedByAnotherSeries`                                   |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

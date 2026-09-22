@@ -1,5 +1,11 @@
 # Reports
 
+The 22–23 September architecture implementation rounds on
+`codex/architecture-measurements` measured intermediate uncommitted states.
+Final implementation and harness revisions are `ce5564a` and `20f5c93`;
+individual comparison baselines are provisional until their source states
+are archived as reproducible revisions.
+
 Dated measurement rounds, in the order they happened. They are history rather
 than documentation: each one records what was measured on a given day, on which
 machine, against which corpus, and with the command that reproduces it. A later
@@ -53,3 +59,21 @@ fetch and normalise them.
 | [engine-audit-2026-09-22.md](engine-audit-2026-09-22.md) | remaining costs, reproduced operational limits, aggregate rounding and corrections to RSS/WAL interpretation |
 | [execution-review-2026-09-22.md](execution-review-2026-09-22.md) | where the reader plateau waits, per-ingest index churn, writer and maintenance defects, and runtime proposals split into work packages |
 | [execution-review-verdict-2026-09-22.md](execution-review-verdict-2026-09-22.md) | decisions and corrections for the execution review's proposed optimization sequence |
+| [reader-reuse-2026-09-22.md](reader-reuse-2026-09-22.md) | the first measured change: retaining healthy readers and reusing warm idle connections |
+| [maintenance-fairness-2026-09-22.md](maintenance-fairness-2026-09-22.md) | rotating ready-series selection and the two-pass fairness result |
+| [maintenance-isolation-2026-09-22.md](maintenance-isolation-2026-09-22.md) | persisted per-series maintenance failures, bounded retry and recovery after a limit change |
+| [architecture-instruments-2026-09-22.md](architecture-instruments-2026-09-22.md) | corrected RSS/WAL labels and separated registration, append and rotating-key read baselines |
+| [ingest-state-2026-09-22.md](ingest-state-2026-09-22.md) | one state read and UPDATE per packed-head ingest, with measured append and registration effects |
+| [head-reuse-2026-09-22.md](head-reuse-2026-09-22.md) | reuse of unchanged encoded head chunks, bit-exact tests and long-head append measurements |
+| [architecture-worklist-2026-09-22.md](architecture-worklist-2026-09-22.md) | completed and open work packages from the audit, review and verdict |
+| [posting-counts-2026-09-22.md](posting-counts-2026-09-22.md) | exact posting counts, read gains, registration cost and per-object file accounting |
+| [read-labels-2026-09-22.md](read-labels-2026-09-22.md) | avoid discarded identity JSON on reads, with fixed, rotating and wide query comparisons |
+| [ready-watermark-2026-09-22.md](ready-watermark-2026-09-22.md) | stop maintenance churn until a full prefix is strictly before the watermark |
+| [matcher-batching-2026-09-23.md](matcher-batching-2026-09-23.md) | reject universal matcher batching, retain prepared short lookups and batch broad selectors |
+| [batched-head-reads-2026-09-23.md](batched-head-reads-2026-09-23.md) | reserve head bytes before bounded batch fetches, with wide and 20-series read comparisons |
+| [batched-group-and-payload-reads-2026-09-23.md](batched-group-and-payload-reads-2026-09-23.md) | bounded selected-payload and group-directory batches, with one- and eight-reader comparisons |
+| [ordered-ingest-2026-09-23.md](ordered-ingest-2026-09-23.md) | ordered-input ingest preparation with exact fallback and separate write-stage comparisons |
+| [prepared-writes-2026-09-23.md](prepared-writes-2026-09-23.md) | bounded prepared writes on the owning connection and separate append/registration gains |
+| [batched-maintenance-2026-09-23.md](batched-maintenance-2026-09-23.md) | byte-bounded savepoint publication and the 64-series maintenance comparison |
+| [active-work-admission-2026-09-23.md](active-work-admission-2026-09-23.md) | bound active work per store and measure the wide-read memory/throughput tradeoff |
+| [series-reclamation-2026-09-23.md](series-reclamation-2026-09-23.md) | reclaim empty registrations and dictionary ownership, with per-object page accounting |
