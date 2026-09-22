@@ -102,3 +102,35 @@ not a query holding many payloads. A caller inspects `Iterator.Err()` after
 iterating and enforces its own budgets for bytes, blocks and series. A block
 builder enforces its own encoded-byte ceiling too: a codec result is not
 automatically below 2 KiB.
+
+## Metrics group directories, versions 2 and 3
+
+These versions belong to the metrics directory, independently of the codec
+version above. Version 2 remains the format for newly sealed groups. Version 3
+is written when publication merges adjacent groups, retaining the payload ids
+already owned by their live slots. Both keep the same header:
+
+| offset | bytes | meaning |
+|---:|---:|---|
+| 0 | 1 | directory version |
+| 1 | 1 | block slots, 1..32 |
+| 2 | 4 | live mask |
+| 6 | 4 | external payload mask |
+| 10 | 8 | first payload id in version 2; zero in version 3 |
+| 18 | 8 | shared clock id |
+| 26 | variable | compression mode and descriptor stream |
+| end-4 | 4 | IEEE CRC32 bound to series id, start, end and preceding bytes |
+
+The stream stores each block's first value, summary prediction flags, explicit
+summary values where needed, reset count and body length. Version 2 addresses
+external bodies as `first_id + popcount(earlier allocation bits)`. Version 3
+instead follows each external body's length with its absolute payload id as an
+unsigned varint; ids are positive, below MaxInt64 and unique within a directory.
+Inline bodies follow their length directly in either version. Expired external
+slots retain their address until the directory is merged or removed.
+
+The descriptor stream is bounded to 8 KiB before and after compression. Group
+clocks, value representations and payload checksums are unchanged. Version 3
+does not cause raw values or summaries to be re-encoded. Readers accept all
+three directory versions; earlier binaries cannot read version 3. Golden
+vectors cover every directory version.

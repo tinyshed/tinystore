@@ -180,9 +180,14 @@ It must not be advertised with the prototype's
 
 Packing starts when at least 240 safe head points are present, and publishes up
 to 32 microblocks. The time-span cap can split them sooner; clock objects are
-bounded to 64 KiB. A live workload may produce one-block groups. Merging already
-sealed groups and byte-aware page-packing policies remain future work. Payload
-formats and schema migrations preserve the old directory reader.
+bounded to 64 KiB. Publication merges preceding groups with no more live blocks
+than the incoming group, up to those same bounds. Version-three directories
+keep explicit payload addresses, so merging rewrites metadata without relocating
+values. Expired slots are omitted; the new clock ownership, directory and sealed
+prefix commit together. `SealedBlocks` counts newly sealed blocks only. Existing
+groups merge when later samples seal; there is no background sweep over quiet
+series. Byte-aware page-packing policies remain future work. All older directory
+versions remain readable; older binaries cannot read version-three directories.
 
 Tests cover reopen, bitwise values, label matching, atomic rejection, budgets,
 watermark boundaries, stale compaction, rollback after payload/head writes,

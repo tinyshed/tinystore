@@ -35,14 +35,16 @@ func (s *Store) writeDirectory(group blockGroup) ([]byte, error) {
 		}
 		raw = binary.AppendUvarint(raw, uint64(summary.resets))
 		raw = binary.AppendUvarint(raw, uint64(block.bodyBytes))
-		if !group.isExternal(slot) {
+		if group.format >= 3 && group.isExternal(slot) {
+			raw = binary.AppendUvarint(raw, uint64(block.payload))
+		} else if !group.isExternal(slot) {
 			raw = append(raw, block.body...)
 		}
 	}
 	if len(raw) > maxDirectoryBytes {
 		return nil, fmt.Errorf("%w: expanded directory", ErrLimit)
 	}
-	header := []byte{2, byte(len(group.blocks))}
+	header := []byte{group.format, byte(len(group.blocks))}
 	header = binary.LittleEndian.AppendUint32(header, group.live)
 	header = binary.LittleEndian.AppendUint32(header, group.allocation)
 	header = binary.LittleEndian.AppendUint64(header, uint64(group.firstPayload))
@@ -62,9 +64,10 @@ func (s *Store) readDirectory(id, start, end, clockID int64, data []byte, clock 
 		return decodeDirectory(id, start, end, data)
 	}
 	group := blockGroup{format: 2, seriesID: id, start: start, end: end, clockID: clockID}
-	if len(data) < 31 || len(data) > maxDirectoryBytes || data[0] != 2 {
+	if len(data) < 31 || len(data) > maxDirectoryBytes || (data[0] != 2 && data[0] != 3) {
 		return group, fmt.Errorf("%w: directory version or size", ErrCorrupt)
 	}
+	group.format = data[0]
 	content := data[:len(data)-4]
 	if group.checksum(content) != binary.LittleEndian.Uint32(data[len(data)-4:]) {
 		return group, fmt.Errorf("%w: directory checksum", ErrCorrupt)
@@ -81,7 +84,8 @@ func (s *Store) readDirectory(id, start, end, clockID int64, data []byte, clock 
 		return group, fmt.Errorf("%w: group references or masks", ErrCorrupt)
 	}
 	allocated := bits.OnesCount32(group.allocation)
-	if (allocated == 0 && group.firstPayload != 0) || (allocated > 0 && (group.firstPayload < 1 || group.firstPayload > math.MaxInt64-int64(allocated))) {
+	if (group.format == 3 && group.firstPayload != 0) ||
+		(group.format == 2 && ((allocated == 0 && group.firstPayload != 0) || (allocated > 0 && (group.firstPayload < 1 || group.firstPayload > math.MaxInt64-int64(allocated))))) {
 		return group, fmt.Errorf("%w: group payload range", ErrCorrupt)
 	}
 	plain, err := s.metadata.decode(content[26:])
@@ -112,6 +116,18 @@ func (s *Store) readDirectory(id, start, end, clockID int64, data []byte, clock 
 		if group.isExternal(slot) {
 			if block.bodyBytes <= inlineBytes {
 				return group, fmt.Errorf("%w: external body length", ErrCorrupt)
+			}
+			if group.format == 3 {
+				id := reader.unsigned()
+				if id == 0 || id >= math.MaxInt64 {
+					return group, fmt.Errorf("%w: external payload identifier", ErrCorrupt)
+				}
+				block.payload = int64(id)
+				for _, previous := range group.blocks {
+					if previous.payload == block.payload {
+						return group, fmt.Errorf("%w: repeated payload identifier", ErrCorrupt)
+					}
+				}
 			}
 		} else {
 			if block.bodyBytes > inlineBytes {

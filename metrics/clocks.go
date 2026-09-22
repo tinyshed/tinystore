@@ -214,7 +214,11 @@ func decodeClockGroup(body []byte) ([]storedBlock, error) {
 		if block.head.End == math.MaxInt64 || (i > 0 && start <= blocks[i-1].head.End) {
 			return nil, fmt.Errorf("%w: clock block ordering", ErrCorrupt)
 		}
-		if _, err := decodeClockValues(block); err != nil {
+		if len(clock) == 0 {
+			if (samples == 1 && span != 0) || (samples > 1 && (span == 0 || span%uint64(samples-1) != 0)) {
+				return nil, fmt.Errorf("%w: regular clock extent", ErrCorrupt)
+			}
+		} else if _, err := decodeClockValues(block); err != nil {
 			return nil, err
 		}
 		blocks[i] = block

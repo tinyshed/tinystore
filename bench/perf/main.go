@@ -519,7 +519,7 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 
 func main() {
 	dir := flag.String("dir", ".", "directory for the database")
-	stage := flag.String("stage", "ingest", "ingest, populate, read or mixed")
+	stage := flag.String("stage", "ingest", "ingest, populate, steady, read or mixed")
 	label := flag.String("label", "run", "name for this run")
 	seriesCount := flag.Int("series", 1000, "series to write")
 	samples := flag.Int("samples", 1000, "samples per series")
@@ -539,6 +539,8 @@ func main() {
 		ingest(ctx, *dir, *label, *seriesCount, *samples, *batch, *maintainEvery)
 	case "populate":
 		populate(ctx, *dir, *seriesCount, *samples)
+	case "steady":
+		steady(ctx, *dir, *label, *seriesCount, *samples)
 	case "read":
 		read(ctx, *dir, *label, *shape, *seriesCount, *readers, *seconds)
 	case "mixed":

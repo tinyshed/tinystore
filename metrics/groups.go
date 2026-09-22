@@ -27,6 +27,7 @@ type blockSummary struct {
 }
 
 type storedBlock struct {
+	payload   int64
 	format    byte
 	clock     []byte
 	head      codec.Head
@@ -103,6 +104,9 @@ func (g blockGroup) isLive(slot int) bool     { return g.live&(uint32(1)<<uint(s
 func (g blockGroup) isExternal(slot int) bool { return g.allocation&(uint32(1)<<uint(slot)) != 0 } //nolint:gosec // slot belongs to a checked group
 
 func (g blockGroup) payloadID(slot int) int64 {
+	if g.format >= 3 {
+		return g.blocks[slot].payload
+	}
 	return g.firstPayload + int64(bits.OnesCount32(g.allocation&slotsMask(slot)))
 }
 

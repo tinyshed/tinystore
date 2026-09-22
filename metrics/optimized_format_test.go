@@ -49,3 +49,35 @@ func TestVersionTwoDirectoryAndClockRemainReadable(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionThreeDirectoryKeepsPayloadAddresses(t *testing.T) {
+	const clockVector = "010100ef01f00100b9a118b1"
+	const directoryVector = "030101000000010000000000000000000000010000000000000000d0023f0014f0a204504d30aa"
+	s := encodingStore(t)
+	clock, err := hex.DecodeString(clockVector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := hex.DecodeString(directoryVector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks, err := decodeClockGroup(clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := s.readDirectory(7, 0, 239, 1, directory, blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.format != 3 || group.payloadID(0) != 70000 || group.blocks[0].bodyBytes != 20 {
+		t.Fatal("explicit payload address changed")
+	}
+	encoded, err := s.writeDirectory(group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, directory) {
+		t.Fatal("version three changed")
+	}
+}

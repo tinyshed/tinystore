@@ -220,6 +220,13 @@ func FuzzNewFormats(f *testing.F) {
 	f.Add(byte(1), block.body)
 	f.Add(byte(2), dir)
 	f.Add(byte(3), []byte{residualSparse, 1, 1})
+	g.format, g.firstPayload, g.allocation = 3, 0, 1
+	g.blocks[0].bodyBytes, g.blocks[0].payload = 20, 70000
+	dir, err = s.writeDirectory(g)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(byte(2), dir)
 	f.Fuzz(func(t *testing.T, kind byte, data []byte) {
 		if len(data) > maxDirectoryBytes {
 			return

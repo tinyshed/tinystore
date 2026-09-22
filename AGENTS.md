@@ -22,8 +22,9 @@ head, atomic bounded ingestion, raw range reads from one snapshot, version-check
 sealing, bounded retention and reopen. `internal/sqlite/` owns file mechanics.
 `metrics/README.md` documents the API and limits. Groups now share clocks and
 use constant/change/grid candidates, compact exact summaries and inline or
-separate payloads. Aggregate queries, sealed-group merging and steady-state
-performance remain unfinished. Prototype density figures are not engine guarantees.
+separate payloads. Incremental sealing merges adjacent groups by size while
+preserving payload addresses. Aggregate queries and steady-state performance
+remain unfinished. Prototype density figures are not engine guarantees.
 `spike/` preserves the experiments behind those decisions.
 
 The mutable **head** is a bounded packed tail in `series_state`, rewritten once
@@ -201,6 +202,13 @@ same promise. Cardinality and ingest rate are promised separately.
 **The format carries its own version, and a released one never moves.** Codec
 bodies, group directories and schema histories have their own versions and
 golden readers. A module version is not a substitute for any of them.
+
+**Merging directories must not relocate payloads.** A preceding group is absorbed
+only when it has no more live blocks than the new group and the combination fits
+the existing group and clock bounds. Version-three directories retain explicit
+payload ids; values and summaries are neither decoded nor recomputed. Clock
+ownership, directory replacement and the newly sealed prefix publish atomically.
+`SealedBlocks` counts only new blocks, never the old blocks carried into a merge.
 
 **A measurement is a number with its environment, or it is an anecdote.** Every
 figure in `docs/` carries what produced it — machine or container, versions,

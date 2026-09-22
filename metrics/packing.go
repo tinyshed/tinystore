@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/bits"
 )
 
 type packingCandidate struct {
@@ -207,32 +206,52 @@ func (s *Store) publish(ctx context.Context, candidate packingCandidate, group b
 		if version == math.MaxInt64 {
 			return fmt.Errorf("%w: series version exhausted", ErrLimit)
 		}
+		merged, replaced, mergeErr := s.mergePrecedingGroups(ctx, tx, group)
+		if mergeErr != nil {
+			return mergeErr
+		}
+		group = merged
 		clockID, clockErr := acquireClock(ctx, tx, group.clockBody)
 		if clockErr != nil {
 			return clockErr
 		}
 		group.clockID = clockID
-		allocated := int64(bits.OnesCount32(group.allocation))
-		if allocated > 0 {
-			if err := tx.QueryRowContext(ctx, `select next_payload_id from store_state where id=1`).Scan(&group.firstPayload); err != nil {
-				return fmt.Errorf("read payload allocation: %w", err)
-			}
-			if group.firstPayload > math.MaxInt64-allocated {
-				return fmt.Errorf("%w: payload identifiers exhausted", ErrLimit)
-			}
-			if _, err := tx.ExecContext(ctx, `update store_state set next_payload_id=? where id=1`, group.firstPayload+allocated); err != nil {
-				return fmt.Errorf("reserve payload identifiers: %w", err)
+		allocated := int64(0)
+		for slot, block := range group.blocks {
+			if group.isExternal(slot) && block.payload == 0 {
+				allocated++
 			}
 		}
-		for slot, block := range group.blocks {
-			if group.isExternal(slot) {
-				if _, err := tx.ExecContext(ctx, `insert into payloads values(?,?)`, group.payloadID(slot), block.body); err != nil {
+		var nextPayload int64
+		if allocated > 0 {
+			if err := tx.QueryRowContext(ctx, `select next_payload_id from store_state where id=1`).Scan(&nextPayload); err != nil {
+				return fmt.Errorf("read payload allocation: %w", err)
+			}
+			if nextPayload > math.MaxInt64-allocated {
+				return fmt.Errorf("%w: payload identifiers exhausted", ErrLimit)
+			}
+			if _, err := tx.ExecContext(ctx, `update store_state set next_payload_id=? where id=1`, nextPayload+allocated); err != nil {
+				return fmt.Errorf("reserve payload identifiers: %w", err)
+			}
+			if group.format == 2 {
+				group.firstPayload = nextPayload
+			}
+		}
+		for slot := range group.blocks {
+			block := &group.blocks[slot]
+			if group.isExternal(slot) && block.payload == 0 {
+				block.payload = nextPayload
+				nextPayload++
+				if _, err := tx.ExecContext(ctx, `insert into payloads values(?,?)`, block.payload, block.body); err != nil {
 					return fmt.Errorf("write sealed payload: %w", err)
 				}
 			}
 		}
 		directory, err := s.writeDirectory(group)
 		if err != nil {
+			return err
+		}
+		if err = removeMergedGroups(ctx, tx, replaced); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, `insert into groups values(?,?,?,?,?)`, group.seriesID, group.start, group.end, directory, group.clockID); err != nil {
