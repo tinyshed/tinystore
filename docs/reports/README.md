@@ -2,7 +2,8 @@
 
 The 22–23 September architecture implementation rounds on
 `codex/architecture-measurements` measured intermediate uncommitted states.
-Final implementation and harness revisions are `ce5564a` and `20f5c93`;
+Implementation revisions run through `7bcc8ec` and harness revisions through
+`64ce638`;
 individual comparison baselines are provisional until their source states
 are archived as reproducible revisions.
 
@@ -78,3 +79,4 @@ fetch and normalise them.
 | [active-work-admission-2026-09-23.md](active-work-admission-2026-09-23.md) | bound active work per store and measure the wide-read memory/throughput tradeoff |
 | [series-reclamation-2026-09-23.md](series-reclamation-2026-09-23.md) | reclaim empty registrations and dictionary ownership, with per-object page accounting |
 | [prepared-eviction-2026-09-23.md](prepared-eviction-2026-09-23.md) | retain recently used prepared programs without a measured stable-query QPS change |
+| [narrow-head-2026-09-23.md](narrow-head-2026-09-23.md) | validate a whole packed head while decoding only selected chunks and charging their samples |

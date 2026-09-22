@@ -136,8 +136,10 @@ ingestion into a suspended series returns `ErrSuspended`.
   Separate stores do not share an aggregate memory budget.
 - A narrow query can spend 240 decoded samples on one returned point. Resource
   errors never silently truncate the result or choose another resolution.
-  A query touching a packed head currently decodes that whole bounded head;
-  every decoded point is charged even when only one falls in the requested range.
+  A packed head charges the whole compressed tail to `PayloadBytes`, checks
+  its CRC and chunk metadata, then decodes and charges only chunks overlapping
+  the requested range to `DecodedSamples`. A legacy row head still decodes and
+  charges its full bounded head.
 - `Close(ctx)` stops admission and waits for admitted work. Canceling that wait
   does not cancel cleanup; another Close can wait for its completion.
 - Statistics are per opened handle. Aggregate query semantics, external series

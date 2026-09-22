@@ -57,6 +57,9 @@ it does not move the sealed frontier or reject a previously admissible timestamp
 Identity indexes store a digest; the original canonical labels are checked in
 full before a digest match may resolve a series. A series row holds its labels
 as gap-coded dictionary ids rather than text, so that check compares ids.
+Narrow reads verify the packed head's whole CRC and chunk metadata, then
+decode only selected chunks; their full compressed bytes still count toward
+the payload budget. Legacy row heads retain full-head decoding.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -314,6 +317,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | cancelled callers do not bypass active-work slots   | `TestActiveReadAndIngestAdmissionHonorsCancellation`                         |
 | expired series return a cardinality slot            | `TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle`                  |
 | live siblings keep shared dictionary pairs          | `TestReclaimKeepsLabelsUsedByAnotherSeries`                                   |
+| narrow reads pay only for selected packed chunks     | `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks` |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before
