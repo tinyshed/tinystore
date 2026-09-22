@@ -6,9 +6,11 @@ tens of thousands of series, not for a cluster, and it exists because
 [Dashbin](https://github.com/tinyshed/dashbin) needs somewhere to put metrics
 that does not cost more memory than the thing it is watching.
 
-**Nothing here is usable yet.** The block codec is implemented, tested and
-measured. The store around it — ingest, compaction, retention, queries — is
-not. There is no API to depend on, no release, and no compatibility promise.
+**The first embedded metrics slice works.** `metrics.Open` provides atomic
+ingestion, label matching, exact range reads, explicit bounded maintenance and
+reopen. The API is unreleased. See [the walkthrough](metrics/README.md) and its
+[runnable example](metrics/example_test.go); Records, KV and SQL helpers remain
+future work.
 
 ## Where a sample goes
 
@@ -33,9 +35,10 @@ not. There is no API to depend on, no release, and no compatibility promise.
                     SQLite
 ```
 
-Of those four boxes only the codec exists. The tail and the segment are a
-design with measurements behind it, written down in
-[docs/design.md](docs/design.md) and not yet implemented.
+The durable head is a bounded packed tail per series. Sealing writes groups
+of independent microblocks with shared clocks, constant/change/grid value
+representations and inline or separate payloads. Reads combine head and groups
+from one snapshot. Maintenance is called by the embedding application.
 
 ## What the codec does
 
@@ -82,6 +85,8 @@ and the command that reproduces each number are in
 | Path     | What it is                                                      |
 |----------|-----------------------------------------------------------------|
 | `codec/` | the block codec: what a payload looks like and how to read one  |
+| `metrics/` | the durable metrics engine and its lifecycle tests           |
+| `internal/sqlite/` | file handles, transactions and checked migrations      |
 | `spike/` | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
 | `docs/`  | the design, the format, the numbers and what is still unknown   |
 | `tools/` | a second module pinning developer tools                         |

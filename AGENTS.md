@@ -17,19 +17,23 @@ checksum over both halves, an iterator that owns its bytes and a fuzzed decoder
 that refuses corruption. It has no opinion about when a block is sealed or how
 long one is kept.
 
-Nothing else is built. There is no store, no registry, no compactor, no query
-and no schema. `spike/` holds prototypes that measured the shape the store will
-have, and a handful of gates that pin arithmetic which is easy to get wrong.
-[docs/design.md](docs/design.md) is a design with measurements behind it, not a
-description of running code.
+`metrics/` has the first durable slice: a registry with postings, an exact packed
+head, atomic bounded ingestion, raw range reads from one snapshot, version-checked
+sealing, bounded retention and reopen. `internal/sqlite/` owns file mechanics.
+`metrics/README.md` documents the API and limits. Groups now share clocks and
+use constant/change/grid candidates, compact exact summaries and inline or
+separate payloads. Aggregate queries, sealed-group merging and steady-state
+performance remain unfinished. Prototype density figures are not engine guarantees.
+`spike/` preserves the experiments behind those decisions.
 
-The rules below are written in the vocabulary that was measured: a durable
-**head** of recent rows and immutable **blocks** behind it. The physical shape
-of that head is an open question — a packed mutable tail inside the series row
-would remove a table and most of the write amplification, and it has no
-measurement behind it yet. [docs/research.md](docs/research.md) holds the
-candidate and the numbers it has to beat. What does not change either way is
-the frontier, the retention arithmetic, the snapshot and the exactness.
+The mutable **head** is a bounded packed tail in `series_state`, rewritten once
+per touched series inside a transaction. Each encoded chunk has at most 240
+samples; the whole head has separate byte and sample budgets. Legacy head rows
+remain readable and convert on mutation. Packing is physical compression only:
+it does not move the sealed frontier or reject a previously admissible timestamp.
+Identity indexes store a digest; the original canonical labels are checked in
+full before a digest match may resolve a series. A series row holds its labels
+as gap-coded dictionary ids rather than text, so that check compares ids.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -38,29 +42,26 @@ Do not describe unbuilt behaviour as though it works.
 | Path                 | What it is                                                                    |
 |----------------------|-------------------------------------------------------------------------------|
 | `codec/`             | the block codec and the payload format. Knows samples and bytes, nothing else |
+| `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
+| `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `docs/`              | the design, the format, the numbers, the open questions                       |
 | `.github/workflows/` | the authoritative clean builds                                                |
 
-Planned, and not yet written:
+The first engine keeps its implementation in one package; split it only when
+a dependency boundary needs a package, not to mirror the execution steps:
 
 ```text
-tinystore.go        Open, Close — the whole surface a caller sees
-ingest.go           a batch in
-query.go            a range out, and the budget it may spend
-series.go           Sample, SeriesID, Labels, Matcher
-internal/
-  sqlite/           the handle, two pools, the pragmas, the migrations
-  series/           the registry, its postings and its bounded cache
-  block/            the head, the sealing, the immutable blocks
-  query/            one snapshot, the merge, the aggregation
+metrics/            public API and private implementation files
+internal/sqlite/    mechanics shared by future engines; no metric vocabulary
 bench/              a module of its own: corpora, and other engines to measure against
 ```
 
-`spike/` is deleted when that exists. Its gates move onto the real
-implementation, because a harness measuring a prototype nobody runs any more is
-worse than no harness at all.
+Production gates belong beside their implementation. Keep historical spikes
+until a real-engine harness can reproduce what they measured. Do not copy their
+test-only parsers or call their helpers from production code. Records, KV and a
+SQL mapper get no placeholder packages and are not Metrics dependencies.
 
 ## Modules
 
@@ -140,7 +141,7 @@ cutoff and reads `[max(from, cutoff), to)`. A whole-block summary may be used
 only when all its samples belong to that range and one requested aggregation
 bucket; otherwise raw is filtered first, including for counters. Ingest refuses
 a sample below either the cutoff or `sealed_before`. Retention removes expired
-head rows directly and blocks whose last sample is before the cutoff. An
+head points directly and blocks whose last sample is before the cutoff. An
 overlapping block can hold expired samples physically without making them
 queryable; freeing its pages neither shrinks the file nor promises byte erasure.
 
@@ -159,8 +160,8 @@ decode raw and a later coarse tier cannot change the answer; the reset count is
 diagnosis. A reset is visible only in time order, and samples arrive in any
 order, so what is packed is sorted first.
 
-**What a query sees is blocks and the head from one snapshot.** The head is a
-durable table, the compactor writes a block and deletes what it packed in one
+**What a query sees is blocks and the head from one snapshot.** The head is
+durable, the compactor writes a block and removes what it packed in one
 transaction, and a reader takes both in one read transaction — otherwise a
 compaction running beside it shows a sample twice or not at all, depending on
 which half was read first.
@@ -189,11 +190,9 @@ redesign is what the format and the query model are built for; what an
 installation actually permits is a configured limit, and the two are not the
 same promise. Cardinality and ingest rate are promised separately.
 
-**The format carries its own version, and a released one never moves.** The
-payload names its version in its third byte and a reader keeps every version it
-has ever written. The module's version, the payload format's version and the
-schema's version are three numbers; conflating them is how a `v0.4.0` ends up
-meaning something about bytes on somebody's disk.
+**The format carries its own version, and a released one never moves.** Codec
+bodies, group directories and schema histories have their own versions and
+golden readers. A module version is not a substitute for any of them.
 
 **A measurement is a number with its environment, or it is an anecdote.** Every
 figure in `docs/` carries what produced it — machine or container, versions,
@@ -224,6 +223,8 @@ changing something, not to look something up.
 |                                              |                                                                  |
 |----------------------------------------------|------------------------------------------------------------------|
 | [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape               |
+| [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
+| [docs/implementation-2026-09-21.md](docs/implementation-2026-09-21.md) | the first slice and its measured limits |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
 | [docs/measurements.md](docs/measurements.md) | every number, its environment and how to reproduce it            |
 | [docs/research.md](docs/research.md)         | what is not built: the open questions and their acceptance gates |
@@ -241,6 +242,11 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
 | importing this stays cheap                          | `task size` links a probe and reports what it cost                              |
 | a sample survives the codec exactly                 | `TestSamplesSurviveTheCodecExactly`, on bits and not on values                  |
+| a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
+| publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |
+| a reader sees one consistent state                   | `TestReadersSeeOneSnapshotWhilePackingAndIngesting`, including retention        |
+| shared clocks live as long as their owners           | `TestClockSharingAndLastOwnerRetention`                                         |
+| production stays independent of research             | `TestEngineDoesNotImportExperimentsOrFutureEngines`                             |
 | the extremes survive too                            | `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time |
 | a corrupt payload is refused                        | `TestPayloadCorruptionIsRefused` and `FuzzDecode`                               |
 | bytes written once still read                       | `TestPayloadsWrittenBeforeStillRead`, one vector per representation             |

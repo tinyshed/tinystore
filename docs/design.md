@@ -1,7 +1,9 @@
 # The design
 
 How TinyStore is meant to work, and why it has this shape rather than another.
-Only `codec/` exists; everything below is a design with measurements behind it.
+The first durable engine now lives in `metrics/`; [its README](../metrics/README.md)
+states implemented behavior. This document preserves the design and experiments,
+including proposed features and older layouts; it is not an API reference.
 The numbers are quoted here where they decided something and recorded in full,
 with their environment and their reproduction, in
 [measurements.md](measurements.md). What is still open is in

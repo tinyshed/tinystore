@@ -8,6 +8,11 @@ than a measurement, it says so; the measured ones are in
 
 ## The physical shape of the head
 
+Update: the first public-engine packed head is now implemented and measured in
+[packed-head-2026-09-21.md](packed-head-2026-09-21.md). The rationale and sparse
+acceptance targets below predate it; the million-series sparse experiment and
+full WAL/RSS comparison are still outstanding.
+
 Measured today: a durable head of one row per sample, and immutable blocks
 behind it. The candidate is to put the recent samples inside the series row as
 one packed, rewritable byte string, and to make everything behind it an
