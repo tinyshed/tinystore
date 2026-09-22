@@ -267,14 +267,44 @@ func (s *Store) resolveSeries(ctx context.Context, tx *sql.Tx, batch preparedBat
 	return id, nil
 }
 
-// postingsFilter names the series carrying every matcher; nothing here scans
-// the registry to discover a match
-func postingsFilter(matchers []Label) (string, []any) {
-	query := `select p.series_id as series_id from postings p where p.label_id=(select id from label_values where name=? and value=?)`
-	arguments := []any{matchers[0].Name, matchers[0].Value}
-	for _, matcher := range matchers[1:] {
-		query += ` and exists(select 1 from postings q where q.label_id=(select id from label_values where name=? and value=?) and q.series_id=p.series_id)`
-		arguments = append(arguments, matcher.Name, matcher.Value)
+// the probe stops at the cap because the matchers are being ranked, not counted
+const selectivityProbe = 1024
+
+type matcherPosting struct {
+	labelID int64
+	names   int
+}
+
+const rankShape = `select v.id,(select count(*) from (select 1 from postings p where p.label_id=v.id limit ?)) from label_values v where v.name=? and v.value=?`
+
+// rankMatchers resolves every matcher to its dictionary id, shortest posting
+// list first. The second result is false when a matcher names no series at all,
+// which makes the whole match empty without running it.
+func rankMatchers(ctx context.Context, tx *sql.Tx, matchers []Label) ([]matcherPosting, bool, error) {
+	ranked := make([]matcherPosting, 0, len(matchers))
+	for _, matcher := range matchers {
+		var posting matcherPosting
+		row := tx.QueryRowContext(ctx, rankShape, selectivityProbe, matcher.Name, matcher.Value)
+		switch err := row.Scan(&posting.labelID, &posting.names); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, false, nil
+		case err != nil:
+			return nil, false, fmt.Errorf("rank matcher %q: %w", matcher.Name, err)
+		}
+		ranked = append(ranked, posting)
+	}
+	slices.SortStableFunc(ranked, func(a, b matcherPosting) int { return a.names - b.names })
+	return ranked, true, nil
+}
+
+// postingsFilter drives from the shortest posting list; driving from the
+// alphabetically first matcher scanned a hundred times the rows at 100k series
+func postingsFilter(ranked []matcherPosting) (string, []any) {
+	query := `select p.series_id as series_id from postings p where p.label_id=?`
+	arguments := []any{ranked[0].labelID}
+	for _, posting := range ranked[1:] {
+		query += ` and exists(select 1 from postings q where q.label_id=? and q.series_id=p.series_id)`
+		arguments = append(arguments, posting.labelID)
 	}
 	return query, arguments
 }
@@ -288,7 +318,14 @@ const matchShape = `select id,kind,compact,length(source),case when length(sourc
 ) order by id limit ?`
 
 func matchSeries(ctx context.Context, tx *sql.Tx, matchers []Label, budget *queryBudget) ([]registeredSeries, error) {
-	filter, filterArguments := postingsFilter(matchers)
+	ranked, possible, err := rankMatchers(ctx, tx, matchers)
+	if err != nil {
+		return nil, err
+	}
+	if !possible {
+		return nil, nil
+	}
+	filter, filterArguments := postingsFilter(ranked)
 	query := strings.Replace(matchShape, ":postings", filter, 1)
 	arguments := append([]any{budget.limits.PayloadBytes - budget.bytes}, filterArguments...)
 	arguments = append(arguments, budget.limits.Series+1)
