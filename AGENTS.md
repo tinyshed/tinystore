@@ -321,7 +321,7 @@ would be charging to somebody else's binary.
   scheduler.
 - Do not weaken or delete a test to make a change pass. When behaviour changes
   on purpose, update the test and state the new contract.
-- Do not commit machine-specific paths, and do not commit a corpus.
+- Do not commit machine-specific paths or a corpus; see **Research rounds**.
 
 ## Commits
 
@@ -354,6 +354,37 @@ system reads. A release is a tag; tag nothing before there is something to run.
 
 The payload format's version and the schema's version are not the module's. A
 release may leave both where they are, and either may move without a release.
+
+## Research rounds
+
+A round is prototype code in `spike/` and one dated report in `docs/reports/`.
+Both land on `main`. Neither is a product, and neither may be quoted as one.
+
+**A round may be developed on a branch; it is not archived on one.** A report
+names the commit it measured, so a round whose base lives only on a branch
+somebody deleted is an anecdote with a number in it. The finding lands on `main`
+with its report, and the commit it names is never rewritten afterwards — check
+what the reports cite before touching history, because a rewrite that moves a
+cited base silently unmakes every measurement standing on it.
+
+**A report is dated in its filename and listed in the index.**
+`docs/reports/<topic>-<date>.md`, one line in `docs/reports/README.md`, and the
+machine, the versions, the corpus and the command inside the report itself. A
+later round supersedes an earlier one by saying so in the earlier one, rather
+than by editing the number it replaces.
+
+**A reproduction command carries no path from the machine that ran it.**
+`<repo>` for the repository, `<corpus>` for a prepared corpus. A real path is
+useless to the reader, and a home directory is a username published for as long
+as the history lasts.
+
+**A corpus is fetched, never committed.** The runners in `bench/` download and
+normalise one, `/bench/corpus/` is ignored, and a hash file is how a corpus is
+pinned.
+
+**A round is `test(spike):` and its report is `docs:`.** What the round proved
+is worth building becomes its own commit with its own type: the evidence and the
+feature are read by different people.
 
 ## Build and checks
 
