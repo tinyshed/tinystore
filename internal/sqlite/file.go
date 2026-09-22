@@ -14,8 +14,9 @@ import (
 )
 
 type File struct {
-	writer *sql.DB
-	reader *sql.DB
+	writer  *sql.DB
+	reader  *sql.DB
+	readers chan *readConnection
 }
 
 // Open takes the reader-pool size because every pragma here is per connection,
@@ -67,19 +68,27 @@ func Open(ctx context.Context, path string, readers int) (*File, error) {
 	if err = f.reader.PingContext(ctx); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect SQLite reader: %w", err), f.Close())
 	}
+	f.readers = make(chan *readConnection, readers)
+	for range readers {
+		f.readers <- &readConnection{}
+	}
 	return f, nil
 }
 
 // View pins every callback read to the same connection and snapshot.
 func (f *File) View(ctx context.Context, read func(*sql.Tx) error) error {
-	return transact(ctx, f.reader, read)
+	return f.view(ctx, func(tx *sql.Tx, _ *readConnection) error { return read(tx) })
 }
 
 func (f *File) Update(ctx context.Context, write func(*sql.Tx) error) error {
 	return transact(ctx, f.writer, write)
 }
 
-func transact(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) (err error) {
+type transactionStarter interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func transact(ctx context.Context, db transactionStarter, work func(*sql.Tx) error) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin SQLite transaction: %w", err)
@@ -101,9 +110,14 @@ func transact(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) (err er
 // Close releases connections; callers must first drain their operations.
 func (f *File) Close() error {
 	var err error
+	for range len(f.readers) {
+		connection := <-f.readers
+		err = errors.Join(err, connection.close())
+		f.readers <- connection
+	}
 	if f.reader != nil {
 		if closeErr := f.reader.Close(); closeErr != nil {
-			err = fmt.Errorf("close SQLite reader: %w", closeErr)
+			err = errors.Join(err, fmt.Errorf("close SQLite reader: %w", closeErr))
 		}
 	}
 	if f.writer != nil {

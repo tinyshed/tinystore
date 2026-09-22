@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 type queryBudget struct {
@@ -74,7 +76,7 @@ func (s *Store) fetchSnapshot(ctx context.Context, matchers []Label, from, to in
 	defer cancel()
 	var reads []seriesRead
 	budget := queryBudget{limits: limits}
-	err := s.file.View(ctx, func(tx *sql.Tx) error {
+	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
 		matched, err := matchSeries(ctx, tx, matchers, &budget)
 		if err != nil {
 			return err
@@ -98,7 +100,7 @@ func (s *Store) fetchSnapshot(ctx context.Context, matchers []Label, from, to in
 	return reads, nil
 }
 
-func (s *Store) fetchBlocks(ctx context.Context, tx *sql.Tx, id, from, to int64, budget *queryBudget) ([]storedBlock, error) {
+func (s *Store) fetchBlocks(ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget) ([]storedBlock, error) {
 	// inspect bounded directories before requesting any external value bytes
 	type groupRow struct {
 		start, end, clockID int64
@@ -106,7 +108,7 @@ func (s *Store) fetchBlocks(ctx context.Context, tx *sql.Tx, id, from, to int64,
 	}
 	var rowsToRead []groupRow
 	err := func() error {
-		rows, err := tx.QueryContext(ctx, `select start_ts,end_ts,length(directory),case when length(directory)<=? then directory else null end,clock_id from groups where series_id=? and start_ts>=coalesce((select start_ts from groups where series_id=? and start_ts<=? order by start_ts desc limit 1),?) and start_ts<? and end_ts>=? order by start_ts limit ?`, budget.limits.PayloadBytes-budget.bytes, id, id, from, from, to, from, budget.limits.Blocks+1)
+		rows, err := tx.QueryContext(ctx, `select start_ts,end_ts,length(directory),case when length(directory)<=? then directory else null end,clock_id from groups where series_id=? and start_ts>=coalesce((select start_ts from groups where series_id=? and start_ts<=? order by start_ts desc limit 1),?) and start_ts<? and end_ts>=? order by start_ts limit cast(? as integer)`, budget.limits.PayloadBytes-budget.bytes, id, id, from, from, to, from, budget.limits.Blocks+1)
 		if err != nil {
 			return fmt.Errorf("find metric groups: %w", err)
 		}
@@ -162,7 +164,7 @@ func (s *Store) fetchBlocks(ctx context.Context, tx *sql.Tx, id, from, to int64,
 					return nil, err
 				}
 				var size int
-				if err = tx.QueryRowContext(ctx, `select length(body),case when length(body)=? then body else null end from payloads where id=?`, block.bodyBytes, group.payloadID(slot)).Scan(&size, &block.body); err != nil {
+				if err = sqlite.QueryRow(ctx, tx, `select length(body),case when length(body)=? then body else null end from payloads where id=?`, block.bodyBytes, group.payloadID(slot)).Scan(&size, &block.body); err != nil {
 					if errors.Is(err, sql.ErrNoRows) {
 						return nil, fmt.Errorf("%w: payload missing", ErrCorrupt)
 					}

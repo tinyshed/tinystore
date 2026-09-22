@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 const maxClockBytes = 65536
@@ -272,7 +274,7 @@ func releaseClock(ctx context.Context, tx *sql.Tx, id int64) error {
 	return nil
 }
 
-func loadClock(ctx context.Context, tx *sql.Tx, id int64, budget *queryBudget) ([]storedBlock, error) {
+func loadClock(ctx context.Context, tx sqlite.Reader, id int64, budget *queryBudget) ([]storedBlock, error) {
 	if id == 0 {
 		return nil, nil
 	}
@@ -287,7 +289,7 @@ func loadClock(ctx context.Context, tx *sql.Tx, id int64, budget *queryBudget) (
 	}
 	var size int
 	var body []byte
-	err := tx.QueryRowContext(ctx, `select length(body),case when length(body)<=? then body else null end from clocks where id=?`, limit, id).Scan(&size, &body)
+	err := sqlite.QueryRow(ctx, tx, `select length(body),case when length(body)<=? then body else null end from clocks where id=?`, limit, id).Scan(&size, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: shared clock missing", ErrCorrupt)
 	}

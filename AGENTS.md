@@ -183,6 +183,14 @@ transaction that upgrades on its first write gets a busy that `busy_timeout`
 cannot wait out. Every pragma is per connection, which is why nothing in the
 pool is allowed to expire and be reopened.
 
+**Read SQL is prepared on its owning connection, with a bounded cache.** A
+prepared program is not a cached result: each read still starts a new snapshot.
+Do not pass connection-owned statements through `Tx.StmtContext`, which prepares
+them again. Bound read limits use `LIMIT CAST(? AS INTEGER)` because a bare
+`LIMIT ?` lets SQLite expire the program on rebinding and compile it again at
+`step`; every caller supplies a checked integer. Keep both protections when
+changing the read path.
+
 **Nothing scans every series.** Postings are in the first version rather than
 in an optimisation after it, and finding due work is an index over one value
 per series rather than one per sample. A million active series without a

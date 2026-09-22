@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // a hundred short labels and thirty enormous ones are different threats, so a
@@ -275,16 +277,16 @@ type matcherPosting struct {
 	names   int
 }
 
-const rankShape = `select v.id,(select count(*) from (select 1 from postings p where p.label_id=v.id limit ?)) from label_values v where v.name=? and v.value=?`
+const rankShape = `select v.id,(select count(*) from (select 1 from postings p where p.label_id=v.id limit cast(? as integer))) from label_values v where v.name=? and v.value=?`
 
 // rankMatchers resolves every matcher to its dictionary id, shortest posting
 // list first. The second result is false when a matcher names no series at all,
 // which makes the whole match empty without running it.
-func rankMatchers(ctx context.Context, tx *sql.Tx, matchers []Label) ([]matcherPosting, bool, error) {
+func rankMatchers(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]matcherPosting, bool, error) {
 	ranked := make([]matcherPosting, 0, len(matchers))
 	for _, matcher := range matchers {
 		var posting matcherPosting
-		row := tx.QueryRowContext(ctx, rankShape, selectivityProbe, matcher.Name, matcher.Value)
+		row := sqlite.QueryRow(ctx, tx, rankShape, selectivityProbe, matcher.Name, matcher.Value)
 		switch err := row.Scan(&posting.labelID, &posting.names); {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, false, nil
@@ -316,9 +318,9 @@ const matchShape = `select id,kind,compact,length(source),case when length(sourc
 	select s.id as id,s.kind as kind,s.label_ids is not null as compact,
 	       coalesce(s.label_ids,cast(coalesce(s.labels,s.identity) as blob)) as source
 	from (:postings) m join series s on s.id=m.series_id
-) order by id limit ?`
+) order by id limit cast(? as integer)`
 
-func matchSeries(ctx context.Context, tx *sql.Tx, matchers []Label, budget *queryBudget) ([]registeredSeries, error) {
+func matchSeries(ctx context.Context, tx sqlite.Reader, matchers []Label, budget *queryBudget) ([]registeredSeries, error) {
 	ranked, possible, err := rankMatchers(ctx, tx, matchers)
 	if err != nil {
 		return nil, err
@@ -373,7 +375,7 @@ func matchSeries(ctx context.Context, tx *sql.Tx, matchers []Label, budget *quer
 
 // fillLabels turns the dictionary entries a series was registered with back
 // into its labels, one query for the whole match rather than one per series
-func fillLabels(ctx context.Context, tx *sql.Tx, matched []registeredSeries, budget *queryBudget) error {
+func fillLabels(ctx context.Context, tx sqlite.Reader, matched []registeredSeries, budget *queryBudget) error {
 	wanted := map[int64]Label{}
 	for _, series := range matched {
 		for _, id := range series.ids {

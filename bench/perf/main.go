@@ -529,6 +529,7 @@ func main() {
 	shape := flag.String("shape", "", "run only this read shape, empty for all")
 	seconds := flag.Int("seconds", 10, "how long a read or mixed stage runs")
 	flag.Parse()
+	defer startProfiles()()
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
 		log.Fatal(err)
 	}

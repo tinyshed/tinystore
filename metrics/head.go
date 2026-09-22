@@ -9,6 +9,8 @@ import (
 	"hash/crc32"
 	"math"
 
+	"github.com/tinyshed/tinystore/internal/sqlite"
+
 	"github.com/tinyshed/tinystore/codec"
 )
 
@@ -125,7 +127,7 @@ func (s *Store) decodeHead(ctx context.Context, head headSnapshot) ([]Sample, er
 }
 
 // the snapshot owns encoded bytes; normal queries decode them only after releasing SQLite
-func (s *Store) fetchHead(ctx context.Context, tx *sql.Tx, id, from, to int64, budget *queryBudget) (headSnapshot, error) {
+func (s *Store) fetchHead(ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget) (headSnapshot, error) {
 	head := headSnapshot{seriesID: id}
 	var first, last sql.NullInt64
 	var size int
@@ -133,7 +135,7 @@ func (s *Store) fetchHead(ctx context.Context, tx *sql.Tx, id, from, to int64, b
 	if budget != nil {
 		limit = min(limit, budget.limits.PayloadBytes-budget.bytes)
 	}
-	err := tx.QueryRowContext(ctx, `select head_count,head_start,head_end,coalesce(length(tail),0),case when length(tail)<=? and head_end>=? and head_start<? then tail else null end from series_state where series_id=?`, limit, from, to, id).Scan(&head.count, &first, &last, &size, &head.packed)
+	err := sqlite.QueryRow(ctx, tx, `select head_count,head_start,head_end,coalesce(length(tail),0),case when length(tail)<=? and head_end>=? and head_start<? then tail else null end from series_state where series_id=?`, limit, from, to, id).Scan(&head.count, &first, &last, &size, &head.packed)
 	if err != nil {
 		return head, fmt.Errorf("read mutable state: %w", err)
 	}
@@ -173,7 +175,7 @@ func (s *Store) fetchHead(ctx context.Context, tx *sql.Tx, id, from, to int64, b
 		}
 		return head, nil
 	}
-	rows, err := tx.QueryContext(ctx, `select at,value from head where series_id=? order by at limit ?`, id, head.count+1)
+	rows, err := tx.QueryContext(ctx, `select at,value from head where series_id=? order by at limit cast(? as integer)`, id, head.count+1)
 	if err != nil {
 		return head, fmt.Errorf("read legacy head: %w", err)
 	}
