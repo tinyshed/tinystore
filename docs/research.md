@@ -419,10 +419,11 @@ Every measurement so far is synthetic. The numbers that need a living v0:
 - how a subject is physically encoded, which is an events question and does not
   hold metrics up.
 
-The first version leaves out five-minute buckets, the automatic choice between
-resolutions, the coarse retention tiers, `rate` and `increase`, the scheduler
-and every materialisation. Its raw payload therefore stays until the block is
-deleted. It may not leave out the foundation those features sit on: one ingest
+The first slice left out five-minute buckets, the automatic choice between
+resolutions, coarse retention tiers, `rate`, `increase`, the scheduler and
+materialisation. `AggregateIncrease` now computes an exact answer by decoding
+raw; its versioned summary shortcut remains open. Raw payload still stays until
+the block is deleted. The foundation these features sit on is one ingest
 path that takes any number of samples at any timestamps, the block builder, the
 codec in both directions, the series registry with its postings and its
 cardinality guard, and whether a series is a gauge or a counter. A first version
@@ -430,11 +431,13 @@ without those is not a first slice of this engine — it is a second engine,
 shaped by whatever arrived first, with production data already on top of it by
 the time the real one is written.
 
-A counter is why the block summary is not only `count/min/max/sum`. An increase
-over an hour is `last − first`, so both belong in the row, and a counter that
-reset inside the hour has to be noticed while the block is built. Keeping raw
-does not make the summary optional: a whole-block query should not decode it,
-and a future coarse tier must not change the answer.
+A counter is why the block summary is not only `count/min/max/sum`. A monotone
+transition adds `current − previous`; a reset adds `current`, including the
+transition between blocks. First and last values cannot recover the internal
+reset deltas once raw expires. Keeping raw
+does not make the summary optional: a future whole-block shortcut should avoid
+the decode without changing the raw-decoding answer, and a coarse tier must not
+change it either.
 
 Events and metrics take a file each:
 

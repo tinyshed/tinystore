@@ -21,10 +21,12 @@ long one is kept.
 head, atomic bounded ingestion, raw range reads from one snapshot, version-checked
 sealing, bounded retention and reopen. `internal/sqlite/` owns file mechanics.
 `metrics/README.md` documents the API and limits. Groups now share clocks and
-use constant/change/grid candidates, compact exact summaries and inline or
+use constant/change/grid candidates, compact summaries and inline or
 separate payloads. Incremental sealing merges adjacent groups by size while
-preserving payload addresses. Aggregate queries and steady-state performance
-remain unfinished. Prototype density figures are not engine guarantees.
+preserving payload addresses. A raw-decoding aggregate API now returns exact
+count, correctly rounded finite sums and counter increases; versioned exact
+summary shortcuts and steady-state performance remain unfinished. Prototype
+density figures are not engine guarantees.
 `spike/` preserves the experiments behind those decisions.
 
 Maintenance suspends one series after a local corruption or capacity failure,
@@ -34,7 +36,10 @@ File and I/O errors still stop the pass.
 The common ingest path reads one packed state and writes one merged UPDATE;
 indexed maintenance fields are assigned only when their values change.
 Completed encoded head chunks before an incoming timestamp are reused; the
-intersecting suffix is rebuilt and the whole-head checksum renewed.
+intersecting suffix is rebuilt and the whole-head checksum renewed. A strictly
+ordered append to a long packed head with zero lateness and no retention
+overlap decodes only the mutable suffix after checking the whole CRC and chunk
+metadata.
 Postings carry transactional exact counts for matcher ranking; a new series
 increments its label counters with the registration transaction.
 Ready marks a retained 240-sample prefix strictly before the series watermark,
@@ -44,7 +49,8 @@ uses them inside one immediate transaction, and an uncertain connection is close
 Maintenance stages at most eight series and 1 MiB before a savepoint batch;
 publication counters move only after the outer commit succeeds.
 Read admission lasts through decode and ingest admission begins before batch
-preparation. These limits apply per Store handle, not across handles in a process.
+preparation. Per-Store slots remain local; handles can optionally share a
+weighted active-work budget. That budget is not a process RSS ceiling.
 Complete retention removes empty series registrations and postings, decrements
 dictionary ownership and frees `MaxSeries` capacity. Re-registration begins a
 new kind and frontier lifecycle; the retention cutoff still rejects old samples.
@@ -59,7 +65,10 @@ full before a digest match may resolve a series. A series row holds its labels
 as gap-coded dictionary ids rather than text, so that check compares ids.
 Narrow reads verify the packed head's whole CRC and chunk metadata, then
 decode only selected chunks; their full compressed bytes still count toward
-the payload budget. Legacy row heads retain full-head decoding.
+the payload budget. Legacy row heads retain full-head decoding. `Stream`
+reuses one fetched snapshot and yields owned results by series after the read
+transaction closes; later errors may follow earlier results. `Read` keeps its
+all-or-error contract.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -318,6 +327,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | expired series return a cardinality slot            | `TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle`                  |
 | live siblings keep shared dictionary pairs          | `TestReclaimKeepsLabelsUsedByAnotherSeries`                                   |
 | narrow reads pay only for selected packed chunks     | `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks` |
+| multiple handles honor one active-work budget        | `TestSharedWorkBudgetBoundsTwoStoresAndHonorsCancellation`               |
+| streaming owns each result and exposes partial failure | `TestStreamOwnsResultsAndReportsPartialFailure`                         |
+| long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |
+| exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

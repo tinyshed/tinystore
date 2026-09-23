@@ -18,7 +18,10 @@ after reopening. No binary-format knowledge is needed to use or follow it.
    Everything commits together. Last input wins for duplicate mutable timestamps.
    Ordered unique input skips the timestamp map and sort; a duplicate or late
    point uses the same last-input-wins fallback. The writer reuses up to 32
-   prepared SQL programs on its one connection.
+   prepared SQL programs on its one connection. On a long packed head, a
+   strictly newer batch with zero lateness and no retention overlap validates
+   the whole head but decodes only the changing suffix; completed chunks keep
+   their encoded bytes.
 3. **Read** (`query.go`) resolves exact label matches through postings and copies
    the required directories, payloads and encoded heads from one snapshot. It ends
    that snapshot before decoding. An error returns no partial answer.
@@ -93,12 +96,41 @@ from the last returned `SeriesID`. Those IDs are diagnostic cursors, not handles
 call. A still damaged series will be suspended again on the next pass, and
 ingestion into a suspended series returns `ErrSuspended`.
 
+`Stream(ctx, range, yield)` calls `yield` once per nonempty series, in the same
+series order and with the same exact owned samples as `Read`. It fetches one
+snapshot and closes the read transaction before the first callback. A callback
+can stop early by returning an error, which `Stream` wraps; cancellation is
+checked during decode and before later callbacks. Earlier callbacks may have
+received results when a later decode, output limit, callback or cancellation
+fails. `Read` retains its all-or-error behavior. Streaming reduces output
+materialization to one series at a time while the call is active; the encoded
+bytes fetched from the snapshot remain held until it returns. The caller may
+retain callback results, so this is not a total RSS bound. Read admission and
+an optional shared work reservation remain held through every callback. A
+callback must not call `Close` on the same Store or synchronously re-enter it
+when the configured active-read limit is exhausted; both waits would depend on
+the callback returning.
+
+`Aggregate(ctx, metrics.AggregateRequest{Range: r, Width: time.Hour,
+Op: metrics.AggregateSum})` returns one result per matched series and one value
+per nonempty bucket. Buckets start at `r.From`; retention clips contributing
+samples without shifting them. `AggregateCount`, `AggregateMin`,
+`AggregateMax` and `AggregateIncrease` are also available; increase requires
+a counter series. `Count` and `Resets` remain integers, `Value` is rounded once
+from exact finite arithmetic, and `Overflow` distinguishes a finite sum that
+rounded to infinity. An error returns no results. `OutputSamples` limits
+buckets, while `DecodedSamples` limits raw work. The current engine decodes raw
+for every aggregate; [the numerical contract](../docs/aggregate-contract.md)
+specifies nonfinite, reset and boundary behavior.
+
 ## Contracts and defaults
 
 - Timestamps are signed Unix milliseconds; MaxInt64 is reserved as an exclusive
   upper bound. Values, including signed zero and NaN payloads, are stored as
   exact bits. An invalid counter value remains readable; its summary is marked
-  unusable. No aggregate API is exposed yet.
+  unusable. `Aggregate` computes exact `count`, correctly rounded `sum`,
+  signed-zero-aware `min`/`max`, and counter `increase` from raw samples in one
+  snapshot. It does not use the existing float64 directory summaries.
 - `__name__` is required on ingestion. Labels are case-sensitive and unique by
   name, and are bounded by four budgets rather than one count: at most 128
   pairs, 16 KiB of combined raw name/value bytes, 256 bytes for one name and
@@ -133,7 +165,14 @@ ingestion into a suspended series returns `ErrSuspended`.
   after the snapshot has ended. `MaxConcurrentIngest` defaults to one and holds
   a slot from before batch preparation through commit. The slots bound active
   work per Store; callers waiting for one can cancel through their context.
-  Separate stores do not share an aggregate memory budget.
+  `NewWorkBudget(bytes)` creates an optional shared active-work reservation;
+  pass the same pointer as `Options.SharedBudget` to every Store that should
+  participate. Read weight comes from effective query limits; ingest and
+  maintenance use conservative input and staging estimates. An operation too
+  large for the budget returns `ErrLimit`, and a queued operation honors its
+  context. `WorkBudget.Usage()` exposes current and peak reservations. The
+  budget is not a process RSS ceiling: it excludes runtime, SQLite caches,
+  caller-owned inputs and retained returned results.
 - A narrow query can spend 240 decoded samples on one returned point. Resource
   errors never silently truncate the result or choose another resolution.
   A packed head charges the whole compressed tail to `PayloadBytes`, checks
@@ -142,8 +181,8 @@ ingestion into a suspended series returns `ErrSuspended`.
   charges its full bounded head.
 - `Close(ctx)` stops admission and waits for admitted work. Canceling that wait
   does not cancel cleanup; another Close can wait for its completion.
-- Statistics are per opened handle. Aggregate query semantics, external series
-  deletion, regex matchers and a network API are not implemented. Retention can
+- Statistics are per opened handle. External series deletion, regex matchers
+  and a network API are not implemented. Retention can
   reclaim an empty series and free a cardinality slot; `Maintenance.ReclaimedSeries`
   reports that pass and `Stats.ReclaimedSeries` counts this handle's committed
   reclamations. Re-registering the same labels starts a new lifecycle: kind and

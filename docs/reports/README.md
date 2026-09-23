@@ -81,3 +81,11 @@ fetch and normalise them.
 | [prepared-eviction-2026-09-23.md](prepared-eviction-2026-09-23.md) | retain recently used prepared programs without a measured stable-query QPS change |
 | [narrow-head-2026-09-23.md](narrow-head-2026-09-23.md) | validate a whole packed head while decoding only selected chunks and charging their samples |
 | [post-batching-profile-2026-09-23.md](post-batching-profile-2026-09-23.md) | fresh fixed-key and wide-read profiles after batching, with D7 and execution-layer decision gates |
+| [aggregate-representation-2026-09-23.md](aggregate-representation-2026-09-23.md) | exact sum contract and variable integer, fixed accumulator and expansion measurements on both corpora |
+| [final-architecture-benchmark-2026-09-23.md](final-architecture-benchmark-2026-09-23.md) | saved-revision throughput, complete two-corpus three-engine files, remote-write service rates and physical SQLite writes |
+| [shared-work-budget-2026-09-23.md](shared-work-budget-2026-09-23.md) | shared active-work admission over two Store handles, cancellation and the RSS/throughput trade |
+| [ram-comparison-2026-09-23.md](ram-comparison-2026-09-23.md) | seven process-RSS shapes across TinyStore, VictoriaMetrics and Prometheus on the full TSBS corpus |
+| [head-suffix-2026-09-23.md](head-suffix-2026-09-23.md) | long-head suffix-only decode and the append-only head decision |
+| [architecture-hypotheses-2026-09-23.md](architecture-hypotheses-2026-09-23.md) | WP9 execution and page/cache gates, WP10 churn, WP12 digest/layout, and value-envelope isolation |
+| [exact-aggregates-2026-09-23.md](exact-aggregates-2026-09-23.md) | raw-decoding exact sums and counter transitions, reopened-corpus checks and aggregate read costs |
+| [grouping-ceiling-2026-09-23.md](grouping-ceiling-2026-09-23.md) | measured commit, WAL and sync savings of explicit batching before any group-commit actor |
