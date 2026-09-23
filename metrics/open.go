@@ -127,6 +127,9 @@ func (s *Store) Stats() Stats {
 }
 
 func normalizeOptions(o Options) (Options, error) {
+	if o.SharedBudget != nil && o.SharedBudget.capacity <= 0 {
+		return o, fmt.Errorf("%w: uninitialized shared work budget", ErrInvalid)
+	}
 	if o.Retention == 0 {
 		o.Retention = 30 * 24 * time.Hour
 	}

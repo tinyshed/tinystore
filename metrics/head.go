@@ -49,16 +49,23 @@ func (s *Store) encodeHeadPrefix(ctx context.Context, id int64, points []Sample,
 	if len(points) > s.opts.MaxHeadSamples || prefixCount < 0 || prefixCount > len(points) || prefixCount%blockSamples != 0 {
 		return nil, fmt.Errorf("%w: mutable samples in one series", ErrLimit)
 	}
-	out := binary.AppendUvarint([]byte{1}, uint64(len(points)))
+	return s.encodeHeadSuffix(ctx, id, points[prefixCount:], prefix, prefixCount)
+}
+
+func (s *Store) encodeHeadSuffix(ctx context.Context, id int64, suffix []Sample, prefix []byte, prefixCount int) ([]byte, error) {
+	if prefixCount < 0 || prefixCount%blockSamples != 0 || len(suffix) > s.opts.MaxHeadSamples-prefixCount || prefixCount+len(suffix) == 0 {
+		return nil, fmt.Errorf("%w: mutable samples in one series", ErrLimit)
+	}
+	out := binary.AppendUvarint([]byte{1}, uint64(prefixCount+len(suffix)))
 	out = append(out, prefix...)
 	if len(out) > s.opts.MaxHeadBytes-4 {
 		return nil, fmt.Errorf("%w: mutable head bytes", ErrLimit)
 	}
-	for start := prefixCount; start < len(points); start += blockSamples {
+	for start := 0; start < len(suffix); start += blockSamples {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		head, body, err := s.encoder.Encode(points[start:min(start+blockSamples, len(points))])
+		head, body, err := s.encoder.Encode(suffix[start:min(start+blockSamples, len(suffix))])
 		if err != nil {
 			return nil, fmt.Errorf("encode mutable head: %w", err)
 		}

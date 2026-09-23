@@ -28,6 +28,16 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 		return result, ctx.Err()
 	}
 	defer func() { s.maintenanceGate <- struct{}{} }()
+	if s.opts.SharedBudget != nil {
+		weight, reserveErr := s.maintenanceReservation()
+		if reserveErr != nil {
+			return result, reserveErr
+		}
+		if reserveErr := s.opts.SharedBudget.acquire(ctx, weight); reserveErr != nil {
+			return result, reserveErr
+		}
+		defer s.opts.SharedBudget.release(weight)
+	}
 	cutoff := s.cutoff()
 	due, err := s.dueSeries(ctx, false, cutoff)
 	if err != nil {

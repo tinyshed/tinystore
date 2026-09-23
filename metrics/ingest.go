@@ -46,6 +46,19 @@ func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
 	if err = ctx.Err(); err != nil {
 		return err
 	}
+	if len(batches) == 0 {
+		return nil
+	}
+	if s.opts.SharedBudget != nil {
+		weight, reserveErr := s.ingestReservation(batches)
+		if reserveErr != nil {
+			return reserveErr
+		}
+		if reserveErr := s.opts.SharedBudget.acquire(ctx, weight); reserveErr != nil {
+			return reserveErr
+		}
+		defer s.opts.SharedBudget.release(weight)
+	}
 	cutoff := s.cutoff()
 	prepared, err := s.prepareIngest(batches, cutoff)
 	if err != nil {
@@ -168,6 +181,17 @@ func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, point
 	if state.version == math.MaxInt64 {
 		return fmt.Errorf("%w: series version exhausted", ErrLimit)
 	}
+	if state.head.count >= blockSamples && !state.legacy && s.opts.Lateness == 0 && cutoff <= state.head.start && points[0].At > state.head.end {
+		packed, count, first, last, ready, appendErr := s.appendPackedHead(ctx, state, points, cutoff, id)
+		if appendErr != nil {
+			return appendErr
+		}
+		query, arguments := s.ingestUpdateParts(state, packed, count, first, last, ready, points, id)
+		if _, updateErr := tx.ExecContext(ctx, query, arguments...); updateErr != nil { //nolint:gosec // query uses fixed fragments and binds every value
+			return fmt.Errorf("replace mutable ingest state: %w", updateErr)
+		}
+		return nil
+	}
 	var existing []Sample
 	if state.head.count > 0 {
 		if state.legacy {
@@ -205,19 +229,24 @@ func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, point
 }
 
 func (s *Store) ingestUpdate(state ingestState, packed []byte, merged, incoming []Sample, id, cutoff int64) (string, []any) {
-	first := sql.NullInt64{Int64: merged[0].At, Valid: true}
-	last := sql.NullInt64{Int64: merged[len(merged)-1].At, Valid: true}
 	ready := 0
 	maxSeen := max(state.maxSeen, incoming[len(incoming)-1].At)
 	if s.headReady(merged, maxSeen, cutoff) {
 		ready = 1
 	}
+	return s.ingestUpdateParts(state, packed, len(merged), merged[0].At, merged[len(merged)-1].At, ready, incoming, id)
+}
+
+func (s *Store) ingestUpdateParts(state ingestState, packed []byte, count int, firstAt, lastAt int64, ready int, incoming []Sample, id int64) (string, []any) {
+	first := sql.NullInt64{Int64: firstAt, Valid: true}
+	last := sql.NullInt64{Int64: lastAt, Valid: true}
+	maxSeen := max(state.maxSeen, incoming[len(incoming)-1].At)
 	nextGC := state.nextGC
 	if !nextGC.Valid || incoming[0].At < nextGC.Int64 {
 		nextGC = sql.NullInt64{Int64: incoming[0].At, Valid: true}
 	}
 	query := `update series_state set tail=?,head_count=?,head_start=?,head_end=?,max_seen_ts=?,version=version+1`
-	arguments := []any{packed, len(merged), first, last, maxSeen}
+	arguments := []any{packed, count, first, last, maxSeen}
 	if ready != state.ready {
 		query += `,ready=?`
 		arguments = append(arguments, ready)

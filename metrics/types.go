@@ -9,13 +9,15 @@ import (
 )
 
 var (
-	ErrInvalid   = errors.New("invalid metrics request")
-	ErrLimit     = errors.New("metrics resource limit")
-	ErrClosed    = errors.New("metrics store is closed")
-	ErrTooOld    = errors.New("sample is expired or sealed")
-	ErrConflict  = errors.New("metrics state changed")
-	ErrCorrupt   = errors.New("corrupt metrics data")
-	ErrSuspended = errors.New("metrics maintenance is suspended for this series")
+	ErrInvalid      = errors.New("invalid metrics request")
+	ErrLimit        = errors.New("metrics resource limit")
+	ErrClosed       = errors.New("metrics store is closed")
+	ErrTooOld       = errors.New("sample is expired or sealed")
+	ErrConflict     = errors.New("metrics state changed")
+	ErrCorrupt      = errors.New("corrupt metrics data")
+	ErrSuspended    = errors.New("metrics maintenance is suspended for this series")
+	ErrNonFinite    = errors.New("nonfinite metrics aggregate input")
+	ErrCounterValue = errors.New("invalid counter aggregate input")
 )
 
 type Sample = codec.Sample
@@ -61,6 +63,7 @@ type Options struct {
 	MaxConcurrentReads  int
 	MaxConcurrentIngest int
 	SnapshotTimeout     time.Duration
+	SharedBudget        *WorkBudget
 	Limits              Limits
 }
 
@@ -74,6 +77,34 @@ type Range struct {
 type Result struct {
 	Series  Series
 	Samples []Sample
+}
+
+type AggregateOp string
+
+const (
+	AggregateCount    AggregateOp = "count"
+	AggregateSum      AggregateOp = "sum"
+	AggregateMin      AggregateOp = "min"
+	AggregateMax      AggregateOp = "max"
+	AggregateIncrease AggregateOp = "increase"
+)
+
+type AggregateRequest struct {
+	Range Range
+	Width time.Duration
+	Op    AggregateOp
+}
+
+type AggregateBucket struct {
+	From, To      int64
+	Count, Resets int
+	Value         float64
+	Overflow      bool
+}
+
+type AggregateResult struct {
+	Series  Series
+	Buckets []AggregateBucket
 }
 
 type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts, QuarantinedSeries, ReclaimedSeries int }

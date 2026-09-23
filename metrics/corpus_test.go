@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"database/sql"
 	"encoding/json"
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +18,12 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	if corpus == "" {
 		t.Skip("set TINYSTORE_JSONL to a normalized corpus")
 	}
-	path := filepath.Join(t.TempDir(), "corpus.db")
+	path := os.Getenv("TINYSTORE_CORPUS_DB")
+	if path == "" {
+		path = filepath.Join(t.TempDir(), "corpus.db")
+	} else if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("TINYSTORE_CORPUS_DB must name a new file")
+	}
 	options := Options{Retention: 100 * 365 * 24 * time.Hour, MaxHeadSamples: 8192, MaxBatchSamples: 8192, Limits: Limits{DecodedSamples: 1000000, OutputSamples: 1000000}}
 	store, err := Open(t.Context(), path, options)
 	if err != nil {
@@ -94,6 +101,11 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	counters, err := store.file.WriterCounters(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("PUBLIC WRITER commits=%d prepared=%d evicted=%d programs=%d cache_writes=%d cache_spills=%d", counters.Commits, counters.Prepared, counters.Evicted, counters.Programs, counters.CacheWrites, counters.CacheSpills)
 	if err = store.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +121,7 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	}
 	defer reopened.Close(t.Context())
 	begin = time.Now()
+	aggregatesChecked := 0
 	walk(func(series Series, points []Sample) {
 		result, readErr := reopened.Read(t.Context(), Range{Matchers: series.Labels, From: points[0].At, To: points[len(points)-1].At + 1})
 		if readErr != nil {
@@ -118,6 +131,27 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 			t.Fatal("corpus series missing")
 		}
 		assertSamples(t, result[0].Samples, points)
+		if aggregatesChecked < 64 {
+			width := time.Duration(points[len(points)-1].At-points[0].At+1) * time.Millisecond
+			aggregated, aggregateErr := reopened.Aggregate(t.Context(), AggregateRequest{
+				Range: Range{Matchers: series.Labels, From: points[0].At, To: points[len(points)-1].At + 1},
+				Width: width, Op: AggregateSum,
+			})
+			if aggregateErr != nil || len(aggregated) != 1 || len(aggregated[0].Buckets) != 1 {
+				t.Fatalf("corpus aggregate: %+v: %v", aggregated, aggregateErr)
+			}
+			rational := new(big.Rat)
+			for _, point := range points {
+				rational.Add(rational, new(big.Rat).SetFloat64(point.Value))
+			}
+			want, _ := rational.Float64()
+			bucket := aggregated[0].Buckets[0]
+			if bucket.Count != len(points) || math.Float64bits(bucket.Value) != math.Float64bits(want) {
+				t.Fatalf("corpus aggregate count=%d value=%v, want count=%d value=%v", bucket.Count, bucket.Value, len(points), want)
+			}
+			aggregatesChecked++
+		}
 	})
 	t.Logf("PUBLIC STORE full reopened bitwise readback=%s", time.Since(begin))
+	t.Logf("PUBLIC STORE exact aggregates checked=%d", aggregatesChecked)
 }
