@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 type File struct {
@@ -23,6 +24,55 @@ type File struct {
 	readSlots   chan struct{}
 	readersMu   sync.Mutex
 	idleReaders []*readConnection
+	commits     atomic.Uint64
+}
+
+type WriterCounters struct {
+	Commits, CacheWrites, CacheSpills, CacheHits, CacheMisses uint64
+	Prepared, Evicted                                         uint64
+	Programs                                                  int
+}
+
+func (f *File) WriterCounters(ctx context.Context) (WriterCounters, error) {
+	select {
+	case f.writeSlots <- struct{}{}:
+	case <-ctx.Done():
+		return WriterCounters{}, ctx.Err()
+	}
+	defer func() { <-f.writeSlots }()
+	result := WriterCounters{Commits: f.commits.Load()}
+	if f.writerConn == nil {
+		return result, nil
+	}
+	result.Prepared = f.writerConn.prepares
+	result.Evicted = f.writerConn.evictions
+	result.Programs = len(f.writerConn.statements)
+	err := f.writerConn.conn.Raw(func(driverConn any) error {
+		status, ok := driverConn.(sqlite.DBStatus)
+		if !ok {
+			return fmt.Errorf("SQLite writer does not expose database status")
+		}
+		for _, item := range []struct {
+			op sqlite.DBStatusOp
+			to *uint64
+		}{
+			{sqlite.DBStatusCacheWrite, &result.CacheWrites},
+			{sqlite.DBStatusCacheSpill, &result.CacheSpills},
+			{sqlite.DBStatusCacheHit, &result.CacheHits},
+			{sqlite.DBStatusCacheMiss, &result.CacheMisses},
+		} {
+			count, _, err := status.Status(item.op, false)
+			if err != nil {
+				return fmt.Errorf("read SQLite writer status: %w", err)
+			}
+			if count < 0 {
+				return fmt.Errorf("SQLite writer status counter overflow")
+			}
+			*item.to = uint64(count)
+		}
+		return nil
+	})
+	return result, err
 }
 
 // Open takes the reader-pool size because every pragma here is per connection,
@@ -110,6 +160,9 @@ func (f *File) update(ctx context.Context, work func(*writeConnection) (error, b
 		f.writerConn = &writeConnection{conn: connection}
 	}
 	err, reusable := work(f.writerConn)
+	if err == nil {
+		f.commits.Add(1)
+	}
 	if !reusable || ctx.Err() != nil || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		closeErr := f.writerConn.close()
 		f.writerConn = nil

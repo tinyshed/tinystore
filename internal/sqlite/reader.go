@@ -18,6 +18,8 @@ type preparedConnection struct {
 	conn       *sql.Conn
 	statements map[string]*sql.Stmt
 	order      []string
+	prepares   uint64
+	evictions  uint64
 }
 
 type readConnection struct {
@@ -50,6 +52,7 @@ func (r *preparedConnection) prepare(ctx context.Context, query string) (*sql.St
 		}
 		delete(r.statements, oldest)
 		r.order = r.order[1:]
+		r.evictions++
 	}
 	statement, err := r.conn.PrepareContext(ctx, query)
 	if err != nil {
@@ -60,6 +63,7 @@ func (r *preparedConnection) prepare(ctx context.Context, query string) (*sql.St
 	}
 	r.statements[query] = statement
 	r.order = append(r.order, query)
+	r.prepares++
 	return statement, nil
 }
 
