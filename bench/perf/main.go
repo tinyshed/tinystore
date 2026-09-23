@@ -328,6 +328,10 @@ func read(ctx context.Context, dir, label, only string, seriesCount, readers, ac
 	}
 	first = results[0].Samples[0].At
 	last = results[0].Samples[len(results[0].Samples)-1].At
+	if only == "stream_region_hour" {
+		streamRegionHour(ctx, store, seriesCount, readers, seconds, first, last)
+		return
+	}
 
 	shapes := []readShape{
 		{"point", []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, time.Duration(step) * time.Millisecond, false},
@@ -570,7 +574,8 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 func main() {
 	dir := flag.String("dir", ".", "directory for the database")
 	file := flag.String("file", "read.db", "database filename for the objects stage")
-	stage := flag.String("stage", "ingest", "ingest, register, append, ready_churn, maintenance_batch, churn_prepare, churn_expire, narrow_populate, populate, steady, read, mixed or objects")
+	corpus := flag.String("corpus", "", "normalized JSONL corpus for TSBS RSS ingestion")
+	stage := flag.String("stage", "ingest", "ingest, register, append, ready_churn, maintenance_batch, churn_prepare, churn_expire, long_churn, multi_store, idle_rss, tsbs_rss, tsbs_ingest_rss, tsbs_ingest_maint_rss, maintenance_ingest_rss, narrow_populate, populate, steady, read, aggregate, mixed or objects")
 	label := flag.String("label", "run", "name for this run")
 	seriesCount := flag.Int("series", 1000, "series to write")
 	samples := flag.Int("samples", 1000, "samples per series")
@@ -581,6 +586,8 @@ func main() {
 	activeReads := flag.Int("active-reads", 0, "admitted reads including decode; zero follows the reader pool")
 	shape := flag.String("shape", "", "run only this read shape, empty for all")
 	seconds := flag.Int("seconds", 10, "how long a read or mixed stage runs")
+	epochs := flag.Int("epochs", 30, "rotating cardinality epochs")
+	sharedBytes := flag.Int64("shared-bytes", 0, "shared active-work reservation bytes for multi_store")
 	flag.Parse()
 	defer startProfiles()()
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
@@ -602,6 +609,20 @@ func main() {
 		churnPrepare(ctx, *dir, *seriesCount)
 	case "churn_expire":
 		churnExpire(ctx, *dir, *seriesCount)
+	case "long_churn":
+		longChurn(ctx, *dir, *seriesCount, *epochs, *corpus)
+	case "multi_store":
+		multiStore(ctx, *dir, *seriesCount, *seconds, *sharedBytes)
+	case "idle_rss":
+		idleRSS(ctx, *dir, *seriesCount, *readers, *seconds)
+	case "tsbs_rss":
+		tsbsRSS(ctx, *dir, *shape, *readers, *seconds)
+	case "tsbs_ingest_rss":
+		tsbsIngestRSS(ctx, *dir, *corpus, false)
+	case "tsbs_ingest_maint_rss":
+		tsbsIngestRSS(ctx, *dir, *corpus, true)
+	case "maintenance_ingest_rss":
+		maintenanceIngestRSS(ctx, *dir, *seriesCount, *seconds)
 	case "narrow_populate":
 		narrowPopulate(ctx, *dir, *seriesCount, *samples)
 	case "populate":
@@ -610,6 +631,8 @@ func main() {
 		steady(ctx, *dir, *label, *seriesCount, *samples)
 	case "read":
 		read(ctx, *dir, *label, *shape, *seriesCount, *readers, *activeReads, *seconds)
+	case "aggregate":
+		aggregate(ctx, *dir, *shape, *seriesCount, *readers, *seconds)
 	case "mixed":
 		mixed(ctx, *dir, *label, *seriesCount, *readers, *activeReads, *seconds)
 	default:
