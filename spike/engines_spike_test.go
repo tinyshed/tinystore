@@ -82,14 +82,20 @@ func readPromDump(t *testing.T, path string) map[string][]point {
 			t.Fatalf("unexpected dump line: %.80s", line)
 		}
 		labels := map[string]string{}
-		for pair := range strings.SplitSeq(line[1:close], ", ") {
+		for _, pair := range splitDumpLabels(line[1:close]) {
 			key, quoted, ok := strings.Cut(pair, "=")
 			if !ok {
 				t.Fatalf("unexpected label: %s", pair)
 			}
+			if strings.HasPrefix(key, "\"") {
+				key, err = strconv.Unquote(key)
+				if err != nil {
+					t.Fatalf("unquote dump label name %q: %v", key, err)
+				}
+			}
 			value, err := strconv.Unquote(quoted)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("unquote dump label %q in %.200s: %v", quoted, line, err)
 			}
 			labels[key] = value
 		}
@@ -115,6 +121,27 @@ func readPromDump(t *testing.T, path string) map[string][]point {
 		sort.Slice(out[key], func(i, j int) bool { return out[key][i].at < out[key][j].at })
 	}
 	return out
+}
+
+func splitDumpLabels(input string) []string {
+	var parts []string
+	start := 0
+	quoted, escaped := false, false
+	for i := 0; i < len(input); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case quoted && input[i] == '\\':
+			escaped = true
+		case input[i] == '"':
+			quoted = !quoted
+		case !quoted && input[i] == ',' && i+1 < len(input) && input[i+1] == ' ':
+			parts = append(parts, input[start:i])
+			i++
+			start = i + 1
+		}
+	}
+	return append(parts, input[start:])
 }
 
 // TestEngineExportIsBitExact reports, rather than asserts, how an engine's
