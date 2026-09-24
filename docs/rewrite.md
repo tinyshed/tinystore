@@ -170,7 +170,8 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      `bench/perf` file: a narrow hour −1.6%, a 500-series selector ±0%, a
      region aggregate +0.5%, and the `repro` read stage +2.9%, each p ≥ 0.37;
      allocations per wide query fell about 4%, from 56.2k to 53.9k. `task size`
-     grew by 4 KiB, to 6 684.
+     grew by 4 KiB, to 6 684. Later a bucket that retention cut reports
+     `Partial`, and its `From` stays the one asked for.
    - Done, C: `publishTx` is check version → merge → clock → payloads →
      directory → frontier; `publishIsolated` holds the savepoint of one
      series; `readDirectory` takes a `groupRow` and splits into the header, the
@@ -219,7 +220,6 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 
 | area | gap |
 |---|---|
-| D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
 | all | the `lll` entry in `.golangci.yml`: 5 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

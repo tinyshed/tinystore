@@ -180,7 +180,7 @@ func aggregateReservation(limits Limits) (int64, error) {
 // aggregation is one Aggregate call. Its buckets start at the requested From,
 // while retention may have moved the start of the samples that count:
 //
-//	origin 0, width 481, retention from 200    samples 200…480 fill the bucket [0, 481)
+//	origin 0, width 481, retention from 200    samples 200…480 fill the bucket [0, 481), partial
 type aggregation struct {
 	store         *Store
 	op            AggregateOp
@@ -254,7 +254,9 @@ func (b *seriesBuckets) flush() error {
 	if b.output == b.limit {
 		return fmt.Errorf("%w: aggregate output buckets", ErrLimit)
 	}
-	b.buckets = append(b.buckets, b.current.result(b.op))
+	bucket := b.current.result(b.op)
+	bucket.Partial = bucket.From < b.from
+	b.buckets = append(b.buckets, bucket)
 	b.output++
 	return nil
 }

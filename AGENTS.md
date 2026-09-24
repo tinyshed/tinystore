@@ -317,6 +317,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a late sample cannot enter a sealed block           | `TestHeadSealingReopenAndPartialRetention`, `ErrTooOld` behind the frontier     |
 | a partial range is not answered from a summary      | `TestAggregateRoundsExactSumAcrossSealedBlocks`: aggregates decode raw          |
 | retention clips before it summarises                | `TestAggregateClipsRetentionBeforeSummingSealedEdges`                           |
+| a bucket retention cut says so                      | `TestAggregateMarksOnlyTheBucketRetentionCut`                                   |
 | a quiet tail expires without becoming a block       | `TestHeadSealingReopenAndPartialRetention`, the one-sample head at its end      |
 | one expired sample does not delete a block          | `TestHeadSealingReopenAndPartialRetention`, the partly expired second block     |
 | one damaged series does not stop its neighbors      | `TestCorruptSeriesDoesNotStopOtherMaintenance`                                   |

@@ -125,14 +125,15 @@ the callback returning.
 `Aggregate(ctx, metrics.AggregateRequest{Range: r, Width: time.Hour,
 Op: metrics.AggregateSum})` returns one result per matched series and one value
 per nonempty bucket. Buckets start at `r.From`; retention clips contributing
-samples without shifting them. `AggregateCount`, `AggregateMin`,
-`AggregateMax` and `AggregateIncrease` are also available; increase requires
-a counter series. `Count` and `Resets` remain integers, `Value` is rounded once
-from exact finite arithmetic, and `Overflow` distinguishes a finite sum that
-rounded to infinity. An error returns no results. `OutputSamples` limits
-buckets, while `DecodedSamples` limits raw work. The current engine decodes raw
-for every aggregate; [the numerical contract](../docs/aggregate-contract.md)
-specifies nonfinite, reset and boundary behavior.
+samples without shifting them, and the bucket it cuts reports `Partial`.
+`AggregateCount`, `AggregateMin`, `AggregateMax` and `AggregateIncrease` are
+also available; increase requires a counter series. `Count` and `Resets` remain
+integers, `Value` is rounded once from exact finite arithmetic, and `Overflow`
+distinguishes a finite sum that rounded to infinity. An error returns no
+results. `OutputSamples` limits buckets, while `DecodedSamples` limits raw
+work. The current engine decodes raw for every aggregate;
+[the numerical contract](../docs/aggregate-contract.md) specifies nonfinite,
+reset and boundary behavior.
 
 ## Contracts and defaults
 

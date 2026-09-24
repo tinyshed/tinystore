@@ -83,11 +83,14 @@ type AggregateRequest struct {
 	Op    AggregateOp
 }
 
+// AggregateBucket keeps the edges it was asked for. Partial reports that
+// retention cut it: only its samples from the cutoff on were counted.
 type AggregateBucket struct {
 	From, To      int64
 	Count, Resets int
 	Value         float64
 	Overflow      bool
+	Partial       bool
 }
 
 type AggregateResult struct {

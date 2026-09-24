@@ -170,8 +170,50 @@ func TestAggregateClipsRetentionBeforeSummingSealedEdges(t *testing.T) {
 	if err != nil || len(result) != 1 || len(result[0].Buckets) != 1 {
 		t.Fatalf("clipped sum: %+v: %v", result, err)
 	}
-	if bucket := result[0].Buckets[0]; bucket.Count != 281 || bucket.Value != 281 || bucket.From != testEpoch {
+	bucket := result[0].Buckets[0]
+	if bucket.Count != 281 || bucket.Value != 281 || bucket.From != testEpoch || !bucket.Partial {
 		t.Fatalf("retention changed aggregate: %+v", bucket)
+	}
+}
+
+func TestAggregateMarksOnlyTheBucketRetentionCut(t *testing.T) {
+	store, _ := openTestStore(t, Options{Retention: time.Second, MaxHeadSamples: 1024})
+	series := testSeries()
+	points := make([]Sample, 481)
+	for index := range points {
+		points[index] = Sample{At: testEpoch + int64(index), Value: 1}
+	}
+	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return time.UnixMilli(testEpoch + 1200) }
+	type bucket struct {
+		from    int64
+		count   int
+		partial bool
+	}
+	for _, test := range []struct {
+		name        string
+		from, width int64
+		want        []bucket
+	}{
+		{"cutoff inside a bucket", 0, 150, []bucket{{150, 100, true}, {300, 150, false}, {450, 31, false}}},
+		{"cutoff on a bucket edge", 0, 200, []bucket{{200, 200, false}, {400, 81, false}}},
+		{"range after the cutoff", 250, 100, []bucket{{250, 100, false}, {350, 100, false}, {450, 31, false}}},
+	} {
+		result, err := store.Aggregate(t.Context(), AggregateRequest{
+			Range: Range{Matchers: series.Labels, From: testEpoch + test.from, To: testEpoch + 481},
+			Width: time.Duration(test.width) * time.Millisecond, Op: AggregateCount,
+		})
+		if err != nil || len(result) != 1 || len(result[0].Buckets) != len(test.want) {
+			t.Fatalf("%s: %+v: %v", test.name, result, err)
+		}
+		for index, got := range result[0].Buckets {
+			want := test.want[index]
+			if got.From != testEpoch+want.from || got.Count != want.count || got.Partial != want.partial {
+				t.Errorf("%s: bucket %d is %+v, want %+v", test.name, index, got, want)
+			}
+		}
 	}
 }
 

@@ -6,7 +6,8 @@ a positive whole-millisecond `Width`, and an operation: `count`, `sum`, `min`,
 `max` or `increase`. The buckets are anchored at the requested `Range.From`;
 retention clips contributing samples without shifting those bucket boundaries.
 `AggregateResult` holds one series and its nonempty buckets. Each bucket reports
-its half-open bounds, count, value, reset count and overflow flag.
+its half-open bounds, count, value, reset count and overflow flag, and
+`Partial` when the retention cutoff falls inside it.
 
 Existing directory `sum` and `increase` fields are ordinary float64 diagnostics
 and cannot answer the sums specified here. The current aggregate path decodes
