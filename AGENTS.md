@@ -28,10 +28,11 @@ directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
 `Reserve`), and metrics opens through it, with instruments (`Counter`,
 `Gauge`, `GaugeFunc`) for an application measuring itself. `sqldb` gives the
 application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
-states its contract.
+states its contract. `records` keeps the application's `slog` lines in
+`records.db` ([records/README.md](records/README.md)).
 
-Designed, not built: the rest of the root runtime (snapshots), `records`,
-`kv`, `blobs`, `jobs`, `backup`, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
+Designed, not built: the rest of the root runtime (snapshots), `kv`, `blobs`,
+`jobs`, `backup` and self-metrics. [docs/samples/](docs/samples/README.md)
 holds a prototype of their API and the reference rewrite of one metrics path.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
@@ -51,6 +52,7 @@ Do not describe unbuilt behaviour as though it works.
 | `codec/`             | the block codec and the payload format. Knows samples and bytes, nothing else |
 | `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
 | `sqldb/`             | the application's SQL databases: migrations, typed reads, `Exec…` writes, `Tx` |
+| `records/`           | the application's logs: a `slog.Handler` that never blocks, reads by time     |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
@@ -316,6 +318,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | engines never import each other                     | `TestEnginesDoNotImportEachOther`, over every engine package                    |
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
+| a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
+| writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |

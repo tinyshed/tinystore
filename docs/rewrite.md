@@ -251,7 +251,9 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      (linux/amd64, `CGO_ENABLED=0`, `-trimpath -ldflags="-s -w"`, Go 1.27.1;
      a throwaway probe beside `internal/sizeprobe`), against 5 004 for bare
      `internal/sqlite` in `docs/architecture.md`.
-   - Next: records, snapshots and backup.
+   - Done: `records`: the slog handler, hourly retention by age and bounded
+     reads by time and level.
+   - Next: snapshots and backup.
 7. New engines, one at a time.
 
 ## Gaps to close during the rewrite

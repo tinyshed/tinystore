@@ -2,7 +2,7 @@
 
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
-store, `sqldb/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+store, `sqldb/`, `records/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every` and the memory budget. Everything else here is designed and
 agreed, not built. [samples/](samples/README.md) holds a compiling
 prototype of this API and a reference rewrite of one metrics path. A section
@@ -200,9 +200,11 @@ counts. A new label set beyond `MaxSeries` is refused with `ErrLimit` and
 logged once. Histograms wait: bucketed approximations are not the exact answer
 this engine promises.
 
-**records** (designed). Structured records in `records.db`: time, level,
-message and attributes, appended through the slog handler and read by time
-range. Retention and indexing by attribute are decided when it is built.
+**records** (built; contract in `records/README.md`). Structured records in
+`records.db`: time, level, message and attributes, appended through the slog
+handler and read by time range and level, at most 10000 at a time. Retention
+is by age, fourteen days by default, checked hourly; records are indexed by
+time only, and an index by attribute waits for a query that needs one.
 
 **sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the
