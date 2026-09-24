@@ -183,6 +183,11 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      order: seal −2.1% over 16 runs a side (p = 0.56), a narrow hour −0.2%, a
      500-series selector −3.9% (p = 0.21), a region aggregate +1.1%, the
      narrow read's allocations identical. `task size` grew by 12 KiB, to 6 700.
+   - The `task size` figures above are cgo builds: from `f7fd5ad` the task set
+     `CGO_ENABLED=0`, `GOOS` and `GOARCH` on single commands, which Task
+     ignores, and this container has a C compiler, so they compare with each
+     other only. The task now names the target on each build and its report
+     refuses a cgo probe; built so, the import added 6 684 KiB at `cec241b`.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.

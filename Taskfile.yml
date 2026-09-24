@@ -58,16 +58,16 @@ tasks:
       - go test ./spike -run '{{.CLI_ARGS}}' -v -count=1
 
   size:
-    desc: Report what importing the public API costs a binary
+    desc: Report what importing the public API costs a cgo-free linux/amd64 binary
     vars:
       PROBE: '{{.BIN}}/sizeprobe'
       BASELINE: '{{.BIN}}/sizeprobe-baseline'
+      # task ignores env on a single command, and the report has to run on the host
+      TARGET: CGO_ENABLED=0 GOOS=linux GOARCH=amd64
     cmds:
       - mkdir -p {{.BIN}}
-      - cmd: go build -trimpath -ldflags="-s -w" -o {{.PROBE}} ./internal/sizeprobe
-        env: {CGO_ENABLED: '0', GOOS: linux, GOARCH: amd64}
-      - cmd: go build -trimpath -ldflags="-s -w" -o {{.BASELINE}} ./internal/sizeprobe/baseline
-        env: {CGO_ENABLED: '0', GOOS: linux, GOARCH: amd64}
+      - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.PROBE}} ./internal/sizeprobe'
+      - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.BASELINE}} ./internal/sizeprobe/baseline'
       - go run ./internal/sizeprobe/report
 
   lint:

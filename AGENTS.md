@@ -296,7 +296,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 |-----------------------------------------------------|---------------------------------------------------------------------------------|
 | no cgo                                              | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
 | the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
-| importing this stays cheap                          | `task size` links a probe and reports what it cost                              |
+| importing this stays cheap                          | `task size` links a cgo-free linux/amd64 probe and reports what it cost         |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |
@@ -347,20 +347,20 @@ it.
 
 This exists because the alternatives cost more memory than what they watch.
 
-**No cgo, ever.** `CGO_ENABLED=0` in `task build`, `task size` and the CI build
-on all three platforms, so a dependency needing a C toolchain fails on the pull
-request that introduces it. This is why the file is `modernc.org/sqlite`; do
-not swap it for a faster cgo driver. The race detector is the one exception —
-it builds test binaries, never a product.
+**No cgo, ever.** `CGO_ENABLED=0` in the CI build on all three platforms, so a
+dependency needing a C toolchain fails on the pull request that introduces it,
+and in `task size`, whose report refuses a probe built with cgo. This is why
+the file is `modernc.org/sqlite`; do not swap it for a faster cgo driver. The
+race detector is the one exception — it builds test binaries, never a product.
 
 **A dependency is a decision, and here it is somebody else's decision too.**
 Whatever the root module requires, every program importing this links. Check
 what a module drags in, prefer the standard library, and put anything a
 measurement needs in `bench/`.
 
-**Watch the weight.** `task size` links a probe that calls the public API and
-reports what the import cost. There is no threshold to game; the point is that
-growth is visible and deliberate.
+**Watch the weight.** `task size` links a probe that calls the public API, for
+linux/amd64 on every host, and reports what the import cost. There is no
+threshold to game; the point is that growth is visible and deliberate.
 
 **Nothing in the module calls `reflect.Value.MethodByName` with a non-constant
 name.** Doing so switches off the linker's method pruning for the whole program
