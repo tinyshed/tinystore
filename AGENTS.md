@@ -332,6 +332,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | live siblings keep shared dictionary pairs          | `TestReclaimKeepsLabelsUsedByAnotherSeries`                                   |
 | narrow reads pay only for selected packed chunks     | `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks` |
 | multiple handles honor one active-work budget        | `TestSharedWorkBudgetBoundsTwoStoresAndHonorsCancellation`               |
+| a large reservation is not passed over by small ones | `TestWorkBudgetGrantsInArrivalOrder` and `TestWorkBudgetCancelledWaiterLetsTheNextOneIn` |
 | streaming owns each result and exposes partial failure | `TestStreamOwnsResultsAndReportsPartialFailure`                         |
 | an error about one series carries its labels           | `TestIngestRefusalNamesItsSeries` and `TestIngestValidationNamesItsSeries` |
 | long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |

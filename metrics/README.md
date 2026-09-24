@@ -177,7 +177,9 @@ specifies nonfinite, reset and boundary behavior.
   participate. Read weight comes from effective query limits; ingest and
   maintenance use conservative input and staging estimates. An operation too
   large for the budget returns `ErrLimit`, and a queued operation honors its
-  context. `WorkBudget.Usage()` exposes current and peak reservations. The
+  context. Queued operations are granted in arrival order, so a large one is
+  not passed over by smaller ones that arrive after it.
+  `WorkBudget.Usage()` exposes current and peak reservations. The
   budget is not a process RSS ceiling: it excludes runtime, SQLite caches,
   caller-owned inputs and retained returned results.
 - A narrow query can spend 240 decoded samples on one returned point. Resource

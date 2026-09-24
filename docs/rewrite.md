@@ -134,7 +134,10 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      allocations identical to the count; the four `bench/perf/repro` stages
      with the parameters of the saved-revision round, in ABBA order, stayed
      inside the spread of the base's own runs, and append wrote the same
-     663 552 bytes. `task size` grew by 4 KiB, to 6 664.
+     663 552 bytes. `task size` grew by 4 KiB, to 6 664. Later the shared
+     `WorkBudget` grants queued reservations in arrival order; it still
+     reserves the worst case, about 34 MiB for a default `Read`, because that
+     is the one bound it can promise.
    - Done, E and F: registration, matching, `Maintain`, expiry and
      reclamation read as steps; a `maintenancePass` carries one call's cutoff,
      staged publications and counts, `dueSeries(packing bool)` is
@@ -174,7 +177,6 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | E, F | a series that cannot be repaired cannot be removed: add `DropSeries`, and decide what happens to payloads a corrupt directory no longer names |
 | F | a suspended series is skipped by retention, so its expired samples stay on disk |
 | D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
-| G | `WorkBudget` reserves the worst case (about 34 MiB for a default `Read`) and has no queue order |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
 | A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
 | all | the debt entries in `.golangci.yml`: 8 functions over `funlen` or `gocognit`, 18 files with lines over 120 columns |

@@ -156,3 +156,75 @@ func TestSharedWorkBudgetBoundsTwoStoresAndHonorsCancellation(t *testing.T) {
 		t.Fatalf("zero shared budget: %v", err)
 	}
 }
+
+func TestWorkBudgetGrantsInArrivalOrder(t *testing.T) {
+	budget, err := NewWorkBudget(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = budget.acquire(t.Context(), 6); err != nil {
+		t.Fatal(err)
+	}
+	large, small := make(chan error, 1), make(chan error, 1)
+	go func() { large <- budget.acquire(t.Context(), 8) }()
+	waitForWaiters(t, budget, 1)
+	go func() { small <- budget.acquire(t.Context(), 3) }()
+	waitForWaiters(t, budget, 2)
+
+	budget.release(6)
+	if err = <-large; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-small:
+		t.Fatal("the small reservation overtook the queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+	budget.release(8)
+	if err = <-small; err != nil {
+		t.Fatal(err)
+	}
+	if used, peak := budget.Usage(); used != 3 || peak != 8 {
+		t.Fatalf("used %d, peak %d", used, peak)
+	}
+}
+
+func TestWorkBudgetCancelledWaiterLetsTheNextOneIn(t *testing.T) {
+	budget, err := NewWorkBudget(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = budget.acquire(t.Context(), 6); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	large, small := make(chan error, 1), make(chan error, 1)
+	go func() { large <- budget.acquire(ctx, 8) }()
+	waitForWaiters(t, budget, 1)
+	go func() { small <- budget.acquire(t.Context(), 3) }()
+	waitForWaiters(t, budget, 2)
+
+	cancel()
+	if err = <-large; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled waiter: %v", err)
+	}
+	if err = <-small; err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := budget.Usage(); used != 9 {
+		t.Fatalf("used %d", used)
+	}
+}
+
+func waitForWaiters(t *testing.T, budget *WorkBudget, count int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		budget.mu.Lock()
+		waiting := len(budget.waiting)
+		budget.mu.Unlock()
+		if waiting == count {
+			return
+		}
+	}
+	t.Fatalf("never saw %d waiters", count)
+}
