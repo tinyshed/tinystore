@@ -1,8 +1,10 @@
 package metrics
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -130,6 +132,34 @@ func TestLabelBudgetsRefuseOversizedNamesAndValues(t *testing.T) {
 		err := store.Ingest(t.Context(), []Batch{{Series: Series{Labels: labels, Kind: Gauge}, Samples: testSamples(1)}})
 		if !errors.Is(err, ErrInvalid) {
 			t.Fatalf("oversized label accepted: %v", err)
+		}
+	}
+}
+
+func TestFormatLabelsPrintsTheMetricNameFirst(t *testing.T) {
+	for _, test := range []struct {
+		labels []Label
+		want   string
+	}{
+		{[]Label{{"__name__", "cpu"}, {"host", "web-1"}, {"zone", "a"}}, `cpu{host="web-1",zone="a"}`},
+		{[]Label{{"__name__", "up"}}, `up`},
+		{[]Label{{"host", `a"b`}}, `{host="a\"b"}`},
+	} {
+		if got := formatLabels(test.labels); got != test.want {
+			t.Errorf("%v: got %s, want %s", test.labels, got, test.want)
+		}
+	}
+}
+
+func TestSeriesErrorNamesOnlyRefusals(t *testing.T) {
+	labels := []Label{{Name: "__name__", Value: "cpu"}}
+	var named *SeriesError
+	if err := seriesError(labels, fmt.Errorf("%w: sealed frontier", ErrTooOld)); !errors.As(err, &named) {
+		t.Fatalf("a refusal lost its series: %v", err)
+	}
+	for _, cause := range []error{context.Canceled, errors.New("disk I/O error")} {
+		if err := seriesError(labels, cause); errors.As(err, &named) || !errors.Is(err, cause) {
+			t.Fatalf("%v was blamed on a series: %v", cause, err)
 		}
 	}
 }

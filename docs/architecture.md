@@ -142,9 +142,9 @@ the store writes every report as ordinary series:
   `ErrSuspended`); engines wrap them, so `errors.Is` means the same everywhere.
   Today `metrics` defines its own; they move to the root with the runtime.
 - An error about one item names it. An `Ingest` refused because of one series
-  returns an error carrying that series' labels (`errors.As`), and
-  `DropSeries(ctx, labels)` removes a series that cannot be repaired. Neither is
-  built; see `docs/rewrite.md`.
+  returns a `*metrics.SeriesError` carrying that series' labels (`errors.As`).
+  `DropSeries(ctx, labels)`, which removes a series that cannot be repaired, is
+  not built; see `docs/rewrite.md`.
 
 ## Engines
 

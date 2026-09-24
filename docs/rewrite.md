@@ -156,7 +156,7 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 
 | area | gap |
 |---|---|
-| E, F | one suspended or corrupt series fails the whole atomic `Ingest`, and the error does not name it: wrap it in an error carrying the labels; add `DropSeries` |
+| E, F | a series that cannot be repaired cannot be removed: add `DropSeries`, and decide what happens to payloads a corrupt directory no longer names |
 | F | a suspended series is skipped by retention, so its expired samples stay on disk |
 | D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
 | G | `WorkBudget` reserves the worst case (about 34 MiB for a default `Read`) and has no queue order |

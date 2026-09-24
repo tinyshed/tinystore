@@ -58,7 +58,7 @@ func (in *ingestInput) add(batch Batch) error {
 	}
 	kind, err := seriesKind(batch.Series.Kind)
 	if err != nil {
-		return err
+		return seriesError(labels, err)
 	}
 
 	// the canonical labels once, then a timestamp and a value per sample
@@ -70,9 +70,12 @@ func (in *ingestInput) add(batch Batch) error {
 
 	series, err := in.seriesFor(identity, labels, kind)
 	if err != nil {
-		return err
+		return seriesError(labels, err)
 	}
-	return series.addAll(batch.Samples, in.cutoff)
+	if err = series.addAll(batch.Samples, in.cutoff); err != nil {
+		return seriesError(labels, err)
+	}
+	return nil
 }
 
 func (in *ingestInput) seriesFor(identity string, labels []Label, kind Kind) (*pendingSeries, error) {

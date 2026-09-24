@@ -19,6 +19,21 @@ var (
 	ErrCounterValue = errors.New("invalid counter aggregate input")
 )
 
+// SeriesError is a refusal that belongs to one series: its data, state or
+// limits, never a cancelled call or a failing file. errors.Is still finds the
+// cause and errors.As gives the labels; Ingest is atomic, so a caller can send
+// the call again without that series.
+type SeriesError struct {
+	Labels []Label
+	Err    error
+}
+
+func (e *SeriesError) Error() string {
+	return "series " + formatLabels(e.Labels) + ": " + e.Err.Error()
+}
+
+func (e *SeriesError) Unwrap() error { return e.Err }
+
 type Sample = codec.Sample
 
 type Kind string

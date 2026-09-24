@@ -47,18 +47,22 @@ func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
 func (s *Store) commitIngest(ctx context.Context, input []preparedBatch, cutoff int64) error {
 	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		for _, series := range input {
-			id, err := s.resolveSeries(ctx, tx, series)
-			if err != nil {
-				return err
-			}
-
-			err = s.writeHead(ctx, tx, id, series.samples, cutoff)
-			if err != nil {
-				return err
+			if err := s.writeSeries(ctx, tx, series, cutoff); err != nil {
+				return seriesError(series.labels, err)
 			}
 		}
 		return nil
 	})
+}
+
+// writeSeries registers a series the first time it arrives, then writes its
+// samples into its head.
+func (s *Store) writeSeries(ctx context.Context, tx sqlite.Writer, series preparedBatch, cutoff int64) error {
+	id, err := s.resolveSeries(ctx, tx, series)
+	if err != nil {
+		return err
+	}
+	return s.writeHead(ctx, tx, id, series.samples, cutoff)
 }
 
 // writeHead puts one series' new samples into its packed head.

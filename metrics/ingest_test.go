@@ -6,7 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestLongPackedHeadAppendKeepsExactBitsAndFrontier(t *testing.T) {
@@ -78,5 +81,48 @@ func TestCanceledIngestDoesNotCreateASeries(t *testing.T) {
 	}
 	if got := readAll(t, store); len(got) != 0 {
 		t.Fatal("canceled ingest committed")
+	}
+}
+
+func TestIngestRefusalNamesItsSeries(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	broken := Series{Labels: []Label{{Name: "host", Value: "b"}, {Name: "__name__", Value: "cpu"}}}
+	healthy := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "a"}}}
+	for _, series := range []Series{broken, healthy} {
+		if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: testEpoch, Value: 1}}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `update series_state set failed_at=?,failure_reason='test' where series_id=1`, testEpoch)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	next := []Sample{{At: testEpoch + 1, Value: 2}}
+	err := store.Ingest(t.Context(), []Batch{{Series: healthy, Samples: next}, {Series: broken, Samples: next}})
+	var named *SeriesError
+	if !errors.As(err, &named) || !errors.Is(err, ErrSuspended) {
+		t.Fatalf("refusal: %v", err)
+	}
+	want := []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "b"}}
+	if !slices.Equal(named.Labels, want) || !strings.Contains(err.Error(), `series cpu{host="b"}: `) {
+		t.Fatalf("named %v in %q", named.Labels, err)
+	}
+
+	results, err := store.Read(t.Context(), Range{Matchers: healthy.Labels, From: testEpoch, To: testEpoch + 10})
+	if err != nil || len(results) != 1 || len(results[0].Samples) != 1 {
+		t.Fatalf("the refused call wrote its healthy series: %v, %v", results, err)
+	}
+}
+
+func TestIngestValidationNamesItsSeries(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	expired := Sample{At: testEpoch - (31 * 24 * time.Hour).Milliseconds(), Value: 1}
+	err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: []Sample{expired}}})
+	var named *SeriesError
+	if !errors.As(err, &named) || !errors.Is(err, ErrTooOld) || formatLabels(named.Labels) != `cpu{host="one"}` {
+		t.Fatalf("expired sample: %v", err)
 	}
 }

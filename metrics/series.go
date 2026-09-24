@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -70,6 +71,37 @@ func orderedLabels(labels []Label, requireMetric bool) ([]Label, error) {
 		return nil, fmt.Errorf("%w: a nonempty __name__ label is required", ErrInvalid)
 	}
 	return ordered, nil
+}
+
+// formatLabels prints a series the way Prometheus does:
+//
+//	{__name__="cpu", host="web-1", zone="a"}  →  cpu{host="web-1",zone="a"}
+//	{__name__="up"}                            →  up
+func formatLabels(labels []Label) string {
+	var name strings.Builder
+	var rest []string
+	for _, label := range labels {
+		if label.Name == "__name__" {
+			name.WriteString(label.Value)
+			continue
+		}
+		rest = append(rest, label.Name+"="+strconv.Quote(label.Value))
+	}
+	if len(rest) == 0 && name.Len() > 0 {
+		return name.String()
+	}
+	return name.String() + "{" + strings.Join(rest, ",") + "}"
+}
+
+// seriesError names the series a refusal belongs to. A cancelled call or a
+// failing file is not the series' doing and keeps its own error.
+func seriesError(labels []Label, err error) error {
+	for _, refusal := range []error{ErrInvalid, ErrLimit, ErrTooOld, ErrConflict, ErrCorrupt, ErrSuspended} {
+		if errors.Is(err, refusal) {
+			return &SeriesError{Labels: slices.Clone(labels), Err: err}
+		}
+	}
+	return err
 }
 
 type registeredSeries struct {

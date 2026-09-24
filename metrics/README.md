@@ -146,6 +146,11 @@ specifies nonfinite, reset and boundary behavior.
   force a quiet sparse head to produce small blocks on a timer.
 - An entire admitted `Ingest` call is atomic, including new series and postings.
   No input is silently dropped. Errors are returned and rejected batches counted.
+  A refusal that belongs to one series, such as an invalid kind, a sample behind
+  the cutoff or the frontier, or a suspended or conflicting series, is a
+  `*SeriesError` carrying that series' labels; `errors.Is` still matches its
+  cause, so the caller can send the call again without that series. A cancelled
+  call or a failing file keeps its own error.
 - Defaults are 100000 currently registered series, 4096 head samples per series, 10000
   input samples / 4 MiB accounted batch data, and 64 maintenance series per pass.
   Replacements do not consume another head slot. A full head returns `ErrLimit`;
