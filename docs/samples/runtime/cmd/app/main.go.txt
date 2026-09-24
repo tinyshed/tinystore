@@ -1,0 +1,144 @@
+// Command app is what a program using TinyStore looks like.
+package main
+
+import (
+	"context"
+	"embed"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/metrics"
+	"github.com/tinyshed/tinystore/records"
+	"github.com/tinyshed/tinystore/sqldb"
+)
+
+//go:embed migrations/*.sql
+var files embed.FS
+
+type User struct {
+	ID        int64  `db:"id"`
+	Name      string `db:"name"`
+	Email     string `db:"email"`
+	CreatedAt int64  // column created_at, found by the field's name
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context) error {
+	console := slog.NewTextHandler(os.Stdout, nil)
+
+	// 1. one directory, one lifecycle
+	store, err := tinystore.Open(ctx, "./data", tinystore.Options{
+		Logger:      slog.New(console), // TinyStore's own logs
+		SelfMetrics: 500 * time.Millisecond,
+	})
+	if err != nil {
+		return err
+	}
+	defer store.Close(context.WithoutCancel(ctx))
+
+	// 2. the engines this program uses, each in its own file
+	cpu, err := metrics.Open(ctx, store, metrics.Options{Retention: 30 * 24 * time.Hour})
+	if err != nil {
+		return err
+	}
+	events, err := records.Open(ctx, store, records.Options{})
+	if err != nil {
+		return err
+	}
+	migrations, err := fs.Sub(files, "migrations")
+	if err != nil {
+		return err
+	}
+	app, err := sqldb.Open(ctx, store, "app", migrations)
+	if err != nil {
+		return err
+	}
+
+	// 3. the program's own logs go to the console and into records.db
+	logger := slog.New(slog.NewMultiHandler(console, events.Handler()))
+
+	// 4. SQL: the program writes it, TinyStore owns the file
+	id, err := app.Scalar[int64](ctx,
+		`insert into users (name, email, created_at) values (?, ?, ?) returning id`,
+		"Dmitry", "dima@example.com", time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	user, err := app.One[User](ctx, `select id, name, email, created_at from users where id = ?`, id)
+	if err != nil {
+		return err
+	}
+	logger.Info("user created", "id", user.ID, "email", user.Email)
+
+	err = app.Transaction(ctx, func(tx *sqldb.Tx) error {
+		return writeFirstPost(ctx, tx, logger, user)
+	})
+	if err != nil {
+		return err
+	}
+	users, err := app.All[User](ctx, `select id, name, email, created_at from users order by id`)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("users: %+v\n", users)
+
+	// 5. metrics
+	now := time.Now().UnixMilli()
+	err = cpu.Ingest(ctx, []metrics.Batch{{
+		Series:  metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "web-1"}}},
+		Samples: []metrics.Sample{{At: now - 2000, Value: 12.00}, {At: now - 1000, Value: 12.02}, {At: now, Value: 11.97}},
+	}})
+	if err != nil {
+		return err
+	}
+
+	// 6. a second database under the same name is refused
+	_, err = sqldb.Open(ctx, store, "app", migrations)
+	fmt.Println("second \"app\":", err, "| ErrInUse:", errors.Is(err, tinystore.ErrInUse))
+
+	// let background work run once: records flush, self metrics
+	time.Sleep(1700 * time.Millisecond)
+
+	logged, err := events.Since(ctx, time.Now().Add(-time.Minute))
+	if err != nil {
+		return err
+	}
+	for _, record := range logged {
+		fmt.Printf("records.db  %-5s %-13s %v\n", record.Level, record.Message, record.Attrs)
+	}
+	self, err := cpu.Read(ctx, metrics.Range{
+		Matchers: []metrics.Label{{Name: "__name__", Value: "tinystore_written_records"}},
+		From:     0,
+		To:       time.Now().UnixMilli() + 1,
+	})
+	if err != nil {
+		return err
+	}
+	for _, result := range self {
+		fmt.Printf("metrics.db  %v  %d samples, last %v\n", result.Series.Labels, len(result.Samples), result.Samples[len(result.Samples)-1].Value)
+	}
+	return nil
+}
+
+// writeFirstPost runs inside one transaction: both writes land, or neither does.
+func writeFirstPost(ctx context.Context, tx *sqldb.Tx, logger *slog.Logger, user User) error {
+	post, err := tx.Scalar[int64](ctx, `insert into posts (user_id, title) values (?, ?) returning id`, user.ID, "hello")
+	if err != nil {
+		return err
+	}
+	logger.Info("post written", "post", post)
+
+	_, err = tx.Exec(ctx, `update users set name = ? where id = ?`, "Dima", user.ID)
+	return err
+}

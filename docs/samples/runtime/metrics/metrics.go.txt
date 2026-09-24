@@ -1,0 +1,156 @@
+// Package metrics here is a stand-in with the real engine's surface; the real
+// engine keeps samples in metrics.db. It shows how an engine joins the store.
+package metrics
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tinyshed/tinystore"
+)
+
+type Label struct{ Name, Value string }
+
+type Sample struct {
+	At    int64
+	Value float64
+}
+
+type Series struct{ Labels []Label }
+
+type Batch struct {
+	Series  Series
+	Samples []Sample
+}
+
+type Range struct {
+	Matchers []Label
+	From, To int64
+}
+
+type Result struct {
+	Series  Series
+	Samples []Sample
+}
+
+type Options struct {
+	Retention time.Duration
+}
+
+type Store struct {
+	path     string
+	log      *slog.Logger
+	mu       sync.Mutex
+	series   map[string]Result
+	ingested atomic.Int64
+}
+
+// Open opens metrics.db inside the store; the store closes it and, unless it is
+// Manual, runs its maintenance every minute.
+func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error) {
+	path, err := store.Claim("metrics.db")
+	if err != nil {
+		return nil, err
+	}
+
+	engine := &Store{path: path, log: store.Logger("metrics"), series: map[string]Result{}}
+	if err := store.Attach(engine); err != nil {
+		return nil, err
+	}
+	store.Every("metrics maintenance", time.Minute, func(ctx context.Context) error {
+		_, err := engine.Maintain(ctx)
+		return err
+	})
+
+	engine.log.Info("metrics opened", "path", path, "retention", options.Retention)
+	return engine, nil
+}
+
+func (s *Store) Ingest(_ context.Context, batches []Batch) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, batch := range batches {
+		key := identity(batch.Series.Labels)
+		result := s.series[key]
+		result.Series = batch.Series
+		result.Samples = append(result.Samples, batch.Samples...)
+		s.series[key] = result
+		s.ingested.Add(int64(len(batch.Samples)))
+	}
+	return nil
+}
+
+func (s *Store) Read(_ context.Context, request Range) ([]Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Result
+	for _, result := range s.series {
+		if !matches(result.Series.Labels, request.Matchers) {
+			continue
+		}
+		var samples []Sample
+		for _, sample := range result.Samples {
+			if sample.At >= request.From && sample.At < request.To {
+				samples = append(samples, sample)
+			}
+		}
+		if len(samples) > 0 {
+			out = append(out, Result{Series: result.Series, Samples: samples})
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) Maintain(context.Context) (int, error) {
+	s.log.Debug("maintenance pass", "series", len(s.series))
+	return 0, nil
+}
+
+func (s *Store) Close(context.Context) error {
+	s.log.Info("metrics closed")
+	return nil
+}
+
+// Report is what the store's own telemetry reads from this engine.
+func (s *Store) Report() []tinystore.Measure {
+	return []tinystore.Measure{{Engine: "metrics", Name: "ingested_samples", Value: float64(s.ingested.Load())}}
+}
+
+// WriteSelf stores the store's numbers as ordinary series:
+//
+//	{Engine: "metrics", Name: "ingested_samples", Value: 3}
+//	→ tinystore_ingested_samples{engine="metrics"}  3
+func (s *Store) WriteSelf(ctx context.Context, at time.Time, measures []tinystore.Measure) error {
+	batches := make([]Batch, 0, len(measures))
+	for _, measure := range measures {
+		batches = append(batches, Batch{
+			Series:  Series{Labels: []Label{{"__name__", "tinystore_" + measure.Name}, {"engine", measure.Engine}}},
+			Samples: []Sample{{At: at.UnixMilli(), Value: measure.Value}},
+		})
+	}
+	return s.Ingest(ctx, batches)
+}
+
+func identity(labels []Label) string {
+	parts := make([]string, 0, len(labels))
+	for _, label := range labels {
+		parts = append(parts, fmt.Sprintf("%s=%q", label.Name, label.Value))
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, ",")
+}
+
+func matches(labels, matchers []Label) bool {
+	for _, matcher := range matchers {
+		if !slices.Contains(labels, matcher) {
+			return false
+		}
+	}
+	return true
+}
