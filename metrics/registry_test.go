@@ -2,48 +2,10 @@ package metrics
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
-
-func TestLegacyLabelIdentityIsReusedAndCompacted(t *testing.T) {
-	store, _ := openTestStore(t, Options{})
-	series := testSeries()
-	points := testSamples(10)
-	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
-		t.Fatal(err)
-	}
-	labels, _, err := canonicalLabels(series.Labels, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := json.Marshal(labels)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = store.file.Update(t.Context(), func(tx *sql.Tx) error {
-		_, writeErr := tx.ExecContext(t.Context(), `update series set identity=?,labels=null where id=1`, string(legacy))
-		return writeErr
-	}); err != nil {
-		t.Fatal(err)
-	}
-	assertSamples(t, readAll(t, store), points)
-	if err = store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
-		t.Fatal(err)
-	}
-	if err = store.file.View(t.Context(), func(tx *sql.Tx) error {
-		var count, keyBytes int
-		readErr := tx.QueryRowContext(t.Context(), `select count(*),length(identity) from series`).Scan(&count, &keyBytes)
-		if count != 1 || keyBytes != 44 {
-			t.Fatalf("identity migration count=%d bytes=%d", count, keyBytes)
-		}
-		return readErr
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestDigestNeverAliasesDifferentLabels(t *testing.T) {
 	store, _ := openTestStore(t, Options{})
@@ -142,11 +104,11 @@ func TestRegistryStoresIdentifiersRatherThanLabelText(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
-		var text sql.NullString
+		var identity string
 		var ids []byte
-		readErr := tx.QueryRowContext(t.Context(), `select labels,label_ids from series where id=1`).Scan(&text, &ids)
-		if text.Valid {
-			t.Fatalf("label text survived: %q", text.String)
+		readErr := tx.QueryRowContext(t.Context(), `select identity,label_ids from series where id=1`).Scan(&identity, &ids)
+		if !strings.HasPrefix(identity, "@") {
+			t.Fatalf("identity is not a digest: %q", identity)
 		}
 		decoded, decodeErr := decodeLabelIDs(ids)
 		if decodeErr != nil || len(decoded) != 2 {

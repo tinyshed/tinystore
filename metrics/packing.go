@@ -264,7 +264,7 @@ func (s *Store) encodeCandidate(ctx context.Context, candidate packingCandidate)
 			return group, fmt.Errorf("encode sealed block: %w", err)
 		}
 		group.modelScale = hint
-		block := storedBlock{format: 2, clock: clock, summary: summarize(points, candidate.kind)}
+		block := storedBlock{clock: clock, summary: summarize(points, candidate.kind)}
 		block.head.Start = points[0].At
 		block.head.End = points[len(points)-1].At
 		block.head.Count = len(points)

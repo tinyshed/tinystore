@@ -39,7 +39,7 @@ func encodedTestBlock(t testing.TB, s *Store, points []Sample) storedBlock {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := storedBlock{format: 2, head: codec.Head{Start: points[0].At, End: points[len(points)-1].At, Count: len(points), First: points[0].Value}, clock: encodeClockValues(points), summary: summarize(points, Gauge)}
+	b := storedBlock{head: codec.Head{Start: points[0].At, End: points[len(points)-1].At, Count: len(points), First: points[0].Value}, clock: encodeClockValues(points), summary: summarize(points, Gauge)}
 	b.body = sealValueBody(b, body)
 	b.bodyBytes = len(b.body)
 	return b

@@ -188,85 +188,50 @@ func increasePostingCounts(ctx context.Context, tx sqlite.Writer, ids []int64) e
 	return nil
 }
 
-type storedIdentity struct {
-	identity string
-	text     sql.NullString
-	ids      []byte
-}
-
-// confirms is the invariant a digest cannot carry on its own: a lookup key may
-// only resolve a series once the labels themselves have been compared in full
-func (s storedIdentity) confirms(ctx context.Context, tx sqlite.Writer, batch preparedBatch) error {
-	if s.identity == batch.identity || (s.text.Valid && s.text.String == batch.identity) {
-		return nil
-	}
-	if s.ids != nil {
-		stored, err := decodeLabelIDs(s.ids)
-		if err != nil {
-			return err
-		}
-		want, complete, err := lookupLabelIDs(ctx, tx, batch.labels)
-		if err != nil {
-			return err
-		}
-		if complete && slices.Equal(stored, want) {
-			return nil
-		}
-		return fmt.Errorf("%w: series digest collision", ErrConflict)
-	}
-	// an older file kept the labels in the identity column itself
-	text := s.identity
-	if s.text.Valid {
-		text = s.text.String
-	}
-	decoded, err := decodeLabels(text)
+// confirmIdentity is the check a digest cannot make on its own: a digest match
+// resolves a series only when the stored label ids are the batch's own
+func confirmIdentity(ctx context.Context, tx sqlite.Writer, stored []byte, batch preparedBatch) error {
+	ids, err := decodeLabelIDs(stored)
 	if err != nil {
 		return err
 	}
-	_, canonical, err := canonicalLabels(decoded, true)
+	want, complete, err := lookupLabelIDs(ctx, tx, batch.labels)
 	if err != nil {
 		return err
 	}
-	if canonical != batch.identity {
+	if !complete || !slices.Equal(ids, want) {
 		return fmt.Errorf("%w: series digest collision", ErrConflict)
 	}
 	return nil
 }
 
 func (s *Store) resolveSeries(ctx context.Context, tx sqlite.Writer, batch preparedBatch) (int64, error) {
-	legacy, err := json.Marshal(batch.labels)
-	if err != nil {
-		return 0, fmt.Errorf("encode legacy identity: %w", err)
-	}
 	identity := seriesIdentity(batch.identity)
 	var id int64
 	var kind Kind
-	var stored storedIdentity
-	err = sqlite.QueryRow(ctx, tx, `select id,kind,identity,labels,label_ids from series where identity in (?,?,?)`,
-		identity, batch.identity, string(legacy)).Scan(&id, &kind, &stored.identity, &stored.text, &stored.ids)
-	if err == nil {
-		if kind != batch.kind {
-			return 0, fmt.Errorf("%w: a series cannot change kind", ErrConflict)
-		}
-		if err = stored.confirms(ctx, tx, batch); err != nil {
-			return 0, err
-		}
-		if stored.ids == nil || stored.identity != identity {
-			ids, registerErr := registerLabels(ctx, tx, batch.labels)
-			if registerErr != nil {
-				return 0, registerErr
-			}
-			if _, err = tx.ExecContext(ctx, `update series set identity=?,labels=null,label_ids=? where id=?`, identity, encodeLabelIDs(ids), id); err != nil {
-				return 0, fmt.Errorf("compact series identity: %w", err)
-			}
-		}
-		return id, nil
+	var stored []byte
+	err := sqlite.QueryRow(ctx, tx, `select id, kind, label_ids from series where identity = ?`, identity).
+		Scan(&id, &kind, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s.registerSeries(ctx, tx, identity, batch)
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return 0, fmt.Errorf("resolve series: %w", err)
 	}
+
+	if kind != batch.kind {
+		return 0, fmt.Errorf("%w: a series cannot change kind", ErrConflict)
+	}
+	if err := confirmIdentity(ctx, tx, stored, batch); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// registerSeries adds a series, its postings and its state inside the cardinality limit.
+func (s *Store) registerSeries(ctx context.Context, tx sqlite.Writer, identity string, batch preparedBatch) (int64, error) {
 	var count int
-	if err = sqlite.QueryRow(ctx, tx, `select series_count from store_state where id=1`).Scan(&count); err != nil {
+	if err := sqlite.QueryRow(ctx, tx, `select series_count from store_state where id=1`).Scan(&count); err != nil {
 		return 0, fmt.Errorf("read cardinality: %w", err)
 	}
 	if count >= s.opts.MaxSeries {
@@ -276,11 +241,12 @@ func (s *Store) resolveSeries(ctx context.Context, tx sqlite.Writer, batch prepa
 	if err != nil {
 		return 0, err
 	}
-	result, err := tx.ExecContext(ctx, `insert into series(identity,labels,label_ids,kind) values(?,null,?,?)`, identity, encodeLabelIDs(ids), batch.kind)
+	result, err := tx.ExecContext(ctx, `insert into series(identity, label_ids, kind) values(?, ?, ?)`, identity, encodeLabelIDs(ids), batch.kind)
 	if err != nil {
 		return 0, fmt.Errorf("register series: %w", err)
 	}
-	if id, err = result.LastInsertId(); err != nil {
+	id, err := result.LastInsertId()
+	if err != nil {
 		return 0, fmt.Errorf("read series identifier: %w", err)
 	}
 	for _, labelID := range ids {
@@ -386,11 +352,9 @@ func postingsFilter(ranked []matcherPosting) (string, []any) {
 	return query.String(), arguments
 }
 
-// the source is named once, so the budget can refuse it before SQLite
-// materializes it and the reader is not asked to follow three coalesces
-const matchShape = `select id,kind,compact,length(source),case when length(source)<=? then source else null end from (
-	select s.id as id,s.kind as kind,s.label_ids is not null as compact,
-	       coalesce(s.label_ids,cast(coalesce(s.labels,s.identity) as blob)) as source
+// the ids are named once, so the budget can refuse them before SQLite materializes them
+const matchShape = `select id,kind,length(label_ids),case when length(label_ids)<=? then label_ids else null end from (
+	select s.id as id,s.kind as kind,s.label_ids as label_ids
 	from (:postings) m join series s on s.id=m.series_id
 ) order by id limit cast(? as integer)`
 
@@ -417,10 +381,9 @@ func matchSeries(ctx context.Context, tx sqlite.Reader, matchers []Label, budget
 			return nil, fmt.Errorf("%w: matched series", ErrLimit)
 		}
 		var series registeredSeries
-		var compact int
 		var source []byte
 		var size int
-		if err = rows.Scan(&series.id, &series.kind, &compact, &size, &source); err != nil {
+		if err = rows.Scan(&series.id, &series.kind, &size, &source); err != nil {
 			return nil, fmt.Errorf("read matched series: %w", err)
 		}
 		if err = budget.takeBytes(size); err != nil {
@@ -429,12 +392,8 @@ func matchSeries(ctx context.Context, tx sqlite.Reader, matchers []Label, budget
 		if source == nil || (series.kind != Gauge && series.kind != Counter) {
 			return nil, fmt.Errorf("%w: series metadata", ErrCorrupt)
 		}
-		if compact != 0 {
-			if series.ids, err = decodeLabelIDs(source); err != nil {
-				return nil, err
-			}
-		} else if series.labels, err = decodeLabels(string(source)); err != nil {
-			return nil, fmt.Errorf("%w: registry labels: %w", ErrCorrupt, err)
+		if series.ids, err = decodeLabelIDs(source); err != nil {
+			return nil, err
 		}
 		matched = append(matched, series)
 	}
@@ -494,9 +453,6 @@ func fillLabels(ctx context.Context, tx sqlite.Reader, matched []registeredSerie
 		}
 	}
 	for i := range matched {
-		if matched[i].ids == nil {
-			continue
-		}
 		labels := make([]Label, 0, len(matched[i].ids))
 		for _, id := range matched[i].ids {
 			label, found := wanted[id]
@@ -512,26 +468,4 @@ func fillLabels(ctx context.Context, tx sqlite.Reader, matched []registeredSerie
 		matched[i].labels = ordered
 	}
 	return nil
-}
-
-func decodeLabels(encoded string) ([]Label, error) {
-	var labels []Label
-	if strings.HasPrefix(encoded, "[[") {
-		var pairs [][]string
-		if err := json.Unmarshal([]byte(encoded), &pairs); err != nil {
-			return nil, fmt.Errorf("decode label pairs: %w", err)
-		}
-		for _, pair := range pairs {
-			if len(pair) != 2 {
-				return nil, fmt.Errorf("%w: label pair", ErrCorrupt)
-			}
-			labels = append(labels, Label{Name: pair[0], Value: pair[1]})
-		}
-	} else if err := json.Unmarshal([]byte(encoded), &labels); err != nil {
-		return nil, fmt.Errorf("decode legacy labels: %w", err)
-	}
-	if _, err := orderedLabels(labels, true); err != nil {
-		return nil, fmt.Errorf("%w: stored labels: %w", ErrCorrupt, err)
-	}
-	return labels, nil
 }

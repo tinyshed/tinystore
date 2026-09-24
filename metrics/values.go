@@ -260,20 +260,6 @@ func sealValueBody(block storedBlock, body []byte) []byte {
 }
 
 func (s *Store) decodeBlock(block storedBlock) ([]Sample, error) {
-	if block.format < 2 {
-		iterator, err := s.decoder.Decode(block.head, block.body)
-		if err != nil {
-			return nil, fmt.Errorf("%w: legacy block: %w", ErrCorrupt, err)
-		}
-		out := make([]Sample, 0, block.head.Count)
-		for iterator.Next() {
-			out = append(out, iterator.Sample())
-		}
-		if err = iterator.Err(); err != nil {
-			return nil, fmt.Errorf("%w: legacy values: %w", ErrCorrupt, err)
-		}
-		return out, nil
-	}
 	times, err := decodeClockValues(block)
 	if err != nil {
 		return nil, err

@@ -258,9 +258,6 @@ func acquireClock(ctx context.Context, tx *sql.Tx, body []byte) (int64, error) {
 }
 
 func releaseClock(ctx context.Context, tx *sql.Tx, id int64) error {
-	if id == 0 {
-		return nil
-	}
 	result, err := tx.ExecContext(ctx, `update clocks set refs=refs-1 where id=? and refs>0`, id)
 	if err != nil {
 		return fmt.Errorf("release clock: %w", err)
@@ -279,9 +276,6 @@ func releaseClock(ctx context.Context, tx *sql.Tx, id int64) error {
 }
 
 func loadClock(ctx context.Context, tx sqlite.Reader, id int64, budget *queryBudget) ([]storedBlock, error) {
-	if id == 0 {
-		return nil, nil
-	}
 	if budget != nil {
 		if cached, ok := budget.clocks[id]; ok {
 			return cached, nil

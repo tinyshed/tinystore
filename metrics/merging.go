@@ -31,7 +31,7 @@ func (s *Store) mergePrecedingGroups(ctx context.Context, tx *sql.Tx, group bloc
 		}
 		count := bits.OnesCount32(previous.live)
 		// each absorbed group at least doubles in size, bounding repeated directory rewrites
-		if previous.format < 2 || count > len(group.blocks) || count+len(group.blocks) > groupSlots {
+		if count > len(group.blocks) || count+len(group.blocks) > groupSlots {
 			break
 		}
 		if previous.end >= group.start {

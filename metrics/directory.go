@@ -9,9 +9,6 @@ import (
 )
 
 func (s *Store) writeDirectory(group blockGroup) ([]byte, error) {
-	if group.format < 2 {
-		return encodeDirectory(group)
-	}
 	var raw []byte
 	for slot, block := range group.blocks {
 		raw = appendFloat(raw, block.head.First)
@@ -57,12 +54,6 @@ func (s *Store) writeDirectory(group blockGroup) ([]byte, error) {
 }
 
 func (s *Store) readDirectory(id, start, end, clockID int64, data []byte, clock []storedBlock) (blockGroup, error) {
-	if len(data) > 0 && data[0] == 1 {
-		if clockID != 0 {
-			return blockGroup{}, fmt.Errorf("%w: legacy clock reference", ErrCorrupt)
-		}
-		return decodeDirectory(id, start, end, data)
-	}
 	group := blockGroup{format: 2, seriesID: id, start: start, end: end, clockID: clockID}
 	if len(data) < 31 || len(data) > maxDirectoryBytes || (data[0] != 2 && data[0] != 3) {
 		return group, fmt.Errorf("%w: directory version or size", ErrCorrupt)
@@ -95,7 +86,6 @@ func (s *Store) readDirectory(id, start, end, clockID int64, data []byte, clock 
 	reader := binaryReader{data: plain}
 	for slot := range count {
 		block := clock[slot]
-		block.format = 2
 		block.head.First = reader.float()
 		flags := reader.byte()
 		if flags&0xc0 != 0 {

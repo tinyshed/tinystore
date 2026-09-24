@@ -3,12 +3,9 @@ package metrics
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/tinyshed/tinystore/codec"
 )
 
 func TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers(t *testing.T) {
@@ -60,13 +57,13 @@ func TestDirectoryCorruptionAndRebindingAreRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	var directory []byte
-	var start, end int64
+	var start, end, clockID int64
 	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `select start_ts,end_ts,directory from groups where series_id=1`).Scan(&start, &end, &directory)
+		return tx.QueryRowContext(t.Context(), `select start_ts,end_ts,directory,clock_id from groups where series_id=1`).Scan(&start, &end, &directory, &clockID)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := decodeDirectory(2, start, end, directory); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.readDirectory(2, start, end, clockID, directory, nil); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("rebound directory: %v", err)
 	}
 	directory[len(directory)/2] ^= 1
@@ -79,35 +76,6 @@ func TestDirectoryCorruptionAndRebindingAreRefused(t *testing.T) {
 	if result, err := store.Read(t.Context(), Range{Matchers: testSeries().Labels, From: testEpoch, To: testEpoch + 500}); !errors.Is(err, ErrCorrupt) || result != nil {
 		t.Fatalf("corruption: %v %#v", err, result)
 	}
-}
-
-func FuzzDirectory(f *testing.F) {
-	group := blockGroup{seriesID: 1, start: 10, end: 249, live: 1, blocks: []storedBlock{{head: codec.Head{Start: 10, End: 249, Count: 240}, body: make([]byte, 8), bodyBytes: 8}}}
-	encoded, err := encodeDirectory(group)
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Add(encoded)
-	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) > maxDirectoryBytes {
-			return
-		}
-		if len(data) >= 4 {
-			data = append([]byte(nil), data...)
-			binary.LittleEndian.PutUint32(data[len(data)-4:], group.checksum(data[:len(data)-4]))
-		}
-		decoded, err := decodeDirectory(group.seriesID, group.start, group.end, data)
-		if err == nil {
-			if len(decoded.blocks) < 1 || len(decoded.blocks) > groupSlots {
-				t.Fatal("unbounded directory")
-			}
-			for _, b := range decoded.blocks {
-				if b.head.Count < 1 || b.head.Count > blockSamples || len(b.body) > inlineBytes {
-					t.Fatal("unbounded block")
-				}
-			}
-		}
-	})
 }
 
 func TestCanceledIngestDoesNotCreateASeries(t *testing.T) {

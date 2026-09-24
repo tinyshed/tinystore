@@ -177,8 +177,7 @@ specifies nonfinite, reset and boundary behavior.
   errors never silently truncate the result or choose another resolution.
   A packed head charges the whole compressed tail to `PayloadBytes`, checks
   its CRC and chunk metadata, then decodes and charges only chunks overlapping
-  the requested range to `DecodedSamples`. A legacy row head still decodes and
-  charges its full bounded head.
+  the requested range to `DecodedSamples`.
 - `Close(ctx)` stops admission and waits for admitted work. Canceling that wait
   does not cancel cleanup; another Close can wait for its completion.
 - Statistics are per opened handle. External series deletion, regex matchers
@@ -192,14 +191,13 @@ specifies nonfinite, reset and boundary behavior.
 ## Binary details are behind one boundary
 
 The label index uses a dictionary: each exact `(name,value)` pair is stored
-once, and postings contain only its id and a series id. Migration 0005 converts
-existing postings transactionally. A series row then stores the same dictionary
+once, and postings contain only its id and a series id. A series row stores the same dictionary
 ids as a gap-coded blob rather than its canonical label text, and a query
 rebuilds the labels from one dictionary read for the whole match. Matching,
 identity checks still compare the full ids behind a digest. Retention decrements
 posting counts and removes dictionary pairs after their last series disappears.
-Each dictionary pair also stores an exact posting count, backfilled by migration
-0009 and advanced in the registration transaction. Multi-label reads use those
+Each dictionary pair also stores an exact posting count, advanced in the
+registration transaction. Multi-label reads use those
 counts to choose the shortest posting list without scanning a capped prefix.
 
 The packed head uses independently decodable existing-codec chunks of at most
@@ -209,13 +207,13 @@ restart. Its bounded encode/merge runs inside the writer transaction; sealed
 group encoding still runs outside it. This trades CPU for fewer SQL mutations.
 Queries copy packed bytes in the snapshot and decode after ending it.
 
-Schema migrations add packed heads without discarding legacy rows. A legacy head
-is read as before and replaced atomically on its next mutation. Canonical labels
-now use JSON pairs, with a short SHA256-based identity in the unique index. Full
-label equality is checked on lookup, including when upgrading an older identity.
+The schema is one script, `migrations/0001_schema.sql`; nothing written by an
+earlier revision is read. A series' identity is `@` and the base64 SHA-256 of its
+canonical labels, unique in the index; a digest match resolves a series only
+after its stored label ids equal the batch's.
 
-`groups.go` owns slot addressing and the legacy reader; `directory.go` owns the
-compact directory. Think of a directory as a small list of block descriptions:
+`groups.go` owns slot addressing; `directory.go` owns the directory format,
+versions two and three. Think of a directory as a small list of block descriptions:
 first value, statistics and where the body lives. The shared clock owns its
 time bounds and sample counts. `binary.go` contains checked binary reads and
 the bounded metadata compressor, so parsing checks are not scattered through SQL.
@@ -229,8 +227,8 @@ reserved durably and never recycled by this writer.
 The checksum binds a directory to its series, time bounds, clock id and payload
 addressing. Each nonempty encoded body also verifies its head and clock bytes.
 First values and summaries use exact storage, not SQLite REAL. Summary values
-may be derived from the first value only when their IEEE bits agree. Both old
-and compact directories have golden readers. New parsers have a fuzz target.
+may be derived from the first value only when their IEEE bits agree. Directory
+versions two and three have golden readers and a fuzz target.
 
 Clock deduplication checks both SHA256 and actual bytes. Retention releases one
 clock owner per deleted group, not per deleted microblock. Query-local caching
@@ -259,15 +257,14 @@ keep explicit payload addresses, so merging rewrites metadata without relocating
 values. Expired slots are omitted; the new clock ownership, directory and sealed
 prefix commit together. `SealedBlocks` counts newly sealed blocks only. Existing
 groups merge when later samples seal; there is no background sweep over quiet
-series. Byte-aware page-packing policies remain future work. All older directory
-versions remain readable; older binaries cannot read version-three directories.
+series. Byte-aware page-packing policies remain future work.
 
 Tests cover reopen, bitwise values, label matching, atomic rejection, budgets,
 watermark boundaries, stale compaction, rollback after payload/head writes,
 concurrent ingestion/packing/expiry/read snapshots, partial retention, series
 reactivation, shared clock ownership and close. A subprocess also commits and
 exits without Close before reopening. Packed heads add a fixed reader vector,
-fuzz target, legacy conversion and byte-capacity gates. An opt-in 1000-round
+fuzz target and byte-capacity gates. An opt-in 1000-round
 incremental test covers lateness, replacements, retention and raw reads and
 reports WAL size. Broad WAL/RSS/p99 work, mid-commit process termination and
 power-loss testing remain acceptance work.

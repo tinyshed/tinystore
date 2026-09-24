@@ -31,16 +31,6 @@ func TestPackedHeadReplacementsAndByteBudget(t *testing.T) {
 		t.Fatalf("packed byte bound: %v", err)
 	}
 	assertSamples(t, readAll(t, store), want)
-	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
-		var rows int
-		err := tx.QueryRowContext(t.Context(), `select count(*) from head`).Scan(&rows)
-		if rows != 0 {
-			t.Fatal("new ingest still writes per-sample rows")
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func FuzzPackedHead(f *testing.F) {
