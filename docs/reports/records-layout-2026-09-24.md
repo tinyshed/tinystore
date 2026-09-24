@@ -47,10 +47,46 @@ TINYSTORE_SPIKE=1 go test ./spike -run TestRecordLayoutDensity -v -count=1
   from pages, because a 12 KiB block overflows a 4 KiB page. Block size is a
   page question as much as a compression one.
 
+## Second pass: FTS5 over whole blocks
+
+Commit `d520447`, same environment, corpus and command. A block is one FTS5
+document: contentless (`content=''`), `detail=none`, `unicode61` with
+`tokenchars '.:_-/'`, and each distinct message and attribute value of the
+block given once. A match names candidate blocks, which are then decoded and
+filtered. `rows + fts5 detail=none` separates the effect of `detail` from the
+effect of indexing blocks instead of records.
+
+| layout | payload B/record | file B/record | where the file went (KiB) |
+|---|---:|---:|---|
+| rows + FTS5 `detail=none` | 113.4 | 187.5 | + fts data 3 444, docsize 1 068 |
+| blocks of 256 + FTS5 per block | 28.0 | 54.0 | blocks 3 128, fts data 2 108 |
+| blocks of 1024 + FTS5 per block | 27.6 | 48.6 | blocks 2 740, fts data 1 980 |
+
+Candidate blocks per query, out of 391 blocks of 256 and 98 of 1024:
+
+| term | blocks of 256 | blocks of 1024 |
+|---|---:|---:|
+| one `trace_id` | 1 | 1 |
+| `refused` (in 1 record of 16) | 391 | 98 |
+| `/api/export` (1 route of 8) | 391 | 98 |
+
+- Searchable blocks cost 49–54 B a record, a third of today's unsearchable
+  rows. Per record, `detail=none` alone saves half of the row FTS index;
+  indexing blocks removes the per-document `docsize` rows as well.
+- Almost all of the block index is unique values — a `trace_id` per record and
+  users — and a block index does its job only for them: a rare term names one
+  block, a common one names every block and the search degrades to decoding
+  the whole range. A level, route or message filter needs the time range to
+  narrow it, or a column of its own, not the full-text index.
+- `detail=none` refuses phrase and `NEAR` queries, so `"connection refused"`
+  is two terms whose blocks are intersected, then filtered exactly on decode.
+- `tokenchars ':'` keeps `10.0.0.7:5432` whole, but the error text writes
+  `10.0.0.7:5432:` and indexes that, trailing colon included. Which punctuation
+  is part of a token is a tokenizer decision the corpus has to settle.
+
 ## Not measured
 
 A real corpus, write throughput with the non-blocking handler, read cost of a
 time range and of a level or attribute filter inside compressed blocks, the
-memory a block decode needs, and FTS5 over blocks (external content keyed by
-record id). A durable head of recent rows that is sealed into blocks, as the
+memory a block decode needs, and decode cost per candidate block. A durable head of recent rows that is sealed into blocks, as the
 metrics engine does, is the shape these numbers point at; it is a hypothesis.
