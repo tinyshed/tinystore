@@ -207,7 +207,7 @@ func TestChangedCandidateCannotPublish(t *testing.T) {
 	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := store.dueSeries(t.Context(), true, store.cutoff())
+	ids, err := store.readyToSeal(t.Context())
 	if err != nil || len(ids) != 1 {
 		t.Fatal(ids, err)
 	}

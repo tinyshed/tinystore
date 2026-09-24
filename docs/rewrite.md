@@ -135,6 +135,19 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      with the parameters of the saved-revision round, in ABBA order, stayed
      inside the spread of the base's own runs, and append wrote the same
      663 552 bytes. `task size` grew by 4 KiB, to 6 664.
+   - Done, E and F: registration, matching, `Maintain`, expiry and
+     reclamation read as steps; a `maintenancePass` carries one call's cutoff,
+     staged publications and counts, `dueSeries(packing bool)` is
+     `expiryDue` and `readyToSeal`, and every statement is a named constant
+     beside its function. The three matcher lookups stay, as measured in
+     `reports/matcher-batching-2026-09-23.md`, and so does the SQL of varying
+     arity, as measured in WP3 of `reports/architecture-hypotheses-2026-09-23.md`.
+     Against `cca752f` on the same container: `BenchmarkIngest*` medians moved
+     −3.3% to −0.2% and `BenchmarkRankThirtyTwoMatchers` +4.2% (8 runs a
+     side, p ≥ 0.4), allocations identical; the four `bench/perf/repro` stages
+     moved −4.1% to +7.6% (seal over 16 runs a side, p = 0.28), each inside
+     the spread of the base's own runs, and each wrote the same file bytes.
+     `task size` grew by 12 KiB, to 6 676.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -147,9 +160,8 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | F | a suspended series is skipped by retention, so its expired samples stay on disk |
 | D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
 | G | `WorkBudget` reserves the worst case (about 34 MiB for a default `Read`) and has no queue order |
-| E | `rankMatchers` has three paths; `lookupLabelIDs` and `increasePostingCounts` send SQL of varying arity through the 32-program writer cache |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
 | A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
-| all | the debt entries in `.golangci.yml`: 18 functions over `funlen` or `gocognit`, 29 files with lines over 120 columns |
+| all | the debt entries in `.golangci.yml`: 14 functions over `funlen` or `gocognit`, 24 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

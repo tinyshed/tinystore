@@ -51,7 +51,7 @@ func stagedTestGroups(t *testing.T, s *Store) ([]stagedPublication, []int64) {
 	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: testSamples(241)}, {Series: b, Samples: testSamples(241)}}); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := s.dueSeries(t.Context(), true, s.cutoff())
+	ids, err := s.readyToSeal(t.Context())
 	if err != nil || len(ids) != 2 {
 		t.Fatalf("ready ids: %v, %v", ids, err)
 	}
