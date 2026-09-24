@@ -584,7 +584,7 @@ func main() {
 	shape := flag.String("shape", "", "run only this read shape, empty for all")
 	seconds := flag.Int("seconds", 10, "how long a read or mixed stage runs")
 	epochs := flag.Int("epochs", 30, "rotating cardinality epochs")
-	sharedBytes := flag.Int64("shared-bytes", 0, "shared active-work reservation bytes for multi_store")
+	sharedBytes := flag.Int64("shared-bytes", 0, "memory bytes of each multi_store store")
 	flag.Parse()
 	defer startProfiles()()
 	if err := os.MkdirAll(*dir, 0o755); err != nil {

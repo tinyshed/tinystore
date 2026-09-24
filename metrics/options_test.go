@@ -74,7 +74,6 @@ func TestEachInvalidOptionIsRefused(t *testing.T) {
 		options Options
 		refusal string
 	}{
-		{"an unmade shared budget", Options{SharedBudget: &WorkBudget{}}, "uninitialized shared work budget"},
 		{"half a millisecond of block span", Options{MaxBlockSpan: 500 * time.Microsecond}, "block span"},
 		{"a negative retention", Options{Retention: -time.Hour}, "durations"},
 		{"a lateness in microseconds", Options{Lateness: 1500 * time.Microsecond}, "durations"},

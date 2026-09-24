@@ -191,16 +191,15 @@ reset and boundary behavior.
   after the snapshot has ended. `MaxConcurrentIngest` defaults to one and holds
   a slot from before batch preparation through commit. The slots bound active
   work per Store; callers waiting for one can cancel through their context.
-  `NewWorkBudget(bytes)` creates an optional shared active-work reservation;
-  pass the same pointer as `Options.SharedBudget` to every Store that should
-  participate. Read weight comes from effective query limits; ingest and
-  maintenance use conservative input and staging estimates. An operation too
-  large for the budget returns `ErrLimit`, and a queued operation honors its
-  context. Queued operations are granted in arrival order, so a large one is
-  not passed over by smaller ones that arrive after it.
-  `WorkBudget.Usage()` exposes current and peak reservations. The
-  budget is not a process RSS ceiling: it excludes runtime, SQLite caches,
-  caller-owned inputs and retained returned results.
+  With `tinystore.Options.Memory` set, every read, ingest and maintenance pass
+  first reserves its weight in the store's memory. Read weight comes from
+  effective query limits; ingest and maintenance use conservative input and
+  staging estimates. An operation too large for the budget returns `ErrLimit`,
+  and a queued operation honors its context. Queued operations are granted in
+  arrival order, so a large one is not passed over by smaller ones that arrive
+  after it. `store.Memory()` on the `tinystore.Store` exposes current and peak
+  reservations. The budget is not a process RSS ceiling: it excludes runtime,
+  SQLite caches, caller-owned inputs and retained returned results.
 - A narrow query can spend 240 decoded samples on one returned point. Resource
   errors never silently truncate the result or choose another resolution.
   A packed head charges the whole compressed tail to `PayloadBytes`, checks

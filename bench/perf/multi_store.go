@@ -16,14 +16,6 @@ func multiStore(ctx context.Context, dir string, seriesCount, seconds int, share
 	if seriesCount < 1 || seconds < 1 || sharedBytes < 0 {
 		log.Fatal("invalid multi-store parameters")
 	}
-	var shared *metrics.WorkBudget
-	if sharedBytes > 0 {
-		var err error
-		shared, err = metrics.NewWorkBudget(sharedBytes)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
 	limits := metrics.Limits{Series: 3000, Blocks: 100000, PayloadBytes: 64 << 20, DecodedSamples: 2000000, OutputSamples: 1000000}
 	var stores [2]*metrics.Store
 	for index := range stores {
@@ -32,7 +24,8 @@ func multiStore(ctx context.Context, dir string, seriesCount, seconds int, share
 			log.Fatal(err)
 		}
 		defer cleanup()
-		stores[index] = openMetrics(ctx, path, metrics.Options{
+		// a budget belongs to one store now, so each store gets sharedBytes of its own
+		stores[index] = openMetricsWithMemory(ctx, path, sharedBytes, metrics.Options{
 			Retention:          365 * 24 * time.Hour,
 			MaxReaders:         4,
 			MaxConcurrentReads: 4,
@@ -41,7 +34,6 @@ func multiStore(ctx context.Context, dir string, seriesCount, seconds int, share
 			MaxBatchSamples:    200000,
 			MaxBatchBytes:      64 << 20,
 			Limits:             limits,
-			SharedBudget:       shared,
 		})
 		defer closeMetrics(ctx, stores[index])
 	}
@@ -81,8 +73,8 @@ func multiStore(ctx context.Context, dir string, seriesCount, seconds int, share
 	w.finish()
 	p50, _, p99, _ := latency.quantiles()
 	peak := int64(0)
-	if shared != nil {
-		_, peak = shared.Usage()
+	for _, store := range stores {
+		peak = max(peak, memoryOf(store).Peak)
 	}
 	report("multi_store", "series_per_store", seriesCount, "workers", 8,
 		"shared_bytes", sharedBytes, "shared_peak_reserved", peak,

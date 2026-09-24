@@ -24,10 +24,10 @@ batched publication, per-series quarantine, retention with series reclamation,
 reopen). [metrics/README.md](metrics/README.md) states each of those contracts
 and its limits; this file does not repeat them. The `tinystore` root holds a
 directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
-`Attach`, `Logger`, `Now` and `Every`, and metrics opens through it.
+`Attach`, `Logger`, `Now`, `Every` and the memory budget (`Options.Memory`,
+`Reserve`), and metrics opens through it.
 
-Designed, not built: the rest of the root runtime (the memory budget,
-snapshots), `records`, `sqldb`, `kv`, `blobs`, `jobs`, `backup`, metrics
+Designed, not built: the rest of the root runtime (snapshots), `records`, `sqldb`, `kv`, `blobs`, `jobs`, `backup`, metrics
 instruments, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
 holds a prototype of their API and the reference rewrite of one metrics path.
 
@@ -342,8 +342,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | expired series return a cardinality slot            | `TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle`                  |
 | live siblings keep shared dictionary pairs          | `TestReclaimKeepsLabelsUsedByAnotherSeries`                                   |
 | narrow reads pay only for selected packed chunks     | `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks` |
-| multiple handles honor one active-work budget        | `TestSharedWorkBudgetBoundsTwoStoresAndHonorsCancellation`               |
-| a large reservation is not passed over by small ones | `TestWorkBudgetGrantsInArrivalOrder` and `TestWorkBudgetCancelledWaiterLetsTheNextOneIn` |
+| an engine's work honors the store's memory           | `TestStoreMemoryBoundsReadsIngestAndMaintenance`                         |
+| a large reservation is not passed over by small ones | `TestMemoryGrantsInArrivalOrder` and `TestMemoryCancelledWaiterLetsTheNextOneIn` |
 | streaming owns each result and exposes partial failure | `TestStreamOwnsResultsAndReportsPartialFailure`                         |
 | an error about one series carries its labels           | `TestIngestRefusalNamesItsSeries` and `TestIngestValidationNamesItsSeries` |
 | a series that cannot be repaired can still be dropped  | `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours` |

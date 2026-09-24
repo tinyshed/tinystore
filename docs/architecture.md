@@ -3,7 +3,7 @@
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
 store, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
-`Attach`, `Logger`, `Now` and `Every`. Everything else here is designed and
+`Attach`, `Logger`, `Now`, `Every` and the memory budget. Everything else here is designed and
 agreed, not built. [samples/](samples/README.md) holds a compiling
 prototype of this API and a reference rewrite of one metrics path. A section
 that describes something unbuilt says so.
@@ -119,8 +119,9 @@ possible if exporting them turns out to be a mistake.
 once. An engine reserves before it materialises (`Store.Reserve`); waiters are
 served in arrival order, a cancelled waiter leaves the queue, and a reservation
 larger than the whole budget is refused with `ErrLimit`. Zero leaves each
-engine to its own per-call limits. The metrics engine's `WorkBudget` and
-`Options.SharedBudget` move here: a default `Read` reserves its worst case,
+engine to its own per-call limits; `Store.Memory` reports use, peak and
+capacity. What was the metrics engine's `WorkBudget` lives here: a default
+`Read` reserves its worst case,
 about 34 MiB, so 256 MiB admits seven at once and queues the eighth.
 
 ## Logs

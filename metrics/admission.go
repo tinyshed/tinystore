@@ -2,10 +2,11 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
-	"slices"
-	"sync"
+
+	"github.com/tinyshed/tinystore"
 )
 
 // admit lets one operation in: the store is still open and one of the given
@@ -33,11 +34,10 @@ func (s *Store) admit(ctx context.Context, slots chan struct{}) (release func(),
 	return release, nil
 }
 
-// reserve holds an operation's weight in the budget shared by several stores.
-// A store opened without one holds nothing and never calls weigh.
+// reserve holds an operation's weight in the store's memory; a store without
+// Options.Memory is not asked, so the weight is not even computed
 func (s *Store) reserve(ctx context.Context, weigh func() (int64, error)) (release func(), err error) {
-	budget := s.opts.SharedBudget
-	if budget == nil {
+	if s.runtime == nil || s.runtime.Memory().Capacity == 0 {
 		return func() {}, nil
 	}
 
@@ -45,10 +45,11 @@ func (s *Store) reserve(ctx context.Context, weigh func() (int64, error)) (relea
 	if err != nil {
 		return nil, err
 	}
-	if err := budget.acquire(ctx, weight); err != nil {
-		return nil, err
+	release, err = s.runtime.Reserve(ctx, weight)
+	if errors.Is(err, tinystore.ErrLimit) {
+		return nil, fmt.Errorf("%w: %s", ErrLimit, err.Error())
 	}
-	return func() { budget.release(weight) }, nil
+	return release, err
 }
 
 func (s *Store) enter(ctx context.Context) error {
@@ -71,106 +72,6 @@ func (s *Store) leave() {
 	if s.closing && s.active == 0 {
 		close(s.drained)
 	}
-}
-
-// WorkBudget shares active-work reservations across Store handles that use it.
-// Reservations are granted in the order they were asked for, so a large one is
-// never passed over by the small ones that arrive after it.
-type WorkBudget struct {
-	mu                   sync.Mutex
-	capacity, used, peak int64
-	waiting              []*budgetWaiter
-}
-
-// budgetWaiter is a reservation that did not fit; granted closes when release
-// has made room for it and taken its bytes on its behalf.
-type budgetWaiter struct {
-	bytes   int64
-	granted chan struct{}
-}
-
-func NewWorkBudget(bytes int64) (*WorkBudget, error) {
-	if bytes <= 0 {
-		return nil, fmt.Errorf("%w: shared work budget", ErrInvalid)
-	}
-	return &WorkBudget{capacity: bytes}, nil
-}
-
-func (b *WorkBudget) Usage() (used, peak int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.used, b.peak
-}
-
-func (b *WorkBudget) acquire(ctx context.Context, bytes int64) error {
-	if bytes <= 0 || bytes > b.capacity {
-		return fmt.Errorf("%w: shared work reservation", ErrLimit)
-	}
-	b.mu.Lock()
-	if err := ctx.Err(); err != nil {
-		b.mu.Unlock()
-		return err
-	}
-	if len(b.waiting) == 0 && bytes <= b.capacity-b.used {
-		b.take(bytes)
-		b.mu.Unlock()
-		return nil
-	}
-	waiter := &budgetWaiter{bytes: bytes, granted: make(chan struct{})}
-	b.waiting = append(b.waiting, waiter)
-	b.mu.Unlock()
-
-	select {
-	case <-waiter.granted:
-		if err := ctx.Err(); err != nil {
-			b.abandon(waiter)
-			return err
-		}
-		return nil
-	case <-ctx.Done():
-		b.abandon(waiter)
-		return ctx.Err()
-	}
-}
-
-// abandon takes a cancelled waiter out of the queue, or gives its bytes back
-// when release granted them in the meantime.
-func (b *WorkBudget) abandon(waiter *budgetWaiter) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	select {
-	case <-waiter.granted:
-		b.used -= waiter.bytes
-	default:
-		b.waiting = slices.DeleteFunc(b.waiting, func(queued *budgetWaiter) bool { return queued == waiter })
-	}
-	b.grant()
-}
-
-func (b *WorkBudget) release(bytes int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if bytes <= 0 || bytes > b.used {
-		panic("metrics: invalid shared work release")
-	}
-	b.used -= bytes
-	b.grant()
-}
-
-// grant serves waiters in arrival order and stops at the first that does not
-// fit, even when a later one would.
-func (b *WorkBudget) grant() {
-	for len(b.waiting) > 0 && b.waiting[0].bytes <= b.capacity-b.used {
-		waiter := b.waiting[0]
-		b.waiting = b.waiting[1:]
-		b.take(waiter.bytes)
-		close(waiter.granted)
-	}
-}
-
-func (b *WorkBudget) take(bytes int64) {
-	b.used += bytes
-	b.peak = max(b.peak, b.used)
 }
 
 func reservation(parts ...int64) (int64, error) {

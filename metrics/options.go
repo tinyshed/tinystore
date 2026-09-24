@@ -29,14 +29,10 @@ type Options struct {
 	MaxConcurrentIngest int
 	SnapshotTimeout     time.Duration
 	MaintenanceInterval time.Duration
-	SharedBudget        *WorkBudget
 	Limits              Limits
 }
 
 func normalizeOptions(o Options) (Options, error) {
-	if o.SharedBudget != nil && o.SharedBudget.capacity <= 0 {
-		return o, fmt.Errorf("%w: uninitialized shared work budget", ErrInvalid)
-	}
 	if err := o.normalizeDurations(); err != nil {
 		return o, err
 	}

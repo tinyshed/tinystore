@@ -22,6 +22,10 @@ type Options struct {
 
 	// Clock replaces time.Now for the store and every engine opened against it.
 	Clock func() time.Time
+
+	// Memory bounds the bytes that all engines' in-flight work holds at once;
+	// zero leaves each engine to its own per-call limits.
+	Memory int64
 }
 
 type Store struct {
@@ -30,6 +34,7 @@ type Store struct {
 	clock  func() time.Time
 	manual bool
 	lock   io.Closer
+	memory *memory
 
 	background context.Context
 	stop       context.CancelFunc
@@ -49,8 +54,8 @@ type Store struct {
 // same directory, in this process or another, is refused with ErrInUse. ctx
 // bounds the opening only: background work lives until Close.
 func Open(ctx context.Context, dir string, options Options) (*Store, error) {
-	if dir == "" {
-		return nil, fmt.Errorf("%w: empty directory", ErrInvalid)
+	if dir == "" || options.Memory < 0 {
+		return nil, fmt.Errorf("%w: empty directory or negative memory", ErrInvalid)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
@@ -76,6 +81,9 @@ func newStore(ctx context.Context, dir string, options Options, lock io.Closer) 
 	}
 	if store.clock == nil {
 		store.clock = time.Now
+	}
+	if options.Memory > 0 {
+		store.memory = &memory{capacity: options.Memory}
 	}
 	store.background, store.stop = context.WithCancel(context.WithoutCancel(ctx))
 	return store

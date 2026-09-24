@@ -15,5 +15,6 @@
 //	errors.go      the sentinels every engine wraps
 //	engine.go      Claim, Attach, Logger, Now: how an engine joins the store
 //	every.go       background work, and how its failures are logged
+//	memory.go      Reserve: one memory budget for every engine's work
 //	lock_*.go      one store per directory, per platform
 package tinystore

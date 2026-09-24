@@ -15,7 +15,7 @@
 //	store.go           Open, Close, Stats: the handle and its lifecycle
 //	types.go           samples, series, ranges, results and errors
 //	options.go         options, limits and their defaults
-//	admission.go       the open/closed gate, slots and the shared work budget
+//	admission.go       the open/closed gate, slots and reservations in the store's memory
 //
 //	ingest.go          Ingest: admit → check → register → write each head
 //	ingest_input.go    one call's batches, checked and grouped by series

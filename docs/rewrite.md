@@ -49,7 +49,7 @@ the file it tests, and `store_test.go`, `corpus_test.go`, `recovery_test.go`,
 | file | holds | area |
 |---|---|---|
 | `doc.go`, `store.go`, `types.go`, `options.go` | map; handle and lifecycle; public model; options, limits, defaults | — |
-| `admission.go` | open/closed gate, slots, the shared `WorkBudget` | G |
+| `admission.go` | open/closed gate, slots, reservations in the store's memory | G |
 | `ingest.go`, `ingest_input.go` | `Ingest`; one call's batches checked and grouped | B |
 | `series.go`, `match.go` | identity, dictionary, postings; matchers to series | E |
 | `head.go`, `head_state.go` | the packed head format; its row in `series_state` | B |
@@ -235,8 +235,11 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      Manual store of its own, so `read.db` is now `read/metrics.db`. `task size`
      grew by 160 KiB, to 6 848: the probe now links `log/slog`, 42 KB of symbols
      of its own, for the store's logger, and the root package itself.
-   - Next: the memory budget moves to the root, then instruments, sqldb,
-     records, snapshots and backup.
+   - Done: the memory budget lives in the store (`Options.Memory`,
+     `Reserve`, `Memory`) and metrics reserves through it; `WorkBudget` and
+     `Options.SharedBudget` are gone, and a store without memory is not asked,
+     so no weight is computed, as before.
+   - Next: instruments, sqldb, records, snapshots and backup.
 7. New engines, one at a time.
 
 ## Gaps to close during the rewrite
