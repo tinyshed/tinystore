@@ -171,6 +171,18 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      region aggregate +0.5%, and the `repro` read stage +2.9%, each p ≥ 0.37;
      allocations per wide query fell about 4%, from 56.2k to 53.9k. `task size`
      grew by 4 KiB, to 6 684.
+   - Done, C: `publishTx` is check version → merge → clock → payloads →
+     directory → frontier; `publishIsolated` holds the savepoint of one
+     series; `readDirectory` takes a `groupRow` and splits into the header, the
+     references and one block at a time; `decodeClockValues` reads one mode per
+     function; `absorb` decides a merge. `clock.go` and `directory.go` lost
+     their file-level `//nolint:gosec`: `distance`, `advance`, `appendCount`,
+     `appendSigned64`, `signed64` and `appendID` own the conversions once. The
+     `repro` seal and read stages, run by `d96588f` and by this change on the
+     same fixture, wrote byte-identical files; against `d96588f` in ABBA
+     order: seal −2.1% over 16 runs a side (p = 0.56), a narrow hour −0.2%, a
+     500-series selector −3.9% (p = 0.21), a region aggregate +1.1%, the
+     narrow read's allocations identical. `task size` grew by 12 KiB, to 6 700.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -181,7 +193,7 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 |---|---|
 | D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
-| A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
-| all | the debt entries in `.golangci.yml`: 8 functions over `funlen` or `gocognit`, 18 files with lines over 120 columns |
+| A | file-level `//nolint:gosec` in `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
+| all | the debt entries in `.golangci.yml`: 4 functions over `funlen` or `gocognit`, 11 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

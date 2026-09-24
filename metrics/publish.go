@@ -14,9 +14,41 @@ func (s *Store) publish(ctx context.Context, candidate packingCandidate, group b
 	})
 }
 
-func (s *Store) publishTx(ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup, cutoff int64) error {
+// publishTx writes one sealed group in the writer's transaction: it checks
+// that the head has not changed since the group was encoded, absorbs preceding
+// groups, stores payloads and the directory, then moves the frontier.
+func (s *Store) publishTx(
+	ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup, cutoff int64,
+) error {
+	if err := checkPackingVersion(ctx, tx, candidate); err != nil {
+		return err
+	}
+
+	group, replaced, err := s.mergePrecedingGroups(ctx, tx, group)
+	if err != nil {
+		return err
+	}
+	if group.clockID, err = acquireClock(ctx, tx, group.clockBody); err != nil {
+		return err
+	}
+
+	if err = storePayloads(ctx, tx, &group); err != nil {
+		return err
+	}
+
+	if err = s.replaceGroups(ctx, tx, group, replaced); err != nil {
+		return err
+	}
+
+	return s.advanceFrontier(ctx, tx, candidate, group, cutoff)
+}
+
+const packingVersionQuery = `select version from series_state where series_id=?`
+
+// checkPackingVersion refuses a group encoded from a head that changed since.
+func checkPackingVersion(ctx context.Context, tx *sql.Tx, candidate packingCandidate) error {
 	var version int64
-	if err := tx.QueryRowContext(ctx, `select version from series_state where series_id=?`, candidate.seriesID).Scan(&version); err != nil {
+	if err := tx.QueryRowContext(ctx, packingVersionQuery, candidate.seriesID).Scan(&version); err != nil {
 		return fmt.Errorf("check packing version: %w", err)
 	}
 	if version != candidate.version {
@@ -25,47 +57,60 @@ func (s *Store) publishTx(ctx context.Context, tx *sql.Tx, candidate packingCand
 	if version == math.MaxInt64 {
 		return fmt.Errorf("%w: series version exhausted", ErrLimit)
 	}
-	merged, replaced, mergeErr := s.mergePrecedingGroups(ctx, tx, group)
-	if mergeErr != nil {
-		return mergeErr
-	}
-	group = merged
-	clockID, clockErr := acquireClock(ctx, tx, group.clockBody)
-	if clockErr != nil {
-		return clockErr
-	}
-	group.clockID = clockID
+	return nil
+}
+
+const (
+	nextPayloadQuery    = `select next_payload_id from store_state where id=1`
+	reservePayloadQuery = `update store_state set next_payload_id=? where id=1`
+	insertPayloadQuery  = `insert into payloads values(?,?)`
+)
+
+// storePayloads gives each new external body the next payload identifier and
+// writes it; bodies a merge carried over keep theirs.
+func storePayloads(ctx context.Context, tx *sql.Tx, group *blockGroup) error {
 	allocated := int64(0)
 	for slot, block := range group.blocks {
 		if group.isExternal(slot) && block.payload == 0 {
 			allocated++
 		}
 	}
-	var nextPayload int64
-	if allocated > 0 {
-		if err := tx.QueryRowContext(ctx, `select next_payload_id from store_state where id=1`).Scan(&nextPayload); err != nil {
-			return fmt.Errorf("read payload allocation: %w", err)
-		}
-		if nextPayload > math.MaxInt64-allocated {
-			return fmt.Errorf("%w: payload identifiers exhausted", ErrLimit)
-		}
-		if _, err := tx.ExecContext(ctx, `update store_state set next_payload_id=? where id=1`, nextPayload+allocated); err != nil {
-			return fmt.Errorf("reserve payload identifiers: %w", err)
-		}
-		if group.format == 2 {
-			group.firstPayload = nextPayload
-		}
+	if allocated == 0 {
+		return nil
 	}
+
+	var next int64
+	if err := tx.QueryRowContext(ctx, nextPayloadQuery).Scan(&next); err != nil {
+		return fmt.Errorf("read payload allocation: %w", err)
+	}
+	if next > math.MaxInt64-allocated {
+		return fmt.Errorf("%w: payload identifiers exhausted", ErrLimit)
+	}
+	if _, err := tx.ExecContext(ctx, reservePayloadQuery, next+allocated); err != nil {
+		return fmt.Errorf("reserve payload identifiers: %w", err)
+	}
+	if group.format == 2 {
+		group.firstPayload = next
+	}
+
 	for slot := range group.blocks {
 		block := &group.blocks[slot]
-		if group.isExternal(slot) && block.payload == 0 {
-			block.payload = nextPayload
-			nextPayload++
-			if _, err := tx.ExecContext(ctx, `insert into payloads values(?,?)`, block.payload, block.body); err != nil {
-				return fmt.Errorf("write sealed payload: %w", err)
-			}
+		if !group.isExternal(slot) || block.payload != 0 {
+			continue
+		}
+		block.payload = next
+		next++
+		if _, err := tx.ExecContext(ctx, insertPayloadQuery, block.payload, block.body); err != nil {
+			return fmt.Errorf("write sealed payload: %w", err)
 		}
 	}
+	return nil
+}
+
+const insertGroupQuery = `insert into groups values(?,?,?,?,?)`
+
+// replaceGroups writes the group's directory in place of the groups it absorbed.
+func (s *Store) replaceGroups(ctx context.Context, tx *sql.Tx, group blockGroup, replaced []blockGroup) error {
 	directory, err := s.writeDirectory(group)
 	if err != nil {
 		return err
@@ -73,9 +118,22 @@ func (s *Store) publishTx(ctx context.Context, tx *sql.Tx, candidate packingCand
 	if err = removeMergedGroups(ctx, tx, replaced); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `insert into groups values(?,?,?,?,?)`, group.seriesID, group.start, group.end, directory, group.clockID); err != nil {
+	_, err = tx.ExecContext(ctx, insertGroupQuery, group.seriesID, group.start, group.end, directory, group.clockID)
+	if err != nil {
 		return fmt.Errorf("publish group directory: %w", err)
 	}
+	return nil
+}
+
+const advanceFrontierQuery = `
+	update series_state set sealed_before=?,version=version+1,ready=?,model_scale=?
+	where series_id=?`
+
+// advanceFrontier removes the sealed samples from the head and moves the
+// sealed frontier past the group, in the same transaction as the group.
+func (s *Store) advanceFrontier(
+	ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup, cutoff int64,
+) error {
 	existing, err := s.mutablePoints(ctx, tx, group.seriesID)
 	if err != nil {
 		return err
@@ -87,11 +145,13 @@ func (s *Store) publishTx(ctx context.Context, tx *sql.Tx, candidate packingCand
 	if err = s.saveHead(ctx, tx, group.seriesID, remaining); err != nil {
 		return err
 	}
+
 	ready := 0
 	if s.headReady(remaining, candidate.maxSeen, cutoff) {
 		ready = 1
 	}
-	if _, err = tx.ExecContext(ctx, `update series_state set sealed_before=?,version=version+1,ready=?,model_scale=? where series_id=?`, group.end+1, ready, group.modelScale, group.seriesID); err != nil {
+	_, err = tx.ExecContext(ctx, advanceFrontierQuery, group.end+1, ready, group.modelScale, group.seriesID)
+	if err != nil {
 		return fmt.Errorf("advance sealed frontier: %w", err)
 	}
 	return s.refreshDue(ctx, tx, group.seriesID)
@@ -115,54 +175,78 @@ func publicationBytes(candidate packingCandidate, group blockGroup) int {
 	return bytes
 }
 
+// publishBatch publishes staged groups in one transaction; the counts move
+// only once it commits.
 func (s *Store) publishBatch(ctx context.Context, staged []stagedPublication, cutoff int64) (Maintenance, error) {
-	var committed Maintenance
 	if len(staged) == 0 {
-		return committed, nil
+		return Maintenance{}, nil
 	}
 	var pending Maintenance
 	err := s.file.Update(ctx, func(tx *sql.Tx) error {
 		for _, item := range staged {
-			if _, err := tx.ExecContext(ctx, `savepoint maintenance_series`); err != nil {
-				return fmt.Errorf("start series publication: %w", err)
+			outcome, err := s.publishIsolated(ctx, tx, item, cutoff)
+			if err != nil {
+				return err
 			}
-			publishErr := s.publishTx(ctx, tx, item.candidate, item.group, cutoff)
-			if publishErr != nil {
-				_, rollbackErr := tx.ExecContext(ctx, `rollback to maintenance_series`)
-				_, releaseErr := tx.ExecContext(ctx, `release maintenance_series`)
-				if rollbackErr != nil || releaseErr != nil {
-					return errors.Join(publishErr, rollbackErr, releaseErr)
-				}
-				switch {
-				case errors.Is(publishErr, ErrConflict):
-					pending.Conflicts++
-					continue
-				case errors.Is(publishErr, ErrCorrupt):
-					reason := maintenanceFailureReason("publish block", publishErr)
-					result, err := tx.ExecContext(ctx, `update series_state set failed_at=?,failure_reason=? where series_id=? and failed_at is null`, s.now().UnixMilli(), reason, item.candidate.seriesID)
-					if err != nil {
-						return fmt.Errorf("suspend failed publication: %w", err)
-					}
-					changed, err := result.RowsAffected()
-					if err != nil {
-						return fmt.Errorf("count suspended publication: %w", err)
-					}
-					pending.QuarantinedSeries += int(changed)
-					continue
-				default:
-					return publishErr
-				}
-			}
-			if _, err := tx.ExecContext(ctx, `release maintenance_series`); err != nil {
-				return fmt.Errorf("finish series publication: %w", err)
-			}
-			pending.SealedBlocks += len(item.group.blocks)
+			pending.SealedBlocks += outcome.SealedBlocks
+			pending.Conflicts += outcome.Conflicts
+			pending.QuarantinedSeries += outcome.QuarantinedSeries
 		}
 		return nil
 	})
 	if err != nil {
-		return committed, err
+		return Maintenance{}, err
 	}
-	committed = pending
-	return committed, nil
+	return pending, nil
+}
+
+const (
+	savepointQuery         = `savepoint maintenance_series`
+	rollbackSavepointQuery = `rollback to maintenance_series`
+	releaseSavepointQuery  = `release maintenance_series`
+)
+
+// publishIsolated publishes one series inside a savepoint, so that a conflict
+// or a corrupt series undoes only its own changes and the batch goes on.
+func (s *Store) publishIsolated(
+	ctx context.Context, tx *sql.Tx, item stagedPublication, cutoff int64,
+) (Maintenance, error) {
+	if _, err := tx.ExecContext(ctx, savepointQuery); err != nil {
+		return Maintenance{}, fmt.Errorf("start series publication: %w", err)
+	}
+	publishErr := s.publishTx(ctx, tx, item.candidate, item.group, cutoff)
+	if publishErr == nil {
+		if _, err := tx.ExecContext(ctx, releaseSavepointQuery); err != nil {
+			return Maintenance{}, fmt.Errorf("finish series publication: %w", err)
+		}
+		return Maintenance{SealedBlocks: len(item.group.blocks)}, nil
+	}
+
+	_, rollbackErr := tx.ExecContext(ctx, rollbackSavepointQuery)
+	_, releaseErr := tx.ExecContext(ctx, releaseSavepointQuery)
+	if rollbackErr != nil || releaseErr != nil {
+		return Maintenance{}, errors.Join(publishErr, rollbackErr, releaseErr)
+	}
+	switch {
+	case errors.Is(publishErr, ErrConflict):
+		return Maintenance{Conflicts: 1}, nil
+	case errors.Is(publishErr, ErrCorrupt):
+		suspended, err := s.suspendInPublication(ctx, tx, item.candidate.seriesID, publishErr)
+		return Maintenance{QuarantinedSeries: suspended}, err
+	default:
+		return Maintenance{}, publishErr
+	}
+}
+
+func (s *Store) suspendInPublication(ctx context.Context, tx *sql.Tx, id int64, cause error) (int, error) {
+	reason := maintenanceFailureReason("publish block", cause)
+	result, err := tx.ExecContext(ctx, suspendQuery, s.now().UnixMilli(), reason, id)
+	if err != nil {
+		return 0, fmt.Errorf("suspend failed publication: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count suspended publication: %w", err)
+	}
+	return int(changed), nil
 }

@@ -36,7 +36,8 @@ func summarize(points []Sample, kind Kind) blockSummary {
 			}
 		}
 	}
-	if math.IsNaN(summary.sum) || math.IsInf(summary.sum, 0) || math.IsNaN(summary.increase) || math.IsInf(summary.increase, 0) {
+	if math.IsNaN(summary.sum) || math.IsInf(summary.sum, 0) ||
+		math.IsNaN(summary.increase) || math.IsInf(summary.increase, 0) {
 		summary.valid = false
 	}
 	return summary

@@ -26,7 +26,7 @@ func TestVersionTwoDirectoryAndClockRemainReadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group, err := s.readDirectory(7, 0, 239, 1, directory, blocks)
+	group, err := s.readDirectory(7, groupRow{start: 0, end: 239, clockID: 1, data: directory}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestVersionThreeDirectoryKeepsPayloadAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group, err := s.readDirectory(7, 0, 239, 1, directory, blocks)
+	group, err := s.readDirectory(7, groupRow{start: 0, end: 239, clockID: 1, data: directory}, blocks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestDirectoryCorruptionAndRebindingAreRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.readDirectory(2, start, end, clockID, directory, nil); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.readDirectory(2, groupRow{start: start, end: end, clockID: clockID, data: directory}, nil); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("rebound directory: %v", err)
 	}
 	directory[len(directory)/2] ^= 1
@@ -166,7 +166,7 @@ func FuzzNewFormats(f *testing.F) {
 			if len(data) >= 4 {
 				binary.LittleEndian.PutUint32(data[len(data)-4:], g.checksum(data[:len(data)-4]))
 			}
-			_, _ = s.readDirectory(1, 10, 40, 1, data, []storedBlock{block})
+			_, _ = s.readDirectory(1, groupRow{start: 10, end: 40, clockID: 1, data: data}, []storedBlock{block})
 		case 3:
 			_, _ = s.metadata.decodeResiduals(data, 2)
 		}

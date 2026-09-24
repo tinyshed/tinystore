@@ -1,4 +1,3 @@
-//nolint:gosec // timestamp conversions preserve signed bit patterns; lengths are bounded before conversion
 package metrics
 
 import (
@@ -12,6 +11,7 @@ import (
 	"hash/crc32"
 	"math"
 
+	"github.com/tinyshed/tinystore/codec"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -33,7 +33,7 @@ func encodeClockValues(points []Sample) []byte {
 	frequencies := map[uint64]int{}
 	unit := uint64(0)
 	for i := range deltas {
-		deltas[i] = uint64(points[i+1].At) - uint64(points[i].At)
+		deltas[i] = distance(points[i].At, points[i+1].At)
 		unit = commonDivisor(unit, deltas[i])
 		frequencies[deltas[i]]++
 	}
@@ -46,6 +46,15 @@ func encodeClockValues(points []Sample) []byte {
 			step = delta
 		}
 	}
+	return smallestClock(deltas, unit, step)
+}
+
+// smallestClock writes the deltas three ways, in units, and keeps the shortest:
+//
+//	plain       0, unit, every delta
+//	runs        1, unit, then run length and delta, run by run
+//	exceptions  2, unit, the commonest step, then the gap to and the delta of each other one
+func smallestClock(deltas []uint64, unit, step uint64) []byte {
 	plain := binary.AppendUvarint([]byte{0}, unit)
 	for _, delta := range deltas {
 		plain = binary.AppendUvarint(plain, delta/unit)
@@ -56,7 +65,7 @@ func encodeClockValues(points []Sample) []byte {
 		for end < len(deltas) && deltas[end] == deltas[i] {
 			end++
 		}
-		runs = binary.AppendUvarint(runs, uint64(end-i))
+		runs = appendCount(runs, end-i)
 		runs = binary.AppendUvarint(runs, deltas[i]/unit)
 		i = end
 	}
@@ -65,7 +74,7 @@ func encodeClockValues(points []Sample) []byte {
 	previous := -1
 	for i, delta := range deltas {
 		if delta != step {
-			exceptions = binary.AppendUvarint(exceptions, uint64(i-previous))
+			exceptions = appendCount(exceptions, i-previous)
 			exceptions = binary.AppendUvarint(exceptions, delta/unit)
 			previous = i
 		}
@@ -85,80 +94,112 @@ func decodeClockValues(block storedBlock) ([]int64, error) {
 	if head.Count < 1 || head.Count > blockSamples || head.End < head.Start {
 		return nil, fmt.Errorf("%w: clock head", ErrCorrupt)
 	}
-	times := make([]int64, head.Count)
-	times[0] = head.Start
 	if head.Count == 1 {
 		if len(block.clock) != 0 || head.Start != head.End {
 			return nil, fmt.Errorf("%w: singleton clock", ErrCorrupt)
 		}
-		return times, nil
+		return []int64{head.Start}, nil
 	}
+
+	deltas, err := clockDeltas(block)
+	if err != nil {
+		return nil, err
+	}
+
+	return accumulateClock(head, deltas)
+}
+
+// clockDeltas are the steps between a block's timestamps: all equal for a
+// block without a clock body, else as its body encodes them.
+func clockDeltas(block storedBlock) ([]uint64, error) {
+	head := block.head
 	deltas := make([]uint64, head.Count-1)
 	if len(block.clock) == 0 {
-		span := uint64(head.End) - uint64(head.Start)
-		divisor := uint64(head.Count - 1)
+		span, divisor := distance(head.Start, head.End), uint64(head.Count-1) //nolint:gosec // two or more samples
 		if span == 0 || span%divisor != 0 {
 			return nil, fmt.Errorf("%w: regular clock step", ErrCorrupt)
 		}
 		for i := range deltas {
 			deltas[i] = span / divisor
 		}
-	} else {
-		r := binaryReader{data: block.clock}
-		mode, unit := r.byte(), r.unsigned()
-		switch mode {
-		case 0:
-			for i := range deltas {
-				deltas[i] = r.unsigned()
-			}
-		case 1:
-			for i := 0; i < len(deltas) && r.err == nil; {
-				count, delta := r.size(len(deltas)-i), r.unsigned()
-				if count == 0 {
-					r.err = fmt.Errorf("%w: empty clock run", ErrCorrupt)
-					break
-				}
-				for j := range count {
-					deltas[i+j] = delta
-				}
-				i += count
-			}
-		case 2:
-			step := r.unsigned()
-			for i := range deltas {
-				deltas[i] = step
-			}
-			position := -1
-			for len(r.data) > 0 && r.err == nil {
-				gap := r.size(len(deltas) - 1 - position)
-				if gap == 0 {
-					r.err = fmt.Errorf("%w: clock exception position", ErrCorrupt)
-					break
-				}
-				position += gap
-				deltas[position] = r.unsigned()
-			}
-		default:
-			return nil, fmt.Errorf("%w: clock mode", ErrCorrupt)
+		return deltas, nil
+	}
+
+	r := binaryReader{data: block.clock}
+	mode, unit := r.byte(), r.unsigned()
+	switch mode {
+	case 0:
+		for i := range deltas {
+			deltas[i] = r.unsigned()
 		}
-		if err := r.finish(); err != nil {
-			return nil, err
+	case 1:
+		readClockRuns(&r, deltas)
+	case 2:
+		readClockExceptions(&r, deltas)
+	default:
+		return nil, fmt.Errorf("%w: clock mode", ErrCorrupt)
+	}
+	if err := r.finish(); err != nil {
+		return nil, err
+	}
+	return deltas, scaleClock(deltas, unit)
+}
+
+func readClockRuns(r *binaryReader, deltas []uint64) {
+	for i := 0; i < len(deltas) && r.err == nil; {
+		count, delta := r.size(len(deltas)-i), r.unsigned()
+		if count == 0 {
+			r.err = fmt.Errorf("%w: empty clock run", ErrCorrupt)
+			return
 		}
-		if unit == 0 {
-			return nil, fmt.Errorf("%w: clock quantum", ErrCorrupt)
+		for j := range count {
+			deltas[i+j] = delta
 		}
-		for i, delta := range deltas {
-			if delta > math.MaxUint64/unit {
-				return nil, fmt.Errorf("%w: clock multiplication", ErrCorrupt)
-			}
-			deltas[i] *= unit
+		i += count
+	}
+}
+
+func readClockExceptions(r *binaryReader, deltas []uint64) {
+	step := r.unsigned()
+	for i := range deltas {
+		deltas[i] = step
+	}
+	position := -1
+	for len(r.data) > 0 && r.err == nil {
+		gap := r.size(len(deltas) - 1 - position)
+		if gap == 0 {
+			r.err = fmt.Errorf("%w: clock exception position", ErrCorrupt)
+			return
 		}
+		position += gap
+		deltas[position] = r.unsigned()
+	}
+}
+
+// scaleClock turns deltas counted in units into milliseconds.
+func scaleClock(deltas []uint64, unit uint64) error {
+	if unit == 0 {
+		return fmt.Errorf("%w: clock quantum", ErrCorrupt)
 	}
 	for i, delta := range deltas {
-		if delta == 0 || delta > uint64(math.MaxInt64)-uint64(times[i]) {
+		if delta > math.MaxUint64/unit {
+			return fmt.Errorf("%w: clock multiplication", ErrCorrupt)
+		}
+		deltas[i] *= unit
+	}
+	return nil
+}
+
+// accumulateClock adds the deltas up from the block's start, and refuses a
+// clock that does not end exactly at the block's end.
+func accumulateClock(head codec.Head, deltas []uint64) ([]int64, error) {
+	times := make([]int64, head.Count)
+	times[0] = head.Start
+	for i, delta := range deltas {
+		if delta == 0 || delta > distance(times[i], math.MaxInt64) {
 			return nil, fmt.Errorf("%w: clock ordering or overflow", ErrCorrupt)
 		}
-		times[i+1] = int64(uint64(times[i]) + delta)
+		times[i+1] = advance(times[i], delta)
 	}
 	if times[len(times)-1] != head.End {
 		return nil, fmt.Errorf("%w: clock endpoint", ErrCorrupt)
@@ -167,12 +208,12 @@ func decodeClockValues(block storedBlock) ([]int64, error) {
 }
 
 func encodeClockGroup(group blockGroup) []byte {
-	out := []byte{1, byte(len(group.blocks))}
+	out := []byte{1, byte(len(group.blocks))} //nolint:gosec // a group holds at most 32 blocks
 	for _, block := range group.blocks {
 		out = binary.AppendVarint(out, block.head.Start)
-		out = binary.AppendUvarint(out, uint64(block.head.End)-uint64(block.head.Start))
-		out = binary.AppendUvarint(out, uint64(block.head.Count))
-		out = binary.AppendUvarint(out, uint64(len(block.clock)))
+		out = binary.AppendUvarint(out, distance(block.head.Start, block.head.End))
+		out = appendCount(out, block.head.Count)
+		out = appendCount(out, len(block.clock))
 		out = append(out, block.clock...)
 	}
 	return binary.LittleEndian.AppendUint32(out, crc32.ChecksumIEEE(out))
@@ -196,29 +237,14 @@ func decodeClockGroup(body []byte) ([]storedBlock, error) {
 	}
 	blocks := make([]storedBlock, count)
 	for i := range blocks {
-		start := unfoldSigned(r.unsigned())
-		span := r.unsigned()
-		samples := r.size(blockSamples)
-		length := r.size(10*blockSamples + 32)
-		clock := r.take(length)
-		if r.err != nil {
-			return nil, r.err
+		block, err := readClockBlock(&r)
+		if err != nil {
+			return nil, err
 		}
-		if span > uint64(math.MaxInt64)-uint64(start) || samples < 1 {
-			return nil, fmt.Errorf("%w: clock extent", ErrCorrupt)
-		}
-		block := storedBlock{clock: clock}
-		block.head.Start = start
-		block.head.End = int64(uint64(start) + span)
-		block.head.Count = samples
-		if block.head.End == math.MaxInt64 || (i > 0 && start <= blocks[i-1].head.End) {
+		if block.head.End == math.MaxInt64 || (i > 0 && block.head.Start <= blocks[i-1].head.End) {
 			return nil, fmt.Errorf("%w: clock block ordering", ErrCorrupt)
 		}
-		if len(clock) == 0 {
-			if (samples == 1 && span != 0) || (samples > 1 && (span == 0 || span%uint64(samples-1) != 0)) {
-				return nil, fmt.Errorf("%w: regular clock extent", ErrCorrupt)
-			}
-		} else if _, err := decodeClockValues(block); err != nil {
+		if err = checkClockBody(block); err != nil {
 			return nil, err
 		}
 		blocks[i] = block
@@ -227,6 +253,40 @@ func decodeClockGroup(body []byte) ([]storedBlock, error) {
 		return nil, err
 	}
 	return blocks, nil
+}
+
+// readClockBlock reads one block's time bounds, count and clock body.
+func readClockBlock(r *binaryReader) (storedBlock, error) {
+	start := unfoldSigned(r.unsigned())
+	span := r.unsigned()
+	samples := r.size(blockSamples)
+	length := r.size(10*blockSamples + 32)
+	clock := r.take(length)
+	if r.err != nil {
+		return storedBlock{}, r.err
+	}
+	if span > distance(start, math.MaxInt64) || samples < 1 {
+		return storedBlock{}, fmt.Errorf("%w: clock extent", ErrCorrupt)
+	}
+	block := storedBlock{clock: clock}
+	block.head.Start = start
+	block.head.End = advance(start, span)
+	block.head.Count = samples
+	return block, nil
+}
+
+// checkClockBody refuses a block whose clock body, or the lack of one, does not
+// lead from its start to its end in its count of samples.
+func checkClockBody(block storedBlock) error {
+	samples, span := block.head.Count, distance(block.head.Start, block.head.End)
+	if len(block.clock) == 0 {
+		if (samples == 1 && span != 0) || (samples > 1 && (span == 0 || span%uint64(samples-1) != 0)) {
+			return fmt.Errorf("%w: regular clock extent", ErrCorrupt)
+		}
+		return nil
+	}
+	_, err := decodeClockValues(block)
+	return err
 }
 
 func acquireClock(ctx context.Context, tx *sql.Tx, body []byte) (int64, error) {
@@ -275,6 +335,8 @@ func releaseClock(ctx context.Context, tx *sql.Tx, id int64) error {
 	return nil
 }
 
+const clockQuery = `select length(body),case when length(body)<=? then body else null end from clocks where id=?`
+
 func loadClock(ctx context.Context, tx sqlite.Reader, id int64, budget *queryBudget) ([]storedBlock, error) {
 	if budget != nil {
 		if cached, ok := budget.clocks[id]; ok {
@@ -287,7 +349,7 @@ func loadClock(ctx context.Context, tx sqlite.Reader, id int64, budget *queryBud
 	}
 	var size int
 	var body []byte
-	err := sqlite.QueryRow(ctx, tx, `select length(body),case when length(body)<=? then body else null end from clocks where id=?`, limit, id).Scan(&size, &body)
+	err := sqlite.QueryRow(ctx, tx, clockQuery, limit, id).Scan(&size, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: shared clock missing", ErrCorrupt)
 	}

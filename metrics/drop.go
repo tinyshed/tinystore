@@ -145,7 +145,7 @@ func (s *Store) groupPayloads(ctx context.Context, tx *sql.Tx, id int64, row gro
 	if err != nil {
 		return nil, err
 	}
-	group, err := s.readDirectory(id, row.start, row.end, row.clockID, row.data, clock)
+	group, err := s.readDirectory(id, row, clock)
 	if err != nil {
 		return nil, err
 	}

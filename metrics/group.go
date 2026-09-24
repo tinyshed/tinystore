@@ -40,11 +40,16 @@ func slotsMask(count int) uint32 {
 	if count == groupSlots {
 		return math.MaxUint32
 	}
-	return (uint32(1) << uint(count)) - 1 //nolint:gosec // callers validate slot counts in 0..32
+	return uint32(1)<<count - 1
 }
 
-func (g blockGroup) isLive(slot int) bool     { return g.live&(uint32(1)<<uint(slot)) != 0 }       //nolint:gosec // slot belongs to a checked group
-func (g blockGroup) isExternal(slot int) bool { return g.allocation&(uint32(1)<<uint(slot)) != 0 } //nolint:gosec // slot belongs to a checked group
+func (g blockGroup) isLive(slot int) bool {
+	return g.live&(uint32(1)<<slot) != 0
+}
+
+func (g blockGroup) isExternal(slot int) bool {
+	return g.allocation&(uint32(1)<<slot) != 0
+}
 
 func (g blockGroup) payloadID(slot int) int64 {
 	if g.format >= 3 {
@@ -53,9 +58,26 @@ func (g blockGroup) payloadID(slot int) int64 {
 	return g.firstPayload + int64(bits.OnesCount32(g.allocation&slotsMask(slot)))
 }
 
+// checksum binds a directory to its series and its time bounds, so that it
+// cannot be read as another group's.
 func (g blockGroup) checksum(data []byte) uint32 {
-	key := binary.LittleEndian.AppendUint64(nil, uint64(g.seriesID)) //nolint:gosec // preserve identifier bits
-	key = binary.LittleEndian.AppendUint64(key, uint64(g.start))     //nolint:gosec // preserve signed timestamp bits
-	key = binary.LittleEndian.AppendUint64(key, uint64(g.end))       //nolint:gosec // preserve signed timestamp bits
+	key := appendSigned64(nil, g.seriesID)
+	key = appendSigned64(key, g.start)
+	key = appendSigned64(key, g.end)
 	return crc32.Update(crc32.ChecksumIEEE(key), crc32.IEEETable, data)
+}
+
+// appendSigned64 and signed64 carry an identifier's or a timestamp's bits as
+// they are, eight bytes little endian.
+func appendSigned64(out []byte, value int64) []byte {
+	return binary.LittleEndian.AppendUint64(out, uint64(value)) //nolint:gosec // bits kept, not a value converted
+}
+
+func signed64(data []byte) int64 {
+	return int64(binary.LittleEndian.Uint64(data)) //nolint:gosec // bits kept, not a value converted
+}
+
+// appendID writes a positive identifier as a varint.
+func appendID(out []byte, id int64) []byte {
+	return binary.AppendUvarint(out, uint64(id)) //nolint:gosec // identifiers are positive
 }

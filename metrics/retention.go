@@ -16,21 +16,19 @@ const oldestGroupQuery = `
 	where series_id=? order by start_ts limit 1`
 
 func (s *Store) firstGroup(ctx context.Context, tx *sql.Tx, id int64) (blockGroup, bool, error) {
-	var start, end int64
-	var clockID int64
-	var data []byte
-	err := tx.QueryRowContext(ctx, oldestGroupQuery, id).Scan(&start, &end, &data, &clockID)
+	var row groupRow
+	err := tx.QueryRowContext(ctx, oldestGroupQuery, id).Scan(&row.start, &row.end, &row.data, &row.clockID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return blockGroup{}, false, nil
 	}
 	if err != nil {
 		return blockGroup{}, false, fmt.Errorf("read oldest group: %w", err)
 	}
-	clock, err := loadClock(ctx, tx, clockID, nil)
+	clock, err := loadClock(ctx, tx, row.clockID, nil)
 	if err != nil {
 		return blockGroup{}, false, err
 	}
-	group, err := s.readDirectory(id, start, end, clockID, data, clock)
+	group, err := s.readDirectory(id, row, clock)
 	return group, true, err
 }
 

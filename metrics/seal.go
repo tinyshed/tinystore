@@ -32,6 +32,11 @@ func (s *Store) headReady(points []Sample, maxSeen, cutoff int64) bool {
 	return false
 }
 
+const packingStateQuery = `
+	select s.kind, state.version, state.max_seen_ts, state.model_scale
+	from series s join series_state state on s.id = state.series_id
+	where s.id = ?`
+
 func (s *Store) readCandidate(ctx context.Context, id, cutoff int64) (packingCandidate, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.SnapshotTimeout)
 	defer cancel()
@@ -39,7 +44,9 @@ func (s *Store) readCandidate(ctx context.Context, id, cutoff int64) (packingCan
 	var head headSnapshot
 	var watermark int64
 	err := s.file.View(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `select s.kind,state.version,state.max_seen_ts,state.model_scale from series s join series_state state on s.id=state.series_id where s.id=?`, id).Scan(&candidate.kind, &candidate.version, &candidate.maxSeen, &candidate.modelScale); err != nil {
+		err := tx.QueryRowContext(ctx, packingStateQuery, id).
+			Scan(&candidate.kind, &candidate.version, &candidate.maxSeen, &candidate.modelScale)
+		if err != nil {
 			return fmt.Errorf("read packing state: %w", err)
 		}
 		if candidate.modelScale < -2 || candidate.modelScale > 15 {
@@ -70,9 +77,11 @@ func (s *Store) readCandidate(ctx context.Context, id, cutoff int64) (packingCan
 	return candidate, err
 }
 
+const clearReadyQuery = `update series_state set ready=0 where series_id=? and version=?`
+
 func (s *Store) clearReady(ctx context.Context, candidate packingCandidate) error {
 	return s.file.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `update series_state set ready=0 where series_id=? and version=?`, candidate.seriesID, candidate.version); err != nil {
+		if _, err := tx.ExecContext(ctx, clearReadyQuery, candidate.seriesID, candidate.version); err != nil {
 			return fmt.Errorf("defer packing until more input: %w", err)
 		}
 		return nil
@@ -80,14 +89,18 @@ func (s *Store) clearReady(ctx context.Context, candidate packingCandidate) erro
 }
 
 func (s *Store) encodeCandidate(ctx context.Context, candidate packingCandidate) (blockGroup, error) {
-	group := blockGroup{format: 2, modelScale: candidate.modelScale, seriesID: candidate.seriesID, start: candidate.points[0].At, end: candidate.points[len(candidate.points)-1].At}
+	group := blockGroup{
+		format: 2, modelScale: candidate.modelScale, seriesID: candidate.seriesID,
+		start: candidate.points[0].At, end: candidate.points[len(candidate.points)-1].At,
+	}
+	maxSpan := uint64(s.opts.MaxBlockSpan.Milliseconds()) //nolint:gosec // a validated positive duration
 	clockBytes := 6
 	for start := 0; start < len(candidate.points) && len(group.blocks) < groupSlots; {
 		if err := ctx.Err(); err != nil {
 			return group, err
 		}
 		end := min(start+blockSamples, len(candidate.points))
-		for end > start+1 && uint64(candidate.points[end-1].At)-uint64(candidate.points[start].At) > uint64(s.opts.MaxBlockSpan.Milliseconds()) { //nolint:gosec // modular timestamp distance and a validated positive duration
+		for end > start+1 && distance(candidate.points[start].At, candidate.points[end-1].At) > maxSpan {
 			end--
 		}
 		points := candidate.points[start:end]
@@ -109,8 +122,8 @@ func (s *Store) encodeCandidate(ctx context.Context, candidate packingCandidate)
 		block.body = sealValueBody(block, body)
 		block.bodyBytes = len(block.body)
 		if block.bodyBytes > inlineBytes {
-			group.allocation |= uint32(1) << uint(len(group.blocks))
-		} //nolint:gosec // at most 32 slots
+			group.allocation |= uint32(1) << len(group.blocks)
+		}
 		group.blocks = append(group.blocks, block)
 		start = end
 	}
