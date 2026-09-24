@@ -7,13 +7,13 @@ built in the first place to give [Dashbin](https://github.com/tinyshed/dashbin)
 somewhere to put telemetry that does not cost more memory than the thing it is
 watching.
 
-**Experimental and unreleased: the API moves without notice.** The first
-embedded metrics slice works. `metrics.Open` provides atomic ingestion, label
-matching, exact range reads, explicit bounded maintenance and reopen. See
-[the walkthrough](metrics/README.md) and its
-[runnable example](metrics/example_test.go). Aggregate queries, sealed-group
-merging and steady-state performance are unfinished; Records, KV and SQL
-helpers are future work.
+**Experimental and unreleased: the API moves without notice.** The metrics
+engine works: atomic ingestion, label matching, exact range reads and streams,
+exact aggregates over raw samples, bounded maintenance with per-series
+quarantine, and reopen. See [the walkthrough](metrics/README.md) and its
+[runnable example](metrics/example_test.go). The runtime around it — records,
+SQL databases, KV, blobs, jobs, logs and self-metrics — is designed in
+[docs/architecture.md](docs/architecture.md) and not built yet.
 
 ## Where a sample goes
 

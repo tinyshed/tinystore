@@ -1,74 +1,40 @@
 # TinyStore
 
-An embedded time-series store for Go, on SQLite: exact samples, bounded memory,
-one file, no daemon. It is a library, so the only thing a consumer sees is a
-handle and the promises this file makes about it. `tinyshed/dashbin` is the
-first caller and not the owner.
+An embedded data runtime for Go, on SQLite: exact metrics first, then records,
+SQL databases the application owns, KV, blobs and jobs, in one directory with a
+file per engine, bounded memory, no daemon and no cgo. It is a library, so the
+only thing a consumer sees is a handle and the promises this file makes about
+it. `tinyshed/dashbin` is the first caller and not the owner.
 
 This file is the contract for anyone — human or agent — changing the repository.
 Keep it short and factual, and update it when a decision moves. Nothing here
-should be a fact a ten-second grep would answer.
+should be a fact a ten-second grep would answer. The runtime and every engine
+beyond metrics are specified in [docs/architecture.md](docs/architecture.md);
+the rewrite of the metrics code for people follows [docs/rewrite.md](docs/rewrite.md).
 
 ## Status
 
-`codec/` is built, tested and measured: 1..240 ordered samples in, a head and a
-bounded body out, every IEEE-754 bit preserved, five value representations, a
-checksum over both halves, an iterator that owns its bytes and a fuzzed decoder
-that refuses corruption. It has no opinion about when a block is sealed or how
-long one is kept.
+Built: `codec/` (1..240 ordered samples to a checked body, every IEEE-754 bit
+preserved, a fuzzed decoder that refuses corruption), `internal/sqlite/` (files,
+one pinned writer with bounded prepared programs, bounded readers, checked
+migrations) and `metrics/` (registry and postings with exact counts, a packed
+durable head, atomic bounded ingestion, `Read`, `Stream` and a raw-decoding exact
+`Aggregate` from one snapshot, version-checked sealing into merged groups,
+batched publication, per-series quarantine, retention with series reclamation,
+reopen). [metrics/README.md](metrics/README.md) states each of those contracts
+and its limits; this file does not repeat them.
 
-`metrics/` has the first durable slice: a registry with postings, an exact packed
-head, atomic bounded ingestion, raw range reads from one snapshot, version-checked
-sealing, bounded retention and reopen. `internal/sqlite/` owns file mechanics.
-`metrics/README.md` documents the API and limits. Groups now share clocks and
-use constant/change/grid candidates, compact summaries and inline or
-separate payloads. Incremental sealing merges adjacent groups by size while
-preserving payload addresses. A raw-decoding aggregate API now returns exact
-count, correctly rounded finite sums and counter increases; versioned exact
-summary shortcuts and steady-state performance remain unfinished. Prototype
-density figures are not engine guarantees.
-`spike/` preserves the experiments behind those decisions.
+Designed, not built: the `tinystore` root runtime, `records`, `sqldb`, `kv`,
+`blobs`, `jobs`, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
+holds a prototype of their API and the reference rewrite of one metrics path.
 
-Maintenance suspends one series after a local corruption or capacity failure,
-records the reason, and continues other series. Ingest rejects a suspended
-series; bounded explicit retry re-enables it after repair or a limit change.
-File and I/O errors still stop the pass.
-The common ingest path reads one packed state and writes one merged UPDATE;
-indexed maintenance fields are assigned only when their values change.
-Completed encoded head chunks before an incoming timestamp are reused; the
-intersecting suffix is rebuilt and the whole-head checksum renewed. A strictly
-ordered append to a long packed head with zero lateness and no retention
-overlap decodes only the mutable suffix after checking the whole CRC and chunk
-metadata.
-Postings carry transactional exact counts for matcher ranking; a new series
-increments its label counters with the registration transaction.
-Ready marks a retained 240-sample prefix strictly before the series watermark,
-not merely a head with 240 samples.
-The one pinned writer connection retains at most 32 prepared programs; ingestion
-uses them inside one immediate transaction, and an uncertain connection is closed.
-Maintenance stages at most eight series and 1 MiB before a savepoint batch;
-publication counters move only after the outer commit succeeds.
-Read admission lasts through decode and ingest admission begins before batch
-preparation. Per-Store slots remain local; handles can optionally share a
-weighted active-work budget. That budget is not a process RSS ceiling.
-Complete retention removes empty series registrations and postings, decrements
-dictionary ownership and frees `MaxSeries` capacity. Re-registration begins a
-new kind and frontier lifecycle; the retention cutoff still rejects old samples.
+Unfinished in metrics: the versioned exact summary shortcut for aggregates,
+steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
+density figures are not engine guarantees. `spike/` preserves the experiments
+behind the decisions.
 
-The mutable **head** is a bounded packed tail in `series_state`, rewritten once
-per touched series inside a transaction. Each encoded chunk has at most 240
-samples; the whole head has separate byte and sample budgets. Legacy head rows
-remain readable and convert on mutation. Packing is physical compression only:
-it does not move the sealed frontier or reject a previously admissible timestamp.
-Identity indexes store a digest; the original canonical labels are checked in
-full before a digest match may resolve a series. A series row holds its labels
-as gap-coded dictionary ids rather than text, so that check compares ids.
-Narrow reads verify the packed head's whole CRC and chunk metadata, then
-decode only selected chunks; their full compressed bytes still count toward
-the payload budget. Legacy row heads retain full-head decoding. `Stream`
-reuses one fetched snapshot and yields owned results by series after the read
-transaction closes; later errors may follow earlier results. `Read` keeps its
-all-or-error contract.
+Nothing is released: there is no tag, and no database written by an earlier
+revision has to be read. Readers for earlier formats are deleted, not kept.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -82,21 +48,25 @@ Do not describe unbuilt behaviour as though it works.
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
+| `docs/samples/`      | the runtime API prototype, as text, and where the reference rewrite lives     |
 | `.github/workflows/` | the authoritative clean builds                                                |
 
 The first engine keeps its implementation in one package; split it only when
 a dependency boundary needs a package, not to mirror the execution steps:
 
 ```text
+tinystore (root)    the runtime: directory, lifecycle, logger, background work, shared errors
 metrics/            public API and private implementation files
-internal/sqlite/    mechanics shared by future engines; no metric vocabulary
+records/ sqldb/ …   one package per engine, each arriving with its first working code
+internal/sqlite/    mechanics shared by every engine; no engine vocabulary
 bench/              a module of its own: corpora, and other engines to measure against
 ```
 
 Production gates belong beside their implementation. Keep historical spikes
 until a real-engine harness can reproduce what they measured. Do not copy their
-test-only parsers or call their helpers from production code. Records, KV and a
-SQL mapper get no placeholder packages and are not Metrics dependencies.
+test-only parsers or call their helpers from production code. Records, sqldb,
+KV, blobs and jobs get no placeholder packages, and engines never import each
+other.
 
 ## Modules
 
@@ -120,7 +90,37 @@ floor imposed on everyone importing this; raise it only for a language feature
 actually in use. `toolchain go1.27.1` pins what we build with and imposes
 nothing.
 
+## Runtime
+
+Breaking one of these is a design change. [docs/architecture.md](docs/architecture.md)
+has the reasons and the API; the rules hold for the runtime as it is built.
+
+**One directory, a file per engine.** `metrics.db`, `records.db`, `jobs.db`,
+`kv.db`, `blobs/`, and `sql/<name>.db` for databases the application names. No
+engine waits on another's writer, and no write is atomic across two engines.
+
+**The store opens first, engines open against it.** `metrics.Open(ctx, store, …)`,
+`sqldb.Open(ctx, store, "app", migrations)`. The caller keeps the handles; the
+store has no accessors. One `Close` closes every engine, the last opened first.
+
+**The root package imports no engine.** A program links the engines it opens
+and nothing else. Engines import the root and `internal/`, never each other.
+
+**Only the store starts goroutines.** Engines register periodic work with
+`Store.Every`; `Options.Manual` stops all of it. Metrics maintenance runs by
+default.
+
+**Logs never block and never loop.** Engines log through `Store.Logger(name)`
+into the application's `*slog.Logger`, never per sample. The records handler
+drops and counts when full, and refuses the records engine's own lines.
+
+**An error names what failed.** Engines wrap the root's shared sentinels, so
+`errors.Is` means the same in every engine; an error about one series carries
+its labels.
+
 ## Architecture
+
+The metrics engine's invariants.
 
 Breaking one of these is a design change, not an implementation detail.
 
@@ -272,7 +272,11 @@ changing something, not to look something up.
 
 |                                              |                                                                  |
 |----------------------------------------------|------------------------------------------------------------------|
-| [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape               |
+| [docs/architecture.md](docs/architecture.md) | the runtime, the engines, their files, logs, errors and weight    |
+| [docs/rewrite.md](docs/rewrite.md)           | how the metrics code is rewritten for people, and in what order  |
+| [docs/samples/](docs/samples/README.md)      | the runtime API prototype and the reference rewrite              |
+| [docs/design.md](docs/design.md)             | how the metrics store is meant to work, and why that shape       |
+| [docs/aggregate-contract.md](docs/aggregate-contract.md) | exact aggregate arithmetic, resets, boundaries        |
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
 | [docs/reports/implementation-2026-09-21.md](docs/reports/implementation-2026-09-21.md) | the first slice and its measured limits |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
@@ -293,7 +297,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | no cgo                                              | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
 | the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
 | importing this stays cheap                          | `task size` links a probe and reports what it cost                              |
-| a sample survives the codec exactly                 | `TestSamplesSurviveTheCodecExactly`, on bits and not on values                  |
+| a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |
 | a reader sees one consistent state                   | `TestReadersSeeOneSnapshotWhilePackingAndIngesting`, including retention        |
@@ -305,16 +309,16 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a head that does not fit its body is refused        | the four moved heads in `TestPayloadCorruptionIsRefused`                        |
 | a decimal travels as the integer it was written as  | `TestDecimalsTravelAsTheIntegersTheyWereWrittenAs`                              |
 | a value no scale reproduces is refused, not rounded | `TestAValueNoScaleReproducesIsRefusedRatherThanRounded`                         |
-| a decode stays bounded                              | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling                          |
+| a decode stays bounded                              | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling; opt-in, CI skips it     |
 | an iterator outlives its codec                      | `TestIteratorOwnsItsBytesAndOutlivesTheCodec`                                   |
 | unordered or oversized input is refused             | `TestRejectsUnorderedAndOversizedInput`                                         |
-| a counter's increase survives a reset               | `TestACounterKeepsItsIncreaseAcrossAReset`                                      |
-| only the safe prefix is sealed                      | `TestOnlyTheSafePrefixIsSealed`, on the strict edge                             |
-| a late sample cannot enter a sealed block           | `TestALateCounterSampleWouldRewriteASealedBlock`                                |
-| a partial range is not answered from a summary      | `TestAPartialRangeNeedsTheRawEdges`                                             |
-| retention clips before it summarises                | `TestRetentionClipsAPersistedBlockBeforeSummarising`                            |
-| a quiet tail expires without becoming a block       | `TestASilentTailExpiresWithoutBecomingABlock`                                   |
-| one expired sample does not delete a block          | `TestWholeBlockRetentionOvershoot`                                              |
+| a counter's increase survives a reset               | `TestCounterSummaryIncludesResets`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` |
+| only the safe prefix is sealed                      | `TestWatermarkIsStrictAndFollowsTheSeries`, on the strict edge                  |
+| a late sample cannot enter a sealed block           | `TestHeadSealingReopenAndPartialRetention`, `ErrTooOld` behind the frontier     |
+| a partial range is not answered from a summary      | `TestAggregateRoundsExactSumAcrossSealedBlocks`: aggregates decode raw          |
+| retention clips before it summarises                | `TestAggregateClipsRetentionBeforeSummingSealedEdges`                           |
+| a quiet tail expires without becoming a block       | `TestHeadSealingReopenAndPartialRetention`, the one-sample head at its end      |
+| one expired sample does not delete a block          | `TestHeadSealingReopenAndPartialRetention`, the partly expired second block     |
 | one damaged series does not stop its neighbors      | `TestCorruptSeriesDoesNotStopOtherMaintenance`                                   |
 | a raised limit can resume suspended maintenance     | `TestSuspendedLimitCanRecoverAfterReopen`                                        |
 | an append need not churn due indexes                | `TestExistingSeriesIngestAvoidsUnchangedDueIndexes`                             |
@@ -368,11 +372,23 @@ would be charging to somebody else's binary.
   it, delete it, split it, or collapse the two branches into one. A comment
   that explains a confusing name leaves the name confusing.
 - A comment says what the code cannot: why this way, what broke last time,
-  which trap is being avoided. **One line.** Two is an exception you should be
-  able to defend — when a comment runs onto a second line it is usually a
-  `so that ...` clause, and that clause is rationale, which belongs in this
-  file. Lower case, no closing full stop, in Go and YAML alike. Never restate
-  the line below it.
+  which trap is being avoided. **One line**, lower case, no closing full stop,
+  in Go and YAML alike; a second line is usually a `so that ...` clause, and
+  that is rationale, which belongs in this file. Never restate the line below.
+- **A worked example is the exception, and it is welcome.** Where a function
+  transforms data — an encoding, a boundary, a merge — show one input and its
+  output in a small aligned block (`12.02 → 1202 → +2`). Every such example
+  is also a test case, so it cannot drift.
+- **A public method reads as a list of steps**: blank lines between them, each
+  a call named with a verb, the details in the functions it calls. A function
+  over 40 lines needs a reason and over 60 is split; no line passes 120
+  columns; SQL is a named constant beside its function; more than four
+  parameters become a named value. `docs/rewrite.md` shows it on real code.
+- **One byte layout, one parser.** Decoding, reuse and partial reads all start
+  from what it returns.
+- **No file-level `//nolint`.** One line with its reason, or a helper that owns
+  the conversion once.
+- A test file is named after the file it tests: `head.go`, `head_test.go`.
 - **A comment that restates its declaration is worse than none.** It costs a
   line, it ages on its own, and it teaches the reader that comments here can be
   skipped. When the name and the signature say it, write nothing. revive's

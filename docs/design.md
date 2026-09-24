@@ -1,6 +1,7 @@
 # The design
 
-How TinyStore is meant to work, and why it has this shape rather than another.
+How the metrics store is meant to work, and why it has this shape rather than
+another. The runtime and the other engines are in [architecture.md](architecture.md).
 The first durable engine now lives in `metrics/`; [its README](../metrics/README.md)
 states implemented behavior. This document preserves the design and experiments,
 including proposed features and older layouts; it is not an API reference.
@@ -40,8 +41,8 @@ The +8.4 MiB is bad; the second column is worse. `tsdb` imports
 `x/net/trace` and finally `text/template`, whose `evalField` calls
 `reflect.Value.MethodByName` with a name it computes at run time. That switches
 off the linker's method pruning for the whole binary — the tax `task size`
-already prices at +3.4 MiB, and the canary in `internal/linkaudit` would fail
-the build without anyone arguing about it.
+already prices at +3.4 MiB. No test catches it yet; `task size` shows the
+growth.
 
 A trimmed fork is possible: `prometheus/storage` on its own pulls none of that,
 so cutting the `config` import is an evening. Cutting `client_golang` is not —
@@ -554,9 +555,7 @@ summary. Every cut, including an interior output-bucket boundary, requires raw.
 The same is true when the retention cutoff cuts the first block. Thresholds
 written into the code would be a bug waiting for a 600-pixel panel.
 A future five-minute tier may be chosen by the same arithmetic only after its
-effective resolution is part of the result. This is also the first real caller
-of `source.Limits.MaxPoints`, which `AGENTS.md` currently lists as built and
-unexercised.
+effective resolution is part of the result.
 
 ### The series registry
 

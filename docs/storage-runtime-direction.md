@@ -19,10 +19,11 @@ A future engine should get its own file, migration identity and resource
 budgets. Blob collection must not consume the metrics writer. A facade may open
 the handles, but must not promise atomic writes across independent files.
 
-The writer still executes uncached SQL. Bounded statement reuse on that path is
-a concrete next profiling candidate. Bounded batching of maintenance commits is
-another: keep value encoding outside the writer and cap staging memory and lock
-duration. Increasing a reader pool does not solve either cost.
+Update, 23 September: the writer now reuses at most 32 prepared programs, and
+maintenance publishes byte-bounded savepoint batches with value encoding outside
+the writer; the dated reports have the numbers. Increasing a reader pool does
+not solve either cost. [architecture.md](architecture.md) now holds the runtime
+contract.
 
 ## Corrections to carry forward
 
@@ -82,8 +83,8 @@ graph. No placeholder packages or new dependencies are introduced here.
 |---|---|
 | packed heads, dictionary ids, shared clocks, constant/change/grid values, compact summaries, inline bodies | implemented |
 | bounded prepared reads and incremental group merging | implemented; see the dated reports, including the point-read trade |
-| aggregate queries over existing summaries | unbuilt; define exact boundary and counter semantics, decode only clipped edges |
-| writer SQL reuse and maintenance batching | unbuilt; profile and compare durable throughput, staging memory, WAL and writer latency |
+| aggregate queries | exact `Aggregate` over raw samples implemented; the versioned exact summary shortcut is unbuilt |
+| writer SQL reuse and maintenance batching | implemented; see the 23 September reports |
 | digest as binary rather than base64 text | unbuilt; measure remaining registry/index bytes and preserve full-label collision checking |
 | shared Huffman tables | research-only; roughly 4% of value payload on both measured corpora, with extra ownership/read costs |
 | sibling prediction with bit corrections | research-only; real-corpus gain much smaller than TSBS, dependency and retention costs remain unpaid |
