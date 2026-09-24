@@ -11,7 +11,8 @@ func (w *bitWriter) put(v uint64, n uint8) {
 			w.data = append(w.data, 0)
 		}
 		take := min(n, 8-w.used)
-		w.data[len(w.data)-1] |= byte((v>>(n-take))&(1<<take-1)) << (8 - w.used - take) //nolint:gosec // take is at most eight bits
+		part := byte((v >> (n - take)) & (1<<take - 1)) //nolint:gosec // take is at most eight bits
+		w.data[len(w.data)-1] |= part << (8 - w.used - take)
 		w.used = (w.used + take) % 8
 		n -= take
 	}
@@ -43,4 +44,19 @@ func (r *bitReader) get(n uint8) uint64 {
 func (r *bitReader) finished() bool {
 	left := len(r.data)*8 - r.position
 	return !r.failed && left >= 0 && left < 8 && r.get(uint8(left)) == 0
+}
+
+// distance is end − start as an unsigned number, exact across the whole signed range.
+func distance(start, end int64) uint64 {
+	return uint64(end) - uint64(start) //nolint:gosec // modular subtraction is the exact distance
+}
+
+// advance is start + span; callers have checked the result stays representable.
+func advance(start int64, span uint64) int64 {
+	return int64(uint64(start) + span) //nolint:gosec // bounded by the caller's distance check
+}
+
+// foldSigned is zigzag: small magnitudes of either sign become small numbers.
+func foldSigned(value int64) uint64 {
+	return uint64(value)<<1 ^ uint64(value>>63) //nolint:gosec // a bit transform, not a value converted
 }

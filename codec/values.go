@@ -89,7 +89,7 @@ func (c *Codec) encodeScaled(samples []Sample) []byte {
 			if (current > previous && delta < 0) || (current < previous && delta > 0) {
 				return nil
 			}
-			zigzag := uint64(delta)<<1 ^ uint64(delta>>63) //nolint:gosec // zigzag deliberately folds the signed bit pattern
+			zigzag := foldSigned(delta)
 			if zigzag >= 1<<60 {
 				return nil
 			}
@@ -134,7 +134,7 @@ func (c *Codec) encodeIntegers(samples []Sample) []byte {
 			if (current > previous && delta < 0) || (current < previous && delta > 0) {
 				return nil
 			}
-			zigzag := uint64(delta)<<1 ^ uint64(delta>>63) //nolint:gosec // zigzag deliberately folds the signed bit pattern
+			zigzag := foldSigned(delta)
 			if zigzag >= 1<<60 {
 				return nil
 			}
@@ -303,8 +303,8 @@ func encodeXOR(samples []Sample) []byte {
 			writer.put(0, 1)
 		} else {
 			writer.put(1, 1)
-			l := uint8(min(bits.LeadingZeros64(difference), 31)) //nolint:gosec // leading zeros are clamped to 0..31
-			r := uint8(bits.TrailingZeros64(difference))         //nolint:gosec // a nonzero uint64 has at most 63 trailing zeros
+			l := uint8(min(bits.LeadingZeros64(difference), 31)) //nolint:gosec // clamped to 0..31
+			r := uint8(bits.TrailingZeros64(difference))         //nolint:gosec // at most 63 when nonzero
 			if window && l >= leading && r >= trailing {
 				writer.put(0, 1)
 				writer.put(difference>>trailing, 64-leading-trailing)

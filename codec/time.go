@@ -22,7 +22,7 @@ func encodeTimes(head Head, samples []Sample) (byte, []byte) {
 	fixed := divides
 	if fixed {
 		for i := 1; i < len(samples); i++ {
-			if uint64(samples[i].At)-uint64(samples[i-1].At) != step { //nolint:gosec // modular subtraction preserves the full signed range
+			if distance(samples[i-1].At, samples[i].At) != step {
 				fixed = false
 				break
 			}
@@ -32,15 +32,15 @@ func encodeTimes(head Head, samples []Sample) (byte, []byte) {
 		}
 	}
 	var deltas, second []byte
-	second = binary.AppendUvarint(second, uint64(samples[1].At)-uint64(samples[0].At)) //nolint:gosec // modular subtraction preserves a positive distance
-	previous := uint64(samples[1].At) - uint64(samples[0].At)                          //nolint:gosec // modular subtraction preserves a positive distance
+	previous := distance(samples[0].At, samples[1].At)
+	second = binary.AppendUvarint(second, previous)
 	secondOK := previous <= math.MaxInt64
 	for i := 1; i < len(samples); i++ {
-		delta := uint64(samples[i].At) - uint64(samples[i-1].At) //nolint:gosec // modular subtraction preserves a positive full-width distance
+		delta := distance(samples[i-1].At, samples[i].At)
 		deltas = binary.AppendUvarint(deltas, delta)
 		secondOK = secondOK && delta <= math.MaxInt64
 		if i > 1 && secondOK {
-			second = binary.AppendVarint(second, int64(delta)-int64(previous)) //nolint:gosec // secondOK bounds both deltas by MaxInt64
+			second = binary.AppendVarint(second, int64(delta)-int64(previous)) //nolint:gosec // both below MaxInt64
 		}
 		previous = delta
 	}
@@ -65,15 +65,15 @@ func (it *Iterator) nextTime() error {
 				(change <= 0 && change <= -int64(it.delta))) {
 				return fmt.Errorf("%w: timestamp delta overflow", ErrInvalid)
 			}
-			it.delta = uint64(int64(it.delta) + change) //nolint:gosec // the preceding checks bound the positive result by MaxInt64
+			it.delta = uint64(int64(it.delta) + change) //nolint:gosec // bounded by the checks above
 		}
 	}
 	if it.err != nil {
 		return it.err
 	}
-	if it.delta == 0 || it.delta > uint64(math.MaxInt64)-uint64(it.at) { //nolint:gosec // modular subtraction computes the full positive distance to MaxInt64
+	if it.delta == 0 || it.delta > distance(it.at, math.MaxInt64) {
 		return fmt.Errorf("%w: non-increasing or overflowing timestamp", ErrInvalid)
 	}
-	it.at = int64(uint64(it.at) + it.delta) //nolint:gosec // the bound above prevents signed timestamp overflow
+	it.at = advance(it.at, it.delta)
 	return nil
 }

@@ -39,9 +39,9 @@ type Head struct {
 
 func (h Head) bytes() []byte {
 	out := make([]byte, 0, 26)
-	out = binary.LittleEndian.AppendUint64(out, uint64(h.Start)) //nolint:gosec // signed timestamp bits travel as they are
-	out = binary.LittleEndian.AppendUint64(out, uint64(h.End))   //nolint:gosec // signed timestamp bits travel as they are
-	out = binary.LittleEndian.AppendUint16(out, uint16(h.Count)) //nolint:gosec // the count is checked against MaxSamples
+	out = binary.LittleEndian.AppendUint64(out, uint64(h.Start)) //nolint:gosec // the signed bits, kept
+	out = binary.LittleEndian.AppendUint64(out, uint64(h.End))   //nolint:gosec // the signed bits, kept
+	out = binary.LittleEndian.AppendUint16(out, uint16(h.Count)) //nolint:gosec // at most MaxSamples
 	return binary.LittleEndian.AppendUint64(out, math.Float64bits(h.First))
 }
 
@@ -50,8 +50,8 @@ func (h Head) step() (uint64, bool) {
 	if h.Count < 2 {
 		return 0, false
 	}
-	span := uint64(h.End) - uint64(h.Start) //nolint:gosec // modular subtraction spans the whole signed range
-	divisor := uint64(h.Count - 1)          //nolint:gosec // Count is at least two here
+	span := distance(h.Start, h.End)
+	divisor := uint64(h.Count - 1) //nolint:gosec // Count is at least two here
 	if span == 0 || span%divisor != 0 {
 		return 0, false
 	}

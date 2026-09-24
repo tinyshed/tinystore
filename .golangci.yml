@@ -85,7 +85,7 @@ linters:
           - gocognit
 
       # debt the rewrite has not paid yet, see docs/rewrite.md; delete an entry once it passes
-      - path: (codec/(bits|codec|time|values)|internal/sizeprobe/(main|report/main)|metrics/(binary|options|store|types|values_changes))\.go$
+      - path: (internal/sizeprobe/(main|report/main)|metrics/(binary|options|store|types|values_changes))\.go$
         linters:
           - lll
       - text: '[`''.](decodeResiduals|decodeBlock|changeValues|readChanges)[`'']'
