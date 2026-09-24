@@ -28,6 +28,7 @@ type Options struct {
 	MaxConcurrentReads  int
 	MaxConcurrentIngest int
 	SnapshotTimeout     time.Duration
+	MaintenanceInterval time.Duration
 	SharedBudget        *WorkBudget
 	Limits              Limits
 }
@@ -58,13 +59,19 @@ func (o *Options) normalizeDurations() error {
 	if o.SnapshotTimeout == 0 {
 		o.SnapshotTimeout = 5 * time.Second
 	}
+	if o.MaintenanceInterval == 0 {
+		o.MaintenanceInterval = time.Minute
+	}
 	if o.MaxBlockSpan == 0 {
 		o.MaxBlockSpan = 24 * time.Hour
 	}
 	if o.MaxBlockSpan <= 0 || !wholeMilliseconds(o.MaxBlockSpan) {
 		return fmt.Errorf("%w: block span", ErrInvalid)
 	}
-	if o.Retention <= 0 || !wholeMilliseconds(o.Retention) || !wholeMilliseconds(o.Lateness) || o.SnapshotTimeout < 0 {
+	if o.Retention <= 0 || !wholeMilliseconds(o.Retention) || !wholeMilliseconds(o.Lateness) {
+		return fmt.Errorf("%w: durations", ErrInvalid)
+	}
+	if o.SnapshotTimeout < 0 || o.MaintenanceInterval < 0 {
 		return fmt.Errorf("%w: durations", ErrInvalid)
 	}
 	return nil

@@ -45,10 +45,10 @@ func TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle(t *testing.T) {
 	if err = s.Ingest(t.Context(), []Batch{{Series: old, Samples: []Sample{{At: testEpoch + 5000, Value: 42}}}}); err != nil {
 		t.Fatalf("new kind after complete expiry: %v", err)
 	}
-	if err = s.Close(context.Background()); err != nil {
+	if err = s.runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(t.Context(), path, Options{MaxSeries: 1, Retention: time.Second})
+	reopened, err := openAt(t, path, Options{MaxSeries: 1, Retention: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

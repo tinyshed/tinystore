@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -44,7 +45,7 @@ func TestReadersRunAsWideAsTheOptionAllows(t *testing.T) {
 
 func TestAnEmptyReaderPoolIsRefused(t *testing.T) {
 	for _, readers := range []int{-1, -8} {
-		if _, err := Open(t.Context(), t.TempDir()+"/metrics.db", Options{Retention: time.Hour, MaxReaders: readers}); err == nil {
+		if _, err := openAt(t, filepath.Join(t.TempDir(), fileName), Options{Retention: time.Hour, MaxReaders: readers}); err == nil {
 			t.Fatalf("opened a store with %d readers", readers)
 		}
 	}
@@ -57,7 +58,8 @@ func TestZeroOptionsTakeTheDefaults(t *testing.T) {
 	}
 	want := Options{
 		Retention: 30 * 24 * time.Hour, MaxBlockSpan: 24 * time.Hour, SnapshotTimeout: 5 * time.Second,
-		MaxSeries: 100000, MaxHeadSamples: 4096, MaxHeadBytes: 256 << 10, MaxBatchSamples: 10000,
+		MaintenanceInterval: time.Minute,
+		MaxSeries:           100000, MaxHeadSamples: 4096, MaxHeadBytes: 256 << 10, MaxBatchSamples: 10000,
 		MaxBatchBytes: 4 << 20, MaintenanceSeries: 64, MaxReaders: 2, MaxConcurrentReads: 2, MaxConcurrentIngest: 1,
 		Limits: Limits{Series: 1000, Blocks: 4096, PayloadBytes: 16 << 20, DecodedSamples: 1 << 20, OutputSamples: 100000},
 	}
@@ -77,6 +79,7 @@ func TestEachInvalidOptionIsRefused(t *testing.T) {
 		{"a negative retention", Options{Retention: -time.Hour}, "durations"},
 		{"a lateness in microseconds", Options{Lateness: 1500 * time.Microsecond}, "durations"},
 		{"a negative snapshot timeout", Options{SnapshotTimeout: -time.Second}, "durations"},
+		{"a negative maintenance interval", Options{MaintenanceInterval: -time.Minute}, "durations"},
 		{"a negative series capacity", Options{MaxSeries: -1}, "negative capacity"},
 		{"more concurrent reads than slots", Options{MaxConcurrentReads: 1<<16 + 1}, "concurrent work capacity"},
 		{"a head larger than its format", Options{MaxHeadBytes: maximumHeadBytes + 1}, "mutable head capacity"},

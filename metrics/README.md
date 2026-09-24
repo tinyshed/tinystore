@@ -54,15 +54,24 @@ the watermark; a full but unsafe head does not cause repeated empty passes.
 
 ## Public use
 
+The engine opens inside a `tinystore.Store`, which holds the directory, runs
+maintenance every `Options.MaintenanceInterval` (a minute) unless it is Manual,
+and closes the engine with everything else:
+
 ```go
-store, err := metrics.Open(ctx, "metrics.db", metrics.Options{
+runtime, err := tinystore.Open(ctx, "./data", tinystore.Options{})
+if err != nil {
+    return err
+}
+defer runtime.Close(context.Background())
+
+store, err := metrics.Open(ctx, runtime, metrics.Options{ // data/metrics.db
     Retention: 30 * 24 * time.Hour,
     Lateness:  5 * time.Minute,
 })
 if err != nil {
     return err
 }
-defer store.Close(context.Background())
 
 series := metrics.Series{
     Kind: metrics.Gauge,
@@ -197,8 +206,11 @@ reset and boundary behavior.
   A packed head charges the whole compressed tail to `PayloadBytes`, checks
   its CRC and chunk metadata, then decodes and charges only chunks overlapping
   the requested range to `DecodedSamples`.
-- `Close(ctx)` stops admission and waits for admitted work. Canceling that wait
-  does not cancel cleanup; another Close can wait for its completion.
+- The store's `Close` closes the engine: it stops admission and waits for
+  admitted work. Canceling that wait does not cancel cleanup; another Close
+  can wait for its completion. Every error wraps the store's sentinel of the
+  same kind, so `errors.Is(err, tinystore.ErrLimit)` holds for a metrics limit,
+  and the store's clock (`tinystore.Options.Clock`) decides retention.
 - Statistics are per opened handle. Regex matchers and a network API are not
   implemented. Retention can
   reclaim an empty series and free a cardinality slot; `Maintenance.ReclaimedSeries`

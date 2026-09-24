@@ -1,9 +1,10 @@
 # Architecture
 
 The contract for the runtime and every engine beyond metrics. What is built
-today is `codec/`, `internal/sqlite/`, `metrics/` and the root's lifecycle:
-`Open`, `Close`, the directory lock, `Claim`, `Attach`, `Logger`, `Now` and
-`Every`. Everything else here is designed and agreed, not built. [samples/](samples/README.md) holds a compiling
+today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
+store, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+`Attach`, `Logger`, `Now` and `Every`. Everything else here is designed and
+agreed, not built. [samples/](samples/README.md) holds a compiling
 prototype of this API and a reference rewrite of one metrics path. A section
 that describes something unbuilt says so.
 
@@ -167,7 +168,7 @@ the store writes every report as ordinary series:
 - The root package defines the shared sentinels (`ErrInvalid`, `ErrLimit`,
   `ErrClosed`, `ErrInUse`, `ErrConflict`, `ErrCorrupt`, `ErrTooOld`,
   `ErrSuspended`); engines wrap them, so `errors.Is` means the same everywhere.
-  Today `metrics` defines its own; they move to the root with the runtime.
+  `metrics` keeps its own messages, and each of its errors wraps the root's.
 - An error about one item names it. An `Ingest` refused because of one series
   returns a `*metrics.SeriesError` carrying that series' labels (`errors.As`),
   and `DropSeries(ctx, labels)` removes a series that cannot be repaired.

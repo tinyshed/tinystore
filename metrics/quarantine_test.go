@@ -50,10 +50,10 @@ func TestCorruptSeriesDoesNotStopOtherMaintenance(t *testing.T) {
 	if len(failures) != 1 || failures[0].SeriesID != failedID || !strings.Contains(failures[0].Reason, "checksum") {
 		t.Fatalf("persisted failures: %+v", failures)
 	}
-	if err = s.Close(context.Background()); err != nil {
+	if err = s.runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(t.Context(), path, Options{MaintenanceSeries: 2})
+	reopened, err := openAt(t, path, Options{MaintenanceSeries: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,11 +73,11 @@ func TestCorruptSeriesDoesNotStopOtherMaintenance(t *testing.T) {
 }
 
 func TestSuspendedLimitCanRecoverAfterReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "limits.db")
+	path := filepath.Join(t.TempDir(), fileName)
 	series := Series{Labels: []Label{{Name: "__name__", Value: "limited"}}}
 	open := func(maxHeadSamples int) *Store {
 		t.Helper()
-		s, err := Open(t.Context(), path, Options{MaxHeadSamples: maxHeadSamples, MaintenanceSeries: 1})
+		s, err := openAt(t, path, Options{MaxHeadSamples: maxHeadSamples, MaintenanceSeries: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +88,7 @@ func TestSuspendedLimitCanRecoverAfterReopen(t *testing.T) {
 	if err := s.Ingest(t.Context(), []Batch{{Series: series, Samples: testSamples(241)}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Close(context.Background()); err != nil {
+	if err := s.runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	s = open(240)
@@ -96,7 +96,7 @@ func TestSuspendedLimitCanRecoverAfterReopen(t *testing.T) {
 	if err != nil || result.QuarantinedSeries != 1 || s.Stats().QuarantinedSeries != 1 {
 		t.Fatalf("lowered limit: %+v, %v, %+v", result, err, s.Stats())
 	}
-	if err = s.Close(context.Background()); err != nil {
+	if err = s.runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	s = open(512)
@@ -127,10 +127,10 @@ func TestMaintenanceFailurePagesAndRetryStayBounded(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Close(context.Background()); err != nil {
+	if err := s.runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	s, err := Open(t.Context(), path, Options{MaintenanceSeries: 1})
+	s, err := openAt(t, path, Options{MaintenanceSeries: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

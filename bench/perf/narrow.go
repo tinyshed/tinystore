@@ -14,7 +14,7 @@ func narrowPopulate(ctx context.Context, dir string, seriesCount, samples int) {
 	if seriesCount < 1 || samples < 241 || samples > 8192 {
 		log.Fatal("narrow fixture requires positive series and 241..8192 head samples")
 	}
-	path := filepath.Join(dir, "read.db")
+	path := filepath.Join(dir, "read", "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
@@ -37,7 +37,7 @@ func narrowPopulate(ctx context.Context, dir string, seriesCount, samples int) {
 			log.Fatal(err)
 		}
 	}
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	report("narrow_populate", "series", seriesCount, "head_samples_per_series", samples, "file_bytes", fileBytes(path))

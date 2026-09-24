@@ -1,23 +1,36 @@
 package metrics
 
 import (
-	"errors"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
 )
 
+// Each wraps the store's sentinel of the same kind, so errors.Is(err,
+// tinystore.ErrLimit) holds for a metrics limit as it does in every engine.
 var (
-	ErrInvalid      = errors.New("invalid metrics request")
-	ErrLimit        = errors.New("metrics resource limit")
-	ErrClosed       = errors.New("metrics store is closed")
-	ErrTooOld       = errors.New("sample is expired or sealed")
-	ErrConflict     = errors.New("metrics state changed")
-	ErrCorrupt      = errors.New("corrupt metrics data")
-	ErrSuspended    = errors.New("metrics maintenance is suspended for this series")
-	ErrNonFinite    = errors.New("nonfinite metrics aggregate input")
-	ErrCounterValue = errors.New("invalid counter aggregate input")
+	ErrInvalid      = kindOf("invalid metrics request", tinystore.ErrInvalid)
+	ErrLimit        = kindOf("metrics resource limit", tinystore.ErrLimit)
+	ErrClosed       = kindOf("metrics store is closed", tinystore.ErrClosed)
+	ErrTooOld       = kindOf("sample is expired or sealed", tinystore.ErrTooOld)
+	ErrConflict     = kindOf("metrics state changed", tinystore.ErrConflict)
+	ErrCorrupt      = kindOf("corrupt metrics data", tinystore.ErrCorrupt)
+	ErrSuspended    = kindOf("metrics maintenance is suspended for this series", tinystore.ErrSuspended)
+	ErrNonFinite    = kindOf("nonfinite metrics aggregate input", tinystore.ErrInvalid)
+	ErrCounterValue = kindOf("invalid counter aggregate input", tinystore.ErrInvalid)
 )
+
+// sentinel keeps the engine's own message while errors.Is finds the store's kind
+type sentinel struct {
+	message string
+	kind    error
+}
+
+func kindOf(message string, kind error) error { return &sentinel{message: message, kind: kind} }
+
+func (s *sentinel) Error() string { return s.message }
+func (s *sentinel) Unwrap() error { return s.kind }
 
 // SeriesError is a refusal that belongs to one series: its data, state or
 // limits, never a cancelled call or a failing file. errors.Is still finds the

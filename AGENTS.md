@@ -24,7 +24,7 @@ batched publication, per-series quarantine, retention with series reclamation,
 reopen). [metrics/README.md](metrics/README.md) states each of those contracts
 and its limits; this file does not repeat them. The `tinystore` root holds a
 directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
-`Attach`, `Logger`, `Now` and `Every`; metrics does not open through it yet.
+`Attach`, `Logger`, `Now` and `Every`, and metrics opens through it.
 
 Designed, not built: the rest of the root runtime (the memory budget,
 snapshots), `records`, `sqldb`, `kv`, `blobs`, `jobs`, `backup`, metrics
@@ -305,6 +305,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
 | engines close last opened first, once               | `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`                              |
 | a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`                             |
+| an engine's errors are the store's kinds            | `TestMetricsErrorsAreTheStoresKinds`                                            |
+| a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |

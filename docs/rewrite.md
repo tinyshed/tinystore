@@ -227,6 +227,16 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      now proves safe, and 16 in tests, where nothing they named is reported.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
+   - Done: the root's lifecycle, lock and background work (`abd7a34`), and
+     metrics opening through the store: its errors wrap the root's, the store's
+     clock drives retention, maintenance runs every
+     `Options.MaintenanceInterval`. The `repro` seal and read files are
+     byte-identical to `abd7a34`'s. `bench/perf` opens each database as a
+     Manual store of its own, so `read.db` is now `read/metrics.db`. `task size`
+     grew by 160 KiB, to 6 848: the probe now links `log/slog`, 42 KB of symbols
+     of its own, for the store's logger, and the root package itself.
+   - Next: the memory budget moves to the root, then instruments, sqldb,
+     records, snapshots and backup.
 7. New engines, one at a time.
 
 ## Gaps to close during the rewrite

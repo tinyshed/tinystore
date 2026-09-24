@@ -22,7 +22,7 @@ func aggregate(ctx context.Context, dir, shape string, seriesCount, readers, sec
 	}
 	defer cleanup()
 	store := openStore(ctx, path, seriesCount, readers)
-	defer store.Close(ctx)
+	defer closeMetrics(ctx, store)
 	probe, err := store.Read(ctx, metrics.Range{Matchers: []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, From: 0, To: 1 << 62})
 	if err != nil || len(probe) != 1 {
 		log.Fatalf("aggregate probe: %v", err)

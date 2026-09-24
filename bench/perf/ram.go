@@ -24,21 +24,18 @@ func tsbsIngestRSS(ctx context.Context, dir, corpus string, concurrentMaintenanc
 	if concurrentMaintenance {
 		stage = "tsbs_ingest_maint_rss"
 	}
-	path := filepath.Join(dir, stage+".db")
+	path := filepath.Join(dir, stage, "metrics.db")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		log.Fatal("TSBS RSS database path must be new")
 	}
-	store, err := metrics.Open(ctx, path, metrics.Options{
+	store := openMetrics(ctx, path, metrics.Options{
 		Retention:       100 * 365 * 24 * time.Hour,
 		MaxSeries:       4040,
 		MaxHeadSamples:  8192,
 		MaxBatchSamples: 8192,
 		MaxBatchBytes:   64 << 20,
 	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer store.Close(ctx)
+	defer closeMetrics(ctx, store)
 	file, err := os.Open(corpus)
 	if err != nil {
 		log.Fatal(err)
@@ -131,7 +128,7 @@ func idleRSS(ctx context.Context, dir string, seriesCount, readers, seconds int)
 	}
 	defer cleanup()
 	store := openStore(ctx, path, seriesCount, readers)
-	defer store.Close(ctx)
+	defer closeMetrics(ctx, store)
 	runtime.GC()
 	baseline := processRSS()
 	w := watch(path)
@@ -147,14 +144,14 @@ func maintenanceIngestRSS(ctx context.Context, dir string, seriesCount, seconds 
 	if seriesCount < 1 || seriesCount > 10000 || seconds < 1 {
 		log.Fatal("maintenance ingest RSS needs 1..10000 series and positive seconds")
 	}
-	path := filepath.Join(dir, "maintenance-ingest-rss.db")
+	path := filepath.Join(dir, "maintenance-ingest-rss", "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
 		}
 	}
 	store := openStore(ctx, path, seriesCount, 2)
-	defer store.Close(ctx)
+	defer closeMetrics(ctx, store)
 	series := buildSeries(seriesCount)
 	start := time.Now().UnixMilli() - 3600000
 	for first := 0; first < seriesCount; first += 64 {
@@ -264,7 +261,7 @@ func tsbsRSS(ctx context.Context, dir, shape string, workers, seconds int) {
 		log.Fatal(err)
 	}
 	defer cleanup()
-	store, err := metrics.Open(ctx, path, metrics.Options{
+	store := openMetrics(ctx, path, metrics.Options{
 		Retention:          100 * 365 * 24 * time.Hour,
 		MaxReaders:         workers,
 		MaxConcurrentReads: workers,
@@ -275,10 +272,7 @@ func tsbsRSS(ctx context.Context, dir, shape string, workers, seconds int) {
 			DecodedSamples: 4 << 20, OutputSamples: 4 << 20,
 		},
 	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer store.Close(ctx)
+	defer closeMetrics(ctx, store)
 	const first = int64(1767225600000)
 	const last = int64(1767250790000)
 	request := metrics.Range{}

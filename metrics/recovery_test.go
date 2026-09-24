@@ -12,13 +12,13 @@ import (
 func TestAbruptExitKeepsCommittedHeadAndGroups(t *testing.T) {
 	for _, phase := range []string{"head", "sealed"} {
 		t.Run(phase, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "crash.db")
+			path := filepath.Join(t.TempDir(), fileName)
 			command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestAbruptExitHelper$")
 			command.Env = append(os.Environ(), "TINYSTORE_CRASH_FILE="+path, "TINYSTORE_CRASH_PHASE="+phase)
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("child failed: %v\n%s", err, output)
 			}
-			store, err := Open(t.Context(), path, Options{})
+			store, err := openAt(t, path, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -34,7 +34,7 @@ func TestAbruptExitHelper(t *testing.T) {
 	if path == "" {
 		t.Skip("subprocess only")
 	}
-	store, err := Open(t.Context(), path, Options{})
+	store, err := openAt(t, path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

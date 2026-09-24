@@ -7,32 +7,37 @@ import (
 	"path/filepath"
 )
 
+// copiedReadFixture copies read/metrics.db into a directory of its own, so that
+// a run can write to it and open it as a store
 func copiedReadFixture(dir string) (string, func(), error) {
-	source, err := os.Open(filepath.Join(dir, "read.db"))
+	source, err := os.Open(filepath.Join(dir, "read", "metrics.db"))
 	if err != nil {
 		return "", nil, fmt.Errorf("open read fixture: %w", err)
 	}
 	defer source.Close()
-	copy, err := os.CreateTemp(dir, "read-run-*.db")
+	runDir, err := os.MkdirTemp(dir, "read-run-")
 	if err != nil {
 		return "", nil, fmt.Errorf("create read fixture copy: %w", err)
 	}
-	path := copy.Name()
+	cleanup := func() {
+		if err := os.RemoveAll(runDir); err != nil {
+			fmt.Fprintln(os.Stderr, "remove read fixture copy:", err)
+		}
+	}
+	path := filepath.Join(runDir, "metrics.db")
+	copy, err := os.Create(path)
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("create read fixture copy: %w", err)
+	}
 	if _, err = io.Copy(copy, source); err != nil {
 		copy.Close()
-		os.Remove(path)
+		cleanup()
 		return "", nil, fmt.Errorf("copy read fixture: %w", err)
 	}
 	if err = copy.Close(); err != nil {
-		os.Remove(path)
+		cleanup()
 		return "", nil, fmt.Errorf("close read fixture copy: %w", err)
-	}
-	cleanup := func() {
-		for _, suffix := range []string{"-wal", "-shm", ""} {
-			if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
-				fmt.Fprintln(os.Stderr, "remove read fixture copy:", err)
-			}
-		}
 	}
 	return path, cleanup, nil
 }

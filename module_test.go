@@ -40,8 +40,8 @@ func TestNothingHereImportsItsCaller(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.HasPrefix(path, "github.com/tinyshed/") &&
-				!strings.HasPrefix(path, "github.com/tinyshed/tinystore/") {
+			ours := path == "github.com/tinyshed/tinystore" || strings.HasPrefix(path, "github.com/tinyshed/tinystore/")
+			if strings.HasPrefix(path, "github.com/tinyshed/") && !ours {
 				t.Errorf("%s imports %s; the store knows samples, series, labels and time", file, path)
 			}
 		}

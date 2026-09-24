@@ -34,13 +34,13 @@ func TestPhysicalWriteCounters(t *testing.T) {
 	}
 	for _, stage := range []string{"register", "append", "seal"} {
 		t.Run(stage, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "physical.db")
+			path := filepath.Join(t.TempDir(), fileName)
 			if pageSize == 8192 {
 				if err := precreatePageSize(t.Context(), path, pageSize); err != nil {
 					t.Fatal(err)
 				}
 			}
-			store, openErr := Open(t.Context(), path, Options{Retention: 365 * 24 * time.Hour, MaxHeadSamples: 8192, MaxBatchSamples: 20000, MaxBatchBytes: 64 << 20})
+			store, openErr := openAt(t, path, Options{Retention: 365 * 24 * time.Hour, MaxHeadSamples: 8192, MaxBatchSamples: 20000, MaxBatchBytes: 64 << 20})
 			if openErr != nil {
 				t.Fatal(openErr)
 			}
@@ -140,7 +140,7 @@ func TestPhysicalWriteCounters(t *testing.T) {
 			if checkpointErr != nil {
 				t.Fatal(checkpointErr)
 			}
-			if err := store.Close(t.Context()); err != nil {
+			if err := store.runtime.Close(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			info, statErr := os.Stat(path)

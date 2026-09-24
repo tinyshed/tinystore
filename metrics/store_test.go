@@ -4,29 +4,48 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tinyshed/tinystore"
 )
 
 const testEpoch = int64(1000000)
 
 func openTestStore(t *testing.T, options Options) (*Store, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "metrics.db")
-	store, err := Open(t.Context(), path, options)
+	path := filepath.Join(t.TempDir(), fileName)
+	store, err := openAt(t, path, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return time.UnixMilli(testEpoch + 900) }
+	return store, path
+}
+
+// openAt opens a Manual store on the directory holding path, a metrics.db, and
+// the engine inside it. The test's cleanup closes the store; a test that
+// reopens the file closes store.runtime first, which releases the directory.
+func openAt(t testing.TB, path string, options Options) (*Store, error) {
+	t.Helper()
+	if filepath.Base(path) != fileName {
+		t.Fatalf("%s: the engine's file is named %s", path, fileName)
+	}
+	runtime, err := tinystore.Open(t.Context(), filepath.Dir(path), tinystore.Options{Manual: true})
+	if err != nil {
+		return nil, err
+	}
 	t.Cleanup(func() {
-		if err := store.Close(context.Background()); err != nil {
+		if err := runtime.Close(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
-	return store, path
+	return Open(t.Context(), runtime, options)
 }
 
 func testSeries() Series {
@@ -93,10 +112,10 @@ func TestHeadSealingReopenAndPartialRetention(t *testing.T) {
 		t.Fatalf("sealed %+v", work)
 	}
 	assertSamples(t, readAll(t, store), points)
-	if err = store.Close(t.Context()); err != nil {
+	if err = store.runtime.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(t.Context(), path, options)
+	store, err = openAt(t, path, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,5 +351,106 @@ func TestCloseDrainsAdmittedWorkAndRejectsNewWork(t *testing.T) {
 	store.leave()
 	if err := store.Close(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMetricsErrorsAreTheStoresKinds(t *testing.T) {
+	for _, test := range []struct {
+		err, kind error
+		message   string
+	}{
+		{ErrInvalid, tinystore.ErrInvalid, "invalid metrics request"},
+		{ErrLimit, tinystore.ErrLimit, "metrics resource limit"},
+		{ErrClosed, tinystore.ErrClosed, "metrics store is closed"},
+		{ErrTooOld, tinystore.ErrTooOld, "sample is expired or sealed"},
+		{ErrConflict, tinystore.ErrConflict, "metrics state changed"},
+		{ErrCorrupt, tinystore.ErrCorrupt, "corrupt metrics data"},
+		{ErrSuspended, tinystore.ErrSuspended, "metrics maintenance is suspended for this series"},
+		{ErrNonFinite, tinystore.ErrInvalid, "nonfinite metrics aggregate input"},
+		{ErrCounterValue, tinystore.ErrInvalid, "invalid counter aggregate input"},
+	} {
+		wrapped := fmt.Errorf("read: %w", test.err)
+		if !errors.Is(wrapped, test.kind) || !errors.Is(wrapped, test.err) || test.err.Error() != test.message {
+			t.Errorf("%q: kind %v", test.err, test.kind)
+		}
+	}
+}
+
+func TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo(t *testing.T) {
+	dir := t.TempDir()
+	runtime, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
+
+	if err = os.WriteFile(filepath.Join(dir, fileName), []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Open(t.Context(), runtime, Options{}); err == nil {
+		t.Fatal("opened a file that is not a database")
+	}
+	if err = os.Remove(filepath.Join(dir, fileName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Open(t.Context(), runtime, Options{}); err != nil {
+		t.Fatalf("open after the failed one gave its name back: %v", err)
+	}
+	if _, err = Open(t.Context(), runtime, Options{}); !errors.Is(err, tinystore.ErrInUse) {
+		t.Fatalf("second metrics in one store: %v", err)
+	}
+}
+
+func TestClosingTheStoreClosesMetrics(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	if err := store.runtime.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: testSamples(1)}})
+	if !errors.Is(err, ErrClosed) || !errors.Is(err, tinystore.ErrClosed) {
+		t.Fatalf("ingest after the store closed: %v", err)
+	}
+}
+
+func TestTheStoresClockDecidesWhatHasExpired(t *testing.T) {
+	runtime, err := tinystore.Open(t.Context(), t.TempDir(), tinystore.Options{
+		Manual: true,
+		Clock:  func() time.Time { return time.UnixMilli(testEpoch + 10*time.Hour.Milliseconds()) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
+	store, err := Open(t.Context(), runtime, Options{Retention: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: testSamples(1)}})
+	if !errors.Is(err, ErrTooOld) {
+		t.Fatalf("a sample nine hours past retention by the store's clock: %v", err)
+	}
+}
+
+func TestMaintenanceRunsInTheBackground(t *testing.T) {
+	runtime, err := tinystore.Open(t.Context(), t.TempDir(), tinystore.Options{
+		Clock: func() time.Time { return time.UnixMilli(testEpoch + 900) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
+	store, err := Open(t.Context(), runtime, Options{MaintenanceInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: testSamples(241)}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for store.Stats().SealedBlocks == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no block sealed in ten seconds of background maintenance")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

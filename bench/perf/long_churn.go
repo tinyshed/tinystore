@@ -79,7 +79,7 @@ func longChurn(ctx context.Context, dir string, seriesCount, epochs int, corpus 
 	if seriesCount < 1 || seriesCount > 10000 || epochs < 2 {
 		log.Fatal("long churn requires 1..10000 series and at least two epochs")
 	}
-	path := filepath.Join(dir, "long-churn.db")
+	path := filepath.Join(dir, "long-churn", "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
@@ -143,7 +143,7 @@ func longChurn(ctx context.Context, dir string, seriesCount, epochs int, corpus 
 		expireDurations = append(expireDurations, expireElapsed)
 		maxOpenBytes = max(maxOpenBytes, fileBytes(path))
 	}
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	i50, _, i99, _ := ingestTimes.quantiles()

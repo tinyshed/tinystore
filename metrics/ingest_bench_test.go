@@ -10,14 +10,13 @@ import (
 
 func openBenchStore(b *testing.B) *Store {
 	b.Helper()
-	store, err := Open(context.Background(), filepath.Join(b.TempDir(), "bench.db"), Options{
+	store, err := openAt(b, filepath.Join(b.TempDir(), fileName), Options{
 		MaxHeadSamples: 1 << 20, MaxHeadBytes: 16 << 20, MaxBatchSamples: 100000, MaxBatchBytes: 64 << 20,
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
 	store.now = func() time.Time { return time.UnixMilli(testEpoch + 900) }
-	b.Cleanup(func() { _ = store.Close(context.Background()) })
 	return store
 }
 

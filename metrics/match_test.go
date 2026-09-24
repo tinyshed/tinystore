@@ -158,15 +158,10 @@ func TestMatcherLookupBatchesOnlyLargeSelectors(t *testing.T) {
 }
 
 func BenchmarkRankThirtyTwoMatchers(b *testing.B) {
-	store, err := Open(b.Context(), filepath.Join(b.TempDir(), "matchers.db"), Options{})
+	store, err := openAt(b, filepath.Join(b.TempDir(), fileName), Options{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() {
-		if err := store.Close(context.Background()); err != nil {
-			b.Error(err)
-		}
-	})
 	labels := []Label{{Name: "__name__", Value: "cpu"}}
 	for i := range 31 {
 		labels = append(labels, Label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})

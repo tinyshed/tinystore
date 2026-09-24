@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
@@ -19,6 +21,8 @@ import (
 var migrationFiles embed.FS
 
 type Store struct {
+	runtime                                                 *tinystore.Store
+	log                                                     *slog.Logger
 	file                                                    *sqlite.File
 	encoder, decoder                                        *codec.Codec
 	metadata                                                *metadataCodec
@@ -36,22 +40,53 @@ type Store struct {
 	readSlots, ingestSlots                                  chan struct{}
 }
 
-func Open(ctx context.Context, path string, options Options) (*Store, error) {
+// the file this engine claims inside the store's directory
+const fileName = "metrics.db"
+
+// Open opens metrics.db inside the store. The store closes it, and unless it
+// is Manual runs Maintain every Options.MaintenanceInterval, a minute by default.
+func Open(ctx context.Context, runtime *tinystore.Store, options Options) (*Store, error) {
 	opts, err := normalizeOptions(options)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := openFile(ctx, path, opts.MaxReaders)
+	path, release, err := runtime.Claim(fileName)
 	if err != nil {
 		return nil, err
 	}
 
+	store, err := openEngine(ctx, runtime, path, opts)
+	if err != nil {
+		release()
+		return nil, err
+	}
+
+	runtime.Every("metrics maintenance", opts.MaintenanceInterval, store.maintainInBackground)
+	store.log.Info("opened", "path", path, "suspended", store.quarantined.Load())
+	return store, nil
+}
+
+// openEngine opens and migrates the file, then hands the engine to the store
+func openEngine(ctx context.Context, runtime *tinystore.Store, path string, opts Options) (*Store, error) {
+	f, err := openFile(ctx, path, opts.MaxReaders)
+	if err != nil {
+		return nil, err
+	}
 	store, err := newStore(ctx, f, opts)
 	if err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
+	store.runtime, store.log, store.now = runtime, runtime.Logger("metrics"), runtime.Now
+	if err = runtime.Attach(store); err != nil {
+		return nil, errors.Join(err, store.Close(ctx))
+	}
 	return store, nil
+}
+
+func (s *Store) maintainInBackground(ctx context.Context) error {
+	_, err := s.Maintain(ctx)
+	return err
 }
 
 // metricsApplicationID is "TMET", the SQLite application id that claims a file for this engine
@@ -92,6 +127,7 @@ func newStore(ctx context.Context, f *sqlite.File, opts Options) (*Store, error)
 	}
 	store := &Store{
 		file: f, encoder: encoder, decoder: decoder, metadata: metadata, opts: opts, now: time.Now,
+		log:     slog.New(slog.DiscardHandler),
 		drained: make(chan struct{}), closed: make(chan struct{}), maintenanceGate: make(chan struct{}, 1),
 		readSlots:   make(chan struct{}, opts.MaxConcurrentReads),
 		ingestSlots: make(chan struct{}, opts.MaxConcurrentIngest),
@@ -114,7 +150,8 @@ func countSuspended(ctx context.Context, f *sqlite.File) (int64, error) {
 	return suspended, nil
 }
 
-// Close stops admission and drains in-flight work; cancellation stops waiting, not cleanup.
+// Close stops admission and drains in-flight work; cancellation stops waiting,
+// not cleanup. The store calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.closing {
@@ -125,6 +162,7 @@ func (s *Store) Close(ctx context.Context) error {
 		go func() {
 			<-s.drained
 			s.closeErr = errors.Join(s.encoder.Close(), s.decoder.Close(), s.metadata.close(), s.file.Close())
+			s.log.Info("closed")
 			close(s.closed)
 		}()
 	}

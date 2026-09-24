@@ -40,10 +40,10 @@ func TestIncrementalSealingMergesGroupsWithoutChangingSamples(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(t.Context()); err != nil {
+	if err := store.runtime.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(t.Context(), path, Options{})
+	reopened, err := openAt(t, path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

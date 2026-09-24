@@ -93,8 +93,8 @@ func TestPackedHeadIncrementalWorkload(t *testing.T) {
 	if os.Getenv("TINYSTORE_SPIKE") == "" {
 		t.Skip("set TINYSTORE_SPIKE=1")
 	}
-	path := filepath.Join(t.TempDir(), "incremental.db")
-	store, err := Open(t.Context(), path, Options{Retention: 400 * time.Millisecond, Lateness: 10 * time.Millisecond, MaxHeadSamples: 512})
+	path := filepath.Join(t.TempDir(), fileName)
+	store, err := openAt(t, path, Options{Retention: 400 * time.Millisecond, Lateness: 10 * time.Millisecond, MaxHeadSamples: 512})
 	if err != nil {
 		t.Fatal(err)
 	}

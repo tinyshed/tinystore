@@ -15,21 +15,18 @@ func readyChurn(ctx context.Context, dir string, rounds int) {
 	if rounds < 1 || rounds > 100 {
 		log.Fatal("ready churn requires 1..100 rounds")
 	}
-	path := filepath.Join(dir, "ready-churn.db")
+	path := filepath.Join(dir, "ready-churn", "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
 		}
 	}
-	store, err := metrics.Open(ctx, path, metrics.Options{
+	store := openMetrics(ctx, path, metrics.Options{
 		Retention:  365 * 24 * time.Hour,
 		Lateness:   time.Hour,
 		MaxSeries:  1,
 		MaxReaders: 1,
 	})
-	if err != nil {
-		log.Fatal(err)
-	}
 	series := metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "churn"}}}
 	start := time.Now().UnixMilli() - int64(240+rounds)*10000
 	initial := make([]metrics.Sample, 240)
@@ -56,7 +53,7 @@ func readyChurn(ctx context.Context, dir string, rounds int) {
 	}
 	elapsed := time.Since(begin)
 	w.finish()
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	p50, p95, p99, worst := maintenance.quantiles()

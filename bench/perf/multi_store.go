@@ -32,7 +32,7 @@ func multiStore(ctx context.Context, dir string, seriesCount, seconds int, share
 			log.Fatal(err)
 		}
 		defer cleanup()
-		stores[index], err = metrics.Open(ctx, path, metrics.Options{
+		stores[index] = openMetrics(ctx, path, metrics.Options{
 			Retention:          365 * 24 * time.Hour,
 			MaxReaders:         4,
 			MaxConcurrentReads: 4,
@@ -43,10 +43,7 @@ func multiStore(ctx context.Context, dir string, seriesCount, seconds int, share
 			Limits:             limits,
 			SharedBudget:       shared,
 		})
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer stores[index].Close(ctx)
+		defer closeMetrics(ctx, stores[index])
 	}
 	probe, err := stores[0].Read(ctx, metrics.Range{Matchers: []metrics.Label{{Name: "__name__", Value: "metric_0"}, {Name: "host", Value: "host_0"}}, From: 0, To: 1 << 62})
 	if err != nil || len(probe) != 1 {

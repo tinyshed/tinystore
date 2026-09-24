@@ -11,20 +11,17 @@ import (
 )
 
 func churnStore(ctx context.Context, path string, seriesCount int) *metrics.Store {
-	store, err := metrics.Open(ctx, path, metrics.Options{
+	store := openMetrics(ctx, path, metrics.Options{
 		Retention:       time.Second,
 		MaxSeries:       seriesCount,
 		MaxBatchSamples: seriesCount,
 		MaxBatchBytes:   4 << 20,
 	})
-	if err != nil {
-		log.Fatal(err)
-	}
 	return store
 }
 
 func churnPrepare(ctx context.Context, dir string, seriesCount int) {
-	path := filepath.Join(dir, "churn.db")
+	path := filepath.Join(dir, "churn", "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
@@ -40,14 +37,14 @@ func churnPrepare(ctx context.Context, dir string, seriesCount int) {
 	if err := store.Ingest(ctx, batches); err != nil {
 		log.Fatal(err)
 	}
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	report("churn_prepare", "series", seriesCount, "sample_at_ms", stamp, "file_bytes", fileBytes(path))
 }
 
 func churnExpire(ctx context.Context, dir string, seriesCount int) {
-	path := filepath.Join(dir, "churn.db")
+	path := filepath.Join(dir, "churn", "metrics.db")
 	store := churnStore(ctx, path, seriesCount)
 	var expired, reclaimed int
 	begin := time.Now()
@@ -60,7 +57,7 @@ func churnExpire(ctx context.Context, dir string, seriesCount int) {
 		reclaimed += result.ReclaimedSeries
 	}
 	elapsed := time.Since(begin)
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	report("churn_expire", "series", seriesCount, "expired_samples", expired, "reclaimed_series", reclaimed, "elapsed_us", micros(elapsed), "file_bytes", fileBytes(path))

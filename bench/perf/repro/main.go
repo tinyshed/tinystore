@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/metrics"
 )
 
@@ -29,8 +30,14 @@ func sample(id, index int) metrics.Sample {
 	return metrics.Sample{At: 1789500000000 + int64(index)*10000, Value: float64((id*17+index*13)%97) / 3}
 }
 
+// store opens a Manual store on the directory holding path, a metrics.db, and
+// the engine in it; the process exiting releases both
 func store(ctx context.Context, path string, seriesCount int) *metrics.Store {
-	s, err := metrics.Open(ctx, path, metrics.Options{
+	runtime, err := tinystore.Open(ctx, filepath.Dir(path), tinystore.Options{Manual: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+	s, err := metrics.Open(ctx, runtime, metrics.Options{
 		Retention:       365 * 24 * time.Hour,
 		MaxSeries:       seriesCount * 2,
 		MaxHeadSamples:  8192,
@@ -91,7 +98,7 @@ func main() {
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	path := filepath.Join(*dir, *stage+".db")
+	path := filepath.Join(*dir, *stage, "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)

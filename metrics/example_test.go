@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/metrics"
 )
 
@@ -17,12 +17,16 @@ func ExampleStore() {
 		panic(err)
 	}
 	defer os.RemoveAll(directory)
-	path := filepath.Join(directory, "metrics.db")
-	store, err := metrics.Open(ctx, path, metrics.Options{})
+
+	// Manual: this example runs Maintain itself instead of waiting a minute
+	store, err := tinystore.Open(ctx, directory, tinystore.Options{Manual: true})
 	if err != nil {
 		panic(err)
 	}
-	defer store.Close(ctx)
+	cpu, err := metrics.Open(ctx, store, metrics.Options{})
+	if err != nil {
+		panic(err)
+	}
 
 	series := metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "web-1"}}}
 	start := time.Now().UnixMilli()
@@ -30,12 +34,12 @@ func ExampleStore() {
 	for i := range points {
 		points[i] = metrics.Sample{At: start + int64(i), Value: 42}
 	}
-	if err = store.Ingest(ctx, []metrics.Batch{{Series: series, Samples: points}}); err != nil {
+	if err = cpu.Ingest(ctx, []metrics.Batch{{Series: series, Samples: points}}); err != nil {
 		panic(err)
 	}
 
 	// 240 older samples can seal; the newest one remains replaceable in the head
-	work, err := store.Maintain(ctx)
+	work, err := cpu.Maintain(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -43,12 +47,16 @@ func ExampleStore() {
 		panic(err)
 	}
 
-	reopened, err := metrics.Open(ctx, path, metrics.Options{})
+	store, err = tinystore.Open(ctx, directory, tinystore.Options{Manual: true})
 	if err != nil {
 		panic(err)
 	}
-	defer reopened.Close(ctx)
-	result, err := reopened.Read(ctx, metrics.Range{Matchers: series.Labels, From: start + 237, To: start + 241})
+	defer store.Close(ctx)
+	cpu, err = metrics.Open(ctx, store, metrics.Options{})
+	if err != nil {
+		panic(err)
+	}
+	result, err := cpu.Read(ctx, metrics.Range{Matchers: series.Labels, From: start + 237, To: start + 241})
 	if err != nil {
 		panic(err)
 	}

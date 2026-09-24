@@ -15,7 +15,7 @@ func maintenanceBatch(ctx context.Context, dir string, seriesCount, samples int)
 	if seriesCount < 1 || seriesCount > 64 || samples < 241 || samples > 8192 {
 		log.Fatal("maintenance batch requires 1..64 series and 241..8192 samples")
 	}
-	path := filepath.Join(dir, "maintenance.db")
+	path := filepath.Join(dir, "maintenance", "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
@@ -43,7 +43,7 @@ func maintenanceBatch(ctx context.Context, dir string, seriesCount, samples int)
 		log.Fatal(err)
 	}
 	w.finish()
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	report("maintenance_batch",

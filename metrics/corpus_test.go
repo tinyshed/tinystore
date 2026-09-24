@@ -20,12 +20,12 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	}
 	path := os.Getenv("TINYSTORE_CORPUS_DB")
 	if path == "" {
-		path = filepath.Join(t.TempDir(), "corpus.db")
+		path = filepath.Join(t.TempDir(), fileName)
 	} else if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("TINYSTORE_CORPUS_DB must name a new file")
 	}
 	options := Options{Retention: 100 * 365 * 24 * time.Hour, MaxHeadSamples: 8192, MaxBatchSamples: 8192, Limits: Limits{DecodedSamples: 1000000, OutputSamples: 1000000}}
-	store, err := Open(t.Context(), path, options)
+	store, err := openAt(t, path, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("PUBLIC WRITER commits=%d prepared=%d evicted=%d programs=%d cache_writes=%d cache_spills=%d", counters.Commits, counters.Prepared, counters.Evicted, counters.Programs, counters.CacheWrites, counters.CacheSpills)
-	if err = store.Close(t.Context()); err != nil {
+	if err = store.runtime.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -115,7 +115,7 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	}
 	t.Logf("PUBLIC STORE size is the entire file after close; freed pages are included")
 	t.Logf("PUBLIC STORE series=%d samples=%d file=%d B/sample=%.6f ingest+maintain=%s", seriesCount, samples, info.Size(), float64(info.Size())/float64(samples), time.Since(begin))
-	reopened, err := Open(t.Context(), path, options)
+	reopened, err := openAt(t, path, options)
 	if err != nil {
 		t.Fatal(err)
 	}

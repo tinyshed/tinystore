@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
 	"github.com/tinyshed/tinystore/metrics"
 )
@@ -33,11 +33,15 @@ func main() {
 	}
 	defer func() { _ = os.RemoveAll(directory) }()
 	ctx := context.Background()
-	store, err := metrics.Open(ctx, filepath.Join(directory, "metrics.db"), metrics.Options{})
+	runtime, err := tinystore.Open(ctx, directory, tinystore.Options{})
 	if err != nil {
 		panic(err)
 	}
-	defer func() { _ = store.Close(ctx) }()
+	defer func() { _ = runtime.Close(ctx) }()
+	store, err := metrics.Open(ctx, runtime, metrics.Options{})
+	if err != nil {
+		panic(err)
+	}
 	at := time.Now().UnixMilli()
 	series := metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "probe"}}}
 	batch := metrics.Batch{Series: series, Samples: []metrics.Sample{{At: at, Value: 1}}}

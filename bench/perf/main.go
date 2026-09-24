@@ -164,7 +164,7 @@ func openStore(ctx context.Context, path string, series, readers int) *metrics.S
 }
 
 func openStoreWithAdmission(ctx context.Context, path string, series, readers, activeReads int) *metrics.Store {
-	store, err := metrics.Open(ctx, path, metrics.Options{
+	store := openMetrics(ctx, path, metrics.Options{
 		Retention:          365 * 24 * time.Hour,
 		MaxReaders:         readers,
 		MaxConcurrentReads: activeReads,
@@ -177,9 +177,6 @@ func openStoreWithAdmission(ctx context.Context, path string, series, readers, a
 			DecodedSamples: 1 << 24, OutputSamples: 1 << 24,
 		},
 	})
-	if err != nil {
-		log.Fatal(err)
-	}
 	return store
 }
 
@@ -195,7 +192,7 @@ func fileBytes(path string) int64 {
 
 // ingest fills a fresh store and reports what one Ingest call costs
 func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch, maintainEvery int) {
-	path := filepath.Join(dir, "ingest.db")
+	path := filepath.Join(dir, "ingest", "metrics.db")
 	os.Remove(path)
 	store := openStore(ctx, path, seriesCount, 2)
 	all := buildSeries(seriesCount)
@@ -276,7 +273,7 @@ func ingest(ctx context.Context, dir, label string, seriesCount, samples, batch,
 	runtime.ReadMemStats(&after)
 	w.finish()
 	live := fileBytes(path)
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	p50, p95, p99, worst := calls.quantiles()
@@ -316,7 +313,7 @@ func read(ctx context.Context, dir, label, only string, seriesCount, readers, ac
 	}
 	defer cleanup()
 	store := openStoreWithAdmission(ctx, path, seriesCount, readers, activeReads)
-	defer store.Close(ctx)
+	defer closeMetrics(ctx, store)
 	step := int64(10000)
 	var first, last int64
 	results, err := store.Read(ctx, metrics.Range{
@@ -493,7 +490,7 @@ func mixed(ctx context.Context, dir, label string, seriesCount, readers, activeR
 	}
 	wg.Wait()
 	w.finish()
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	i50, i95, i99, imax := ingestCalls.quantiles()
@@ -511,7 +508,7 @@ func mixed(ctx context.Context, dir, label string, seriesCount, readers, activeR
 
 // populate builds the database the read stages share; its timings are not a result
 func populate(ctx context.Context, dir string, seriesCount, samples int) {
-	path := filepath.Join(dir, "read.db")
+	path := filepath.Join(dir, "read", "metrics.db")
 	os.Remove(path)
 	os.Remove(path + "-wal")
 	os.Remove(path + "-shm")
@@ -561,7 +558,7 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 			break
 		}
 	}
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	report("populate", "series", seriesCount, "samples_per_series", samples,
@@ -573,7 +570,7 @@ func populate(ctx context.Context, dir string, seriesCount, samples int) {
 
 func main() {
 	dir := flag.String("dir", ".", "directory for the database")
-	file := flag.String("file", "read.db", "database filename for the objects stage")
+	file := flag.String("file", "read/metrics.db", "database file, relative to -dir, for the objects stage")
 	corpus := flag.String("corpus", "", "normalized JSONL corpus for TSBS RSS ingestion")
 	stage := flag.String("stage", "ingest", "ingest, register, append, ready_churn, maintenance_batch, churn_prepare, churn_expire, long_churn, multi_store, idle_rss, tsbs_rss, tsbs_ingest_rss, tsbs_ingest_maint_rss, maintenance_ingest_rss, narrow_populate, populate, steady, read, aggregate, mixed or objects")
 	label := flag.String("label", "run", "name for this run")

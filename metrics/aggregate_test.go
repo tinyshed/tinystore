@@ -245,8 +245,8 @@ func TestAggregateHandlesCancellationOfOverflowAndSubnormals(t *testing.T) {
 }
 
 func TestAggregateCounterRejectsNegativeValuesAfterReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "aggregate.db")
-	store, err := Open(t.Context(), path, Options{Retention: 100 * 365 * 24 * time.Hour})
+	path := filepath.Join(t.TempDir(), fileName)
+	store, err := openAt(t, path, Options{Retention: 100 * 365 * 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +256,10 @@ func TestAggregateCounterRejectsNegativeValuesAfterReopen(t *testing.T) {
 	if writeErr := store.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: testEpoch, Value: 1}, {At: testEpoch + 1, Value: -1}}}}); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	if closeErr := store.Close(t.Context()); closeErr != nil {
+	if closeErr := store.runtime.Close(t.Context()); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	reopened, err := Open(t.Context(), path, Options{Retention: 100 * 365 * 24 * time.Hour})
+	reopened, err := openAt(t, path, Options{Retention: 100 * 365 * 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

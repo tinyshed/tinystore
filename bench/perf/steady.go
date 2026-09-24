@@ -29,7 +29,7 @@ func steadySample(series, index int) metrics.Sample {
 }
 
 func steady(ctx context.Context, dir, label string, seriesCount, samples int) {
-	path := filepath.Join(dir, "read.db")
+	path := filepath.Join(dir, "read", "metrics.db")
 	store := openStore(ctx, path, seriesCount, 2)
 	all := buildSeries(seriesCount)
 	maintenance := &latencies{}
@@ -68,7 +68,7 @@ func steady(ctx context.Context, dir, label string, seriesCount, samples int) {
 	}
 	elapsed := time.Since(begin)
 	w.finish()
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	p50, _, p99, _ := maintenance.quantiles()
@@ -90,7 +90,7 @@ func steady(ctx context.Context, dir, label string, seriesCount, samples int) {
 			}
 		}
 	}
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	report("steady_readback", "label", label, "verified_samples", samples*seriesCount)

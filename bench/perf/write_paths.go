@@ -16,7 +16,7 @@ func writePath(ctx context.Context, dir, stage string, seriesCount, samples, bat
 	if seriesCount < 1 || samples < 1 || batch < 1 || seedSamples < 1 || (stage == "append" && (seedSamples+samples > 8192 || seedSamples*batch > 200000)) {
 		log.Fatal("write path exceeds its series, batch or mutable-head bounds")
 	}
-	path := filepath.Join(dir, stage+".db")
+	path := filepath.Join(dir, stage, "metrics.db")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
 			log.Fatal(err)
@@ -42,7 +42,7 @@ func writePath(ctx context.Context, dir, stage string, seriesCount, samples, bat
 	elapsed := time.Since(begin)
 	runtime.ReadMemStats(&after)
 	w.finish()
-	if err := store.Close(ctx); err != nil {
+	if err := closeMetrics(ctx, store); err != nil {
 		log.Fatal(err)
 	}
 	p50, p95, p99, worst := calls.quantiles()
