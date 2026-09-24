@@ -4,9 +4,9 @@ The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
 store, `sqldb/`, `records/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every`, the memory budget and snapshots. Everything else here is designed and
-agreed, not built. [samples/](samples/README.md) holds a compiling
-prototype of this API and a reference rewrite of one metrics path. A section
-that describes something unbuilt says so.
+agreed, not built. [examples/notes](../examples/notes/main.go) is a program
+using the built part, and [samples/](samples/README.md) holds a reference
+rewrite of one metrics path. A section that describes something unbuilt says so.
 
 ## What TinyStore is
 
@@ -85,8 +85,8 @@ release, err := store.Reserve(ctx, n)   // n bytes of the store's memory, in arr
 ```
 
 Every engine's `Open` has the same shape: claim, open and migrate its file,
-attach, register background work, log that it opened. See
-`samples/runtime/metrics/metrics.go.txt`.
+attach, register background work, log that it opened. See `records.Open`,
+the shortest of them.
 
 These methods are exported because engines live in other packages; the
 application may call `Every` too. Moving them behind an internal handle is
@@ -206,6 +206,13 @@ handler and read by time range and level, at most 10000 at a time. Retention
 is by age, fourteen days by default, checked hourly; records are indexed by
 time only, and an index by attribute waits for a query that needs one.
 
+This is a first version and says so. A record is a row, its attributes JSON
+text; nothing is compressed, messages and keys are not shared between rows,
+there is no full-text search, and no bytes-per-record figure has been measured.
+What a log store should cost, and whether dictionaries, compressed blocks of
+records or FTS5 earn their place, is a research round with a real corpus and
+has not been run.
+
 **sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the
 transaction lifecycle.
@@ -296,11 +303,10 @@ against a program that only prints:
 SQLite is the floor every engine shares; an engine's own code is what a program
 pays on top of it.
 
-## Where the samples are
+## Where the examples are
 
-- `samples/runtime/`: the runtime, a stand-in metrics engine, `records`, `sqldb`
-  and an application using them, as text files that build once renamed. It
-  predates the lock, the memory budget, instruments and the `Exec…` split of
-  sqldb; where it differs, this file decides.
+- `examples/notes`: a program using the store, `sqldb`, metrics instruments,
+  `records` and `backup`, built and tested with the module. It replaces the
+  text prototype the runtime was designed from.
 - Commit `407e728`, merged into `main`: the metrics ingest path rewritten in
   the target style, behaviour and bytes unchanged; see `docs/rewrite.md`.

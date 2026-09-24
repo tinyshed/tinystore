@@ -35,3 +35,11 @@ lines, err := logs.Read(ctx, records.Query{
   are deleted every hour, or on `Maintain(ctx)` in a Manual store.
 - Records are indexed by time only; an index by attribute waits for a query
   that needs one.
+
+## What this version is not
+
+A first version, sized for a program's own logs rather than a log platform. A
+record is one row with its attributes as JSON text: nothing is compressed,
+repeated messages and keys are stored again each time, there is no full-text
+search, and bytes per record have not been measured. Those wait for a research
+round on a real corpus; see `docs/architecture.md`.

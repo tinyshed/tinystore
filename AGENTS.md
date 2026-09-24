@@ -33,8 +33,11 @@ states its contract. `records` keeps the application's `slog` lines in
 every engine's file while it works, and `backup` writes those copies as one zip
 and restores it before `Open`.
 
-Designed, not built: `kv`, `blobs`, `jobs` and self-metrics. [docs/samples/](docs/samples/README.md)
-holds a prototype of their API and the reference rewrite of one metrics path.
+`records` is a first version: a row per record with JSON attributes, a time
+index and nothing else — no compression, no full-text search, no measured
+density. [examples/notes](examples/notes/main.go) is a program using all of it.
+
+Designed, not built: `kv`, `blobs`, `jobs` and self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -59,7 +62,8 @@ Do not describe unbuilt behaviour as though it works.
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
-| `docs/samples/`      | the runtime API prototype, as text, and where the reference rewrite lives     |
+| `examples/`          | programs using the public API, built and tested with the module               |
+| `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
 | `.github/workflows/` | the authoritative clean builds                                                |
 
 The first engine keeps its implementation in one package; split it only when
@@ -285,7 +289,7 @@ changing something, not to look something up.
 |----------------------------------------------|------------------------------------------------------------------|
 | [docs/architecture.md](docs/architecture.md) | the runtime, the engines, their files, logs, errors and weight    |
 | [docs/rewrite.md](docs/rewrite.md)           | how the metrics code is rewritten for people, and in what order  |
-| [docs/samples/](docs/samples/README.md)      | the runtime API prototype and the reference rewrite              |
+| [docs/samples/](docs/samples/README.md)      | the reference rewrite of one metrics path                        |
 | [docs/design.md](docs/design.md)             | how the metrics store is meant to work, and why that shape       |
 | [docs/aggregate-contract.md](docs/aggregate-contract.md) | exact aggregate arithmetic, resets, boundaries        |
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |

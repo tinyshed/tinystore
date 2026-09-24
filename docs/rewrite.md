@@ -225,7 +225,7 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      without a linter or a reason, or one that silences nothing, and 24 such
      directives are gone: 8 in the engine, whose conversions the pinned gosec
      now proves safe, and 16 in tests, where nothing they named is reported.
-6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
+6. The runtime: `tinystore.Open` and friends from the runtime prototype, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
    - Done: the root's lifecycle, lock and background work (`abd7a34`), and
      metrics opening through the store: its errors wrap the root's, the store's

@@ -1,36 +1,9 @@
 # Samples
 
-Code that shows the shape of what `docs/architecture.md` and `docs/rewrite.md`
-describe. None of it is product code, and nothing here is built by the module.
-
-## runtime/: the API a program will use
-
-A prototype of the runtime and three engines, kept as text so the module does
-not build it:
-
-| file | what it shows |
-|---|---|
-| `tinystore.go.txt` | the store: one directory, `Claim`, `Attach`, `Logger`, `Every`, self-metrics, one `Close` |
-| `metrics/metrics.go.txt` | how an engine joins the store; a stand-in with the real engine's surface |
-| `records/records.go.txt` | records.db and a `slog.Handler` that never blocks and refuses its own lines |
-| `sqldb/*.go.txt` | the application's SQL: migrations, `One[T]`, `All[T]`, `Scalar[T]`, `Transaction` |
-| `cmd/app/main.go.txt` | a program using all of it |
-
-It compiled, ran and passed the repository's golangci-lint with Go 1.27.1 on
-24 September 2026. It predates the directory lock, the shared memory budget,
-metrics instruments and sqldb's `Exec…` split; `docs/architecture.md` decides
-where the two differ. To run it again:
-
-```sh
-cp -r <repo>/docs/samples/runtime /tmp/runtime-sample && cd /tmp/runtime-sample
-find . -name '*.txt' -exec sh -c 'mv "$1" "${1%.txt}"' _ {} \;
-go run ./cmd/app
-```
-
-It prints the store opening, two migrations applied, the user it wrote and
-read back, a second `sql/app.db` refused with `ErrInUse`, the program's log
-lines read back from `records.db`, a self-metric read back from metrics, and
-the engines closing in reverse order.
+Code that shows the shape of what `docs/rewrite.md` describes. The runtime
+prototype that used to live here was replaced by
+[examples/notes](../../examples/notes/main.go), which the module builds and
+tests; it is in the history before that commit.
 
 ## The reference rewrite
 
