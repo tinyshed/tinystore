@@ -43,41 +43,6 @@ func TestPackedHeadReplacementsAndByteBudget(t *testing.T) {
 	}
 }
 
-func TestLegacyHeadConvertsOnFirstMutation(t *testing.T) {
-	store, _ := openTestStore(t, Options{})
-	points := testSamples(10)
-	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.file.Update(t.Context(), func(tx *sql.Tx) error {
-		for _, p := range points {
-			if _, err := tx.ExecContext(t.Context(), `insert into head values(1,?,?)`, p.At, binary.LittleEndian.AppendUint64(nil, math.Float64bits(p.Value))); err != nil {
-				return err
-			}
-		}
-		_, err := tx.ExecContext(t.Context(), `update series_state set tail=null where series_id=1`)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	assertSamples(t, readAll(t, store), points)
-	points[2].Value = 42
-	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points[2:3]}}); err != nil {
-		t.Fatal(err)
-	}
-	assertSamples(t, readAll(t, store), points)
-	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
-		var legacy, packed int
-		err := tx.QueryRowContext(t.Context(), `select (select count(*) from head),(select count(*) from series_state where tail is not null)`).Scan(&legacy, &packed)
-		if legacy != 0 || packed != 1 {
-			t.Fatal("head not migrated")
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func FuzzPackedHead(f *testing.F) {
 	s := encodingStore(f)
 	s.opts.MaxHeadSamples = 1000

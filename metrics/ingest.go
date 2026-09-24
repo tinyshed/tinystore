@@ -2,294 +2,231 @@ package metrics
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-type preparedBatch struct {
-	identity string
-	labels   []Label
-	kind     Kind
-	samples  []Sample
-}
-
-type ingestState struct {
-	frontier, nextGC, failedAt sql.NullInt64
-	failure                    sql.NullString
-	version, maxSeen           int64
-	ready                      int
-	head                       headSnapshot
-	legacy                     bool
-}
-
-// Ingest commits all batches together; duplicate mutable timestamps keep the last supplied value.
+// Ingest stores every batch or none of them. A timestamp repeated within the
+// call, or already waiting in the head, keeps the value supplied last.
 func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
-	defer func() {
-		if err != nil {
-			s.rejected.Add(1)
-		}
-	}()
-	if err = s.enter(ctx); err != nil {
+	defer s.countRejection(&err)
+
+	release, err := s.admit(ctx, s.ingestSlots)
+	if err != nil {
 		return err
 	}
-	defer s.leave()
-	select {
-	case s.ingestSlots <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	defer func() { <-s.ingestSlots }()
-	if err = ctx.Err(); err != nil {
-		return err
-	}
+	defer release()
+
 	if len(batches) == 0 {
 		return nil
 	}
-	if s.opts.SharedBudget != nil {
-		weight, reserveErr := s.ingestReservation(batches)
-		if reserveErr != nil {
-			return reserveErr
-		}
-		if reserveErr := s.opts.SharedBudget.acquire(ctx, weight); reserveErr != nil {
-			return reserveErr
-		}
-		defer s.opts.SharedBudget.release(weight)
-	}
-	cutoff := s.cutoff()
-	prepared, err := s.prepareIngest(batches, cutoff)
+
+	unreserve, err := s.reserve(ctx, func() (int64, error) { return s.ingestReservation(batches) })
 	if err != nil {
 		return err
 	}
-	if len(prepared) == 0 {
-		return nil
-	}
-	written := 0
-	err = s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		for _, batch := range prepared {
-			id, resolveErr := s.resolveSeries(ctx, tx, batch)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			if writeErr := s.writeHead(ctx, tx, id, batch.samples, cutoff); writeErr != nil {
-				return writeErr
-			}
-			written += len(batch.samples)
-		}
-		return nil
-	})
+	defer unreserve()
+
+	cutoff := s.cutoff()
+	input, err := s.prepareIngest(batches, cutoff)
 	if err != nil {
+		return err
+	}
+
+	if err = s.commitIngest(ctx, input, cutoff); err != nil {
 		return fmt.Errorf("ingest metrics: %w", err)
 	}
-	s.ingested.Add(uint64(written)) //nolint:gosec // written counts admitted samples
+	s.ingested.Add(uint64(countSamples(input))) //nolint:gosec // a count of committed samples
 	return nil
 }
 
-func (s *Store) prepareIngest(batches []Batch, cutoff int64) ([]preparedBatch, error) {
-	type pending struct {
-		batch  preparedBatch
-		points map[int64]Sample
-	}
-	byIdentity := map[string]*pending{}
-	inputSamples, inputBytes := 0, 0
-	for _, batch := range batches {
-		if len(batch.Samples) == 0 {
-			return nil, fmt.Errorf("%w: empty series batch", ErrInvalid)
-		}
-		if len(batch.Samples) > s.opts.MaxBatchSamples-inputSamples {
-			return nil, fmt.Errorf("%w: batch samples", ErrLimit)
-		}
-		inputSamples += len(batch.Samples)
-		labels, identity, err := canonicalLabels(batch.Series.Labels, true)
-		if err != nil {
-			return nil, err
-		}
-		kind := batch.Series.Kind
-		if kind == "" {
-			kind = Gauge
-		}
-		if kind != Gauge && kind != Counter {
-			return nil, fmt.Errorf("%w: series kind", ErrInvalid)
-		}
-		cost := len(identity) + 16*len(batch.Samples)
-		if cost > s.opts.MaxBatchBytes-inputBytes {
-			return nil, fmt.Errorf("%w: batch bytes", ErrLimit)
-		}
-		inputBytes += cost
-		entry := byIdentity[identity]
-		if entry == nil {
-			entry = &pending{batch: preparedBatch{identity: identity, labels: labels, kind: kind}}
-			byIdentity[identity] = entry
-		}
-		if entry.batch.kind != kind {
-			return nil, fmt.Errorf("%w: conflicting kinds in batch", ErrInvalid)
-		}
-		last := int64(math.MinInt64)
-		if len(entry.batch.samples) > 0 {
-			last = entry.batch.samples[len(entry.batch.samples)-1].At
-		}
-		for _, point := range batch.Samples {
-			if point.At == math.MaxInt64 {
-				return nil, fmt.Errorf("%w: MaxInt64 is reserved for the exclusive range bound", ErrInvalid)
+// commitIngest registers new series and rewrites every touched head in one
+// transaction, so a failure anywhere leaves the file as it was.
+func (s *Store) commitIngest(ctx context.Context, input []preparedBatch, cutoff int64) error {
+	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
+		for _, series := range input {
+			id, err := s.resolveSeries(ctx, tx, series)
+			if err != nil {
+				return err
 			}
-			if point.At < cutoff {
-				return nil, fmt.Errorf("%w: retention cutoff", ErrTooOld)
-			}
-			if entry.points == nil && point.At <= last {
-				entry.points = make(map[int64]Sample, len(entry.batch.samples)+len(batch.Samples))
-				for _, earlier := range entry.batch.samples {
-					entry.points[earlier.At] = earlier
-				}
-				entry.batch.samples = nil
-			}
-			if entry.points != nil {
-				entry.points[point.At] = point
-			} else {
-				entry.batch.samples = append(entry.batch.samples, point)
-				last = point.At
+
+			err = s.writeHead(ctx, tx, id, series.samples, cutoff)
+			if err != nil {
+				return err
 			}
 		}
-	}
-	prepared := make([]preparedBatch, 0, len(byIdentity))
-	for _, entry := range byIdentity {
-		if entry.points != nil {
-			for _, point := range entry.points {
-				entry.batch.samples = append(entry.batch.samples, point)
-			}
-			sort.Slice(entry.batch.samples, func(i, j int) bool { return entry.batch.samples[i].At < entry.batch.samples[j].At })
-		}
-		prepared = append(prepared, entry.batch)
-	}
-	sort.Slice(prepared, func(i, j int) bool { return prepared[i].identity < prepared[j].identity })
-	return prepared, nil
+		return nil
+	})
 }
 
-func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, points []Sample, cutoff int64) error {
+// writeHead puts one series' new samples into its packed head.
+func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, incoming []Sample, cutoff int64) error {
 	state, err := s.loadIngestState(ctx, tx, id)
 	if err != nil {
 		return err
 	}
-	if state.failedAt.Valid {
-		return fmt.Errorf("%w: %s", ErrSuspended, state.failure.String)
-	}
-	if state.frontier.Valid && points[0].At < state.frontier.Int64 {
-		return fmt.Errorf("%w: sealed frontier", ErrTooOld)
-	}
-	if state.version == math.MaxInt64 {
-		return fmt.Errorf("%w: series version exhausted", ErrLimit)
-	}
-	if state.head.count >= blockSamples && !state.legacy && s.opts.Lateness == 0 && cutoff <= state.head.start && points[0].At > state.head.end {
-		packed, count, first, last, ready, appendErr := s.appendPackedHead(ctx, state, points, cutoff, id)
-		if appendErr != nil {
-			return appendErr
-		}
-		query, arguments := s.ingestUpdateParts(state, packed, count, first, last, ready, points, id)
-		if _, updateErr := tx.ExecContext(ctx, query, arguments...); updateErr != nil { //nolint:gosec // query uses fixed fragments and binds every value
-			return fmt.Errorf("replace mutable ingest state: %w", updateErr)
-		}
-		return nil
-	}
-	var existing []Sample
-	if state.head.count > 0 {
-		if state.legacy {
-			existing, err = s.mutablePoints(ctx, tx, id)
-		} else {
-			existing, err = s.decodeHead(ctx, state.head)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	merged, err := mergeHead(existing, points, s.opts.MaxHeadSamples)
+
+	err = state.accepts(incoming)
 	if err != nil {
 		return err
 	}
-	prefix, prefixCount, err := reusableHeadPrefix(state.head.packed, points[0].At, s.opts.MaxHeadSamples)
+
+	chunks, err := s.storedChunks(state)
 	if err != nil {
 		return err
 	}
-	packed, err := s.encodeHeadPrefix(ctx, id, merged, prefix, prefixCount)
+	write := headWrite{id: id, state: state, chunks: chunks, incoming: incoming, cutoff: cutoff}
+
+	next, err := s.nextHead(ctx, write)
 	if err != nil {
 		return err
 	}
-	query, arguments := s.ingestUpdate(state, packed, merged, points, id, cutoff)
-	_, err = tx.ExecContext(ctx, query, arguments...) //nolint:gosec // query uses fixed fragments and binds every value
+
+	query, arguments := ingestUpdate(write, next)
+	_, err = tx.ExecContext(ctx, query, arguments...) //nolint:gosec // fixed fragments, every value bound
 	if err != nil {
 		return fmt.Errorf("replace mutable ingest state: %w", err)
-	}
-	if state.legacy {
-		if _, err = tx.ExecContext(ctx, `delete from head where series_id=?`, id); err != nil {
-			return fmt.Errorf("retire legacy head: %w", err)
-		}
 	}
 	return nil
 }
 
-func (s *Store) ingestUpdate(state ingestState, packed []byte, merged, incoming []Sample, id, cutoff int64) (string, []any) {
-	ready := 0
-	maxSeen := max(state.maxSeen, incoming[len(incoming)-1].At)
-	if s.headReady(merged, maxSeen, cutoff) {
-		ready = 1
+// accepts refuses a write the series can no longer take:
+//
+//	suspended by maintenance          ErrSuspended
+//	older than the sealed frontier    ErrTooOld
+//	version counter exhausted         ErrLimit
+func (state ingestState) accepts(incoming []Sample) error {
+	switch {
+	case state.failedAt.Valid:
+		return fmt.Errorf("%w: %s", ErrSuspended, state.failure.String)
+	case state.frontier.Valid && incoming[0].At < state.frontier.Int64:
+		return fmt.Errorf("%w: sealed frontier", ErrTooOld)
+	case state.version == math.MaxInt64:
+		return fmt.Errorf("%w: series version exhausted", ErrLimit)
 	}
-	return s.ingestUpdateParts(state, packed, len(merged), merged[0].At, merged[len(merged)-1].At, ready, incoming, id)
+	return nil
 }
 
-func (s *Store) ingestUpdateParts(state ingestState, packed []byte, count int, firstAt, lastAt int64, ready int, incoming []Sample, id int64) (string, []any) {
-	first := sql.NullInt64{Int64: firstAt, Valid: true}
-	last := sql.NullInt64{Int64: lastAt, Valid: true}
-	maxSeen := max(state.maxSeen, incoming[len(incoming)-1].At)
-	nextGC := state.nextGC
-	if !nextGC.Valid || incoming[0].At < nextGC.Int64 {
-		nextGC = sql.NullInt64{Int64: incoming[0].At, Valid: true}
-	}
-	query := `update series_state set tail=?,head_count=?,head_start=?,head_end=?,max_seen_ts=?,version=version+1`
-	arguments := []any{packed, count, first, last, maxSeen}
-	if ready != state.ready {
-		query += `,ready=?`
-		arguments = append(arguments, ready)
-	}
-	if nextGC != state.nextGC {
-		query += `,next_gc_ts=?`
-		arguments = append(arguments, nextGC)
-	}
-	query += ` where series_id=?`
-	arguments = append(arguments, id)
-	return query, arguments
+// headWrite is one series' write while its next head is being built.
+type headWrite struct {
+	id       int64
+	state    ingestState
+	chunks   []headChunk // the stored head, parsed
+	incoming []Sample
+	cutoff   int64
 }
 
-func (s *Store) loadIngestState(ctx context.Context, tx sqlite.Writer, id int64) (ingestState, error) {
-	state := ingestState{head: headSnapshot{seriesID: id}}
-	var first, last sql.NullInt64
-	var size int
-	err := sqlite.QueryRow(ctx, tx, `select sealed_before,version,max_seen_ts,ready,next_gc_ts,failed_at,failure_reason,head_count,head_start,head_end,coalesce(length(tail),0),case when length(tail)<=? then tail else null end from series_state where series_id=?`, s.opts.MaxHeadBytes, id).Scan(
-		&state.frontier, &state.version, &state.maxSeen, &state.ready, &state.nextGC, &state.failedAt, &state.failure,
-		&state.head.count, &first, &last, &size, &state.head.packed,
-	)
-	if err != nil {
-		return state, fmt.Errorf("read ingest state: %w", err)
-	}
-	if state.failedAt.Valid {
-		return state, nil
-	}
+// newest is the series' newest timestamp once this write lands.
+func (w headWrite) newest() int64 {
+	return max(w.state.maxSeen, w.incoming[len(w.incoming)-1].At)
+}
+
+// headUpdate is a head after one write, ready to be stored.
+type headUpdate struct {
+	packed      []byte
+	count       int
+	first, last int64
+	ready       bool // 240 retained samples lie strictly before the watermark
+}
+
+// storedChunks parses the head a write starts from; a new series has none.
+func (s *Store) storedChunks(state ingestState) ([]headChunk, error) {
 	if state.head.count == 0 {
-		if first.Valid || last.Valid || size != 0 {
-			return state, fmt.Errorf("%w: empty mutable head", ErrCorrupt)
+		return nil, nil
+	}
+	return s.parseHead(state.head)
+}
+
+// nextHead builds the head after this write. A long head that only grows at its
+// end keeps its full chunks; anything else is decoded and merged whole.
+func (s *Store) nextHead(ctx context.Context, write headWrite) (headUpdate, error) {
+	if s.onlyAppends(write) {
+		return s.appendToHead(ctx, write)
+	}
+	return s.mergeIntoHead(ctx, write)
+}
+
+// onlyAppends: the head is long, nothing may arrive late, nothing in it has
+// expired, and every incoming sample is newer than all of it.
+//
+//	head       [240][240][ 90]            ends at 14:00
+//	incoming                   14:01 14:02
+//	           kept      [90 + 2] encoded again
+func (s *Store) onlyAppends(write headWrite) bool {
+	head := write.state.head
+	return head.count >= blockSamples &&
+		s.opts.Lateness == 0 &&
+		write.cutoff <= head.start &&
+		write.incoming[0].At > head.end
+}
+
+// appendToHead decodes only what follows the chunks it keeps.
+func (s *Store) appendToHead(ctx context.Context, write headWrite) (headUpdate, error) {
+	kept := reusableChunks(write.chunks, write.incoming[0].At)
+	keptSamples := countChunkSamples(kept)
+
+	tail, err := s.decodeChunks(ctx, write.chunks[len(kept):], math.MinInt64, math.MaxInt64)
+	if err != nil {
+		return headUpdate{}, err
+	}
+	tail, err = mergeHead(tail, write.incoming, s.opts.MaxHeadSamples-keptSamples)
+	if err != nil {
+		return headUpdate{}, err
+	}
+
+	packed, err := s.encodeHeadAfter(ctx, write.id, kept, tail)
+	if err != nil {
+		return headUpdate{}, err
+	}
+
+	// kept samples are retained and older than the newest, so every one may seal
+	sealable := keptSamples
+	for _, point := range tail {
+		if point.At >= write.cutoff && point.At < write.newest() {
+			sealable++
 		}
-		return state, nil
 	}
-	if !first.Valid || !last.Valid || last.Int64 < first.Int64 {
-		return state, fmt.Errorf("%w: mutable endpoints", ErrCorrupt)
+
+	return headUpdate{
+		packed: packed,
+		count:  keptSamples + len(tail),
+		first:  write.state.head.start,
+		last:   tail[len(tail)-1].At,
+		ready:  sealable >= blockSamples,
+	}, nil
+}
+
+// mergeIntoHead decodes the whole head, merges, and encodes again what changed.
+func (s *Store) mergeIntoHead(ctx context.Context, write headWrite) (headUpdate, error) {
+	existing, err := s.decodeChunks(ctx, write.chunks, math.MinInt64, math.MaxInt64)
+	if err != nil {
+		return headUpdate{}, err
 	}
-	if state.head.count < 0 || state.head.count > s.opts.MaxHeadSamples || size > s.opts.MaxHeadBytes {
-		return state, fmt.Errorf("%w: mutable head capacity", ErrLimit)
+	merged, err := mergeHead(existing, write.incoming, s.opts.MaxHeadSamples)
+	if err != nil {
+		return headUpdate{}, err
 	}
-	state.head.start, state.head.end = first.Int64, last.Int64
-	state.legacy = size == 0
-	if !state.legacy && len(state.head.packed) != size {
-		return state, fmt.Errorf("%w: mutable body missing", ErrCorrupt)
+
+	kept := reusableChunks(write.chunks, write.incoming[0].At)
+	packed, err := s.encodeHeadAfter(ctx, write.id, kept, merged[countChunkSamples(kept):])
+	if err != nil {
+		return headUpdate{}, err
 	}
-	return state, nil
+
+	return headUpdate{
+		packed: packed,
+		count:  len(merged),
+		first:  merged[0].At,
+		last:   merged[len(merged)-1].At,
+		ready:  s.headReady(merged, write.newest(), write.cutoff),
+	}, nil
+}
+
+// countRejection counts a failed call, whichever step failed.
+func (s *Store) countRejection(err *error) {
+	if *err != nil {
+		s.rejected.Add(1)
+	}
 }

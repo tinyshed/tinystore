@@ -1,212 +1,178 @@
-//nolint:gosec // checked counts bound allocations; signed timestamp and IEEE conversions preserve bits
 package metrics
 
 import (
 	"context"
-	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"math"
 
-	"github.com/tinyshed/tinystore/internal/sqlite"
-
 	"github.com/tinyshed/tinystore/codec"
 )
 
-const maximumHeadBytes = 16 << 20
+// The head is the mutable tail of one series, stored whole in series_state.tail:
+//
+//	┌────┬───────┬─────────┬─────────┬───┬─────────┬───────┐
+//	│ v1 │ count │ chunk 1 │ chunk 2 │ … │ chunk n │ crc32 │
+//	└────┴───────┴─────────┴─────────┴───┴─────────┴───────┘
+//
+//	chunk = start │ end − start │ samples │ first value │ body length │ codec body
+//
+// A chunk holds at most 240 samples, so each one decodes inside the codec's
+// bound. The checksum also covers the series id: a head copied onto another
+// series does not verify.
+const (
+	headVersion      = 1
+	maximumHeadBytes = 16 << 20
+)
 
+// headSnapshot is a head as its row holds it, before anything is decoded.
 type headSnapshot struct {
 	seriesID   int64
 	count      int
 	start, end int64
-	from, to   int64
-	filtered   bool
 	packed     []byte
-	legacy     []Sample
-	chunks     []headChunk
+
+	// a query that needs only part of the head parses it once in the snapshot
+	filtered bool
+	from, to int64
+	chunks   []headChunk
 }
 
+// headChunk is one chunk of a parsed head.
 type headChunk struct {
 	header codec.Head
 	body   []byte
+	stored []byte // the whole chunk as stored, copied as is when a write keeps it
 }
 
-func headChecksum(id int64, data []byte) uint32 {
-	key := binary.LittleEndian.AppendUint64(nil, uint64(id))
-	return crc32.Update(crc32.ChecksumIEEE(key), crc32.IEEETable, data)
+func (c headChunk) overlaps(from, to int64) bool {
+	return c.header.End >= from && c.header.Start < to
 }
 
-// each chunk stays within the existing codec's decode bound; the whole tail has its own budget
-func (s *Store) encodeHead(ctx context.Context, id int64, points []Sample) ([]byte, error) {
-	return s.encodeHeadPrefix(ctx, id, points, nil, 0)
-}
-
-func (s *Store) encodeHeadPrefix(ctx context.Context, id int64, points []Sample, prefix []byte, prefixCount int) ([]byte, error) {
-	if len(points) == 0 {
-		return nil, nil
-	}
-	if len(points) > s.opts.MaxHeadSamples || prefixCount < 0 || prefixCount > len(points) || prefixCount%blockSamples != 0 {
-		return nil, fmt.Errorf("%w: mutable samples in one series", ErrLimit)
-	}
-	return s.encodeHeadSuffix(ctx, id, points[prefixCount:], prefix, prefixCount)
-}
-
-func (s *Store) encodeHeadSuffix(ctx context.Context, id int64, suffix []Sample, prefix []byte, prefixCount int) ([]byte, error) {
-	if prefixCount < 0 || prefixCount%blockSamples != 0 || len(suffix) > s.opts.MaxHeadSamples-prefixCount || prefixCount+len(suffix) == 0 {
-		return nil, fmt.Errorf("%w: mutable samples in one series", ErrLimit)
-	}
-	out := binary.AppendUvarint([]byte{1}, uint64(prefixCount+len(suffix)))
-	out = append(out, prefix...)
-	if len(out) > s.opts.MaxHeadBytes-4 {
-		return nil, fmt.Errorf("%w: mutable head bytes", ErrLimit)
-	}
-	for start := 0; start < len(suffix); start += blockSamples {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		head, body, err := s.encoder.Encode(suffix[start:min(start+blockSamples, len(suffix))])
-		if err != nil {
-			return nil, fmt.Errorf("encode mutable head: %w", err)
-		}
-		out = binary.AppendVarint(out, head.Start)
-		out = binary.AppendUvarint(out, uint64(head.End)-uint64(head.Start))
-		out = binary.AppendUvarint(out, uint64(head.Count))
-		out = binary.LittleEndian.AppendUint64(out, math.Float64bits(head.First))
-		out = binary.AppendUvarint(out, uint64(len(body)))
-		out = append(out, body...)
-		if len(out) > s.opts.MaxHeadBytes-4 {
-			return nil, fmt.Errorf("%w: mutable head bytes", ErrLimit)
-		}
-	}
-	return binary.LittleEndian.AppendUint32(out, headChecksum(id, out)), nil
-}
-
-func reusableHeadPrefix(packed []byte, before int64, maximumSamples int) ([]byte, int, error) {
-	if len(packed) == 0 {
-		return nil, 0, nil
-	}
-	if len(packed) < 6 {
-		return nil, 0, fmt.Errorf("%w: mutable head size", ErrCorrupt)
-	}
-	content := packed[:len(packed)-4]
-	r := binaryReader{data: content}
-	if r.byte() != 1 {
-		return nil, 0, fmt.Errorf("%w: mutable head version", ErrCorrupt)
-	}
-	count := r.size(maximumSamples)
-	if r.err != nil || count == 0 {
-		return nil, 0, fmt.Errorf("%w: mutable head count", ErrCorrupt)
-	}
-	begin := len(content) - len(r.data)
-	end := begin
-	reused := 0
-	for reused < count {
-		start := unfoldSigned(r.unsigned())
-		span := r.unsigned()
-		chunkCount := r.size(min(blockSamples, count-reused))
-		r.word()
-		length := r.size(maxPayloadBytes)
-		r.take(length)
-		if r.err != nil || chunkCount == 0 || span > uint64(math.MaxInt64)-uint64(start) {
-			return nil, 0, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
-		}
-		if chunkCount < blockSamples || int64(uint64(start)+span) >= before {
-			break
-		}
-		reused += chunkCount
-		end = len(content) - len(r.data)
-	}
-	return content[begin:end], reused, nil
-}
-
-func (s *Store) decodeHead(ctx context.Context, head headSnapshot) ([]Sample, error) {
-	if head.count < 0 || head.count > s.opts.MaxHeadSamples {
-		return nil, fmt.Errorf("%w: mutable head samples", ErrLimit)
-	}
-	if head.packed == nil {
-		if len(head.legacy) != head.count {
-			return nil, fmt.Errorf("%w: mutable head sample count", ErrCorrupt)
-		}
-		return head.legacy, nil
-	}
+// parseHead checks a head against its row and splits it into chunks. It is the
+// only reader of the layout above; decoding, reuse and partial reads start here.
+func (s *Store) parseHead(head headSnapshot) ([]headChunk, error) {
 	data := head.packed
 	if len(data) < 6 || len(data) > s.opts.MaxHeadBytes {
 		return nil, fmt.Errorf("%w: mutable head size", ErrCorrupt)
 	}
-	content := data[:len(data)-4]
-	if headChecksum(head.seriesID, content) != binary.LittleEndian.Uint32(data[len(data)-4:]) {
+	content, sum := data[:len(data)-4], binary.LittleEndian.Uint32(data[len(data)-4:])
+	if headChecksum(head.seriesID, content) != sum {
 		return nil, fmt.Errorf("%w: mutable head checksum", ErrCorrupt)
 	}
+
 	r := binaryReader{data: content}
-	if r.byte() != 1 {
+	if r.byte() != headVersion {
 		return nil, fmt.Errorf("%w: mutable head version", ErrCorrupt)
 	}
 	count := r.size(s.opts.MaxHeadSamples)
 	if count != head.count || count == 0 {
 		return nil, fmt.Errorf("%w: mutable head count", ErrCorrupt)
 	}
-	out := make([]Sample, 0, count)
-	for len(out) < count {
-		if err := ctx.Err(); err != nil {
+
+	chunks := make([]headChunk, 0, (count+blockSamples-1)/blockSamples)
+	for parsed := 0; parsed < count; {
+		chunk, err := readHeadChunk(&r, count-parsed)
+		if err != nil {
 			return nil, err
 		}
-		start := unfoldSigned(r.unsigned())
-		span := r.unsigned()
-		n := r.size(min(blockSamples, count-len(out)))
-		first := math.Float64frombits(r.word())
-		length := r.size(maxPayloadBytes)
-		body := r.take(length)
-		if r.err != nil {
-			return nil, r.err
-		}
-		if n == 0 || span > uint64(math.MaxInt64)-uint64(start) {
-			return nil, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
-		}
-		chunk := codec.Head{Start: start, End: int64(uint64(start) + span), Count: n, First: first}
-		if chunk.End == math.MaxInt64 || (len(out) > 0 && start <= out[len(out)-1].At) {
+		if len(chunks) > 0 && chunk.header.Start <= chunks[len(chunks)-1].header.End {
 			return nil, fmt.Errorf("%w: mutable chunk ordering", ErrCorrupt)
 		}
-		iterator, err := s.decoder.Decode(chunk, body)
-		if err != nil {
-			return nil, fmt.Errorf("%w: mutable chunk: %w", ErrCorrupt, err)
-		}
-		for iterator.Next() {
-			out = append(out, iterator.Sample())
-		}
-		if err = iterator.Err(); err != nil {
-			return nil, fmt.Errorf("%w: mutable values: %w", ErrCorrupt, err)
-		}
+		chunks = append(chunks, chunk)
+		parsed += chunk.header.Count
 	}
 	if err := r.finish(); err != nil {
 		return nil, err
 	}
-	if out[0].At != head.start || out[len(out)-1].At != head.end {
+
+	if chunks[0].header.Start != head.start || chunks[len(chunks)-1].header.End != head.end {
 		return nil, fmt.Errorf("%w: mutable head endpoints", ErrCorrupt)
 	}
-	return out, nil
+	return chunks, nil
 }
 
+// readHeadChunk reads one chunk; remaining bounds its sample count.
+func readHeadChunk(r *binaryReader, remaining int) (headChunk, error) {
+	stored := r.data
+	start := unfoldSigned(r.unsigned())
+	span := r.unsigned()
+	count := r.size(min(blockSamples, remaining))
+	first := math.Float64frombits(r.word())
+	length := r.size(maxPayloadBytes)
+	body := r.take(length)
+	if r.err != nil {
+		return headChunk{}, r.err
+	}
+
+	switch {
+	case count == 0, length < 8, count == 1 && span != 0, count > 1 && span == 0:
+		return headChunk{}, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
+	case span > distance(start, math.MaxInt64):
+		return headChunk{}, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
+	}
+	end := advance(start, span)
+	if end == math.MaxInt64 {
+		return headChunk{}, fmt.Errorf("%w: mutable chunk ordering", ErrCorrupt)
+	}
+
+	return headChunk{
+		header: codec.Head{Start: start, End: end, Count: count, First: first},
+		body:   body,
+		stored: stored[:len(stored)-len(r.data)],
+	}, nil
+}
+
+// decodeHead returns every sample of a head.
+func (s *Store) decodeHead(ctx context.Context, head headSnapshot) ([]Sample, error) {
+	if head.count < 0 || head.count > s.opts.MaxHeadSamples {
+		return nil, fmt.Errorf("%w: mutable head samples", ErrLimit)
+	}
+	if head.packed == nil {
+		if head.count != 0 {
+			return nil, fmt.Errorf("%w: mutable head sample count", ErrCorrupt)
+		}
+		return nil, nil
+	}
+
+	chunks, err := s.parseHead(head)
+	if err != nil {
+		return nil, err
+	}
+	return s.decodeChunks(ctx, chunks, math.MinInt64, math.MaxInt64)
+}
+
+// decodeSelectedHead decodes only the chunks a query range touches:
+//
+//	chunks    [10:00 … 10:59] [11:00 … 11:59] [12:00 … 12:20]
+//	range              10:30 ────── 11:10
+//	decoded   [10:00 … 10:59] [11:00 … 11:59]        the last is skipped
 func (s *Store) decodeSelectedHead(ctx context.Context, head headSnapshot) ([]Sample, error) {
 	if !head.filtered || head.packed == nil {
 		return s.decodeHead(ctx, head)
 	}
+
 	chunks := head.chunks
 	if chunks == nil {
 		var err error
-		chunks, err = s.inspectHead(head)
-		if err != nil {
+		if chunks, err = s.parseHead(head); err != nil {
 			return nil, err
 		}
 	}
-	out := make([]Sample, 0, selectedHeadSamples(chunks, head.from, head.to))
+	return s.decodeChunks(ctx, chunks, head.from, head.to)
+}
+
+func (s *Store) decodeChunks(ctx context.Context, chunks []headChunk, from, to int64) ([]Sample, error) {
+	out := make([]Sample, 0, selectedHeadSamples(chunks, from, to))
 	for _, chunk := range chunks {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if chunk.header.End < head.from || chunk.header.Start >= head.to {
+		if !chunk.overlaps(from, to) {
 			continue
 		}
+
 		iterator, err := s.decoder.Decode(chunk.header, chunk.body)
 		if err != nil {
 			return nil, fmt.Errorf("%w: mutable chunk: %w", ErrCorrupt, err)
@@ -224,175 +190,101 @@ func (s *Store) decodeSelectedHead(ctx context.Context, head headSnapshot) ([]Sa
 func selectedHeadSamples(chunks []headChunk, from, to int64) int {
 	count := 0
 	for _, chunk := range chunks {
-		if chunk.header.End >= from && chunk.header.Start < to {
+		if chunk.overlaps(from, to) {
 			count += chunk.header.Count
 		}
 	}
 	return count
 }
 
-func (s *Store) inspectHead(head headSnapshot) ([]headChunk, error) {
-	data := head.packed
-	if len(data) < 6 || len(data) > s.opts.MaxHeadBytes {
-		return nil, fmt.Errorf("%w: mutable head size", ErrCorrupt)
-	}
-	content := data[:len(data)-4]
-	if headChecksum(head.seriesID, content) != binary.LittleEndian.Uint32(data[len(data)-4:]) {
-		return nil, fmt.Errorf("%w: mutable head checksum", ErrCorrupt)
-	}
-	r := binaryReader{data: content}
-	if r.byte() != 1 {
-		return nil, fmt.Errorf("%w: mutable head version", ErrCorrupt)
-	}
-	count := r.size(s.opts.MaxHeadSamples)
-	if count != head.count || count == 0 {
-		return nil, fmt.Errorf("%w: mutable head count", ErrCorrupt)
-	}
-	chunks := make([]headChunk, 0, (count+blockSamples-1)/blockSamples)
-	parsed := 0
-	var firstStart, previousEnd int64
-	for parsed < count {
-		start := unfoldSigned(r.unsigned())
-		span := r.unsigned()
-		n := r.size(min(blockSamples, count-parsed))
-		first := math.Float64frombits(r.word())
-		length := r.size(maxPayloadBytes)
-		body := r.take(length)
-		if r.err != nil || n == 0 || length < 8 || (n == 1 && span != 0) || (n > 1 && span == 0) || span > uint64(math.MaxInt64)-uint64(start) {
-			return nil, fmt.Errorf("%w: mutable chunk extent", ErrCorrupt)
-		}
-		chunk := codec.Head{Start: start, End: int64(uint64(start) + span), Count: n, First: first}
-		if chunk.End == math.MaxInt64 || (parsed > 0 && start <= previousEnd) {
-			return nil, fmt.Errorf("%w: mutable chunk ordering", ErrCorrupt)
-		}
-		if parsed == 0 {
-			firstStart = start
-		}
-		previousEnd = chunk.End
-		parsed += n
-		chunks = append(chunks, headChunk{header: chunk, body: body})
-	}
-	if err := r.finish(); err != nil {
-		return nil, err
-	}
-	if firstStart != head.start || previousEnd != head.end {
-		return nil, fmt.Errorf("%w: mutable head endpoints", ErrCorrupt)
-	}
-	return chunks, nil
+// encodeHead packs samples into a new head.
+func (s *Store) encodeHead(ctx context.Context, id int64, points []Sample) ([]byte, error) {
+	return s.encodeHeadAfter(ctx, id, nil, points)
 }
 
-// the snapshot owns encoded bytes; normal queries decode them only after releasing SQLite
-func (s *Store) fetchHead(ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget) (headSnapshot, error) {
-	head := headSnapshot{seriesID: id}
-	var first, last sql.NullInt64
-	var size int
-	limit := s.opts.MaxHeadBytes
-	if budget != nil {
-		limit = min(limit, budget.limits.PayloadBytes-budget.bytes)
+// encodeHeadAfter packs points behind chunks that are kept byte for byte:
+//
+//	kept      [240][240]
+//	points              [240][ 57]         encoded now
+//	result    v1 │ 777 │ [240][240][240][ 57] │ crc32
+func (s *Store) encodeHeadAfter(ctx context.Context, id int64, kept []headChunk, points []Sample) ([]byte, error) {
+	total := countChunkSamples(kept) + len(points)
+	if total == 0 {
+		return nil, nil
 	}
-	err := sqlite.QueryRow(ctx, tx, `select head_count,head_start,head_end,coalesce(length(tail),0),case when length(tail)<=? and head_end>=? and head_start<? then tail else null end from series_state where series_id=?`, limit, from, to, id).Scan(&head.count, &first, &last, &size, &head.packed)
-	if err != nil {
-		return head, fmt.Errorf("read mutable state: %w", err)
+	if total > s.opts.MaxHeadSamples {
+		return nil, fmt.Errorf("%w: mutable samples in one series", ErrLimit)
 	}
-	if head.count == 0 {
-		if first.Valid || last.Valid || size != 0 {
-			return head, fmt.Errorf("%w: empty mutable head", ErrCorrupt)
+
+	out := appendCount([]byte{headVersion}, total)
+	for _, chunk := range kept {
+		out = append(out, chunk.stored...)
+	}
+	if len(out) > s.opts.MaxHeadBytes-4 {
+		return nil, fmt.Errorf("%w: mutable head bytes", ErrLimit)
+	}
+
+	for start := 0; start < len(points); start += blockSamples {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		return head, nil
-	}
-	if !first.Valid || !last.Valid || last.Int64 < first.Int64 {
-		return head, fmt.Errorf("%w: mutable endpoints", ErrCorrupt)
-	}
-	head.start, head.end = first.Int64, last.Int64
-	if head.end < from || head.start >= to {
-		head.count = 0
-		head.packed = nil
-		return head, nil
-	}
-	if head.count < 0 || head.count > s.opts.MaxHeadSamples || size > s.opts.MaxHeadBytes {
-		return head, fmt.Errorf("%w: mutable head capacity", ErrLimit)
-	}
-	if budget != nil {
-		bytes := size
-		if size == 0 {
-			if err = budget.takeSamples(head.count); err != nil {
-				return head, err
-			}
-			bytes = 16 * head.count
+		var err error
+		out, err = s.appendHeadChunk(out, points[start:min(start+blockSamples, len(points))])
+		if err != nil {
+			return nil, err
 		}
-		if err = budget.takeBytes(bytes); err != nil {
-			return head, err
+		if len(out) > s.opts.MaxHeadBytes-4 {
+			return nil, fmt.Errorf("%w: mutable head bytes", ErrLimit)
 		}
 	}
-	if size > 0 {
-		if len(head.packed) != size {
-			return head, fmt.Errorf("%w: mutable body missing", ErrCorrupt)
-		}
-		if budget != nil {
-			head.filtered, head.from, head.to = true, from, to
-			head.chunks, err = s.inspectHead(head)
-			if err != nil {
-				return head, err
-			}
-			if err = budget.takeSamples(selectedHeadSamples(head.chunks, from, to)); err != nil {
-				return head, err
-			}
-		}
-		return head, nil
-	}
-	rows, err := tx.QueryContext(ctx, `select at,value from head where series_id=? order by at limit cast(? as integer)`, id, head.count+1)
-	if err != nil {
-		return head, fmt.Errorf("read legacy head: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var point Sample
-		var value []byte
-		if err = rows.Scan(&point.At, &value); err != nil {
-			return head, fmt.Errorf("read legacy sample: %w", err)
-		}
-		if len(value) != 8 || len(head.legacy) >= head.count {
-			return head, fmt.Errorf("%w: legacy head size", ErrCorrupt)
-		}
-		point.Value = math.Float64frombits(binary.LittleEndian.Uint64(value))
-		head.legacy = append(head.legacy, point)
-	}
-	if err = rows.Err(); err != nil {
-		return head, fmt.Errorf("iterate legacy head: %w", err)
-	}
-	if len(head.legacy) != head.count || head.legacy[0].At != head.start || head.legacy[head.count-1].At != head.end {
-		return head, fmt.Errorf("%w: legacy head count or bounds", ErrCorrupt)
-	}
-	return head, nil
+
+	return binary.LittleEndian.AppendUint32(out, headChecksum(id, out)), nil
 }
 
-func (s *Store) mutablePoints(ctx context.Context, tx sqlite.Reader, id int64) ([]Sample, error) {
-	head, err := s.fetchHead(ctx, tx, id, math.MinInt64, math.MaxInt64, nil)
+// appendHeadChunk encodes up to 240 samples as one chunk.
+func (s *Store) appendHeadChunk(out []byte, points []Sample) ([]byte, error) {
+	header, body, err := s.encoder.Encode(points)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encode mutable head: %w", err)
 	}
-	return s.decodeHead(ctx, head)
+	out = binary.AppendVarint(out, header.Start)
+	out = binary.AppendUvarint(out, distance(header.Start, header.End))
+	out = appendCount(out, header.Count)
+	out = binary.LittleEndian.AppendUint64(out, math.Float64bits(header.First))
+	out = appendCount(out, len(body))
+	return append(out, body...), nil
 }
 
-func (s *Store) saveHead(ctx context.Context, tx *sql.Tx, id int64, points []Sample) error {
-	packed, err := s.encodeHead(ctx, id, points)
-	if err != nil {
-		return err
+// reusableChunks returns the leading chunks a write at `before` leaves as they
+// are: full, and ending before it.
+//
+//	chunks      [0 … 239] [240 … 479] [480 … 520]
+//	write at 300               ↑
+//	reusable    [0 … 239]                            copied byte for byte
+func reusableChunks(chunks []headChunk, before int64) []headChunk {
+	reusable := 0
+	for _, chunk := range chunks {
+		if chunk.header.Count < blockSamples || chunk.header.End >= before {
+			break
+		}
+		reusable++
 	}
-	var first, last sql.NullInt64
-	if len(points) > 0 {
-		first = sql.NullInt64{Int64: points[0].At, Valid: true}
-		last = sql.NullInt64{Int64: points[len(points)-1].At, Valid: true}
-	}
-	if _, err = tx.ExecContext(ctx, `update series_state set tail=?,head_count=?,head_start=?,head_end=? where series_id=?`, packed, len(points), first, last, id); err != nil {
-		return fmt.Errorf("replace mutable head: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx, `delete from head where series_id=?`, id); err != nil {
-		return fmt.Errorf("retire legacy head: %w", err)
-	}
-	return nil
+	return chunks[:reusable]
 }
 
+func countChunkSamples(chunks []headChunk) int {
+	count := 0
+	for _, chunk := range chunks {
+		count += chunk.header.Count
+	}
+	return count
+}
+
+// mergeHead merges two sorted runs; a repeated timestamp takes the incoming value:
+//
+//	existing   10  11       13
+//	incoming       11'  12       14
+//	merged     10  11'  12  13   14
 func mergeHead(existing, incoming []Sample, limit int) ([]Sample, error) {
 	merged := make([]Sample, 0, min(len(existing)+len(incoming), limit))
 	a, b := 0, 0
@@ -418,6 +310,8 @@ func mergeHead(existing, incoming []Sample, limit int) ([]Sample, error) {
 	return merged, nil
 }
 
+// removeSealed drops exactly the samples a new block holds. A sample that changed
+// since maintenance read it means a write won the race, so publication stops.
 func removeSealed(existing, sealed []Sample) ([]Sample, error) {
 	out := make([]Sample, 0, len(existing))
 	removed := 0
@@ -427,12 +321,31 @@ func removeSealed(existing, sealed []Sample) ([]Sample, error) {
 				return nil, fmt.Errorf("%w: changed sealed sample", ErrConflict)
 			}
 			removed++
-		} else {
-			out = append(out, point)
+			continue
 		}
+		out = append(out, point)
 	}
 	if removed != len(sealed) {
 		return nil, fmt.Errorf("%w: missing sealed sample", ErrConflict)
 	}
 	return out, nil
+}
+
+func headChecksum(id int64, data []byte) uint32 {
+	key := binary.LittleEndian.AppendUint64(nil, uint64(id)) //nolint:gosec // identifier bits, not a magnitude
+	return crc32.Update(crc32.ChecksumIEEE(key), crc32.IEEETable, data)
+}
+
+// distance is end − start as an unsigned number, exact across the whole signed range.
+func distance(start, end int64) uint64 {
+	return uint64(end) - uint64(start) //nolint:gosec // modular subtraction is the exact distance
+}
+
+// advance is start + span; callers have checked the result stays representable.
+func advance(start int64, span uint64) int64 {
+	return int64(uint64(start) + span) //nolint:gosec // bounded by the caller's distance check
+}
+
+func appendCount(out []byte, count int) []byte {
+	return binary.AppendUvarint(out, uint64(count)) //nolint:gosec // counts are never negative
 }

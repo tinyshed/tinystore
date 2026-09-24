@@ -33,7 +33,6 @@ func (s *Store) fetchHeads(ctx context.Context, tx sqlite.Reader, matched []regi
 		}
 		seen := make(map[int64]bool, len(ids))
 		packedIDs := make([]int64, 0, len(ids))
-		legacyIDs := make([]int64, 0)
 		sizes := make(map[int64]int, len(ids))
 		for rows.Next() {
 			var id int64
@@ -71,8 +70,8 @@ func (s *Store) fetchHeads(ctx context.Context, tx sqlite.Reader, matched []regi
 				break
 			}
 			if size == 0 {
-				legacyIDs = append(legacyIDs, id)
-				continue
+				err = fmt.Errorf("%w: mutable body missing", ErrCorrupt)
+				break
 			}
 			if err = budget.takeBytes(size); err != nil {
 				break
@@ -92,13 +91,6 @@ func (s *Store) fetchHeads(ctx context.Context, tx sqlite.Reader, matched []regi
 		}
 		if len(seen) != len(ids) {
 			return nil, fmt.Errorf("%w: mutable descriptor missing", ErrCorrupt)
-		}
-		for _, id := range legacyIDs {
-			head, fetchErr := s.fetchHead(ctx, tx, id, from, to, budget)
-			if fetchErr != nil {
-				return nil, fetchErr
-			}
-			heads[positions[id]] = head
 		}
 		if len(packedIDs) == 0 {
 			continue
@@ -142,7 +134,7 @@ func (s *Store) fetchHeads(ctx context.Context, tx sqlite.Reader, matched []regi
 		for _, id := range packedIDs {
 			head := &heads[positions[id]]
 			head.filtered, head.from, head.to = true, from, to
-			head.chunks, err = s.inspectHead(*head)
+			head.chunks, err = s.parseHead(*head)
 			if err != nil {
 				return nil, err
 			}

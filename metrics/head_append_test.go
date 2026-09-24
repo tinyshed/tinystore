@@ -14,28 +14,32 @@ func TestLongPackedHeadAppendKeepsExactBitsAndFrontier(t *testing.T) {
 	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: seed}}); err != nil {
 		t.Fatal(err)
 	}
-	readTail := func() []byte {
-		var packed []byte
+	keptBefore := func(at int64) ([]byte, int) {
+		head := headSnapshot{seriesID: 1}
 		if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(), `select tail from series_state where series_id=1`).Scan(&packed)
+			return tx.QueryRowContext(t.Context(), `select tail,head_count,head_start,head_end from series_state where series_id=1`).
+				Scan(&head.packed, &head.count, &head.start, &head.end)
 		}); err != nil {
 			t.Fatal(err)
 		}
-		return packed
+		chunks, err := store.parseHead(head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept := reusableChunks(chunks, at)
+		return storedBytes(kept), countChunkSamples(kept)
 	}
-	before := readTail()
 	incoming := Sample{At: testEpoch + 2000, Value: math.Float64frombits(0x7ff8000000004321)}
-	prefix, count, prefixErr := reusableHeadPrefix(before, incoming.At, store.opts.MaxHeadSamples)
-	if prefixErr != nil || count != 1920 {
-		t.Fatalf("reusable prefix: %d: %v", count, prefixErr)
+	prefix, count := keptBefore(incoming.At)
+	if count != 1920 {
+		t.Fatalf("reusable prefix: %d", count)
 	}
 	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{incoming}}}); err != nil {
 		t.Fatal(err)
 	}
-	after := readTail()
-	kept, keptCount, keptErr := reusableHeadPrefix(after, incoming.At, store.opts.MaxHeadSamples)
-	if keptErr != nil || keptCount != count || !bytes.Equal(prefix, kept) {
-		t.Fatalf("encoded prefix changed: %d: %v", keptCount, keptErr)
+	kept, keptCount := keptBefore(incoming.At)
+	if keptCount != count || !bytes.Equal(prefix, kept) {
+		t.Fatalf("encoded prefix changed: %d", keptCount)
 	}
 	var headCount, ready int
 	var first, last, maxSeen int64
