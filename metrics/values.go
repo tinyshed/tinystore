@@ -16,34 +16,24 @@ const (
 	valuesGrid
 )
 
-// ordinaryValues reuses the existing value codec without storing an extra timestamp envelope
+// ordinaryValues packs values with the codec; the timestamps live in the clock
 func (s *Store) ordinaryValues(points []Sample) ([]byte, error) {
-	flat := make([]Sample, len(points))
-	for i, p := range points {
-		flat[i] = Sample{At: int64(i), Value: p.Value}
+	values := make([]float64, len(points))
+	for i, point := range points {
+		values[i] = point.Value
 	}
-	_, body, err := s.encoder.Encode(flat)
+	stream, err := s.encoder.EncodeValues(values)
 	if err != nil {
 		return nil, fmt.Errorf("encode ordinary values: %w", err)
 	}
-	return append([]byte{valuesOrdinary, body[1]}, body[4:len(body)-4]...), nil
+	return append([]byte{valuesOrdinary}, stream...), nil
 }
 
 func (s *Store) readOrdinary(head codec.Head, body []byte) ([]Sample, error) {
-	if len(body) < 2 || body[0] != valuesOrdinary || body[1]&3 != 0 {
+	if len(body) < 2 || body[0] != valuesOrdinary {
 		return nil, fmt.Errorf("%w: ordinary value flags", ErrCorrupt)
 	}
-	head.Start = 0
-	head.End = int64(head.Count - 1)
-	encoded := append([]byte{1, body[1], 0, 0}, body[2:]...)
-	key := binary.LittleEndian.AppendUint64(nil, 0)
-	key = binary.LittleEndian.AppendUint64(key, uint64(head.End))
-	key = binary.LittleEndian.AppendUint16(key, uint16(head.Count))
-	key = binary.LittleEndian.AppendUint64(key, math.Float64bits(head.First))
-	table := crc32.MakeTable(crc32.Castagnoli)
-	sum := crc32.Update(crc32.Checksum(key, table), table, encoded)
-	encoded = binary.LittleEndian.AppendUint32(encoded, sum)
-	iterator, err := s.decoder.Decode(head, encoded)
+	iterator, err := s.decoder.DecodeValues(head.First, head.Count, body[1:])
 	if err != nil {
 		return nil, fmt.Errorf("%w: ordinary values: %w", ErrCorrupt, err)
 	}

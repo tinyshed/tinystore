@@ -44,6 +44,13 @@ row whose `first` was corrupted would otherwise change every sample silently.
 A decoder also requires the last timestamp it produces to equal the head's
 `end`, which catches the same class of damage a second way.
 
+`EncodeValues` writes values alone for a caller that keeps the timestamps
+itself, as the metrics engine keeps them in its clocks: byte 1 above followed by
+the stream of evenly spaced samples, with no version, no timestamp length and
+no checksum. `DecodeValues` is given the first value and the count, and the
+caller checks the bytes it stored. The metrics engine's ordinary value body is
+its representation byte followed by exactly this.
+
 An evenly spaced block writes **no timestamps at all**: the step is
 `(end - start) / (count - 1)`, and a decoder refuses a head where that division
 is not exact. Otherwise the stream holds either the positive distances between

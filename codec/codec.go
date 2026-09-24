@@ -161,9 +161,8 @@ func (c *Codec) Decode(head Head, body []byte) (*Iterator, error) {
 	if body[0] != formatVersion {
 		return nil, fmt.Errorf("%w: format version", ErrInvalid)
 	}
-	timeMode, valueMode, compressed := body[1]&3, body[1]>>2&7, body[1]>>5
-	if timeMode > timeDeltaDelta || valueMode > valueScaled || compressed > 1 {
-		return nil, fmt.Errorf("%w: format header", ErrInvalid)
+	if err := checkFlags(body[1]); err != nil {
+		return nil, err
 	}
 	end := len(body) - checksumSize
 	sum := crc32.Update(crc32.Checksum(head.bytes(), checksumTable), checksumTable, body[:end])
@@ -171,28 +170,79 @@ func (c *Codec) Decode(head Head, body []byte) (*Iterator, error) {
 		return nil, fmt.Errorf("%w: checksum", ErrInvalid)
 	}
 	timeBytes := int(binary.LittleEndian.Uint16(body[2:]))
+	return c.decodeStream(head, body[1], timeBytes, body[headerSize:end])
+}
 
+// EncodeValues packs values alone, for a caller that keeps the timestamps and
+// the first value itself. It returns Encode's stream for evenly spaced samples,
+// which write no timestamps, behind the byte that says how it was packed:
+//
+//	Encode        1 | flags | 0 0 | stream | checksum
+//	EncodeValues      flags |       stream
+func (c *Codec) EncodeValues(values []float64) ([]byte, error) {
+	samples := make([]Sample, len(values))
+	for i, value := range values {
+		samples[i] = Sample{At: int64(i), Value: value}
+	}
+	_, body, err := c.Encode(samples)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte{body[1]}, body[headerSize:len(body)-checksumSize]...), nil
+}
+
+// DecodeValues reads what EncodeValues wrote, given the first value and the
+// count, which the stream does not repeat. It carries no checksum of its own, so
+// the caller checks the bytes it stored; each Sample's At is its index.
+func (c *Codec) DecodeValues(first float64, count int, stream []byte) (*Iterator, error) {
+	if count < 1 || count > MaxSamples {
+		return nil, fmt.Errorf("%w: value count", ErrInvalid)
+	}
+	if len(stream) < 1 || len(stream) > maxBody+1 {
+		return nil, fmt.Errorf("%w: value stream length", ErrInvalid)
+	}
+	if err := checkFlags(stream[0]); err != nil {
+		return nil, err
+	}
+	if stream[0]&3 != timeFixed {
+		return nil, fmt.Errorf("%w: value stream with timestamps", ErrInvalid)
+	}
+	head := Head{Start: 0, End: int64(count - 1), Count: count, First: first}
+	return c.decodeStream(head, stream[0], 0, stream[1:])
+}
+
+func checkFlags(flags byte) error {
+	timeMode, valueMode, compressed := flags&3, flags>>2&7, flags>>5
+	if timeMode > timeDeltaDelta || valueMode > valueScaled || compressed > 1 {
+		return fmt.Errorf("%w: format header", ErrInvalid)
+	}
+	return nil
+}
+
+// decodeStream inflates a stream when it is compressed and prepares an
+// iterator over its timestamps, the first timeBytes of it, and its values.
+func (c *Codec) decodeStream(head Head, flags byte, timeBytes int, payload []byte) (*Iterator, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil, errors.New("metric codec is closed")
 	}
 	var stream []byte
-	if compressed == 1 {
+	if flags>>5 == 1 {
 		var err error
-		stream, err = c.reader.DecodeAll(body[headerSize:end], nil)
+		stream, err = c.reader.DecodeAll(payload, nil)
 		if err != nil {
 			return nil, fmt.Errorf("%w: zstd: %w", ErrInvalid, err)
 		}
 	} else {
-		stream = append([]byte(nil), body[headerSize:end]...)
+		stream = append([]byte(nil), payload...)
 	}
 	if timeBytes > len(stream) || len(stream) > maxBody {
 		return nil, fmt.Errorf("%w: stream lengths", ErrInvalid)
 	}
 
 	it := &Iterator{
-		count: head.Count, head: head, timeMode: timeMode, valueMode: valueMode,
+		count: head.Count, head: head, timeMode: flags & 3, valueMode: flags >> 2 & 7,
 		times: stream[:timeBytes], values: stream[timeBytes:],
 		at: head.Start, value: math.Float64bits(head.First),
 	}

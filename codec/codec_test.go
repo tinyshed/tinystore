@@ -1,7 +1,9 @@
 package codec
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"math"
 	"math/rand/v2"
@@ -321,6 +323,112 @@ func FuzzDecode(f *testing.F) {
 		}
 		if it.Err() == nil {
 			assertRoundTrip(t, c, samples)
+		}
+	})
+}
+
+// valueSets are one of each representation, and the values a round trip must not bend
+func valueSets() [][]float64 {
+	random := rand.New(rand.NewPCG(7, 11))
+	sets := [][]float64{{42}, {math.Copysign(0, -1), math.Inf(1), math.Float64frombits(0x7ff8000000001234)}}
+	for _, n := range []int{2, 8, 33, MaxSamples} {
+		integers, decimals, smooth, noise := make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n)
+		for i := range n {
+			integers[i] = float64(i*7 - 40)
+			decimals[i] = float64(200+i%17) / 10
+			smooth[i] = math.Sin(float64(i) / 9)
+			noise[i] = math.Float64frombits(random.Uint64())
+		}
+		sets = append(sets, integers, decimals, smooth, noise)
+	}
+	return sets
+}
+
+func decodeValues(t testing.TB, c *Codec, first float64, count int, stream []byte) ([]float64, error) {
+	t.Helper()
+	it, err := c.DecodeValues(first, count, stream)
+	if err != nil {
+		return nil, err
+	}
+	var values []float64
+	for it.Next() {
+		if it.Sample().At != int64(len(values)) {
+			t.Fatalf("value %d carries timestamp %d", len(values), it.Sample().At)
+		}
+		values = append(values, it.Sample().Value)
+	}
+	return values, it.Err()
+}
+
+func TestValueStreamIsEncodeWithoutItsEnvelope(t *testing.T) {
+	c := testCodec(t)
+	for _, values := range valueSets() {
+		stream, err := c.EncodeValues(values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		samples := make([]Sample, len(values))
+		for i, value := range values {
+			samples[i] = Sample{At: int64(i), Value: value}
+		}
+		_, body, err := c.Encode(samples)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := append([]byte{body[1]}, body[headerSize:len(body)-checksumSize]...); !bytes.Equal(stream, want) {
+			t.Fatalf("%d values: stream %x, want %x", len(values), stream, want)
+		}
+
+		decoded, err := decodeValues(t, c, values[0], len(values), stream)
+		if err != nil || len(decoded) != len(values) {
+			t.Fatalf("%d values: decoded %d, %v", len(values), len(decoded), err)
+		}
+		for i := range values {
+			if math.Float64bits(decoded[i]) != math.Float64bits(values[i]) {
+				t.Fatalf("value %d of %d changed", i, len(values))
+			}
+		}
+	}
+}
+
+func TestValueStreamCorruptionIsRefused(t *testing.T) {
+	c := testCodec(t)
+	values := valueSets()[len(valueSets())-2]
+	stream, err := c.EncodeValues(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, corrupt := range map[string]func() (float64, int, []byte){
+		"empty":           func() (float64, int, []byte) { return values[0], len(values), nil },
+		"no values":       func() (float64, int, []byte) { return values[0], 0, stream },
+		"too many values": func() (float64, int, []byte) { return values[0], MaxSamples + 1, stream },
+		"one value more":  func() (float64, int, []byte) { return values[0], len(values) + 1, stream },
+		"timestamps": func() (float64, int, []byte) {
+			return values[0], len(values), append([]byte{stream[0] | timeDelta}, stream[1:]...)
+		},
+		"truncated":      func() (float64, int, []byte) { return values[0], len(values), stream[:len(stream)-1] },
+		"trailing bytes": func() (float64, int, []byte) { return values[0], len(values), append(slices.Clone(stream), 0) },
+	} {
+		first, count, bytes := corrupt()
+		if _, err := decodeValues(t, c, first, count, bytes); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func FuzzDecodeValues(f *testing.F) {
+	c := testCodec(f)
+	for _, values := range valueSets() {
+		stream, err := c.EncodeValues(values)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(math.Float64bits(values[0]), uint8(len(values)), stream)
+	}
+	f.Fuzz(func(t *testing.T, first uint64, count uint8, stream []byte) {
+		values, err := decodeValues(t, c, math.Float64frombits(first), int(count), stream)
+		if err == nil && len(values) != int(count) {
+			t.Fatalf("decoded %d of %d values", len(values), count)
 		}
 	})
 }

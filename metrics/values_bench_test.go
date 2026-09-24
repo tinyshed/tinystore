@@ -1,15 +1,13 @@
 package metrics
 
 import (
-	"encoding/binary"
-	"hash/crc32"
 	"math"
 	"testing"
 
 	"github.com/tinyshed/tinystore/codec"
 )
 
-func BenchmarkOrdinaryEnvelope(b *testing.B) {
+func BenchmarkReadOrdinary(b *testing.B) {
 	points := make([]Sample, 240)
 	for index := range points {
 		bits := uint64(index+1) * 0x9e3779b97f4a7c15
@@ -30,16 +28,11 @@ func BenchmarkOrdinaryEnvelope(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	head := codec.Head{Start: 0, End: 239, Count: 240, First: points[0].Value}
-	encoded := append([]byte{1, body[1], 0, 0}, body[2:]...)
-	key := binary.LittleEndian.AppendUint64(nil, 0)
-	key = binary.LittleEndian.AppendUint64(key, uint64(head.End))
-	key = binary.LittleEndian.AppendUint16(key, uint16(head.Count))
-	key = binary.LittleEndian.AppendUint64(key, math.Float64bits(head.First))
-	table := crc32.MakeTable(crc32.Castagnoli)
-	sum := crc32.Update(crc32.Checksum(key, table), table, encoded)
-	encoded = binary.LittleEndian.AppendUint32(encoded, sum)
-	b.Run("rebuild_envelope", func(b *testing.B) {
+	head, payload, err := encoder.Encode(points)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("value_stream", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
 			decoded, err := store.readOrdinary(head, body)
@@ -48,10 +41,10 @@ func BenchmarkOrdinaryEnvelope(b *testing.B) {
 			}
 		}
 	})
-	b.Run("prepared_envelope", func(b *testing.B) {
+	b.Run("whole_payload", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			iterator, err := decoder.Decode(head, encoded)
+			iterator, err := decoder.Decode(head, payload)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -60,7 +53,7 @@ func BenchmarkOrdinaryEnvelope(b *testing.B) {
 				decoded = append(decoded, iterator.Sample())
 			}
 			if err := iterator.Err(); err != nil || len(decoded) != len(points) {
-				b.Fatalf("prepared decode: %v", err)
+				b.Fatalf("whole payload decode: %v", err)
 			}
 		}
 	})
