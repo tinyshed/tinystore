@@ -84,6 +84,43 @@ Candidate blocks per query, out of 391 blocks of 256 and 98 of 1024:
   `10.0.0.7:5432:` and indexes that, trailing colon included. Which punctuation
   is part of a token is a tokenizer decision the corpus has to settle.
 
+## Third pass: a level mask and a token bloom filter per block
+
+Commit `83849a9`, same environment and corpus. Each block row carries a bitmask
+of the levels it holds and a bloom filter over its tokens, split as `unicode61`
+with `tokenchars '.:_-/'` would split them: 10 bits a distinct token, 7 hashes
+from FNV-64a and FNV-64. `holding` is the number of blocks that really hold the
+term, counted from the corpus.
+
+```sh
+TINYSTORE_SPIKE=1 go test ./spike -run TestRecordBlockFilters -v -count=1
+```
+
+| layout | payload B/record | file B/record | against plain blocks |
+|---|---:|---:|---|
+| blocks of 256 + levels + bloom | 31.6 | 33.0 | +3.6 payload, +0.8 file |
+| blocks of 1024 + levels + bloom | 30.5 | 32.1 | +2.9 payload, +4.0 file |
+
+| term | 256: candidates / holding of 391 | 1024: candidates / holding of 98 |
+|---|---:|---:|
+| one `trace_id` | 4 / 1 | 1 / 1 |
+| one user of 5 000 | 29 / 24 | 24 / 22 |
+| `refused` | 391 / 391 | 98 / 98 |
+| `/api/export` | 391 / 391 | 98 / 98 |
+| a token nowhere in the corpus | 4 / 0 | 0 / 0 |
+| level error | 391 | 98 |
+
+- For rare terms the filter prunes as the FTS5 block index does, at a sixth
+  of its cost: 3–4 B a record against about 20, with false positives near the
+  1 % that 10 bits a token promise (3 of 390 blocks of 256).
+- On the file, 256-record blocks gained less than their payload: the filter
+  filled slack in overflow pages the bodies had left. That is the page effect
+  of the first pass again, not a property of the filter.
+- The level mask and the common terms prune nothing here, and this is the
+  corpus rather than the method: the generator spreads errors and routes
+  uniformly, one error in sixteen records, so every block holds all of them.
+  Real errors come in bursts, and whether a mask pays needs a real corpus.
+
 ## Not measured
 
 A real corpus, write throughput with the non-blocking handler, read cost of a

@@ -89,4 +89,4 @@ fetch and normalise them.
 | [architecture-hypotheses-2026-09-23.md](architecture-hypotheses-2026-09-23.md) | WP9 execution and page/cache gates, WP10 churn, WP12 digest/layout, and value-envelope isolation |
 | [exact-aggregates-2026-09-23.md](exact-aggregates-2026-09-23.md) | raw-decoding exact sums and counter transitions, reopened-corpus checks and aggregate read costs |
 | [grouping-ceiling-2026-09-23.md](grouping-ceiling-2026-09-23.md) | measured commit, WAL and sync savings of explicit batching before any group-commit actor |
-| [records-layout-2026-09-24.md](records-layout-2026-09-24.md) | bytes a log record costs as rows, with FTS5, with dictionaries and in zstd blocks, and FTS5 per block, on a synthetic corpus |
+| [records-layout-2026-09-24.md](records-layout-2026-09-24.md) | bytes a log record costs as rows, with FTS5, with dictionaries and in zstd blocks, FTS5 per block, and level masks with bloom filters, on a synthetic corpus |
