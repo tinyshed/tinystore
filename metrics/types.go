@@ -95,6 +95,13 @@ type AggregateResult struct {
 	Buckets []AggregateBucket
 }
 
+// DroppedSeries is what DropSeries removed. UnreadableGroups counts the groups
+// removed without the payload rows their directory named.
+type DroppedSeries struct {
+	Found            bool
+	UnreadableGroups int
+}
+
 type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts, QuarantinedSeries, ReclaimedSeries int }
 
 // Stats counts this handle's work; QuarantinedSeries is the current persisted count.

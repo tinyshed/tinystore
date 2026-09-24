@@ -96,7 +96,16 @@ at most `MaintenanceSeries` rows per call; start with `afterID=0` and continue
 from the last returned `SeriesID`. Those IDs are diagnostic cursors, not handles.
 `RetryFailedMaintenance(ctx)` clears at most `MaintenanceSeries` failures per
 call. A still damaged series will be suspended again on the next pass, and
-ingestion into a suspended series returns `ErrSuspended`.
+ingestion into a suspended series returns `ErrSuspended`. A suspended series
+stays out of retention until it is retried or dropped.
+
+`DropSeries(ctx, labels)` removes one series and everything it holds in one
+transaction, whether its data still reads or not, and waits for a running
+`Maintain`. A group whose directory or clock no longer reads is removed without
+the payload rows it named, since only a directory that reads proves which rows
+are this series'; those rows stay in the file, and
+`DroppedSeries.UnreadableGroups` counts such groups. Ingesting the same labels
+afterwards starts a new series.
 
 `Stream(ctx, range, yield)` calls `yield` once per nonempty series, in the same
 series order and with the same exact owned samples as `Read`. It fetches one
@@ -189,8 +198,8 @@ specifies nonfinite, reset and boundary behavior.
   the requested range to `DecodedSamples`.
 - `Close(ctx)` stops admission and waits for admitted work. Canceling that wait
   does not cancel cleanup; another Close can wait for its completion.
-- Statistics are per opened handle. External series deletion, regex matchers
-  and a network API are not implemented. Retention can
+- Statistics are per opened handle. Regex matchers and a network API are not
+  implemented. Retention can
   reclaim an empty series and free a cardinality slot; `Maintenance.ReclaimedSeries`
   reports that pass and `Stats.ReclaimedSeries` counts this handle's committed
   reclamations. Re-registering the same labels starts a new lifecycle: kind and

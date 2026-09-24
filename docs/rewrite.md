@@ -145,6 +145,11 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      beside its function. The three matcher lookups stay, as measured in
      `reports/matcher-batching-2026-09-23.md`, and so does the SQL of varying
      arity, as measured in WP3 of `reports/architecture-hypotheses-2026-09-23.md`.
+     Later an `Ingest` refusal names its series (`*SeriesError`) and
+     `DropSeries` removes a series that cannot be repaired, leaving in the file
+     the payload rows only an unreadable directory could have named. A
+     suspended series stays out of retention by decision: retrying or dropping
+     it is the remedy.
      Against `cca752f` on the same container: `BenchmarkIngest*` medians moved
      −3.3% to −0.2% and `BenchmarkRankThirtyTwoMatchers` +4.2% (8 runs a
      side, p ≥ 0.4), allocations identical; the four `bench/perf/repro` stages
@@ -174,8 +179,6 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 
 | area | gap |
 |---|---|
-| E, F | a series that cannot be repaired cannot be removed: add `DropSeries`, and decide what happens to payloads a corrupt directory no longer names |
-| F | a suspended series is skipped by retention, so its expired samples stay on disk |
 | D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
 | A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |

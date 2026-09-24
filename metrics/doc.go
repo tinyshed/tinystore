@@ -35,6 +35,7 @@
 //	merge.go           a new group absorbing the one before it
 //	retention.go       expiry and reclamation
 //	quarantine.go      series whose maintenance failed
+//	drop.go            DropSeries: one series and everything it holds
 //
 //	group.go           a group of blocks and where their payloads live
 //	directory.go       the group directory's bytes
