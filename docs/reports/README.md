@@ -90,3 +90,4 @@ fetch and normalise them.
 | [exact-aggregates-2026-09-23.md](exact-aggregates-2026-09-23.md) | raw-decoding exact sums and counter transitions, reopened-corpus checks and aggregate read costs |
 | [grouping-ceiling-2026-09-23.md](grouping-ceiling-2026-09-23.md) | measured commit, WAL and sync savings of explicit batching before any group-commit actor |
 | [records-layout-2026-09-24.md](records-layout-2026-09-24.md) | bytes a log record costs as rows, with FTS5, with dictionaries and in zstd blocks, FTS5 per block, and level masks with bloom filters, on a synthetic corpus |
+| [loghub-templates-2026-09-24.md](loghub-templates-2026-09-24.md) | Drain-style templates against plain zstd on ten Loghub samples, every line decoded byte for byte |
