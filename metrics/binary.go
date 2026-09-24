@@ -51,7 +51,7 @@ func (r *binaryReader) unsigned() uint64 {
 
 func (r *binaryReader) size(maximum int) int {
 	value := r.unsigned()
-	if maximum < 0 || value > uint64(maximum) { //nolint:gosec // short-circuit excludes negative bounds
+	if maximum < 0 || value > uint64(maximum) {
 		r.err = fmt.Errorf("%w: binary size exceeds limit", ErrCorrupt)
 		return 0
 	}
@@ -76,8 +76,14 @@ func (r *binaryReader) finish() error {
 	return nil
 }
 
-func foldSigned(value int64) uint64   { return uint64(value)<<1 ^ uint64(value>>63) } //nolint:gosec // zigzag is a bit transform
-func unfoldSigned(value uint64) int64 { return int64(value>>1) ^ -int64(value&1) }    //nolint:gosec // the shifted value fits int64
+// foldSigned is zigzag: small magnitudes of either sign become small numbers.
+func foldSigned(value int64) uint64 {
+	return uint64(value)<<1 ^ uint64(value>>63) //nolint:gosec // a bit transform, not a value converted
+}
+
+func unfoldSigned(value uint64) int64 {
+	return int64(value>>1) ^ -int64(value&1)
+}
 
 func appendFloat(out []byte, value float64) []byte {
 	for tag, factor := range []float64{1, 100} {
@@ -88,7 +94,7 @@ func appendFloat(out []byte, value float64) []byte {
 		integer := int64(product)
 		if math.Float64bits(float64(integer)/factor) == math.Float64bits(value) {
 			return binary.AppendUvarint(out, foldSigned(integer)<<2|uint64(tag))
-		} //nolint:gosec // tag is zero or one
+		}
 	}
 	return binary.LittleEndian.AppendUint64(append(out, 2), math.Float64bits(value))
 }
@@ -117,11 +123,13 @@ type metadataCodec struct {
 }
 
 func newMetadataCodec() (*metadataCodec, error) {
-	w, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(8192), zstd.WithLowerEncoderMem(true))
+	w, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1),
+		zstd.WithWindowSize(8192), zstd.WithLowerEncoderMem(true))
 	if err != nil {
 		return nil, fmt.Errorf("create metadata encoder: %w", err)
 	}
-	r, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(8192), zstd.WithDecoderMaxWindow(8192))
+	r, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxMemory(8192), zstd.WithDecoderMaxWindow(8192))
 	if err != nil {
 		_ = w.Close()
 		return nil, fmt.Errorf("create metadata decoder: %w", err)

@@ -1,4 +1,3 @@
-//nolint:gosec // unsigned conversions preserve IEEE bits; stream counts and scales are checked before allocation
 package metrics
 
 import (
@@ -83,10 +82,12 @@ func (s *Store) encodeValues(points []Sample, hint int) ([]byte, int, error) {
 	return best, selected, nil
 }
 
+// valueChecksum binds a value body to its block's head and clock, so that it
+// cannot be read as another block's values.
 func valueChecksum(block storedBlock, body []byte) uint32 {
-	key := binary.LittleEndian.AppendUint64(nil, uint64(block.head.Start))
-	key = binary.LittleEndian.AppendUint64(key, uint64(block.head.End))
-	key = binary.LittleEndian.AppendUint16(key, uint16(block.head.Count))
+	key := appendSigned64(nil, block.head.Start)
+	key = appendSigned64(key, block.head.End)
+	key = binary.LittleEndian.AppendUint16(key, uint16(block.head.Count)) //nolint:gosec // at most 240 samples
 	key = binary.LittleEndian.AppendUint64(key, math.Float64bits(block.head.First))
 	sum := crc32.Update(crc32.ChecksumIEEE(key), crc32.IEEETable, block.clock)
 	return crc32.Update(sum, crc32.IEEETable, body)
@@ -104,62 +105,12 @@ func (s *Store) decodeBlock(block storedBlock) ([]Sample, error) {
 	if err != nil {
 		return nil, err
 	}
-	head := block.head
-	var out []Sample
-	if len(block.body) == 0 {
-		out = make([]Sample, head.Count)
-		for i := range out {
-			out[i].Value = head.First
-		}
-	} else {
-		if len(block.body) < 5 {
-			return nil, fmt.Errorf("%w: value body size", ErrCorrupt)
-		}
-		body := block.body[:len(block.body)-4]
-		if valueChecksum(block, body) != binary.LittleEndian.Uint32(block.body[len(block.body)-4:]) {
-			return nil, fmt.Errorf("%w: value body checksum", ErrCorrupt)
-		}
-		switch body[0] {
-		case valuesOrdinary:
-			out, err = s.readOrdinary(head, body)
-		case valuesChanges:
-			out, err = readChanges(head, body[1:])
-		case valuesGrid:
-			r := binaryReader{data: body[1:]}
-			scale := int(r.byte())
-			if scale > 15 {
-				return nil, fmt.Errorf("%w: grid scale", ErrCorrupt)
-			}
-			n := r.size(maxPayloadBytes)
-			base := r.take(n)
-			if r.err != nil {
-				return nil, r.err
-			}
-			factor := math.Pow10(scale)
-			originalFirst := head.First
-			head.First = math.Round(head.First * factor)
-			if math.IsNaN(head.First) || math.IsInf(head.First, 0) || math.Abs(head.First) > 0x1p53 {
-				return nil, fmt.Errorf("%w: grid seed", ErrCorrupt)
-			}
-			out, err = s.readOrdinary(head, base)
-			if err != nil {
-				return nil, err
-			}
-			residuals, resErr := s.metadata.decodeResiduals(r.data, head.Count-1)
-			if resErr != nil {
-				return nil, resErr
-			}
-			out[0].Value = originalFirst
-			for i := 1; i < len(out); i++ {
-				out[i].Value = orderedValue(orderedBits(out[i].Value/factor) + uint64(residuals[i-1]))
-			}
-		default:
-			return nil, fmt.Errorf("%w: value representation", ErrCorrupt)
-		}
-		if err != nil {
-			return nil, err
-		}
+
+	out, err := s.decodeValues(block)
+	if err != nil {
+		return nil, err
 	}
+
 	if len(out) != len(times) {
 		return nil, fmt.Errorf("%w: value count", ErrCorrupt)
 	}
@@ -167,4 +118,34 @@ func (s *Store) decodeBlock(block storedBlock) ([]Sample, error) {
 		out[i].At = times[i]
 	}
 	return out, nil
+}
+
+// decodeValues checks a block's value body and reads it in its representation;
+// a block without a body holds its first value throughout.
+func (s *Store) decodeValues(block storedBlock) ([]Sample, error) {
+	head := block.head
+	if len(block.body) == 0 {
+		out := make([]Sample, head.Count)
+		for i := range out {
+			out[i].Value = head.First
+		}
+		return out, nil
+	}
+	if len(block.body) < 5 {
+		return nil, fmt.Errorf("%w: value body size", ErrCorrupt)
+	}
+	body := block.body[:len(block.body)-4]
+	if valueChecksum(block, body) != binary.LittleEndian.Uint32(block.body[len(block.body)-4:]) {
+		return nil, fmt.Errorf("%w: value body checksum", ErrCorrupt)
+	}
+	switch body[0] {
+	case valuesOrdinary:
+		return s.readOrdinary(head, body)
+	case valuesChanges:
+		return readChanges(head, body[1:])
+	case valuesGrid:
+		return s.readGrid(head, body[1:])
+	default:
+		return nil, fmt.Errorf("%w: value representation", ErrCorrupt)
+	}
 }

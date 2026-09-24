@@ -188,6 +188,29 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      ignores, and this container has a C compiler, so they compare with each
      other only. The task now names the target on each build and its report
      refuses a cgo probe; built so, the import added 6 684 KiB at `cec241b`.
+   - Done, A: the codec owns its signed conversions (`distance`, `advance`,
+     `foldSigned` in `codec/bits.go`) and hands the engine a checked value
+     stream, `EncodeValues` and `DecodeValues`, instead of the envelope
+     `readOrdinary` rebuilt: 240 values decode in 22.8 µs, 3 allocations and
+     6 144 bytes, against 23.7 µs, 9 and 8 032 at `802c200` (16 runs a side,
+     p < 0.01). `decodeBlock` reads the clock, then `decodeValues` picks one
+     reader per representation; `decodeResiduals` reads one mode per function;
+     no file keeps a file-level `//nolint`. A throwaway differential dump —
+     1 100 blocks in every representation, change kind and residual mode,
+     8 000 residual vectors, 6 000 corrupted or crafted bodies — was
+     byte-identical against `cec241b`, every refusal included, and so were the
+     `repro` seal and read files. In ABBA order against `cec241b` on the same
+     container: seal −0.9% (16 runs a side); on the 2 000-series `bench/perf`
+     file a narrow hour −1.2%, a 500-series selector −1.4%, a region aggregate
+     −1.2% (4 runs a side, each p ≥ 0.29); allocations identical.
+     `BenchmarkEncodeValues` and `BenchmarkDecodeBlock`, added here and copied
+     onto `cec241b` for the comparison, 16 runs a side: encoding within 1.4%
+     (p ≥ 0.34), decoding −5.4% on ordinary values (p < 0.01) and −2.7% on the
+     grid (p = 0.09). One cost: a block changing at every second sample
+     decodes 6.3% slower (p = 0.02), about 4 ns a change by division, for the
+     two calls a change now makes; the encoder stores that shape as ordinary
+     values and picks changes only for a few steps. `task size` grew by 4 KiB,
+     to 6 688.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -197,8 +220,6 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | area | gap |
 |---|---|
 | D | a bucket clipped by retention reports its nominal `From`; the caller cannot tell it is partial |
-| A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
-| A | file-level `//nolint:gosec` in `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
-| all | the debt entries in `.golangci.yml`: 4 functions over `funlen` or `gocognit`, 11 files with lines over 120 columns |
+| all | the `lll` entry in `.golangci.yml`: 5 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

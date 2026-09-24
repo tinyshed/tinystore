@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	"math"
 	"math/rand/v2"
 	"testing"
@@ -84,6 +85,27 @@ func TestEveryValueRepresentationPreservesBits(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertSamples(t, back, points)
+		}
+	}
+}
+
+func TestChangeValuesWriteWhereAndByHowMuchValuesChange(t *testing.T) {
+	values := []float64{5, 5, 5, 7, 7, 9}
+	points := make([]Sample, len(values))
+	for i, value := range values {
+		points[i] = Sample{At: int64(i), Value: value}
+	}
+	body := changeValues(points)
+	if want := []byte{valuesChanges, 0, 3, 4, 2, 4}; !bytes.Equal(body, want) {
+		t.Fatalf("body %x, want %x", body, want)
+	}
+	decoded, err := readChanges(codec.Head{End: 5, Count: len(values), First: values[0]}, body[1:])
+	if err != nil || len(decoded) != len(values) {
+		t.Fatalf("decoded %d: %v", len(decoded), err)
+	}
+	for i, point := range decoded {
+		if math.Float64bits(point.Value) != math.Float64bits(values[i]) {
+			t.Fatalf("value %d: %v", i, point.Value)
 		}
 	}
 }

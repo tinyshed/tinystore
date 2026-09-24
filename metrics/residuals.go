@@ -1,4 +1,3 @@
-//nolint:gosec // bit widths and residual counts are validated before indexing or integer conversion
 package metrics
 
 import (
@@ -75,12 +74,13 @@ func (m *metadataCodec) encodeResiduals(residuals []int64) []byte {
 		consider(append([]byte{residualCompressed}, compressed[1:]...))
 	}
 	width := bits.Len64(union)
-	consider(append([]byte{residualPacked, byte(width)}, packedBits(values, width)...))
+	widthByte := byte(width) //nolint:gosec // a bit length is at most 64
+	consider(append([]byte{residualPacked, widthByte}, packedBits(values, width)...))
 	bitmap := make([]byte, (len(values)+7)/8)
 	for _, i := range positions {
-		bitmap[i/8] |= 1 << uint(i%8)
+		bitmap[i/8] |= 1 << (i % 8)
 	}
-	consider(append(append([]byte{residualBitmap, byte(width)}, bitmap...), packedBits(nonzero, width)...))
+	consider(append(append([]byte{residualBitmap, widthByte}, bitmap...), packedBits(nonzero, width)...))
 	if union <= 3 {
 		signs := make([]uint64, len(nonzero))
 		onlySigns := true
@@ -100,7 +100,7 @@ func (m *metadataCodec) encodeResiduals(residuals []int64) []byte {
 	sparse := []byte{residualSparse}
 	previous := -1
 	for _, i := range positions {
-		sparse = binary.AppendUvarint(sparse, uint64(i-previous))
+		sparse = appendCount(sparse, i-previous)
 		sparse = binary.AppendUvarint(sparse, values[i])
 		previous = i
 	}
@@ -114,15 +114,16 @@ func (m *metadataCodec) decodeResiduals(data []byte, count int) ([]int64, error)
 	}
 	r := binaryReader{data: data}
 	mode := r.byte()
-	out := make([]int64, count)
 	if mode == residualCompressed {
 		plain, err := m.decode(append([]byte{1}, r.data...))
 		if err != nil {
 			return nil, err
 		}
-		r.data = plain
-		mode = residualVarint
+		r.data, mode = plain, residualVarint
 	}
+
+	out := make([]int64, count)
+	var err error
 	switch mode {
 	case residualZero:
 	case residualVarint:
@@ -130,67 +131,90 @@ func (m *metadataCodec) decodeResiduals(data []byte, count int) ([]int64, error)
 			out[i] = unfoldSigned(r.unsigned())
 		}
 	case residualSparse:
-		position := -1
-		for len(r.data) > 0 && r.err == nil {
-			gap := r.size(count - 1 - position)
-			if gap == 0 {
-				return nil, fmt.Errorf("%w: residual position", ErrCorrupt)
-			}
-			position += gap
-			out[position] = unfoldSigned(r.unsigned())
-		}
+		err = readSparseResiduals(&r, out)
 	case residualPacked:
-		width := int(r.byte())
-		values, err := readPackedBits(r.data, count, width)
-		if err != nil {
-			return nil, err
-		}
-		r.data = nil
-		for i, value := range values {
-			out[i] = unfoldSigned(value)
-		}
+		err = readPackedResiduals(&r, out)
 	case residualSigns, residualBitmap:
-		width := 1
-		if mode == residualBitmap {
-			width = int(r.byte())
-		}
-		bitmap := r.take((count + 7) / 8)
-		if r.err != nil {
-			return nil, r.err
-		}
-		if used := count % 8; used != 0 && bitmap[len(bitmap)-1]>>uint(used) != 0 {
-			return nil, fmt.Errorf("%w: residual bitmap padding", ErrCorrupt)
-		}
-		nonzero := 0
-		for _, value := range bitmap {
-			nonzero += bits.OnesCount8(value)
-		}
-		values, err := readPackedBits(r.data, nonzero, width)
-		if err != nil {
-			return nil, err
-		}
-		r.data = nil
-		position := 0
-		for i := range out {
-			if bitmap[i/8]&(1<<uint(i%8)) == 0 {
-				continue
-			}
-			value := values[position]
-			position++
-			if mode == residualSigns {
-				out[i] = 1
-				if value == 1 {
-					out[i] = -1
-				}
-			} else {
-				out[i] = unfoldSigned(value)
-			}
-		}
+		err = readBitmapResiduals(&r, out, mode)
 	default:
-		return nil, fmt.Errorf("%w: residual representation", ErrCorrupt)
+		err = fmt.Errorf("%w: residual representation", ErrCorrupt)
 	}
-	if err := r.finish(); err != nil {
+	if err != nil {
+		return nil, err
+	}
+	if err = r.finish(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// readSparseResiduals reads the gap to each nonzero residual and its value.
+func readSparseResiduals(r *binaryReader, out []int64) error {
+	position := -1
+	for len(r.data) > 0 && r.err == nil {
+		gap := r.size(len(out) - 1 - position)
+		if gap == 0 {
+			return fmt.Errorf("%w: residual position", ErrCorrupt)
+		}
+		position += gap
+		out[position] = unfoldSigned(r.unsigned())
+	}
+	return nil
+}
+
+// readPackedResiduals reads every residual at one bit width.
+func readPackedResiduals(r *binaryReader, out []int64) error {
+	width := int(r.byte())
+	values, err := readPackedBits(r.data, len(out), width)
+	if err != nil {
+		return err
+	}
+	r.data = nil
+	for i, value := range values {
+		out[i] = unfoldSigned(value)
+	}
+	return nil
+}
+
+// readBitmapResiduals reads a bitmap of the nonzero residuals, then their
+// values at one bit width, or only their signs when every one is ±1.
+func readBitmapResiduals(r *binaryReader, out []int64, mode byte) error {
+	width := 1
+	if mode == residualBitmap {
+		width = int(r.byte())
+	}
+	bitmap := r.take((len(out) + 7) / 8)
+	if r.err != nil {
+		return r.err
+	}
+	if used := len(out) % 8; used != 0 && bitmap[len(bitmap)-1]>>used != 0 {
+		return fmt.Errorf("%w: residual bitmap padding", ErrCorrupt)
+	}
+	nonzero := 0
+	for _, value := range bitmap {
+		nonzero += bits.OnesCount8(value)
+	}
+	values, err := readPackedBits(r.data, nonzero, width)
+	if err != nil {
+		return err
+	}
+	r.data = nil
+
+	position := 0
+	for i := range out {
+		if bitmap[i/8]&(1<<(i%8)) == 0 {
+			continue
+		}
+		value := values[position]
+		position++
+		switch {
+		case mode == residualBitmap:
+			out[i] = unfoldSigned(value)
+		case value == 1:
+			out[i] = -1
+		default:
+			out[i] = 1
+		}
+	}
+	return nil
 }
