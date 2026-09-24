@@ -117,3 +117,34 @@ func TestTheRootImportsNoEngine(t *testing.T) {
 		}
 	}
 }
+
+// engines never import each other, so a program links only the engines it opens
+func TestEnginesDoNotImportEachOther(t *testing.T) {
+	engines := []string{"metrics", "sqldb"}
+	for _, engine := range engines {
+		files, err := filepath.Glob(filepath.Join(engine, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range files {
+			if strings.HasSuffix(file, "_test.go") {
+				continue
+			}
+			parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range parsed.Imports {
+				path, err := strconv.Unquote(entry.Path.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, other := range engines {
+					if other != engine && path == "github.com/tinyshed/tinystore/"+other {
+						t.Errorf("%s imports the %s engine", file, other)
+					}
+				}
+			}
+		}
+	}
+}

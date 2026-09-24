@@ -2,7 +2,7 @@
 
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
-store, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+store, `sqldb/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every` and the memory budget. Everything else here is designed and
 agreed, not built. [samples/](samples/README.md) holds a compiling
 prototype of this API and a reference rewrite of one metrics path. A section
@@ -204,7 +204,7 @@ this engine promises.
 message and attributes, appended through the slog handler and read by time
 range. Retention and indexing by attribute are decided when it is built.
 
-**sqldb** (designed, prototyped). The application writes the schema and the
+**sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the
 transaction lifecycle.
 

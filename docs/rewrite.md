@@ -244,7 +244,14 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      `*SeriesError` naming it, as every other refusal already was. `task size`
      grew by 32 KiB, to 6 880: `Open` registers the background flush, so every
      program links the instruments.
-   - Next: sqldb, records, snapshots and backup.
+   - Done: `sqldb`, on `internal/sqlite`: its migrations are `Migrate`'s,
+     reads run on the `query_only` readers and `Exec…` on the one writer. A
+     program opening a store and one database, inserting a row and reading it
+     back through `ExecOne`, adds 5 980 KiB to the printing baseline
+     (linux/amd64, `CGO_ENABLED=0`, `-trimpath -ldflags="-s -w"`, Go 1.27.1;
+     a throwaway probe beside `internal/sizeprobe`), against 5 004 for bare
+     `internal/sqlite` in `docs/architecture.md`.
+   - Next: records, snapshots and backup.
 7. New engines, one at a time.
 
 ## Gaps to close during the rewrite
