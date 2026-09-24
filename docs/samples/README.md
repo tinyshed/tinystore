@@ -17,7 +17,9 @@ not build it:
 | `cmd/app/main.go.txt` | a program using all of it |
 
 It compiled, ran and passed the repository's golangci-lint with Go 1.27.1 on
-24 September 2026. To run it again:
+24 September 2026. It predates the directory lock, the shared memory budget,
+metrics instruments and sqldb's `Exec…` split; `docs/architecture.md` decides
+where the two differ. To run it again:
 
 ```sh
 cp -r <repo>/docs/samples/runtime /tmp/runtime-sample && cd /tmp/runtime-sample

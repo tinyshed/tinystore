@@ -39,6 +39,12 @@ data/
 - Application databases live only under `sql/`, so their names cannot collide
   with engine files. A name is `[a-z0-9][a-z0-9_-]{0,63}`; `Store.Claim` refuses
   a name already taken with `ErrInUse`.
+- One store owns the directory. `Open` holds `data/LOCK` until `Close`, so a
+  second store, in this process or another, is refused with `ErrInUse` at once
+  rather than with a busy error on some later write. It is `flock` on Linux,
+  macOS, the BSDs and illumos and an unshared `CreateFile` on Windows, both from
+  `syscall`; the operating system releases it when the process dies. Where
+  neither exists, `Open` logs a warning and runs unlocked.
 
 ## Opening: the store first, engines against it
 
@@ -73,6 +79,7 @@ err = store.Attach(engine)              // Close will close it
 logger := store.Logger("metrics")       // the application's logger, engine=metrics
 store.Every("metrics maintenance", time.Minute, engine.maintain)
 now := store.Now()                      // the store's clock, replaceable in tests
+release, err := store.Reserve(ctx, n)   // n bytes of the store's memory, in arrival order
 ```
 
 Every engine's `Open` has the same shape: claim, open and migrate its file,
@@ -87,6 +94,15 @@ possible if exporting them turns out to be a mistake.
 
 - Only the store starts goroutines. Engines register periodic work with
   `Store.Every`; a failure is logged at Warn and the next run still happens.
+  The same failure repeated is logged once per ten minutes with its count, and
+  the first success after it at Info, so a full disk is not a line a minute:
+
+  ```text
+  00:00  disk full        → Warn "background work failed" failures=1
+  00:01…00:09 the same    → counted
+  00:10  disk full        → Warn failures=11
+  00:11  success          → Info "background work recovered" failures=11
+  ```
 - Metrics maintenance runs every minute by default: a forgotten `Maintain` fills
   heads until ingest refuses samples.
 - `Options.Manual` stops all background work, and the application calls
@@ -94,6 +110,16 @@ possible if exporting them turns out to be a mistake.
 - `Close` cancels background work and waits for it before closing engines.
 - Self-metrics and log flushing run only when enabled.
 - `Every` is in memory. Durable, retried, leased work is the jobs engine.
+
+## Memory
+
+`Options.Memory` bounds the bytes that every engine's in-flight work holds at
+once. An engine reserves before it materialises (`Store.Reserve`); waiters are
+served in arrival order, a cancelled waiter leaves the queue, and a reservation
+larger than the whole budget is refused with `ErrLimit`. Zero leaves each
+engine to its own per-call limits. The metrics engine's `WorkBudget` and
+`Options.SharedBudget` move here: a default `Read` reserves its worst case,
+about 34 MiB, so 256 MiB admits seven at once and queues the eighth.
 
 ## Logs
 
@@ -148,7 +174,28 @@ the store writes every report as ordinary series:
 ## Engines
 
 **metrics** (built). Contract: `AGENTS.md`, `metrics/README.md`,
-`docs/aggregate-contract.md`.
+`docs/aggregate-contract.md`. `Ingest` stays for whoever receives samples from
+elsewhere; an application measuring itself uses instruments (designed):
+
+```go
+requests := stats.Counter("http_requests_total")
+inflight := stats.Gauge("http_requests_inflight")
+stats.GaugeFunc("notes", func(ctx context.Context) (float64, error) {
+	n, err := sqldb.Scalar[int](ctx, app, `select count(*) from notes`)
+	return float64(n), err
+})
+
+requests.With("route", "/notes").Inc()
+inflight.Add(1)
+```
+
+The engine keeps their values in memory and ingests them every `Options.Flush`
+(15 s by default) and on `Close`; a Manual store flushes on `stats.Flush(ctx)`.
+What is stored is the value at each flush, so a gauge's resolution is the flush
+interval, and a counter reset by a restart is a reset `increase` already
+counts. A new label set beyond `MaxSeries` is refused with `ErrLimit` and
+logged once. Histograms wait: bucketed approximations are not the exact answer
+this engine promises.
 
 **records** (designed). Structured records in `records.db`: time, level,
 message and attributes, appended through the slog handler and read by time
@@ -158,26 +205,39 @@ range. Retention and indexing by attribute are decided when it is built.
 SQL; TinyStore owns the file, the connections, the migrations and the
 transaction lifecycle.
 
+What a method's name starts with says where it runs: `Exec…` may write and
+goes to the file's one writer; everything else reads, on the `query_only`
+readers.
+
 ```go
-id, err := app.Scalar[int64](ctx, `insert into users (name) values (?) returning id`, name)
-user, err := app.One[User](ctx, `select id, name, created_at from users where id = ?`, id)
-users, err := app.All[User](ctx, `select id, name, created_at from users order by id`)
-err = app.Transaction(ctx, func(tx *sqldb.Tx) error { … })
+user, err := sqldb.One[User](ctx, app, `select id, name from users where id = ?`, id)
+users, err := sqldb.All[User](ctx, app, `select id, name from users order by id limit ?`, 50)
+count, err := sqldb.Scalar[int](ctx, app, `select count(*) from users`)
+
+id, err := sqldb.ExecScalar[int64](ctx, app, `insert into users (name) values (?) returning id`, name)
+user, err = sqldb.ExecOne[User](ctx, app, `update users set name = ? where id = ? returning id, name`, name, id)
+result, err := app.Exec(ctx, `delete from sessions where expires_at < ?`, now)
+
+err = app.Tx(ctx, func(tx *sqldb.Tx) error { … }) // several statements, one writer transaction
 ```
 
-- `One`: no row is `sql.ErrNoRows`, two rows are `ErrManyRows`. `Scalar` reads
-  one column. `Exec`, `Query` and `QueryRow` stay as in `database/sql`; there is
-  no `Raw()`, so nobody closes the pool under the store.
+- A write sent to a read fails at once with `SQLITE_READONLY` and writes
+  nothing; sqldb returns `ErrInvalid` naming the `Exec…` form to use.
+- `One`: no row is `sql.ErrNoRows`, two rows are `ErrManyRows`; an `ExecOne`
+  whose `returning` found no row is `sql.ErrNoRows` too. `Scalar` reads one
+  column. There is no `Raw()`, so nobody closes the pool under the store.
+- The typed reads are package functions taking `*DB` or `*Tx`, as pgx's and
+  sqlc's are, rather than generic methods, which would raise the Go version
+  every importer needs.
 - A struct takes columns by its `db` tag, or by field name in snake_case
   (`CreatedAt` → `created_at`); embedded structs' fields count. Mapping uses
   `reflect` without `MethodByName`.
-- `Transaction`: nil commits, an error or a panic rolls back. `Tx` has the same
-  methods. Generic methods need concrete types (Go 1.27 refuses them in
-  interfaces), so `DB` and `Tx` are concrete.
-- Migrations are `*.sql` files applied in name order, all pending ones in one
-  transaction, with checksums of the applied ones verified on every open. A
-  changed applied migration, or a database newer than the binary, refuses to
-  open.
+- `Tx`: nil commits, an error or a panic rolls back.
+- Migrations are `*.sql` files applied in name order through
+  `internal/sqlite.Migrate`, the one metrics uses: all pending ones in one
+  transaction, checksums of the applied ones verified on every open. A changed
+  applied migration, another engine's file, or a database newer than the binary
+  refuses to open.
 
 **kv** (boundary only). Mutable values by bucket and key in `kv.db`.
 
@@ -190,9 +250,15 @@ them commits, and readers hold a lease that collection respects.
 schedules.
 
 **Backup** (designed). One format for every engine: a zip holding
-`manifest.json` (format, time, engines, schema versions, checksums) and a
-`VACUUM INTO` snapshot of each file. Restore runs before `Open`, never on an
-open store.
+`manifest.json` (format, time, engines, schema versions, sizes, checksums) and
+a `VACUUM INTO` snapshot of each file. The root only copies files
+(`Store.Snapshot`, over every engine implementing `Snapshotter`); the zip lives
+in the `backup` package, so `archive/zip`'s 200 KiB is paid only by programs
+that back up. A snapshot runs on a short-lived connection opened read-only at
+the file: the `query_only` readers refuse `VACUUM INTO`, and a read-only file
+lets the writer keep writing. Each file is one moment of its engine; two
+engines are two moments, as no write spans them. `backup.Restore` runs before
+`Open`, into an empty directory, and checks every size and checksum.
 
 No engine gets a package before its first working code.
 
@@ -221,6 +287,8 @@ pays on top of it.
 ## Where the samples are
 
 - `samples/runtime/`: the runtime, a stand-in metrics engine, `records`, `sqldb`
-  and an application using them, as text files that build once renamed.
+  and an application using them, as text files that build once renamed. It
+  predates the lock, the memory budget, instruments and the `Exec…` split of
+  sqldb; where it differs, this file decides.
 - Commit `407e728`, merged into `main`: the metrics ingest path rewritten in
   the target style, behaviour and bytes unchanged; see `docs/rewrite.md`.
