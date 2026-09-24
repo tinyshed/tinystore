@@ -261,12 +261,19 @@ func TestRecordLayoutDensity(t *testing.T) {
 
 func measureRecordLayout(t *testing.T, layout recordLayout, records []logRecord) (int, int64, string) {
 	t.Helper()
+	_, payload, file, objects := openRecordLayout(t, layout, records)
+	return payload, file, objects
+}
+
+// openRecordLayout writes records in layout, vacuums, and leaves the database open for queries
+func openRecordLayout(t *testing.T, layout recordLayout, records []logRecord) (*sql.DB, int, int64, string) {
+	t.Helper()
 	ctx := t.Context()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "records.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +293,7 @@ func measureRecordLayout(t *testing.T, layout recordLayout, records []logRecord)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return payload, file, recordObjects(t, db) + blockCandidates(t, db, records)
+	return db, payload, file, recordObjects(t, db) + blockCandidates(t, db, records)
 }
 
 // blockCandidates is how many blocks a rare and a common term send to decoding
