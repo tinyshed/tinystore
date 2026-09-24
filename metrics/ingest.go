@@ -89,7 +89,7 @@ func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, incom
 	}
 
 	query, arguments := ingestUpdate(write, next)
-	_, err = tx.ExecContext(ctx, query, arguments...) //nolint:gosec // fixed fragments, every value bound
+	_, err = tx.ExecContext(ctx, query, arguments...)
 	if err != nil {
 		return fmt.Errorf("replace mutable ingest state: %w", err)
 	}

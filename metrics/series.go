@@ -118,7 +118,7 @@ func seriesIdentity(labels string) string {
 
 func encodeLabelIDs(ids []int64) []byte {
 	slices.Sort(ids)
-	out := binary.AppendUvarint(make([]byte, 0, 2*len(ids)+1), uint64(len(ids))) //nolint:gosec // a checked label count
+	out := binary.AppendUvarint(make([]byte, 0, 2*len(ids)+1), uint64(len(ids)))
 	previous := int64(0)
 	for _, id := range ids {
 		out = binary.AppendUvarint(out, uint64(id-previous)) //nolint:gosec // ascending identifiers
@@ -228,7 +228,7 @@ func increasePostingCounts(ctx context.Context, tx sqlite.Writer, ids []int64) e
 	if err != nil {
 		return fmt.Errorf("count updated postings: %w", err)
 	}
-	if changed != int64(len(ids)) { //nolint:gosec // a validated series has at most 128 labels
+	if changed != int64(len(ids)) {
 		return fmt.Errorf("%w: missing posting counter", ErrCorrupt)
 	}
 	return nil

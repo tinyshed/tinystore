@@ -51,7 +51,7 @@ func (h Head) step() (uint64, bool) {
 		return 0, false
 	}
 	span := distance(h.Start, h.End)
-	divisor := uint64(h.Count - 1) //nolint:gosec // Count is at least two here
+	divisor := uint64(h.Count - 1)
 	if span == 0 || span%divisor != 0 {
 		return 0, false
 	}

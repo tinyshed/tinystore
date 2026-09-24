@@ -155,7 +155,7 @@ func (s *Store) expireBlocks(ctx context.Context, tx *sql.Tx, id, cutoff int64) 
 				return 0, err
 			}
 		}
-		group.live &^= uint32(1) << uint(slot) //nolint:gosec // slot belongs to the checked directory
+		group.live &^= uint32(1) << uint(slot)
 		expired += block.head.Count
 		changed = true
 	}

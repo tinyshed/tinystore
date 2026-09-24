@@ -26,7 +26,7 @@ func summarize(points []Sample, kind Kind) blockSummary {
 				summary.valid = false
 			}
 			if i > 0 {
-				previous := points[i-1].Value //nolint:gosec // guarded by i > 0
+				previous := points[i-1].Value
 				if value < previous {
 					summary.resets++
 					summary.increase += value

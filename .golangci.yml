@@ -34,6 +34,7 @@ linters:
     - lll
     - funlen
     - gocognit
+    - nolintlint      # a //nolint names its linter, says why and still silences something
 
   settings:
     govet:
@@ -68,6 +69,10 @@ linters:
       ignore-comments: true   # a worked example is not length
     gocognit:
       min-complexity: 30
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
 
   exclusions:
     presets:

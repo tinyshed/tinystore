@@ -283,7 +283,7 @@ func (it *Iterator) nextInteger() error {
 }
 
 func (it *Iterator) addDelta(zigzag uint64) error {
-	delta := int64(zigzag>>1) ^ -int64(zigzag&1) //nolint:gosec // zigzag unfolds to the signed delta
+	delta := int64(zigzag>>1) ^ -int64(zigzag&1)
 	if (delta > 0 && it.integer > math.MaxInt64-delta) || (delta < 0 && it.integer < math.MinInt64-delta) {
 		return fmt.Errorf("%w: integer overflow", ErrInvalid)
 	}

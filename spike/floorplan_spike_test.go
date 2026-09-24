@@ -176,10 +176,10 @@ func TestCorpusFloor(t *testing.T) {
 			ids = append(ids, id)
 		}
 		sort.Ints(ids)
-		row := binary.AppendUvarint(nil, uint64(len(ids))) //nolint:gosec // a label count
+		row := binary.AppendUvarint(nil, uint64(len(ids)))
 		previous := 0
 		for _, id := range ids {
-			row = binary.AppendUvarint(row, uint64(id-previous)) //nolint:gosec // sorted ids, gap coded
+			row = binary.AppendUvarint(row, uint64(id-previous))
 			previous = id
 		}
 		pairBytes += len(row)

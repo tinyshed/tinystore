@@ -297,6 +297,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | no cgo                                              | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
 | the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
 | importing this stays cheap                          | `task size` links a cgo-free linux/amd64 probe and reports what it cost         |
+| a `//nolint` silences a named finding and says why  | `nolintlint`: no unused, unexplained or blanket directive                       |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |

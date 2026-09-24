@@ -30,7 +30,7 @@ func widthProfile(values []int64) (meanWidth, widthEntropy, maxWidth float64) {
 	counts := map[int64]int{}
 	var sum float64
 	for _, v := range values {
-		w := bits.Len64(uint64(v)<<1 ^ uint64(v>>63)) //nolint:gosec // zigzag
+		w := bits.Len64(uint64(v)<<1 ^ uint64(v>>63))
 		counts[int64(w)]++
 		sum += float64(w)
 		maxWidth = math.Max(maxWidth, float64(w))
@@ -132,7 +132,7 @@ func TestMemFieldStructure(t *testing.T) {
 			exact, oneULP, worst := 0, 0, 0
 			for i := range want {
 				got := form.of(part[i], total[i])
-				d := int64(math.Float64bits(got)) - int64(math.Float64bits(want[i])) //nolint:gosec // ULP distance
+				d := int64(math.Float64bits(got)) - int64(math.Float64bits(want[i]))
 				switch d {
 				case 0:
 					exact++
@@ -198,7 +198,7 @@ func TestPercentAcrossHosts(t *testing.T) {
 		distances := map[int64]int{}
 		for i := range want {
 			got := part[i] / total[i] * 100
-			d := int64(math.Float64bits(got)) - int64(math.Float64bits(want[i])) //nolint:gosec // ULP distance
+			d := int64(math.Float64bits(got)) - int64(math.Float64bits(want[i]))
 			distances[d]++
 			switch d {
 			case 0:

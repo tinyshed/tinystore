@@ -224,7 +224,7 @@ func TestEachRowStopsAtTheFirstErrorAndClosesTheRows(t *testing.T) {
 	file := openReaderTestFile(t)
 	stop := errors.New("stop")
 	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
-		rows, err := reader.QueryContext(t.Context(), `select value from json_each('[1,2,3]')`) //nolint:rowserrcheck // EachRow
+		rows, err := reader.QueryContext(t.Context(), `select value from json_each('[1,2,3]')`)
 		if err != nil {
 			return err
 		}

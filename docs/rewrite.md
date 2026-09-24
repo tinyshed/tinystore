@@ -221,7 +221,10 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      pin the defaults, each refusal and the narrowing. `narrowLimits`, the one
      step that runs per query, inlines `fields` and allocates as before.
      `.golangci.yml` excludes no file from `lll`, `funlen` or `gocognit`, and
-     `task size` stayed at 6 688.
+     `task size` stayed at 6 688. Later `nolintlint` refuses a `//nolint`
+     without a linter or a reason, or one that silences nothing, and 24 such
+     directives are gone: 8 in the engine, whose conversions the pinned gosec
+     now proves safe, and 16 in tests, where nothing they named is reported.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.

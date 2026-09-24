@@ -51,7 +51,7 @@ func clockSignature(times []int64) uint64 {
 	var buf [8]byte
 	for _, t := range times {
 		for i := range buf {
-			buf[i] = byte(t >> (8 * i)) //nolint:gosec // a hash of the clock, not its value
+			buf[i] = byte(t >> (8 * i))
 		}
 		_, _ = h.Write(buf[:])
 	}
@@ -172,7 +172,7 @@ func searchRelation(fields map[string]corpusSeries, name string, constants map[s
 			if i < from {
 				continue
 			}
-			d := int64(math.Float64bits(predict(i))) - int64(math.Float64bits(values[i])) //nolint:gosec // ULP distance
+			d := int64(math.Float64bits(predict(i))) - int64(math.Float64bits(values[i]))
 			if d > maxResidualULP || d < -maxResidualULP {
 				return
 			}
@@ -363,7 +363,7 @@ func TestRelationCensus(t *testing.T) {
 				continue
 			}
 			for i := r.from; i < len(s.Values); i++ {
-				back := math.Float64frombits(uint64(int64(math.Float64bits(r.predict(i))) - r.residual[i-r.from])) //nolint:gosec // the stored distance
+				back := math.Float64frombits(uint64(int64(math.Float64bits(r.predict(i))) - r.residual[i-r.from]))
 				if math.Float64bits(back) != math.Float64bits(s.Values[i]) {
 					t.Fatalf("%s: %s plus its correction changed a sample at %d", name, r.kind, i)
 				}

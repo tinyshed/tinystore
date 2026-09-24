@@ -35,10 +35,10 @@ func labelIDs(labels map[string]string, dictionary map[string]int64) []int64 {
 }
 
 func gapCoded(ids []int64) []byte {
-	out := binary.AppendUvarint(nil, uint64(len(ids))) //nolint:gosec // a label count
+	out := binary.AppendUvarint(nil, uint64(len(ids)))
 	previous := int64(0)
 	for _, id := range ids {
-		out = binary.AppendUvarint(out, uint64(id-previous)) //nolint:gosec // sorted ids, gap coded
+		out = binary.AppendUvarint(out, uint64(id-previous))
 		previous = id
 	}
 	return out
@@ -58,7 +58,7 @@ func gapDecoded(blob []byte) ([]int64, error) {
 			return nil, fmt.Errorf("label id")
 		}
 		blob = blob[n:]
-		previous += int64(gap) //nolint:gosec // gaps are non negative
+		previous += int64(gap)
 		ids = append(ids, previous)
 	}
 	return ids, nil

@@ -33,7 +33,7 @@ func ulpResidual(want []float64, predict func(i int) float64) ([]int64, bool) {
 		if math.IsNaN(got) != math.IsNaN(want[i]) {
 			return nil, false
 		}
-		d := int64(math.Float64bits(got)) - int64(math.Float64bits(want[i])) //nolint:gosec // ULP distance
+		d := int64(math.Float64bits(got)) - int64(math.Float64bits(want[i]))
 		if d > maxResidualULP || d < -maxResidualULP {
 			return nil, false
 		}
@@ -170,7 +170,7 @@ func TestDerivedProjection(t *testing.T) {
 				continue
 			}
 			for i, want := range s.Values {
-				back := math.Float64frombits(uint64(int64(math.Float64bits(p.predict(i))) - p.residual[i])) //nolint:gosec // the residual is the distance stored
+				back := math.Float64frombits(uint64(int64(math.Float64bits(p.predict(i))) - p.residual[i]))
 				if math.Float64bits(back) != math.Float64bits(want) {
 					t.Fatalf("%s %s: prediction plus residual changed a sample at %d", host, name, i)
 				}

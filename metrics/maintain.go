@@ -154,8 +154,8 @@ func (p *maintenancePass) flush(ctx context.Context) error {
 	p.result.SealedBlocks += committed.SealedBlocks
 	p.result.Conflicts += committed.Conflicts
 	p.result.QuarantinedSeries += committed.QuarantinedSeries
-	p.store.sealed.Add(uint64(committed.SealedBlocks))          //nolint:gosec // only committed blocks are counted
-	p.store.quarantined.Add(int64(committed.QuarantinedSeries)) //nolint:gosec // bounded by staged series count
+	p.store.sealed.Add(uint64(committed.SealedBlocks)) //nolint:gosec // only committed blocks are counted
+	p.store.quarantined.Add(int64(committed.QuarantinedSeries))
 	p.staged = nil
 	p.stagedBytes = 0
 	return nil

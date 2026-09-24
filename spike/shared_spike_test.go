@@ -24,7 +24,7 @@ func monotoneInt(v float64) int64 {
 	} else {
 		u |= 1 << 63
 	}
-	return int64(u) //nolint:gosec // an order-preserving relabelling, not a magnitude
+	return int64(u)
 }
 
 func differences(values []int64) []int64 {
@@ -38,7 +38,7 @@ func differences(values []int64) []int64 {
 func varints(symbols []int64) []byte {
 	out := make([]byte, 0, len(symbols)*2)
 	for _, s := range symbols {
-		out = binary.AppendUvarint(out, uint64(s)<<1^uint64(s>>63)) //nolint:gosec // zigzag
+		out = binary.AppendUvarint(out, uint64(s)<<1^uint64(s>>63))
 	}
 	return out
 }
