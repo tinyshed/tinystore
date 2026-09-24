@@ -1,4 +1,3 @@
-// Package metrics stores exact numeric series in one durable SQLite file.
 package metrics
 
 import (

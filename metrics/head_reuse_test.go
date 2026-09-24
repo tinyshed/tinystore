@@ -13,6 +13,10 @@ func TestUnchangedHeadChunksKeepTheirEncodedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chunks, err := s.parseHead(snapshotOf(1, old, packed))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name     string
 		incoming []Sample
@@ -26,19 +30,22 @@ func TestUnchangedHeadChunksKeepTheirEncodedBytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			prefix, count, err := reusableHeadPrefix(packed, test.incoming[0].At, s.opts.MaxHeadSamples)
-			if err != nil || count != test.want {
-				t.Fatalf("reusable prefix: %d, %v", count, err)
+			kept := reusableChunks(chunks, test.incoming[0].At)
+			if countChunkSamples(kept) != test.want {
+				t.Fatalf("reusable prefix: %d", countChunkSamples(kept))
 			}
-			updated, err := s.encodeHeadPrefix(t.Context(), 1, merged, prefix, count)
+			updated, err := s.encodeHeadAfter(t.Context(), 1, kept, merged[test.want:])
 			if err != nil {
 				t.Fatal(err)
 			}
-			unchanged, _, err := reusableHeadPrefix(updated, test.incoming[0].At, s.opts.MaxHeadSamples)
-			if err != nil || !bytes.Equal(unchanged, prefix) {
-				t.Fatalf("unchanged chunk bytes moved: %v", err)
+			after, err := s.parseHead(snapshotOf(1, merged, updated))
+			if err != nil {
+				t.Fatal(err)
 			}
-			decoded, err := s.decodeHead(t.Context(), headSnapshot{seriesID: 1, count: len(merged), start: merged[0].At, end: merged[len(merged)-1].At, packed: updated})
+			if !bytes.Equal(storedBytes(reusableChunks(after, test.incoming[0].At)), storedBytes(kept)) {
+				t.Fatal("unchanged chunk bytes moved")
+			}
+			decoded, err := s.decodeHead(t.Context(), snapshotOf(1, merged, updated))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -49,4 +56,16 @@ func TestUnchangedHeadChunksKeepTheirEncodedBytes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func snapshotOf(id int64, points []Sample, packed []byte) headSnapshot {
+	return headSnapshot{seriesID: id, count: len(points), start: points[0].At, end: points[len(points)-1].At, packed: packed}
+}
+
+func storedBytes(chunks []headChunk) []byte {
+	var out []byte
+	for _, chunk := range chunks {
+		out = append(out, chunk.stored...)
+	}
+	return out
 }

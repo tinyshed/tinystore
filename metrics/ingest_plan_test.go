@@ -14,7 +14,14 @@ func TestExistingSeriesIngestAvoidsUnchangedDueIndexes(t *testing.T) {
 	points := testSamples(241)
 	check := func(merged []Sample, wantIndexWork bool) {
 		t.Helper()
-		query, arguments := s.ingestUpdate(state, nil, merged, merged[len(merged)-1:], 1, testEpoch)
+		incoming := merged[len(merged)-1:]
+		next := headUpdate{
+			count: len(merged),
+			first: merged[0].At,
+			last:  merged[len(merged)-1].At,
+			ready: s.headReady(merged, max(state.maxSeen, incoming[0].At), testEpoch),
+		}
+		query, arguments := ingestUpdate(headWrite{id: 1, state: state, incoming: incoming}, next)
 		indexWork := 0
 		err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
 			rows, err := tx.QueryContext(t.Context(), `explain `+query, arguments...)
