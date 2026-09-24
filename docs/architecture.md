@@ -2,8 +2,8 @@
 
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
-store, `sqldb/`, `records/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
-`Attach`, `Logger`, `Now`, `Every` and the memory budget. Everything else here is designed and
+store, `sqldb/`, `records/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+`Attach`, `Logger`, `Now`, `Every`, the memory budget and snapshots. Everything else here is designed and
 agreed, not built. [samples/](samples/README.md) holds a compiling
 prototype of this API and a reference rewrite of one metrics path. A section
 that describes something unbuilt says so.
@@ -254,12 +254,19 @@ them commits, and readers hold a lease that collection respects.
 **jobs** (boundary only). A durable queue in `jobs.db` with leases, retries and
 schedules.
 
-**Backup** (designed). One format for every engine: a zip holding
+**Backup** (built). One format for every engine: a zip holding
 `manifest.json` (format, time, engines, schema versions, sizes, checksums) and
 a `VACUUM INTO` snapshot of each file. The root only copies files
-(`Store.Snapshot`, over every engine implementing `Snapshotter`); the zip lives
-in the `backup` package, so `archive/zip`'s 200 KiB is paid only by programs
-that back up. A snapshot runs on a short-lived connection opened read-only at
+(`Store.Snapshot`, over every engine implementing `Snapshotter`, into a
+directory inside the store's own, so on the data's disk); the zip lives in the
+`backup` package, so `archive/zip`'s 200 KiB is paid only by programs that back
+up:
+
+```go
+err := backup.Write(ctx, store, file)                   // the store keeps working
+err = backup.Restore(ctx, "./data", archive, size)       // before tinystore.Open
+```
+ A snapshot runs on a short-lived connection opened read-only at
 the file: the `query_only` readers refuse `VACUUM INTO`, and a read-only file
 lets the writer keep writing. Each file is one moment of its engine; two
 engines are two moments, as no write spans them. `backup.Restore` runs before

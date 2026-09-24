@@ -4,6 +4,7 @@
 //	data/
 //	├── LOCK           held while a store is open
 //	├── metrics.db     metrics.Open(ctx, store, …)
+//	├── records.db     records.Open(ctx, store, …)
 //	└── sql/
 //	    └── app.db     sqldb.Open(ctx, store, "app", migrations)
 //
@@ -16,5 +17,6 @@
 //	engine.go      Claim, Attach, Logger, Now: how an engine joins the store
 //	every.go       background work, and how its failures are logged
 //	memory.go      Reserve: one memory budget for every engine's work
+//	snapshot.go    Snapshot: every engine's file copied while it keeps working
 //	lock_*.go      one store per directory, per platform
 package tinystore

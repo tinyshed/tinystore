@@ -29,10 +29,11 @@ directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
 `Gauge`, `GaugeFunc`) for an application measuring itself. `sqldb` gives the
 application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
 states its contract. `records` keeps the application's `slog` lines in
-`records.db` ([records/README.md](records/README.md)).
+`records.db` ([records/README.md](records/README.md)). `Store.Snapshot` copies
+every engine's file while it works, and `backup` writes those copies as one zip
+and restores it before `Open`.
 
-Designed, not built: the rest of the root runtime (snapshots), `kv`, `blobs`,
-`jobs`, `backup` and self-metrics. [docs/samples/](docs/samples/README.md)
+Designed, not built: `kv`, `blobs`, `jobs` and self-metrics. [docs/samples/](docs/samples/README.md)
 holds a prototype of their API and the reference rewrite of one metrics path.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
@@ -53,6 +54,7 @@ Do not describe unbuilt behaviour as though it works.
 | `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
 | `sqldb/`             | the application's SQL databases: migrations, typed reads, `Exec…` writes, `Tx` |
 | `records/`           | the application's logs: a `slog.Handler` that never blocks, reads by time     |
+| `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
@@ -320,6 +322,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
+| a snapshot does not stop the writer                 | `TestSnapshotCopiesWhileTheWriterWrites`                                        |
+| a backup restores every engine                      | `TestABackupRestoresEveryEngine`                                                |
+| a changed backup is refused and leaves nothing      | `TestAChangedByteIsRefusedAndLeavesNothing`                                     |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |

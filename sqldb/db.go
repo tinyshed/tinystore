@@ -46,7 +46,7 @@ func Open(ctx context.Context, store *tinystore.Store, name string, migrations f
 		return nil, fmt.Errorf("%w: database name %q", tinystore.ErrInvalid, name)
 	}
 
-	path, release, err := store.Claim("sql/" + name + ".db")
+	path, release, err := store.Claim(fileName(name))
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +75,17 @@ func openFile(ctx context.Context, path, name string, migrations fs.FS) (*DB, er
 		return nil, errors.Join(fmt.Errorf("sql %q: %w", name, err), file.Close())
 	}
 	return &DB{name: name, file: file}, nil
+}
+
+func fileName(name string) string { return "sql/" + name + ".db" }
+
+// Snapshot copies the database into dir while it keeps working.
+func (d *DB) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+	schema, err := d.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName(d.name)))
+	if err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot sql %q: %w", d.name, err)
+	}
+	return tinystore.SnapshotFile{Name: fileName(d.name), Engine: "sql", Schema: schema}, nil
 }
 
 // Exec runs one statement on the writer, in a transaction of its own.

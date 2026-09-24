@@ -88,6 +88,15 @@ func openEngine(ctx context.Context, runtime *tinystore.Store, path string, opts
 	return store, nil
 }
 
+// Snapshot copies metrics.db into dir while the engine keeps working.
+func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
+	if err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot metrics: %w", err)
+	}
+	return tinystore.SnapshotFile{Name: fileName, Engine: "metrics", Schema: schema}, nil
+}
+
 func (s *Store) maintainInBackground(ctx context.Context) error {
 	_, err := s.Maintain(ctx)
 	return err

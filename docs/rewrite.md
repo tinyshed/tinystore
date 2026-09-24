@@ -253,7 +253,12 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      `internal/sqlite` in `docs/architecture.md`.
    - Done: `records`: the slog handler, hourly retention by age and bounded
      reads by time and level.
-   - Next: snapshots and backup.
+   - Done: snapshots and backup. `internal/sqlite.File.Snapshot` runs
+     `VACUUM INTO` on a connection opened read-only at the file; the store
+     copies every engine into `.snapshot-*` inside its directory, and `backup`
+     zips the copies with a checked manifest.
+   - Next: step 7, one new engine at a time (`kv`, `jobs`, `blobs`), and
+     self-metrics.
 7. New engines, one at a time.
 
 ## Gaps to close during the rewrite

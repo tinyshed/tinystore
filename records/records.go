@@ -19,6 +19,9 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
+// the file this engine claims inside the store's directory
+const fileName = "records.db"
+
 // recordsApplicationID is "TREC", the SQLite application id that claims a file for this engine
 const recordsApplicationID = 0x54524543
 
@@ -67,7 +70,7 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 		return nil, err
 	}
 
-	path, release, err := store.Claim("records.db")
+	path, release, err := store.Claim(fileName)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +191,16 @@ func (s *Store) Maintain(ctx context.Context) error {
 		}
 		return err
 	})
+}
+
+// Snapshot copies records.db into dir while the engine keeps working; what
+// waits in the buffer is not in the copy.
+func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
+	if err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot records: %w", err)
+	}
+	return tinystore.SnapshotFile{Name: fileName, Engine: "records", Schema: schema}, nil
 }
 
 func (s *Store) Stats() Stats {

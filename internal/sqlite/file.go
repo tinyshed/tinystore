@@ -17,6 +17,7 @@ import (
 )
 
 type File struct {
+	path        string
 	writer      *sql.DB
 	writerConn  *writeConnection
 	writeSlots  chan struct{}
@@ -97,6 +98,7 @@ func Open(ctx context.Context, path string, readers int) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	f.path = abs
 
 	if err = f.openReaders(ctx, abs, readers); err != nil {
 		return nil, errors.Join(err, f.Close())
