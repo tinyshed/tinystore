@@ -29,6 +29,7 @@ type Options struct {
 	MaxConcurrentIngest int
 	SnapshotTimeout     time.Duration
 	MaintenanceInterval time.Duration
+	Flush               time.Duration
 	Limits              Limits
 }
 
@@ -58,6 +59,9 @@ func (o *Options) normalizeDurations() error {
 	if o.MaintenanceInterval == 0 {
 		o.MaintenanceInterval = time.Minute
 	}
+	if o.Flush == 0 {
+		o.Flush = 15 * time.Second
+	}
 	if o.MaxBlockSpan == 0 {
 		o.MaxBlockSpan = 24 * time.Hour
 	}
@@ -67,7 +71,7 @@ func (o *Options) normalizeDurations() error {
 	if o.Retention <= 0 || !wholeMilliseconds(o.Retention) || !wholeMilliseconds(o.Lateness) {
 		return fmt.Errorf("%w: durations", ErrInvalid)
 	}
-	if o.SnapshotTimeout < 0 || o.MaintenanceInterval < 0 {
+	if o.SnapshotTimeout < 0 || o.MaintenanceInterval < 0 || o.Flush < 0 {
 		return fmt.Errorf("%w: durations", ErrInvalid)
 	}
 	return nil

@@ -144,6 +144,31 @@ work. The current engine decodes raw for every aggregate;
 [the numerical contract](../docs/aggregate-contract.md) specifies nonfinite,
 reset and boundary behavior.
 
+## Instruments
+
+An application measuring itself does not build batches: it keeps instruments,
+and the engine ingests their values every `Options.Flush` (15 s), on `Close`,
+or on `Flush(ctx)` in a Manual store.
+
+```go
+requests := store.Counter("http_requests_total")
+inflight := store.Gauge("http_requests_inflight")
+store.GaugeFunc("notes", func(ctx context.Context) (float64, error) { … })
+
+requests.With("route", "/notes", "method", "POST").Inc()
+inflight.Add(1)
+```
+
+What is stored is the value at each flush, so a gauge's resolution is the flush
+interval. A counter holds its total since the process started; a restart is a
+reset, which `AggregateIncrease` counts. The same labels in any order are one
+series. A series `Ingest` refuses — an invalid label, a new label set beyond
+`MaxSeries`, a negative counter increment, the same name as a counter and a
+gauge — is dropped and logged once, and the other instruments still flush; a
+`GaugeFunc` error skips that sample and is logged once while it repeats.
+Histograms are not provided: a bucketed approximation is not the exact answer
+this engine promises.
+
 ## Contracts and defaults
 
 - Timestamps are signed Unix milliseconds; MaxInt64 is reserved as an exclusive

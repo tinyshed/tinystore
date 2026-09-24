@@ -239,7 +239,12 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      `Reserve`, `Memory`) and metrics reserves through it; `WorkBudget` and
      `Options.SharedBudget` are gone, and a store without memory is not asked,
      so no weight is computed, as before.
-   - Next: instruments, sqldb, records, snapshots and backup.
+   - Done: instruments (`Counter`, `Gauge`, `GaugeFunc`, `Flush`), in
+     `instruments.go`; a series whose labels are invalid is now refused as a
+     `*SeriesError` naming it, as every other refusal already was. `task size`
+     grew by 32 KiB, to 6 880: `Open` registers the background flush, so every
+     program links the instruments.
+   - Next: sqldb, records, snapshots and backup.
 7. New engines, one at a time.
 
 ## Gaps to close during the rewrite

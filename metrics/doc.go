@@ -36,6 +36,7 @@
 //	retention.go       expiry and reclamation
 //	quarantine.go      series whose maintenance failed
 //	drop.go            DropSeries: one series and everything it holds
+//	instruments.go     Counter, Gauge, GaugeFunc: values ingested at each Flush
 //
 //	group.go           a group of blocks and where their payloads live
 //	directory.go       the group directory's bytes

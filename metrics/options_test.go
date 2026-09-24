@@ -58,8 +58,8 @@ func TestZeroOptionsTakeTheDefaults(t *testing.T) {
 	}
 	want := Options{
 		Retention: 30 * 24 * time.Hour, MaxBlockSpan: 24 * time.Hour, SnapshotTimeout: 5 * time.Second,
-		MaintenanceInterval: time.Minute,
-		MaxSeries:           100000, MaxHeadSamples: 4096, MaxHeadBytes: 256 << 10, MaxBatchSamples: 10000,
+		MaintenanceInterval: time.Minute, Flush: 15 * time.Second,
+		MaxSeries: 100000, MaxHeadSamples: 4096, MaxHeadBytes: 256 << 10, MaxBatchSamples: 10000,
 		MaxBatchBytes: 4 << 20, MaintenanceSeries: 64, MaxReaders: 2, MaxConcurrentReads: 2, MaxConcurrentIngest: 1,
 		Limits: Limits{Series: 1000, Blocks: 4096, PayloadBytes: 16 << 20, DecodedSamples: 1 << 20, OutputSamples: 100000},
 	}

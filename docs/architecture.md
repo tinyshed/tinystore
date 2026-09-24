@@ -178,7 +178,7 @@ the store writes every report as ordinary series:
 
 **metrics** (built). Contract: `AGENTS.md`, `metrics/README.md`,
 `docs/aggregate-contract.md`. `Ingest` stays for whoever receives samples from
-elsewhere; an application measuring itself uses instruments (designed):
+elsewhere; an application measuring itself uses instruments:
 
 ```go
 requests := stats.Counter("http_requests_total")

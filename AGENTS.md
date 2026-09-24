@@ -25,10 +25,11 @@ reopen). [metrics/README.md](metrics/README.md) states each of those contracts
 and its limits; this file does not repeat them. The `tinystore` root holds a
 directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
 `Attach`, `Logger`, `Now`, `Every` and the memory budget (`Options.Memory`,
-`Reserve`), and metrics opens through it.
+`Reserve`), and metrics opens through it, with instruments (`Counter`,
+`Gauge`, `GaugeFunc`) for an application measuring itself.
 
-Designed, not built: the rest of the root runtime (snapshots), `records`, `sqldb`, `kv`, `blobs`, `jobs`, `backup`, metrics
-instruments, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
+Designed, not built: the rest of the root runtime (snapshots), `records`,
+`sqldb`, `kv`, `blobs`, `jobs`, `backup`, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
 holds a prototype of their API and the reference rewrite of one metrics path.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
@@ -307,6 +308,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`                             |
 | an engine's errors are the store's kinds            | `TestMetricsErrorsAreTheStoresKinds`                                            |
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
+| one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
+| an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |

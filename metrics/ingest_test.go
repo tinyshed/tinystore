@@ -125,4 +125,10 @@ func TestIngestValidationNamesItsSeries(t *testing.T) {
 	if !errors.As(err, &named) || !errors.Is(err, ErrTooOld) || formatLabels(named.Labels) != `cpu{host="one"}` {
 		t.Fatalf("expired sample: %v", err)
 	}
+
+	unnamed := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "", Value: "web-1"}}}
+	err = store.Ingest(t.Context(), []Batch{{Series: unnamed, Samples: testSamples(1)}})
+	if !errors.As(err, &named) || !errors.Is(err, ErrInvalid) || formatLabels(named.Labels) != `cpu{="web-1"}` {
+		t.Fatalf("a label without a name: %v", err)
+	}
 }

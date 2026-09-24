@@ -38,6 +38,9 @@ type Store struct {
 	readyCursor                                             atomic.Int64
 	quarantined                                             atomic.Int64
 	readSlots, ingestSlots                                  chan struct{}
+	instruments                                             instruments
+	flushing                                                sync.Mutex
+	finalFlush                                              sync.Once
 }
 
 // the file this engine claims inside the store's directory
@@ -63,6 +66,7 @@ func Open(ctx context.Context, runtime *tinystore.Store, options Options) (*Stor
 	}
 
 	runtime.Every("metrics maintenance", opts.MaintenanceInterval, store.maintainInBackground)
+	runtime.Every("metrics instruments", opts.Flush, store.Flush)
 	store.log.Info("opened", "path", path, "suspended", store.quarantined.Load())
 	return store, nil
 }
@@ -132,6 +136,7 @@ func newStore(ctx context.Context, f *sqlite.File, opts Options) (*Store, error)
 		readSlots:   make(chan struct{}, opts.MaxConcurrentReads),
 		ingestSlots: make(chan struct{}, opts.MaxConcurrentIngest),
 	}
+	store.instruments.store = store
 	store.maintenanceGate <- struct{}{}
 	store.quarantined.Store(quarantined)
 	return store, nil
@@ -150,9 +155,13 @@ func countSuspended(ctx context.Context, f *sqlite.File) (int64, error) {
 	return suspended, nil
 }
 
-// Close stops admission and drains in-flight work; cancellation stops waiting,
-// not cleanup. The store calls it: an application closes the store instead.
+// Close ingests the instruments' last values, stops admission and drains
+// in-flight work; cancellation stops waiting, not cleanup. The store calls it:
+// an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
+	var flushErr error
+	s.finalFlush.Do(func() { flushErr = s.Flush(ctx) })
+
 	s.mu.Lock()
 	if !s.closing {
 		s.closing = true
@@ -169,9 +178,9 @@ func (s *Store) Close(ctx context.Context) error {
 	s.mu.Unlock()
 	select {
 	case <-s.closed:
-		return s.closeErr
+		return errors.Join(flushErr, s.closeErr)
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Join(flushErr, ctx.Err())
 	}
 }
 

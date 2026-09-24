@@ -54,7 +54,7 @@ func (in *ingestInput) add(batch Batch) error {
 
 	labels, identity, err := canonicalLabels(batch.Series.Labels, true)
 	if err != nil {
-		return err
+		return seriesError(batch.Series.Labels, err)
 	}
 	kind, err := seriesKind(batch.Series.Kind)
 	if err != nil {
