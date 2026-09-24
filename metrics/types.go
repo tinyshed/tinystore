@@ -108,7 +108,15 @@ type DroppedSeries struct {
 type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts, QuarantinedSeries, ReclaimedSeries int }
 
 // Stats counts this handle's work; QuarantinedSeries is the current persisted count.
-type Stats struct{ IngestedSamples, RejectedBatches, Queries, SealedBlocks, ExpiredSamples, QuarantinedSeries, ReclaimedSeries uint64 }
+type Stats struct {
+	IngestedSamples   uint64
+	RejectedBatches   uint64
+	Queries           uint64
+	SealedBlocks      uint64
+	ExpiredSamples    uint64
+	QuarantinedSeries uint64
+	ReclaimedSeries   uint64
+}
 
 // MaintenanceFailure is a persisted diagnostic; SeriesID is a file-local cursor, not a series handle.
 type MaintenanceFailure struct {

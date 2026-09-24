@@ -212,6 +212,16 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      two calls a change now makes; the encoder stores that shape as ordinary
      values and picks changes only for a few steps. `task size` grew by 4 KiB,
      to 6 688.
+   - Done, the debt list: `Open` is `normalizeOptions` → `openFile` →
+     `newStore`; the options are checked as durations, capacities,
+     concurrency, the head and the limits, in the order they always were, and
+     `Limits.fields` is the one list of the five limits. A throwaway dump of
+     200 000 random option sets, each also narrowed as a query's limits, was
+     identical against `f3f3954`, every refusal included, and three tests now
+     pin the defaults, each refusal and the narrowing. `narrowLimits`, the one
+     step that runs per query, inlines `fields` and allocates as before.
+     `.golangci.yml` excludes no file from `lll`, `funlen` or `gocognit`, and
+     `task size` stayed at 6 688.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -220,6 +230,5 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 
 | area | gap |
 |---|---|
-| all | the `lll` entry in `.golangci.yml`: 5 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

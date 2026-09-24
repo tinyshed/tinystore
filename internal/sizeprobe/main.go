@@ -40,7 +40,8 @@ func main() {
 	defer func() { _ = store.Close(ctx) }()
 	at := time.Now().UnixMilli()
 	series := metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "probe"}}}
-	if err = store.Ingest(ctx, []metrics.Batch{{Series: series, Samples: []metrics.Sample{{At: at, Value: 1}}}}); err != nil {
+	batch := metrics.Batch{Series: series, Samples: []metrics.Sample{{At: at, Value: 1}}}
+	if err = store.Ingest(ctx, []metrics.Batch{batch}); err != nil {
 		panic(err)
 	}
 	if _, err = store.Maintain(ctx); err != nil {

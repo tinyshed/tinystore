@@ -36,6 +36,22 @@ func normalizeOptions(o Options) (Options, error) {
 	if o.SharedBudget != nil && o.SharedBudget.capacity <= 0 {
 		return o, fmt.Errorf("%w: uninitialized shared work budget", ErrInvalid)
 	}
+	if err := o.normalizeDurations(); err != nil {
+		return o, err
+	}
+	if err := o.normalizeCapacities(); err != nil {
+		return o, err
+	}
+	if err := o.normalizeConcurrency(); err != nil {
+		return o, err
+	}
+	if err := o.normalizeHead(); err != nil {
+		return o, err
+	}
+	return o, o.Limits.normalize()
+}
+
+func (o *Options) normalizeDurations() error {
 	if o.Retention == 0 {
 		o.Retention = 30 * 24 * time.Hour
 	}
@@ -45,24 +61,47 @@ func normalizeOptions(o Options) (Options, error) {
 	if o.MaxBlockSpan == 0 {
 		o.MaxBlockSpan = 24 * time.Hour
 	}
-	if o.MaxBlockSpan < time.Millisecond || o.MaxBlockSpan%time.Millisecond != 0 {
-		return o, fmt.Errorf("%w: block span", ErrInvalid)
+	if o.MaxBlockSpan <= 0 || !wholeMilliseconds(o.MaxBlockSpan) {
+		return fmt.Errorf("%w: block span", ErrInvalid)
 	}
-	if o.Retention < time.Millisecond || o.Retention%time.Millisecond != 0 || o.Lateness < 0 || o.Lateness%time.Millisecond != 0 || o.SnapshotTimeout < 0 {
-		return o, fmt.Errorf("%w: durations", ErrInvalid)
+	if o.Retention <= 0 || !wholeMilliseconds(o.Retention) || !wholeMilliseconds(o.Lateness) || o.SnapshotTimeout < 0 {
+		return fmt.Errorf("%w: durations", ErrInvalid)
 	}
-	fields := []*int{&o.MaxSeries, &o.MaxHeadSamples, &o.MaxBatchSamples, &o.MaxBatchBytes, &o.MaintenanceSeries, &o.MaxReaders}
-	defaults := []int{100000, 4096, 10000, 4 << 20, 64, 2}
-	for i, p := range fields {
-		if *p < 0 {
-			return o, fmt.Errorf("%w: negative capacity", ErrInvalid)
+	return nil
+}
+
+func wholeMilliseconds(duration time.Duration) bool {
+	return duration >= 0 && duration%time.Millisecond == 0
+}
+
+func (o *Options) normalizeCapacities() error {
+	capacities := []struct {
+		value    *int
+		fallback int
+	}{
+		{&o.MaxSeries, 100000},
+		{&o.MaxHeadSamples, 4096},
+		{&o.MaxBatchSamples, 10000},
+		{&o.MaxBatchBytes, 4 << 20},
+		{&o.MaintenanceSeries, 64},
+		{&o.MaxReaders, 2},
+	}
+	for _, capacity := range capacities {
+		if *capacity.value < 0 {
+			return fmt.Errorf("%w: negative capacity", ErrInvalid)
 		}
-		if *p == 0 {
-			*p = defaults[i]
+		if *capacity.value == 0 {
+			*capacity.value = capacity.fallback
 		}
 	}
-	if o.MaxConcurrentReads < 0 || o.MaxConcurrentIngest < 0 || o.MaxConcurrentReads > 1<<16 || o.MaxConcurrentIngest > 1<<16 {
-		return o, fmt.Errorf("%w: concurrent work capacity", ErrInvalid)
+	return nil
+}
+
+func (o *Options) normalizeConcurrency() error {
+	for _, slots := range []int{o.MaxConcurrentReads, o.MaxConcurrentIngest} {
+		if slots < 0 || slots > 1<<16 {
+			return fmt.Errorf("%w: concurrent work capacity", ErrInvalid)
+		}
 	}
 	if o.MaxConcurrentReads == 0 {
 		o.MaxConcurrentReads = o.MaxReaders
@@ -70,35 +109,51 @@ func normalizeOptions(o Options) (Options, error) {
 	if o.MaxConcurrentIngest == 0 {
 		o.MaxConcurrentIngest = 1
 	}
+	return nil
+}
+
+func (o *Options) normalizeHead() error {
 	if o.MaxHeadBytes == 0 {
 		o.MaxHeadBytes = 256 << 10
 	}
 	if o.MaxHeadBytes < 1 || o.MaxHeadBytes > maximumHeadBytes || o.MaxHeadSamples > 1<<20 {
-		return o, fmt.Errorf("%w: mutable head capacity", ErrInvalid)
+		return fmt.Errorf("%w: mutable head capacity", ErrInvalid)
 	}
-	defaultsLimits := Limits{Series: 1000, Blocks: 4096, PayloadBytes: 16 << 20, DecodedSamples: 1 << 20, OutputSamples: 100000}
-	configured := []*int{&o.Limits.Series, &o.Limits.Blocks, &o.Limits.PayloadBytes, &o.Limits.DecodedSamples, &o.Limits.OutputSamples}
-	limitDefaults := []int{defaultsLimits.Series, defaultsLimits.Blocks, defaultsLimits.PayloadBytes, defaultsLimits.DecodedSamples, defaultsLimits.OutputSamples}
-	for i, capacity := range configured {
-		if *capacity < 0 || *capacity == math.MaxInt {
-			return o, fmt.Errorf("%w: query capacity", ErrInvalid)
-		}
-		if *capacity == 0 {
-			*capacity = limitDefaults[i]
-		}
-	}
-	return o, nil
+	return nil
 }
 
+// fields lists the limits in one order for every loop over them
+func (l *Limits) fields() [5]*int {
+	return [5]*int{&l.Series, &l.Blocks, &l.PayloadBytes, &l.DecodedSamples, &l.OutputSamples}
+}
+
+func (l *Limits) normalize() error {
+	defaults := Limits{
+		Series: 1000, Blocks: 4096, PayloadBytes: 16 << 20, DecodedSamples: 1 << 20, OutputSamples: 100000,
+	}
+	fallbacks := defaults.fields()
+	for i, limit := range l.fields() {
+		if *limit < 0 || *limit == math.MaxInt {
+			return fmt.Errorf("%w: query capacity", ErrInvalid)
+		}
+		if *limit == 0 {
+			*limit = *fallbacks[i]
+		}
+	}
+	return nil
+}
+
+// narrowLimits takes a query's limits, each capped by the store's; zero asks for the store's:
+//
+//	store 10 20 30 40 50    query 5 0 31 0 0    → 5 20 30 40 50
 func narrowLimits(want, ceiling Limits) (Limits, error) {
-	a := []*int{&want.Series, &want.Blocks, &want.PayloadBytes, &want.DecodedSamples, &want.OutputSamples}
-	b := []int{ceiling.Series, ceiling.Blocks, ceiling.PayloadBytes, ceiling.DecodedSamples, ceiling.OutputSamples}
-	for i, p := range a {
-		if *p < 0 {
+	caps := ceiling.fields()
+	for i, limit := range want.fields() {
+		if *limit < 0 {
 			return want, fmt.Errorf("%w: negative query limit", ErrInvalid)
 		}
-		if *p == 0 || *p > b[i] {
-			*p = b[i]
+		if *limit == 0 || *limit > *caps[i] {
+			*limit = *caps[i]
 		}
 	}
 	return want, nil

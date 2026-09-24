@@ -84,11 +84,6 @@ linters:
           - funlen
           - gocognit
 
-      # debt the rewrite has not paid yet, see docs/rewrite.md; delete an entry once it passes
-      - path: (internal/sizeprobe/(main|report/main)|metrics/(options|store|types))\.go$
-        linters:
-          - lll
-
 formatters:
   enable:
     - gofumpt         # stricter superset of gofmt
