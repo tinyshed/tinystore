@@ -40,32 +40,6 @@ type Batch struct {
 	Samples []Sample
 }
 
-type Limits struct {
-	Series         int
-	Blocks         int
-	PayloadBytes   int
-	DecodedSamples int
-	OutputSamples  int
-}
-
-type Options struct {
-	Retention           time.Duration
-	Lateness            time.Duration
-	MaxBlockSpan        time.Duration
-	MaxSeries           int
-	MaxHeadSamples      int
-	MaxHeadBytes        int
-	MaxBatchSamples     int
-	MaxBatchBytes       int
-	MaintenanceSeries   int
-	MaxReaders          int
-	MaxConcurrentReads  int
-	MaxConcurrentIngest int
-	SnapshotTimeout     time.Duration
-	SharedBudget        *WorkBudget
-	Limits              Limits
-}
-
 // Range selects exact labels and an exclusive upper timestamp bound; limits may only narrow the store's limits.
 type Range struct {
 	Matchers []Label

@@ -5,6 +5,45 @@ import (
 	"testing"
 )
 
+func TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	points := testSamples(500)
+	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `create trigger fail_publication before update of sealed_before on series_state begin select raise(abort,'injected failure'); end`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Maintain(t.Context()); err == nil {
+		t.Fatal("injected failure was ignored")
+	}
+	assertSamples(t, readAll(t, store), points)
+	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
+		var payloads, groups int
+		var nextID int64
+		err := tx.QueryRowContext(t.Context(), `select (select count(*) from payloads),(select count(*) from groups),next_payload_id from store_state where id=1`).Scan(&payloads, &groups, &nextID)
+		if payloads != 0 || groups != 0 || nextID != 1 {
+			t.Fatalf("rollback left payloads=%d groups=%d next=%d", payloads, groups, nextID)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `drop trigger fail_publication`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	assertSamples(t, readAll(t, store), points)
+}
+
 func stagedTestGroups(t *testing.T, s *Store) ([]stagedPublication, []int64) {
 	t.Helper()
 	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}

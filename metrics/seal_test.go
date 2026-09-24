@@ -6,42 +6,23 @@ import (
 	"time"
 )
 
-func TestMaintenanceRotatesReadySeries(t *testing.T) {
-	s, _ := openTestStore(t, Options{MaintenanceSeries: 1})
-	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}
-	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
-	points := testSamples(481)
-	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: points[:241]}, {Series: b, Samples: points[:241]}}); err != nil {
+func TestWatermarkIsStrictAndFollowsTheSeries(t *testing.T) {
+	store, _ := openTestStore(t, Options{Lateness: 261 * time.Millisecond})
+	points := append(testSamples(240), Sample{At: testEpoch + 500, Value: 1})
+	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.Maintain(t.Context())
-	if err != nil {
+	store.now = func() time.Time { return time.UnixMilli(testEpoch + 3600000) }
+	work, err := store.Maintain(t.Context())
+	if err != nil || work.SealedBlocks != 0 {
+		t.Fatalf("sealed the watermark or followed wall time: %+v %v", work, err)
+	}
+	if err = store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: []Sample{{At: testEpoch + 501, Value: 2}}}}); err != nil {
 		t.Fatal(err)
 	}
-	if first.SealedBlocks != 1 {
-		t.Fatalf("first pass sealed %d blocks", first.SealedBlocks)
-	}
-	if err = s.Ingest(t.Context(), []Batch{{Series: a, Samples: points[241:]}}); err != nil {
-		t.Fatal(err)
-	}
-	second, err := s.Maintain(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.SealedBlocks != 1 {
-		t.Fatalf("second pass sealed %d blocks", second.SealedBlocks)
-	}
-	if err := s.file.View(t.Context(), func(tx *sql.Tx) error {
-		var frontier sql.NullInt64
-		if err := tx.QueryRowContext(t.Context(), `select state.sealed_before from series_state state join postings p on p.series_id=state.series_id join label_values v on v.id=p.label_id where v.name='__name__' and v.value='b'`).Scan(&frontier); err != nil {
-			return err
-		}
-		if !frontier.Valid || frontier.Int64 != points[240].At {
-			t.Fatalf("later series frontier: %v", frontier)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	work, err = store.Maintain(t.Context())
+	if err != nil || work.SealedBlocks != 1 {
+		t.Fatalf("new sample did not release prefix: %+v %v", work, err)
 	}
 }
 
@@ -91,4 +72,30 @@ func TestReadyWaitsForASealableWatermarkPrefix(t *testing.T) {
 	if err != nil || result.SealedBlocks != 1 {
 		t.Fatalf("safe prefix was not sealed: %+v, %v", result, err)
 	}
+}
+
+func TestBlockSpanIsBoundedWithoutDroppingThePrefix(t *testing.T) {
+	store, _ := openTestStore(t, Options{MaxBlockSpan: 10 * time.Millisecond})
+	points := testSamples(500)
+	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
+		group, _, err := store.firstGroup(t.Context(), tx, 1)
+		if err != nil {
+			return err
+		}
+		for _, b := range group.blocks {
+			if b.head.End-b.head.Start > 10 {
+				t.Fatal("block span")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertSamples(t, readAll(t, store), points)
 }

@@ -32,8 +32,7 @@ the engines closing in reverse order.
 
 ## The reference rewrite
 
-Branch `claude/tender-cannon-6z3mxv`, commit `407e728`: the metrics ingest
-path, from `Ingest` to the packed head, moved function by function into the
+Commit `407e728`, merged into `main`: the metrics ingest path, from `Ingest` to the packed head, moved function by function into the
 style of `docs/rewrite.md`, with behaviour, bytes and speed unchanged. Read it
 as a diff against `cad0ea8`:
 

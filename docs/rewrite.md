@@ -12,8 +12,8 @@ changes behaviour and structure at once. The code already holds every edge
 case that was found the hard way (CRCs, bounds, frontier checks, budgets before
 materialisation); writing it again from memory loses some of them silently.
 
-The reference is branch `claude/tender-cannon-6z3mxv`, commit `407e728`: the
-ingest path from `Ingest` to the packed head, rebuilt this way.
+The reference is commit `407e728`, merged into `main`: the ingest path from
+`Ingest` to the packed head, rebuilt this way.
 
 | before | after |
 |---|---|
@@ -36,27 +36,30 @@ earlier run, so all three are within noise. Functions over 40 lines went from
 ## Reading path
 
 ```text
-tinystore/doc.go     the runtime: engines, directory, lifecycle   (after step 5)
+tinystore/doc.go     the runtime: engines, directory, lifecycle   (step 6)
 metrics/doc.go       the pipeline and a map of the files
-metrics/store.go     every public method, each a list of steps
-metrics/<step>.go    one step per file
+metrics/store.go     the handle: Open, Close, Stats
+metrics/<step>.go    one step per file; a public method opens the file of its step
 ```
 
-Target files of `metrics/`, one package; tests mirror them one to one:
+The files of `metrics/` since step 4, one package; a test file is named after
+the file it tests, and `store_test.go`, `corpus_test.go`, `recovery_test.go`,
+`physical_test.go` and `example_test.go` cross every step:
 
-| file | holds |
-|---|---|
-| `doc.go`, `store.go`, `types.go`, `options.go` | map, public methods, public model, defaults and limits |
-| `admission.go` | open/closed gate, slots, shared budget |
-| `ingest.go`, `ingest_input.go` | `Ingest`; one call's batches checked and grouped |
-| `series.go`, `match.go` | identity, dictionary, postings; matchers to series |
-| `head.go`, `head_state.go` | the packed head format; its row in `series_state` |
-| `read.go`, `snapshot.go`, `budget.go`, `aggregate.go` | `Read`/`Stream`; fetching from one snapshot; query budget; exact buckets |
-| `maintain.go`, `seal.go`, `publish.go`, `merge.go` | the pass; the safe prefix and its blocks; publication; merging groups |
-| `retention.go`, `quarantine.go` | expiry and reclamation; suspended series |
-| `group.go`, `directory.go`, `clock.go`, `summary.go` | sealed format |
-| `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go`, `binary.go` | value representations and bounded binary reads |
-| `schema.sql` | the one schema |
+| file | holds | area |
+|---|---|---|
+| `doc.go`, `store.go`, `types.go`, `options.go` | map; handle and lifecycle; public model; options, limits, defaults | — |
+| `admission.go` | open/closed gate, slots, the shared `WorkBudget` | G |
+| `ingest.go`, `ingest_input.go` | `Ingest`; one call's batches checked and grouped | B |
+| `series.go`, `match.go` | identity, dictionary, postings; matchers to series | E |
+| `head.go`, `head_state.go` | the packed head format; its row in `series_state` | B |
+| `read.go`, `snapshot.go`, `snapshot_heads.go`, `snapshot_groups.go`, `snapshot_payloads.go` | `Read`/`Stream` and the query budget; one snapshot and its batched fetches | D |
+| `aggregate.go` | `Aggregate`, exact buckets | D |
+| `maintain.go`, `seal.go`, `publish.go`, `merge.go` | the pass; the safe prefix encoded; publication; merging groups | F, C |
+| `retention.go`, `quarantine.go` | expiry and reclamation; suspended series | F |
+| `group.go`, `directory.go`, `clock.go`, `summary.go` | sealed format | C |
+| `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go`, `binary.go` | value representations and bounded binary reads | A |
+| `migrations/0001_schema.sql` | the one schema; a later change is `0002_…` | — |
 
 ## Rules
 
@@ -101,33 +104,23 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 1. Done: `codex/architecture-measurements` fast-forwarded into `main` at
    `cad0ea8`; every cited commit kept its hash.
 2. Done: `docs/architecture.md`, this file, `AGENTS.md`.
-3. **Delete what only reads old files.** No database written by an earlier
-   revision exists, and nothing is tagged.
-   - row-per-sample head: the `head` table, the legacy branches of `fetchHead`,
-     `decodeHead`, `loadIngestState`, `writeHead`, `saveHead` and `head_batch.go`,
-     `TestLegacyHeadConvertsOnFirstMutation`,
-     `TestSchemaOneFileUpgradesWithoutChangingSamples` (the reference commit
-     already did all but the table);
-   - version-one directories: `directoryHeader`, `directoryBlock`,
-     `encodeDirectory`, `decodeDirectory`, the `data[0] == 1` branch of
-     `readDirectory`, `format < 2` in `writeDirectory`, codec-body blocks
-     (`block.format < 2`) in `decodeBlock`, clock id 0,
-     `TestDirectoryVersionOneStillReads`, and their uses in `publication_test.go`;
-     version two is still written for new groups and keeps its golden reader;
-   - text identities: the `labels` column, JSON identities in
-     `resolveSeries` (`identity in (?,?,?)`), the legacy branches of
-     `storedIdentity.confirms`, `decodeLabels` and `coalesce(s.labels,
-     s.identity)` in `matchShape`, `TestLegacyLabelIdentityIsReusedAndCompacted`;
-   - migrations `0001`…`0009` become one `0001_schema.sql` holding the final
-     tables and indexes, without `head` and `series.labels`.
-4. **Skeleton.** `doc.go` with the map, `store.go` with the public methods as
-   step lists, files moved to the table above, tests renamed to mirror them.
-   Add `lll` (120), `funlen` (60 lines) and `gocognit` to `.golangci.yml` with
-   the exceptions that remain listed. Mechanical moves only.
+3. Done: what only read old files is gone: the row-per-sample head, version-one
+   directories, codec-body blocks, clock id 0, text identities and the
+   `labels` column, with the four tests that exercised them
+   (`TestLegacyHeadConvertsOnFirstMutation`,
+   `TestSchemaOneFileUpgradesWithoutChangingSamples`,
+   `TestDirectoryVersionOneStillReads`,
+   `TestLegacyLabelIdentityIsReusedAndCompacted`) and `FuzzDirectory`.
+   Migrations `0001`…`0009` are one `0001_schema.sql`.
+4. Done: the skeleton. Files moved to the table above by whole declarations,
+   tests renamed or merged to mirror them, `doc.go` holds the map. `lll` (120),
+   `funlen` (60 lines, comments excluded) and `gocognit` (30) gate new code;
+   `.golangci.yml` lists by name what does not pass yet, and an area deletes
+   its entries as it clears them.
 5. **By area, in parallel** on disjoint files, each merged green: A codec,
    B head, C seal/publish/merge/group/directory/clock, D read/snapshot/aggregate,
-   E series/match, F maintain/retention/quarantine, G `internal/sqlite`. Steps 3
-   and 4 go first and in one session: they set the seams the areas share.
+   E series/match, F maintain/retention/quarantine, G admission and
+   `internal/sqlite`. The file table above names each file's area.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -143,6 +136,7 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | E | `rankMatchers` has three paths; `lookupLabelIDs` and `increasePostingCounts` send SQL of varying arity through the 32-program writer cache |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
 | G | `transactReusable` returns `(error, bool)`; the error goes last |
-| C | file-level `//nolint:gosec` in `clocks.go`, `directory.go`, `values.go`, `residuals.go` |
+| A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
+| all | the debt entries in `.golangci.yml`: 19 functions over `funlen` or `gocognit`, 32 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

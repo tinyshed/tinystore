@@ -217,3 +217,12 @@ func reclaimSeries(ctx context.Context, tx *sql.Tx, id int64) error {
 	}
 	return nil
 }
+
+func earlier(at, delta int64) int64 {
+	if at < math.MinInt64+delta {
+		return math.MinInt64
+	}
+	return at - delta
+}
+
+func (s *Store) cutoff() int64 { return earlier(s.now().UnixMilli(), s.opts.Retention.Milliseconds()) }

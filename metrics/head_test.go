@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -165,4 +166,127 @@ func TestPackedHeadGoldenOneSample(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSamples(t, back, point)
+}
+
+func TestUnchangedHeadChunksKeepTheirEncodedBytes(t *testing.T) {
+	s, _ := openTestStore(t, Options{})
+	old := testSamples(480)
+	packed, err := s.encodeHead(t.Context(), 1, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := s.parseHead(snapshotOf(1, old, packed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		incoming []Sample
+		want     int
+	}{
+		{name: "append", incoming: []Sample{{At: testEpoch + 480, Value: math.Float64frombits(0x7ff8000000004321)}}, want: 480},
+		{name: "late replacement", incoming: []Sample{{At: testEpoch + 300, Value: math.Float64frombits(0x7ff8000000004321)}}, want: 240},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			merged, err := mergeHead(old, test.incoming, s.opts.MaxHeadSamples)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept := reusableChunks(chunks, test.incoming[0].At)
+			if countChunkSamples(kept) != test.want {
+				t.Fatalf("reusable prefix: %d", countChunkSamples(kept))
+			}
+			updated, err := s.encodeHeadAfter(t.Context(), 1, kept, merged[test.want:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := s.parseHead(snapshotOf(1, merged, updated))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(storedBytes(reusableChunks(after, test.incoming[0].At)), storedBytes(kept)) {
+				t.Fatal("unchanged chunk bytes moved")
+			}
+			decoded, err := s.decodeHead(t.Context(), snapshotOf(1, merged, updated))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range merged {
+				if decoded[i].At != merged[i].At || math.Float64bits(decoded[i].Value) != math.Float64bits(merged[i].Value) {
+					t.Fatalf("sample %d changed", i)
+				}
+			}
+		})
+	}
+}
+
+func snapshotOf(id int64, points []Sample, packed []byte) headSnapshot {
+	return headSnapshot{seriesID: id, count: len(points), start: points[0].At, end: points[len(points)-1].At, packed: packed}
+}
+
+func storedBytes(chunks []headChunk) []byte {
+	var out []byte
+	for _, chunk := range chunks {
+		out = append(out, chunk.stored...)
+	}
+	return out
+}
+
+func TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum(t *testing.T) {
+	s, _ := openTestStore(t, Options{MaxHeadSamples: 512})
+	points := testSamples(481)
+	if err := s.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
+		t.Fatal(err)
+	}
+	last := points[len(points)-1]
+	request := Range{Matchers: testSeries().Labels, From: last.At, To: last.At + 1, Limits: Limits{DecodedSamples: 1, OutputSamples: 1}}
+	read, err := s.Read(t.Context(), request)
+	if err != nil || len(read) != 1 || len(read[0].Samples) != 1 || math.Float64bits(read[0].Samples[0].Value) != math.Float64bits(last.Value) {
+		t.Fatalf("narrow last chunk: %+v, %v", read, err)
+	}
+	firstChunk := Range{Matchers: testSeries().Labels, From: points[1].At, To: points[1].At + 1, Limits: Limits{DecodedSamples: 239}}
+	if read, err := s.Read(t.Context(), firstChunk); !errors.Is(err, ErrLimit) || read != nil {
+		t.Fatalf("undersized selected chunk budget: %+v, %v", read, err)
+	}
+	firstChunk.Limits.DecodedSamples = 240
+	if read, err := s.Read(t.Context(), firstChunk); err != nil || len(read) != 1 || len(read[0].Samples) != 1 {
+		t.Fatalf("selected first chunk: %+v, %v", read, err)
+	}
+	if err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
+		var tail []byte
+		if err := tx.QueryRowContext(t.Context(), `select tail from series_state where series_id=1`).Scan(&tail); err != nil {
+			return err
+		}
+		tail[6] ^= 0xff
+		_, err := tx.ExecContext(t.Context(), `update series_state set tail=? where series_id=1`, tail)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if read, err := s.Read(t.Context(), request); !errors.Is(err, ErrCorrupt) || read != nil {
+		t.Fatalf("unselected prefix corruption: %+v, %v", read, err)
+	}
+}
+
+func TestBatchedNarrowHeadsChargeSelectedChunks(t *testing.T) {
+	s, _ := openTestStore(t, Options{MaxHeadSamples: 512})
+	points := testSamples(481)
+	batches := make([]Batch, 20)
+	for i := range batches {
+		batches[i] = Batch{Series: Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprint(i)}}}, Samples: points}
+	}
+	if err := s.Ingest(t.Context(), batches); err != nil {
+		t.Fatal(err)
+	}
+	last := points[len(points)-1]
+	request := Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: last.At, To: last.At + 1, Limits: Limits{DecodedSamples: 20, OutputSamples: 20}}
+	read, err := s.Read(t.Context(), request)
+	if err != nil || len(read) != 20 {
+		t.Fatalf("batched narrow heads: %d series, %v", len(read), err)
+	}
+	for _, series := range read {
+		if len(series.Samples) != 1 || math.Float64bits(series.Samples[0].Value) != math.Float64bits(last.Value) {
+			t.Fatalf("batched narrow value changed: %+v", series)
+		}
+	}
 }

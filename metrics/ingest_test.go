@@ -2,7 +2,9 @@ package metrics
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"errors"
 	"math"
 	"testing"
 )
@@ -65,4 +67,16 @@ func TestLongPackedHeadAppendKeepsExactBitsAndFrontier(t *testing.T) {
 		t.Fatalf("seal appended head: %+v: %v", result, err)
 	}
 	assertRead()
+}
+
+func TestCanceledIngestDoesNotCreateASeries(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := store.Ingest(ctx, []Batch{{Series: testSeries(), Samples: testSamples(1)}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ingest: %v", err)
+	}
+	if got := readAll(t, store); len(got) != 0 {
+		t.Fatal("canceled ingest committed")
+	}
 }

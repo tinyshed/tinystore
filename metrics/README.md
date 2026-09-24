@@ -10,10 +10,10 @@ The runnable [example](example_test.go) writes 241 samples of `cpu{host="web-1"}
 seals the first 240, closes the store and reads across the sealed/head boundary
 after reopening. No binary-format knowledge is needed to use or follow it.
 
-1. **Open** (`open.go`) validates limits, opens `internal/sqlite` and applies
+1. **Open** (`store.go`) validates limits, opens `internal/sqlite` and applies
    checked SQL migrations. A metrics file has its own application identity.
 2. **Ingest** (`ingest.go`) validates and sorts a bounded batch, resolves its
-   series through `registry.go`, merges incoming points into its packed head,
+   series through `series.go`, merges incoming points into its packed head,
    then advances its state. `head.go` owns reading and replacing that tail.
    Everything commits together. Last input wins for duplicate mutable timestamps.
    Ordered unique input skips the timestamp map and sort; a duplicate or late
@@ -22,10 +22,11 @@ after reopening. No binary-format knowledge is needed to use or follow it.
    strictly newer batch with zero lateness and no retention overlap validates
    the whole head but decodes only the changing suffix; completed chunks keep
    their encoded bytes.
-3. **Read** (`query.go`) resolves exact label matches through postings and copies
+3. **Read** (`read.go`, `snapshot.go`) resolves exact label matches through
+   postings (`match.go`) and copies
    the required directories, payloads and encoded heads from one snapshot. It ends
    that snapshot before decoding. An error returns no partial answer.
-4. **Maintain** (`packing.go`) first expires due work, then reads a safe head
+4. **Maintain** (`maintain.go`, `seal.go`, `publish.go`) first expires due work, then reads a safe head
    prefix, encodes it outside the writer, and publishes only if its version is
    unchanged. Publication writes payloads, removes those exact head samples and
    moves the sealed frontier in the same transaction.
@@ -40,7 +41,8 @@ after reopening. No binary-format knowledge is needed to use or follow it.
    postings and unreferenced dictionary pairs in the same transaction.
 
 The value encoder in `values.go` compares the ordinary codec with constant,
-change-event and decimal-grid candidates. `clocks.go` stores time separately
+change-event (`values_changes.go`) and decimal-grid (`values_grid.go`)
+candidates. `clock.go` stores time separately
 and shares identical clock groups, with ownership maintained in the publication
 transaction. None of these choices appear in the public request types.
 
@@ -212,7 +214,7 @@ earlier revision is read. A series' identity is `@` and the base64 SHA-256 of it
 canonical labels, unique in the index; a digest match resolves a series only
 after its stored label ids equal the batch's.
 
-`groups.go` owns slot addressing; `directory.go` owns the directory format,
+`group.go` owns slot addressing; `directory.go` owns the directory format,
 versions two and three. Think of a directory as a small list of block descriptions:
 first value, statistics and where the body lives. The shared clock owns its
 time bounds and sample counts. `binary.go` contains checked binary reads and

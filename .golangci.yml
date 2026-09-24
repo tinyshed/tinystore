@@ -30,6 +30,11 @@ linters:
     - unconvert
     - wastedassign
 
+    # readability gates of docs/rewrite.md
+    - lll
+    - funlen
+    - gocognit
+
   settings:
     govet:
       enable-all: true
@@ -54,6 +59,15 @@ linters:
     gosec:
       excludes:
         - G104  # duplicate of errcheck
+    lll:
+      line-length: 120
+      tab-width: 4
+    funlen:
+      lines: 60
+      statements: -1
+      ignore-comments: true   # a worked example is not length
+    gocognit:
+      min-complexity: 30
 
   exclusions:
     presets:
@@ -66,6 +80,18 @@ linters:
           - gosec
           - noctx
           - bodyclose
+          - lll
+          - funlen
+          - gocognit
+
+      # debt the rewrite has not paid yet, see docs/rewrite.md; delete an entry once it passes
+      - path: (codec/(bits|codec|time|values)|internal/sizeprobe/(main|report/main)|internal/sqlite/(file|migrate|reader)|metrics/(aggregate|binary|clock|directory|group|maintain|match|merge|options|publish|quarantine|read|retention|seal|series|snapshot|snapshot_groups|snapshot_heads|snapshot_payloads|store|summary|types|values_changes))\.go$
+        linters:
+          - lll
+      - text: '[`''.](Migrate|Aggregate|decodeClockValues|readDirectory|Maintain|rankMatchers|fillLabels|publishBatch|publishTx|visitResults|decodeResiduals|expireSeries|decodeGroupRows|fetchGroupRows|fetchHeads|fetchPayloads|decodeBlock|changeValues|readChanges)[`'']'
+        linters:
+          - funlen
+          - gocognit
 
 formatters:
   enable:

@@ -223,6 +223,5 @@ pays on top of it.
 
 - `samples/runtime/`: the runtime, a stand-in metrics engine, `records`, `sqldb`
   and an application using them, as text files that build once renamed.
-- Branch `claude/tender-cannon-6z3mxv`, commit `407e728`: the metrics ingest
-  path rewritten in the target style, behaviour and bytes unchanged. The branch
-  stays until that code lands on `main` or is redone; see `docs/rewrite.md`.
+- Commit `407e728`, merged into `main`: the metrics ingest path rewritten in
+  the target style, behaviour and bytes unchanged; see `docs/rewrite.md`.
