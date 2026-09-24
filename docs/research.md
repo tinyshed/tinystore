@@ -100,6 +100,12 @@ The daily case alone would only prove it is a good format for telemetry.
 
 ## Where the rest of a dense block's bytes are — answered
 
+Update: built past what this section asked for. Blocks have no rows of their
+own any more — a group row holds up to 32 — so neither `block_payload` nor
+`block_expiry` exists, and retention walks series through
+`series_state.next_gc_ts` and its partial index `series_due`. The numbers below
+predate it, and a retention pass at a million series is still unmeasured.
+
 Measured rather than argued about, and the section that used to stand here
 guessed wrong twice. [measurements.md](measurements.md) has the division of the
 file; what it leaves for this document is what to do about it.
@@ -291,6 +297,11 @@ late sample rewrites an object belonging to fifty series.
 
 ## Entropy coding — measured, and larger than expected
 
+Update: built. The codec writes a block's deltas as Simple8b words and as a
+`huff0` stream with its own table, and keeps the smaller;
+[format.md](format.md) has the byte. What follows is the measurement that
+justified it.
+
 The version of this section that guessed put the prize at 0.056 bytes a sample
 and filed it under P3. The measurement in [measurements.md](measurements.md)
 says otherwise: between what we write and the order-0 entropy of the delta
@@ -332,6 +343,11 @@ that it removes the ladder's gaps — `… 15, 20, 30, 60` — which is what wou
 otherwise send a 44-bit ordered-integer residual to 60 bits.
 
 ## Stop paying twice for what the block row already holds
+
+Update: built. A block's value body carries no envelope: its first value and
+body length are in the group directory and its timestamps in a shared clock,
+and since `cec241b` the codec says so itself, in `EncodeValues` and
+`DecodeValues`.
 
 The payload begins with eight bytes of first timestamp and eight bytes of first
 value. The row it will live in has `start_ts` as its primary key and `first` as
@@ -485,16 +501,16 @@ for the XOR transform. None of them is a dependency.
 ```text
 done decompose the 103 bytes        two indexes, and 1.046 is safe today
 done exact decimals                 1.792 to 0.379, and the file to 0.865
-P0   retention that walks series    what 0.964 is owed before it may be claimed
-P0   the packed tail                the largest sparse prize, and the riskiest
-P1   a real corpus and an analyzer  without them, "we beat X" means nothing
-P1   order-preserving integers      only if the analyzer finds the gap
-P2   one object for many series     a layout question, against the packed tail
+done retention that walks series    series_due; unmeasured at a million series
+done the packed tail                the sparse run at a million series is still open
+done a real corpus and an analyzer  four corpora, and the census of 22 September
+done huff0 over the delta stream    Simple8b words or huff0, whichever is smaller
+done stop repeating the block row   the group directory and the shared clock hold it
+done exceptions in the scaled path  the engine's grid keeps a residual per value
+gone one object for many series     groups and shared clocks took the row's bytes
+P1   order-preserving integers      a second difference lost on TSBS; floats decide
 P2   a summary shaped by kind       two columns of waste, after the corpus says
-P1   huff0 over the delta stream    measured at a fifth to a quarter of the payload
-P1   stop repeating the block row   0.0875 a sample, and an API decision first
 P2   a fixed width beside simple8b  0.26 bits, and it unblocks ordered integers
-P2   exceptions in the scaled path  all-or-nothing is the decimal path's weakness
 P3   Chimp, ALP-RD                  against a bound our noisy fixture is already near
 ```
 

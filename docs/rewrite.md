@@ -234,4 +234,4 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | area | gap |
 |---|---|
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
-| docs | `docs/research.md` "Order of work" still lists shipped items |
+| docs | `docs/format.md` does not describe the engine's value representations: changes, the grid and its seven residual modes |

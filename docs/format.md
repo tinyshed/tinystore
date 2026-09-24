@@ -138,6 +138,5 @@ slots retain their address until the directory is merged or removed.
 
 The descriptor stream is bounded to 8 KiB before and after compression. Group
 clocks, value representations and payload checksums are unchanged. Version 3
-does not cause raw values or summaries to be re-encoded. Readers accept all
-three directory versions; earlier binaries cannot read version 3. Golden
-vectors cover every directory version.
+does not cause raw values or summaries to be re-encoded. Readers accept both
+versions; earlier binaries cannot read version 3. Golden vectors cover both.
