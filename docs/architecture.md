@@ -209,9 +209,65 @@ time only, and an index by attribute waits for a query that needs one.
 This is a first version and says so. A record is a row, its attributes JSON
 text; nothing is compressed, messages and keys are not shared between rows,
 there is no full-text search, and no bytes-per-record figure has been measured.
-What a log store should cost, and whether dictionaries, compressed blocks of
-records or FTS5 earn their place, is a research round with a real corpus and
-has not been run.
+The first density round is `docs/reports/records-layout-2026-09-24.md`, on a
+synthetic corpus.
+
+### Where records is going (designed, not built)
+
+Records will also take logs from programs that are not Go and not embedded,
+through a server that is a module of its own: OTLP, JSON and plain text never
+enter the root module's dependencies. The design follows from that caller.
+
+**One record model, whatever came in.** A record is the OpenTelemetry log
+model: event time and observed time, severity as number and text, a body that
+is a string or a value, attributes, a resource, a trace and span id. `slog`
+maps onto it without loss, and so does every input below.
+
+**A stream is what a series is in metrics.** Resource attributes
+(`service.name`, host) are a label set that rarely changes; records are packed
+into blocks per stream, found through the same kind of registry and postings.
+A block of one service compresses better, and a query for one service decodes
+no other.
+
+**Each line is parsed on its own; a stream may only hint.** A line starting
+with `{` is JSON, `key=value` pairs are logfmt, anything else is text whose
+whole line is the body. A line that fails its hinted format is kept as text,
+never dropped. Nested objects flatten to dotted keys (`http.status`); arrays
+stay one JSON value. Time and level come from known keys (`time`, `ts`,
+`@timestamp`, `level`, `severity`) or the start of a text line, else the
+observed time is used.
+
+**Lines become records before they are parsed.** A multi-line record, a Java
+stack trace, is joined at ingest by a continuation rule, before any format is
+detected.
+
+**A body is split into a template and its variables.** Drain-style template
+mining runs on every string body, JSON `msg` included:
+`service api started in 132ms → service <*> started in <*>ms + [api, 132]`.
+For structured input the template is the message and its set of keys, exact
+and free. Blocks store columns: time as deltas, level, template id, one column
+per variable and attribute key with a presence bitmap, then zstd.
+
+**Text is kept byte for byte; JSON is kept by value.** A text body comes back
+exactly, or its original is stored when the template cannot reproduce it.
+JSON keeps its key order, integers stay integers and fractions stay fractions,
+a number no int64 or float64 holds exactly is kept as text, and an absent key,
+`null` and `""` are three values. Whitespace and escaping are not kept: the
+meaning is the same, and a byte-exact JSON line costs its whole length. A
+stream that must keep the original bytes (an audit) asks for it and pays.
+
+**A late record is not an error.** Records arrive out of order and with equal
+times. Unlike a counter, a record has no increase that overlapping blocks
+would break, so a late one goes into a new block and overlapping blocks merge
+at read; the metrics `ErrTooOld` rule does not apply. Identity and order are
+defined apart from event time.
+
+**Search is small filters on blocks; FTS5 is for the application's data.** A
+block carries a level mask and a token bloom filter; a match decodes the
+candidate blocks and filters exactly. In the first round a bloom filter pruned
+rare terms as well as an FTS5 index over blocks, at a sixth of its size.
+FTS5, with its ranking and phrases, stays for `sqldb` and the application's
+own text.
 
 **sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the
