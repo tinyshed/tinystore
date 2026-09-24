@@ -90,3 +90,30 @@ func directRequirements(goMod string) []string {
 	}
 	return modules
 }
+
+// the root imports no engine, so a program links only the engines it opens
+func TestTheRootImportsNoEngine(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range parsed.Imports {
+			path, err := strconv.Unquote(entry.Path.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(path, "github.com/tinyshed/tinystore/") &&
+				!strings.HasPrefix(path, "github.com/tinyshed/tinystore/internal/") {
+				t.Errorf("%s imports %s; the root may import only internal/", file, path)
+			}
+		}
+	}
+}

@@ -22,10 +22,13 @@ durable head, atomic bounded ingestion, `Read`, `Stream` and a raw-decoding exac
 `Aggregate` from one snapshot, version-checked sealing into merged groups,
 batched publication, per-series quarantine, retention with series reclamation,
 reopen). [metrics/README.md](metrics/README.md) states each of those contracts
-and its limits; this file does not repeat them.
+and its limits; this file does not repeat them. The `tinystore` root holds a
+directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
+`Attach`, `Logger`, `Now` and `Every`; metrics does not open through it yet.
 
-Designed, not built: the `tinystore` root runtime, `records`, `sqldb`, `kv`,
-`blobs`, `jobs`, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
+Designed, not built: the rest of the root runtime (the memory budget,
+snapshots), `records`, `sqldb`, `kv`, `blobs`, `jobs`, `backup`, metrics
+instruments, the log sink and self-metrics. [docs/samples/](docs/samples/README.md)
 holds a prototype of their API and the reference rewrite of one metrics path.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
@@ -298,6 +301,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
 | importing this stays cheap                          | `task size` links a cgo-free linux/amd64 probe and reports what it cost         |
 | a `//nolint` silences a named finding and says why  | `nolintlint`: no unused, unexplained or blanket directive                       |
+| the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |
+| one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
+| engines close last opened first, once               | `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`                              |
+| a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`                             |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |

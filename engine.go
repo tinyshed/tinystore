@@ -1,0 +1,71 @@
+package tinystore
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
+	"time"
+)
+
+// Engine is what the store needs from an opened engine.
+type Engine interface {
+	Close(ctx context.Context) error
+}
+
+// Claim reserves a file or directory inside the store for one engine and
+// returns its path. release gives the name back to an engine that failed to
+// open; an attached engine keeps it until the store closes.
+//
+//	metrics.db  records.db  blobs/    engines
+//	sql/<name>.db                     databases the application names
+func (s *Store) Claim(name string) (filePath string, release func(), err error) {
+	name = path.Clean(name)
+	if name == "." || name == lockName || !filepath.IsLocal(filepath.FromSlash(name)) {
+		return "", nil, fmt.Errorf("%w: %q is not a name inside the store", ErrInvalid, name)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", nil, ErrClosed
+	}
+	if s.claimed[name] {
+		return "", nil, fmt.Errorf("%w: %s", ErrInUse, name)
+	}
+
+	filePath = filepath.Join(s.dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
+		return "", nil, fmt.Errorf("create %s: %w", filepath.Dir(filePath), err)
+	}
+	s.claimed[name] = true
+	return filePath, func() { s.unclaim(name) }, nil
+}
+
+func (s *Store) unclaim(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.claimed, name)
+}
+
+// Attach hands an opened engine to the store, which closes it on Close.
+func (s *Store) Attach(engine Engine) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	s.engines = append(s.engines, engine)
+	return nil
+}
+
+// Logger is the application's logger, labelled with the engine that logs.
+func (s *Store) Logger(engine string) *slog.Logger {
+	return s.logger.With("engine", engine)
+}
+
+func (s *Store) Now() time.Time {
+	return s.clock()
+}

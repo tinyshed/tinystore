@@ -1,8 +1,9 @@
 # Architecture
 
 The contract for the runtime and every engine beyond metrics. What is built
-today is `codec/`, `internal/sqlite/` and `metrics/`; everything else here is
-designed and agreed, not built. [samples/](samples/README.md) holds a compiling
+today is `codec/`, `internal/sqlite/`, `metrics/` and the root's lifecycle:
+`Open`, `Close`, the directory lock, `Claim`, `Attach`, `Logger`, `Now` and
+`Every`. Everything else here is designed and agreed, not built. [samples/](samples/README.md) holds a compiling
 prototype of this API and a reference rewrite of one metrics path. A section
 that describes something unbuilt says so.
 
@@ -74,7 +75,7 @@ Decided, with the alternatives that lost:
 ## What the store gives an engine
 
 ```go
-path, err := store.Claim("metrics.db")  // reserve a file; ErrInUse if taken
+path, release, err := store.Claim("metrics.db") // ErrInUse if taken; release if Open fails
 err = store.Attach(engine)              // Close will close it
 logger := store.Logger("metrics")       // the application's logger, engine=metrics
 store.Every("metrics maintenance", time.Minute, engine.maintain)
