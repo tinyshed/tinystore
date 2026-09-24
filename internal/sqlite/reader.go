@@ -128,6 +128,28 @@ func (f *File) returnIdleReader(connection *readConnection) {
 	f.idleReaders = append(f.idleReaders, connection)
 }
 
+// EachRow hands every row to visit and closes the rows before it returns, so
+// that the connection can run its next query; the first error stops the rows.
+func EachRow(rows *sql.Rows, what string, visit func(*sql.Rows) error) error {
+	var err error
+	for rows.Next() {
+		if err = visit(rows); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	closeErr := rows.Close()
+	if err != nil {
+		return fmt.Errorf("read %s: %w", what, errors.Join(err, closeErr))
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s: %w", what, closeErr)
+	}
+	return nil
+}
+
 type Row struct {
 	rows *sql.Rows
 	err  error

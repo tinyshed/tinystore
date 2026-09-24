@@ -220,6 +220,32 @@ func TestCancelledPreparedReadReleasesItsConnection(t *testing.T) {
 	}
 }
 
+func TestEachRowStopsAtTheFirstErrorAndClosesTheRows(t *testing.T) {
+	file := openReaderTestFile(t)
+	stop := errors.New("stop")
+	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
+		rows, err := reader.QueryContext(t.Context(), `select value from json_each('[1,2,3]')`) //nolint:rowserrcheck // EachRow
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		visited := 0
+		err = EachRow(rows, "numbers", func(*sql.Rows) error {
+			visited++
+			return stop
+		})
+		if !errors.Is(err, stop) || visited != 1 || err.Error() != "read numbers: stop" {
+			t.Fatalf("visited %d rows: %v", visited, err)
+		}
+		if rows.Next() {
+			t.Fatal("rows stayed open after EachRow")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func BenchmarkPreparedReadAfterApplicationError(b *testing.B) {
 	ctx := b.Context()
 	file, err := Open(ctx, filepath.Join(b.TempDir(), "read.db"), 4)

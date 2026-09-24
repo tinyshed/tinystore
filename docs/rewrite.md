@@ -148,6 +148,21 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      moved −4.1% to +7.6% (seal over 16 runs a side, p = 0.28), each inside
      the spread of the base's own runs, and each wrote the same file bytes.
      `task size` grew by 12 KiB, to 6 676.
+   - Done, D: `Read`, `Stream` and `Aggregate` are admitted, checked, reserved
+     and fetched by the same steps (`admit`, `checkRange`, `reserve`,
+     `fetchSnapshot`); a `snapshotRead` carries one read transaction's
+     connection, range and budget; one `eachSample` walks blocks and head for
+     reads and aggregates alike; `sqlite.EachRow` replaces six hand-written row
+     loops that closed their rows early. `Aggregate` now also checks
+     cancellation once admitted, as `Read` already did. The fetch trace in
+     `TestBatchedHeadsPreserveSnapshotAndReserveBytesFirst` recognises the tail
+     and directory queries by their constants rather than by a fragment of
+     their text, which the new formatting would have silently defeated.
+     Against `64bbc08`, four runs a side in ABBA order on a 2 000-series
+     `bench/perf` file: a narrow hour −1.6%, a 500-series selector ±0%, a
+     region aggregate +0.5%, and the `repro` read stage +2.9%, each p ≥ 0.37;
+     allocations per wide query fell about 4%, from 56.2k to 53.9k. `task size`
+     grew by 4 KiB, to 6 684.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -162,6 +177,6 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | G | `WorkBudget` reserves the worst case (about 34 MiB for a default `Read`) and has no queue order |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
 | A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
-| all | the debt entries in `.golangci.yml`: 14 functions over `funlen` or `gocognit`, 24 files with lines over 120 columns |
+| all | the debt entries in `.golangci.yml`: 8 functions over `funlen` or `gocognit`, 18 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

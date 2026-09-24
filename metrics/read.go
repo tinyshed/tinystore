@@ -50,105 +50,122 @@ func (s *Store) Stream(ctx context.Context, request Range, yield func(Result) er
 }
 
 func (s *Store) readEach(ctx context.Context, request Range, yield func(Result) error) error {
-	if err := s.enter(ctx); err != nil {
-		return err
-	}
-	defer s.leave()
-	select {
-	case s.readSlots <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	defer func() { <-s.readSlots }()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if request.To < request.From {
-		return fmt.Errorf("%w: inverted time range", ErrInvalid)
-	}
-	matchers, err := orderedLabels(request.Matchers, false)
+	release, err := s.admit(ctx, s.readSlots)
 	if err != nil {
 		return err
 	}
-	limits, err := narrowLimits(request.Limits, s.opts.Limits)
+	defer release()
+
+	query, err := s.checkRange(request)
+	if err != nil || query.from >= query.to {
+		return err
+	}
+
+	unreserve, err := s.reserve(ctx, func() (int64, error) { return readReservation(query.limits) })
 	if err != nil {
 		return err
 	}
-	from := max(request.From, s.cutoff())
-	if from >= request.To {
-		return nil
-	}
-	if s.opts.SharedBudget != nil {
-		weight, reserveErr := readReservation(limits)
-		if reserveErr != nil {
-			return reserveErr
-		}
-		if reserveErr := s.opts.SharedBudget.acquire(ctx, weight); reserveErr != nil {
-			return reserveErr
-		}
-		defer s.opts.SharedBudget.release(weight)
-	}
-	reads, err := s.fetchSnapshot(ctx, matchers, from, request.To, limits)
+	defer unreserve()
+
+	reads, err := s.fetchSnapshot(ctx, query)
 	if err != nil {
 		return err
 	}
-	if err := s.visitResults(ctx, reads, from, request.To, limits.OutputSamples, yield); err != nil {
+
+	if err = s.yieldResults(ctx, query, reads, yield); err != nil {
 		return err
 	}
 	s.queried.Add(1)
 	return nil
 }
 
-func (s *Store) visitResults(ctx context.Context, reads []seriesRead, from, to int64, outputLimit int, yield func(Result) error) error {
-	outputCount := 0
+// rangeQuery is a checked request: exact matchers, the limits it may spend and
+// its range, whose start retention may have moved forward.
+type rangeQuery struct {
+	matchers []Label
+	limits   Limits
+	from, to int64
+}
+
+func (s *Store) checkRange(request Range) (rangeQuery, error) {
+	if request.To < request.From {
+		return rangeQuery{}, fmt.Errorf("%w: inverted time range", ErrInvalid)
+	}
+	matchers, err := orderedLabels(request.Matchers, false)
+	if err != nil {
+		return rangeQuery{}, err
+	}
+	limits, err := narrowLimits(request.Limits, s.opts.Limits)
+	if err != nil {
+		return rangeQuery{}, err
+	}
+	return rangeQuery{matchers: matchers, limits: limits, from: max(request.From, s.cutoff()), to: request.To}, nil
+}
+
+// yieldResults hands each nonempty series to yield, with its samples inside
+// the range and within the output limit across every series.
+func (s *Store) yieldResults(
+	ctx context.Context, query rangeQuery, reads []seriesRead, yield func(Result) error,
+) error {
+	output := 0
 	for _, read := range reads {
 		result := Result{Series: Series{Labels: read.series.labels, Kind: read.series.kind}}
-		appendPoint := func(point Sample) error {
-			if point.At < from || point.At >= to {
+		err := s.eachSample(ctx, read, func(point Sample) error {
+			if point.At < query.from || point.At >= query.to {
 				return nil
 			}
-			if outputCount == outputLimit {
+			if output == query.limits.OutputSamples {
 				return fmt.Errorf("%w: output samples", ErrLimit)
 			}
 			if len(result.Samples) > 0 && point.At <= result.Samples[len(result.Samples)-1].At {
 				return fmt.Errorf("%w: overlapping samples", ErrCorrupt)
 			}
 			result.Samples = append(result.Samples, point)
-			outputCount++
+			output++
 			return nil
-		}
-		for _, block := range read.blocks {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			points, err := s.decodeBlock(block)
-			if err != nil {
-				return fmt.Errorf("%w: decode values: %w", ErrCorrupt, err)
-			}
-			for _, point := range points {
-				if err = appendPoint(point); err != nil {
-					return err
-				}
-			}
-		}
-		head, headErr := s.decodeSelectedHead(ctx, read.head)
-		if headErr != nil {
-			return headErr
-		}
-		for i, point := range head {
-			if i%blockSamples == 0 {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-			}
-			if err := appendPoint(point); err != nil {
-				return err
-			}
+		})
+		if err != nil {
+			return err
 		}
 		if len(result.Samples) > 0 {
-			if err := yield(result); err != nil {
+			if err = yield(result); err != nil {
 				return fmt.Errorf("stream metrics result: %w", err)
 			}
+		}
+	}
+	return nil
+}
+
+// eachSample decodes a series' blocks, then its head, and hands every sample
+// to visit in time order; it checks for cancellation once per block.
+func (s *Store) eachSample(ctx context.Context, read seriesRead, visit func(Sample) error) error {
+	for _, block := range read.blocks {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		points, err := s.decodeBlock(block)
+		if err != nil {
+			return fmt.Errorf("%w: decode values: %w", ErrCorrupt, err)
+		}
+		for _, point := range points {
+			if err = visit(point); err != nil {
+				return err
+			}
+		}
+	}
+
+	head, err := s.decodeSelectedHead(ctx, read.head)
+	if err != nil {
+		return err
+	}
+	for i, point := range head {
+		if i%blockSamples == 0 {
+			if err = ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if err = visit(point); err != nil {
+			return err
 		}
 	}
 	return nil

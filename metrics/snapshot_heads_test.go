@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/tinyshed/tinystore/internal/sqlite"
@@ -18,7 +17,7 @@ type headReadTrace struct {
 }
 
 func (r *headReadTrace) QueryContext(ctx context.Context, query string, arguments ...any) (*sql.Rows, error) {
-	if strings.Contains(query, `state.series_id,state.tail`) || strings.Contains(query, `g.series_id,g.start_ts,g.directory`) {
+	if query == headTailsQuery || query == selectedGroupsQuery {
 		r.materialized = true
 	}
 	return r.Reader.QueryContext(ctx, query, arguments...)
@@ -65,7 +64,8 @@ func TestBatchedHeadsPreserveSnapshotAndReserveBytesFirst(t *testing.T) {
 	if err = s.file.ViewPrepared(t.Context(), func(reader sqlite.Reader) error {
 		trace := &headReadTrace{Reader: reader}
 		budget := queryBudget{limits: Limits{PayloadBytes: 1, DecodedSamples: 1000}}
-		_, readErr := s.fetchHeads(t.Context(), trace, matched, testEpoch, testEpoch+241, &budget)
+		snapshot := snapshotRead{tx: trace, from: testEpoch, to: testEpoch + 241, budget: &budget}
+		_, readErr := s.fetchHeads(t.Context(), snapshot, matched)
 		if !errors.Is(readErr, ErrLimit) || trace.materialized {
 			t.Fatalf("head bytes fetched before budget: %v, materialized=%v", readErr, trace.materialized)
 		}
@@ -76,7 +76,8 @@ func TestBatchedHeadsPreserveSnapshotAndReserveBytesFirst(t *testing.T) {
 	if err = s.file.ViewPrepared(t.Context(), func(reader sqlite.Reader) error {
 		trace := &headReadTrace{Reader: reader}
 		budget := queryBudget{limits: Limits{PayloadBytes: 1, Blocks: 1000}}
-		_, readErr := fetchGroupRows(t.Context(), trace, matched, testEpoch, testEpoch+241, &budget)
+		snapshot := snapshotRead{tx: trace, from: testEpoch, to: testEpoch + 241, budget: &budget}
+		_, readErr := fetchGroupRows(t.Context(), snapshot, matched)
 		if !errors.Is(readErr, ErrLimit) || trace.materialized {
 			t.Fatalf("directory bytes fetched before budget: %v, materialized=%v", readErr, trace.materialized)
 		}

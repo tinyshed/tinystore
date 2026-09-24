@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 const oldestGroupQuery = `
@@ -273,31 +275,24 @@ const seriesPostingsQuery = `
 // postingLabels reads the dictionary ids of a series' postings, and closes its
 // rows before the caller changes the same tables.
 func postingLabels(ctx context.Context, tx *sql.Tx, id int64) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, seriesPostingsQuery, id)
+	rows, err := tx.QueryContext(ctx, seriesPostingsQuery, id) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
 		return nil, fmt.Errorf("read series postings: %w", err)
 	}
 	var labelIDs []int64
-	for rows.Next() {
+	err = sqlite.EachRow(rows, "series postings", func(rows *sql.Rows) error {
 		var labelID, count int64
-		if err = rows.Scan(&labelID, &count); err != nil {
-			break
+		if scanErr := rows.Scan(&labelID, &count); scanErr != nil {
+			return scanErr
 		}
 		if count < 1 {
-			err = fmt.Errorf("%w: posting count before reclamation", ErrCorrupt)
-			break
+			return fmt.Errorf("%w: posting count before reclamation", ErrCorrupt)
 		}
 		labelIDs = append(labelIDs, labelID)
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	closeErr := rows.Close() //nolint:sqlclosecheck // release rows before updating the same tables
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("read series postings: %w", errors.Join(err, closeErr))
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close series postings: %w", closeErr)
+		return nil, err
 	}
 	if len(labelIDs) == 0 {
 		return nil, fmt.Errorf("%w: empty series postings", ErrCorrupt)

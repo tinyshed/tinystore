@@ -141,6 +141,14 @@ func TestAggregateBucketEdgesAcrossSignedTimestampRange(t *testing.T) {
 	}
 }
 
+func TestAggregateBucketEdgesEndTheLastBucketAtTo(t *testing.T) {
+	for _, test := range []struct{ at, start, end int64 }{{7, 0, 10}, {23, 20, 25}} {
+		if start, end := bucketEdges(0, 25, test.at, 10); start != test.start || end != test.end {
+			t.Errorf("at %d: [%d, %d)", test.at, start, end)
+		}
+	}
+}
+
 func TestAggregateClipsRetentionBeforeSummingSealedEdges(t *testing.T) {
 	store, _ := openTestStore(t, Options{Retention: time.Second, MaxHeadSamples: 1024})
 	series := testSeries()

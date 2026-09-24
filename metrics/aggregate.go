@@ -98,152 +98,163 @@ func (b *bucketAccumulator) result(op AggregateOp) AggregateBucket {
 	return result
 }
 
+// bucketEdges is the bucket that holds at. Buckets are width long from from,
+// except the last, which ends at to:
+//
+//	from 0, to 25, width 10    at 7 → [0, 10)    at 23 → [20, 25)
 func bucketEdges(from, to, at, width int64) (int64, int64) {
-	span := uint64(to) - uint64(from)                     //nolint:gosec // modular distance includes both signed timestamp extremes
-	offset := uint64(at) - uint64(from)                   //nolint:gosec // modular distance stays nonnegative inside the range
-	startOffset := offset / uint64(width) * uint64(width) //nolint:gosec // width is a checked positive duration
-	start := int64(uint64(from) + startOffset)            //nolint:gosec // bucket start stays inside the signed range
-	if uint64(width) > span-startOffset {                 //nolint:gosec // width is a checked positive duration
+	step := uint64(width) //nolint:gosec // width is a checked positive duration
+	startOffset := distance(from, at) / step * step
+	start := advance(from, startOffset)
+	if step > distance(from, to)-startOffset {
 		return start, to
 	}
-	return start, int64(uint64(start) + uint64(width)) //nolint:gosec // bucket end stays below the requested bound
+	return start, advance(start, step)
 }
 
 // Aggregate rounds exact finite arithmetic once and never uses legacy float64 block sums.
 func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]AggregateResult, error) {
-	if err := s.enter(ctx); err != nil {
+	release, err := s.admit(ctx, s.readSlots)
+	if err != nil {
 		return nil, err
 	}
-	defer s.leave()
-	select {
-	case s.readSlots <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	defer release()
+
+	query, err := s.checkAggregate(request)
+	if err != nil {
+		return nil, err
 	}
-	defer func() { <-s.readSlots }()
-	if request.Range.To < request.Range.From || request.Width < time.Millisecond || request.Width%time.Millisecond != 0 {
-		return nil, fmt.Errorf("%w: aggregate range or bucket width", ErrInvalid)
+	if query.from >= query.to {
+		return []AggregateResult{}, nil
+	}
+
+	unreserve, err := s.reserve(ctx, func() (int64, error) { return aggregateReservation(query.limits) })
+	if err != nil {
+		return nil, err
+	}
+	defer unreserve()
+
+	reads, err := s.fetchSnapshot(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	aggregation := aggregation{
+		store: s, op: request.Op, origin: request.Range.From, width: request.Width.Milliseconds(),
+		from: query.from, to: query.to, limit: query.limits.OutputSamples,
+	}
+	results, err := aggregation.fold(ctx, reads)
+	if err != nil {
+		return nil, err
+	}
+	s.queried.Add(1)
+	return results, nil
+}
+
+func (s *Store) checkAggregate(request AggregateRequest) (rangeQuery, error) {
+	width := request.Width
+	if request.Range.To < request.Range.From || width < time.Millisecond || width%time.Millisecond != 0 {
+		return rangeQuery{}, fmt.Errorf("%w: aggregate range or bucket width", ErrInvalid)
 	}
 	switch request.Op {
 	case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateIncrease:
 	default:
-		return nil, fmt.Errorf("%w: aggregate operation", ErrInvalid)
+		return rangeQuery{}, fmt.Errorf("%w: aggregate operation", ErrInvalid)
 	}
-	matchers, err := orderedLabels(request.Range.Matchers, false)
+	return s.checkRange(request.Range)
+}
+
+// aggregateReservation is a read's, plus the exact accumulator of each output bucket.
+func aggregateReservation(limits Limits) (int64, error) {
+	weight, err := readReservation(limits)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	limits, err := narrowLimits(request.Range.Limits, s.opts.Limits)
+	extra, err := reservedMultiple(limits.OutputSamples, 48)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	from := max(request.Range.From, s.cutoff())
-	if from >= request.Range.To {
-		return []AggregateResult{}, nil
-	}
-	if s.opts.SharedBudget != nil {
-		weight, reserveErr := readReservation(limits)
-		if reserveErr != nil {
-			return nil, reserveErr
-		}
-		extra, reserveErr := reservedMultiple(limits.OutputSamples, 48)
-		if reserveErr != nil {
-			return nil, reserveErr
-		}
-		weight, reserveErr = reservation(weight, extra)
-		if reserveErr != nil {
-			return nil, reserveErr
-		}
-		if reserveErr := s.opts.SharedBudget.acquire(ctx, weight); reserveErr != nil {
-			return nil, reserveErr
-		}
-		defer s.opts.SharedBudget.release(weight)
-	}
-	reads, err := s.fetchSnapshot(ctx, matchers, from, request.Range.To, limits)
-	if err != nil {
-		return nil, err
-	}
+	return reservation(weight, extra)
+}
+
+// aggregation is one Aggregate call. Its buckets start at the requested From,
+// while retention may have moved the start of the samples that count:
+//
+//	origin 0, width 481, retention from 200    samples 200…480 fill the bucket [0, 481)
+type aggregation struct {
+	store         *Store
+	op            AggregateOp
+	origin, width int64
+	from, to      int64
+	limit, output int
+}
+
+func (a *aggregation) fold(ctx context.Context, reads []seriesRead) ([]AggregateResult, error) {
 	results := make([]AggregateResult, 0, len(reads))
-	outputCount := 0
-	width := request.Width.Milliseconds()
 	for _, read := range reads {
-		if request.Op == AggregateIncrease && read.series.kind != Counter {
+		if a.op == AggregateIncrease && read.series.kind != Counter {
 			return nil, fmt.Errorf("%w: increase requires a counter series", ErrInvalid)
 		}
-		result := AggregateResult{Series: Series{Labels: read.series.labels, Kind: read.series.kind}}
-		var current bucketAccumulator
-		var previousAt int64
-		hasPrevious := false
-		flush := func() error {
-			if current.count == 0 {
-				return nil
-			}
-			if request.Op == AggregateCount && uint64(current.count) > 1<<53 { //nolint:gosec // count is positive after the zero check
-				return fmt.Errorf("%w: exact count representation", ErrLimit)
-			}
-			if outputCount == limits.OutputSamples {
-				return fmt.Errorf("%w: aggregate output buckets", ErrLimit)
-			}
-			result.Buckets = append(result.Buckets, current.result(request.Op))
-			outputCount++
-			return nil
-		}
-		consume := func(point Sample) error {
-			if point.At < from || point.At >= request.Range.To {
-				return nil
-			}
-			if hasPrevious && point.At <= previousAt {
-				return fmt.Errorf("%w: overlapping samples", ErrCorrupt)
-			}
-			previousAt, hasPrevious = point.At, true
-			start, end := bucketEdges(request.Range.From, request.Range.To, point.At, width)
-			if current.count > 0 && start != current.from {
-				if err := flush(); err != nil {
-					return err
-				}
-				current = bucketAccumulator{}
-			}
-			current.from, current.to = start, end
-			if err := current.add(point.Value, request.Op, read.series.kind); err != nil {
-				return fmt.Errorf("aggregate sample at %d: %w", point.At, err)
-			}
-			return nil
-		}
-		for _, block := range read.blocks {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			points, decodeErr := s.decodeBlock(block)
-			if decodeErr != nil {
-				return nil, fmt.Errorf("%w: decode values: %w", ErrCorrupt, decodeErr)
-			}
-			for _, point := range points {
-				if err := consume(point); err != nil {
-					return nil, err
-				}
-			}
-		}
-		head, decodeErr := s.decodeSelectedHead(ctx, read.head)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		for index, point := range head {
-			if index%blockSamples == 0 {
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-			}
-			if err := consume(point); err != nil {
-				return nil, err
-			}
-		}
-		if err := flush(); err != nil {
+		series := seriesBuckets{aggregation: a, kind: read.series.kind}
+		if err := a.store.eachSample(ctx, read, series.add); err != nil {
 			return nil, err
 		}
-		if len(result.Buckets) > 0 {
-			results = append(results, result)
+		if err := series.flush(); err != nil {
+			return nil, err
+		}
+		if len(series.buckets) > 0 {
+			labelled := Series{Labels: read.series.labels, Kind: read.series.kind}
+			results = append(results, AggregateResult{Series: labelled, Buckets: series.buckets})
 		}
 	}
-	s.queried.Add(1)
 	return results, nil
+}
+
+// seriesBuckets folds one series' samples, which arrive in time order, into
+// its buckets; the output limit counts buckets across every series.
+type seriesBuckets struct {
+	*aggregation
+	kind        Kind
+	current     bucketAccumulator
+	previousAt  int64
+	hasPrevious bool
+	buckets     []AggregateBucket
+}
+
+func (b *seriesBuckets) add(point Sample) error {
+	if point.At < b.from || point.At >= b.to {
+		return nil
+	}
+	if b.hasPrevious && point.At <= b.previousAt {
+		return fmt.Errorf("%w: overlapping samples", ErrCorrupt)
+	}
+	b.previousAt, b.hasPrevious = point.At, true
+
+	start, end := bucketEdges(b.origin, b.to, point.At, b.width)
+	if b.current.count > 0 && start != b.current.from {
+		if err := b.flush(); err != nil {
+			return err
+		}
+		b.current = bucketAccumulator{}
+	}
+	b.current.from, b.current.to = start, end
+	if err := b.current.add(point.Value, b.op, b.kind); err != nil {
+		return fmt.Errorf("aggregate sample at %d: %w", point.At, err)
+	}
+	return nil
+}
+
+func (b *seriesBuckets) flush() error {
+	if b.current.count == 0 {
+		return nil
+	}
+	if b.op == AggregateCount && uint64(b.current.count) > 1<<53 { //nolint:gosec // positive after the zero check
+		return fmt.Errorf("%w: exact count representation", ErrLimit)
+	}
+	if b.output == b.limit {
+		return fmt.Errorf("%w: aggregate output buckets", ErrLimit)
+	}
+	b.buckets = append(b.buckets, b.current.result(b.op))
+	b.output++
+	return nil
 }
