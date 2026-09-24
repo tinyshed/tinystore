@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -93,8 +94,17 @@ var recordLayouts = []recordLayout{
 		create trigger records_ai after insert on records begin
 			insert into records_text (rowid, message, attrs) values (new.id, new.message, new.attrs); end;`)},
 	{"dictionary for messages and keys", writeDictionary},
-	{"zstd blocks of 256 records", writeBlocks(256)},
-	{"zstd blocks of 1024 records", writeBlocks(1024)},
+	{"rows + fts5 detail=none", writeRows(`create table records (id integer primary key, at integer not null,
+		level integer not null, message text not null, attrs text not null) strict;
+		create index records_at on records (at);
+		create virtual table records_text using fts5(message, attrs, content='records', content_rowid='id',
+			detail=none);
+		create trigger records_ai after insert on records begin
+			insert into records_text (rowid, message, attrs) values (new.id, new.message, new.attrs); end;`)},
+	{"zstd blocks of 256 records", writeBlocks(256, false)},
+	{"zstd blocks of 1024 records", writeBlocks(1024, false)},
+	{"blocks of 256 + fts5 per block", writeBlocks(256, true)},
+	{"blocks of 1024 + fts5 per block", writeBlocks(1024, true)},
 }
 
 func writeRows(schema string) func(context.Context, *sql.Tx, []logRecord) (int, error) {
@@ -162,12 +172,21 @@ func writeDictionary(ctx context.Context, tx *sql.Tx, records []logRecord) (int,
 	return payload, nil
 }
 
-// writeBlocks packs size records as JSON lines under one zstd frame per row
-func writeBlocks(size int) func(context.Context, *sql.Tx, []logRecord) (int, error) {
+const blocksSchema = `create table blocks (id integer primary key, first_at integer not null,
+	last_at integer not null, body blob not null) strict; create index blocks_at on blocks (first_at);`
+
+// blockSearchSchema indexes a whole block as one document, so a match names candidate blocks
+const blockSearchSchema = `create virtual table blocks_text using fts5(text, content='', detail=none,
+	tokenize="unicode61 tokenchars '.:_-/'");`
+
+// writeBlocks packs size records as JSON lines under one zstd frame per row, indexed when searched
+func writeBlocks(size int, searched bool) func(context.Context, *sql.Tx, []logRecord) (int, error) {
 	return func(ctx context.Context, tx *sql.Tx, records []logRecord) (int, error) {
-		_, err := tx.ExecContext(ctx, `create table blocks (id integer primary key, first_at integer not null,
-			last_at integer not null, body blob not null) strict; create index blocks_at on blocks (first_at);`)
-		if err != nil {
+		schema := blocksSchema
+		if searched {
+			schema += blockSearchSchema
+		}
+		if _, err := tx.ExecContext(ctx, schema); err != nil {
 			return 0, err
 		}
 		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
@@ -184,14 +203,45 @@ func writeBlocks(size int) func(context.Context, *sql.Tx, []logRecord) (int, err
 			}
 			body := encoder.EncodeAll(lines.Bytes(), nil)
 			payload += len(body) + 16
-			_, err = tx.ExecContext(ctx, `insert into blocks (first_at, last_at, body) values (?, ?, ?)`,
-				block[0].At, block[len(block)-1].At, body)
+			id, err := insertBlock(ctx, tx, block, body)
 			if err != nil {
 				return 0, err
+			}
+			if searched {
+				if err = indexBlock(ctx, tx, id, block); err != nil {
+					return 0, err
+				}
 			}
 		}
 		return payload, nil
 	}
+}
+
+func insertBlock(ctx context.Context, tx *sql.Tx, block []logRecord, body []byte) (int64, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx, `insert into blocks (first_at, last_at, body) values (?, ?, ?) returning id`,
+		block[0].At, block[len(block)-1].At, body).Scan(&id)
+	return id, err
+}
+
+// indexBlock gives the index every message and attribute value of the block once
+func indexBlock(ctx context.Context, tx *sql.Tx, id int64, block []logRecord) error {
+	words := map[string]bool{}
+	var text strings.Builder
+	add := func(word string) {
+		if !words[word] {
+			words[word] = true
+			text.WriteString(word + " ")
+		}
+	}
+	for _, record := range block {
+		add(record.Message)
+		for _, value := range record.Attrs {
+			add(fmt.Sprint(value))
+		}
+	}
+	_, err := tx.ExecContext(ctx, `insert into blocks_text (rowid, text) values (?, ?)`, id, text.String())
+	return err
 }
 
 func TestRecordLayoutDensity(t *testing.T) {
@@ -236,7 +286,29 @@ func measureRecordLayout(t *testing.T, layout recordLayout, records []logRecord)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return payload, file, recordObjects(t, db)
+	return payload, file, recordObjects(t, db) + blockCandidates(t, db, records)
+}
+
+// blockCandidates is how many blocks a rare and a common term send to decoding
+func blockCandidates(t *testing.T, db *sql.DB, records []logRecord) string {
+	t.Helper()
+	var exists int
+	_ = db.QueryRowContext(t.Context(), `select count(*) from sqlite_schema where name = 'blocks_text'`).Scan(&exists)
+	if exists == 0 {
+		return ""
+	}
+	rare := records[len(records)/2].Attrs["trace_id"].(string)
+	out := "| candidates:"
+	for _, term := range []string{`"` + rare + `"`, `refused`, `"/api/export"`} {
+		var blocks int
+		err := db.QueryRowContext(t.Context(), `select count(*) from blocks_text where blocks_text match ?`,
+			term).Scan(&blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out += fmt.Sprintf(" %s=%d", term, blocks)
+	}
+	return out
 }
 
 // recordObjects is the file divided by b-tree, in KiB, largest first
