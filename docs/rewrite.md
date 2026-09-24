@@ -117,10 +117,24 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
    `funlen` (60 lines, comments excluded) and `gocognit` (30) gate new code;
    `.golangci.yml` lists by name what does not pass yet, and an area deletes
    its entries as it clears them.
-5. **By area, in parallel** on disjoint files, each merged green: A codec,
-   B head, C seal/publish/merge/group/directory/clock, D read/snapshot/aggregate,
-   E series/match, F maintain/retention/quarantine, G admission and
-   `internal/sqlite`. The file table above names each file's area.
+5. **By area**, one or two at a time on disjoint files, each merged green:
+   A codec, B head, C seal/publish/merge/group/directory/clock,
+   D read/snapshot/aggregate, E series/match, F maintain/retention/quarantine,
+   G admission and `internal/sqlite`. The file table above names each file's
+   area. The order is G, E and F, D, then A and C, the format code, last; B is
+   the reference and only checked.
+   - Done, G: `internal/sqlite` reads as steps (`Open`, `Migrate`, `view`,
+     `update`), `transactReusable` returns its error last, each test file is
+     named after the file it tests, and the connection URLs and the migration
+     history carry worked examples that are also tests. Against `e316a95`,
+     interleaved on one 4-vCPU linux/amd64 container with Go 1.27.1:
+     `BenchmarkIngest*` medians moved −0.5% to +3.3% (the long-head append
+     over 16 runs a side, permutation p = 0.24, inside the base's own 9%
+     interquartile range), `BenchmarkPreparedReadAfterApplicationError` −8%,
+     allocations identical to the count; the four `bench/perf/repro` stages
+     with the parameters of the saved-revision round, in ABBA order, stayed
+     inside the spread of the base's own runs, and append wrote the same
+     663 552 bytes. `task size` grew by 4 KiB, to 6 664.
 6. The runtime: `tinystore.Open` and friends from `samples/runtime`, then
    `metrics.Open(ctx, store, …)`, `records`, `sqldb`.
 7. New engines, one at a time.
@@ -135,8 +149,7 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
 | G | `WorkBudget` reserves the worst case (about 34 MiB for a default `Read`) and has no queue order |
 | E | `rankMatchers` has three paths; `lookupLabelIDs` and `increasePostingCounts` send SQL of varying arity through the 32-program writer cache |
 | A, C | `values.go` `readOrdinary` rebuilds the codec's private envelope; give the codec a checked value-stream entry point |
-| G | `transactReusable` returns `(error, bool)`; the error goes last |
 | A, C | file-level `//nolint:gosec` in `clock.go`, `directory.go`, `values.go`, `values_changes.go`, `values_grid.go`, `residuals.go` |
-| all | the debt entries in `.golangci.yml`: 19 functions over `funlen` or `gocognit`, 32 files with lines over 120 columns |
+| all | the debt entries in `.golangci.yml`: 18 functions over `funlen` or `gocognit`, 29 files with lines over 120 columns |
 | C, D | block summaries are written and never read: the versioned exact summary shortcut, or fewer summary bytes |
 | docs | `docs/research.md` "Order of work" still lists shipped items |

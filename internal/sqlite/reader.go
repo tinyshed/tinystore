@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 )
@@ -87,39 +86,46 @@ func (f *File) ViewPrepared(ctx context.Context, read func(Reader) error) error 
 }
 
 func (f *File) view(ctx context.Context, read func(*sql.Tx, *readConnection) error) error {
-	select {
-	case f.readSlots <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
+	if err := takeSlot(ctx, f.readSlots); err != nil {
+		return err
 	}
-	f.readersMu.Lock()
-	var connection *readConnection
-	if last := len(f.idleReaders) - 1; last >= 0 {
-		connection = f.idleReaders[last]
-		f.idleReaders = f.idleReaders[:last]
-	}
-	f.readersMu.Unlock()
-	if connection == nil {
-		connection = &readConnection{}
-	}
-	defer func() {
-		f.readersMu.Lock()
-		f.idleReaders = append(f.idleReaders, connection)
-		f.readersMu.Unlock()
-		<-f.readSlots
-	}()
+	defer freeSlot(f.readSlots)
+
+	connection := f.takeIdleReader()
+	defer f.returnIdleReader(connection)
+
 	if connection.conn == nil {
 		var err error
-		connection.conn, err = f.reader.Conn(ctx)
-		if err != nil {
+		if connection.conn, err = f.reader.Conn(ctx); err != nil {
 			return fmt.Errorf("acquire SQLite reader: %w", err)
 		}
 	}
-	err, reusable := transactReusable(ctx, connection.conn, func(tx *sql.Tx) error { return read(tx, connection) })
-	if !reusable || ctx.Err() != nil || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+
+	reusable, err := transactReusable(ctx, connection.conn, func(tx *sql.Tx) error { return read(tx, connection) })
+	if !keepConnection(ctx, reusable, err) {
 		return errors.Join(err, connection.close())
 	}
 	return err
+}
+
+// takeIdleReader prefers the most recently used connection, whose prepared
+// programs are warm; a new one connects on first use.
+func (f *File) takeIdleReader() *readConnection {
+	f.readersMu.Lock()
+	defer f.readersMu.Unlock()
+	last := len(f.idleReaders) - 1
+	if last < 0 {
+		return &readConnection{}
+	}
+	connection := f.idleReaders[last]
+	f.idleReaders = f.idleReaders[:last]
+	return connection
+}
+
+func (f *File) returnIdleReader(connection *readConnection) {
+	f.readersMu.Lock()
+	defer f.readersMu.Unlock()
+	f.idleReaders = append(f.idleReaders, connection)
 }
 
 type Row struct {
@@ -128,7 +134,7 @@ type Row struct {
 }
 
 func QueryRow(ctx context.Context, reader Reader, query string, args ...any) *Row {
-	rows, err := reader.QueryContext(ctx, query, args...) //nolint:rowserrcheck // Scan owns iteration and checks rows.Err
+	rows, err := reader.QueryContext(ctx, query, args...) //nolint:rowserrcheck // Scan iterates and checks Err
 	return &Row{rows: rows, err: err}
 }
 

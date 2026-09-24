@@ -29,7 +29,7 @@ func (w *writeConnection) ExecContext(ctx context.Context, query string, argumen
 
 // UpdatePrepared reuses SQL programs on the single writer connection within one transaction.
 func (f *File) UpdatePrepared(ctx context.Context, write func(Writer) error) error {
-	return f.update(ctx, func(connection *writeConnection) (error, bool) {
+	return f.update(ctx, func(connection *writeConnection) (bool, error) {
 		return transactReusable(ctx, connection.conn, func(_ *sql.Tx) error {
 			return write(connection)
 		})
