@@ -11,7 +11,10 @@ Follow-up: [what a late record is behind](records-late-reference-2026-09-25.md)
 measures a late record against its stream's newest record instead of its
 batch's median: one-second reads with late records fetch 4.63 blocks in the
 research's batches and 5.24 in flushes, and a record appended alone is late
-again.
+again. [The rice parameter round](records-rice-2026-09-26.md) chooses each rice
+column's parameter among all 64 and takes the production corpus from 20.8984
+to 20.7738 bytes a record in full segments, and from 22.9463 to 22.8333 sealed
+hourly; the frontend fixture does not move.
 
 ## Environment and reproduction
 

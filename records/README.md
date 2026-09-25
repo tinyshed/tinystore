@@ -69,8 +69,8 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 - Records wait in a durable head until their head holds a segment's worth
   (16,384 records or 4 MiB) or its oldest row is `Options.SealAge` old (an
   hour). A longer `SealAge` trades how soon `Follow` sees a sparse stream's
-  records for fewer, larger segments: on the production corpus 22.95 bytes a
-  record at an hour, 21.33 at six, 21.00 at a day, 20.90 in full segments.
+  records for fewer, larger segments: on the production corpus 22.83 bytes a
+  record at an hour, 21.21 at six, 20.87 at a day, 20.77 in full segments.
   `Maintain`, every minute unless the store is Manual, seals them: the
   segment, its blocks, filters and keys are written and the head rows deleted
   in one transaction, so a reader finds each record once.

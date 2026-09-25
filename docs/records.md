@@ -227,15 +227,16 @@ decompress or copy at most twice a segment's input.
 
 The prototype, and the engine on the same fixtures and corpus, in the same
 kind of container; [the engine report](reports/records-engine-2026-09-25.md)
-has the environment and the commands.
+has the environment and the commands, and [the rice round](reports/records-rice-2026-09-26.md)
+the corpus's figures since it chose each rice parameter among all 64.
 
 | | Prototype | Engine |
 |---|---|---|
 | frontend fixture, one million records, B/record in the file | 7.85; its time-order floor is 7.74 | 7.89 |
-| production logs, 1.32 million records, full segments | 20.09, blooms included | 20.90, without the text sample |
-| the same, sealed hourly on the corpus's own clock | 21.96 | 22.95; 21.33 at six hours, 21.00 at a day |
+| production logs, 1.32 million records, full segments | 20.09, blooms included | 20.77, without the text sample |
+| the same, sealed hourly on the corpus's own clock | 21.96 | 22.83; 21.21 at six hours, 20.87 at a day |
 | structured services, as `slog` records | 18.99, 15.84 of it a random request id | — |
-| text from third-party software | about zstd over the same lines, 19.28 against 19.64 | 20.16 |
+| text from third-party software | about zstd over the same lines, 19.28 against 19.64 | 20.02 |
 | encoder, one CPU | 405,000 to 480,000 frontend records/s | 570,000 to 710,000 |
 | decoder, one CPU | about 1.5 million records/s | 1.29 to 1.44 million |
 | one second of one million records | 2 of 977 blocks read | 1.92 blocks |
@@ -250,7 +251,8 @@ left it out for the decoder state it costs a segment and counted its gain at
 2.6 % of text records. The engine measures more: without it the production
 corpus's text grows from 19.28 to 20.16 bytes a record, and the whole corpus
 from 20.09 to 20.90, 0.80 bytes, where the JSON services' bytes are the
-prototype's to the hundredth. Decided on 25 September: the engine stays
+prototype's to the hundredth; the rice round has since taken the engine to
+20.77. Decided on 25 September: the engine stays
 without it, and text's next lever is templates, not a decoder state per
 segment. Recipe and affine predictions are left out as well, at no cost on the
 production logs.
@@ -275,8 +277,8 @@ for long and follows them rarely raises it.
 - Input: a continuation rule for multi-line records; adapters for pino, logfmt,
   glog and log4j lines.
 - Storage: a merge of a stream's small sealed segments, which cost the hourly
-  replay 2.05 bytes a record over full segments, where a six-hour `SealAge`
-  costs 0.43; a merge has to keep a follower's `(segment, row)` cursor valid.
+  replay 2.06 bytes a record over full segments, where a six-hour `SealAge`
+  costs 0.44; a merge has to keep a follower's `(segment, row)` cursor valid.
   A bound on the time-index scan when late blocks are wide.
 - Encoding: a store-level context registry, per-context numeric state, nested
   JSON decomposition.
