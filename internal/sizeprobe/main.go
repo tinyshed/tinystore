@@ -4,12 +4,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
 	"github.com/tinyshed/tinystore/metrics"
+	"github.com/tinyshed/tinystore/records"
 )
 
 func main() {
@@ -56,4 +58,39 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(len(result), store.Stats())
+	probeRecords(ctx, runtime)
+}
+
+// probeRecords links the records engine the way an application uses it: its
+// handler, Append, Maintain, Read, Follow and Drop
+func probeRecords(ctx context.Context, runtime *tinystore.Store) {
+	logs, err := records.Open(ctx, runtime, records.Options{})
+	if err != nil {
+		panic(err)
+	}
+	slog.New(logs.Handler("probe")).Info("probe", "n", 1)
+	if err = logs.Flush(ctx); err != nil {
+		panic(err)
+	}
+	event := records.Record{At: time.Now(), Stream: "probe", Name: "event", Attrs: []records.Field{records.Int("n", 1)}}
+	if err = logs.Append(ctx, event); err != nil {
+		panic(err)
+	}
+	if _, err = logs.Maintain(ctx); err != nil {
+		panic(err)
+	}
+	page, err := logs.Read(ctx, records.Query{Streams: []string{"probe"}})
+	if err != nil {
+		panic(err)
+	}
+	batch, err := logs.Follow(ctx, records.Cursor{}, 10)
+	if err != nil {
+		panic(err)
+	}
+	for _, damage := range logs.Damaged() {
+		if err = logs.Drop(ctx, damage); err != nil {
+			panic(err)
+		}
+	}
+	fmt.Println(len(page.Records), len(batch.Records), logs.Stats())
 }

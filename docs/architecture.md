@@ -379,6 +379,12 @@ against a program that only prints:
 SQLite is the floor every engine shares; an engine's own code is what a program
 pays on top of it.
 
+On 26 September 2026 `internal/sizeprobe` also opens `records` and uses its
+handler, `Append`, `Maintain`, `Read`, `Follow` and `Drop`. Built the same way
+from Windows 11 at the commit that adds this paragraph, the metrics probe adds
+6 888 KiB and the probe with records 7 380 KiB: records costs a program 492 KiB
+beside metrics.
+
 ## Where the examples are
 
 - `examples/notes`: a program using the store, `sqldb`, metrics instruments,
