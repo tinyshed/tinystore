@@ -26,3 +26,10 @@ records restored. `TestDeepRecordDensity` compares deeper candidate families
 and a pinned GH Archive prefix fetched by `bench/fetch-record-events.py`.
 `docs/reports/record-reconstruction-2026-09-25.md` includes losing candidates,
 the broader dictionary scope and the whole-segment decoding cost.
+
+`spike/record_v2_*` is the second prototype: segments sorted by event time, a
+segment row and a row per block of 1024 records in SQLite with 1 KiB pages,
+integer and text columns chosen by computed size, and recipe or affine
+predictions tried only when a row sample agrees. `TestRecordV2Density`,
+`TestRecordV2Queries`, `TestRecordV2PageFit` and `TestRecordV2AgainstV1` need
+`TINYSTORE_SPIKE=1`; see `docs/reports/record-v2-2026-09-25.md`.
