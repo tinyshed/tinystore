@@ -225,7 +225,7 @@ has the environment and the commands.
 | encoder, one CPU | 405,000 to 480,000 frontend records/s | 570,000 to 710,000 |
 | decoder, one CPU | about 1.5 million records/s | 1.29 to 1.44 million |
 | one second of one million records | 2 of 977 blocks read | 1.92 blocks |
-| the same, one record in a hundred ten minutes late | 5.12 blocks | 5.12; 5.26 in flushes of 1024 |
+| the same, one record in a hundred ten minutes late | 5.12 blocks | 4.63; 5.24 in flushes of 1024 |
 | one request id among 1.32 million | 11 blocks read, 21 ms | 11 blocks, 6 ms |
 
 ## What the engine leaves out
@@ -254,6 +254,10 @@ for long and follows them rarely raises it.
   or templates with typed variables, a line's own timestamp first; one zstd
   frame per segment shows about 2.5 bytes a record that independent blocks
   leave.
+- Late records: measured against the stream's newest record, one-second reads
+  fetch 5.24 blocks when the late fixture arrives in flushes of 1024, above the
+  hand-off's 5.2; the minute itself is the lever left
+  ([the round](reports/records-late-reference-2026-09-25.md)).
 - Input: a continuation rule for multi-line records; adapters for pino, logfmt,
   glog and log4j lines.
 - Storage: a merge of a stream's small sealed segments, which cost the hourly

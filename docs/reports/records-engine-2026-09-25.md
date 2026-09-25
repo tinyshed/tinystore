@@ -7,6 +7,12 @@ Every figure comes from the engine itself: records appended through
 `records.Append`, sealed by `Maintain`, read by `Read`, the file divided by
 `dbstat`. The runner is `bench/records`.
 
+Follow-up: [what a late record is behind](records-late-reference-2026-09-25.md)
+measures a late record against its stream's newest record instead of its
+batch's median: one-second reads with late records fetch 4.63 blocks in the
+research's batches and 5.24 in flushes, and a record appended alone is late
+again.
+
 ## Environment and reproduction
 
 - The engine at `49dc7b1` and its runner at `b646acd`, branch
