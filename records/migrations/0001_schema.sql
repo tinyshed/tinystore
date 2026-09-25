@@ -7,8 +7,8 @@ create table streams (
 ) strict;
 
 -- a head row is one stream's flush, its records in arrival order under zstd;
--- late: more than a minute behind the median of its batch; input: what its
--- records weigh against a segment's bounds; size: the body's bytes
+-- late: more than a minute behind the newest record its stream has shown;
+-- input: what its records weigh against a segment's bounds; size: the body's bytes
 create table heads (
     id         integer primary key,
     stream     integer not null,

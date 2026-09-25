@@ -13,6 +13,7 @@ import (
 // head rows it was made of, in one transaction: a reader finds each record in
 // the head or in the segment, never in both and never in neither
 func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segment encodedSegment) error {
+	emptied := false
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		firstBlock, err := nextBlockID(ctx, tx)
 		if err != nil {
@@ -29,10 +30,14 @@ func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segm
 		if err = insertKeys(ctx, tx, id, segment.keys); err != nil {
 			return err
 		}
-		return removeHeadRows(ctx, tx, head, chunk)
+		emptied, err = removeHeadRows(ctx, tx, head, chunk)
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("records: publish a segment of %s: %w", segment.stream, err)
+	}
+	if emptied && !head.late {
+		s.waiting.forget(segment.stream)
 	}
 	return nil
 }
@@ -110,10 +115,12 @@ func insertKeys(ctx context.Context, tx sqlite.Writer, segment int64, keys []seg
 
 const deleteHeadRow = `delete from heads where id = ?`
 
-func removeHeadRows(ctx context.Context, tx sqlite.Writer, head headKey, chunk headChunk) error {
+// removeHeadRows deletes what a segment took from its head, and says whether
+// the head is empty now
+func removeHeadRows(ctx context.Context, tx sqlite.Writer, head headKey, chunk headChunk) (bool, error) {
 	for _, id := range chunk.ids {
 		if _, err := tx.ExecContext(ctx, deleteHeadRow, id); err != nil {
-			return err
+			return false, err
 		}
 	}
 	return settleHead(ctx, tx, head, chunk.count, chunk.input)
@@ -127,20 +134,20 @@ const (
 )
 
 // settleHead takes what left a head off its state, then dates the state by
-// the oldest row left, or removes it when none is
-func settleHead(ctx context.Context, tx sqlite.Writer, head headKey, count, input int) error {
-	if _, err := tx.ExecContext(ctx, subtractFromHead, count, input, head.stream, head.late); err != nil {
-		return err
+// the oldest row left, or removes it and says so when none is
+func settleHead(ctx context.Context, tx sqlite.Writer, head headKey, count, input int) (emptied bool, err error) {
+	if _, err = tx.ExecContext(ctx, subtractFromHead, count, input, head.stream, head.late); err != nil {
+		return false, err
 	}
 	var since int64
-	err := sqlite.QueryRow(ctx, tx, selectOldestHead, head.stream, head.late).Scan(&since)
+	err = sqlite.QueryRow(ctx, tx, selectOldestHead, head.stream, head.late).Scan(&since)
 	if errors.Is(err, sql.ErrNoRows) {
 		_, err = tx.ExecContext(ctx, deleteHeadState, head.stream, head.late)
-		return err
+		return err == nil, err
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = tx.ExecContext(ctx, setHeadSince, since, head.stream, head.late)
-	return err
+	return false, err
 }

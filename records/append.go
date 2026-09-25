@@ -40,10 +40,11 @@ func (s *Store) appendChecked(ctx context.Context, batch []Record) error {
 	}
 	defer unreserve()
 
-	rows := s.encodeHeadRows(routeToHeads(batch))
+	rows := s.encodeHeadRows(routeToHeads(batch, &s.waiting))
 	if err = s.writeHeadRows(ctx, rows); err != nil {
 		return fmt.Errorf("records: append: %w", err)
 	}
+	s.waiting.remember(rows)
 	s.appended.Add(uint64(len(batch)))
 	return nil
 }

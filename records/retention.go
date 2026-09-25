@@ -115,7 +115,7 @@ func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
 					return err
 				}
 			}
-			if err = settleHead(ctx, tx, head, expired.count, expired.input); err != nil {
+			if _, err = settleHead(ctx, tx, head, expired.count, expired.input); err != nil {
 				return err
 			}
 			removed += len(expired.ids)

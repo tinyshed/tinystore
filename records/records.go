@@ -39,6 +39,7 @@ type Store struct {
 	blobs       *zstd.Encoder
 	unpack      *zstd.Decoder
 	streams     streams
+	waiting     waitingTimes
 	queue       chan Record
 	gate        gate
 	maintenance chan struct{}
@@ -120,6 +121,7 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 		queue: make(chan Record, opts.Buffer), maintenance: make(chan struct{}, 1),
 	}
 	engine.gate.drained = make(chan struct{})
+	engine.waiting.newest = map[string]int64{}
 	engine.maintenance <- struct{}{}
 	if err = engine.streams.load(ctx, file); err != nil {
 		_ = blobs.Close()

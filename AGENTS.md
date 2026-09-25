@@ -357,6 +357,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a failed seal leaves the head as it was             | `TestAFailedSealLeavesTheHeadAsItWas`                                           |
 | a damaged head does not stop the others             | `TestADamagedHeadDoesNotStopTheOthers`                                          |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
+| a record appended alone can be late                 | `TestARecordAppendedAloneCanBeLate`                                             |
 | a page never splits a timestamp nor loses one       | `TestAPageNeverSplitsATimestamp`, `TestPagesContinueWithoutLosingOrRepeating`   |
 | a budget ends a page rather than failing it         | `TestABudgetEndsAPageEarly`                                                     |
 | blooms and level masks skip blocks                  | `TestBloomsAndLevelMasksSkipBlocks`                                             |

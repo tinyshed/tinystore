@@ -49,7 +49,7 @@ const (
 
 // what the engine does on its own schedule, and how long it waits
 const (
-	lateness           = time.Minute     // behind its batch's median, a record goes to the late head
+	lateness           = time.Minute     // behind its stream's newest, a record goes to the late head
 	maintenanceEvery   = time.Minute     // seal and expire
 	snapshotTimeout    = 5 * time.Second // the longest a read holds its snapshot
 	segmentReservation = 24 << 20        // what encoding or decoding one segment allocates at most

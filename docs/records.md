@@ -130,10 +130,11 @@ blocks and filters and deletes the head rows in one transaction, as metrics
 does.
 
 **Late records have a head of their own.** What arrives more than a minute
-behind its batch's median goes to a late head of the same stream and seals the
-same way. Without it, one record in a hundred arriving ten minutes late made
-one-second reads read thirteen times as many blocks; with it, under three
-times.
+behind the newest record its stream has shown, in the same batch or waiting on
+time in its head, goes to a late head of the same stream and seals the same
+way; a record appended alone can be late too. Without it, one record in a
+hundred arriving ten minutes late made one-second reads read thirteen times as
+many blocks; with it, under three times.
 
 **A segment in flight reserves 24 MiB.** Encoding allocates three to five
 times a segment's input and decoding four to six, and the input is at most
@@ -201,7 +202,7 @@ column, with exact exceptions. The engine leaves both out; what that costs is
 | Integer dictionary | 256 values |
 | Expanded or copied text per block | 4 MiB |
 | Head row | a block's bounds |
-| Head | an hour of age; a minute behind its batch's median is late |
+| Head | an hour of age; a minute behind the stream's newest is late |
 | Memory reservation | 24 MiB per segment in flight |
 
 Counts, lengths, references, radix words, Rice streams, FSE expansion, text
@@ -253,10 +254,6 @@ for long and follows them rarely raises it.
   or templates with typed variables, a line's own timestamp first; one zstd
   frame per segment shows about 2.5 bytes a record that independent blocks
   leave.
-- Late records: a batch's median is a flush's, and a flush of 1024 frontend
-  records separates the late ones slightly worse than the research's segment
-  of 16,384: 5.26 blocks a one-second read against 5.12. The head's newest time
-  would be a steadier reference.
 - Input: a continuation rule for multi-line records; adapters for pino, logfmt,
   glog and log4j lines.
 - Storage: a merge of a stream's small sealed segments, which cost the hourly
