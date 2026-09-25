@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"testing"
@@ -75,6 +77,9 @@ func v2Measure(t testing.TB, events []recordEvent, arrival bool) v2Measured {
 			measured.payload += len(block.body)
 			if len(block.traces) > 0 {
 				measured.blooms += len(v2Bloom(block.traces, 16))
+			}
+			for _, filter := range block.filters {
+				measured.blooms += len(filter.bloom)
 			}
 		}
 		assertRecordEvents(t, stored, decoded)
@@ -360,4 +365,132 @@ func TestRecordV2FrontendFloor(t *testing.T) {
 	t.Logf("time arrival=%.4f sorted_rice=%.4f context_ids=%.4f dictionary=%.4f attributes=%.4f",
 		arrival, sorted, contexts, dictionary, attributes)
 	t.Logf("floor arrival_order=%.4f time_order=%.4f B/record", arrival+rest, sorted+rest)
+}
+
+// TestRecordV2LateRecords shifts one record in a hundred up to ten minutes into the past,
+// as clients that were offline deliver them, and counts what one-second reads pay for it
+func TestRecordV2LateRecords(t *testing.T) {
+	if os.Getenv("TINYSTORE_SPIKE") == "" {
+		t.Skip("set TINYSTORE_SPIKE=1 to measure late records")
+	}
+	for _, mode := range []string{"on time", "late", "late, own head"} {
+		random := rand.New(rand.NewPCG(29, 31))
+		events := recordFixture("frontend", 1_000_000)
+		if mode != "on time" {
+			for i := range events {
+				if random.IntN(100) == 0 {
+					events[i].at -= random.Int64N(int64(10 * time.Minute))
+				}
+			}
+		}
+		var measured v2Measured
+		if mode == "late, own head" {
+			measured = v2MeasureBatches(t, v2LateHead(v2Batches(events), int64(time.Minute)))
+		} else {
+			measured = v2Measure(t, events, false)
+		}
+		db, err := v2OpenStore(t.Context(), filepath.Join(t.TempDir(), "late.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = v2WriteSegments(t.Context(), db, measured.segments); err != nil {
+			t.Fatal(err)
+		}
+		var widest, blocks int64
+		const spans = `select max(last_at - first_at), count(*) from blocks`
+		if err = db.QueryRowContext(t.Context(), spans).Scan(&widest, &blocks); err != nil {
+			t.Fatal(err)
+		}
+		read, rows := 0, 0
+		_, decoder := v2TestCodec(t)
+		for i := range 100 {
+			from := events[10_000+i*9_000].at
+			reader := &v2Reader{db: db, decoder: decoder, schemas: map[int64]*v2Schema{}}
+			got, err := reader.readRange(t.Context(), from, from+1e9)
+			if err != nil {
+				t.Fatal(err)
+			}
+			read, rows = read+reader.blocks, rows+len(got)
+		}
+		db.Close()
+		t.Logf("%-15s blocks=%d widest_block=%v blocks_per_second_read=%.2f rows_per_read=%.0f payload=%.4f B/record",
+			mode, blocks, time.Duration(widest), float64(read)/100, float64(rows)/100,
+			float64(measured.payload)/float64(len(events)))
+	}
+}
+
+// TestRecordV2SegmentMemory bounds what encoding and decoding one full segment allocate,
+// the figure a memory reservation has to cover
+func TestRecordV2SegmentMemory(t *testing.T) {
+	if os.Getenv("TINYSTORE_SPIKE") == "" {
+		t.Skip("set TINYSTORE_SPIKE=1 to measure segment memory")
+	}
+	encoder, decoder := v2TestCodec(t)
+	for _, name := range []string{"frontend", "backend", "noise"} {
+		events := v2Batches(recordFixture(name, v2SegmentEvents))[0]
+		raw := 0
+		for i := range events {
+			raw += v2EventBytes(&events[i])
+		}
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		segment, _, err := encoder.encodeSegment(events, false)
+		runtime.ReadMemStats(&after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded := after.TotalAlloc - before.TotalAlloc
+		runtime.ReadMemStats(&before)
+		schema, err := decoder.decodeSchema(segment.row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range segment.blocks {
+			if _, err = decoder.decodeBlock(&schema, block.body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		runtime.ReadMemStats(&after)
+		t.Logf("%-8s records=%d input=%.1f MiB encode_alloc=%.1f MiB decode_alloc=%.1f MiB", name, len(events),
+			float64(raw)/(1<<20), float64(encoded)/(1<<20), float64(after.TotalAlloc-before.TotalAlloc)/(1<<20))
+	}
+}
+
+// v2LateHead moves what a batch holds from more than margin before its median into a
+// head of its own, sealed in event-time order like any other
+func v2LateHead(batches [][]recordEvent, margin int64) [][]recordEvent {
+	var onTime [][]recordEvent
+	var late []recordEvent
+	for _, batch := range batches {
+		times := make([]int64, len(batch))
+		for i := range batch {
+			times[i] = batch[i].at
+		}
+		slices.Sort(times)
+		median := times[len(times)/2]
+		var kept []recordEvent
+		for _, event := range batch {
+			if event.at < median-margin {
+				late = append(late, event)
+			} else {
+				kept = append(kept, event)
+			}
+		}
+		onTime = append(onTime, kept)
+	}
+	return append(onTime, v2Batches(late)...)
+}
+
+func v2MeasureBatches(t testing.TB, batches [][]recordEvent) v2Measured {
+	t.Helper()
+	var measured v2Measured
+	for _, batch := range batches {
+		part := v2Measure(t, batch, false)
+		measured.segments = append(measured.segments, part.segments...)
+		measured.payload += part.payload
+		measured.blooms += part.blooms
+		measured.encode += part.encode
+	}
+	return measured
 }

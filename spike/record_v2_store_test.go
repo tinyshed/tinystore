@@ -17,7 +17,9 @@ const v2StoreSchema = `create table segments (id integer primary key, stream tex
 create table blocks (id integer primary key, segment integer not null, first_at integer not null,
 	last_at integer not null, count integer not null, levels integer not null, body blob not null) strict;
 create index blocks_time on blocks (first_at, last_at, levels);
-create table block_traces (block integer primary key, bloom blob not null) strict;`
+create table block_traces (block integer primary key, bloom blob not null) strict;
+create table block_filters (key text not null, block integer not null, bloom blob not null,
+	primary key (key, block)) without rowid, strict;`
 
 const (
 	v2BloomBits   = 10
@@ -65,6 +67,7 @@ const (
 	v2InsertSegment = `insert into segments (stream, first_at, last_at, count, body) values (?, ?, ?, ?, ?)`
 	v2InsertBlock   = `insert into blocks (segment, first_at, last_at, count, levels, body) values (?, ?, ?, ?, ?, ?)`
 	v2InsertBloom   = `insert into block_traces (block, bloom) values (?, ?)`
+	v2InsertFilter  = `insert into block_filters (key, block, bloom) values (?, ?, ?)`
 )
 
 func v2WriteSegments(ctx context.Context, db *sql.DB, segments []v2Segment) error {
@@ -96,14 +99,25 @@ func v2WriteSegment(ctx context.Context, tx *sql.Tx, segment *v2Segment) error {
 		if err != nil {
 			return err
 		}
-		if len(block.traces) == 0 {
-			continue
-		}
 		blockID, err := result.LastInsertId()
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, v2InsertBloom, blockID, v2Bloom(block.traces, 16)); err != nil {
+		if err = v2WriteFilters(ctx, tx, blockID, &block); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func v2WriteFilters(ctx context.Context, tx *sql.Tx, blockID int64, block *v2Block) error {
+	if len(block.traces) > 0 {
+		if _, err := tx.ExecContext(ctx, v2InsertBloom, blockID, v2Bloom(block.traces, 16)); err != nil {
+			return err
+		}
+	}
+	for _, filter := range block.filters {
+		if _, err := tx.ExecContext(ctx, v2InsertFilter, filter.key, blockID, filter.bloom); err != nil {
 			return err
 		}
 	}
@@ -355,8 +369,15 @@ func (r *v2Reader) readAttr(ctx context.Context, field recordField, from, to int
 	if err != nil {
 		return nil, err
 	}
+	filters, err := r.filtered(ctx, field.key, from, to)
+	if err != nil {
+		return nil, err
+	}
 	var kept []v2Candidate
 	for _, candidate := range candidates {
+		if bloom, ok := filters[candidate.id]; ok && !v2BloomMayHold(bloom, []byte(field.value)) {
+			continue
+		}
 		schema, err := r.schema(ctx, candidate.segment)
 		if err != nil {
 			return nil, err
@@ -421,4 +442,61 @@ func v2OpenStore(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// v2IDLike picks the attribute columns a lookup names one value of: short JSON strings,
+// nearly every one distinct, as request ids, hashes and uuids are; distinct numbers are
+// times and measures, which a range asks for
+func v2IDLike(values []string) bool {
+	if len(values) < 16 {
+		return false
+	}
+	distinct := map[string]bool{}
+	for _, value := range values {
+		if _, quoted := v2Unquote(value); !quoted || len(value) > 64 {
+			return false
+		}
+		distinct[value] = true
+	}
+	return len(distinct)*10 >= len(values)*9
+}
+
+func v2BloomValues(values []string) []byte {
+	distinct := map[string]bool{}
+	for _, value := range values {
+		distinct[value] = true
+	}
+	filter := make([]byte, max(8, (len(distinct)*v2BloomBits+7)/8))
+	bits := uint64(len(filter)) * 8
+	for value := range distinct {
+		a, b := v2BloomHash([]byte(value))
+		for i := range uint64(v2BloomHashes) {
+			bit := (a + i*b) % bits
+			filter[bit/8] |= 1 << (bit % 8)
+		}
+	}
+	return filter
+}
+
+const v2SelectFilters = `select f.block, f.bloom from block_filters f join blocks b on b.id = f.block
+	where f.key = ? and b.first_at < ? and b.last_at >= ?`
+
+// filtered reads the blooms of one key in a range; a block without one has no id-like column
+func (r *v2Reader) filtered(ctx context.Context, key string, from, to int64) (map[int64][]byte, error) {
+	rows, err := r.db.QueryContext(ctx, v2SelectFilters, key, to, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	filters := map[int64][]byte{}
+	for rows.Next() {
+		var block int64
+		var bloom []byte
+		if err = rows.Scan(&block, &bloom); err != nil {
+			return nil, err
+		}
+		r.bytes += len(bloom)
+		filters[block] = bloom
+	}
+	return filters, rows.Err()
 }

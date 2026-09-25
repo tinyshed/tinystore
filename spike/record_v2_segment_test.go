@@ -73,6 +73,7 @@ type v2Schema struct {
 	slots      []v2Slot
 	shapeSlots [][]int
 	attrSlots  int
+	columnKeys []string
 }
 
 type v2Block struct {
@@ -80,7 +81,14 @@ type v2Block struct {
 	count       int
 	levels      int64
 	traces      []byte
+	filters     []v2Filter
 	body        []byte
+}
+
+// v2Filter is a bloom filter over one id-like attribute of one block
+type v2Filter struct {
+	key   string
+	bloom []byte
 }
 
 type v2Segment struct {
@@ -160,6 +168,12 @@ func (s *v2Schema) derive() {
 	for _, kind := range []byte{v2SlotName, v2SlotShape, v2SlotContext, v2SlotLevel, v2SlotTrace, v2SlotSpan, v2SlotRaw} {
 		if present[kind] {
 			s.slots = append(s.slots, v2Slot{kind: kind})
+		}
+	}
+	s.columnKeys = make([]string, s.columns)
+	for _, shape := range s.shapes {
+		for position, column := range shape.columns {
+			s.columnKeys[column] = shape.keys[position]
 		}
 	}
 	s.attrSlots = len(s.slots)
@@ -444,6 +458,11 @@ func (e *v2Encoder) encodeBlock(schema *v2Schema, events []recordEvent, ids v2Id
 		}
 	}
 	block.traces = columns.traces
+	for column, values := range columns.attrs {
+		if v2IDLike(values) {
+			block.filters = append(block.filters, v2Filter{schema.columnKeys[column], v2BloomValues(values)})
+		}
+	}
 	var payload []byte
 	lengths := make([]int, len(schema.slots))
 	carriers := v2Carriers(schema, ids.shapes)

@@ -513,3 +513,105 @@ func v2TextScope(t *testing.T, encoder *v2Encoder, plain *zstd.Encoder, bodies [
 		costs["v2 column"] += len(encoder.appendText(nil, bodies[start:min(start+recordEventLimit, len(bodies))]))
 	}
 }
+
+// v2SealByAge cuts each stream's arrivals as a head would seal them: a full segment,
+// or the oldest waiting record older than age by the newest arrival's clock
+func v2SealByAge(events []recordEvent, age int64) [][]recordEvent {
+	var batches [][]recordEvent
+	for _, stream := range v2Batches(events) {
+		start := 0
+		for i := range stream {
+			if age > 0 && i > start && stream[i].at-stream[start].at > age {
+				batches, start = append(batches, stream[start:i]), i
+			}
+		}
+		batches = append(batches, stream[start:])
+	}
+	return batches
+}
+
+// TestRecordV2SealPolicy measures what sealing by age costs a real, mostly quiet, fleet
+func TestRecordV2SealPolicy(t *testing.T) {
+	containers := v2DockerCorpus(t)
+	var events []recordEvent
+	for i := range containers {
+		part, _, _ := v2DockerEvents(&containers[i], false)
+		events = append(events, part...)
+	}
+	for _, age := range []time.Duration{time.Minute, 10 * time.Minute, time.Hour, 6 * time.Hour, 24 * time.Hour, 0} {
+		encoder, _ := v2TestCodec(t)
+		var segments []v2Segment
+		payload, sizes := 0, []int{}
+		for _, batch := range v2SealByAge(events, int64(age)) {
+			segment, _, err := encoder.encodeSegment(batch, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			segments = append(segments, segment)
+			sizes = append(sizes, len(batch))
+			payload += len(segment.row)
+			for _, block := range segment.blocks {
+				payload += len(block.body)
+			}
+		}
+		size := v2FileSize(t, segments)
+		slices.Sort(sizes)
+		t.Logf("seal after %-8v segments=%6d median_records=%5d payload=%.3f file=%.3f B/record", age, len(segments),
+			sizes[len(sizes)/2], float64(payload)/float64(len(events)), float64(size)/float64(len(events)))
+	}
+}
+
+func v2FileSize(t *testing.T, segments []v2Segment) int64 {
+	t.Helper()
+	db, err := v2OpenStore(t.Context(), filepath.Join(t.TempDir(), "records.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = v2WriteSegments(t.Context(), db, segments); err != nil {
+		t.Fatal(err)
+	}
+	size, _, err := v2StoreSize(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return size
+}
+
+// TestRecordV2HeadFlushes measures a head written once a second per stream: what one
+// flush costs as plain rows, as rows under zstd, and as a v2 segment of its own
+func TestRecordV2HeadFlushes(t *testing.T) {
+	containers := v2DockerCorpus(t)
+	var events []recordEvent
+	for i := range containers {
+		part, _, _ := v2DockerEvents(&containers[i], false)
+		events = append(events, part...)
+	}
+	flushes := v2SealByAge(events, int64(time.Second))
+	encoder, _ := v2TestCodec(t)
+	writer, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	var rows, compressed, segments int
+	for _, flush := range flushes {
+		var raw []byte
+		for _, event := range flush {
+			raw = appendRecordEvent(raw, event)
+		}
+		rows += len(raw)
+		compressed += min(len(raw), len(writer.EncodeAll(raw, nil)))
+		segment, _, err := encoder.encodeSegment(flush, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		segments += len(segment.row)
+		for _, block := range segment.blocks {
+			segments += len(block.body)
+		}
+	}
+	n := float64(len(events))
+	t.Logf("flushes=%d records/flush=%.1f rows=%.1f rows_zstd=%.1f v2_per_flush=%.1f B/record",
+		len(flushes), n/float64(len(flushes)), float64(rows)/n, float64(compressed)/n, float64(segments)/n)
+}
