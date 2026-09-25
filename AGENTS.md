@@ -355,6 +355,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an appended record reads before it is sealed        | `TestAppendedRecordsAreReadBeforeTheyAreSealed`                                 |
 | a reader finds each record once while sealing       | `TestReadersSeeEveryRecordOnceWhileSealing`                                     |
 | a failed seal leaves the head as it was             | `TestAFailedSealLeavesTheHeadAsItWas`                                           |
+| an abrupt exit loses no appended record             | `TestAnAbruptExitKeepsEveryAppendedRecord`, before, inside and after a seal     |
 | a damaged head does not stop the others             | `TestADamagedHeadDoesNotStopTheOthers`                                          |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
 | a record appended alone can be late                 | `TestARecordAppendedAloneCanBeLate`                                             |
