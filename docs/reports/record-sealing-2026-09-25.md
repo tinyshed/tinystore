@@ -108,6 +108,27 @@ Encoding allocates three to five times a segment's input and decoding four to
 six; at the 4 MiB input limit a reservation of 24 MiB per segment covers both.
 This is allocation, an upper bound on live heap, not a measured peak RSS.
 
+## Throughput on Linux
+
+The earlier figures were measured on Windows. The same benchmarks in the
+`golang:1.27` container (go1.27.1 linux/amd64, Docker Desktop on the same
+machine, module cache mounted read-only, `GOPROXY=off`), one CPU:
+
+```sh
+docker run --rm -v <repo>:/src -v <module cache>:/go/pkg/mod -w /src -e GOTOOLCHAIN=local \
+  -e GOFLAGS=-mod=readonly -e GOPROXY=off -e GOWORK=off golang:1.27 go test ./spike -run '^$' \
+  -bench '^BenchmarkRecordV2Throughput$|^BenchmarkRecordThroughput$/adaptive' -benchtime=20x -benchmem -cpu=1 -count=1
+```
+
+| Path | Records/s | Allocated per record |
+|---|---:|---:|
+| previous `final` encode, 10,000 records | 950 | 848 KB |
+| previous decode | 412,294 | 3.4 KB |
+| v2 frontend encode, 16,384 records | 404,961 | 758 B |
+| v2 frontend decode | 1,512,787 | 1.0 KB |
+| v2 backend encode | 664,698 | 998 B |
+| v2 backend decode | 1,349,746 | 1.3 KB |
+
 ## What this settles, and what it does not
 
 - Head: a row per stream and flush, under zstd. Seal: 16,384 records, 4 MiB,
@@ -117,4 +138,4 @@ This is allocation, an upper bound on live heap, not a measured peak RSS.
   `block_filters`; 1 KiB pages; a reservation of 24 MiB per segment in flight.
 - Not measured: a merge of small sealed segments, an index of keys per
   segment, a bound on the time-index scan with late blocks present, recovery of
-  a head after a crash, concurrent readers, and any figure on Linux.
+  a head after a crash, concurrent readers, and density or queries on Linux.

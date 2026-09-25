@@ -36,6 +36,8 @@ and restores it before `Open`.
 `records` is a first version: a row per record with JSON attributes, a time
 index and nothing else — no compression, no full-text search, no measured
 density. [examples/notes](examples/notes/main.go) is a program using all of it.
+The design it is to be rebuilt to is settled in [docs/records.md](docs/records.md);
+its format starts at version one and reads no earlier prototype.
 
 Designed, not built: `kv`, `blobs`, `jobs` and self-metrics.
 
