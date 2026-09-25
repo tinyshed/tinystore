@@ -95,3 +95,4 @@ fetch and normalise them.
 | [record-reconstruction-2026-09-25.md](record-reconstruction-2026-09-25.md) | lossless 9.8304 B/record in the complete SQLite file on a fixed frontend fixture, candidate ablations and a real GitHub-event control |
 | [record-speed-2026-09-25.md](record-speed-2026-09-25.md) | one-CPU codec throughput and cumulative allocations on the fixed frontend fixture; the current encoder's high search cost |
 | [record-v2-2026-09-25.md](record-v2-2026-09-25.md) | event-time order, segment and block rows, screened predictions: 7.85 B/record in the file at one million records, a ~480,000 records/s encoder, and query cost for time, level, attribute, session and trace |
+| [record-docker-logs-2026-09-25.md](record-docker-logs-2026-09-25.md) | v2 on 1.32 million production container log lines: 17.75 B/record for structured services as slog records, text against zstd by compression scope, and query pruning on real data |

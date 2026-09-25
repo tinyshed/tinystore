@@ -65,7 +65,17 @@ by counting bits, not by compressing candidates; only text blobs go through
 zstd, once. A column may be a recipe (`prefix + earlier column + suffix`) or an
 affine function of an earlier column with exact exceptions, tried only when the
 first 8 to 16 rows agree and only against a column that is not itself
-predicted.
+predicted. Text without newlines is stored newline-separated, without a length
+column. A segment whose bodies hold at least 256 KiB keeps a 64 KiB sample of
+them in its row, and its blocks' text compresses against the sample.
+
+**Real logs are decided by what programs write.** On production container logs
+([report](reports/record-docker-logs-2026-09-25.md)) structured services cost
+17.75 bytes per record as `slog` records, 15.84 of them a distinct random
+request id per record; text from third-party software costs about what zstd
+does over the same lines. Text templates with typed timestamps, a continuation
+rule for multi-line records, adapters that map time, level and message, and
+blooms for id-like attributes are the open work for such logs.
 
 ## Logical input
 
