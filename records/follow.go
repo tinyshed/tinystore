@@ -16,7 +16,7 @@ import (
 // head is sealed, a segment's worth or SealAge after it arrived; Read sees it
 // at once. A late record is in a later segment than its neighbours in time.
 func (s *Store) Follow(ctx context.Context, after Cursor, limit int) (Batch, error) {
-	release, err := s.admit(ctx)
+	release, err := s.admitTo(ctx, s.reads)
 	if err != nil {
 		return Batch{}, err
 	}

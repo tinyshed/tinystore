@@ -67,10 +67,13 @@ func openRecords(t *testing.T) *testStore {
 	return openTestStore(t, t.TempDir(), Options{}, tinystore.Options{})
 }
 
+// append writes a fixture as few Appends as a segment's input allows
 func (s *testStore) append(t testing.TB, records ...Record) {
 	t.Helper()
-	if err := s.Append(t.Context(), records...); err != nil {
-		t.Fatal(err)
+	for _, piece := range appendsOf(records) {
+		if err := s.Append(t.Context(), piece...); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -190,6 +193,33 @@ func TestARecordOutsideItsWindowIsRefused(t *testing.T) {
 	edges := []Record{{At: oldest, Stream: "x", Name: "oldest"}, {At: newest, Stream: "x", Name: "newest"}}
 	s.append(t, edges...)
 	sameRecords(t, edges, s.readAll(t, Query{}))
+}
+
+// one Append carries at most a segment's input, so that one call's memory is
+// bounded whatever the store's; the handler writes a larger flush in pieces
+func TestAnAppendOfMoreThanASegmentIsRefused(t *testing.T) {
+	s := openLogging(t, t.TempDir(), Options{Buffer: 32})
+	body := string(make([]byte, 200<<10))
+	lines := make([]Record, 21)
+	for i := range lines {
+		lines[i] = Record{At: s.clock.Now(), Stream: "x", Name: "x", Body: &body}
+	}
+	if err := s.Append(t.Context(), lines...); !errors.Is(err, tinystore.ErrLimit) {
+		t.Fatalf("an Append of 4.2 MB: %v", err)
+	}
+	if got := s.readAll(t, Query{}); len(got) != 0 {
+		t.Fatalf("a refused Append wrote %d records", len(got))
+	}
+	logger := slog.New(s.Handler("app"))
+	for range lines {
+		logger.Info(body)
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if stats := s.Stats(); stats.Appended != uint64(len(lines)) || stats.Dropped != 0 {
+		t.Fatalf("a flush of 4.2 MB: %+v", stats)
+	}
 }
 
 func TestAClosedStoreRefusesWork(t *testing.T) {

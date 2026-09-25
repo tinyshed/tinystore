@@ -97,7 +97,12 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   partly past it.
 - Every operation reserves its weight in the store's memory: an append its
   input, a seal 24 MiB for a segment in flight, a read its budget's bytes, a
-  decoded block and a page of records.
+  decoded block and a page of records. Without `tinystore.Options.Memory` the
+  engine still bounds what runs at once: two reads or follows, decoding
+  included, and two appends; the rest wait for a slot, and a caller that stops
+  waiting leaves. One `Append` carries at most a segment's input, 4 MiB, or is
+  refused with `tinystore.ErrLimit`; the handler writes a larger flush in
+  pieces.
 - A changed byte is refused with `tinystore.ErrCorrupt` naming the invariant
   it broke: every row carries a CRC-32 and every count and length is bounded
   before anything is allocated.

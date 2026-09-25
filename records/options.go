@@ -50,6 +50,7 @@ const (
 	// what a segment row may decompress or copy: its contexts come from at most
 	// maxSegmentInput of records
 	maxSegmentExpansion = 2 * maxSegmentInput
+	maxAppendInput      = maxSegmentInput // what one Append may carry, whatever the store's memory
 )
 
 // what the engine does on its own schedule, and how long it waits
@@ -58,6 +59,8 @@ const (
 	maintenanceEvery   = time.Minute     // seal and expire
 	snapshotTimeout    = 5 * time.Second // the longest a read holds its snapshot
 	segmentReservation = 24 << 20        // what encoding or decoding one segment allocates at most
+	readSlots          = 2               // reads and follows at once, decoding included: the reader connections
+	appendSlots        = 2               // appends at once: one encodes while another writes
 	recordReservation  = 1 << 10         // what one decoded record holds
 	blockReservation   = 2 << 20         // what decoding one block allocates at most
 	defaultLimit       = 1000            // records a page returns when a query does not say

@@ -7,31 +7,25 @@ import (
 	"math"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/admission"
 )
 
 // admit lets one operation in: the store is still open and one of the given
 // slots is free. release gives both back.
-func (s *Store) admit(ctx context.Context, slots chan struct{}) (release func(), err error) {
-	if err := s.enter(ctx); err != nil {
+func (s *Store) admit(ctx context.Context, slots admission.Slots) (release func(), err error) {
+	if err = s.enter(ctx); err != nil {
 		return nil, err
 	}
 
-	select {
-	case slots <- struct{}{}:
-	case <-ctx.Done():
+	free, err := slots.Take(ctx)
+	if err != nil {
 		s.leave()
-		return nil, ctx.Err()
-	}
-	release = func() {
-		<-slots
-		s.leave()
-	}
-
-	if err := ctx.Err(); err != nil {
-		release()
 		return nil, err
 	}
-	return release, nil
+	return func() {
+		free()
+		s.leave()
+	}, nil
 }
 
 // reserve holds an operation's weight in the store's memory; a store without
@@ -53,25 +47,11 @@ func (s *Store) reserve(ctx context.Context, weigh func() (int64, error)) (relea
 }
 
 func (s *Store) enter(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closing {
-		return ErrClosed
-	}
-	s.active++
-	return nil
+	return s.gate.Enter(ctx, ErrClosed)
 }
 
 func (s *Store) leave() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.active--
-	if s.closing && s.active == 0 {
-		close(s.drained)
-	}
+	s.gate.Leave()
 }
 
 func reservation(parts ...int64) (int64, error) {

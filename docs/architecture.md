@@ -124,6 +124,12 @@ capacity. What was the metrics engine's `WorkBudget` lives here: a default
 `Read` reserves its worst case,
 about 34 MiB, so 256 MiB admits seven at once and queues the eighth.
 
+Without `Options.Memory` each engine still bounds how much of its work runs at
+once, and a call's weight: metrics through `MaxConcurrentReads`,
+`MaxConcurrentIngest` and its batch limits, records through two reads, two
+appends and 4 MiB an append. The gate that lets work in while an engine is
+open, and the slots, are `internal/admission`, the same in every engine.
+
 ## Time
 
 The store's clock is the one every engine reads (`Store.Now`, replaceable

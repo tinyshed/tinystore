@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/admission"
 )
 
 // appending, reading, sealing and following each hold their weight in the
@@ -50,6 +51,44 @@ func TestStoreMemoryBoundsAppendReadSealAndFollow(t *testing.T) {
 	}
 	if usage := s.runtime.Memory(); usage.Peak < segmentReservation {
 		t.Fatalf("sealing a segment reserved at most %d bytes, want %d", usage.Peak, segmentReservation)
+	}
+}
+
+// reads and follows share the reader connections' slots and appends have their
+// own, held through decoding and encoding: work beyond them waits, and a caller
+// that stops waiting leaves
+func TestReadsAndAppendsWaitForTheirSlots(t *testing.T) {
+	s := openRecords(t)
+	s.append(t, backendRecords(10)...)
+	work := map[string]struct {
+		slots admission.Slots
+		run   func(context.Context) error
+	}{
+		"read": {s.reads, func(ctx context.Context) error {
+			_, err := s.Read(ctx, Query{})
+			return err
+		}},
+		"follow": {s.reads, func(ctx context.Context) error {
+			_, err := s.Follow(ctx, Cursor{}, 10)
+			return err
+		}},
+		"append": {s.appends, func(ctx context.Context) error { return s.Append(ctx, backendRecords(1)...) }},
+	}
+	for name, test := range work {
+		for range cap(test.slots) {
+			test.slots <- struct{}{}
+		}
+		short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		if err := test.run(short); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s while its slots are taken: %v", name, err)
+		}
+		cancel()
+		for range cap(test.slots) {
+			<-test.slots
+		}
+		if err := test.run(t.Context()); err != nil {
+			t.Fatalf("%s once its slots are free: %v", name, err)
+		}
 	}
 }
 

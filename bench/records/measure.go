@@ -62,9 +62,18 @@ func (h *harness) setClock(now time.Time) {
 	h.now = now
 }
 
+// append writes a batch as few Appends as the engine's 4 MiB a call allows
 func (h *harness) append(ctx context.Context, batch []records.Record) {
-	if err := h.logs.Append(ctx, batch...); err != nil {
-		log.Fatal(err)
+	for start := 0; start < len(batch); {
+		end, input := start, 0
+		for end < len(batch) && (end == start || input+inputSize(&batch[end]) <= 4<<20) {
+			input += inputSize(&batch[end])
+			end++
+		}
+		if err := h.logs.Append(ctx, batch[start:end]...); err != nil {
+			log.Fatal(err)
+		}
+		start = end
 	}
 	h.appended += len(batch)
 }

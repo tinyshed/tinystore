@@ -62,6 +62,7 @@ Do not describe unbuilt behaviour as though it works.
 | `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
 | `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
+| `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
@@ -77,6 +78,7 @@ tinystore (root)    the runtime: directory, lifecycle, logger, background work, 
 metrics/            public API and private implementation files
 records/ sqldb/ …   one package per engine, each arriving with its first working code
 internal/sqlite/    mechanics shared by every engine; no engine vocabulary
+internal/admission/ the gate and the slots every engine lets work in through
 bench/              a module of its own: corpora, and other engines to measure against
 ```
 
@@ -411,7 +413,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | ready waits for a safe prefix                       | `TestReadyWaitsForASealableWatermarkPrefix`                                      |
 | writer programs stay bounded and transactional     | `TestPreparedWriterUsesOneTransactionAndRetainsPrograms` and `TestPreparedWriterCacheStaysBounded` |
 | one bad publication does not count its neighbors   | `TestPublicationBatchRollsBackOneConflictingSeries` and `TestPublicationBatchDoesNotCountRolledBackTransaction` |
-| cancelled callers do not bypass active-work slots   | `TestActiveReadAndIngestAdmissionHonorsCancellation`                         |
+| cancelled callers do not bypass active-work slots   | `TestActiveReadAndIngestAdmissionHonorsCancellation`, `TestSlotsHonourCancellation` |
+| a closed gate drains before an engine closes        | `TestAClosedGateRefusesWorkAndDrainsWhenTheWorkLeaves`                          |
+| records reads and appends wait for their slots      | `TestReadsAndAppendsWaitForTheirSlots`                                          |
+| one Append carries at most a segment's input        | `TestAnAppendOfMoreThanASegmentIsRefused`                                       |
 | expired series return a cardinality slot            | `TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle`                  |
 | live siblings keep shared dictionary pairs          | `TestReclaimKeepsLabelsUsedByAnotherSeries`                                   |
 | narrow reads pay only for selected packed chunks     | `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks` |

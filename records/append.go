@@ -25,7 +25,7 @@ func (s *Store) Append(ctx context.Context, batch ...Record) error {
 // appendChecked is admit → reserve → route → write the heads, for records
 // already checked: Append's, and what the handler queued
 func (s *Store) appendChecked(ctx context.Context, batch []Record) error {
-	release, err := s.admit(ctx)
+	release, err := s.admitTo(ctx, s.appends)
 	if err != nil {
 		return err
 	}
@@ -51,6 +51,7 @@ func (s *Store) appendChecked(ctx context.Context, batch []Record) error {
 }
 
 func checkBatch(batch []Record, accepted window) error {
+	input := 0
 	for i := range batch {
 		err := checkRecord(&batch[i])
 		if err == nil {
@@ -59,6 +60,11 @@ func checkBatch(batch []Record, accepted window) error {
 		if err != nil {
 			return &RecordError{Index: i, Stream: batch[i].Stream, Name: batch[i].Name, Err: err}
 		}
+		input += inputSize(&batch[i])
+	}
+	if input > maxAppendInput {
+		return fmt.Errorf("%w: %d bytes of records in one Append, more than a segment's %d; split it",
+			tinystore.ErrLimit, input, maxAppendInput)
 	}
 	return nil
 }

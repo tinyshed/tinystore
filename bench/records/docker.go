@@ -147,11 +147,19 @@ func (c *container) add(received, stream, text string) {
 // inputSize is what the engine weighs a record at against its bounds
 func inputSize(r *records.Record) int {
 	size := 32 + len(r.Stream) + len(r.Name)
+	if r.TraceID != (records.TraceID{}) {
+		size += len(r.TraceID)
+	}
+	if r.SpanID != (records.SpanID{}) {
+		size += len(r.SpanID)
+	}
 	if r.Body != nil {
 		size += len(*r.Body)
 	}
-	for _, field := range r.Attrs {
-		size += 4 + len(field.Key) + len(field.Value)
+	for _, fields := range [][]records.Field{r.Context, r.Attrs} {
+		for _, field := range fields {
+			size += 4 + len(field.Key) + len(field.Value)
+		}
 	}
 	return size
 }

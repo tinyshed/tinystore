@@ -151,19 +151,36 @@ func spellAny(value any) string {
 	return string(encoded)
 }
 
-// Flush writes what the handler holds as one batch. A batch whose write fails
-// is dropped and counted, as a full buffer's lines are.
+// Flush writes what the handler holds, an Append for each segment's worth of
+// input. A write that fails is dropped and counted with what was to follow it,
+// as a full buffer's lines are.
 func (s *Store) Flush(ctx context.Context) error {
-	batch := s.drain()
-	if len(batch) == 0 {
-		return nil
+	pieces := appendsOf(s.drain())
+	for i, piece := range pieces {
+		if err := s.appendChecked(ctx, piece); err != nil {
+			for _, lost := range pieces[i:] {
+				s.dropped.Add(uint64(len(lost)))
+			}
+			return err
+		}
 	}
+	return nil
+}
 
-	err := s.appendChecked(ctx, batch)
-	if err != nil {
-		s.dropped.Add(uint64(len(batch)))
+// appendsOf cuts records into Appends of at most a segment's input each; a
+// record alone always fits
+func appendsOf(records []Record) [][]Record {
+	var pieces [][]Record
+	for start := 0; start < len(records); {
+		end, input := start, 0
+		for end < len(records) && (end == start || input+inputSize(&records[end]) <= maxAppendInput) {
+			input += inputSize(&records[end])
+			end++
+		}
+		pieces = append(pieces, records[start:end])
+		start = end
 	}
-	return err
+	return pieces
 }
 
 // drain takes at most a buffer's worth, so that lines arriving meanwhile wait

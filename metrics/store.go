@@ -14,6 +14,7 @@ import (
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
+	"github.com/tinyshed/tinystore/internal/admission"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -28,16 +29,14 @@ type Store struct {
 	metadata                                                *metadataCodec
 	opts                                                    Options
 	now                                                     func() time.Time
-	mu                                                      sync.Mutex
-	active                                                  int
-	closing                                                 bool
-	drained, closed                                         chan struct{}
+	gate                                                    admission.Gate
+	closed                                                  chan struct{}
 	maintenanceGate                                         chan struct{}
 	closeErr                                                error
 	ingested, rejected, queried, sealed, expired, reclaimed atomic.Uint64
 	readyCursor                                             atomic.Int64
 	quarantined                                             atomic.Int64
-	readSlots, ingestSlots                                  chan struct{}
+	readSlots, ingestSlots                                  admission.Slots
 	instruments                                             instruments
 	flushing                                                sync.Mutex
 	finalFlush                                              sync.Once
@@ -140,10 +139,10 @@ func newStore(ctx context.Context, f *sqlite.File, opts Options) (*Store, error)
 	}
 	store := &Store{
 		file: f, encoder: encoder, decoder: decoder, metadata: metadata, opts: opts, now: time.Now,
-		log:     slog.New(slog.DiscardHandler),
-		drained: make(chan struct{}), closed: make(chan struct{}), maintenanceGate: make(chan struct{}, 1),
-		readSlots:   make(chan struct{}, opts.MaxConcurrentReads),
-		ingestSlots: make(chan struct{}, opts.MaxConcurrentIngest),
+		log:    slog.New(slog.DiscardHandler),
+		closed: make(chan struct{}), maintenanceGate: make(chan struct{}, 1),
+		readSlots:   admission.NewSlots(opts.MaxConcurrentReads),
+		ingestSlots: admission.NewSlots(opts.MaxConcurrentIngest),
 	}
 	store.instruments.store = store
 	store.maintenanceGate <- struct{}{}
@@ -171,20 +170,14 @@ func (s *Store) Close(ctx context.Context) error {
 	var flushErr error
 	s.finalFlush.Do(func() { flushErr = s.Flush(ctx) })
 
-	s.mu.Lock()
-	if !s.closing {
-		s.closing = true
-		if s.active == 0 {
-			close(s.drained)
-		}
+	if drained, first := s.gate.Close(); first {
 		go func() {
-			<-s.drained
+			<-drained
 			s.closeErr = errors.Join(s.encoder.Close(), s.decoder.Close(), s.metadata.close(), s.file.Close())
 			s.log.Info("closed")
 			close(s.closed)
 		}()
 	}
-	s.mu.Unlock()
 	select {
 	case <-s.closed:
 		return errors.Join(flushErr, s.closeErr)

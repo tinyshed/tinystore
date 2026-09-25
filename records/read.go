@@ -16,7 +16,7 @@ import (
 // Page.Next asks for what follows. Nothing is decoded while the snapshot the
 // page was read from is held.
 func (s *Store) Read(ctx context.Context, query Query) (Page, error) {
-	release, err := s.admit(ctx)
+	release, err := s.admitTo(ctx, s.reads)
 	if err != nil {
 		return Page{}, err
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/admission"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -42,7 +43,9 @@ type Store struct {
 	waiting     waitingTimes
 	damaged     damaged
 	queue       chan Record
-	gate        gate
+	gate        admission.Gate
+	reads       admission.Slots
+	appends     admission.Slots
 	maintenance chan struct{}
 	finalFlush  sync.Once
 	closing     sync.Once
@@ -96,7 +99,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string, opts O
 }
 
 func openFile(ctx context.Context, path string) (*sqlite.File, error) {
-	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: 2, PageSize: pageSize})
+	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readSlots, PageSize: pageSize})
 	if err != nil {
 		return nil, fmt.Errorf("records: open: %w", err)
 	}
@@ -120,8 +123,8 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 		file: file, opts: opts, blobs: blobs, unpack: unpack, now: time.Now,
 		log:   slog.New(slog.DiscardHandler),
 		queue: make(chan Record, opts.Buffer), maintenance: make(chan struct{}, 1),
+		reads: admission.NewSlots(readSlots), appends: admission.NewSlots(appendSlots),
 	}
-	engine.gate.drained = make(chan struct{})
 	engine.damaged.found = map[damageKey]Damage{}
 	engine.maintenance <- struct{}{}
 	if err = engine.streams.load(ctx, file); err == nil {
@@ -165,7 +168,7 @@ func (s *Store) Close(ctx context.Context) error {
 	var flushErr error
 	s.finalFlush.Do(func() { flushErr = s.Flush(ctx) })
 
-	drained := s.gate.close()
+	drained, _ := s.gate.Close()
 	select {
 	case <-drained:
 	case <-ctx.Done():
