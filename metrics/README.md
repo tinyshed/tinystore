@@ -95,9 +95,10 @@ result, err := store.Read(ctx, metrics.Range{
 })
 ```
 
-Call `Maintain(ctx)` from the embedding application's maintenance loop. Each
-call considers at most `MaintenanceSeries` due series for expiry and that many
-ready series for packing. There is no hidden maintenance timer yet.
+The store calls `Maintain(ctx)` every `MaintenanceInterval`; in a Manual store
+the application calls it itself. Each call considers at most
+`MaintenanceSeries` due series for expiry and that many ready series for
+packing.
 `Maintenance.QuarantinedSeries` counts newly suspended series in that call;
 `Stats.QuarantinedSeries` reports the persisted current count, including after
 reopen. `ListMaintenanceFailures(ctx, afterID)` pages through stored reasons,

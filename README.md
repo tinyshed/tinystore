@@ -90,7 +90,12 @@ and the command that reproduces each number are in
 |----------|-----------------------------------------------------------------|
 | `codec/` | the block codec: what a payload looks like and how to read one  |
 | `metrics/` | the durable metrics engine and its lifecycle tests           |
+| `records/` | logs and events: a head, event-time segments, paged reads    |
+| `sqldb/` | the application's own SQL databases in the store               |
+| `backup/` | every engine's file in one checked zip, and its restore       |
+| `examples/` | programs using the public API, built and tested with it     |
 | `internal/sqlite/` | file handles, transactions and checked migrations      |
+| `internal/admission/` | the gate and slots every engine lets work in through |
 | `spike/` | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
 | `docs/`  | the design, the format, the numbers and what is still unknown   |
 | `bench/` | a module of its own: corpus runners and the engines compared to |

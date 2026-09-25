@@ -26,11 +26,14 @@ and its limits; this file does not repeat them. The `tinystore` root holds a
 directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
 `Attach`, `Logger`, `Now`, `Every` and the memory budget (`Options.Memory`,
 `Reserve`), and metrics opens through it, with instruments (`Counter`,
-`Gauge`, `GaugeFunc`) for an application measuring itself. `sqldb` gives the
+`Gauge`, `GaugeFunc`) for an application measuring itself. Every engine takes a
+time only inside its window of the store's clock, and lets work in through the
+gate and slots of `internal/admission`. `sqldb` gives the
 application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
 states its contract. `records` keeps logs and events in `records.db`: a
 durable head, segments of event-time blocks written column by column, paged
-reads pruned by time, level, keys and blooms, and a follow cursor
+reads pruned by time, level, keys and blooms, a follow cursor, and rows that
+no longer read reported once and removed by `Drop`
 ([records/README.md](records/README.md)). `Store.Snapshot` copies
 every engine's file while it works, and `backup` writes those copies as one zip
 and restores it before `Open`.
