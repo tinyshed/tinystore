@@ -355,7 +355,17 @@ func (r *v2Reader) readAttr(ctx context.Context, field recordField, from, to int
 	if err != nil {
 		return nil, err
 	}
-	return r.read(ctx, candidates, from, to, func(block *v2Opened) ([]int, error) {
+	var kept []v2Candidate
+	for _, candidate := range candidates {
+		schema, err := r.schema(ctx, candidate.segment)
+		if err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(schema.shapes, func(shape v2Shape) bool { return slices.Contains(shape.keys, field.key) }) {
+			kept = append(kept, candidate)
+		}
+	}
+	return r.read(ctx, kept, from, to, func(block *v2Opened) ([]int, error) {
 		column := -1
 		for _, shape := range block.schema.shapes {
 			if position := slices.Index(shape.keys, field.key); position >= 0 {

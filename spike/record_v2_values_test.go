@@ -1,10 +1,12 @@
 package spike
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/klauspost/compress/fse"
 	"github.com/klauspost/compress/zstd"
@@ -23,16 +25,25 @@ const (
 )
 
 const (
-	v2QuotedFlag   = 1 << 4
-	v2ExceptedFlag = 1 << 5
-	v2Stored       = 0
-	v2Compressed   = 1
+	v2QuotedFlag    = 1 << 4
+	v2ExceptedFlag  = 1 << 5
+	v2Stored        = 0
+	v2Compressed    = 1
+	v2AgainstSample = 2
+	v2LengthColumn  = 0
+	v2LineSeparated = 1
 )
+
+// a segment with much text keeps a sample of it; its blocks compress against the sample
+// instead of an empty history, and stay readable with only the segment row beside them
+const v2TextDictionary = 64 << 10
 
 type v2Encoder struct {
 	blockEvents int
 	blockBytes  int
+	dictionary  int
 	writer      *zstd.Encoder
+	dictWriter  *zstd.Encoder
 	fse         fse.Scratch
 	symbols     []byte
 	rice        []byte
@@ -46,8 +57,10 @@ type v2Encoder struct {
 }
 
 type v2Decoder struct {
-	reader *zstd.Decoder
-	fse    fse.Scratch
+	reader     *zstd.Decoder
+	dictReader *zstd.Decoder
+	dictFor    *byte
+	fse        fse.Scratch
 }
 
 func newV2Encoder() (*v2Encoder, error) {
@@ -57,7 +70,7 @@ func newV2Encoder() (*v2Encoder, error) {
 		return nil, err
 	}
 	return &v2Encoder{
-		blockEvents: recordEventLimit, blockBytes: recordByteLimit,
+		blockEvents: recordEventLimit, blockBytes: recordByteLimit, dictionary: v2TextDictionary,
 		writer: writer, counts: map[int64]int{}, words: map[string]int{},
 	}, nil
 }
@@ -267,26 +280,75 @@ func (e *v2Encoder) appendText(out []byte, values []string) []byte {
 	return e.appendNestedInts(out, ids)
 }
 
+// appendRaw writes values of one length, or without newlines, without a length column:
+//
+//	"GET /a", "POST /b"  → lines "GET /a\nPOST /b\n"
+//	16-byte trace ids    → lengths 16 16 … (one width, no bits), raw bytes
 func (e *v2Encoder) appendRaw(out []byte, values []string) []byte {
 	e.lengths, e.blob = e.lengths[:0], e.blob[:0]
+	sameLength, lines := true, true
+	for _, value := range values {
+		sameLength = sameLength && len(value) == len(values[0])
+		lines = lines && strings.IndexByte(value, '\n') < 0
+	}
+	if lines && !sameLength {
+		for _, value := range values {
+			e.blob = append(append(e.blob, value...), '\n')
+		}
+		out = binary.AppendUvarint(append(out, v2LineSeparated), uint64(len(e.blob)))
+		return e.appendBlob(out, e.blob)
+	}
 	for _, value := range values {
 		e.lengths = append(e.lengths, int64(len(value)))
 		e.blob = append(e.blob, value...)
 	}
-	out = e.appendNestedInts(out, e.lengths)
+	out = e.appendNestedInts(append(out, v2LengthColumn), e.lengths)
 	return e.appendBlob(out, e.blob)
 }
 
 // random bytes are not handed to zstd: its frame would only add bytes
 func (e *v2Encoder) appendBlob(out, blob []byte) []byte {
 	if len(blob) >= 64 && v2ByteEntropy(blob) < 7.5 {
-		compressed := e.writer.EncodeAll(blob, nil)
+		writer, mode := e.writer, byte(v2Compressed)
+		if e.dictWriter != nil {
+			writer, mode = e.dictWriter, v2AgainstSample
+		}
+		compressed := writer.EncodeAll(blob, nil)
 		if len(compressed)+4 < len(blob) {
-			out = binary.AppendUvarint(append(out, v2Compressed), uint64(len(compressed)))
+			out = binary.AppendUvarint(append(out, mode), uint64(len(compressed)))
 			return append(out, compressed...)
 		}
 	}
 	return append(append(out, v2Stored), blob...)
+}
+
+// useDictionary prepares the segment's text sample for the blocks encoded next, or clears it
+func (e *v2Encoder) useDictionary(sample []byte) error {
+	if e.dictWriter != nil {
+		e.dictWriter.Close()
+		e.dictWriter = nil
+	}
+	if len(sample) == 0 {
+		return nil
+	}
+	writer, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault),
+		zstd.WithWindowSize(recordByteLimit), zstd.WithLowerEncoderMem(true), zstd.WithEncoderCRC(false),
+		zstd.WithEncoderDictRaw(1, sample))
+	e.dictWriter = writer
+	return err
+}
+
+func (d *v2Decoder) useDictionary(sample []byte) error {
+	if len(sample) == 0 || (d.dictFor == &sample[0] && d.dictReader != nil) {
+		return nil
+	}
+	if d.dictReader != nil {
+		d.dictReader.Close()
+	}
+	reader, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(recordWorkLimit),
+		zstd.WithDecoderMaxWindow(recordByteLimit), zstd.WithDecoderDictRaw(1, sample))
+	d.dictReader, d.dictFor = reader, &sample[0]
+	return err
 }
 
 func v2ByteEntropy(blob []byte) float64 {
@@ -407,6 +469,9 @@ func (d *v2Decoder) text(cursor *recordCursor, count int) []string {
 }
 
 func (d *v2Decoder) raw(cursor *recordCursor, count int) []string {
+	if cursor.number(v2LineSeparated) == v2LineSeparated {
+		return d.lines(cursor, count)
+	}
 	lengths := d.ints(cursor, count, true)
 	total := 0
 	for _, length := range lengths {
@@ -427,15 +492,44 @@ func (d *v2Decoder) raw(cursor *recordCursor, count int) []string {
 	return values
 }
 
+func (d *v2Decoder) lines(cursor *recordCursor, count int) []string {
+	blob := d.blob(cursor, cursor.number(recordWorkLimit))
+	if cursor.err != nil {
+		return nil
+	}
+	values := make([]string, 0, count)
+	for len(values) < count {
+		at := bytes.IndexByte(blob, '\n')
+		if at < 0 {
+			break
+		}
+		values, blob = append(values, string(blob[:at])), blob[at+1:]
+	}
+	if len(values) != count || len(blob) != 0 {
+		cursor.fail("text lines")
+		return nil
+	}
+	return values
+}
+
 func (d *v2Decoder) blob(cursor *recordCursor, size int) []byte {
-	if cursor.number(1) == v2Stored {
+	mode := cursor.number(v2AgainstSample)
+	if mode == v2Stored {
 		return cursor.take(size)
 	}
 	compressed := cursor.take(cursor.number(recordWorkLimit))
 	if cursor.err != nil || !cursor.reserveText(size) {
 		return nil
 	}
-	blob, err := d.reader.DecodeAll(compressed, make([]byte, 0, size))
+	reader := d.reader
+	if mode == v2AgainstSample {
+		if d.dictReader == nil {
+			cursor.fail("text compressed against a missing dictionary")
+			return nil
+		}
+		reader = d.dictReader
+	}
+	blob, err := reader.DecodeAll(compressed, make([]byte, 0, size))
 	if err != nil || len(blob) != size {
 		cursor.fail("compressed text")
 		return nil

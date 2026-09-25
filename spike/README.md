@@ -33,3 +33,7 @@ integer and text columns chosen by computed size, and recipe or affine
 predictions tried only when a row sample agrees. `TestRecordV2Density`,
 `TestRecordV2Queries`, `TestRecordV2PageFit` and `TestRecordV2AgainstV1` need
 `TINYSTORE_SPIKE=1`; see `docs/reports/record-v2-2026-09-25.md`.
+
+`TestRecordV2DockerLogs` and `TestRecordV2DockerTextScope` read container logs
+collected by `bench/fetch-docker-logs.sh` through `TINYSTORE_RECORD_DOCKER`.
+Such a corpus is production data: it stays local and only aggregates leave it.

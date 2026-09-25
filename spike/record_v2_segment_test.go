@@ -63,6 +63,7 @@ type v2Slot struct {
 }
 
 type v2Schema struct {
+	dictionary []byte
 	stream     string
 	count      int
 	names      []string
@@ -334,7 +335,15 @@ func (e *v2Encoder) encodeSegment(events []recordEvent, arrival bool) (v2Segment
 		return v2Segment{}, nil, errors.New("v2 segment byte limit")
 	}
 	schema, ids := e.schemaFor(stored[0].stream, stored)
+	schema.dictionary = v2TextSample(stored, e.dictionary)
+	if err := e.useDictionary(nil); err != nil {
+		return v2Segment{}, nil, err
+	}
 	segment := v2Segment{schema: schema, row: e.appendSchema(nil, &schema)}
+	if err := e.useDictionary(schema.dictionary); err != nil {
+		return v2Segment{}, nil, err
+	}
+	defer func() { _ = e.useDictionary(nil) }()
 	segment.first, segment.last = stored[0].at, stored[0].at
 	for start := 0; start < len(stored); {
 		end := v2BlockEnd(stored, start, e.blockEvents, e.blockBytes)
@@ -377,6 +386,10 @@ func (e *v2Encoder) appendSchema(out []byte, schema *v2Schema) []byte {
 		out = v2AppendStrings(append(out, shape.presence), shape.keys)
 	}
 	out = e.appendContexts(out, schema.contexts)
+	out = binary.AppendUvarint(out, uint64(len(schema.dictionary)))
+	if len(schema.dictionary) > 0 {
+		out = e.appendBlob(out, schema.dictionary)
+	}
 	return binary.LittleEndian.AppendUint32(out, crc32.ChecksumIEEE(out))
 }
 
@@ -568,6 +581,9 @@ func (d *v2Decoder) decodeSchema(row []byte) (v2Schema, error) {
 		schema.shapes = append(schema.shapes, shape)
 	}
 	schema.contexts = d.contexts(&cursor)
+	if size := cursor.number(2 * v2TextDictionary); size > 0 {
+		schema.dictionary = bytes.Clone(d.blob(&cursor, size))
+	}
 	if err := cursor.finish(); err != nil {
 		return v2Schema{}, err
 	}
@@ -635,6 +651,9 @@ type v2Opened struct {
 func (d *v2Decoder) openBlock(schema *v2Schema, body []byte) (*v2Opened, error) {
 	if len(body) < 6 || body[0] != v2Version {
 		return nil, errors.New("v2 block header")
+	}
+	if err := d.useDictionary(schema.dictionary); err != nil {
+		return nil, err
 	}
 	end := len(body) - 4
 	if crc32.ChecksumIEEE(body[:end]) != binary.LittleEndian.Uint32(body[end:]) {
@@ -845,4 +864,31 @@ func (b *v2Opened) rebuild(decoded *v2Decoded, row int) (recordEvent, error) {
 		decoded.next[index]++
 	}
 	return event, nil
+}
+
+// v2TextSample takes bodies at an even stride until the sample is full; a segment with
+// less than four samples of text gets none
+func v2TextSample(events []recordEvent, limit int) []byte {
+	total := 0
+	for i := range events {
+		if events[i].body != nil {
+			total += len(*events[i].body) + 1
+		}
+	}
+	if limit <= 0 || total < 4*limit {
+		return nil
+	}
+	stride, next, seen := total/limit, 0, 0
+	var sample []byte
+	for i := range events {
+		if events[i].body == nil || len(sample) >= limit {
+			continue
+		}
+		if seen >= next {
+			sample = append(append(sample, *events[i].body...), '\n')
+			next += stride * (len(*events[i].body) + 1)
+		}
+		seen += len(*events[i].body) + 1
+	}
+	return sample[:min(len(sample), limit)]
 }

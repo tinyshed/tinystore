@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"math"
 	"math/rand/v2"
@@ -268,5 +269,32 @@ func BenchmarkRecordV2Throughput(b *testing.B) {
 			}
 			b.ReportMetric(float64(b.N*len(events))/b.Elapsed().Seconds(), "records/s")
 		})
+	}
+}
+
+func TestRecordV2TextSampleIsKeptAndRequired(t *testing.T) {
+	encoder, decoder := v2TestCodec(t)
+	random := rand.New(rand.NewPCG(7, 11))
+	events := make([]recordEvent, 4000)
+	for i := range events {
+		body := fmt.Sprintf("GET /api/items/%d?page=%d from 10.0.%d.%d took %dms status %d", random.IntN(90000),
+			random.IntN(40), random.IntN(256), random.IntN(256), random.IntN(900), []int{200, 404, 500}[random.IntN(3)])
+		events[i] = recordEvent{at: int64(i) * 1_000_000, stream: "text", name: "log", body: &body}
+	}
+	segment := v2RoundTrip(t, encoder, decoder, events, false)
+	if len(segment.schema.dictionary) == 0 {
+		t.Fatal("a text-heavy segment kept no sample")
+	}
+	schema, err := decoder.decodeSchema(segment.row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.dictionary = nil
+	fresh := func() *v2Decoder {
+		_, clean := v2TestCodec(t)
+		return clean
+	}()
+	if _, err = fresh.decodeBlock(&schema, segment.blocks[0].body); err == nil {
+		t.Fatal("a block decoded without its segment's text sample")
 	}
 }
