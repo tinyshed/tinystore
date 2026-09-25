@@ -17,7 +17,7 @@ func TestMigrationHistoryIsVerifiedOnReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "schema.db")
 	scripts := testMigrations(`create table example(n integer) strict;`)
-	file, err := Open(ctx, path, 2)
+	file, err := Open(ctx, path, Config{Readers: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestMigrationHistoryIsVerifiedOnReopen(t *testing.T) {
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	file, err = Open(ctx, path, 2)
+	file, err = Open(ctx, path, Config{Readers: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestMigrationHistoryIsVerifiedOnReopen(t *testing.T) {
 }
 
 func TestMigrateRunsOnlyWhatTheFileHasNotRun(t *testing.T) {
-	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "history.db"), 1)
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "history.db"), Config{Readers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

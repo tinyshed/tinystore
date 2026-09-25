@@ -106,7 +106,7 @@ func (s *Store) maintainInBackground(ctx context.Context) error {
 const metricsApplicationID = 0x544d4554
 
 func openFile(ctx context.Context, path string, readers int) (*sqlite.File, error) {
-	f, err := sqlite.Open(ctx, path, readers)
+	f, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers})
 	if err != nil {
 		return nil, fmt.Errorf("open metrics file: %w", err)
 	}

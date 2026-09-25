@@ -104,7 +104,7 @@ func normalizeOptions(o Options) (Options, error) {
 }
 
 func openEngine(ctx context.Context, store *tinystore.Store, path string, opts Options) (*Store, error) {
-	file, err := sqlite.Open(ctx, path, 2)
+	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: 2})
 	if err != nil {
 		return nil, fmt.Errorf("records: open: %w", err)
 	}

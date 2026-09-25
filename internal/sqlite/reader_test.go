@@ -11,7 +11,7 @@ import (
 
 func openReaderTestFile(t *testing.T) *File {
 	t.Helper()
-	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"), 1)
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"), Config{Readers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestPreparedReadCacheKeepsRecentlyUsedProgram(t *testing.T) {
 }
 
 func TestSequentialReadsReuseOneWarmConnection(t *testing.T) {
-	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"), 4)
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"), Config{Readers: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestEachRowStopsAtTheFirstErrorAndClosesTheRows(t *testing.T) {
 
 func BenchmarkPreparedReadAfterApplicationError(b *testing.B) {
 	ctx := b.Context()
-	file, err := Open(ctx, filepath.Join(b.TempDir(), "read.db"), 4)
+	file, err := Open(ctx, filepath.Join(b.TempDir(), "read.db"), Config{Readers: 4})
 	if err != nil {
 		b.Fatal(err)
 	}

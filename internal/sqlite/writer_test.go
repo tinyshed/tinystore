@@ -9,7 +9,7 @@ import (
 )
 
 func TestPreparedWriterUsesOneTransactionAndRetainsPrograms(t *testing.T) {
-	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "writer.db"), 1)
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "writer.db"), Config{Readers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestPreparedWriterUsesOneTransactionAndRetainsPrograms(t *testing.T) {
 }
 
 func TestPreparedWriterCacheStaysBounded(t *testing.T) {
-	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "writer-cache.db"), 1)
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "writer-cache.db"), Config{Readers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -80,27 +80,43 @@ func readCacheCounters(driverConn any, result *WriterCounters) error {
 	return nil
 }
 
-// Open takes the reader-pool size because every pragma here is per connection,
-// so the pool is sized once and never allowed to expire and reopen.
-func Open(ctx context.Context, path string, readers int) (*File, error) {
+// Config sizes the reader pool once, because every pragma here is per
+// connection and nothing in the pool may expire and reopen. PageSize applies
+// only to a file this call creates; zero keeps SQLite's default.
+type Config struct {
+	Readers  int
+	PageSize int
+}
+
+func (c Config) check() error {
+	if c.Readers < 1 {
+		return fmt.Errorf("open SQLite: %d readers", c.Readers)
+	}
+	if c.PageSize != 0 && (c.PageSize < 512 || c.PageSize > 65536 || c.PageSize&(c.PageSize-1) != 0) {
+		return fmt.Errorf("open SQLite: page size %d is not a power of two from 512 to 65536", c.PageSize)
+	}
+	return nil
+}
+
+func Open(ctx context.Context, path string, config Config) (*File, error) {
 	if path == "" || path == ":memory:" {
 		return nil, errors.New("open SQLite: a file path is required")
 	}
-	if readers < 1 {
-		return nil, fmt.Errorf("open SQLite: %d readers", readers)
+	if err := config.check(); err != nil {
+		return nil, err
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve SQLite path: %w", err)
 	}
 
-	f, err := openWriter(ctx, abs)
+	f, err := openWriter(ctx, abs, config.PageSize)
 	if err != nil {
 		return nil, err
 	}
 	f.path = abs
 
-	if err = f.openReaders(ctx, abs, readers); err != nil {
+	if err = f.openReaders(ctx, abs, config.Readers); err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
 
@@ -113,9 +129,15 @@ func Open(ctx context.Context, path string, readers int) (*File, error) {
 const walQuery = `pragma journal_mode=WAL`
 
 // openWriter opens the pool of the one connection that writes, and turns the
-// file to WAL, so that readers keep their snapshots while it writes.
-func openWriter(ctx context.Context, abs string) (*File, error) {
-	writer, err := sql.Open("sqlite", connectionURL(abs, writerArguments()))
+// file to WAL, so that readers keep their snapshots while it writes. The page
+// size is a pragma of the connection because it must precede the file's first
+// write, which turning on WAL is.
+func openWriter(ctx context.Context, abs string, pageSize int) (*File, error) {
+	arguments := writerArguments()
+	if pageSize > 0 {
+		arguments.Add("_pragma", fmt.Sprintf("page_size(%d)", pageSize))
+	}
+	writer, err := sql.Open("sqlite", connectionURL(abs, arguments))
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite writer: %w", err)
 	}

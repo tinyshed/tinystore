@@ -67,7 +67,7 @@ func Open(ctx context.Context, store *tinystore.Store, name string, migrations f
 }
 
 func openFile(ctx context.Context, path, name string, migrations fs.FS) (*DB, error) {
-	file, err := sqlite.Open(ctx, path, readers)
+	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers})
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)
 	}

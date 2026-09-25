@@ -10,7 +10,7 @@ import (
 
 func TestSnapshotCopiesWhileTheWriterWrites(t *testing.T) {
 	dir := t.TempDir()
-	f, err := Open(t.Context(), filepath.Join(dir, "x.db"), 1)
+	f, err := Open(t.Context(), filepath.Join(dir, "x.db"), Config{Readers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestSnapshotCopiesWhileTheWriterWrites(t *testing.T) {
 		t.Fatalf("snapshot: %d migrations, %v", applied, err)
 	}
 
-	copied, err := Open(t.Context(), into, 1)
+	copied, err := Open(t.Context(), into, Config{Readers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
