@@ -140,6 +140,15 @@ neighbours late. Without it, one record in a hundred arriving ten minutes late
 made one-second reads read thirteen times as many blocks; with it, under three
 times.
 
+**What no longer reads is reported once and dropped by hand.** A head row or
+a segment whose bytes fail their checksum is logged the first time the engine
+meets it and left: sealing goes around a damaged head row, and a read or a
+follow over it fails naming it, as metrics fails a read over a series that
+does not decode. `Drop` removes it, a head row alone or a segment whole, and
+only once it is shown not to read, so that it cannot delete a record by
+mistake. What the engine has met is kept in memory: the file is the record of
+the damage, and a reopened store finds it again as it meets it.
+
 **A segment in flight reserves 24 MiB.** Encoding allocates three to five
 times a segment's input and decoding four to six, and the input is at most
 4 MiB.
@@ -271,5 +280,3 @@ for long and follows them rarely raises it.
   A bound on the time-index scan when late blocks are wide.
 - Encoding: a store-level context registry, per-context numeric state, nested
   JSON decomposition.
-- A head whose row no longer reads is logged and left; there is no call to
-  drop it, as `metrics.DropSeries` drops a series.

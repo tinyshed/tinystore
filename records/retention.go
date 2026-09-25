@@ -77,6 +77,9 @@ func (s *Store) expireSegments(ctx context.Context, cutoff int64) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("records: expire segments: %w", err)
 	}
+	for _, segment := range expired {
+		s.damaged.forget(Damage{Segment: segment.id})
+	}
 	return len(expired), nil
 }
 
@@ -103,7 +106,7 @@ type expiredHead struct {
 }
 
 func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
-	removed := 0
+	removed, gone := 0, []int64(nil)
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		heads, err := expiredHeadRows(ctx, tx, cutoff)
 		if err != nil {
@@ -119,11 +122,15 @@ func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
 				return err
 			}
 			removed += len(expired.ids)
+			gone = append(gone, expired.ids...)
 		}
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("records: expire head rows: %w", err)
+	}
+	for _, id := range gone {
+		s.damaged.forget(Damage{HeadRow: id})
 	}
 	return removed, nil
 }

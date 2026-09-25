@@ -8,9 +8,10 @@ create table streams (
 
 -- a head row is one stream's flush, its records in arrival order under zstd;
 -- late: more than a minute behind the newest record its stream has shown;
--- input: what its records weigh against a segment's bounds; size: the body's bytes
+-- input: what its records weigh against a segment's bounds; size: the body's bytes;
+-- ids only grow, so a row reported damaged is never another row later
 create table heads (
-    id         integer primary key,
+    id         integer primary key autoincrement,
     stream     integer not null,
     late       integer not null,
     first_at   integer not null,

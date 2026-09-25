@@ -2,7 +2,6 @@ package records
 
 import (
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
 
@@ -116,7 +115,7 @@ func TestAFailedSealLeavesTheHeadAsItWas(t *testing.T) {
 	sameRecords(t, sortedByTime(records), s.readAll(t, Query{}))
 }
 
-// a head row that no longer reads stops its own head, not the others
+// a head row that no longer reads is counted and left, and the others seal
 func TestADamagedHeadDoesNotStopTheOthers(t *testing.T) {
 	s := openRecords(t)
 	s.append(t, frontendRecords(100)...)
@@ -131,7 +130,7 @@ func TestADamagedHeadDoesNotStopTheOthers(t *testing.T) {
 	}
 	s.clock.advance(time.Hour)
 	work, err := s.Maintain(t.Context())
-	if !errors.Is(err, tinystore.ErrCorrupt) || work.SealedSegments != 1 {
+	if err != nil || work.SealedSegments != 1 || work.Damaged != 1 {
 		t.Fatalf("one damaged head: %+v, %v", work, err)
 	}
 	sameRecords(t, backendRecords(100), s.readAll(t, Query{Streams: []string{"backend"}}))

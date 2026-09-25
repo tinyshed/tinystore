@@ -38,10 +38,11 @@ func (s *Store) Follow(ctx context.Context, after Cursor, limit int) (Batch, err
 	}
 
 	batch, err := s.buildBatch(ctx, after, limit, followed)
-	if err == nil {
-		s.countRead(followed.blocks, followed.bytes)
+	if err != nil {
+		return Batch{}, s.noted(err)
 	}
-	return batch, err
+	s.countRead(followed.blocks, followed.bytes)
+	return batch, nil
 }
 
 func checkFollow(after Cursor, limit int) (int, error) {
@@ -65,12 +66,13 @@ type followed struct {
 }
 
 type followedSegment struct {
-	id, stream int64
-	count      int
-	row        []byte
-	skip       int // rows the cursor has passed in this segment
-	start      int // rows before the first block fetched
-	blocks     []followedBlock
+	id, stream  int64
+	first, last int64
+	count       int
+	row         []byte
+	skip        int // rows the cursor has passed in this segment
+	start       int // rows before the first block fetched
+	blocks      []followedBlock
 }
 
 type followedBlock struct {
@@ -81,7 +83,7 @@ type followedBlock struct {
 
 const (
 	selectFollowedSegments = `
-		select id, stream, count, first_block, last_block, body from segments
+		select id, stream, first_at, last_at, count, first_block, last_block, body from segments
 		where id >= ?
 		order by id
 		limit cast(? as integer)`
@@ -132,7 +134,8 @@ func (r *followRead) segments(ctx context.Context) ([]followedSegment, error) {
 	err = sqlite.EachRow(rows, "followed segments", func(rows *sql.Rows) error {
 		var segment followedSegment
 		var first, last int64
-		scanErr := rows.Scan(&segment.id, &segment.stream, &segment.count, &first, &last, &segment.row)
+		scanErr := rows.Scan(&segment.id, &segment.stream, &segment.first, &segment.last, &segment.count, &first, &last,
+			&segment.row)
 		found, blocks = append(found, segment), append(blocks, [2]int64{first, last})
 		return scanErr
 	})
@@ -221,9 +224,14 @@ func (s *Store) buildBatch(ctx context.Context, after Cursor, limit int, f follo
 		if err := ctx.Err(); err != nil {
 			return Batch{}, err
 		}
-		next, err := s.followSegment(d, &f.segments[i], limit, &batch)
+		segment := &f.segments[i]
+		next, err := s.followSegment(d, segment, limit, &batch)
 		if err != nil {
-			return Batch{}, fmt.Errorf("records: follow segment %d: %w", f.segments[i].id, err)
+			found := Damage{
+				Stream: s.streams.name(segment.stream), Segment: segment.id,
+				From: timeOf(segment.first), To: timeOf(segment.last),
+			}
+			return Batch{}, fmt.Errorf("records: follow: %w", damageOf(found, err))
 		}
 		batch.Next = next
 		if len(batch.Records) >= limit {

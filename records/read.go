@@ -35,12 +35,12 @@ func (s *Store) Read(ctx context.Context, query Query) (Page, error) {
 
 	rows, err := s.fetchSnapshot(ctx, &checked)
 	if err != nil {
-		return Page{}, err
+		return Page{}, s.noted(err)
 	}
 
 	page, err := s.buildPage(ctx, &checked, rows)
 	if err != nil {
-		return Page{}, err
+		return Page{}, s.noted(err)
 	}
 	s.countRead(len(rows.sources), rows.bytes)
 	return page, nil

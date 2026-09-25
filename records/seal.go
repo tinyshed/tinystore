@@ -10,9 +10,10 @@ import (
 )
 
 // headChunk is the head rows one segment is made of: whole rows in arrival
-// order, as many as fit a segment's bounds
+// order, as many as fit a segment's bounds, less the rows known to be damaged
 type headChunk struct {
 	ids          []int64
+	spans        [][2]int64 // each row's first and last time
 	bodies       [][]byte
 	count, input int
 	oldest       int64 // when its first row was written
@@ -20,7 +21,8 @@ type headChunk struct {
 }
 
 // sealHead seals a head a segment at a time: a full segment at once, and what
-// is left once its oldest row has waited SealAge
+// is left once its oldest row has waited SealAge. A row that no longer reads
+// is reported once and left where it is; the rest of its head seals.
 func (p *maintenancePass) sealHead(ctx context.Context, head headKey) error {
 	for {
 		chunk, err := p.store.readChunk(ctx, head)
@@ -30,7 +32,13 @@ func (p *maintenancePass) sealHead(ctx context.Context, head headKey) error {
 		if len(chunk.ids) == 0 || (!chunk.full && chunk.oldest > p.sealBefore()) {
 			return nil
 		}
-		if err = p.seal(ctx, head, chunk); err != nil {
+		err = p.store.noted(p.seal(ctx, head, chunk))
+		var damage *DamageError
+		if errors.As(err, &damage) {
+			p.result.Damaged++
+			continue
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -61,7 +69,7 @@ func (p *maintenancePass) seal(ctx context.Context, head headKey, chunk headChun
 }
 
 const selectHeadRows = `
-	select id, count, input, written_at, body from heads
+	select id, first_at, last_at, count, input, written_at, body from heads
 	where stream = ? and late = ?
 	order by id
 	limit cast(? as integer)`
@@ -80,7 +88,7 @@ func (s *Store) readChunk(ctx context.Context, head headKey) (headChunk, error) 
 			return err
 		}
 		return sqlite.EachRow(rows, "head rows", func(rows *sql.Rows) error {
-			return chunk.add(rows)
+			return chunk.add(rows, s.damaged.headRow)
 		})
 	})
 	if errors.Is(err, errChunkFull) {
@@ -93,12 +101,15 @@ func (s *Store) readChunk(ctx context.Context, head headKey) (headChunk, error) 
 	return chunk, nil
 }
 
-func (c *headChunk) add(rows *sql.Rows) error {
-	var id, writtenAt int64
+func (c *headChunk) add(rows *sql.Rows, damaged func(id int64) bool) error {
+	var id, first, last, writtenAt int64
 	var count, input int
 	var body []byte
-	if err := rows.Scan(&id, &count, &input, &writtenAt, &body); err != nil {
+	if err := rows.Scan(&id, &first, &last, &count, &input, &writtenAt, &body); err != nil {
 		return err
+	}
+	if damaged(id) {
+		return nil
 	}
 	if c.count+count > maxSegmentRecords || c.input+input > maxSegmentInput {
 		return errChunkFull
@@ -106,7 +117,7 @@ func (c *headChunk) add(rows *sql.Rows) error {
 	if len(c.ids) == 0 {
 		c.oldest = writtenAt
 	}
-	c.ids, c.bodies = append(c.ids, id), append(c.bodies, body)
+	c.ids, c.spans, c.bodies = append(c.ids, id), append(c.spans, [2]int64{first, last}), append(c.bodies, body)
 	c.count, c.input = c.count+count, c.input+input
 	return nil
 }
@@ -119,7 +130,9 @@ func (s *Store) chunkRecords(head headKey, chunk headChunk) ([]Record, error) {
 	for i, body := range chunk.bodies {
 		rows, err := d.parseHeadRow(stream, body)
 		if err != nil {
-			return nil, fmt.Errorf("records: head row %d of %s: %w", chunk.ids[i], stream, err)
+			first, last := chunk.spans[i][0], chunk.spans[i][1]
+			found := Damage{Stream: stream, HeadRow: chunk.ids[i], From: timeOf(first), To: timeOf(last)}
+			return nil, damageOf(found, err)
 		}
 		records = append(records, rows...)
 	}

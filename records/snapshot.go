@@ -29,7 +29,7 @@ type source struct {
 // last time for a page of the newest.
 type fetched struct {
 	sources  []source
-	segments map[int64][]byte
+	segments map[int64]segmentRow
 	cut      bool
 	edge     int64
 	bytes    int
@@ -42,7 +42,7 @@ func (s *Store) fetchSnapshot(ctx context.Context, q *checkedQuery) (fetched, er
 	defer cancel()
 	var out fetched
 	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
-		read := snapshotRead{tx: tx, query: q}
+		read := snapshotRead{tx: tx, query: q, names: &s.streams}
 
 		candidates, err := read.candidates(ctx)
 		if err != nil {
@@ -58,10 +58,17 @@ func (s *Store) fetchSnapshot(ctx context.Context, q *checkedQuery) (fetched, er
 	return out, nil
 }
 
+// segmentRow is a segment row its blocks are decoded with, and the times it holds
+type segmentRow struct {
+	first, last int64
+	body        []byte
+}
+
 // snapshotRead is what every fetch inside one read transaction shares
 type snapshotRead struct {
 	tx    sqlite.Reader
 	query *checkedQuery
+	names *streams
 }
 
 const (
@@ -225,7 +232,7 @@ func (r *snapshotRead) bloom(ctx context.Context, query string, args ...any) ([]
 
 const (
 	selectSegmentSize = `select length(body) from segments where id = ?`
-	selectSegmentBody = `select body from segments where id = ?`
+	selectSegmentBody = `select first_at, last_at, body from segments where id = ?`
 	selectBlockBody   = `select body from blocks where id = ?`
 	selectHeadBody    = `select body from heads where id = ?`
 )
@@ -233,7 +240,7 @@ const (
 // withinBudget fetches candidates in page order while the budget lasts; the
 // first one it cannot afford is the page's edge
 func (r *snapshotRead) withinBudget(ctx context.Context, candidates []source) (fetched, error) {
-	out := fetched{segments: map[int64][]byte{}}
+	out := fetched{segments: map[int64]segmentRow{}}
 	spent := Budget{}
 	for _, candidate := range candidates {
 		segmentSize, err := r.segmentSize(ctx, candidate, out.segments)
@@ -260,7 +267,7 @@ func (r *snapshotRead) withinBudget(ctx context.Context, candidates []source) (f
 }
 
 // segmentSize is what the candidate's segment row adds, when it is not fetched yet
-func (r *snapshotRead) segmentSize(ctx context.Context, candidate source, segments map[int64][]byte) (int, error) {
+func (r *snapshotRead) segmentSize(ctx context.Context, candidate source, segments map[int64]segmentRow) (int, error) {
 	if !candidate.block {
 		return 0, nil
 	}
@@ -270,7 +277,12 @@ func (r *snapshotRead) segmentSize(ctx context.Context, candidate source, segmen
 	var size int
 	err := sqlite.QueryRow(ctx, r.tx, selectSegmentSize, candidate.segment).Scan(&size)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, corrupt(fmt.Sprintf("block %d names segment %d, which is gone", candidate.id, candidate.segment))
+		found := Damage{
+			Stream: r.names.name(candidate.stream), Segment: candidate.segment,
+			From: timeOf(candidate.first), To: timeOf(candidate.last),
+		}
+		gone := corrupt(fmt.Sprintf("block %d names segment %d, which is gone", candidate.id, candidate.segment))
+		return 0, damageOf(found, gone)
 	}
 	return size, err
 }
@@ -312,13 +324,14 @@ func (r *snapshotRead) edgeOf(candidate source) int64 {
 	return candidate.first
 }
 
-func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segments map[int64][]byte) error {
+func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segments map[int64]segmentRow) error {
 	if !candidate.block {
 		return sqlite.QueryRow(ctx, r.tx, selectHeadBody, candidate.id).Scan(&candidate.body)
 	}
 	if _, fetched := segments[candidate.segment]; !fetched {
-		var row []byte
-		if err := sqlite.QueryRow(ctx, r.tx, selectSegmentBody, candidate.segment).Scan(&row); err != nil {
+		var row segmentRow
+		err := sqlite.QueryRow(ctx, r.tx, selectSegmentBody, candidate.segment).Scan(&row.first, &row.last, &row.body)
+		if err != nil {
 			return err
 		}
 		segments[candidate.segment] = row

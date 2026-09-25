@@ -3,18 +3,16 @@ package records
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // Maintain removes the segments and head rows retention has passed, then
 // seals every head that holds a segment's worth or has waited
-// Options.SealAge. A head that cannot be sealed does not keep the others
-// waiting; its error is returned once the others are done.
+// Options.SealAge. A head row that no longer reads is logged once, counted in
+// Maintenance.Damaged and left for Drop; the rest of its head seals.
 func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	release, err := s.admit(ctx)
 	if err != nil {
@@ -70,19 +68,12 @@ func (p *maintenancePass) sealReady(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var failed error
 	for _, head := range ready {
-		err = p.sealHead(ctx, head)
-		if errors.Is(err, tinystore.ErrCorrupt) {
-			p.store.log.Error("head cannot be sealed", "stream", p.store.streams.name(head.stream), "error", err)
-			failed = errors.Join(failed, err)
-			continue
-		}
-		if err != nil {
+		if err = p.sealHead(ctx, head); err != nil {
 			return err
 		}
 	}
-	return failed
+	return nil
 }
 
 func (s *Store) readyHeads(ctx context.Context, sealBefore int64) ([]headKey, error) {

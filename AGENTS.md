@@ -363,6 +363,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a failed seal leaves the head as it was             | `TestAFailedSealLeavesTheHeadAsItWas`                                           |
 | an abrupt exit loses no appended record             | `TestAnAbruptExitKeepsEveryAppendedRecord`, before, inside and after a seal     |
 | a damaged head does not stop the others             | `TestADamagedHeadDoesNotStopTheOthers`                                          |
+| a damaged row is logged once, its head still seals  | `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals`                     |
+| a damaged segment is dropped whole, followed past   | `TestDropRemovesADamagedSegmentAndFollowPassesIt`                               |
+| only what no longer reads can be dropped            | `TestDropRefusesWhatStillReads`                                                 |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
 | a record appended alone can be late                 | `TestARecordAppendedAloneCanBeLate`                                             |
 | a reopened store knows what its heads hold          | `TestAReopenedStoreKnowsWhatItsHeadsHold`                                       |

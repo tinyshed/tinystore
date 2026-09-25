@@ -192,7 +192,10 @@ the store writes every report as ordinary series:
   wraps the root's.
 - An error about one item names it. An `Ingest` refused because of one series
   returns a `*metrics.SeriesError` carrying that series' labels (`errors.As`),
-  and `DropSeries(ctx, labels)` removes a series that cannot be repaired.
+  and `DropSeries(ctx, labels)` removes a series that cannot be repaired; a
+  records `Append` refused because of one record returns a
+  `*records.RecordError`, and a read over a row that no longer reads a
+  `*records.DamageError`, whose `Damage` is what `Drop` removes.
 
 ## Engines
 

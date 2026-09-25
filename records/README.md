@@ -70,10 +70,10 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   (16,384 records or 4 MiB) or its oldest row is `Options.SealAge` old (an
   hour). A longer `SealAge` trades how soon `Follow` sees a sparse stream's
   records for fewer, larger segments: on the production corpus 22.95 bytes a
-  record at an hour, 21.33 at six, 21.00 at a day, 20.90 in full segments. `Maintain`, every minute unless the store is Manual, seals them: the
+  record at an hour, 21.33 at six, 21.00 at a day, 20.90 in full segments.
+  `Maintain`, every minute unless the store is Manual, seals them: the
   segment, its blocks, filters and keys are written and the head rows deleted
-  in one transaction, so a reader finds each record once. A head whose rows no
-  longer read is logged and left; the others seal.
+  in one transaction, so a reader finds each record once.
 - `Read` returns one page, oldest first or newest first, from one snapshot,
   decoded after the snapshot is released. A page never splits a timestamp; it
   ends early when its `Limit` (1000, at most 10000) or its `Budget` (the
@@ -101,6 +101,15 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 - A changed byte is refused with `tinystore.ErrCorrupt` naming the invariant
   it broke: every row carries a CRC-32 and every count and length is bounded
   before anything is allocated.
+- A row that no longer reads is lost, and says so once. `Maintain` logs a
+  damaged head row at Error the first time it meets it, counts it in
+  `Maintenance.Damaged`, leaves it and seals the rest of its head. A `Read` or
+  a `Follow` over it fails with a `*DamageError` naming the head row, or the
+  segment whose row or block it is, and the times it held. `Damaged` lists
+  what this handle has met, and `Drop` removes one: a head row alone, a
+  segment whole, since a `Follow` cursor counts a segment's rows through its
+  blocks. It refuses a row that still reads with `tinystore.ErrConflict`, and
+  `Batch.Expired` counts a dropped segment as it counts retention's.
 
 ## What it does not do yet
 

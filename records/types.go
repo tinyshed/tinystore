@@ -88,19 +88,50 @@ type Batch struct {
 	Expired int
 }
 
+// Damage is a row that no longer reads: a head row, or a sealed segment with
+// its blocks. Its records are lost; Drop removes it, so that the reads over it
+// work again.
+type Damage struct {
+	Stream   string
+	Segment  int64     // a sealed segment, dropped whole; zero for a head row
+	HeadRow  int64     // zero for a segment
+	From, To time.Time // the times it held
+	Reason   string    // the invariant its bytes broke
+}
+
+// DamageError is a read, a follow or a seal that met a damaged row. errors.Is
+// finds tinystore.ErrCorrupt in it, and its Damage is what to Drop.
+type DamageError struct {
+	Damage Damage
+	Err    error
+}
+
+func (e *DamageError) Error() string {
+	if e.Damage.Segment != 0 {
+		return fmt.Sprintf("segment %d of %q: %v", e.Damage.Segment, e.Damage.Stream, e.Err)
+	}
+	return fmt.Sprintf("head row %d of %q: %v", e.Damage.HeadRow, e.Damage.Stream, e.Err)
+}
+
+func (e *DamageError) Unwrap() error { return e.Err }
+
 // Stats counts this handle's work. Dropped is what the handler let go: a full
 // buffer, a record out of bounds, a write that failed. ReadBlocks and ReadBytes
 // are what reads and follows fetched: blocks and head rows, and their bytes
-// with the segment rows beside them, the figures a Budget bounds.
+// with the segment rows beside them, the figures a Budget bounds. Damaged is
+// how many rows this handle has met that no longer read and are not dropped.
 type Stats struct {
 	Appended, Dropped               uint64
 	SealedSegments, ExpiredSegments uint64
 	Queries                         uint64
 	ReadBlocks, ReadBytes           uint64
+	Damaged                         uint64
 }
 
-// Maintenance is what one Maintain call did.
+// Maintenance is what one Maintain call did. Damaged counts the head rows it
+// found no longer read, whose heads it sealed around them.
 type Maintenance struct {
 	SealedSegments, SealedRecords int
 	ExpiredSegments, ExpiredHeads int
+	Damaged                       int
 }

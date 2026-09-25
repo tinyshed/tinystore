@@ -40,6 +40,7 @@ type Store struct {
 	unpack      *zstd.Decoder
 	streams     streams
 	waiting     waitingTimes
+	damaged     damaged
 	queue       chan Record
 	gate        gate
 	maintenance chan struct{}
@@ -121,6 +122,7 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 		queue: make(chan Record, opts.Buffer), maintenance: make(chan struct{}, 1),
 	}
 	engine.gate.drained = make(chan struct{})
+	engine.damaged.found = map[damageKey]Damage{}
 	engine.maintenance <- struct{}{}
 	if err = engine.streams.load(ctx, file); err == nil {
 		err = engine.waiting.load(ctx, file, &engine.streams)
@@ -152,7 +154,7 @@ func (s *Store) Stats() Stats {
 	return Stats{
 		Appended: s.appended.Load(), Dropped: s.dropped.Load(),
 		SealedSegments: s.sealed.Load(), ExpiredSegments: s.expired.Load(), Queries: s.queries.Load(),
-		ReadBlocks: s.readBlocks.Load(), ReadBytes: s.readBytes.Load(),
+		ReadBlocks: s.readBlocks.Load(), ReadBytes: s.readBytes.Load(), Damaged: uint64(len(s.damaged.list())),
 	}
 }
 

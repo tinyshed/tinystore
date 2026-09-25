@@ -29,6 +29,7 @@
 //	seal.go        a head read a segment's worth at a time, and encoded
 //	publish.go     segment, blocks, filters and keys in, head rows out: one transaction
 //	retention.go   whole segments and head rows past the cutoff
+//	damage.go      Damaged, Drop: rows that no longer read, reported once
 //
 //	read.go        Read: admit → check → reserve → fetch → build a page
 //	snapshot.go    candidates and their rows from one read transaction
