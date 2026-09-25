@@ -11,10 +11,18 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
+// openLogging opens a store on the wall clock, the one slog stamps its lines with
+func openLogging(t *testing.T, dir string, options Options) *testStore {
+	t.Helper()
+	s := openTestStore(t, dir, options, tinystore.Options{})
+	s.clock.set(time.Now())
+	return s
+}
+
 // a line becomes a record: the message its body, logger.With its context,
 // the call's attributes its attributes, a group's keys prefixed
 func TestLogsLandInRecordsWithTheirAttributes(t *testing.T) {
-	s := openRecords(t)
+	s := openLogging(t, t.TempDir(), Options{})
 	logger := slog.New(s.Handler("notes")).With("service", "notes", "request_id", "r-17")
 	logger.WithGroup("http").Warn("slow request", "route", "/notes", "ms", 1200, "error", errors.New("timeout"),
 		slog.Group("user", "id", 7), "ratio", math.NaN(), "took", 1500*time.Millisecond)
@@ -48,7 +56,7 @@ func TestLogsLandInRecordsWithTheirAttributes(t *testing.T) {
 }
 
 func TestAFullBufferDropsAndCountsWithoutWaiting(t *testing.T) {
-	s := openTestStore(t, t.TempDir(), Options{Buffer: 2}, tinystore.Options{})
+	s := openLogging(t, t.TempDir(), Options{Buffer: 2})
 	logger := slog.New(s.Handler("app"))
 	for range 5 {
 		logger.Info("line")
@@ -62,7 +70,7 @@ func TestAFullBufferDropsAndCountsWithoutWaiting(t *testing.T) {
 }
 
 func TestTheEnginesOwnLinesAreRefused(t *testing.T) {
-	s := openRecords(t)
+	s := openLogging(t, t.TempDir(), Options{})
 	slog.New(s.Handler("app")).With("engine", "records").Info("flushed")
 	slog.New(s.Handler("app")).Info("flushed", "engine", "records")
 	slog.New(s.Handler("app")).With("engine", "metrics").Info("opened")
@@ -74,22 +82,28 @@ func TestTheEnginesOwnLinesAreRefused(t *testing.T) {
 	}
 }
 
-// a line the format cannot keep is dropped and counted, as a full buffer's is
+// a line the format cannot keep, or from past the store's clock and its skew,
+// is dropped and counted, as a full buffer's is
 func TestALineOutOfBoundsIsDroppedAndCounted(t *testing.T) {
-	s := openRecords(t)
+	s := openLogging(t, t.TempDir(), Options{})
 	slog.New(s.Handler("app")).Info(string(make([]byte, maxBlockInput)))
 	slog.New(s.Handler("")).Info("no stream")
+	ahead := slog.NewRecord(s.clock.Now().Add(time.Hour), slog.LevelInfo, "from an hour ahead", 0)
+	if err := s.Handler("app").Handle(t.Context(), ahead); err != nil {
+		t.Fatal(err)
+	}
+	slog.New(s.Handler("app")).Info("kept")
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if stats := s.Stats(); stats.Dropped != 2 || stats.Appended != 0 {
+	if stats := s.Stats(); stats.Dropped != 3 || stats.Appended != 1 {
 		t.Fatalf("stats %+v", stats)
 	}
 }
 
 func TestClosingTheStoreWritesWhatIsWaiting(t *testing.T) {
 	dir := t.TempDir()
-	s := openTestStore(t, dir, Options{}, tinystore.Options{})
+	s := openLogging(t, dir, Options{})
 	slog.New(s.Handler("app")).Info("last words")
 	if err := s.runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)

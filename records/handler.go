@@ -39,9 +39,9 @@ func (h *handler) Handle(_ context.Context, line slog.Record) error {
 	switch {
 	case h.own || own:
 		return nil
-	case checkRecord(&record) != nil:
+	case !h.store.fits(&record):
 		h.store.dropped.Add(1)
-		return nil //nolint:nilerr // a line the format cannot keep is dropped and counted, as the handler promises
+		return nil
 	}
 	select {
 	case h.store.queue <- record:
@@ -66,6 +66,11 @@ func (h *handler) record(line slog.Record) (Record, bool) {
 		return true
 	})
 	return record, own
+}
+
+// fits is a line the format can keep, at a time the store's window accepts
+func (s *Store) fits(r *Record) bool {
+	return checkRecord(r) == nil && s.window(s.now()).check(r.At) == nil
 }
 
 func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {

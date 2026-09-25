@@ -9,8 +9,13 @@ import (
 
 type Options struct {
 	// Retention is how long a record is kept: a segment goes once its newest
-	// record is older. Fourteen days when zero.
+	// record is older, and Append refuses an older one. Fourteen days when zero.
 	Retention time.Duration
+
+	// ClockSkew is how far ahead of the store's clock a record's time may be;
+	// Append refuses a later one, which would hold its segment past retention.
+	// Ten minutes when zero.
+	ClockSkew time.Duration
 
 	// SealAge is how long a quiet stream's records wait in the head before
 	// they are sealed however few they are, and so how far Follow may lag
@@ -62,13 +67,14 @@ const (
 )
 
 func normalizeOptions(o Options) (Options, error) {
-	if o.Retention < 0 || o.SealAge < 0 || o.Buffer < 0 || o.Flush < 0 {
+	if o.Retention < 0 || o.ClockSkew < 0 || o.SealAge < 0 || o.Buffer < 0 || o.Flush < 0 {
 		return o, fmt.Errorf("%w: records options may not be negative", tinystore.ErrInvalid)
 	}
 	if o.Budget.Blocks < 0 || o.Budget.Bytes < 0 || o.Budget.Decoded < 0 {
 		return o, fmt.Errorf("%w: records budget may not be negative", tinystore.ErrInvalid)
 	}
 	o.Retention = orDefault(o.Retention, 14*24*time.Hour)
+	o.ClockSkew = orDefault(o.ClockSkew, 10*time.Minute)
 	o.SealAge = orDefault(o.SealAge, time.Hour)
 	o.Buffer = orDefault(o.Buffer, 1024)
 	o.Flush = orDefault(o.Flush, time.Second)

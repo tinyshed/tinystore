@@ -154,6 +154,12 @@ choose page size with row size, and measure the file, not the payload.
 `errors.Is` means the same in every engine; an error about one series carries
 its labels.
 
+**A time is taken only inside its engine's window.** An engine that keeps an
+observation by its time accepts `[now − Retention, now + ClockSkew]`, `now`
+read once a call from `Store.Now()`; outside it is `ErrTooOld` or `ErrTooNew`
+naming the item. Without the upper edge one wrong clock holds a records
+segment past retention and a metrics watermark in the future for good.
+
 ## Architecture
 
 The metrics engine's invariants.
@@ -359,6 +365,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a damaged head does not stop the others             | `TestADamagedHeadDoesNotStopTheOthers`                                          |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
 | a record appended alone can be late                 | `TestARecordAppendedAloneCanBeLate`                                             |
+| a reopened store knows what its heads hold          | `TestAReopenedStoreKnowsWhatItsHeadsHold`                                       |
+| a producer ahead of the store makes no one late     | `TestAProducerAheadOfTheStoreDoesNotMakeItsNeighboursLate`                      |
+| a time outside its engine's window is refused       | `TestARecordOutsideItsWindowIsRefused`, `TestASampleAheadOfTheClockIsRefused`   |
 | a page never splits a timestamp nor loses one       | `TestAPageNeverSplitsATimestamp`, `TestPagesContinueWithoutLosingOrRepeating`   |
 | a budget ends a page rather than failing it         | `TestABudgetEndsAPageEarly`                                                     |
 | blooms and level masks skip blocks                  | `TestBloomsAndLevelMasksSkipBlocks`                                             |

@@ -134,7 +134,9 @@ func TestReadFiltersByEveryCondition(t *testing.T) {
 	s.append(t, frontend...)
 	s.clock.advance(2 * time.Hour)
 	s.maintain(t)
-	s.append(t, edgeRecords()...)
+	// the ends of time are outside any store's window; the segment tests keep them
+	edge := slices.DeleteFunc(edgeRecords(), func(r Record) bool { return r.Name == "ends of time" })
+	s.append(t, edge...)
 
 	errorLevel := slog.LevelError
 	session := frontend[123].Context[4]
@@ -155,7 +157,7 @@ func TestReadFiltersByEveryCondition(t *testing.T) {
 		}},
 	}
 	cutoff := s.clock.Now().Add(-14 * 24 * time.Hour)
-	all := slices.DeleteFunc(sortedByTime(slices.Concat(backend, frontend, edgeRecords())), func(r Record) bool {
+	all := slices.DeleteFunc(sortedByTime(slices.Concat(backend, frontend, edge)), func(r Record) bool {
 		return r.At.Before(cutoff)
 	})
 	for name, test := range cases {

@@ -184,8 +184,11 @@ this engine promises.
   the earlier cap of 32 refused outright. Matchers are ANDed exact equality
   predicates; absence is different from an empty value.
 - Retention defaults to 30 days. Lateness defaults to zero and follows the
-  newest timestamp of the series. Both must be whole milliseconds. Ingest
-  rejects expired samples and samples behind the persisted frontier.
+  newest timestamp of the series. `ClockSkew` defaults to ten minutes. All
+  three must be whole milliseconds. Ingest rejects expired samples, samples
+  behind the persisted frontier and samples more than `ClockSkew` ahead of the
+  store's clock (`ErrTooNew`), so that one wrong clock cannot hold a series'
+  watermark in the future.
   `MaxBlockSpan` defaults to one day and caps blocks while packing; it does not
   force a quiet sparse head to produce small blocks on a timer.
 - An entire admitted `Ingest` call is atomic, including new series and postings.

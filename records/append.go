@@ -12,10 +12,11 @@ import (
 )
 
 // Append writes every record or none, in one transaction, and a Read sees them
-// as soon as it returns. A record the format cannot keep is a *RecordError
-// naming it.
+// as soon as it returns. A record the format cannot keep, or whose time is past
+// retention or more than ClockSkew ahead of the store's clock, is a
+// *RecordError naming it.
 func (s *Store) Append(ctx context.Context, batch ...Record) error {
-	if err := checkBatch(batch); err != nil {
+	if err := checkBatch(batch, s.window(s.now())); err != nil {
 		return err
 	}
 	return s.appendChecked(ctx, batch)
@@ -40,7 +41,7 @@ func (s *Store) appendChecked(ctx context.Context, batch []Record) error {
 	}
 	defer unreserve()
 
-	rows := s.encodeHeadRows(routeToHeads(batch, &s.waiting))
+	rows := s.encodeHeadRows(routeToHeads(batch, &s.waiting, unixNanos(s.now())))
 	if err = s.writeHeadRows(ctx, rows); err != nil {
 		return fmt.Errorf("records: append: %w", err)
 	}
@@ -49,13 +50,44 @@ func (s *Store) appendChecked(ctx context.Context, batch []Record) error {
 	return nil
 }
 
-func checkBatch(batch []Record) error {
+func checkBatch(batch []Record, accepted window) error {
 	for i := range batch {
-		if err := checkRecord(&batch[i]); err != nil {
+		err := checkRecord(&batch[i])
+		if err == nil {
+			err = accepted.check(batch[i].At)
+		}
+		if err != nil {
 			return &RecordError{Index: i, Stream: batch[i].Stream, Name: batch[i].Name, Err: err}
 		}
 	}
 	return nil
+}
+
+// window is the times one call accepts, read once from the store's clock:
+//
+//	now 12:00, Retention 14 days, ClockSkew 10 minutes → [12:00 fourteen days ago, 12:10]
+type window struct {
+	oldest, newest int64
+}
+
+func (s *Store) window(now time.Time) window {
+	return window{oldest: unixNanos(now.Add(-s.opts.Retention)), newest: unixNanos(now.Add(s.opts.ClockSkew))}
+}
+
+// check refuses a time the window does not hold, naming the edge it passed
+func (w window) check(at time.Time) error {
+	switch t := unixNanos(at); {
+	case t < w.oldest:
+		return fmt.Errorf("%w: time %s is before the retention cutoff %s", tinystore.ErrTooOld, at, timeOf(w.oldest))
+	case t > w.newest:
+		return fmt.Errorf("%w: time %s is past %s, the store's clock and its skew", tinystore.ErrTooNew, at,
+			timeOf(w.newest))
+	}
+	return nil
+}
+
+func timeOf(nanos int64) time.Time {
+	return time.Unix(0, nanos).UTC()
 }
 
 // the instants a signed count of nanoseconds since 1970 holds

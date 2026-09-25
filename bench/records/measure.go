@@ -39,8 +39,10 @@ func openHarnessSealing(ctx context.Context, dir string, now time.Time, sealAge 
 	if err != nil {
 		log.Fatal(err)
 	}
-	// ten years: a corpus is measured, not expired
-	logs, err := records.Open(ctx, runtime, records.Options{Retention: 10 * 365 * 24 * time.Hour, SealAge: sealAge})
+	// ten years either way: a corpus is measured, not expired, and a stage may
+	// hold the clock at its first record while it appends the rest
+	decade := 10 * 365 * 24 * time.Hour
+	logs, err := records.Open(ctx, runtime, records.Options{Retention: decade, ClockSkew: decade, SealAge: sealAge})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -20,9 +20,9 @@ type preparedBatch struct {
 //	batch 1    cpu{host="a"}   10       12
 //	batch 2    cpu{host="a"}       11   12'
 //	prepared   cpu{host="a"}   10  11   12'     12' was supplied last
-func (s *Store) prepareIngest(batches []Batch, cutoff int64) ([]preparedBatch, error) {
+func (s *Store) prepareIngest(batches []Batch, accepted window) ([]preparedBatch, error) {
 	input := ingestInput{
-		cutoff:     cutoff,
+		accepted:   accepted,
 		maxSamples: s.opts.MaxBatchSamples,
 		maxBytes:   s.opts.MaxBatchBytes,
 		series:     map[string]*pendingSeries{},
@@ -35,9 +35,24 @@ func (s *Store) prepareIngest(batches []Batch, cutoff int64) ([]preparedBatch, e
 	return input.sorted(), nil
 }
 
+// window is the times one call accepts, read once from the store's clock:
+//
+//	now 12:00, Retention 30 days, ClockSkew 10 minutes → [12:00 thirty days ago, 12:10]
+type window struct {
+	cutoff, horizon int64
+}
+
+func (s *Store) window() window {
+	now := s.now().UnixMilli()
+	return window{
+		cutoff:  earlier(now, s.opts.Retention.Milliseconds()),
+		horizon: later(now, s.opts.ClockSkew.Milliseconds()),
+	}
+}
+
 // ingestInput is one call being checked against its sample and byte budgets.
 type ingestInput struct {
-	cutoff               int64
+	accepted             window
 	maxSamples, maxBytes int
 	samples, bytes       int
 	series               map[string]*pendingSeries
@@ -72,7 +87,7 @@ func (in *ingestInput) add(batch Batch) error {
 	if err != nil {
 		return seriesError(labels, err)
 	}
-	if err = series.addAll(batch.Samples, in.cutoff); err != nil {
+	if err = series.addAll(batch.Samples, in.accepted); err != nil {
 		return seriesError(labels, err)
 	}
 	return nil
@@ -118,13 +133,15 @@ type pendingSeries struct {
 	byTime map[int64]Sample // nil while every timestamp so far was newer than the last
 }
 
-func (p *pendingSeries) addAll(samples []Sample, cutoff int64) error {
+func (p *pendingSeries) addAll(samples []Sample, accepted window) error {
 	for _, point := range samples {
-		if point.At == math.MaxInt64 {
+		switch {
+		case point.At == math.MaxInt64:
 			return fmt.Errorf("%w: MaxInt64 is reserved for the exclusive range bound", ErrInvalid)
-		}
-		if point.At < cutoff {
+		case point.At < accepted.cutoff:
 			return fmt.Errorf("%w: retention cutoff", ErrTooOld)
+		case point.At > accepted.horizon:
+			return fmt.Errorf("%w: %d is past %d, the clock and its skew", ErrTooNew, point.At, accepted.horizon)
 		}
 		p.add(point)
 	}

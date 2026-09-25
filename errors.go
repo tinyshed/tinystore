@@ -11,5 +11,6 @@ var (
 	ErrConflict  = errors.New("state changed")
 	ErrCorrupt   = errors.New("corrupt data")
 	ErrTooOld    = errors.New("too old")
+	ErrTooNew    = errors.New("too new")
 	ErrSuspended = errors.New("suspended")
 )

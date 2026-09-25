@@ -28,6 +28,7 @@ func TestWatermarkIsStrictAndFollowsTheSeries(t *testing.T) {
 
 func TestReadyWaitsForASealableWatermarkPrefix(t *testing.T) {
 	s, _ := openTestStore(t, Options{Lateness: time.Hour, MaintenanceSeries: 1})
+	s.now = func() time.Time { return time.UnixMilli(testEpoch + 600*10000) }
 	series := testSeries()
 	points := make([]Sample, 240)
 	for i := range points {

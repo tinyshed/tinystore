@@ -14,6 +14,7 @@ var (
 	ErrLimit        = kindOf("metrics resource limit", tinystore.ErrLimit)
 	ErrClosed       = kindOf("metrics store is closed", tinystore.ErrClosed)
 	ErrTooOld       = kindOf("sample is expired or sealed", tinystore.ErrTooOld)
+	ErrTooNew       = kindOf("sample is ahead of the store's clock", tinystore.ErrTooNew)
 	ErrConflict     = kindOf("metrics state changed", tinystore.ErrConflict)
 	ErrCorrupt      = kindOf("corrupt metrics data", tinystore.ErrCorrupt)
 	ErrSuspended    = kindOf("metrics maintenance is suspended for this series", tinystore.ErrSuspended)

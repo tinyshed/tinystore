@@ -57,8 +57,8 @@ func TestZeroOptionsTakeTheDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Options{
-		Retention: 30 * 24 * time.Hour, MaxBlockSpan: 24 * time.Hour, SnapshotTimeout: 5 * time.Second,
-		MaintenanceInterval: time.Minute, Flush: 15 * time.Second,
+		Retention: 30 * 24 * time.Hour, ClockSkew: 10 * time.Minute, MaxBlockSpan: 24 * time.Hour,
+		SnapshotTimeout: 5 * time.Second, MaintenanceInterval: time.Minute, Flush: 15 * time.Second,
 		MaxSeries: 100000, MaxHeadSamples: 4096, MaxHeadBytes: 256 << 10, MaxBatchSamples: 10000,
 		MaxBatchBytes: 4 << 20, MaintenanceSeries: 64, MaxReaders: 2, MaxConcurrentReads: 2, MaxConcurrentIngest: 1,
 		Limits: Limits{Series: 1000, Blocks: 4096, PayloadBytes: 16 << 20, DecodedSamples: 1 << 20, OutputSamples: 100000},
@@ -77,6 +77,8 @@ func TestEachInvalidOptionIsRefused(t *testing.T) {
 		{"half a millisecond of block span", Options{MaxBlockSpan: 500 * time.Microsecond}, "block span"},
 		{"a negative retention", Options{Retention: -time.Hour}, "durations"},
 		{"a lateness in microseconds", Options{Lateness: 1500 * time.Microsecond}, "durations"},
+		{"a negative clock skew", Options{ClockSkew: -time.Minute}, "durations"},
+		{"a clock skew in microseconds", Options{ClockSkew: 1500 * time.Microsecond}, "durations"},
 		{"a negative snapshot timeout", Options{SnapshotTimeout: -time.Second}, "durations"},
 		{"a negative maintenance interval", Options{MaintenanceInterval: -time.Minute}, "durations"},
 		{"a negative series capacity", Options{MaxSeries: -1}, "negative capacity"},

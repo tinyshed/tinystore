@@ -17,6 +17,7 @@ type Limits struct {
 type Options struct {
 	Retention           time.Duration
 	Lateness            time.Duration
+	ClockSkew           time.Duration
 	MaxBlockSpan        time.Duration
 	MaxSeries           int
 	MaxHeadSamples      int
@@ -65,10 +66,14 @@ func (o *Options) normalizeDurations() error {
 	if o.MaxBlockSpan == 0 {
 		o.MaxBlockSpan = 24 * time.Hour
 	}
+	if o.ClockSkew == 0 {
+		o.ClockSkew = 10 * time.Minute
+	}
 	if o.MaxBlockSpan <= 0 || !wholeMilliseconds(o.MaxBlockSpan) {
 		return fmt.Errorf("%w: block span", ErrInvalid)
 	}
-	if o.Retention <= 0 || !wholeMilliseconds(o.Retention) || !wholeMilliseconds(o.Lateness) {
+	if o.Retention <= 0 || !wholeMilliseconds(o.Retention) || !wholeMilliseconds(o.Lateness) ||
+		!wholeMilliseconds(o.ClockSkew) {
 		return fmt.Errorf("%w: durations", ErrInvalid)
 	}
 	if o.SnapshotTimeout < 0 || o.MaintenanceInterval < 0 || o.Flush < 0 {

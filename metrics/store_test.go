@@ -363,6 +363,7 @@ func TestMetricsErrorsAreTheStoresKinds(t *testing.T) {
 		{ErrLimit, tinystore.ErrLimit, "metrics resource limit"},
 		{ErrClosed, tinystore.ErrClosed, "metrics store is closed"},
 		{ErrTooOld, tinystore.ErrTooOld, "sample is expired or sealed"},
+		{ErrTooNew, tinystore.ErrTooNew, "sample is ahead of the store's clock"},
 		{ErrConflict, tinystore.ErrConflict, "metrics state changed"},
 		{ErrCorrupt, tinystore.ErrCorrupt, "corrupt metrics data"},
 		{ErrSuspended, tinystore.ErrSuspended, "metrics maintenance is suspended for this series"},

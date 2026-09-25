@@ -1,8 +1,12 @@
 package metrics
 
 import (
+	"errors"
 	"math"
 	"testing"
+	"time"
+
+	"github.com/tinyshed/tinystore"
 )
 
 func TestOrderedPreparationFallsBackForDuplicatesAndLatePoints(t *testing.T) {
@@ -29,4 +33,22 @@ func TestOrderedPreparationFallsBackForDuplicatesAndLatePoints(t *testing.T) {
 		{At: testEpoch + 5, Value: 5},
 	}
 	assertSamples(t, readAll(t, s), want)
+}
+
+// a sample past the store's clock and its skew is refused and names its
+// series, so that one wrong clock cannot hold a series' watermark in the future;
+// the edge itself is accepted
+func TestASampleAheadOfTheClockIsRefused(t *testing.T) {
+	s, _ := openTestStore(t, Options{ClockSkew: time.Minute})
+	horizon := testEpoch + 900 + time.Minute.Milliseconds()
+	series := testSeries()
+	err := s.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: horizon + 1, Value: 1}}}})
+	var named *SeriesError
+	if !errors.As(err, &named) || !errors.Is(err, ErrTooNew) || !errors.Is(err, tinystore.ErrTooNew) {
+		t.Fatalf("a sample a millisecond past the skew: %v", err)
+	}
+	if err = s.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: horizon, Value: 1}}}}); err != nil {
+		t.Fatalf("a sample at the skew's edge: %v", err)
+	}
+	assertSamples(t, readAll(t, s), []Sample{{At: horizon, Value: 1}})
 }

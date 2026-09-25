@@ -1,8 +1,13 @@
 package records
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"math"
 	"sync"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // headBatch is the records one call gives one head, in arrival order
@@ -14,16 +19,19 @@ type headBatch struct {
 
 // routeToHeads splits a batch by stream, sends what lags more than a minute
 // behind the newest record its stream has shown, in the batch or waiting on
-// time in its head, to that stream's late head, and cuts each head's share at
-// a block's bounds; a record appended alone can be late too:
+// time in its head, or behind the store's clock when that is earlier, to that
+// stream's late head, and cuts each head's share at a block's bounds; a record
+// appended alone can be late too, and a producer ahead of the store's clock
+// does not make its neighbours late:
 //
-//	web, waiting until 12:00:40; batch 12:00:10 12:00:31 11:50:02 12:00:45
+//	clock 12:01, web waiting until 12:00:40; batch 12:00:10 12:00:31 11:50:02 12:00:45
 //	→ newest 12:00:45: on time 12:00:10 12:00:31 12:00:45, late 11:50:02
-//	web, waiting until 12:00:40; batch 11:59:30 alone        → 70 s behind: late
-func routeToHeads(batch []Record, waiting *waitingTimes) []headBatch {
+//	clock 12:01, web waiting until 12:00:40; batch 11:59:30 alone  → 70 s behind: late
+//	clock 12:00, web waiting until 12:05:00; batch 11:59:30 alone  → 30 s behind the clock: on time
+func routeToHeads(batch []Record, waiting *waitingTimes, now int64) []headBatch {
 	var routed []headBatch
 	for _, records := range byStream(batch) {
-		onTime, late := splitLate(records, waiting.reference(records))
+		onTime, late := splitLate(records, min(waiting.reference(records), now))
 		routed = appendCut(routed, onTime, false)
 		routed = appendCut(routed, late, true)
 	}
@@ -71,13 +79,35 @@ func appendCut(routed []headBatch, records []Record, late bool) []headBatch {
 	return routed
 }
 
-// waitingTimes remembers the newest record each stream's on-time head holds.
-// A head that seals empty forgets it, so one record from a wrong clock
-// misroutes its stream's records to the late head for one head at most, and
-// a restart forgets them all: each batch places its stream until then.
+// waitingTimes remembers the newest record each stream's on-time head holds,
+// read from the heads when the store opens. A head that seals empty forgets it.
 type waitingTimes struct {
 	mu     sync.Mutex
 	newest map[string]int64
+}
+
+const selectWaitingTimes = `select stream, max(last_at) from heads where late = 0 group by stream`
+
+func (w *waitingTimes) load(ctx context.Context, file *sqlite.File, names *streams) error {
+	w.newest = map[string]int64{}
+	err := file.View(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, selectWaitingTimes) //nolint:rowserrcheck // EachRow checks Err
+		if err != nil {
+			return err
+		}
+		return sqlite.EachRow(rows, "waiting times", func(rows *sql.Rows) error {
+			var stream, newest int64
+			if err := rows.Scan(&stream, &newest); err != nil {
+				return err
+			}
+			w.newest[names.name(stream)] = newest
+			return nil
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("records: load what the heads hold: %w", err)
+	}
+	return nil
 }
 
 // reference is the newest record a stream has shown, in this batch of its

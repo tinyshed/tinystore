@@ -29,13 +29,13 @@ func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
 	}
 	defer unreserve()
 
-	cutoff := s.cutoff()
-	input, err := s.prepareIngest(batches, cutoff)
+	accepted := s.window()
+	input, err := s.prepareIngest(batches, accepted)
 	if err != nil {
 		return err
 	}
 
-	if err = s.commitIngest(ctx, input, cutoff); err != nil {
+	if err = s.commitIngest(ctx, input, accepted.cutoff); err != nil {
 		return fmt.Errorf("ingest metrics: %w", err)
 	}
 	s.ingested.Add(uint64(countSamples(input))) //nolint:gosec // a count of committed samples

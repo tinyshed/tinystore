@@ -96,7 +96,7 @@ func formatLabels(labels []Label) string {
 // seriesError names the series a refusal belongs to. A cancelled call or a
 // failing file is not the series' doing and keeps its own error.
 func seriesError(labels []Label, err error) error {
-	for _, refusal := range []error{ErrInvalid, ErrLimit, ErrTooOld, ErrConflict, ErrCorrupt, ErrSuspended} {
+	for _, refusal := range []error{ErrInvalid, ErrLimit, ErrTooOld, ErrTooNew, ErrConflict, ErrCorrupt, ErrSuspended} {
 		if errors.Is(err, refusal) {
 			return &SeriesError{Labels: slices.Clone(labels), Err: err}
 		}

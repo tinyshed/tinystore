@@ -30,6 +30,12 @@ func (c *testClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+func (c *testClock) set(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
+}
+
 // testNow is when the fixtures' records happen, so retention keeps them
 var testNow = time.Unix(0, fixtureBase).UTC().Add(time.Hour)
 
@@ -157,6 +163,33 @@ func TestAppendRefusesARecordAndNamesIt(t *testing.T) {
 	if got := s.readAll(t, Query{}); len(got) != 0 {
 		t.Fatalf("a refused batch wrote %d records", len(got))
 	}
+}
+
+// a record past retention would never be read, and one far ahead of the
+// store's clock would hold its segment past retention: Append refuses both and
+// names them, writes nothing of their batch, and takes the window's edges
+func TestARecordOutsideItsWindowIsRefused(t *testing.T) {
+	s := openTestStore(t, t.TempDir(), Options{Retention: time.Hour, ClockSkew: time.Minute}, tinystore.Options{})
+	oldest, newest := testNow.Add(-time.Hour), testNow.Add(time.Minute)
+	for name, test := range map[string]struct {
+		at   time.Time
+		kind error
+	}{
+		"past retention":     {oldest.Add(-time.Nanosecond), tinystore.ErrTooOld},
+		"ahead of the clock": {newest.Add(time.Nanosecond), tinystore.ErrTooNew},
+	} {
+		err := s.Append(t.Context(), Record{At: testNow, Stream: "x", Name: "x"}, Record{At: test.at, Stream: "x", Name: "x"})
+		var refused *RecordError
+		if !errors.As(err, &refused) || refused.Index != 1 || !errors.Is(err, test.kind) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if got := s.readAll(t, Query{}); len(got) != 0 {
+		t.Fatalf("a refused batch wrote %d records", len(got))
+	}
+	edges := []Record{{At: oldest, Stream: "x", Name: "oldest"}, {At: newest, Stream: "x", Name: "newest"}}
+	s.append(t, edges...)
+	sameRecords(t, edges, s.readAll(t, Query{}))
 }
 
 func TestAClosedStoreRefusesWork(t *testing.T) {

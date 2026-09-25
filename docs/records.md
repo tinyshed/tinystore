@@ -81,8 +81,10 @@ event-time order, merging the segments that overlap its range. A consumer that
 follows the store reads segments in publication order, each in event-time
 order, through a `(segment, row)` cursor. A record that arrives after its
 segment was sealed appears in a later one, so storage holds no global
-event-time order; query results do. The metrics watermark and `ErrTooOld` do
-not apply.
+event-time order; query results do. The metrics watermark does not apply: a
+record is never refused for arriving late, only for falling outside the
+store's window, older than `Retention` or more than `ClockSkew` ahead of the
+store's clock.
 
 ```text
 arrival   .300 buy    .100 menu   .200 save
@@ -131,10 +133,12 @@ does.
 
 **Late records have a head of their own.** What arrives more than a minute
 behind the newest record its stream has shown, in the same batch or waiting on
-time in its head, goes to a late head of the same stream and seals the same
-way; a record appended alone can be late too. Without it, one record in a
-hundred arriving ten minutes late made one-second reads read thirteen times as
-many blocks; with it, under three times.
+time in its head, or behind the store's clock when that is earlier, goes to a
+late head of the same stream and seals the same way; a record appended alone
+can be late too, and a producer ahead of the store's clock does not make its
+neighbours late. Without it, one record in a hundred arriving ten minutes late
+made one-second reads read thirteen times as many blocks; with it, under three
+times.
 
 **A segment in flight reserves 24 MiB.** Encoding allocates three to five
 times a segment's input and decoding four to six, and the input is at most
@@ -202,7 +206,8 @@ column, with exact exceptions. The engine leaves both out; what that costs is
 | Integer dictionary | 256 values |
 | Expanded or copied text per block | 4 MiB |
 | Head row | a block's bounds |
-| Head | an hour of age; a minute behind the stream's newest is late |
+| Head | an hour of age; a minute behind the stream's newest, or the clock, is late |
+| Time | from the retention cutoff to `ClockSkew`, ten minutes, past the store's clock |
 | Memory reservation | 24 MiB per segment in flight |
 
 Counts, lengths, references, radix words, Rice streams, FSE expansion, text

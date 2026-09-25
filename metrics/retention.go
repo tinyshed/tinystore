@@ -360,4 +360,11 @@ func earlier(at, delta int64) int64 {
 	return at - delta
 }
 
+func later(at, delta int64) int64 {
+	if at > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	return at + delta
+}
+
 func (s *Store) cutoff() int64 { return earlier(s.now().UnixMilli(), s.opts.Retention.Milliseconds()) }

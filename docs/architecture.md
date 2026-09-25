@@ -124,6 +124,25 @@ capacity. What was the metrics engine's `WorkBudget` lives here: a default
 `Read` reserves its worst case,
 about 34 MiB, so 256 MiB admits seven at once and queues the eighth.
 
+## Time
+
+The store's clock is the one every engine reads (`Store.Now`, replaceable
+through `Options.Clock`). An engine that keeps an observation by its time, a
+sample or a record, accepts only what falls in its window, read once a call:
+
+```text
+now 12:00, Retention 14 days, ClockSkew 10 minutes → [12:00 fourteen days ago, 12:10]
+older   ErrTooOld     it would never be read
+later   ErrTooNew     it would hold what it lands in past retention
+```
+
+A record from a browser whose clock says 2100 would otherwise keep its segment
+until 2100, and a sample from a wrong clock would hold its series' watermark in
+the future for good. The window trusts the store's clock: a server running an
+hour slow refuses correct data until `ClockSkew` is raised. Mimir and Loki make
+the same trade, ten minutes by default. Schedules, which the jobs engine will
+keep, are meant to be in the future and are not observations.
+
 ## Logs
 
 In: TinyStore logs through the application's `*slog.Logger`
@@ -168,8 +187,9 @@ the store writes every report as ordinary series:
 
 - The root package defines the shared sentinels (`ErrInvalid`, `ErrLimit`,
   `ErrClosed`, `ErrInUse`, `ErrConflict`, `ErrCorrupt`, `ErrTooOld`,
-  `ErrSuspended`); engines wrap them, so `errors.Is` means the same everywhere.
-  `metrics` keeps its own messages, and each of its errors wraps the root's.
+  `ErrTooNew`, `ErrSuspended`); engines wrap them, so `errors.Is` means the
+  same everywhere. `metrics` keeps its own messages, and each of its errors
+  wraps the root's.
 - An error about one item names it. An `Ingest` refused because of one series
   returns a `*metrics.SeriesError` carrying that series' labels (`errors.As`),
   and `DropSeries(ctx, labels)` removes a series that cannot be repaired.

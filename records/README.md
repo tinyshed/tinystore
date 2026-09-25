@@ -42,12 +42,19 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 - `Append` writes every record or none, in one transaction, and a `Read` sees
   them as soon as it returns. A record the format cannot keep is refused as a
   `*RecordError` naming it: no stream or name, a value that is not JSON, a
-  time past what nanoseconds hold, more than 128 fields, more than 256 KiB.
+  time past what nanoseconds hold, more than 128 fields, more than 256 KiB. So
+  is a record outside the store's window: older than `Options.Retention`
+  (`tinystore.ErrTooOld`), which no read would return, or more than
+  `Options.ClockSkew` (ten minutes) ahead of the store's clock
+  (`tinystore.ErrTooNew`), which would hold its segment past retention. An
+  application taking events from clocks it does not own gives them the time
+  it received them and keeps theirs as an attribute.
 - `Handler(stream)` never blocks its caller. Lines wait in a buffer
   (`Options.Buffer`, 1024) and are written as one `Append` every
   `Options.Flush` (a second), on `Close`, or on `Flush(ctx)` in a Manual store;
   a line that does not fit the buffer or the format, or a batch whose write
-  failed, is dropped and counted in `Stats`. Lines of the records engine itself
+  failed, or a line outside the store's window, is dropped and counted in
+  `Stats`. Lines of the records engine itself
   are refused. A line is a record named `log`: its message is the body, the
   attributes of `logger.With` its context, the call's its attributes, a
   group's keys written `group.key`, values spelled as `slog.JSONHandler`
@@ -55,8 +62,10 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 - A record's order is its time. A segment stores one stream's records in time
   order, equal times in the order they arrived; nothing else of the arrival
   order is kept. A record more than a minute behind the newest record its
-  stream has shown, in its batch or waiting in the head, goes to the stream's
-  late head, so that it does not stretch the blocks of its neighbours.
+  stream has shown, in its batch or waiting in the head, or behind the store's
+  clock when that is earlier, goes to the stream's late head, so that it does
+  not stretch the blocks of its neighbours; a producer whose clock runs ahead
+  of the store's does not send its neighbours there.
 - Records wait in a durable head until their head holds a segment's worth
   (16,384 records or 4 MiB) or its oldest row is `Options.SealAge` old (an
   hour). A longer `SealAge` trades how soon `Follow` sees a sparse stream's
