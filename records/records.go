@@ -2,15 +2,16 @@ package records
 
 import (
 	"context"
-	"database/sql"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/sqlite"
@@ -25,45 +26,33 @@ const fileName = "records.db"
 // recordsApplicationID is "TREC", the SQLite application id that claims a file for this engine
 const recordsApplicationID = 0x54524543
 
-type Options struct {
-	// Buffer is how many records may wait in memory; beyond it a record is
-	// dropped and counted, never waited for. 1024 when zero.
-	Buffer int
-
-	// Flush is how often waiting records are written. One second when zero.
-	Flush time.Duration
-
-	// Retention is how long a record is kept. Fourteen days when zero.
-	Retention time.Duration
-}
-
-// Record is one log line as it was handled: attributes in groups are named
-// group.key, and values come back as JSON decodes them.
-type Record struct {
-	At      time.Time
-	Level   slog.Level
-	Message string
-	Attrs   map[string]any
-}
-
-type Stats struct {
-	Written, Dropped, Expired uint64
-}
+// pageSize is chosen once, when the file is created: a block's remainder is
+// left on a leaf page, and 7 KB blocks left a tenth of a 4 KiB-page table empty
+const pageSize = 1024
 
 type Store struct {
-	file    *sqlite.File
-	log     *slog.Logger
-	now     func() time.Time
-	opts    Options
-	queue   chan Record
-	written atomic.Uint64
-	dropped atomic.Uint64
-	expired atomic.Uint64
+	runtime     *tinystore.Store
+	file        *sqlite.File
+	log         *slog.Logger
+	now         func() time.Time
+	opts        Options
+	blobs       *zstd.Encoder
+	unpack      *zstd.Decoder
+	streams     streams
+	queue       chan Record
+	gate        gate
+	maintenance chan struct{}
+	finalFlush  sync.Once
+	closing     sync.Once
+	closeErr    error
+
+	appended, dropped, sealed, expired, queries atomic.Uint64
+	readBlocks, readBytes                       atomic.Uint64
 }
 
 // Open opens records.db inside the store. The store closes it and, unless it
-// is Manual, writes waiting records every Options.Flush and removes expired
-// ones every hour.
+// is Manual, writes what the handler holds every Options.Flush, and seals and
+// expires every minute.
 func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error) {
 	opts, err := normalizeOptions(options)
 	if err != nil {
@@ -82,29 +71,30 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 	}
 
 	store.Every("records flush", opts.Flush, engine.Flush)
-	store.Every("records retention", time.Hour, engine.Maintain)
+	store.Every("records maintenance", maintenanceEvery, engine.maintainInBackground)
 	engine.log.Info("opened", "path", path)
 	return engine, nil
 }
 
-func normalizeOptions(o Options) (Options, error) {
-	if o.Buffer < 0 || o.Flush < 0 || o.Retention < 0 {
-		return o, fmt.Errorf("%w: records options", tinystore.ErrInvalid)
+// openEngine opens and migrates the file, then hands the engine to the store
+func openEngine(ctx context.Context, store *tinystore.Store, path string, opts Options) (*Store, error) {
+	file, err := openFile(ctx, path)
+	if err != nil {
+		return nil, err
 	}
-	if o.Buffer == 0 {
-		o.Buffer = 1024
+	engine, err := newStore(ctx, file, opts)
+	if err != nil {
+		return nil, errors.Join(err, file.Close())
 	}
-	if o.Flush == 0 {
-		o.Flush = time.Second
+	engine.runtime, engine.log, engine.now = store, store.Logger("records"), store.Now
+	if err = store.Attach(engine); err != nil {
+		return nil, errors.Join(err, engine.release())
 	}
-	if o.Retention == 0 {
-		o.Retention = 14 * 24 * time.Hour
-	}
-	return o, nil
+	return engine, nil
 }
 
-func openEngine(ctx context.Context, store *tinystore.Store, path string, opts Options) (*Store, error) {
-	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: 2})
+func openFile(ctx context.Context, path string) (*sqlite.File, error) {
+	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: 2, PageSize: pageSize})
 	if err != nil {
 		return nil, fmt.Errorf("records: open: %w", err)
 	}
@@ -115,86 +105,37 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string, opts O
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("records: migrate: %w", err), file.Close())
 	}
+	return file, nil
+}
 
-	engine := &Store{
-		file: file, log: store.Logger("records"), now: store.Now, opts: opts,
-		queue: make(chan Record, opts.Buffer),
+// newStore builds the handle over an open file; the caller closes the file on an error
+func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, error) {
+	blobs, unpack, err := newBlobCoders()
+	if err != nil {
+		return nil, err
 	}
-	if err = store.Attach(engine); err != nil {
-		return nil, errors.Join(err, file.Close())
+	engine := &Store{
+		file: file, opts: opts, blobs: blobs, unpack: unpack, now: time.Now,
+		log:   slog.New(slog.DiscardHandler),
+		queue: make(chan Record, opts.Buffer), maintenance: make(chan struct{}, 1),
+	}
+	engine.gate.drained = make(chan struct{})
+	engine.maintenance <- struct{}{}
+	if err = engine.streams.load(ctx, file); err != nil {
+		_ = blobs.Close()
+		unpack.Close()
+		return nil, err
 	}
 	return engine, nil
 }
 
-const insertRecord = `insert into records (at, level, message, attrs) values (?, ?, ?, ?)`
-
-// Flush writes every waiting record in one transaction.
-func (s *Store) Flush(ctx context.Context) error {
-	batch := s.drain()
-	if len(batch) == 0 {
-		return nil
-	}
-
-	err := s.file.Update(ctx, func(tx *sql.Tx) error {
-		for _, record := range batch {
-			if err := writeRecord(ctx, tx, record); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		s.dropped.Add(uint64(len(batch)))
-		return err
-	}
-	s.written.Add(uint64(len(batch)))
-	return nil
+func (s *Store) maintainInBackground(ctx context.Context) error {
+	_, err := s.Maintain(ctx)
+	return err
 }
 
-func (s *Store) drain() []Record {
-	var batch []Record
-	for {
-		select {
-		case record := <-s.queue:
-			batch = append(batch, record)
-		default:
-			return batch
-		}
-	}
-}
-
-func writeRecord(ctx context.Context, tx *sql.Tx, record Record) error {
-	attrs, err := json.Marshal(record.Attrs)
-	if err != nil {
-		return fmt.Errorf("records: encode attributes of %q: %w", record.Message, err)
-	}
-	_, err = tx.ExecContext(ctx, insertRecord, record.At.UnixMilli(), int(record.Level), record.Message, string(attrs))
-	if err != nil {
-		return fmt.Errorf("records: write: %w", err)
-	}
-	return nil
-}
-
-const expireRecords = `delete from records where at < ?`
-
-// Maintain removes the records older than Options.Retention by the store's clock.
-func (s *Store) Maintain(ctx context.Context) error {
-	cutoff := s.now().Add(-s.opts.Retention).UnixMilli()
-	return s.file.Update(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, expireRecords, cutoff)
-		if err != nil {
-			return fmt.Errorf("records: expire: %w", err)
-		}
-		removed, err := result.RowsAffected()
-		if err == nil && removed > 0 {
-			s.expired.Add(uint64(removed))
-		}
-		return err
-	})
-}
-
-// Snapshot copies records.db into dir while the engine keeps working; what
-// waits in the buffer is not in the copy.
+// Snapshot copies records.db into dir while the engine keeps working; what the
+// handler holds in memory is not in the copy, and the head is.
 func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
 	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
 	if err != nil {
@@ -204,13 +145,36 @@ func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFil
 }
 
 func (s *Store) Stats() Stats {
-	return Stats{Written: s.written.Load(), Dropped: s.dropped.Load(), Expired: s.expired.Load()}
+	return Stats{
+		Appended: s.appended.Load(), Dropped: s.dropped.Load(),
+		SealedSegments: s.sealed.Load(), ExpiredSegments: s.expired.Load(), Queries: s.queries.Load(),
+		ReadBlocks: s.readBlocks.Load(), ReadBytes: s.readBytes.Load(),
+	}
 }
 
-// Close writes what is still waiting, then closes records.db. The store calls
-// it: an application closes the store instead.
+// Close writes what the handler still holds, lets the work in flight finish
+// and closes records.db; cancellation stops waiting, not the cleanup. The
+// store calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
-	err := errors.Join(s.Flush(ctx), s.file.Close())
-	s.log.Info("closed", "written", s.written.Load(), "dropped", s.dropped.Load())
-	return err
+	var flushErr error
+	s.finalFlush.Do(func() { flushErr = s.Flush(ctx) })
+
+	drained := s.gate.close()
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return errors.Join(flushErr, ctx.Err())
+	}
+
+	s.closing.Do(func() {
+		s.closeErr = s.release()
+		s.log.Info("closed", "appended", s.appended.Load(), "dropped", s.dropped.Load())
+	})
+	return errors.Join(flushErr, s.closeErr)
+}
+
+// release closes what newStore opened, the file last
+func (s *Store) release() error {
+	s.unpack.Close()
+	return errors.Join(s.blobs.Close(), s.file.Close())
 }

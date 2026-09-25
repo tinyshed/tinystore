@@ -4,17 +4,47 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tinyshed/tinystore"
 )
 
-var testNow = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+// testClock is the store's clock, moved by the test
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
 
-func openTestRecords(t *testing.T, dir string, options Options) (*Store, *tinystore.Store) {
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// testNow is when the fixtures' records happen, so retention keeps them
+var testNow = time.Unix(0, fixtureBase).UTC().Add(time.Hour)
+
+type testStore struct {
+	*Store
+	runtime *tinystore.Store
+	clock   *testClock
+	dir     string
+}
+
+func openTestStore(t *testing.T, dir string, options Options, runtime tinystore.Options) *testStore {
 	t.Helper()
-	store, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true, Clock: func() time.Time { return testNow }})
+	clock := &testClock{now: testNow}
+	runtime.Manual, runtime.Clock = true, clock.Now
+	store, err := tinystore.Open(t.Context(), dir, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,119 +53,121 @@ func openTestRecords(t *testing.T, dir string, options Options) (*Store, *tinyst
 	if err != nil {
 		t.Fatal(err)
 	}
-	return logs, store
+	return &testStore{Store: logs, runtime: store, clock: clock, dir: dir}
 }
 
-func readAll(t *testing.T, logs *Store) []Record {
+func openRecords(t *testing.T) *testStore {
 	t.Helper()
-	got, err := logs.Read(t.Context(), Query{From: time.Unix(0, 0), To: time.Now().Add(time.Hour), MinLevel: slog.LevelDebug})
+	return openTestStore(t, t.TempDir(), Options{}, tinystore.Options{})
+}
+
+func (s *testStore) append(t testing.TB, records ...Record) {
+	t.Helper()
+	if err := s.Append(t.Context(), records...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (s *testStore) maintain(t testing.TB) Maintenance {
+	t.Helper()
+	work, err := s.Maintain(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return got
+	return work
 }
 
-func TestLogsLandInRecordsWithTheirAttributes(t *testing.T) {
-	logs, _ := openTestRecords(t, t.TempDir(), Options{})
-	logger := slog.New(logs.Handler()).With("service", "notes")
-	logger.WithGroup("http").Warn("slow request", "route", "/notes", "ms", 1200, "error", errors.New("timeout"))
-	if err := logs.Flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	got := readAll(t, logs)
-	if len(got) != 1 || got[0].Message != "slow request" || got[0].Level != slog.LevelWarn {
-		t.Fatalf("read %+v", got)
-	}
-	want := map[string]any{"service": "notes", "http.route": "/notes", "http.ms": float64(1200), "http.error": "timeout"}
-	for key, value := range want {
-		if got[0].Attrs[key] != value {
-			t.Errorf("%s = %v, want %v", key, got[0].Attrs[key], value)
+// readAll pages through a whole query and returns every record, in order
+func (s *testStore) readAll(t testing.TB, query Query) []Record {
+	t.Helper()
+	var all []Record
+	for range 10_000 {
+		page, err := s.Read(t.Context(), query)
+		if err != nil {
+			t.Fatal(err)
 		}
+		all = append(all, page.Records...)
+		if !page.More {
+			return all
+		}
+		query = page.Next
 	}
+	t.Fatal("paging never ended")
+	return nil
 }
 
-func TestAFullBufferDropsAndCountsWithoutWaiting(t *testing.T) {
-	logs, _ := openTestRecords(t, t.TempDir(), Options{Buffer: 2})
-	logger := slog.New(logs.Handler())
-	for range 5 {
-		logger.Info("line")
+func sortedByTime(records []Record) []Record {
+	sorted := slices.Clone(records)
+	slices.SortStableFunc(sorted, func(a, b Record) int { return a.At.Compare(b.At) })
+	return sorted
+}
+
+func TestAppendedRecordsAreReadBeforeTheyAreSealed(t *testing.T) {
+	s := openRecords(t)
+	records := backendRecords(50)
+	s.append(t, records...)
+
+	sameRecords(t, records, s.readAll(t, Query{}))
+	if work := s.maintain(t); work.SealedSegments != 0 {
+		t.Fatalf("fifty fresh records sealed: %+v", work)
 	}
-	if err := logs.Flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if stats := logs.Stats(); stats.Written != 2 || stats.Dropped != 3 {
+	if stats := s.Stats(); stats.Appended != 50 || stats.Queries == 0 {
 		t.Fatalf("stats %+v", stats)
 	}
 }
 
-func TestTheEnginesOwnLinesAreRefused(t *testing.T) {
-	logs, _ := openTestRecords(t, t.TempDir(), Options{})
-	slog.New(logs.Handler()).With("engine", "records").Info("flushed")
-	slog.New(logs.Handler()).Info("flushed", "engine", "records")
-	slog.New(logs.Handler()).With("engine", "metrics").Info("opened")
-	if err := logs.Flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := readAll(t, logs); len(got) != 1 || got[0].Message != "opened" {
-		t.Fatalf("read %+v", got)
-	}
-}
-
-func TestReadFiltersByTimeAndLevelAndIsBounded(t *testing.T) {
-	logs, _ := openTestRecords(t, t.TempDir(), Options{})
-	handler := logs.Handler()
-	for i, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelError} {
-		record := slog.NewRecord(testNow.Add(time.Duration(i)*time.Minute), level, level.String(), 0)
-		if err := handler.Handle(t.Context(), record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := logs.Flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := logs.Read(t.Context(), Query{From: testNow, To: testNow.Add(2 * time.Minute), MinLevel: slog.LevelInfo})
-	if err != nil || len(got) != 1 || got[0].Message != "INFO" {
-		t.Fatalf("info and above in the first two minutes: %+v, %v", got, err)
-	}
-	got, err = logs.Read(t.Context(), Query{From: testNow, To: testNow.Add(time.Hour), MinLevel: slog.LevelDebug, Limit: 2})
-	if err != nil || len(got) != 2 || got[0].Message != "DEBUG" {
-		t.Fatalf("the oldest two: %+v, %v", got, err)
-	}
-	if _, err = logs.Read(t.Context(), Query{To: testNow, Limit: 10_001}); !errors.Is(err, tinystore.ErrInvalid) {
-		t.Fatalf("an unbounded read: %v", err)
-	}
-}
-
-func TestRetentionRemovesOldRecords(t *testing.T) {
-	logs, _ := openTestRecords(t, t.TempDir(), Options{Retention: time.Hour})
-	handler := logs.Handler()
-	for _, at := range []time.Time{testNow.Add(-2 * time.Hour), testNow.Add(-time.Minute)} {
-		if err := handler.Handle(t.Context(), slog.NewRecord(at, slog.LevelInfo, "line", 0)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := logs.Flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if err := logs.Maintain(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := readAll(t, logs); len(got) != 1 || logs.Stats().Expired != 1 {
-		t.Fatalf("after retention: %+v, %+v", got, logs.Stats())
-	}
-}
-
-func TestClosingTheStoreWritesWhatIsWaiting(t *testing.T) {
+func TestRecordsSurviveCloseAndReopen(t *testing.T) {
 	dir := t.TempDir()
-	logs, store := openTestRecords(t, dir, Options{})
-	slog.New(logs.Handler()).Info("last words")
-	if err := store.Close(t.Context()); err != nil {
+	s := openTestStore(t, dir, Options{}, tinystore.Options{})
+	sealed, waiting := frontendRecords(maxSegmentRecords), backendRecords(100)
+	s.append(t, sealed...)
+	s.append(t, waiting...)
+	if work := s.maintain(t); work.SealedSegments != 1 {
+		t.Fatalf("a full head of frontend records did not seal: %+v", work)
+	}
+	if err := s.runtime.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, _ := openTestRecords(t, dir, Options{})
-	if got := readAll(t, reopened); len(got) != 1 || got[0].Message != "last words" {
-		t.Fatalf("after close and reopen: %+v", got)
+
+	reopened := openTestStore(t, dir, Options{}, tinystore.Options{})
+	got := reopened.readAll(t, Query{Streams: []string{"frontend"}})
+	sameRecords(t, sortedByTime(sealed), got)
+	sameRecords(t, waiting, reopened.readAll(t, Query{Streams: []string{"backend"}}))
+}
+
+func TestAppendRefusesARecordAndNamesIt(t *testing.T) {
+	s := openRecords(t)
+	good := backendRecords(3)
+	for name, bad := range map[string]Record{
+		"no stream":  {At: testNow, Name: "x"},
+		"no name":    {At: testNow, Stream: "x"},
+		"not json":   {At: testNow, Stream: "x", Name: "x", Attrs: []Field{{"k", "unquoted"}}},
+		"too early":  {At: time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC), Stream: "x", Name: "x"},
+		"too many":   {At: testNow, Stream: "x", Name: "x", Attrs: slices.Repeat([]Field{{"k", "1"}}, maxFields+1)},
+		"too large":  {At: testNow, Stream: "x", Name: "x", Body: new(string(make([]byte, maxBlockInput)))},
+		"wide level": {At: testNow, Stream: "x", Name: "x", Level: new(slog.Level(maxLevel + 1))},
+	} {
+		err := s.Append(t.Context(), good[0], good[1], bad, good[2])
+		var refused *RecordError
+		if !errors.As(err, &refused) || refused.Index != 2 ||
+			(!errors.Is(err, tinystore.ErrInvalid) && !errors.Is(err, tinystore.ErrLimit)) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if got := s.readAll(t, Query{}); len(got) != 0 {
+		t.Fatalf("a refused batch wrote %d records", len(got))
+	}
+}
+
+func TestAClosedStoreRefusesWork(t *testing.T) {
+	s := openRecords(t)
+	if err := s.runtime.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(t.Context(), backendRecords(1)...); !errors.Is(err, tinystore.ErrClosed) {
+		t.Errorf("append after close: %v", err)
+	}
+	if _, err := s.Read(t.Context(), Query{}); !errors.Is(err, tinystore.ErrClosed) {
+		t.Errorf("read after close: %v", err)
 	}
 }

@@ -99,7 +99,7 @@ func (a *app) openEngines(ctx context.Context, console slog.Handler) error {
 		return err
 	}
 
-	a.logger = slog.New(slog.NewMultiHandler(console, a.logs.Handler()))
+	a.logger = slog.New(slog.NewMultiHandler(console, a.logs.Handler("notes")))
 	a.created = a.stats.Counter("notes_created_total")
 	a.requests = a.stats.Counter("requests_total")
 	a.stats.GaugeFunc("notes", func(ctx context.Context) (float64, error) {
@@ -157,8 +157,8 @@ func (a *app) readBack(ctx context.Context, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "notes created: %v\n", results[0].Samples[len(results[0].Samples)-1].Value)
 
-	lines, err := a.logs.Read(ctx, records.Query{From: now.Add(-time.Minute), To: now.Add(time.Minute)})
-	fmt.Fprintf(out, "log lines: %d\n", len(lines))
+	page, err := a.logs.Read(ctx, records.Query{From: now.Add(-time.Minute), To: now.Add(time.Minute)})
+	fmt.Fprintf(out, "log lines: %d\n", len(page.Records))
 	return err
 }
 

@@ -11,9 +11,10 @@ watching.
 engine works: atomic ingestion, label matching, exact range reads and streams,
 exact aggregates over raw samples, bounded maintenance with per-series
 quarantine, and reopen. See [the walkthrough](metrics/README.md) and its
-[runnable example](metrics/example_test.go). The runtime around it — records,
-SQL databases, KV, blobs, jobs, logs and self-metrics — is designed in
-[docs/architecture.md](docs/architecture.md) and not built yet.
+[runnable example](metrics/example_test.go). Around it the store holds the
+application's own SQL databases ([sqldb](sqldb/README.md)), its logs and events
+([records](records/README.md)) and backups; KV, blobs, jobs and self-metrics are
+designed in [docs/architecture.md](docs/architecture.md) and not built yet.
 
 ## Where a sample goes
 

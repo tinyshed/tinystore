@@ -2,78 +2,206 @@ package records
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"time"
+	"math"
+	"slices"
 
 	"github.com/tinyshed/tinystore"
-	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// the most records one Read returns, and how many a zero Limit asks for
-const (
-	maxLimit     = 10_000
-	defaultLimit = 1_000
-)
-
-// Query is records in [From, To) at MinLevel or above, oldest first, at most
-// Limit of them: a zero Limit is 1000, and more than 10000 is refused. A zero
-// MinLevel is slog.LevelInfo, as in slog; debug lines need slog.LevelDebug.
-type Query struct {
-	From, To time.Time
-	MinLevel slog.Level
-	Limit    int
-}
-
-const readRecords = `select at, level, message, attrs from records
-	where at >= ? and at < ? and level >= ?
-	order by at, id limit cast(? as integer)`
-
-func (s *Store) Read(ctx context.Context, query Query) ([]Record, error) {
-	limit, err := checkQuery(query)
+// Read returns one page of the records a query selects, in event-time order:
+// oldest first, or newest first when it asks. A page ends where its limit or
+// its budget ran out, never inside one timestamp; Page.More says so, and
+// Page.Next asks for what follows. Nothing is decoded while the snapshot the
+// page was read from is held.
+func (s *Store) Read(ctx context.Context, query Query) (Page, error) {
+	release, err := s.admit(ctx)
 	if err != nil {
-		return nil, err
+		return Page{}, err
+	}
+	defer release()
+
+	checked, err := s.checkQuery(query)
+	if err != nil || checked.nothing {
+		return Page{Next: query}, err
 	}
 
-	var out []Record
-	err = s.file.View(ctx, func(tx *sql.Tx) error {
-		rows, queryErr := tx.QueryContext(ctx, readRecords, //nolint:rowserrcheck // EachRow checks Err
-			query.From.UnixMilli(), query.To.UnixMilli(), int(query.MinLevel), limit)
-		if queryErr != nil {
-			return fmt.Errorf("records: read: %w", queryErr)
-		}
-		return sqlite.EachRow(rows, "records", func(rows *sql.Rows) error {
-			record, scanErr := scanRecord(rows)
-			out = append(out, record)
-			return scanErr
-		})
-	})
-	return out, err
+	unreserve, err := s.reserve(ctx, checked.reservation)
+	if err != nil {
+		return Page{}, err
+	}
+	defer unreserve()
+
+	rows, err := s.fetchSnapshot(ctx, &checked)
+	if err != nil {
+		return Page{}, err
+	}
+
+	page, err := s.buildPage(ctx, &checked, rows)
+	if err != nil {
+		return Page{}, err
+	}
+	s.countRead(len(rows.sources), rows.bytes)
+	return page, nil
 }
 
-func checkQuery(query Query) (int, error) {
-	if query.Limit < 0 || query.Limit > maxLimit || query.To.Before(query.From) {
-		return 0, fmt.Errorf("%w: records query range or limit", tinystore.ErrInvalid)
+// checkedQuery is a query the engine can run: its range as nanoseconds, both
+// ends included and the first clipped by one retention cutoff, and its
+// conditions resolved
+type checkedQuery struct {
+	asked       Query
+	first, last int64
+	streams     map[int64]bool // nil: every stream
+	levels      int64          // the level bits a block must share, zero for any
+	limit       int
+	budget      Budget
+	nothing     bool // no record can match: an empty range, or none of the streams exists
+}
+
+func (s *Store) checkQuery(query Query) (checkedQuery, error) {
+	q := checkedQuery{asked: query}
+	var err error
+	if q.limit, err = checkLimit(query.Limit); err != nil {
+		return q, err
 	}
-	if query.Limit == 0 {
+	if q.budget, err = s.opts.Budget.narrow(query.Budget); err != nil {
+		return q, err
+	}
+	if err = checkConditions(query); err != nil {
+		return q, err
+	}
+	if q.first, q.last, err = s.queryRange(query); err != nil {
+		return q, err
+	}
+	if query.MinLevel != nil {
+		q.levels = levelsFrom(int64(*query.MinLevel))
+	}
+	q.streams = s.knownStreams(query.Streams)
+	q.nothing = q.first > q.last || (query.Streams != nil && len(q.streams) == 0)
+	return q, nil
+}
+
+func checkLimit(limit int) (int, error) {
+	switch {
+	case limit < 0 || limit > maxLimit:
+		return 0, fmt.Errorf("%w: a limit of %d records, not 1 to %d", tinystore.ErrInvalid, limit, maxLimit)
+	case limit == 0:
 		return defaultLimit, nil
 	}
-	return query.Limit, nil
+	return limit, nil
 }
 
-func scanRecord(rows *sql.Rows) (Record, error) {
-	var record Record
-	var at int64
-	var level int
-	var attrs string
-	if err := rows.Scan(&at, &level, &record.Message, &attrs); err != nil {
-		return record, err
+// checkConditions refuses a value no stored value could equal, which is a
+// mistake more often than a question: an unquoted string is not JSON
+func checkConditions(query Query) error {
+	for _, field := range slices.Concat(query.Attrs, query.Context) {
+		if !json.Valid([]byte(field.Value)) {
+			return fmt.Errorf("%w: the value of %q is not JSON: %.64q", tinystore.ErrInvalid, field.Key, field.Value)
+		}
 	}
-	record.At, record.Level = time.UnixMilli(at), slog.Level(level)
-	if err := json.Unmarshal([]byte(attrs), &record.Attrs); err != nil {
-		return record, fmt.Errorf("%w: records attributes: %w", tinystore.ErrCorrupt, err)
+	if query.MinLevel != nil && (*query.MinLevel < minLevel || *query.MinLevel > maxLevel) {
+		return fmt.Errorf("%w: level %d is past 32 bits", tinystore.ErrInvalid, *query.MinLevel)
 	}
-	return record, nil
+	return nil
+}
+
+// queryRange turns [From, To) into both ends included; a zero From or To
+// leaves that end open, and retention's cutoff moves the first end forward
+func (s *Store) queryRange(query Query) (first, last int64, err error) {
+	if !query.From.IsZero() && !query.To.IsZero() && query.To.Before(query.From) {
+		return 0, 0, fmt.Errorf("%w: the range ends before it starts", tinystore.ErrInvalid)
+	}
+	first, last = math.MinInt64, math.MaxInt64
+	if !query.From.IsZero() {
+		first = unixNanos(query.From)
+	}
+	if !query.To.IsZero() {
+		to := unixNanos(query.To)
+		if to == math.MinInt64 {
+			return 1, 0, nil
+		}
+		last = to - 1
+	}
+	return max(first, s.cutoff()), last, nil
+}
+
+func (s *Store) cutoff() int64 {
+	return unixNanos(s.now().Add(-s.opts.Retention))
+}
+
+// knownStreams resolves names to ids; a name no record ever had matches nothing
+func (s *Store) knownStreams(names []string) map[int64]bool {
+	if names == nil {
+		return nil
+	}
+	ids := map[int64]bool{}
+	for _, name := range names {
+		if id, ok := s.streams.id(name); ok {
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
+// reservation is the fetched bytes, one decoded block and the records a page keeps
+func (q *checkedQuery) reservation() int64 {
+	return int64(q.budget.Bytes) + blockReservation + int64(q.limit)*recordReservation
+}
+
+// matches checks a whole record; a block's columns have already ruled out most
+// rows, so this is the one test every returned record has passed
+func (q *checkedQuery) matches(r *Record) bool {
+	at, asked := r.At.UnixNano(), &q.asked
+	switch {
+	case at < q.first || at > q.last:
+		return false
+	case len(asked.Names) > 0 && !slices.Contains(asked.Names, r.Name):
+		return false
+	case asked.MinLevel != nil && (r.Level == nil || *r.Level < *asked.MinLevel):
+		return false
+	case asked.TraceID != (TraceID{}) && r.TraceID != asked.TraceID:
+		return false
+	}
+	for _, want := range asked.Attrs {
+		if !slices.Contains(r.Attrs, want) {
+			return false
+		}
+	}
+	for _, want := range asked.Context {
+		if !slices.Contains(r.Context, want) {
+			return false
+		}
+	}
+	return true
+}
+
+// filtersRows is a query whose conditions only a record's own values settle
+func (q *checkedQuery) filtersRows() bool {
+	asked := &q.asked
+	return len(asked.Names) > 0 || asked.MinLevel != nil || asked.TraceID != (TraceID{}) ||
+		len(asked.Attrs) > 0 || len(asked.Context) > 0
+}
+
+// expectedBefore is how many of a candidate's records fall on this page's side
+// of bound, were they spread evenly over its span; it only decides when to
+// stop fetching, never what a page returns
+func (q *checkedQuery) expectedBefore(candidate source, bound int64) float64 {
+	low, high := float64(max(candidate.first, q.first)), float64(min(candidate.last, q.last))
+	if q.asked.Newest {
+		low = max(low, float64(bound)+1)
+	} else {
+		high = min(high, float64(bound)-1)
+	}
+	span := float64(candidate.last) - float64(candidate.first) + 1
+	if high < low {
+		return 0
+	}
+	return float64(candidate.count) * min(1, (high-low+1)/span)
+}
+
+func (s *Store) countRead(blocks, bytes int) {
+	s.queries.Add(1)
+	s.readBlocks.Add(unsigned(blocks))
+	s.readBytes.Add(unsigned(bytes))
 }

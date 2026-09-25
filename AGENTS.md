@@ -28,16 +28,17 @@ directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
 `Reserve`), and metrics opens through it, with instruments (`Counter`,
 `Gauge`, `GaugeFunc`) for an application measuring itself. `sqldb` gives the
 application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
-states its contract. `records` keeps the application's `slog` lines in
-`records.db` ([records/README.md](records/README.md)). `Store.Snapshot` copies
+states its contract. `records` keeps logs and events in `records.db`: a
+durable head, segments of event-time blocks written column by column, paged
+reads pruned by time, level, keys and blooms, and a follow cursor
+([records/README.md](records/README.md)). `Store.Snapshot` copies
 every engine's file while it works, and `backup` writes those copies as one zip
 and restores it before `Open`.
 
-`records` is a first version: a row per record with JSON attributes, a time
-index and nothing else — no compression, no full-text search, no measured
-density. [examples/notes](examples/notes/main.go) is a program using all of it.
-The design it is to be rebuilt to is settled in [docs/records.md](docs/records.md);
-its format starts at version one and reads no earlier prototype.
+`records` is built to [docs/records.md](docs/records.md), except the
+per-segment text sample, which the production corpus measures at 0.80 bytes a
+record; its format is version one and reads no earlier prototype.
+[examples/notes](examples/notes/main.go) is a program using all of it.
 
 Designed, not built: `kv`, `blobs`, `jobs` and self-metrics.
 
@@ -58,7 +59,7 @@ Do not describe unbuilt behaviour as though it works.
 | `codec/`             | the block codec and the payload format. Knows samples and bytes, nothing else |
 | `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
 | `sqldb/`             | the application's SQL databases: migrations, typed reads, `Exec…` writes, `Tx` |
-| `records/`           | the application's logs: a `slog.Handler` that never blocks, reads by time     |
+| `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
 | `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
@@ -134,8 +135,9 @@ drops and counts when full, and refuses the records engine's own lines.
 **Records has one logical model for logs and events.** A producer's language
 is not a storage format, and template mining is optional for a text body.
 Shapes and shared contexts are encoding choices with bounded lifetimes, not
-permanent streams for every session id. [docs/records.md](docs/records.md)
-describes the research model; the current public engine still takes `slog`.
+permanent streams for every session id. The engine takes `slog` lines through
+its handler and records through `Append`; [docs/records.md](docs/records.md) is
+the model.
 
 **A record's order is its event time.** A segment stores its records sorted by
 event time, equal times in arrival order; `Append` order is not otherwise
@@ -345,6 +347,22 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
+| a record survives the records format exactly        | `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`      |
+| a changed records byte is refused                   | `TestAChangedOrMissingByteIsRefused`, `TestAChangedHeadRowIsRefused`, fuzzers   |
+| a records decode stays bounded                      | `TestExpandedTextIsBounded`; every copy is charged before it is made            |
+| equal times keep their arrival order                | `TestEqualTimesKeepTheirArrivalOrder`                                           |
+| a read merges segments and the head by time         | `TestReadMergesSegmentsAndTheHeadInEventTimeOrder`                              |
+| an appended record reads before it is sealed        | `TestAppendedRecordsAreReadBeforeTheyAreSealed`                                 |
+| a reader finds each record once while sealing       | `TestReadersSeeEveryRecordOnceWhileSealing`                                     |
+| a failed seal leaves the head as it was             | `TestAFailedSealLeavesTheHeadAsItWas`                                           |
+| a damaged head does not stop the others             | `TestADamagedHeadDoesNotStopTheOthers`                                          |
+| a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
+| a page never splits a timestamp nor loses one       | `TestAPageNeverSplitsATimestamp`, `TestPagesContinueWithoutLosingOrRepeating`   |
+| a budget ends a page rather than failing it         | `TestABudgetEndsAPageEarly`                                                     |
+| blooms and level masks skip blocks                  | `TestBloomsAndLevelMasksSkipBlocks`                                             |
+| retention removes whole segments, clips reads       | `TestRetentionRemovesWholeSegmentsAndClipsReads`                                |
+| records work holds the store's memory               | `TestStoreMemoryBoundsAppendReadSealAndFollow`                                  |
+| a follower is told what retention removed           | `TestFollowCountsWhatRetentionRemovedFirst`                                     |
 | a snapshot does not stop the writer                 | `TestSnapshotCopiesWhileTheWriterWrites`                                        |
 | a backup restores every engine                      | `TestABackupRestoresEveryEngine`                                                |
 | a changed backup is refused and leaves nothing      | `TestAChangedByteIsRefusedAndLeavesNothing`                                     |

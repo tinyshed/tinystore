@@ -62,7 +62,7 @@ func backupOf(t *testing.T) []byte {
 	if _, err := source.app.Exec(t.Context(), `insert into notes (title) values ('kept')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.logs.Handler().Handle(t.Context(), slog.NewRecord(epoch, slog.LevelInfo, "backed up", 0)); err != nil {
+	if err := source.logs.Handler("app").Handle(t.Context(), slog.NewRecord(epoch, slog.LevelInfo, "backed up", 0)); err != nil {
 		t.Fatal(err)
 	}
 	if err := source.logs.Flush(t.Context()); err != nil {
@@ -95,9 +95,9 @@ func TestABackupRestoresEveryEngine(t *testing.T) {
 	if err != nil || title != "kept" {
 		t.Fatalf("sql: %q, %v", title, err)
 	}
-	lines, err := restored.logs.Read(t.Context(), records.Query{From: epoch, To: epoch.Add(time.Second)})
-	if err != nil || len(lines) != 1 || lines[0].Message != "backed up" {
-		t.Fatalf("records: %+v, %v", lines, err)
+	page, err := restored.logs.Read(t.Context(), records.Query{From: epoch, To: epoch.Add(time.Second)})
+	if err != nil || len(page.Records) != 1 || *page.Records[0].Body != "backed up" {
+		t.Fatalf("records: %+v, %v", page.Records, err)
 	}
 }
 

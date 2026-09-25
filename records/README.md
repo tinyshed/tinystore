@@ -1,45 +1,101 @@
 # records
 
-An application's structured logs, in `records.db` inside a `tinystore.Store`,
-written through `log/slog` and read back by time and level.
+An application's logs and events, in `records.db` inside a `tinystore.Store`:
+written through `log/slog` or appended as records, read back by time and by
+what they hold, and followed in the order they were sealed. The design and
+the measurements behind it are [docs/records.md](../docs/records.md).
 
 ```go
 logs, err := records.Open(ctx, store, records.Options{Retention: 14 * 24 * time.Hour})
 
-logger := slog.New(slog.NewMultiHandler(console, logs.Handler()))
-logger.Warn("slow request", "route", "/notes", "ms", 1200)
+logger := slog.New(slog.NewMultiHandler(console, logs.Handler("notes")))
+logger.With("request_id", id).Warn("slow request", "route", "/notes", "ms", 1200)
 
-lines, err := logs.Read(ctx, records.Query{
-	From:     time.Now().Add(-time.Hour),
-	To:       time.Now(),
-	MinLevel: slog.LevelWarn,
-	Limit:    100,
+err = logs.Append(ctx, records.Record{
+	At: time.Now(), Stream: "web", Name: "click",
+	Context: []records.Field{records.String("session", sid)},
+	Attrs:   []records.Field{records.String("element", "buy"), records.Int("x", 812)},
 })
+
+page, err := logs.Read(ctx, records.Query{
+	From: time.Now().Add(-time.Hour), Streams: []string{"notes"},
+	MinLevel: new(slog.LevelWarn), Newest: true, Limit: 100,
+})
+
+batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor the caller keeps
 ```
+
+## The record
+
+- A record has a time, a stream the application names, an event name, an
+  optional level and body, optional trace and span ids, a context (who
+  produced it) and attributes (what happened). A nil `Level` or `Body` is
+  absent, and an empty body is not an absent one.
+- A value is JSON and keeps its spelling: `1.2300`, `-0`, a big integer and a
+  nested object come back byte for byte, and so do the order of fields and
+  repeated keys. `String`, `Int`, `Float`, `Bool` and `JSON` build fields.
+- Times are nanoseconds since 1970 in the file and come back in UTC; levels
+  are slog's, as 32-bit integers.
 
 ## Contracts
 
-- The handler never blocks its caller. Records wait in a buffer
-  (`Options.Buffer`, 1024) and are written in one transaction every
+- `Append` writes every record or none, in one transaction, and a `Read` sees
+  them as soon as it returns. A record the format cannot keep is refused as a
+  `*RecordError` naming it: no stream or name, a value that is not JSON, a
+  time past what nanoseconds hold, more than 128 fields, more than 256 KiB.
+- `Handler(stream)` never blocks its caller. Lines wait in a buffer
+  (`Options.Buffer`, 1024) and are written as one `Append` every
   `Options.Flush` (a second), on `Close`, or on `Flush(ctx)` in a Manual store;
-  when the buffer is full a record is dropped and counted in `Stats`, and so is
-  a batch whose write failed. A process that dies loses what was waiting.
-- Lines of the records engine itself (`engine=records`, which the store's
-  logger adds) are refused, or writing a log would log again.
-- Attributes keep their keys, a group's as `group.key`; an error is stored as
-  its message, and values read back as `encoding/json` decodes them.
-- `Read` returns records in `[From, To)` at `MinLevel` or above, oldest first,
-  at most `Limit` (1000 when zero; more than 10000 is `tinystore.ErrInvalid`).
-  A zero `MinLevel` is `slog.LevelInfo`, as in `slog`.
-- Records older than `Options.Retention` (fourteen days) by the store's clock
-  are deleted every hour, or on `Maintain(ctx)` in a Manual store.
-- Records are indexed by time only; an index by attribute waits for a query
-  that needs one.
+  a line that does not fit the buffer or the format, or a batch whose write
+  failed, is dropped and counted in `Stats`. Lines of the records engine itself
+  are refused. A line is a record named `log`: its message is the body, the
+  attributes of `logger.With` its context, the call's its attributes, a
+  group's keys written `group.key`, values spelled as `slog.JSONHandler`
+  spells them.
+- A record's order is its time. A segment stores one stream's records in time
+  order, equal times in the order they arrived; nothing else of the arrival
+  order is kept. A record more than a minute behind the median of its batch
+  goes to its stream's late head, so that it does not stretch the blocks of
+  its neighbours.
+- Records wait in a durable head until their head holds a segment's worth
+  (16,384 records or 4 MiB) or its oldest row is `Options.SealAge` old (an
+  hour). A longer `SealAge` trades how soon `Follow` sees a sparse stream's
+  records for fewer, larger segments: on the production corpus 22.95 bytes a
+  record at an hour, 21.33 at six, 21.00 at a day, 20.90 in full segments. `Maintain`, every minute unless the store is Manual, seals them: the
+  segment, its blocks, filters and keys are written and the head rows deleted
+  in one transaction, so a reader finds each record once. A head whose rows no
+  longer read is logged and left; the others seal.
+- `Read` returns one page, oldest first or newest first, from one snapshot,
+  decoded after the snapshot is released. A page never splits a timestamp; it
+  ends early when its `Limit` (1000, at most 10000) or its `Budget` (the
+  blocks, bytes and records it may fetch) runs out, and says so with `More`;
+  `Next` is the query for the rest. A plain range stops fetching once the
+  blocks taken hold about a page, so paging costs what the page holds. More
+  records at one time than a page holds is `tinystore.ErrLimit`.
+- A query's conditions all hold: one of `Streams`, one of `Names`, a level of
+  `MinLevel` or above (a record without a level does not match), the
+  `TraceID`, and each of `Attrs` and `Context` by key and exact JSON spelling.
+  The time index and level masks pick candidate blocks; a segment's keys, a
+  bloom over each block's trace ids and a bloom over each id-like attribute
+  (short strings nearly all distinct) skip the blocks that cannot match.
+- `Follow` reads sealed segments in the order they were sealed, each in time
+  order, from a `(segment, row)` cursor the caller keeps; `Batch.Expired`
+  counts the segments retention removed before the cursor reached them. A
+  record reaches `Follow` only once it is sealed.
+- Retention removes whole segments whose newest record is older than
+  `Options.Retention` (fourteen days) by the store's clock, and head rows
+  likewise; a read never returns an older record, even from a segment only
+  partly past it.
+- Every operation reserves its weight in the store's memory: an append its
+  input, a seal 24 MiB for a segment in flight, a read its budget's bytes, a
+  decoded block and a page of records.
+- A changed byte is refused with `tinystore.ErrCorrupt` naming the invariant
+  it broke: every row carries a CRC-32 and every count and length is bounded
+  before anything is allocated.
 
-## What this version is not
+## What it does not do yet
 
-A first version, sized for a program's own logs rather than a log platform. A
-record is one row with its attributes as JSON text: nothing is compressed,
-repeated messages and keys are stored again each time, there is no full-text
-search, and bytes per record have not been measured. Those wait for a research
-round on a real corpus; see `docs/architecture.md`.
+No text templates, no full-text search, no merging of a stream's small
+segments, no adapters beyond `slog`. Text compresses per block, without the
+per-segment sample the research measured; see docs/records.md for what that
+costs.
