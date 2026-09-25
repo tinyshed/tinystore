@@ -125,6 +125,35 @@ func TestRadixWordsAndRiceCodes(t *testing.T) {
 	}
 }
 
+// the rice parameter is the cheapest of all 64, the example in its comment
+// among them, and its cost is what writing the code takes
+func TestTheRiceParameterIsTheCheapestOfAll(t *testing.T) {
+	example := slices.Concat(make([]int64, 14), []int64{1000000, 1000000})
+	plan := intPlan{divisor: 1}
+	if k, cost := riceCost(example, &plan, len(example)); k != 0 || cost != 206 {
+		t.Errorf("the example: k %d at %d bits, want 0 at 206", k, cost)
+	}
+	random := rand.New(rand.NewPCG(5, 6))
+	for round := range 200 {
+		values := randomValues(random, 1+random.IntN(300), int64(1)<<random.IntN(63))
+		for i := range values {
+			if random.IntN(8) == 0 {
+				values[i] = random.Int64()
+			}
+		}
+		k, cost := riceCost(values, &intPlan{divisor: 1}, len(values))
+		for candidate := range uint(64) {
+			total := uint64(0)
+			for _, value := range values {
+				total += riceBits(uint64(value), candidate)
+			}
+			if total < cost || (candidate == k && total != cost) {
+				t.Fatalf("round %d: k %d costs %d, but k %d costs %d", round, k, cost, candidate, total)
+			}
+		}
+	}
+}
+
 func TestACorruptIntegerColumnIsRefused(t *testing.T) {
 	e, d := testCoders(t)
 	encoded := e.appendInts(nil, randomValues(rand.New(rand.NewPCG(3, 4)), 300, 1000))

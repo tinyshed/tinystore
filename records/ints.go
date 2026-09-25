@@ -211,34 +211,63 @@ func radixCost(radix uint64, m int) (group, width uint, cost uint64) {
 	}
 }
 
-// riceCost measures four k around log2 of the mean, where the best one lies
+// riceCost is the cheapest rice parameter of all 64 and its bits, exactly and
+// in one pass: a value of bit length L costs 1+k bits when k is at least L,
+// (v>>k)+1+k while L is at most k+5, and the escape beyond. The mean is a
+// poor guide, since a few wide gaps raise it for every value:
+//
+//	14 zeros and 1000000 twice   k 0: 14×1 + 2×96 = 206 bits
+//	                             k 16, near log2 of the mean: 14×17 + 2×(15+17) = 302 bits
 func riceCost(values []int64, plan *intPlan, m int) (k uint, cost uint64) {
-	sum := 0.0
+	var residuals riceHistogram
 	for i := range m {
-		sum += float64(plan.residual(values, i))
+		residuals.add(plan.residual(values, i))
 	}
-	center := 0
-	if mean := sum / float64(m); mean >= 1 {
-		center = int(math.Log2(mean))
-	}
-	var costs [4]uint64
-	for i := range m {
-		value := plan.residual(values, i)
-		for j := range costs {
-			costs[j] += riceBits(value, riceParameter(center, j))
+	cost = math.MaxUint64
+	// a k past the longest residual only adds bits
+	for candidate := range min(residuals.longest, 63) + 1 {
+		if total := residuals.cost(candidate); total < cost {
+			k, cost = uint(candidate), total
 		}
 	}
-	best := 0
-	for j := range costs {
-		if costs[j] < costs[best] {
-			best = j
-		}
-	}
-	return riceParameter(center, best), costs[best]
+	return k, cost
 }
 
-func riceParameter(center, offset int) uint {
-	return uint(min(63, max(0, center-1+offset)))
+// a quotient below riceEscape, 32, is at most five bits
+const riceQuotientBits = 5
+
+// riceHistogram counts residuals by bit length and sums them shifted to one to
+// five bits, which prices every k exactly
+type riceHistogram struct {
+	counts  [65]uint64
+	shifted [65][riceQuotientBits + 1]uint64
+	longest int
+}
+
+func (h *riceHistogram) add(value uint64) {
+	length := bits.Len64(value)
+	h.counts[length]++
+	h.longest = max(h.longest, length)
+	for above := 1; above <= riceQuotientBits && above <= length; above++ {
+		h.shifted[length][above] += value >> (length - above)
+	}
+}
+
+func (h *riceHistogram) cost(k int) uint64 {
+	total := uint64(0)
+	for length := range h.longest + 1 {
+		count := h.counts[length]
+		switch {
+		case count == 0:
+		case length <= k:
+			total += count * unsigned(1+k)
+		case length <= k+riceQuotientBits:
+			total += h.shifted[length][length-k] + count*unsigned(1+k)
+		default:
+			total += count * (riceEscape + 64)
+		}
+	}
+	return total
 }
 
 // tryFSE runs the entropy coder only when the histogram says it can win
