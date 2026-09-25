@@ -36,6 +36,8 @@ and restores it before `Open`.
 `records` is a first version: a row per record with JSON attributes, a time
 index and nothing else — no compression, no full-text search, no measured
 density. [examples/notes](examples/notes/main.go) is a program using all of it.
+The design it is to be rebuilt to is settled in [docs/records.md](docs/records.md);
+its format starts at version one and reads no earlier prototype.
 
 Designed, not built: `kv`, `blobs`, `jobs` and self-metrics.
 
@@ -128,6 +130,23 @@ default.
 **Logs never block and never loop.** Engines log through `Store.Logger(name)`
 into the application's `*slog.Logger`, never per sample. The records handler
 drops and counts when full, and refuses the records engine's own lines.
+
+**Records has one logical model for logs and events.** A producer's language
+is not a storage format, and template mining is optional for a text body.
+Shapes and shared contexts are encoding choices with bounded lifetimes, not
+permanent streams for every session id. [docs/records.md](docs/records.md)
+describes the research model; the current public engine still takes `slog`.
+
+**A record's order is its event time.** A segment stores its records sorted by
+event time, equal times in arrival order; `Append` order is not otherwise
+observable. A query merges segments by time; a consumer follows segments in
+publication order through a `(segment, row)` cursor, and a late record appears
+in a later segment.
+
+**What a query may skip is its own row.** SQL reads a blob column whole, its
+overflow chain included, so a byte range inside a larger blob is not a
+selective read. A row larger than a page leaves its remainder on a leaf page:
+choose page size with row size, and measure the file, not the payload.
 
 **An error names what failed.** Engines wrap the root's shared sentinels, so
 `errors.Is` means the same in every engine; an error about one series carries

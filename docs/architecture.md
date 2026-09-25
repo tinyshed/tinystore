@@ -209,9 +209,76 @@ time only, and an index by attribute waits for a query that needs one.
 This is a first version and says so. A record is a row, its attributes JSON
 text; nothing is compressed, messages and keys are not shared between rows,
 there is no full-text search, and no bytes-per-record figure has been measured.
-What a log store should cost, and whether dictionaries, compressed blocks of
-records or FTS5 earn their place, is a research round with a real corpus and
-has not been run.
+The first density round is `docs/reports/records-layout-2026-09-24.md`, on a
+synthetic corpus.
+
+### Where records is going (designed, not built)
+
+The common log/event model and its bounded compression prototype are described
+in [records.md](records.md). The 25 September round measures shapes, shared
+contexts and exact field reconstruction; none is yet part of `records/`.
+
+Records will also take logs from programs that are not Go and not embedded,
+through a server that is a module of its own: OTLP, JSON and plain text never
+enter the root module's dependencies. The design follows from that caller.
+
+**One record model, whatever came in.** Logs and events share event time,
+observed time, stream and event name, optional severity and body, attributes,
+producer context, and trace and span ids. Adapters map `slog`, structured
+events and external protocols onto it. A full OpenTelemetry mapping remains
+a design requirement, not something the current prototype implements.
+
+**A stream names a source class, not every combination of metadata.** Producer
+and session metadata can share context snapshots. Unique session and trace ids
+must not create permanent streams, writers or buffers. Physical grouping,
+dictionary scope and query indexes are separate decisions with separate
+density, memory and selective-read gates; a mixed-source compression block
+must not silently become a promise about indexed source queries.
+
+**Each line is parsed on its own; a stream may only hint.** A line starting
+with `{` is JSON, `key=value` pairs are logfmt, anything else is text whose
+whole line is the body. A line that fails its hinted format is kept as text,
+never dropped. Nested objects flatten to dotted keys (`http.status`); arrays
+stay one JSON value. Time and level come from known keys (`time`, `ts`,
+`@timestamp`, `level`, `severity`) or the start of a text line, else the
+observed time is used.
+
+**Lines become records before they are parsed.** A multi-line record, a Java
+stack trace, is joined at ingest by a continuation rule, before any format is
+detected.
+
+**Logs and events share a record; compression follows its structure.** Event
+names and streams are common columns. A shape records the keys and optional
+fields present, without repeating their names or redundant presence bits on
+each occurrence. Values choose their representations by complete encoded
+size. A body's template is an optional representation, not a prerequisite for
+storing it. A field may be reconstructed from another only with exact
+exceptions; context dictionaries have bounded ownership and lifetime.
+
+**Text is kept byte for byte; JSON is kept by value.** A text body comes back
+exactly, or its original is stored when the template cannot reproduce it.
+JSON keeps its key order, integers stay integers and fractions stay fractions,
+a number no int64 or float64 holds exactly is kept as text, and an absent key,
+`null` and `""` are three values. Whitespace and escaping are not kept: the
+meaning is the same, and a byte-exact JSON line costs its whole length. A
+stream that must keep the original bytes (an audit) asks for it and pays.
+
+**A late record is not an error, and order is event time.** Records arrive out
+of order and with equal times. Unlike a counter, a record has no increase that
+overlapping blocks would break, so a late one goes into a later segment and
+overlapping segments merge at read; the metrics `ErrTooOld` rule does not
+apply. A segment stores its records sorted by event time, equal times in
+arrival order; arrival order is not otherwise kept.
+
+**Search is small filters on blocks; FTS5 is for the application's data.** A
+block carries a level mask and a token bloom filter; a match decodes the
+candidate blocks and filters exactly. In the first round a bloom filter pruned
+rare terms as well as an FTS5 index over blocks, at a sixth of its size.
+FTS5, with its ranking and phrases, stays for `sqldb` and the application's
+own text. Every block is its own row, because SQL reads a blob whole: the
+[v2 round](reports/record-v2-2026-09-25.md) prunes time and level through a
+covering index, finds a session through segment dictionaries and a trace
+through a per-block bloom, and decodes one column before rebuilding rows.
 
 **sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the
