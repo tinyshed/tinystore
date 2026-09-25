@@ -58,6 +58,25 @@ registry would save a session's context in every later segment it appears in,
 at the cost of references across segments and a reclamation rule; the
 per-segment dictionary cost 0.54 bytes per frontend record.
 
+**A head collects, a segment seals.** The head keeps one row per stream and
+flush, rows under zstd; a v2 segment of two records costs more than the rows. A
+stream seals at 16,384 records, 4 MiB, or when its oldest waiting record is an
+hour old: on production logs sealing after an hour costs 9 % of the file and
+after a minute triples it ([report](reports/record-sealing-2026-09-25.md)).
+Records more than a minute behind their batch's median go to a late head of the
+same stream, so that one late record does not stretch a block over minutes;
+without it one record in a hundred, ten minutes late, made one-second reads
+read thirteen times as many blocks.
+
+**Id-like attributes are found through blooms.** A block writes a bloom filter,
+10 bits a distinct value, for each attribute column of short JSON strings of
+which nine in ten are distinct, into `block_filters (key, block, bloom)`.
+Numbers get none: a range asks for them.
+
+**A segment in flight reserves 24 MiB.** Encoding allocates three to five
+times a segment's input and decoding four to six; the input is limited to
+4 MiB.
+
 **A column is written the cheapest exact way, chosen by computed size.** An
 integer column picks a transform (none, delta, linear trend), a base and common
 divisor, and a packer (bit width, radix words, Rice, FSE for small alphabets)
@@ -74,8 +93,8 @@ them in its row, and its blocks' text compresses against the sample.
 17.75 bytes per record as `slog` records, 15.84 of them a distinct random
 request id per record; text from third-party software costs about what zstd
 does over the same lines. Text templates with typed timestamps, a continuation
-rule for multi-line records, adapters that map time, level and message, and
-blooms for id-like attributes are the open work for such logs.
+rule for multi-line records and adapters that map time, level and message are
+the open work for such logs.
 
 ## Logical input
 

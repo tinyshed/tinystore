@@ -145,4 +145,5 @@ Single runs, warm cache.
   model splits it.
 - Adapters for pino, logfmt, glog and log4j lines, mapping time, level and
   message instead of keeping them inside the body or attributes.
-- Per-block blooms for id-like attribute columns.
+- Per-block blooms for id-like attribute columns; [the sealing round](record-sealing-2026-09-25.md)
+  adds them and measures the lookup.
