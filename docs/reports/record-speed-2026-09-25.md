@@ -5,6 +5,9 @@ implementation: about 965 records/s on one Go CPU. Decoding reconstructs about
 368,000 records/s. This is an in-memory codec measurement, not SQLite ingest
 throughput, durable flush speed, a sustained service rate or a latency percentile.
 
+Follow-up: [the v2 round](record-v2-2026-09-25.md) profiles this encoder and
+replaces it with one that chooses representations by computed size.
+
 ## Environment and method
 
 Spike sources of commit `1bedb5d`, measured on the identical tree before it was

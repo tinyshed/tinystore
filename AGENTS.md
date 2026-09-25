@@ -135,6 +135,17 @@ Shapes and shared contexts are encoding choices with bounded lifetimes, not
 permanent streams for every session id. [docs/records.md](docs/records.md)
 describes the research model; the current public engine still takes `slog`.
 
+**A record's order is its event time.** A segment stores its records sorted by
+event time, equal times in arrival order; `Append` order is not otherwise
+observable. A query merges segments by time; a consumer follows segments in
+publication order through a `(segment, row)` cursor, and a late record appears
+in a later segment.
+
+**What a query may skip is its own row.** SQL reads a blob column whole, its
+overflow chain included, so a byte range inside a larger blob is not a
+selective read. A row larger than a page leaves its remainder on a leaf page:
+choose page size with row size, and measure the file, not the payload.
+
 **An error names what failed.** Engines wrap the root's shared sentinels, so
 `errors.Is` means the same in every engine; an error about one series carries
 its labels.

@@ -14,6 +14,10 @@ The [subsequent speed probe](record-speed-2026-09-25.md) measures the current
 encoder at about 965 records/s on one Go CPU, with high cumulative allocation.
 The density result is not a claim of practical ingestion performance.
 
+Follow-up: [the v2 round](record-v2-2026-09-25.md) shows this file was at the
+fixture's arrival-order floor, stores segments in event-time order instead, and
+reaches 7.8520 bytes per record at one million records with searchable blocks.
+
 ## Environment, fixed input and verification
 
 Spike sources of commit `1bedb5d`, measured on the identical tree before it was

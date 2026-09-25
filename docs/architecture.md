@@ -263,18 +263,22 @@ a number no int64 or float64 holds exactly is kept as text, and an absent key,
 meaning is the same, and a byte-exact JSON line costs its whole length. A
 stream that must keep the original bytes (an audit) asks for it and pays.
 
-**A late record is not an error.** Records arrive out of order and with equal
-times. Unlike a counter, a record has no increase that overlapping blocks
-would break, so a late one goes into a new block and overlapping blocks merge
-at read; the metrics `ErrTooOld` rule does not apply. Identity and order are
-defined apart from event time.
+**A late record is not an error, and order is event time.** Records arrive out
+of order and with equal times. Unlike a counter, a record has no increase that
+overlapping blocks would break, so a late one goes into a later segment and
+overlapping segments merge at read; the metrics `ErrTooOld` rule does not
+apply. A segment stores its records sorted by event time, equal times in
+arrival order; arrival order is not otherwise kept.
 
 **Search is small filters on blocks; FTS5 is for the application's data.** A
 block carries a level mask and a token bloom filter; a match decodes the
 candidate blocks and filters exactly. In the first round a bloom filter pruned
 rare terms as well as an FTS5 index over blocks, at a sixth of its size.
 FTS5, with its ranking and phrases, stays for `sqldb` and the application's
-own text.
+own text. Every block is its own row, because SQL reads a blob whole: the
+[v2 round](reports/record-v2-2026-09-25.md) prunes time and level through a
+covering index, finds a session through segment dictionaries and a trace
+through a per-block bloom, and decodes one column before rebuilding rows.
 
 **sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the

@@ -8,6 +8,65 @@ The [reconstruction follow-up](reports/record-reconstruction-2026-09-25.md)
 meets a fixed frontend density target with optional deeper candidates; it also
 records workloads that remain much larger.
 
+The [v2 round](reports/record-v2-2026-09-25.md) settles order, context scope and
+the SQLite layout, and replaces the exhaustive encoder; `spike/record_v2_*` is
+its prototype. [Order and layout](#order-and-layout) states those decisions; the
+sections after it describe the first prototype, whose candidate families v2
+keeps only where a sample of rows says they pay.
+
+## Order and layout
+
+**A record's order is its event time.** A segment stores one stream's records
+sorted by event time; records with equal times keep their arrival order.
+`Append` order between different times is not observable: concurrent producers
+make it noise, and on the frontend fixture keeping it cost 1.0 byte per record.
+A query returns records in event-time order, merging the segments that overlap
+its range. A consumer that follows the store reads segments in publication
+order, each in event-time order, through a `(segment, row)` cursor. A record
+that arrives after its segment was sealed appears in a later segment, so
+storage holds no global event-time order; query results do. The metrics
+watermark and `ErrTooOld` do not apply. An ingest sequence stored beside time
+order would restore arrival order at the cost of most of the byte saved.
+
+```text
+arrival   .300 buy    .100 menu   .200 save
+stored    .100 menu   .200 save   .300 buy      time gaps +100 +100, not −200 +100
+```
+
+**A segment's shared part and each block are separate rows.** SQLite reads a
+blob column whole, overflow chain included, so a byte range inside a larger
+blob is not a selective read. The segment row holds the stream, event names,
+record shapes and the context dictionary; a block row holds at most 1024
+records as a column directory, columns and a CRC-32, with its time range and
+level mask in a covering index; trace ids get a bloom filter row per block.
+Nothing is compressed across blocks.
+
+```text
+segments  id | stream | first_at | last_at | count | body: names, shapes, contexts
+blocks    id | segment | first_at | last_at | count | levels | body: columns
+          index (first_at, last_at, levels)
+block_traces  block | bloom, 10 bits a distinct trace id
+```
+
+**Pages are sized for rows larger than a page.** SQLite keeps a large row's
+remainder, up to 4061 bytes of a 4 KiB page, on a leaf page; with 7 KB blocks
+a tenth of the table was empty. `records.db` uses 1 KiB pages, which bound the
+remainder to 989 bytes.
+
+**Contexts stay per segment until a corpus needs more.** A store-level
+registry would save a session's context in every later segment it appears in,
+at the cost of references across segments and a reclamation rule; the
+per-segment dictionary cost 0.54 bytes per frontend record.
+
+**A column is written the cheapest exact way, chosen by computed size.** An
+integer column picks a transform (none, delta, linear trend), a base and common
+divisor, and a packer (bit width, radix words, Rice, FSE for small alphabets)
+by counting bits, not by compressing candidates; only text blobs go through
+zstd, once. A column may be a recipe (`prefix + earlier column + suffix`) or an
+affine function of an earlier column with exact exceptions, tried only when the
+first 8 to 16 rows agree and only against a column that is not itself
+predicted.
+
 ## Logical input
 
 A record has event time, stream, event name, optional level and body, optional
@@ -74,9 +133,9 @@ the encoder does not also write nulls or a redundant bitmap per attribute.
 Changing a field's value type is allowed: a column carries its own formats.
 
 Time, stream and name have common columns. Other columns contain only the
-values actually present. Arrival order is a shape-ID sequence, separate from
-event time; duplicate and decreasing timestamps are preserved. No metrics
-watermark or `ErrTooOld` rule is inherited.
+values actually present. In the first prototype arrival order was a shape-ID
+sequence, separate from event time, with duplicate and decreasing timestamps
+preserved; v2 stores event-time order instead, see [Order and layout](#order-and-layout).
 
 Each block compares four layouts: whole contexts versus context fields, and
 columns shared by field key versus scoped to stream, name and shape. The
