@@ -214,20 +214,26 @@ synthetic corpus.
 
 ### Where records is going (designed, not built)
 
+The common log/event model and its bounded compression prototype are described
+in [records.md](records.md). The 25 September round measures shapes, shared
+contexts and exact field reconstruction; none is yet part of `records/`.
+
 Records will also take logs from programs that are not Go and not embedded,
 through a server that is a module of its own: OTLP, JSON and plain text never
 enter the root module's dependencies. The design follows from that caller.
 
-**One record model, whatever came in.** A record is the OpenTelemetry log
-model: event time and observed time, severity as number and text, a body that
-is a string or a value, attributes, a resource, a trace and span id. `slog`
-maps onto it without loss, and so does every input below.
+**One record model, whatever came in.** Logs and events share event time,
+observed time, stream and event name, optional severity and body, attributes,
+producer context, and trace and span ids. Adapters map `slog`, structured
+events and external protocols onto it. A full OpenTelemetry mapping remains
+a design requirement, not something the current prototype implements.
 
-**A stream is what a series is in metrics.** Resource attributes
-(`service.name`, host) are a label set that rarely changes; records are packed
-into blocks per stream, found through the same kind of registry and postings.
-A block of one service compresses better, and a query for one service decodes
-no other.
+**A stream names a source class, not every combination of metadata.** Producer
+and session metadata can share context snapshots. Unique session and trace ids
+must not create permanent streams, writers or buffers. Physical grouping,
+dictionary scope and query indexes are separate decisions with separate
+density, memory and selective-read gates; a mixed-source compression block
+must not silently become a promise about indexed source queries.
 
 **Each line is parsed on its own; a stream may only hint.** A line starting
 with `{` is JSON, `key=value` pairs are logfmt, anything else is text whose
@@ -241,12 +247,13 @@ observed time is used.
 stack trace, is joined at ingest by a continuation rule, before any format is
 detected.
 
-**A body is split into a template and its variables.** Drain-style template
-mining runs on every string body, JSON `msg` included:
-`service api started in 132ms → service <*> started in <*>ms + [api, 132]`.
-For structured input the template is the message and its set of keys, exact
-and free. Blocks store columns: time as deltas, level, template id, one column
-per variable and attribute key with a presence bitmap, then zstd.
+**Logs and events share a record; compression follows its structure.** Event
+names and streams are common columns. A shape records the keys and optional
+fields present, without repeating their names or redundant presence bits on
+each occurrence. Values choose their representations by complete encoded
+size. A body's template is an optional representation, not a prerequisite for
+storing it. A field may be reconstructed from another only with exact
+exceptions; context dictionaries have bounded ownership and lifetime.
 
 **Text is kept byte for byte; JSON is kept by value.** A text body comes back
 exactly, or its original is stored when the template cannot reproduce it.

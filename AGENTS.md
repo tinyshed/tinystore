@@ -129,6 +129,12 @@ default.
 into the application's `*slog.Logger`, never per sample. The records handler
 drops and counts when full, and refuses the records engine's own lines.
 
+**Records has one logical model for logs and events.** A producer's language
+is not a storage format, and template mining is optional for a text body.
+Shapes and shared contexts are encoding choices with bounded lifetimes, not
+permanent streams for every session id. [docs/records.md](docs/records.md)
+describes the research model; the current public engine still takes `slog`.
+
 **An error names what failed.** Engines wrap the root's shared sentinels, so
 `errors.Is` means the same in every engine; an error about one series carries
 its labels.
