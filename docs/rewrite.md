@@ -253,6 +253,12 @@ The editing rules in `AGENTS.md` are the law; this is how they look in code.
      `internal/sqlite` in `docs/architecture.md`.
    - Done: `records`: the slog handler, hourly retention by age and bounded
      reads by time and level.
+   - Done: `records` rebuilt to `docs/records.md`, written in this file's style
+     from the start rather than moved: the spike's code is test code no engine
+     may copy, so its fixtures became golden rows and its reports' numbers the
+     engine's gates, measured by `bench/records`
+     (`reports/records-engine-2026-09-25.md`). `internal/sqlite.Open` takes a
+     `Config`, so an engine chooses its file's page size when it is created.
    - Done: snapshots and backup. `internal/sqlite.File.Snapshot` runs
      `VACUUM INTO` on a connection opened read-only at the file; the store
      copies every engine into `.snapshot-*` inside its directory, and `backup`

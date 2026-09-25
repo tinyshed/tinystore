@@ -140,11 +140,11 @@ In: TinyStore logs through the application's `*slog.Logger`
 Nothing is logged per sample or per query on a hot path, and attributes are not
 built unless the level is enabled.
 
-Out: the records engine provides `Handler() slog.Handler`, so an application
-sends its own logs to both places with the standard library:
+Out: the records engine provides `Handler(stream) slog.Handler`, so an
+application sends its own logs to both places with the standard library:
 
 ```go
-logger := slog.New(slog.NewMultiHandler(console, events.Handler()))
+logger := slog.New(slog.NewMultiHandler(console, events.Handler("notes")))
 ```
 
 The handler never blocks its caller: a bounded queue, flushed by background
@@ -200,33 +200,32 @@ counts. A new label set beyond `MaxSeries` is refused with `ErrLimit` and
 logged once. Histograms wait: bucketed approximations are not the exact answer
 this engine promises.
 
-**records** (built; contract in `records/README.md`). Structured records in
-`records.db`: time, level, message and attributes, appended through the slog
-handler and read by time range and level, at most 10000 at a time. Retention
-is by age, fourteen days by default, checked hourly; records are indexed by
-time only, and an index by attribute waits for a query that needs one.
+**records** (built; contract in `records/README.md`, design in
+[records.md](records.md)). Logs and events in `records.db`, one model: a time,
+a stream the application names, an event name, an optional level and body,
+trace and span ids, a context and attributes, every value kept as its JSON
+spelling. The slog handler and `Append` write a durable head; maintenance
+seals a head into a segment row and rows of up to 1024 records in event-time
+order, each column written the cheapest exact way by computed size. `Read`
+pages in event-time order from one snapshot, pruned by a covering time index,
+level masks, the keys each segment holds and blooms over trace ids and id-like
+attributes; `Follow` reads sealed segments through a `(segment, row)` cursor.
+Retention removes whole segments, fourteen days by default. On the research
+corpora it keeps 7.89 bytes a frontend record and 20.90 a production log line;
+[the engine report](reports/records-engine-2026-09-25.md) has the rest.
 
-This is a first version and says so. A record is a row, its attributes JSON
-text; nothing is compressed, messages and keys are not shared between rows,
-there is no full-text search, and no bytes-per-record figure has been measured.
-The first density round is `docs/reports/records-layout-2026-09-24.md`, on a
-synthetic corpus.
+```go
+logger := slog.New(logs.Handler("notes"))
+err = logs.Append(ctx, records.Record{At: t, Stream: "web", Name: "click", Attrs: attrs})
+page, err := logs.Read(ctx, records.Query{From: from, Attrs: []records.Field{records.String("requestId", id)}})
+batch, err := logs.Follow(ctx, cursor, 1000)
+```
 
 ### Where records is going (designed, not built)
-
-The common log/event model and its bounded compression prototype are described
-in [records.md](records.md). The 25 September round measures shapes, shared
-contexts and exact field reconstruction; none is yet part of `records/`.
 
 Records will also take logs from programs that are not Go and not embedded,
 through a server that is a module of its own: OTLP, JSON and plain text never
 enter the root module's dependencies. The design follows from that caller.
-
-**One record model, whatever came in.** Logs and events share event time,
-observed time, stream and event name, optional severity and body, attributes,
-producer context, and trace and span ids. Adapters map `slog`, structured
-events and external protocols onto it. A full OpenTelemetry mapping remains
-a design requirement, not something the current prototype implements.
 
 **A stream names a source class, not every combination of metadata.** Producer
 and session metadata can share context snapshots. Unique session and trace ids
@@ -241,44 +240,25 @@ whole line is the body. A line that fails its hinted format is kept as text,
 never dropped. Nested objects flatten to dotted keys (`http.status`); arrays
 stay one JSON value. Time and level come from known keys (`time`, `ts`,
 `@timestamp`, `level`, `severity`) or the start of a text line, else the
-observed time is used.
+observed time is used. A full OpenTelemetry mapping remains a design
+requirement.
 
 **Lines become records before they are parsed.** A multi-line record, a Java
 stack trace, is joined at ingest by a continuation rule, before any format is
 detected.
 
-**Logs and events share a record; compression follows its structure.** Event
-names and streams are common columns. A shape records the keys and optional
-fields present, without repeating their names or redundant presence bits on
-each occurrence. Values choose their representations by complete encoded
-size. A body's template is an optional representation, not a prerequisite for
-storing it. A field may be reconstructed from another only with exact
-exceptions; context dictionaries have bounded ownership and lifetime.
-
 **Text is kept byte for byte; JSON is kept by value.** A text body comes back
-exactly, or its original is stored when the template cannot reproduce it.
-JSON keeps its key order, integers stay integers and fractions stay fractions,
-a number no int64 or float64 holds exactly is kept as text, and an absent key,
-`null` and `""` are three values. Whitespace and escaping are not kept: the
-meaning is the same, and a byte-exact JSON line costs its whole length. A
-stream that must keep the original bytes (an audit) asks for it and pays.
+exactly, or its original is stored when a template cannot reproduce it. An
+adapter keeps a JSON line's key order, integers as integers and fractions as
+fractions, a number no int64 or float64 holds exactly as text, and an absent
+key, `null` and `""` as three values; whitespace and escaping are not kept,
+since a byte-exact JSON line costs its whole length. A stream that must keep
+the original bytes (an audit) asks for it and pays.
 
-**A late record is not an error, and order is event time.** Records arrive out
-of order and with equal times. Unlike a counter, a record has no increase that
-overlapping blocks would break, so a late one goes into a later segment and
-overlapping segments merge at read; the metrics `ErrTooOld` rule does not
-apply. A segment stores its records sorted by event time, equal times in
-arrival order; arrival order is not otherwise kept.
-
-**Search is small filters on blocks; FTS5 is for the application's data.** A
-block carries a level mask and a token bloom filter; a match decodes the
-candidate blocks and filters exactly. In the first round a bloom filter pruned
-rare terms as well as an FTS5 index over blocks, at a sixth of its size.
-FTS5, with its ranking and phrases, stays for `sqldb` and the application's
-own text. Every block is its own row, because SQL reads a blob whole: the
-[v2 round](reports/record-v2-2026-09-25.md) prunes time and level through a
-covering index, finds a session through segment dictionaries and a trace
-through a per-block bloom, and decodes one column before rebuilding rows.
+**FTS5 is for the application's data.** A record is found by its time,
+level, keys and blooms; FTS5, with its ranking and phrases, stays for `sqldb`
+and the application's own text, where the first round measured it costing more
+than the records it indexed.
 
 **sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
 SQL; TinyStore owns the file, the connections, the migrations and the

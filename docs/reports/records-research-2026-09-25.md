@@ -7,6 +7,11 @@ behind each decision, what the first engine version takes and leaves, what it
 has to build that no round touched, the gates it must pass and the numbers it
 must hold. The implementation's work plan is derived from it.
 
+Follow-up: [the engine round](records-engine-2026-09-25.md) holds every number
+below except the production corpus's: leaving out the text sample costs it
+0.80 bytes a record, where this report counted 2.6 % of text records, and its
+20.1 is not reached without it.
+
 ## The rounds
 
 Every commit below is reachable from `main`; each report carries its
