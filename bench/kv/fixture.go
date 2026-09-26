@@ -27,6 +27,7 @@ const (
 	seedDraftBodies
 	seedDraftAges
 	seedDraftRequests
+	seedOpRequests
 )
 
 // seeded is one stream of the fixture, the same in every run, so that both

@@ -141,6 +141,7 @@ func checkSessions(ctx context.Context, b *backend, clock *fakeClock) error {
 	t.note(store.devices(ctx, 1))
 	clock.advance(2 * day)
 	read(1, "a")
+	t.note("ok", b.maintain(ctx))
 	clock.advance(29 * day)
 	read(1, "a")
 	read(1, "b")
@@ -153,6 +154,6 @@ func checkSessions(ctx context.Context, b *backend, clock *fakeClock) error {
 	t.note(store.devices(ctx, 1))
 	read(2, "e")
 
-	return t.differs("ok", "ok", "ok", "true", "2", "true", "true", "false", "1", "ok", "false",
+	return t.differs("ok", "ok", "ok", "true", "2", "true", "ok", "true", "false", "1", "ok", "false",
 		"ok", "ok", "ok", "0", "true")
 }

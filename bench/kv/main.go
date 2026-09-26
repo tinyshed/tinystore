@@ -10,6 +10,9 @@
 //	kv -stage flood -dir <dir>      attempts, each from an address never seen before
 //	kv -stage claims -dir <dir>     webhook events claimed, handled and finished, some delivered twice
 //	kv -stage drafts -dir <dir>     drafts saved from two tabs, each at the version it read
+//	kv -stage writes -dir <dir>     sessions written, and nothing else, as the mechanics round wrote them
+//	kv -stage hits -dir <dir>       stored sessions read, and nothing else
+//	kv -stage misses -dir <dir>     tokens nobody holds read, and nothing else
 //
 // -impl table,kv names the implementations, -workers 1,8,64,512 the goroutines
 // of each phase, -keys the state a phase starts from and -phase its length. A
@@ -67,6 +70,9 @@ var stages = []stage{
 	{name: "flood", load: loadFlood, check: checkAttempts, rows: countAttempts},
 	{name: "claims", load: loadClaims, check: checkClaims, rows: countEvents},
 	{name: "drafts", load: loadDrafts, check: checkDrafts, rows: countDrafts},
+	{name: "writes", load: loadWrites, check: checkSessions, rows: countSessions},
+	{name: "hits", load: loadHits, check: checkSessions, rows: countSessions},
+	{name: "misses", load: loadMisses, check: checkSessions, rows: countSessions},
 }
 
 // run is what one invocation measures; broken is a promise a phase saw broken
@@ -81,7 +87,7 @@ type run struct {
 }
 
 func parseRun() *run {
-	name := flag.String("stage", "sessions", "sessions, links, attempts, flood, claims or drafts")
+	name := flag.String("stage", "sessions", "sessions, links, attempts, flood, claims, drafts, writes, hits or misses")
 	impls := flag.String("impl", implTable+","+implKV, "the implementations, each phase in this order")
 	workers := flag.String("workers", "1,8,64,512", "the goroutines of each phase")
 	keys := flag.Int("keys", 100_000, "the state a phase starts from: sessions, codes, counters, events or notes")

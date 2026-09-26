@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/sqldb"
 )
 
@@ -45,11 +46,44 @@ func openAttempts(ctx context.Context, b *backend) (attempts, error) {
 	return &tableAttempts{app: b.app, now: b.now}, nil
 }
 
-// openKVAttempts waits for kv's counters. What takes its place opens
-// kv.OpenCounters(ctx, b.state, "login-attempts", kv.DefaultTTL(attemptWindow), kv.LoseAtMost(time.Second)),
-// and its attempt is Of("ip").Add(ctx, ip, 1) and Of("email").Add(ctx, email, 1)
-func openKVAttempts(context.Context, *backend) (attempts, error) {
-	return nil, fmt.Errorf("%w: kv has no counters yet", errUnavailable)
+// kvAttempts is the attempt limits case through kv's counters, kept in memory
+// and written every second, since a crash may forget a second of attempts
+type kvAttempts struct {
+	state    *kv.Store
+	counters *kv.Counters
+}
+
+func openKVAttempts(ctx context.Context, b *backend) (attempts, error) {
+	counters, err := kv.OpenCounters(ctx, b.state, "login-attempts",
+		kv.DefaultTTL(attemptWindow), kv.LoseAtMost(time.Second))
+	if err != nil {
+		return nil, err
+	}
+	return &kvAttempts{state: b.state, counters: counters}, nil
+}
+
+// preload adds the stored counts through memory and writes them; a counter
+// takes no expiry of its own, so every prepared window ends one window from now
+func (k *kvAttempts) preload(ctx context.Context, batch []storedCount) error {
+	for _, c := range batch {
+		if _, err := k.counters.Of(c.scope).Add(ctx, c.subject, c.attempts); err != nil {
+			return err
+		}
+	}
+	_, err := k.state.Maintain(ctx)
+	return err
+}
+
+func (k *kvAttempts) add(ctx context.Context, scope, subject string, n int64) (int64, error) {
+	return k.counters.Of(scope).Add(ctx, subject, n)
+}
+
+func (k *kvAttempts) attempt(ctx context.Context, ip, email string) (byIP, byEmail int64, err error) {
+	if byIP, err = k.counters.Of("ip").Add(ctx, ip, 1); err != nil {
+		return 0, 0, err
+	}
+	byEmail, err = k.counters.Of("email").Add(ctx, email, 1)
+	return byIP, byEmail, err
 }
 
 // tableAttempts is the attempts table an application keeps without kv

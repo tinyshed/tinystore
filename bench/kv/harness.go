@@ -84,6 +84,16 @@ func (b *backend) close(ctx context.Context) error {
 	return b.store.Close(ctx)
 }
 
+// maintain runs kv's maintenance, which in a Manual store is what writes the
+// renewals and counters kv keeps in memory; the tables keep nothing waiting
+func (b *backend) maintain(ctx context.Context) error {
+	if b.impl != implKV {
+		return nil
+	}
+	_, err := b.state.Maintain(ctx)
+	return err
+}
+
 // sweep deletes a table's expired rows every minute, as kv's maintenance
 // deletes its expired keys; a Manual store runs neither
 func (b *backend) sweep(table, statement string) {

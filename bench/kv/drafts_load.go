@@ -33,6 +33,7 @@ type draftsLoad struct {
 	keys   int
 	now    func() time.Time
 	saved  []atomic.Int64 // each note's saves that went through in the phase
+	opened []tab          // each note as a tab that has just opened it, before the phase
 }
 
 func loadDrafts(ctx context.Context, b *backend, keys int) (workload, error) {
@@ -44,16 +45,27 @@ func loadDrafts(ctx context.Context, b *backend, keys int) (workload, error) {
 }
 
 // prepare saves a draft of every note in a scattered order, each last saved
-// over the last six days
+// over the last six days, then opens every note once, so that the phase times
+// tabs that are open rather than their first reads
 func (l *draftsLoad) prepare(ctx context.Context) error {
 	now, order := l.now(), newScatter(l.keys)
-	return inBatches(l.keys, func(from, to int) error {
+	err := inBatches(l.keys, func(from, to int) error {
 		batch := make([]storedDraft, 0, to-from)
 		for n := from; n < to; n++ {
 			batch = append(batch, preparedDraft(int64(order.at(n)), now))
 		}
 		return l.drafts.preload(ctx, batch)
 	})
+
+	l.opened = make([]tab, l.keys)
+	for note := range l.opened {
+		if err != nil {
+			break
+		}
+		l.opened[note].note = int64(note)
+		_, err = l.open(ctx, &l.opened[note])
+	}
+	return err
 }
 
 func preparedDraft(note int64, now time.Time) storedDraft {
@@ -84,7 +96,7 @@ type tab struct {
 func (l *draftsLoad) requests(worker, workers int) (request, error) {
 	var tabs []tab
 	for t := worker; t < 2*l.keys; t += workers {
-		tabs = append(tabs, tab{note: int64(t / 2)})
+		tabs = append(tabs, l.opened[t/2])
 	}
 	if len(tabs) == 0 {
 		return nil, fmt.Errorf("drafts needs -keys of at least half the workers, not %d for %d", l.keys, workers)

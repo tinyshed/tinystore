@@ -135,22 +135,20 @@ func (t *tableSessions) devices(ctx context.Context, user int64) (int, error) {
 	return len(devices), err
 }
 
-// kvSessions is the sessions case through kv as it is built: a stale session
-// renewed by Touch inside the request, as the table renews it, and a sign-out
-// everywhere deleting what a Scan finds. kv.Sliding(sessionTerm) takes the
-// place of DefaultTTL and of read's Touch, and Clear of signOutEverywhere's loop
+// kvSessions is the sessions case through kv: kv.Sliding renews a session its
+// read finds stale, the flush writing the renewal rather than the request, and
+// a sign-out everywhere is one Clear
 type kvSessions struct {
 	state  *kv.Store
 	bucket *kv.Bucket[session]
-	now    func() time.Time
 }
 
 func openKVSessions(ctx context.Context, b *backend) (sessions, error) {
-	bucket, err := kv.OpenBucket[session](ctx, b.state, "sessions", kv.DefaultTTL(sessionTerm))
+	bucket, err := kv.OpenBucket[session](ctx, b.state, "sessions", kv.Sliding(sessionTerm))
 	if err != nil {
 		return nil, err
 	}
-	return &kvSessions{state: b.state, bucket: bucket, now: b.now}, nil
+	return &kvSessions{state: b.state, bucket: bucket}, nil
 }
 
 func (k *kvSessions) preload(ctx context.Context, batch []storedSession) error {
@@ -169,39 +167,19 @@ func (k *kvSessions) signIn(ctx context.Context, user int64, token string, s ses
 	return k.bucket.Of(user).Set(ctx, token, s)
 }
 
+// read is one Get: kv renews what it finds stale on its own, so the request
+// never learns whether it did
 func (k *kvSessions) read(ctx context.Context, user int64, token string) (found, renewed bool, err error) {
-	mine := k.bucket.Of(user)
-	entry, found, err := mine.GetEntry(ctx, token)
-	if err != nil || !found || !stale(k.now(), entry.ExpiresAt) {
-		return found, false, err
-	}
-	renewed, err = mine.Touch(ctx, token)
-	return true, renewed, err
+	_, found, err = k.bucket.Of(user).Get(ctx, token)
+	return found, false, err
 }
 
 func (k *kvSessions) signOut(ctx context.Context, user int64, token string) error {
 	return k.bucket.Of(user).Delete(ctx, token)
 }
 
-// signOutEverywhere deletes, in one transaction, every session a Scan of the
-// user's branch finds, a page at a time
 func (k *kvSessions) signOutEverywhere(ctx context.Context, user int64) error {
-	return k.state.Tx(ctx, func(tx *kv.Tx) error {
-		mine := k.bucket.WithTx(tx).Of(user)
-		for more := true; more; {
-			page, err := mine.Scan(ctx, kv.Query{Limit: 1000})
-			if err != nil {
-				return err
-			}
-			for _, entry := range page.Entries {
-				if err = mine.Delete(ctx, entry.Key); err != nil {
-					return err
-				}
-			}
-			more = page.More
-		}
-		return nil
-	})
+	return k.bucket.Of(user).Clear(ctx)
 }
 
 func (k *kvSessions) devices(ctx context.Context, user int64) (int, error) {
