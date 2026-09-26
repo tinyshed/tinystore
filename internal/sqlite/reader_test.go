@@ -279,3 +279,42 @@ func BenchmarkPreparedReadAfterApplicationError(b *testing.B) {
 		}
 	}
 }
+
+// each statement of a Lookup is its own snapshot: a commit between two of them
+// is seen by the second, where a View keeps the first one's
+func TestALookupReadsEachStatementFromItsOwnSnapshot(t *testing.T) {
+	file := openReaderTestFile(t)
+	insert := func() error {
+		return file.Update(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `insert into example values(2)`)
+			return err
+		})
+	}
+	countTwice := func(reader Reader) ([2]int, error) {
+		var counts [2]int
+		for i := range counts {
+			if err := QueryRow(t.Context(), reader, `select count(*) from example`).Scan(&counts[i]); err != nil {
+				return counts, err
+			}
+			if err := insert(); err != nil {
+				return counts, err
+			}
+		}
+		return counts, nil
+	}
+
+	var looked, viewed [2]int
+	err := file.Lookup(t.Context(), func(reader Reader) (err error) {
+		looked, err = countTwice(reader)
+		return err
+	})
+	if err == nil {
+		err = file.ViewPrepared(t.Context(), func(reader Reader) (err error) {
+			viewed, err = countTwice(reader)
+			return err
+		})
+	}
+	if err != nil || looked != [2]int{1, 2} || viewed != [2]int{3, 3} {
+		t.Fatalf("a Lookup counted %v and a View %v, %v; want [1 2] and [3 3]", looked, viewed, err)
+	}
+}

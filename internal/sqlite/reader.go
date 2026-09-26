@@ -85,7 +85,24 @@ func (f *File) ViewPrepared(ctx context.Context, read func(Reader) error) error 
 	})
 }
 
+// Lookup runs read on a reader without a transaction of its own, so that each
+// statement is its own snapshot: a point read pays for one statement, not for
+// the BEGIN and COMMIT a View puts around it. read closes the rows it opens.
+func (f *File) Lookup(ctx context.Context, read func(Reader) error) error {
+	return f.withReader(ctx, func(connection *readConnection) (bool, error) {
+		return true, read(connection)
+	})
+}
+
 func (f *File) view(ctx context.Context, read func(*sql.Tx, *readConnection) error) error {
+	return f.withReader(ctx, func(connection *readConnection) (bool, error) {
+		return transactReusable(ctx, connection.conn, func(tx *sql.Tx) error { return read(tx, connection) })
+	})
+}
+
+// withReader lends work a reader connection, connecting it on first use, and
+// closes it when work leaves it unfit for the next caller
+func (f *File) withReader(ctx context.Context, work func(*readConnection) (reusable bool, err error)) error {
 	if err := takeSlot(ctx, f.readSlots); err != nil {
 		return err
 	}
@@ -101,7 +118,7 @@ func (f *File) view(ctx context.Context, read func(*sql.Tx, *readConnection) err
 		}
 	}
 
-	reusable, err := transactReusable(ctx, connection.conn, func(tx *sql.Tx) error { return read(tx, connection) })
+	reusable, err := work(connection)
 	if !keepConnection(ctx, reusable, err) {
 		return errors.Join(err, connection.close())
 	}

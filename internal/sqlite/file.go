@@ -21,6 +21,7 @@ type File struct {
 	writer      *sql.DB
 	writerConn  *writeConnection
 	writeSlots  chan struct{}
+	writes      group
 	reader      *sql.DB
 	readSlots   chan struct{}
 	readersMu   sync.Mutex
