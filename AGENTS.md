@@ -390,6 +390,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a follower keeps its place across merges            | `TestAFollowerKeepsItsPlaceAcrossMerges`, the middle of a merged place included |
 | a merge is one write, and readers see a record once | `TestAFailedMergeLeavesTheSegmentsAsTheyWere`, `TestReadersSeeEveryRecordOnceWhileMerging` |
 | a merged segment goes whole, with its places        | `TestAMergedSegmentExpiresWithItsPlaces`, `TestDropRemovesAMergedSegmentWithItsPlaces` |
+| a holder's places are found through an index        | `TestPlacesAreFoundThroughTheirHolder`, on the plan SQLite chooses              |
 | a merge joins four of a size, in time order         | `TestSmallSegmentsMergeFourOfASize`, `TestAMergeLeavesOverlappingSegmentsOut`   |
 | only what no longer reads can be dropped            | `TestDropRefusesWhatStillReads`                                                 |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |

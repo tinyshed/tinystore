@@ -34,9 +34,18 @@ func TestABlockIsFiledByItsWidth(t *testing.T) {
 // and its end moved on by the span's width, never to the end of the index
 func TestTheTimeIndexIsWalkedWithinEachSpan(t *testing.T) {
 	s := openRecords(t)
+	plan := s.queryPlan(t, selectBlockCandidates, 1, 2, 3, 4, 5, 6)
+	if want := "blocks_by_time (span=? AND last_at>? AND last_at<?)"; !strings.Contains(plan, want) {
+		t.Fatalf("plan %q, want %q", plan, want)
+	}
+}
+
+// queryPlan is how SQLite runs a statement, its steps one after another
+func (s *testStore) queryPlan(t *testing.T, statement string, arguments ...any) string {
+	t.Helper()
 	var plan []string
 	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `explain query plan `+selectBlockCandidates, 1, 2, 3, 4, 5, 6)
+		rows, err := tx.QueryContext(t.Context(), `explain query plan `+statement, arguments...)
 		if err != nil {
 			return err
 		}
@@ -54,9 +63,7 @@ func TestTheTimeIndexIsWalkedWithinEachSpan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "blocks_by_time (span=? AND last_at>? AND last_at<?)"; !strings.Contains(strings.Join(plan, " "), want) {
-		t.Fatalf("plan %q, want %q", plan, want)
-	}
+	return strings.Join(plan, " ")
 }
 
 // a read finds every record its range holds whatever the widths of the blocks

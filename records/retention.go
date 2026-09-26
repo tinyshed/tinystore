@@ -43,8 +43,7 @@ const (
 	deleteBlockTraces  = `delete from block_traces where block between ? and ?`
 	deleteBlocks       = `delete from blocks where id between ? and ?`
 	deleteSegmentKeys  = `delete from segment_keys where segment = ?`
-	// a holder's places come after it, so they are found without an index
-	deleteMergedPlaces = `delete from segments where id > ?1 and holder = ?1`
+	deleteMergedPlaces = `delete from segments where holder = ?`
 	deleteSegment      = `delete from segments where id = ?`
 )
 

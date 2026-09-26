@@ -245,7 +245,7 @@ func (d *decoder) segmentRecords(row []byte, blocks [][]byte) ([]Record, error) 
 }
 
 const (
-	movePlacesInto = `update segments set holder = ?1, start = start + ?2 where id > ?3 and holder = ?3`
+	movePlacesInto = `update segments set holder = ?1, start = start + ?2 where holder = ?3`
 	mergeIntoPlace = `
 		update segments set holder = ?, start = start + ?, first_at = null, last_at = null, held = 0, input = 0,
 			first_block = 0, last_block = -1, body = x''

@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,17 @@ import (
 
 	"github.com/tinyshed/tinystore"
 )
+
+// a merged segment's places are found through their holder's index, not by
+// walking every segment sealed after it
+func TestPlacesAreFoundThroughTheirHolder(t *testing.T) {
+	s := openRecords(t)
+	for statement, arguments := range map[string][]any{movePlacesInto: {1, 2, 3}, deleteMergedPlaces: {1}} {
+		if plan := s.queryPlan(t, statement, arguments...); !strings.Contains(plan, "segments_by_holder (holder=?)") {
+			t.Errorf("%s: plan %q", statement, plan)
+		}
+	}
+}
 
 // the examples in the comment on sizeClass
 func TestASizeClassIsThePowerOfFourItsRecordsStayUnder(t *testing.T) {
