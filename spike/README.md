@@ -37,3 +37,13 @@ predictions tried only when a row sample agrees. `TestRecordV2Density`,
 `TestRecordV2DockerLogs` and `TestRecordV2DockerTextScope` read container logs
 collected by `bench/fetch-docker-logs.sh` through `TINYSTORE_RECORD_DOCKER`.
 Such a corpus is production data: it stays local and only aggregates leave it.
+
+`spike/kv_*` is the round `docs/kv.md` asks for before the kv engine exists:
+durable Sets a transaction each against a group that a waiting caller leads,
+point Gets through `File.ViewPrepared` against a bare statement, a `LoseAtMost`
+counter's memory and flush, the file divided by `dbstat`, `Clear`, and the
+request rates of production services from their container logs. The
+measurements need `TINYSTORE_SPIKE=1`; `TINYSTORE_KV_DIR`, `TINYSTORE_KV_SECONDS`
+and `TINYSTORE_KV_LARGE=1` tune them, and `TINYSTORE_KV_DOCKER` points the rates
+at a corpus `bench/fetch-docker-logs.sh` collected, of which only aggregates
+are printed. See `docs/reports/kv-mechanics-2026-09-26.md`.
