@@ -24,6 +24,8 @@
 //	route.go       a batch split by stream, lateness and a row's bounds
 //	head.go        the head row: one stream's flush under zstd; one parser
 //	handler.go     the slog.Handler: map, check, queue; Flush
+//	lines.go       Lines: another program's lines, joined into records and queued
+//	level.go       where the programs writing lines put their level
 //
 //	maintain.go    Maintain: expire, seal what is ready, merge what it sealed small
 //	seal.go        a head read a segment's worth at a time, and encoded

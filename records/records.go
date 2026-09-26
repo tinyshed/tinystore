@@ -43,6 +43,7 @@ type Store struct {
 	spans       blockSpans
 	waiting     waitingTimes
 	damaged     damaged
+	lines       lineWriters
 	queue       chan Record
 	gate        admission.Gate
 	reads       admission.Slots
@@ -171,7 +172,7 @@ func (s *Store) Stats() Stats {
 // store calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
 	var flushErr error
-	s.finalFlush.Do(func() { flushErr = s.Flush(ctx) })
+	s.finalFlush.Do(func() { flushErr = s.flush(ctx, (*lineWriter).handOverEverything) })
 
 	drained, _ := s.gate.Close()
 	select {

@@ -34,8 +34,9 @@ states its contract. `records` keeps logs and events in `records.db`: a
 durable head, segments of event-time blocks written column by column, a line's
 own time kept apart from its text, a quiet stream's small segments merged
 four of a size, paged reads pruned by time, level, keys and blooms, a follow
-cursor that a merge leaves in its place, and rows that no longer read
-reported once and removed by `Drop`
+cursor that a merge leaves in its place, a writer for another program's lines
+that joins their stack traces and finds their levels, and rows that no longer
+read reported once and removed by `Drop`
 ([records/README.md](records/README.md)). `kv` keeps the application's
 current state in `kv.db`: buckets of one value type, keys in branches, expiry
 by the store's clock, versions that never repeat, writes committed in groups
@@ -143,7 +144,8 @@ default.
 
 **Logs never block and never loop.** Engines log through `Store.Logger(name)`
 into the application's `*slog.Logger`, never per sample. The records handler
-drops and counts when full, and refuses the records engine's own lines.
+and a writer of `Lines` drop and count when full, and the handler refuses the
+records engine's own lines.
 
 **Records has one logical model for logs and events.** A producer's language
 is not a storage format, and template mining is optional for a text body.
@@ -366,6 +368,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
+| another program's lines lose no byte                | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`                                 |
+| a writer of lines never waits, and closes with the store | `TestLinesNeverWaitAndCloseWithTheStore`                                   |
+| a stack trace's lines make one record               | `TestLinesJoinWhatBelongsTogether`, `TestAStackTraceGoesOn`                     |
+| a line's level is found where its program writes it | `TestLinesFindTheLevelWhereProgramsWriteIt`                                     |
 | a record survives the records format exactly        | `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`      |
 | a changed records byte is refused                   | `TestAChangedOrMissingByteIsRefused`, `TestAChangedHeadRowIsRefused`, fuzzers   |
 | a records decode stays bounded                      | `TestExpandedTextIsBounded`; every copy is charged before it is made            |

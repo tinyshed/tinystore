@@ -23,6 +23,7 @@ reads its format and nothing will.
 logs, err := records.Open(ctx, store, records.Options{})
 
 logger := slog.New(logs.Handler("notes"))                 // never blocks: queued, flushed each second
+cmd.Stdout = logs.Lines("worker")                          // another program's lines, stack traces joined
 err = logs.Append(ctx, records.Record{At: t, Stream: "web", Name: "click",
 	Context: []records.Field{records.String("session", sid)},
 	Attrs:   []records.Field{records.String("element", "buy")}})     // one transaction, readable on return
@@ -47,6 +48,14 @@ batch, err := logs.Follow(ctx, records.Cursor{Segment: s, Row: r}, 1000)
 - **The handler maps, the model does not guess.** A `slog` line is a record
   named `log`, the message its body, `logger.With` its context, the call's
   attributes its attributes.
+- **Another program's lines keep their bytes.** A writer of `Lines` makes a
+  record named `log` of each line at the time it arrived, joins the lines of
+  a stack trace, a traceback or a JSON value printed over lines, keeps the
+  text byte for byte, or a JSON object's fields when they spell the line
+  again, and takes the level from where pino, logfmt, glog, log4j and
+  Postgres write it, so that `MinLevel` finds their errors through the
+  blocks' level masks. A line's own time stays in its text, where the codec
+  keeps it at a few bits.
 
 ## The record
 
@@ -66,10 +75,12 @@ template before it can be stored.
   duplicate keys and each value's JSON spelling: `1.2300`, `-0`, big integers,
   nested objects. An absent attribute, `null` and `""` are three things, and so
   are an absent body and an empty one. A body is arbitrary bytes.
-- **Adapters map, the store does not guess.** `slog` is the first adapter.
-  Others map a JSON line's time, level and message into the record instead of
-  leaving them inside it. The root imports no engine; an append API belongs to
-  the handle `records.Open` returns.
+- **Adapters map, the store does not guess.** `slog` and `Lines` are the
+  adapters. `Lines` maps a line's level into the record and leaves the rest
+  where the line has it, its own time included: a time whose zone a line does
+  not say cannot be placed, and the time a line arrived always can. The root
+  imports no engine; an append API belongs to the handle `records.Open`
+  returns.
 
 ## Order
 
@@ -315,7 +326,7 @@ record written again one and a half times, and the default stays an hour.
 - Text: templates with typed variables beyond a line's own time, which is
   built; one zstd frame per segment showed about 2.5 bytes a record that
   independent blocks leave, measured before the times were kept apart.
-- Input: a continuation rule for multi-line records; adapters for pino, logfmt,
-  glog and log4j lines.
+- Input: logfmt pairs as attributes; OTLP, and a server taking lines from
+  programs that do not embed the store.
 - Encoding: a store-level context registry, per-context numeric state, nested
   JSON decomposition.

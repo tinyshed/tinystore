@@ -36,19 +36,24 @@ func (h *handler) Enabled(context.Context, slog.Level) bool {
 
 func (h *handler) Handle(_ context.Context, line slog.Record) error {
 	record, own := h.record(line)
-	switch {
-	case h.own || own:
-		return nil
-	case !h.store.fits(&record):
-		h.store.dropped.Add(1)
-		return nil
-	}
-	select {
-	case h.store.queue <- record:
-	default:
-		h.store.dropped.Add(1)
+	if !h.own && !own {
+		h.store.queue1(record)
 	}
 	return nil
+}
+
+// queue1 queues a record for the next flush, or drops and counts it when it
+// does not fit the format or the store's window, or the buffer has no room
+func (s *Store) queue1(record Record) {
+	if !s.fits(&record) {
+		s.dropped.Add(1)
+		return
+	}
+	select {
+	case s.queue <- record:
+	default:
+		s.dropped.Add(1)
+	}
 }
 
 // record maps one line, and says whether it is the records engine's own
@@ -151,11 +156,20 @@ func spellAny(value any) string {
 	return string(encoded)
 }
 
-// Flush writes what the handler holds, an Append for each segment's worth of
-// input. A write that fails is dropped and counted with what was to follow it,
-// as a full buffer's lines are.
+// Flush writes what the handler holds, and the records the writers of Lines
+// held through a whole flush without a line joining them, an Append for each
+// segment's worth of input. A write that fails is dropped and counted with
+// what was to follow it, as a full buffer's lines are.
 func (s *Store) Flush(ctx context.Context) error {
-	pieces := appendsOf(s.drain())
+	return s.flush(ctx, (*lineWriter).handOverIdle)
+}
+
+// flush takes the queue, then what the writers of Lines hand over into the
+// room that left, and writes both
+func (s *Store) flush(ctx context.Context, handOver func(*lineWriter)) error {
+	queued := s.drain()
+	s.lines.each(handOver)
+	pieces := appendsOf(append(queued, s.drain()...))
 	for i, piece := range pieces {
 		if err := s.appendChecked(ctx, piece); err != nil {
 			for _, lost := range pieces[i:] {
