@@ -42,7 +42,7 @@ func (s *Store) encodeHeadRow(batch headBatch) headRow {
 		serialized = appendHeadRecord(serialized, r)
 	}
 	body := appendCount([]byte{headVersion}, row.count)
-	body = s.blobs.EncodeAll(serialized, body)
+	body = s.heads.EncodeAll(serialized, body)
 	row.body = binary.LittleEndian.AppendUint32(body, crc32.ChecksumIEEE(body))
 	return row
 }

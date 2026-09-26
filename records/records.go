@@ -37,7 +37,8 @@ type Store struct {
 	log         *slog.Logger
 	now         func() time.Time
 	opts        Options
-	blobs       *zstd.Encoder
+	blobs       *zstd.Encoder // a segment's text
+	heads       *zstd.Encoder // head rows
 	unpack      *zstd.Decoder
 	streams     streams
 	spans       blockSpans
@@ -118,12 +119,12 @@ func openFile(ctx context.Context, path string) (*sqlite.File, error) {
 
 // newStore builds the handle over an open file; the caller closes the file on an error
 func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, error) {
-	blobs, unpack, err := newBlobCoders()
+	coders, err := newBlobCoders()
 	if err != nil {
 		return nil, err
 	}
 	engine := &Store{
-		file: file, opts: opts, blobs: blobs, unpack: unpack, now: time.Now,
+		file: file, opts: opts, blobs: coders.segments, heads: coders.heads, unpack: coders.unpack, now: time.Now,
 		log:   slog.New(slog.DiscardHandler),
 		queue: make(chan Record, opts.Buffer), maintenance: make(chan struct{}, 1),
 		reads: admission.NewSlots(readSlots), appends: admission.NewSlots(appendSlots),
@@ -137,9 +138,7 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 		err = engine.spans.load(ctx, file)
 	}
 	if err != nil {
-		_ = blobs.Close()
-		unpack.Close()
-		return nil, err
+		return nil, errors.Join(err, coders.close())
 	}
 	return engine, nil
 }
@@ -196,6 +195,6 @@ func (s *Store) Close(ctx context.Context) error {
 
 // release closes what newStore opened, the file last
 func (s *Store) release() error {
-	s.unpack.Close()
-	return errors.Join(s.blobs.Close(), s.file.Close())
+	coders := blobCoders{segments: s.blobs, heads: s.heads, unpack: s.unpack}
+	return errors.Join(coders.close(), s.file.Close())
 }

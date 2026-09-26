@@ -11,15 +11,12 @@ import (
 
 func testHeadStore(t testing.TB) *Store {
 	t.Helper()
-	blobs, unpack, err := newBlobCoders()
+	coders, err := newBlobCoders()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = blobs.Close()
-		unpack.Close()
-	})
-	return &Store{blobs: blobs, unpack: unpack}
+	t.Cleanup(func() { _ = coders.close() })
+	return &Store{blobs: coders.segments, heads: coders.heads, unpack: coders.unpack}
 }
 
 // a head row keeps its records in arrival order, whatever their times

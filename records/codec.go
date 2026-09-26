@@ -1,6 +1,7 @@
 package records
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/klauspost/compress/fse"
@@ -41,20 +42,43 @@ func newDecoder(blobs *zstd.Decoder) *decoder {
 	return &decoder{zstd: blobs}
 }
 
-// newBlobCoders makes the zstd pair every encoder and decoder shares: EncodeAll
-// and DecodeAll may run concurrently, and nothing larger than a block's input
-// is ever one frame
-func newBlobCoders() (*zstd.Encoder, *zstd.Decoder, error) {
-	writer, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(2), zstd.WithEncoderLevel(zstd.SpeedDefault),
-		zstd.WithWindowSize(maxBlockInput), zstd.WithLowerEncoderMem(true), zstd.WithEncoderCRC(false))
+// blobCoders are the zstd coders every encoder and decoder shares: a segment's
+// text is written once and kept for weeks, so it takes the stronger level, and
+// a head row lives an hour at most, so it takes the one that costs an append less
+type blobCoders struct {
+	segments, heads *zstd.Encoder
+	unpack          *zstd.Decoder
+}
+
+func newBlobCoders() (blobCoders, error) {
+	segments, err := newBlobEncoder(zstd.SpeedBetterCompression)
 	if err != nil {
-		return nil, nil, fmt.Errorf("records: zstd encoder: %w", err)
+		return blobCoders{}, err
 	}
-	reader, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(4),
+	heads, err := newBlobEncoder(zstd.SpeedDefault)
+	if err != nil {
+		return blobCoders{}, errors.Join(err, segments.Close())
+	}
+	unpack, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(4),
 		zstd.WithDecoderMaxMemory(maxExpandedText), zstd.WithDecoderMaxWindow(maxBlockInput))
 	if err != nil {
-		_ = writer.Close()
-		return nil, nil, fmt.Errorf("records: zstd decoder: %w", err)
+		return blobCoders{}, errors.Join(fmt.Errorf("records: zstd decoder: %w", err), segments.Close(), heads.Close())
 	}
-	return writer, reader, nil
+	return blobCoders{segments: segments, heads: heads, unpack: unpack}, nil
+}
+
+func (c blobCoders) close() error {
+	c.unpack.Close()
+	return errors.Join(c.segments.Close(), c.heads.Close())
+}
+
+// newBlobEncoder makes an encoder EncodeAll may call concurrently, for nothing
+// larger than a block's input, which is ever one frame
+func newBlobEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
+	writer, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(2), zstd.WithEncoderLevel(level),
+		zstd.WithWindowSize(maxBlockInput), zstd.WithLowerEncoderMem(true), zstd.WithEncoderCRC(false))
+	if err != nil {
+		return nil, fmt.Errorf("records: zstd encoder: %w", err)
+	}
+	return writer, nil
 }

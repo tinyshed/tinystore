@@ -7,22 +7,17 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
-
 	"github.com/tinyshed/tinystore"
 )
 
 func testCoders(t testing.TB) (*encoder, *decoder) {
 	t.Helper()
-	blobs, unpack, err := newBlobCoders()
+	coders, err := newBlobCoders()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = blobs.Close()
-		unpack.Close()
-	})
-	return newEncoder(blobs), newDecoder(unpack)
+	t.Cleanup(func() { _ = coders.close() })
+	return newEncoder(coders.segments), newDecoder(coders.unpack)
 }
 
 func roundTripInts(t *testing.T, e *encoder, d *decoder, values []int64) []byte {
@@ -174,13 +169,12 @@ func TestACorruptIntegerColumnIsRefused(t *testing.T) {
 }
 
 func BenchmarkIntegerColumn(b *testing.B) {
-	blobs, unpack, err := newBlobCoders()
+	coders, err := newBlobCoders()
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer unpack.Close()
-	defer func(blobs *zstd.Encoder) { _ = blobs.Close() }(blobs)
-	e, d := newEncoder(blobs), newDecoder(unpack)
+	defer func() { _ = coders.close() }()
+	e, d := newEncoder(coders.segments), newDecoder(coders.unpack)
 	values := make([]int64, 1024)
 	for i, record := range frontendRecords(1024) {
 		values[i] = record.At.UnixNano()
