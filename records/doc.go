@@ -34,6 +34,7 @@
 //
 //	read.go        Read: admit → check → reserve → fetch → build a page
 //	snapshot.go    candidates and their rows from one read transaction
+//	spans.go       blocks filed by width, so a read walks the time index near its range
 //	filter.go      the rows of a block a query keeps, one column at a time
 //	page.go        records merged in event-time order, and where a page ends
 //	follow.go      Follow: sealed segments by (segment, row), through the segment holding each

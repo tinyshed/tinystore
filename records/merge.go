@@ -244,6 +244,7 @@ const (
 func (s *Store) publishMerge(ctx context.Context, stream int64, members []member, segment encodedSegment) error {
 	holder := slices.MinFunc(members, func(a, b member) int { return cmp.Compare(a.id, b.id) }).id
 	begins := beginnings(members)
+	s.spans.note(segment.blocks)
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		if err := deleteMembers(ctx, tx, members); err != nil {
 			return err

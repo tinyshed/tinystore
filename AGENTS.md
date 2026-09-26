@@ -394,6 +394,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a page never splits a timestamp nor loses one       | `TestAPageNeverSplitsATimestamp`, `TestPagesContinueWithoutLosingOrRepeating`   |
 | a budget ends a page rather than failing it         | `TestABudgetEndsAPageEarly`                                                     |
 | blooms and level masks skip blocks                  | `TestBloomsAndLevelMasksSkipBlocks`                                             |
+| a read walks the time index near its range only     | `TestTheTimeIndexIsWalkedWithinEachSpan`, on the plan SQLite chooses            |
+| a read finds records in blocks of every width       | `TestReadsFindRecordsInBlocksOfEveryWidth`                                      |
 | retention removes whole segments, clips reads       | `TestRetentionRemovesWholeSegmentsAndClipsReads`                                |
 | records work holds the store's memory               | `TestStoreMemoryBoundsAppendReadSealAndFollow`                                  |
 | a follower is told what retention removed           | `TestFollowCountsWhatRetentionRemovedFirst`                                     |

@@ -74,12 +74,16 @@ create table segment_keys (
     primary key (segment, kind, key)
 ) without rowid, strict;
 
+-- span files a block by how wide its times are: it ends less than 2^span
+-- nanoseconds after it begins, so a read ending at t finds it among the
+-- blocks of its span that end before t + 2^span, and walks no other
 create table blocks (
     id       integer primary key,
     segment  integer not null,
     stream   integer not null,
     first_at integer not null,
     last_at  integer not null,
+    span     integer not null,
     levels   integer not null,
     count    integer not null,
     size     integer not null,
@@ -87,7 +91,7 @@ create table blocks (
 ) strict;
 
 -- covers every column a query picks its blocks by, so candidates cost no row reads
-create index blocks_by_time on blocks (last_at, first_at, levels, stream, segment, count, size);
+create index blocks_by_time on blocks (span, last_at, first_at, levels, stream, segment, count, size);
 
 create table block_traces (
     block integer primary key,

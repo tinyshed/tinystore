@@ -40,6 +40,7 @@ type Store struct {
 	blobs       *zstd.Encoder
 	unpack      *zstd.Decoder
 	streams     streams
+	spans       blockSpans
 	waiting     waitingTimes
 	damaged     damaged
 	queue       chan Record
@@ -129,6 +130,9 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 	engine.maintenance <- struct{}{}
 	if err = engine.streams.load(ctx, file); err == nil {
 		err = engine.waiting.load(ctx, file, &engine.streams)
+	}
+	if err == nil {
+		err = engine.spans.load(ctx, file)
 	}
 	if err != nil {
 		_ = blobs.Close()

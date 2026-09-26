@@ -42,7 +42,7 @@ func (s *Store) fetchSnapshot(ctx context.Context, q *checkedQuery) (fetched, er
 	defer cancel()
 	var out fetched
 	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
-		read := snapshotRead{tx: tx, query: q, names: &s.streams}
+		read := snapshotRead{tx: tx, query: q, names: &s.streams, spans: &s.spans}
 
 		candidates, err := read.candidates(ctx)
 		if err != nil {
@@ -69,12 +69,13 @@ type snapshotRead struct {
 	tx    sqlite.Reader
 	query *checkedQuery
 	names *streams
+	spans *blockSpans
 }
 
 const (
 	selectBlockCandidates = `
 		select id, segment, stream, first_at, last_at, count, size from blocks
-		where last_at >= ? and first_at <= ? and (? = 0 or levels & ? != 0)`
+		where span = ? and last_at between ? and ? and first_at <= ? and (? = 0 or levels & ? != 0)`
 	selectHeadCandidates = `
 		select id, 0, stream, first_at, last_at, count, size from heads
 		where last_at >= ? and first_at <= ? and (? = 0 or levels & ? != 0)`
@@ -82,17 +83,25 @@ const (
 
 // candidates are the blocks and head rows the time index and level masks
 // cannot rule out, less the blocks their segment's keys or their blooms rule
-// out, in the order a page takes them
+// out, in the order a page takes them. The head rows are read first: the
+// snapshot begins with them, and the spans are known from then on.
 func (r *snapshotRead) candidates(ctx context.Context) ([]source, error) {
-	blocks, err := r.indexed(ctx, selectBlockCandidates, true)
+	q := r.query
+	heads, err := r.indexed(ctx, false, selectHeadCandidates, q.first, q.last, q.levels, q.levels)
 	if err != nil {
 		return nil, err
+	}
+	var blocks []source
+	for span := range r.spans.each() {
+		var found []source
+		found, err = r.indexed(ctx, true, selectBlockCandidates, span, q.first, latestEnd(span, q.last), q.last,
+			q.levels, q.levels)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, found...)
 	}
 	if blocks, err = r.withoutExcluded(ctx, blocks); err != nil {
-		return nil, err
-	}
-	heads, err := r.indexed(ctx, selectHeadCandidates, false)
-	if err != nil {
 		return nil, err
 	}
 	all := append(blocks, heads...)
@@ -100,10 +109,9 @@ func (r *snapshotRead) candidates(ctx context.Context) ([]source, error) {
 	return all, nil
 }
 
-func (r *snapshotRead) indexed(ctx context.Context, query string, block bool) ([]source, error) {
+func (r *snapshotRead) indexed(ctx context.Context, block bool, query string, arguments ...any) ([]source, error) {
 	q := r.query
-	//nolint:rowserrcheck // EachRow checks Err
-	rows, err := r.tx.QueryContext(ctx, query, q.first, q.last, q.levels, q.levels)
+	rows, err := r.tx.QueryContext(ctx, query, arguments...) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
 		return nil, err
 	}

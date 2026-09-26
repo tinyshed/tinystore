@@ -103,8 +103,8 @@ nothing else.
 segments       id | stream | first_at | last_at | count | holder | start | held | input | first_block | last_block
                | body: names, shapes, contexts
 segment_keys   segment | kind | key          the event names, attribute keys and context keys it holds
-blocks         id | segment | stream | first_at | last_at | levels | count | size | body: column directory, columns
-               index (last_at, first_at, levels, stream, segment, count, size)
+blocks         id | segment | stream | first_at | last_at | span | levels | count | size | body: column directory, columns
+               index (span, last_at, first_at, levels, stream, segment, count, size)
 block_traces   block | bloom over trace ids
 block_filters  block | key | bloom over one id-like attribute
 heads          id | stream | late | first_at | last_at | levels | count | input | size | written_at | body
@@ -117,8 +117,16 @@ large row's remainder, up to 4061 bytes of a 4 KiB page, on a leaf page, and
 7 KB blocks left a tenth of the table empty.
 
 **Every lookup starts from the candidates.** The block index covers every
-column a query chooses blocks by and leads with `last_at`, so a read of the
-recent past walks only recent blocks. A segment's keys and a block's filters
+column a query chooses blocks by. It leads with a block's span, the power of
+two its width in nanoseconds stays under, then `last_at`: a read asks it once
+for each span the file holds, for the blocks ending between its start and its
+end moved on by that width, so it walks the blocks near its range whatever
+their widths, not every block ending after its start.
+
+```text
+span 29, blocks under half a second: a read of [12:00, 12:01) walks last_at in [12:00, 12:01 + 0.54 s)
+span 51, blocks under 26 days:       the same read walks last_at in [12:00, 12:01 + 26 days)
+``` A segment's keys and a block's filters
 are keyed by their owner: a query asks them about the candidates it already
 has, and retention deletes a segment's blocks, filters and keys as the id
 ranges the segment row names. Segment ids never repeat, so a consumer's
@@ -312,7 +320,5 @@ record written again one and a half times, and the default stays an hour.
   ([the round](reports/records-late-reference-2026-09-25.md)).
 - Input: a continuation rule for multi-line records; adapters for pino, logfmt,
   glog and log4j lines.
-- Storage: a bound on the time-index scan when blocks are wide, late ones and
-  a sparse stream's merged ones alike.
 - Encoding: a store-level context registry, per-context numeric state, nested
   JSON decomposition.

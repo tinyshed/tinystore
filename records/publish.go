@@ -13,6 +13,7 @@ import (
 // head rows it was made of, in one transaction: a reader finds each record in
 // the head or in the segment, never in both and never in neither
 func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segment encodedSegment) error {
+	s.spans.note(segment.blocks)
 	emptied := false
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		firstBlock, err := nextBlockID(ctx, tx)
@@ -75,8 +76,8 @@ type blockPlace struct {
 
 const (
 	insertBlock = `
-		insert into blocks (id, segment, stream, first_at, last_at, levels, count, size, body)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		insert into blocks (id, segment, stream, first_at, last_at, span, levels, count, size, body)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	insertTraces = `insert into block_traces (block, bloom) values (?, ?)`
 	insertFilter = `insert into block_filters (block, key, bloom) values (?, ?, ?)`
 )
@@ -85,7 +86,7 @@ func insertBlocks(ctx context.Context, tx sqlite.Writer, place blockPlace, block
 	for i, block := range blocks {
 		id := place.first + int64(i)
 		_, err := tx.ExecContext(ctx, insertBlock, id, place.segment, place.stream, block.first, block.last,
-			block.levels, block.count, len(block.body), block.body)
+			spanOf(block.first, block.last), block.levels, block.count, len(block.body), block.body)
 		if err != nil {
 			return err
 		}
