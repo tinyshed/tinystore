@@ -415,6 +415,11 @@ reads, a transaction and `Maintain`. Built the same way from Windows 11, it
 adds 7 564 KiB, and 7 380 without `kv` at the same commit: kv costs a program
 184 KiB beside metrics and records.
 
+At the end of 26 September the probe also opens sliding sessions, walks them
+with `All`, clears a branch and counts attempts in memory with `LoseAtMost`.
+Built the same way from Windows 11, it adds 7 812 KiB, against 7 724 at
+`7178c38` before them: the rest of kv costs 88 KiB.
+
 ## Where the examples are
 
 - `examples/notes`: a program using the store, `sqldb`, metrics instruments,

@@ -97,14 +97,46 @@ func probeRecords(ctx context.Context, runtime *tinystore.Store) {
 	fmt.Println(len(page.Records), len(batch.Records), logs.Stats())
 }
 
-// probeKV links the kv engine the way an application uses it: a bucket, its
-// writes and reads, a transaction and maintenance
+// probeKV links the kv engine the way an application uses it: a sliding
+// bucket, its writes and reads, a transaction, a walk and a Clear, counters in
+// memory, and maintenance
 func probeKV(ctx context.Context, runtime *tinystore.Store) {
 	state, err := kv.Open(ctx, runtime, kv.Options{})
 	if err != nil {
 		panic(err)
 	}
-	sessions, err := kv.OpenBucket[string](ctx, state, "sessions", kv.DefaultTTL(time.Hour))
+	value, found, walked := probeBucket(ctx, state)
+	attempts := probeCounters(ctx, state)
+	done, err := state.Maintain(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(value, found, walked, attempts, done)
+}
+
+func probeCounters(ctx context.Context, state *kv.Store) int64 {
+	attempts, err := kv.OpenCounters(ctx, state, "attempts", kv.DefaultTTL(time.Minute), kv.LoseAtMost(time.Second))
+	if err != nil {
+		panic(err)
+	}
+	if _, err = attempts.Of("ip").Add(ctx, "10.0.0.1", 1); err != nil {
+		panic(err)
+	}
+	if _, err = attempts.Of("ip").Max(ctx, "10.0.0.2", 5); err != nil {
+		panic(err)
+	}
+	if err = attempts.Of("ip").Delete(ctx, "10.0.0.2"); err != nil {
+		panic(err)
+	}
+	held, err := attempts.Of("ip").Get(ctx, "10.0.0.1")
+	if err != nil {
+		panic(err)
+	}
+	return held
+}
+
+func probeBucket(ctx context.Context, state *kv.Store) (value string, found bool, walked int) {
+	sessions, err := kv.OpenBucket[string](ctx, state, "sessions", kv.Sliding(time.Hour))
 	if err != nil {
 		panic(err)
 	}
@@ -125,17 +157,18 @@ func probeKV(ctx context.Context, runtime *tinystore.Store) {
 	if err = sessions.Of(42).Set(ctx, "token", "tablet", kv.IfVersion(written.Version)); err != nil {
 		panic(err)
 	}
-	value, found, err := sessions.Of(42).Get(ctx, "token")
+	value, found, err = sessions.Of(42).Get(ctx, "token")
 	if err != nil {
 		panic(err)
 	}
-	page, err := sessions.Of(42).Scan(ctx, kv.Query{})
-	if err != nil {
+	for _, walkErr := range sessions.Of(42).All(ctx) {
+		if walkErr != nil {
+			panic(walkErr)
+		}
+		walked++
+	}
+	if err = sessions.Of(43).Clear(ctx); err != nil {
 		panic(err)
 	}
-	done, err := state.Maintain(ctx)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(value, found, len(page.Entries), done)
+	return value, found, walked
 }
