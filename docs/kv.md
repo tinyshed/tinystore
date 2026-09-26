@@ -1,7 +1,10 @@
 # KV: the application's current state
 
-The design of the kv engine: agreed, not built. There is no `kv/` package yet.
-The API and the contracts below are settled, and what lies under
+The design of the kv engine, built in part: `kv/` holds buckets, branches,
+expiry, versions, grouped writes, point reads, `Scan`, `Tx` and `View`, and
+its contract is [kv/README.md](../kv/README.md); counters, `LoseAtMost`,
+`Sliding` and `Clear` are designed here and not built. The API and the
+contracts below are settled, and what lies under
 [Storage](#storage) was measured by
 [the mechanics round](reports/kv-mechanics-2026-09-26.md) on one development
 machine, not yet on a production host.
@@ -215,8 +218,8 @@ Touch              replaces the expiry and nothing else
   again.
 - **Opaque.** Two versions are equal or not. A version marshals to text, so it
   goes to a page and comes back with the next save.
-- **`kv.IfVersion(v)`** lets `Set`, `SetEntry`, `Take` and `Delete` apply only
-  to a live key with version `v`; anything else is `ErrConflict`.
+- **`kv.IfVersion(v)`** lets `Set`, `SetEntry`, `Take`, `Delete` and `Touch`
+  apply only to a live key with version `v`; anything else is `ErrConflict`.
 
 ## Counters
 
@@ -301,9 +304,9 @@ meta       name | value                                          the revision's 
 - **One table for every kind.** `value` has no declared type, so a row holds a
   blob, an integer or nothing, and a member of a set costs its path, its
   version and one header byte.
-- **An operation is one statement.** SQLite's upsert, `returning` and
-  `delete … returning` are the mutation language; no operation reads into Go
-  and writes back.
+- **An operation runs whole in the writer.** Its statements read and write
+  the key's row inside one savepoint of the writer's transaction, so no other
+  write comes between them; a `Take` is one `delete … returning`.
 
 ```sql
 -- Take: read and burn
@@ -360,17 +363,17 @@ The five cases are the gates' workloads.
 | a `Set` that returned survives an abrupt exit | `TestAWriteThatReturnedSurvivesAnAbruptExit` |
 | an expired key is absent to every operation | `TestAnExpiredKeyIsAbsentToEveryOperation` |
 | a default TTL is given once, at creation | `TestADefaultTTLIsGivenOnceAtCreation` |
-| a sliding read writes at most once per refresh | `TestASlidingReadWritesAtMostOncePerRefresh` |
+| a sliding read writes at most once per refresh | `TestASlidingReadWritesAtMostOncePerRefresh`, not built |
 | an integer key is its decimal text | `TestAnIntegerKeyIsItsDecimalText` |
 | a version never repeats | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen` |
 | one of concurrent `Take`s gets the value | `TestConcurrentTakesGiveTheValueOnce` |
 | a stale claim cannot finish or delete the next | `TestAStaleClaimCannotFinishOrDeleteTheNext` |
 | one of two versioned writes conflicts | `TestOneOfTwoVersionedWritesConflicts` |
-| an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded` |
-| `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval` |
+| an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded`, not built |
+| `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval`, not built |
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
-| `Clear` empties a branch and those under it at once, over the generation bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt` |
-| a refused write fails alone in its group | `TestOneRefusedWriteDoesNotFailItsGroup` |
+| `Clear` empties a branch and those under it at once, over the generation bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt`, not built |
+| a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |
 | a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |
 | a value over 512 bytes reads back from `spilled` | `TestALargeValueSpillsAndReadsBack` |
 

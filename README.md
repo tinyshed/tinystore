@@ -13,7 +13,8 @@ exact aggregates over raw samples, bounded maintenance with per-series
 quarantine, and reopen. See [the walkthrough](metrics/README.md) and its
 [runnable example](metrics/example_test.go). Around it the store holds the
 application's own SQL databases ([sqldb](sqldb/README.md)), its logs and events
-([records](records/README.md)) and backups; KV, blobs, jobs and self-metrics are
+([records](records/README.md)), its current state ([kv](kv/README.md)) and
+backups; blobs, jobs and self-metrics are
 designed in [docs/architecture.md](docs/architecture.md) and not built yet.
 
 ## Where a sample goes
@@ -91,6 +92,7 @@ and the command that reproduces each number are in
 | `codec/` | the block codec: what a payload looks like and how to read one  |
 | `metrics/` | the durable metrics engine and its lifecycle tests           |
 | `records/` | logs and events: a head, event-time segments, paged reads    |
+| `kv/`    | the application's current state: typed buckets by key, versions |
 | `sqldb/` | the application's own SQL databases in the store               |
 | `backup/` | every engine's file in one checked zip, and its restore       |
 | `examples/` | programs using the public API, built and tested with it     |

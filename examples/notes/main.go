@@ -1,5 +1,5 @@
 // Command notes is what a program using TinyStore looks like: one directory,
-// its own SQL, its own metrics and logs, a backup, and one Close.
+// its own SQL, its own metrics and logs, its drafts, a backup, and one Close.
 //
 //	go run ./examples/notes -dir ./data
 package main
@@ -20,6 +20,7 @@ import (
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/backup"
+	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
 	"github.com/tinyshed/tinystore/sqldb"
@@ -49,6 +50,8 @@ type app struct {
 	db       *sqldb.DB
 	stats    *metrics.Store
 	logs     *records.Store
+	state    *kv.Store
+	drafts   *kv.Bucket[string]
 	logger   *slog.Logger
 	created  metrics.CounterInstrument
 	requests metrics.CounterInstrument
@@ -62,6 +65,9 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 	defer func() { err = errors.Join(err, a.store.Close(context.WithoutCancel(ctx))) }()
 
 	if err = a.useNotes(ctx, out); err != nil {
+		return err
+	}
+	if err = a.useDrafts(ctx, out); err != nil {
 		return err
 	}
 	if err = a.readBack(ctx, out); err != nil {
@@ -96,6 +102,12 @@ func (a *app) openEngines(ctx context.Context, console slog.Handler) error {
 		return err
 	}
 	if a.logs, err = records.Open(ctx, a.store, records.Options{}); err != nil {
+		return err
+	}
+	if a.state, err = kv.Open(ctx, a.store, kv.Options{}); err != nil {
+		return err
+	}
+	if a.drafts, err = kv.OpenBucket[string](ctx, a.state, "drafts", kv.DefaultTTL(7*24*time.Hour)); err != nil {
 		return err
 	}
 
@@ -137,6 +149,25 @@ func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 	for _, note := range notes {
 		fmt.Fprintf(out, "note %d: %s — %s\n", note.ID, note.Title, note.Body)
 	}
+	return err
+}
+
+// useDrafts keeps a note's unsaved draft for a week: a tab's save goes through
+// only at the version it read, so a stale tab cannot save over a newer draft
+func (a *app) useDrafts(ctx context.Context, out io.Writer) error {
+	mine := a.drafts.Of("user-1")
+	read, err := mine.SetEntry(ctx, 1, "milk, bread, eggs")
+	if err != nil {
+		return err
+	}
+	if _, err = mine.SetEntry(ctx, 1, "milk, bread, eggs, tea", kv.IfVersion(read.Version)); err != nil {
+		return err
+	}
+	if err = mine.Set(ctx, 1, "milk", kv.IfVersion(read.Version)); !errors.Is(err, tinystore.ErrConflict) {
+		return errors.Join(err, errors.New("a stale tab saved over the draft"))
+	}
+	draft, _, err := mine.Get(ctx, 1)
+	fmt.Fprintf(out, "draft of note 1: %s\n", draft)
 	return err
 }
 

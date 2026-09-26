@@ -9,8 +9,10 @@ import (
 func TestTheExampleRunsTwice(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 	for _, want := range []string{
-		"note 1: groceries — milk, bread\nnotes created: 2\nlog lines: 2\nbackup written\n",
-		"note 1: groceries — milk, bread\nnote 2: groceries — milk, bread\nnotes created: 2\nlog lines: 4\nbackup written\n",
+		"note 1: groceries — milk, bread\ndraft of note 1: milk, bread, eggs, tea\n" +
+			"notes created: 2\nlog lines: 2\nbackup written\n",
+		"note 1: groceries — milk, bread\nnote 2: groceries — milk, bread\ndraft of note 1: milk, bread, eggs, tea\n" +
+			"notes created: 2\nlog lines: 4\nbackup written\n",
 	} {
 		var out bytes.Buffer
 		if err := run(t.Context(), dir, &out); err != nil {

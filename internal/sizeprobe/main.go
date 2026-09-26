@@ -10,6 +10,7 @@ import (
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
+	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
 )
@@ -59,6 +60,7 @@ func main() {
 	}
 	fmt.Println(len(result), store.Stats())
 	probeRecords(ctx, runtime)
+	probeKV(ctx, runtime)
 }
 
 // probeRecords links the records engine the way an application uses it: its
@@ -93,4 +95,47 @@ func probeRecords(ctx context.Context, runtime *tinystore.Store) {
 		}
 	}
 	fmt.Println(len(page.Records), len(batch.Records), logs.Stats())
+}
+
+// probeKV links the kv engine the way an application uses it: a bucket, its
+// writes and reads, a transaction and maintenance
+func probeKV(ctx context.Context, runtime *tinystore.Store) {
+	state, err := kv.Open(ctx, runtime, kv.Options{})
+	if err != nil {
+		panic(err)
+	}
+	sessions, err := kv.OpenBucket[string](ctx, state, "sessions", kv.DefaultTTL(time.Hour))
+	if err != nil {
+		panic(err)
+	}
+	written, err := sessions.Of(42).SetEntry(ctx, "token", "phone")
+	if err != nil {
+		panic(err)
+	}
+	if _, err = sessions.Of(42).SetIfAbsent(ctx, "other", "laptop"); err != nil {
+		panic(err)
+	}
+	err = state.Tx(ctx, func(tx *kv.Tx) error {
+		_, _, takeErr := sessions.WithTx(tx).Of(42).Take(ctx, "other")
+		return takeErr
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err = sessions.Of(42).Set(ctx, "token", "tablet", kv.IfVersion(written.Version)); err != nil {
+		panic(err)
+	}
+	value, found, err := sessions.Of(42).Get(ctx, "token")
+	if err != nil {
+		panic(err)
+	}
+	page, err := sessions.Of(42).Scan(ctx, kv.Query{})
+	if err != nil {
+		panic(err)
+	}
+	done, err := state.Maintain(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(value, found, len(page.Entries), done)
 }

@@ -34,17 +34,20 @@ states its contract. `records` keeps logs and events in `records.db`: a
 durable head, segments of event-time blocks written column by column, paged
 reads pruned by time, level, keys and blooms, a follow cursor, and rows that
 no longer read reported once and removed by `Drop`
-([records/README.md](records/README.md)). `Store.Snapshot` copies
-every engine's file while it works, and `backup` writes those copies as one zip
-and restores it before `Open`.
+([records/README.md](records/README.md)). `kv` keeps the application's
+current state in `kv.db`: buckets of one value type, keys in branches, expiry
+by the store's clock, versions that never repeat, writes committed in groups
+and point reads without a transaction ([kv/README.md](kv/README.md)).
+`Store.Snapshot` copies every engine's file while it works, and `backup`
+writes those copies as one zip and restores it before `Open`.
 
 `records` is built to [docs/records.md](docs/records.md), except the
 per-segment text sample, which the production corpus measures at 0.80 bytes a
 record; its format is version one and reads no earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
-Designed, not built: `kv` ([docs/kv.md](docs/kv.md)), `blobs`, `jobs` and
-self-metrics.
+Designed, not built: `blobs`, `jobs`, self-metrics, and kv's counters,
+`Sliding` expiry and `Clear` ([docs/kv.md](docs/kv.md)).
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -64,6 +67,7 @@ Do not describe unbuilt behaviour as though it works.
 | `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
 | `sqldb/`             | the application's SQL databases: migrations, typed reads, `Exec…` writes, `Tx` |
 | `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
+| `kv/`                | the application's current state: typed buckets, branches, expiry, versions    |
 | `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
@@ -431,6 +435,16 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a series that cannot be repaired can still be dropped  | `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours` |
 | long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |
 | exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |
+| writes queued for the writer share a commit, fail alone | `TestGroupedWritesShareACommitAndFailAlone`                                    |
+| a write whose caller left before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing`                             |
+| a point read is its statement's own snapshot           | `TestALookupReadsEachStatementFromItsOwnSnapshot`                               |
+| a kv write that returned survives an abrupt exit       | `TestAWriteThatReturnedSurvivesAnAbruptExit`, from many goroutines at once      |
+| an expired key is absent to every operation            | `TestAnExpiredKeyIsAbsentToEveryOperation`                                      |
+| a default TTL is given once, at creation               | `TestADefaultTTLIsGivenOnceAtCreation`                                          |
+| an integer key is its decimal text                     | `TestAnIntegerKeyIsItsDecimalText`                                              |
+| a kv version never repeats                             | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen`                             |
+| a stale claim cannot finish or delete the next         | `TestAStaleClaimCannotFinishOrDeleteTheNext`                                    |
+| a kv value comes back as it went in                    | `TestAValueComesBackAsItWentIn`, floats by their bits                           |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

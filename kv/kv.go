@@ -1,0 +1,190 @@
+package kv
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/admission"
+	"github.com/tinyshed/tinystore/internal/sqlite"
+)
+
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+// the file this engine claims inside the store's directory
+const fileName = "kv.db"
+
+// kvApplicationID is "TKVS", the SQLite application id that claims a file for this engine
+const kvApplicationID = 0x544b5653
+
+var errClosed = fmt.Errorf("kv: %w", tinystore.ErrClosed)
+
+type Store struct {
+	runtime     *tinystore.Store
+	file        *sqlite.File
+	log         *slog.Logger
+	now         func() time.Time
+	gate        admission.Gate
+	writes      admission.Slots
+	revision    atomic.Int64
+	maintenance chan struct{}
+	closing     sync.Once
+	closeErr    error
+}
+
+// Open opens kv.db inside the store. The store closes it and, unless it is
+// Manual, deletes expired keys every minute.
+func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error) {
+	path, release, err := store.Claim(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := openEngine(ctx, store, path)
+	if err != nil {
+		release()
+		return nil, err
+	}
+
+	store.Every("kv expiry", expiryEvery, state.maintainInBackground)
+	state.log.Info("opened", "path", path)
+	return state, nil
+}
+
+// openEngine opens and migrates the file, reads its revision and hands the
+// engine to the store
+func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Store, error) {
+	file, err := openFile(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	state := &Store{
+		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
+		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
+	}
+	state.maintenance <- struct{}{}
+	if err = state.loadRevision(ctx); err == nil {
+		err = store.Attach(state)
+	}
+	if err != nil {
+		return nil, errors.Join(err, file.Close())
+	}
+	return state, nil
+}
+
+func openFile(ctx context.Context, path string) (*sqlite.File, error) {
+	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers, PageSize: pageSize})
+	if err != nil {
+		return nil, fmt.Errorf("kv: open: %w", err)
+	}
+	scripts, err := fs.Sub(migrationFiles, "migrations")
+	if err == nil {
+		err = file.Migrate(ctx, kvApplicationID, scripts)
+	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("kv: migrate: %w", err), file.Close())
+	}
+	return file, nil
+}
+
+const (
+	selectRevision = `select value from meta where name = 'revision'`
+	updateRevision = `update meta set value = ?1 where name = 'revision'`
+)
+
+// loadRevision takes up the file's high-water mark, so that no version repeats
+// one an earlier process wrote
+func (s *Store) loadRevision(ctx context.Context) error {
+	var revision int64
+	err := s.file.View(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, selectRevision).Scan(&revision)
+	})
+	if err != nil {
+		return fmt.Errorf("kv: read the revision: %w", err)
+	}
+	s.revision.Store(revision)
+	return nil
+}
+
+// nextRevision is the version of one write, kept as the file's high-water
+// mark in the write's own transaction; a write rolled back leaves a gap, never
+// a repeat
+func (s *Store) nextRevision(ctx context.Context, w sqlite.Writer) (int64, error) {
+	revision := s.revision.Add(1)
+	_, err := w.ExecContext(ctx, updateRevision, revision)
+	return revision, err
+}
+
+// Snapshot copies kv.db into dir while the engine keeps working.
+func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
+	if err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot kv: %w", err)
+	}
+	return tinystore.SnapshotFile{Name: fileName, Engine: "kv", Schema: schema}, nil
+}
+
+// Close lets the work in flight finish and closes kv.db; cancellation stops
+// waiting, not the cleanup. The store calls it: an application closes the
+// store instead.
+func (s *Store) Close(ctx context.Context) error {
+	drained, _ := s.gate.Close()
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	s.closing.Do(func() {
+		s.closeErr = s.file.Close()
+		s.log.Info("closed")
+	})
+	return s.closeErr
+}
+
+// admit lets one operation in while the store is open; release lets it out
+func (s *Store) admit(ctx context.Context) (release func(), err error) {
+	if err = s.gate.Enter(ctx, errClosed); err != nil {
+		return nil, err
+	}
+	return s.gate.Leave, nil
+}
+
+// admitWrite lets a write in and holds one of the write slots until it is
+// answered, so that the writes waiting for a group are bounded
+func (s *Store) admitWrite(ctx context.Context) (release func(), err error) {
+	leave, err := s.admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	free, err := s.writes.Take(ctx)
+	if err != nil {
+		leave()
+		return nil, err
+	}
+	return func() {
+		free()
+		leave()
+	}, nil
+}
+
+// reserve holds an operation's weight in the store's memory; a store without
+// Options.Memory is not asked
+func (s *Store) reserve(ctx context.Context, bytes int) (release func(), err error) {
+	if s.runtime.Memory().Capacity == 0 {
+		return func() {}, nil
+	}
+	release, err = s.runtime.Reserve(ctx, int64(max(bytes, 1)))
+	if errors.Is(err, tinystore.ErrLimit) {
+		return nil, fmt.Errorf("kv: %w", err)
+	}
+	return release, err
+}

@@ -1,0 +1,122 @@
+package kv
+
+import (
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/tinyshed/tinystore"
+)
+
+// Options holds nothing a program sets yet; it is here so that an option can
+// arrive without breaking a caller.
+type Options struct{}
+
+// the engine's own bounds and schedule
+const (
+	pageSize      = 4 << 10         // at 1 KiB a row with a 256-byte value overflows its page
+	readers       = 8               // the reader connections, what the measured reads went through
+	writeSlots    = 2048            // writes at once: a group of 1024 gathering while one commits
+	viewTimeout   = 5 * time.Second // the longest a View holds its snapshot
+	expiryEvery   = time.Minute     // how often maintenance deletes expired keys
+	expiryBatch   = 10_000          // expired keys a transaction deletes, about 45 ms of the writer
+	expiryBatches = 10              // transactions one Maintain runs at most
+	scanLimit     = 100             // keys a page returns when a query does not say
+	maxScanLimit  = 1000            // keys a page may return
+	scanBytes     = 4 << 20         // value bytes a page may hold
+)
+
+// a bucket's name, as a file's is: short and plain
+var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// BucketOption changes how a bucket serves its values; none changes what its
+// bytes mean, so a program may change them between runs.
+type BucketOption func(*bucketSettings)
+
+type bucketSettings struct {
+	ttl   time.Duration
+	codec any
+	err   error
+}
+
+// DefaultTTL is the expiry a key gets when it is created without kv.TTL or
+// kv.ExpireAt; a later Set keeps the expiry a key has.
+func DefaultTTL(d time.Duration) BucketOption {
+	return func(s *bucketSettings) {
+		if d <= 0 {
+			s.err = fmt.Errorf("%w: kv: a default TTL of %v", tinystore.ErrInvalid, d)
+		}
+		s.ttl = d
+	}
+}
+
+// WithCodec writes a bucket's values through codec instead of the bytes their
+// type would get; a codec of another value type is ErrInvalid at OpenBucket.
+func WithCodec[V any](codec Codec[V]) BucketOption {
+	return func(s *bucketSettings) { s.codec = codec }
+}
+
+// Option changes one call.
+type Option func(*callOptions)
+
+type callOptions struct {
+	ttl      time.Duration
+	expireAt time.Time
+	version  Version
+	err      error
+}
+
+// TTL gives the key d from now; see the rules of DefaultTTL.
+func TTL(d time.Duration) Option {
+	return func(o *callOptions) {
+		if d <= 0 {
+			o.err = fmt.Errorf("%w: a TTL of %v", tinystore.ErrInvalid, d)
+		}
+		o.ttl = d
+	}
+}
+
+// ExpireAt gives the key until t by the store's clock.
+func ExpireAt(t time.Time) Option {
+	return func(o *callOptions) {
+		if t.IsZero() {
+			o.err = fmt.Errorf("%w: a zero expiry", tinystore.ErrInvalid)
+		}
+		o.expireAt = t
+	}
+}
+
+// IfVersion lets a call write only to a live key whose version is v; any other
+// is tinystore.ErrConflict, an absent or expired key included.
+func IfVersion(v Version) Option {
+	return func(o *callOptions) {
+		if v.revision <= 0 {
+			o.err = fmt.Errorf("%w: IfVersion with no version", tinystore.ErrInvalid)
+		}
+		o.version = v
+	}
+}
+
+func collect(options []Option) (callOptions, error) {
+	var collected callOptions
+	for _, option := range options {
+		option(&collected)
+	}
+	if collected.ttl > 0 && !collected.expireAt.IsZero() {
+		collected.err = fmt.Errorf("%w: both TTL and ExpireAt", tinystore.ErrInvalid)
+	}
+	return collected, collected.err
+}
+
+// hasExpiry says that the call names an expiry of its own
+func (o callOptions) hasExpiry() bool {
+	return o.ttl > 0 || !o.expireAt.IsZero()
+}
+
+// expiry is the call's own expiry in unix milliseconds
+func (o callOptions) expiry(now int64) int64 {
+	if o.ttl > 0 {
+		return now + o.ttl.Milliseconds()
+	}
+	return o.expireAt.UnixMilli()
+}

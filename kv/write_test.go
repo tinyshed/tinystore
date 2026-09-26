@@ -1,0 +1,284 @@
+package kv
+
+import (
+	"bytes"
+	"database/sql"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tinyshed/tinystore"
+)
+
+// an expired key is absent to every operation, whether maintenance has
+// deleted its row or not
+func TestAnExpiredKeyIsAbsentToEveryOperation(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	bucket := openTestBucket[string](t, state, "short")
+	old, err := bucket.SetEntry(t.Context(), "k", "old", TTL(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.clock.advance(2 * time.Minute)
+
+	if _, found, getErr := bucket.Get(t.Context(), "k"); found || getErr != nil {
+		t.Fatalf("Get found an expired key: %v", getErr)
+	}
+	if found, hasErr := bucket.Has(t.Context(), "k"); found || hasErr != nil {
+		t.Fatalf("Has found an expired key: %v", hasErr)
+	}
+	if page, scanErr := bucket.Scan(t.Context(), Query{}); len(page.Entries) != 0 || scanErr != nil {
+		t.Fatalf("Scan found an expired key: %v", scanErr)
+	}
+	if _, found, takeErr := bucket.Take(t.Context(), "k"); found || takeErr != nil {
+		t.Fatalf("Take found an expired key: %v", takeErr)
+	}
+	if found, touchErr := bucket.Touch(t.Context(), "k", TTL(time.Hour)); found || touchErr != nil {
+		t.Fatalf("Touch renewed an expired key: %v", touchErr)
+	}
+	if err = bucket.Set(t.Context(), "k", "new", IfVersion(old.Version)); !errors.Is(err, tinystore.ErrConflict) {
+		t.Fatalf("IfVersion passed on an expired key: %v", err)
+	}
+	if err = bucket.Delete(t.Context(), "k", IfVersion(old.Version)); !errors.Is(err, tinystore.ErrConflict) {
+		t.Fatalf("a Delete with IfVersion passed on an expired key: %v", err)
+	}
+	created, err := bucket.SetIfAbsent(t.Context(), "k", "claimed")
+	if err != nil || !created {
+		t.Fatalf("SetIfAbsent did not claim an expired key: %v", err)
+	}
+	if value, _, _ := bucket.Get(t.Context(), "k"); value != "claimed" {
+		t.Fatalf("the claimed key holds %q", value)
+	}
+}
+
+// a key gets the bucket's DefaultTTL once, when it is created: a later Set
+// without a TTL keeps its expiry, so a window does not slide
+func TestADefaultTTLIsGivenOnceAtCreation(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	bucket := openTestBucket[int](t, state, "window", DefaultTTL(15*time.Minute))
+	first, err := bucket.SetEntry(t.Context(), "k", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.clock.advance(10 * time.Minute)
+	second, err := bucket.SetEntry(t.Context(), "k", 2)
+	if err != nil || !second.ExpiresAt.Equal(first.ExpiresAt) {
+		t.Fatalf("a second Set moved the expiry from %v to %v: %v", first.ExpiresAt, second.ExpiresAt, err)
+	}
+	state.clock.advance(6 * time.Minute)
+	if _, found, _ := bucket.Get(t.Context(), "k"); found {
+		t.Fatal("the key outlived its window")
+	}
+	renewed, err := bucket.SetEntry(t.Context(), "k", 3, TTL(time.Hour))
+	if err != nil || !renewed.ExpiresAt.Equal(state.clock.Now().Add(time.Hour)) {
+		t.Fatalf("an explicit TTL gave %v: %v", renewed.ExpiresAt, err)
+	}
+}
+
+// a version never repeats: not after a delete, an expiry or a reopen, so an
+// old IfVersion cannot pass against a key written again
+func TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	bucket := openTestBucket[string](t, state, "versions")
+	seen := map[Version]bool{}
+	write := func(bucket *Bucket[string], options ...Option) Version {
+		t.Helper()
+		entry, err := bucket.SetEntry(t.Context(), "k", "v", options...)
+		if err != nil || seen[entry.Version] {
+			t.Fatalf("version %v again, %v", entry.Version, err)
+		}
+		seen[entry.Version] = true
+		return entry.Version
+	}
+
+	first := write(bucket)
+	if err := bucket.Delete(t.Context(), "k"); err != nil {
+		t.Fatal(err)
+	}
+	write(bucket, TTL(time.Minute))
+	state.clock.advance(2 * time.Minute)
+	write(bucket)
+
+	state = state.reopen(t)
+	bucket = openTestBucket[string](t, state, "versions")
+	write(bucket)
+	if err := bucket.Set(t.Context(), "k", "stale", IfVersion(first)); !errors.Is(err, tinystore.ErrConflict) {
+		t.Fatalf("an old version passed: %v", err)
+	}
+}
+
+// of the callers taking one key, one gets its value
+func TestConcurrentTakesGiveTheValueOnce(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	codes := openTestBucket[int64](t, state, "codes")
+	if err := codes.Set(t.Context(), "digest", 42); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	winners := 0
+	for range 64 {
+		wg.Go(func() {
+			userID, found, err := codes.Take(t.Context(), "digest")
+			if err != nil || (found && userID != 42) {
+				t.Errorf("Take: %d, %v", userID, err)
+			}
+			if found {
+				mu.Lock()
+				winners++
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if winners != 1 {
+		t.Fatalf("%d callers took the one value", winners)
+	}
+}
+
+// a handler whose claim expired can neither finish nor delete the claim that
+// came after it
+func TestAStaleClaimCannotFinishOrDeleteTheNext(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	seen := openTestBucket[struct{}](t, state, "events")
+	first, created, err := seen.SetEntryIfAbsent(t.Context(), "evt_1", struct{}{}, TTL(10*time.Minute))
+	if err != nil || !created {
+		t.Fatalf("the first claim: %v, %v", created, err)
+	}
+	if _, again, _ := seen.SetEntryIfAbsent(t.Context(), "evt_1", struct{}{}); again {
+		t.Fatal("a second claim while the first is live")
+	}
+	state.clock.advance(11 * time.Minute)
+	second, created, err := seen.SetEntryIfAbsent(t.Context(), "evt_1", struct{}{}, TTL(10*time.Minute))
+	if err != nil || !created {
+		t.Fatalf("the claim after it expired: %v, %v", created, err)
+	}
+
+	if err = seen.Delete(t.Context(), "evt_1", IfVersion(first.Version)); !errors.Is(err, tinystore.ErrConflict) {
+		t.Fatalf("the stale claim deleted the next: %v", err)
+	}
+	err = seen.Set(t.Context(), "evt_1", struct{}{}, IfVersion(first.Version), TTL(7*24*time.Hour))
+	if !errors.Is(err, tinystore.ErrConflict) {
+		t.Fatalf("the stale claim finished over the next: %v", err)
+	}
+	if err = seen.Set(t.Context(), "evt_1", struct{}{}, IfVersion(second.Version), TTL(7*24*time.Hour)); err != nil {
+		t.Fatalf("the live claim could not finish: %v", err)
+	}
+}
+
+// of two writes naming the version they read, one passes
+func TestOneOfTwoVersionedWritesConflicts(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	drafts := openTestBucket[string](t, state, "drafts")
+	read, err := drafts.Of(7).SetEntry(t.Context(), 1, "draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for tab := range errs {
+		wg.Go(func() { _, errs[tab] = drafts.Of(7).SetEntry(t.Context(), 1, "tab", IfVersion(read.Version)) })
+	}
+	wg.Wait()
+	conflicts := 0
+	for _, err := range errs {
+		switch {
+		case errors.Is(err, tinystore.ErrConflict):
+			conflicts++
+		case err != nil:
+			t.Fatal(err)
+		}
+	}
+	if conflicts != 1 {
+		t.Fatalf("%d of two versioned writes conflicted", conflicts)
+	}
+}
+
+// a value over 512 bytes lives in spilled, and leaves it with its key
+func TestALargeValueSpillsAndReadsBack(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	bucket := openTestBucket[[]byte](t, state, "large")
+	large := bytes.Repeat([]byte("v"), inlineLimit+1)
+	largest := bytes.Repeat([]byte("w"), maxValue)
+	for key, value := range map[string][]byte{"a": large, "b": largest} {
+		if got := roundTripKey(t, bucket, key, value); !bytes.Equal(got, value) {
+			t.Fatalf("a spilled value of %d bytes came back as %d", len(value), len(got))
+		}
+	}
+	if spilled := state.spilledRows(t); spilled != 2 {
+		t.Fatalf("%d spilled rows, want 2", spilled)
+	}
+	if err := bucket.Set(t.Context(), "a", []byte("small")); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := bucket.Take(t.Context(), "b"); !found || err != nil {
+		t.Fatalf("Take of a spilled value: %v, %v", found, err)
+	}
+	if spilled := state.spilledRows(t); spilled != 0 {
+		t.Fatalf("%d spilled rows after their keys moved on", spilled)
+	}
+	if err := bucket.Set(t.Context(), "c", append(largest, 'x')); !errors.Is(err, tinystore.ErrLimit) {
+		t.Fatalf("a value over 1 MiB: %v", err)
+	}
+}
+
+func roundTripKey[V any](t *testing.T, bucket *Bucket[V], key string, value V) V {
+	t.Helper()
+	if err := bucket.Set(t.Context(), key, value); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := bucket.Get(t.Context(), key)
+	if err != nil || !found {
+		t.Fatalf("%v, %v", found, err)
+	}
+	return got
+}
+
+func (s *testState) spilledRows(t *testing.T) int {
+	t.Helper()
+	var count int
+	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `select count(*) from spilled`).Scan(&count)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// a Touch renews a live key and keeps its version, so a renewal fails no
+// IfVersion; a key a Touch does not find stays absent
+func TestTouchRenewsAndKeepsTheVersion(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	sessions := openTestBucket[string](t, state, "sessions")
+	written, err := sessions.SetEntry(t.Context(), "token", "s", TTL(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.clock.advance(50 * time.Second)
+	if found, touchErr := sessions.Touch(t.Context(), "token", TTL(time.Minute)); !found || touchErr != nil {
+		t.Fatalf("Touch: %v, %v", found, touchErr)
+	}
+	state.clock.advance(50 * time.Second)
+	entry, found, err := sessions.GetEntry(t.Context(), "token")
+	if err != nil || !found || entry.Version != written.Version {
+		t.Fatalf("after Touch: %v, %v, version %v against %v", found, err, entry.Version, written.Version)
+	}
+	if _, err = sessions.Touch(t.Context(), "token"); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a Touch with no expiry to give: %v", err)
+	}
+}
+
+func TestABucketCannotChangeItsKindUnderItsData(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	if _, err := state.claimBucket(t.Context(), "hits", "counters"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenBucket[int](t.Context(), state.Store, "hits"); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a bucket of counters opened for values: %v", err)
+	}
+	if _, err := OpenBucket[int](t.Context(), state.Store, "Hits!"); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a name that is not plain: %v", err)
+	}
+}

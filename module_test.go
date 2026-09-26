@@ -120,7 +120,7 @@ func TestTheRootImportsNoEngine(t *testing.T) {
 
 // engines never import each other, so a program links only the engines it opens
 func TestEnginesDoNotImportEachOther(t *testing.T) {
-	engines := []string{"backup", "metrics", "records", "sqldb"}
+	engines := []string{"backup", "kv", "metrics", "records", "sqldb"}
 	for _, engine := range engines {
 		files, err := filepath.Glob(filepath.Join(engine, "*.go"))
 		if err != nil {

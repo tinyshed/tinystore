@@ -2,7 +2,7 @@
 
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
-store, `sqldb/`, `records/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+store, `sqldb/`, `records/`, `kv/` in part, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every`, the memory budget and snapshots. Everything else here is designed and
 agreed, not built. [examples/notes](../examples/notes/main.go) is a program
 using the built part, and [samples/](samples/README.md) holds a reference
@@ -328,10 +328,13 @@ err = app.Tx(ctx, func(tx *sqldb.Tx) error { … }) // several statements, one w
   applied migration, another engine's file, or a database newer than the binary
   refuses to open.
 
-**kv** (designed, not built; the design is [kv.md](kv.md)). The application's
-current state in `kv.db`: buckets of one value type with text keys and
-branches, expiry by the store's clock, versions that never repeat, and
-counters.
+**kv** (built in part; contract in `kv/README.md`, design in [kv.md](kv.md)).
+The application's current state in `kv.db`: buckets of one value type with
+text keys and branches, expiry by the store's clock, versions that never
+repeat, writes from many goroutines committed together by
+`internal/sqlite.File.UpdateGrouped`, point reads by `File.Lookup` without a
+transaction. Counters, `Sliding` expiry and `Clear` are designed, not
+built.
 
 ```go
 state, err := kv.Open(ctx, store, kv.Options{})
@@ -394,6 +397,11 @@ handler, `Append`, `Maintain`, `Read`, `Follow` and `Drop`. Built the same way
 from Windows 11 at the commit that adds this paragraph, the metrics probe adds
 6 888 KiB and the probe with records 7 380 KiB: records costs a program 492 KiB
 beside metrics.
+
+Later on 26 September the probe also opens `kv` and uses a bucket's writes and
+reads, a transaction and `Maintain`. Built the same way from Windows 11, it
+adds 7 564 KiB, and 7 380 without `kv` at the same commit: kv costs a program
+184 KiB beside metrics and records.
 
 ## Where the examples are
 
