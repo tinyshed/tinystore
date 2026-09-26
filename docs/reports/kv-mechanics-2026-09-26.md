@@ -35,6 +35,8 @@ here is the engine: it is the prototype `spike/kv_*`.
   a file, with eight readers for the point reads.
 - Each load runs three seconds; latency is one operation from its call to its
   return, waiting for a connection or a commit included.
+- The production host's figures ran there at the owner's request; see
+  [below](#on-a-production-host).
 - The production figures are aggregates of the private container-log snapshot
   `6bf41f814539fdced24d5403e3adc27939446028717d006e63946601695d1ea0`, read
   locally; no host, service or line leaves it.
@@ -227,13 +229,44 @@ durable until a limit lets a request in. On this machine:
 - behind the limit, grouped durable writes hold 53,000 a second, 500 times the
   peak second; a transaction each would hold three times it.
 
-A production host has a fraction of this machine; the round has not run on
-one.
+A production host has a fraction of this machine; [below](#on-a-production-host)
+is one.
+
+## On a production host
+
+The same prototype, built for linux/amd64 at `5957fdb`, ran on the busier of
+the two production hosts while its services kept running: a KVM guest with two
+vCPUs of an AMD EPYC 7763, 3.9 GB of memory with swap in use, a virtual disk,
+Linux 6.8. It ran at `nice -n 19` with `GOMEMLIMIT=512MiB`, without the
+ten-million set, whose file is larger than the memory the host had free, and
+without the layout, whose bytes do not depend on the machine; its files and the
+binary were deleted afterwards.
+
+| | production host | the container here |
+|---|---:|---:|
+| durable `Set`s, a transaction each, 1 and 512 goroutines | 1,585/s; 1,506/s | 347/s; 343/s |
+| grouped, 8, 64 and 512 goroutines | 5,760/s; 21,376/s; 54,971/s | 1,549/s; 9,894/s; 53,338/s |
+| grouped at 512, p50 and p99 | 7.3 ms; 32 ms | 9.2 ms; 25 ms |
+| point Gets, one million sessions, eight callers, hits: `View`, statement | 58,529/s; 100,292/s | 187,403/s; 244,127/s |
+| the same, misses | 49,243/s; 76,594/s | 153,834/s; 201,756/s |
+| Adds in memory, 512 goroutines | 3,949,893/s | 23,124,663/s |
+| a flush of 100,000 keys, new rows and onto them | 744 ms; 1,014 ms | 547 ms; 853 ms |
+| `Clear` of 10,000 and 1,000,000 keys | 52 ms; 11.1 s | 35 ms; 5.3 s |
+
+- **Its disk acknowledged an fsync faster than this machine's NVMe**: a
+  transaction each held 1,500 `Set`s a second there against 340 here. The
+  hypervisor answers the flush; whether what it holds survives the host losing
+  power is the provider's to say, and this round cannot.
+- **Its reads were two fifths of the container's here**, 100,292 hits a second
+  through eight readers on two vCPUs; a 64 MiB page cache was slower there too.
+- **Against its own traffic**: the host's busiest second held 106 requests. Its
+  reads hold about 900 times that, grouped writes 520 times, and a
+  transaction each 14 times.
 
 ## What this round does not settle
 
-- **A production host's ceilings.** Reading its logs is all the standing
-  permission covers; the commands above on such a host need its owner's word.
+- **Whether an fsync the hypervisor acknowledged is durable** on the
+  production host, and the ten-million set there.
 - **The read path past eight readers**, `mmap_size`, and one page cache for the
   whole file rather than one a connection.
 - **A spilled value's `Get`**, which reads two rows; only the lookup without a

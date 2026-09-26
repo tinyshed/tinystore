@@ -264,7 +264,8 @@ a claim, a draft, comes after a limit has let the request in. On the
 development machine a point read held 97,000 to 244,000 a second over eight
 readers in the container, an `Add` millions, and grouped durable writes
 53,000, against 106 requests in the busiest second of the production services
-that log theirs; a production host's own ceilings are [open](#open).
+that log theirs. On that production host, two vCPUs, the reads held 100,000 a
+second and grouped writes 55,000.
 
 ## Errors
 
@@ -387,23 +388,24 @@ Each waits for a workload that needs it and a measurement that pays for it.
 ## What was measured
 
 The prototype `spike/kv_*` on one AMD Ryzen 7 7700 with an NVMe disk, in a
-`golang:1.27` container and on Windows 11;
+`golang:1.27` container and on Windows 11, and on a production host with two
+vCPUs while its services ran;
 [the round](reports/kv-mechanics-2026-09-26.md) has the environment, the
 commands and every figure.
 
-| | Container | Windows |
-|---|---:|---:|
-| durable `Set`s a second, 512 callers: a transaction each, grouped | 343; 53,338 | 654; 84,808 |
-| point `Get`s a second, one million sessions, eight callers: `View`, a statement | 187,403; 244,127 | 108,160; 132,204 |
-| the same at ten million sessions | 96,696; 111,084 | — |
-| a `LoseAtMost` flush of 100,000 keys, new and onto them | 547 ms; 853 ms | 730 ms; 926 ms |
-| `Clear` of 10,000 and 1,000,000 keys in one transaction | 35 ms; 5.3 s | 45 ms; 8.7 s |
-| production services that log their requests: busiest minute, peak second | 4.9 and 106 requests a second | |
+| | Container | Windows | Production host |
+|---|---:|---:|---:|
+| durable `Set`s a second, 512 callers: a transaction each, grouped | 343; 53,338 | 654; 84,808 | 1,506; 54,971 |
+| point `Get`s a second, one million sessions, eight callers: `View`, a statement | 187,403; 244,127 | 108,160; 132,204 | 58,529; 100,292 |
+| the same at ten million sessions | 96,696; 111,084 | — | — |
+| a `LoseAtMost` flush of 100,000 keys, new and onto them | 547 ms; 853 ms | 730 ms; 926 ms | 744 ms; 1,014 ms |
+| `Clear` of 10,000 and 1,000,000 keys in one transaction | 35 ms; 5.3 s | 45 ms; 8.7 s | 52 ms; 11.1 s |
+| production services that log their requests: busiest minute, peak second | | | 4.9 and 106 requests a second |
 
 ## Open
 
-- **A production host's ceilings.** The standing permission reads its logs and
-  nothing else; running the round there needs its owner's word.
+- **Whether a production host's acknowledged fsync is durable**: its virtual
+  disk answered an fsync in about 0.6 ms, faster than this machine's NVMe.
 - **The read path past eight readers**, `mmap_size`, and one page cache for the
   file rather than 1 MiB a connection: 64 MiB a connection helped on Windows
   and not in the container.
