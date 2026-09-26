@@ -25,6 +25,9 @@ err = seen.Set(ctx, event.ID, struct{}{}, kv.IfVersion(claim.Version), kv.TTL(7*
 n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and from 1 again fifteen minutes on
 ```
 
+[example_test.go](example_test.go) runs the five cases of
+[docs/kv.md](../docs/kv.md) as examples, and `go doc` shows them.
+
 ## Contracts
 
 - **A key is text.** A string, a `[]byte` or an integer; an integer is its
