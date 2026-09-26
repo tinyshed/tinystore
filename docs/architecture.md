@@ -328,7 +328,16 @@ err = app.Tx(ctx, func(tx *sqldb.Tx) error { … }) // several statements, one w
   applied migration, another engine's file, or a database newer than the binary
   refuses to open.
 
-**kv** (boundary only). Mutable values by bucket and key in `kv.db`.
+**kv** (designed, not built; the design is [kv.md](kv.md)). The application's
+current state in `kv.db`: buckets of one value type with text keys and
+branches, expiry by the store's clock, versions that never repeat, and
+counters.
+
+```go
+state, err := kv.Open(ctx, store, kv.Options{})
+sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.Sliding(30*24*time.Hour))
+s, found, err := sessions.Of(userID).Get(ctx, token)
+```
 
 **blobs** (boundary only). Metadata in SQLite, bytes in files and segments
 under `blobs/`; external bytes are durable before the metadata that points at
