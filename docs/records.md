@@ -171,6 +171,14 @@ places 1 4 7 9 of a stream, 30 40 35 38 records   → 1 holds 143; 1 4 7 9 start
 four such, 143 150 160 140 records                → one holds 593
 ```
 
+A holder's places lie hours apart in the order segments were sealed, so a
+follower far behind reaches them one batch at a time, and each batch needs
+the same block. `Follow` keeps the last 4 MiB of the blocks and segment rows
+it fetched, and reserves them beside each call's weight; a block's id is
+never given twice, even after a merge deletes the newest blocks, and a
+holder's row changes only with its first block, so nothing it keeps goes
+stale.
+
 **Late records have a head of their own.** What arrives more than ten
 seconds behind the newest record its stream showed before it, earlier in the
 same batch or waiting on time in its head, or behind the store's clock when

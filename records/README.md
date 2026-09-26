@@ -104,14 +104,17 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   segment its place, so a cursor, the middle of a merged segment included,
   goes on where it was. `Batch.Expired` counts the segments retention removed
   before the cursor reached them. A record reaches `Follow` only once it is
-  sealed.
+  sealed. `Follow` keeps the last 4 MiB of the blocks and segment rows it
+  fetched, so that a follower far behind fetches a merged segment's block
+  once rather than once for every place it holds.
 - Retention removes whole segments whose newest record is older than
   `Options.Retention` (fourteen days) by the store's clock, a merged segment
   with the places it holds, and head rows likewise; a read never returns an
   older record, even from a segment only partly past it.
 - Every operation reserves its weight in the store's memory: an append its
   input, a seal 24 MiB for a segment in flight, a read its budget's bytes, a
-  decoded block and a page of records. Without `tinystore.Options.Memory` the
+  decoded block and a page of records, and a follow those and the 4 MiB it
+  keeps for the batches after it. Without `tinystore.Options.Memory` the
   engine still bounds what runs at once: two reads or follows, decoding
   included, and two appends; the rest wait for a slot, and a caller that stops
   waiting leaves. One `Append` carries at most a segment's input, 4 MiB, or is

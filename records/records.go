@@ -41,6 +41,7 @@ type Store struct {
 	unpack      *zstd.Decoder
 	streams     streams
 	spans       blockSpans
+	cache       followCache
 	waiting     waitingTimes
 	damaged     damaged
 	lines       lineWriters

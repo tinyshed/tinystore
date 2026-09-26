@@ -77,9 +77,11 @@ create table segment_keys (
 
 -- span files a block by how wide its times are: it ends less than 2^span
 -- nanoseconds after it begins, so a read ending at t finds it among the
--- blocks of its span that end before t + 2^span, and walks no other
+-- blocks of its span that end before t + 2^span, and walks no other.
+-- Ids never repeat, even when the newest blocks are deleted, so that a
+-- block's bytes are known by its id
 create table blocks (
-    id       integer primary key,
+    id       integer primary key autoincrement,
     segment  integer not null,
     stream   integer not null,
     first_at integer not null,

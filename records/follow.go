@@ -52,8 +52,10 @@ func checkFollow(after Cursor, limit int) (int, error) {
 	return checkLimit(limit)
 }
 
+// followReservation is what a Follow holds: its budget, a decoded block, its records, and the
+// cache it fills for the batches after it
 func (s *Store) followReservation(limit int) int64 {
-	return int64(s.opts.Budget.Bytes) + blockReservation + int64(limit)*recordReservation
+	return int64(s.opts.Budget.Bytes) + blockReservation + int64(limit)*recordReservation + followCacheBytes
 }
 
 // followed is what one batch decodes, copied out of one read transaction:
@@ -104,8 +106,9 @@ const (
 		order by id
 		limit cast(? as integer)`
 	selectHolder = `
-		select stream, first_at, last_at, first_block, last_block, body from segments
+		select stream, first_at, last_at, first_block, last_block from segments
 		where id = ? and holder is null`
+	selectHolderRow       = `select body from segments where id = ?`
 	selectFollowedBlocks  = `select id, count from blocks where id between ? and ? order by id`
 	selectSegmentSequence = `select coalesce(max(seq), 0) from sqlite_sequence where name = 'segments'`
 )
@@ -115,10 +118,12 @@ func (s *Store) fetchFollowed(ctx context.Context, after Cursor, limit int) (fol
 	defer cancel()
 	var out followed
 	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
-		read := followRead{tx: tx, after: after, limit: limit, budget: s.opts.Budget.Bytes, names: &s.streams}
+		read := followRead{
+			tx: tx, after: after, limit: limit, budget: s.opts.Budget.Bytes, names: &s.streams, cache: &s.cache,
+		}
 		var err error
 		out.places, err = read.places(ctx)
-		out.blocks, out.bytes = read.fetched, read.spent
+		out.blocks, out.bytes = read.fetched, read.fetchedBytes
 		if err != nil || len(out.places) > 0 {
 			return err
 		}
@@ -131,18 +136,21 @@ func (s *Store) fetchFollowed(ctx context.Context, after Cursor, limit int) (fol
 }
 
 // followRead gathers places and the blocks holding them until the batch has
-// limit records or has spent its bytes
+// limit records or has spent its bytes; a byte the cache had is spent as one
+// fetched from the file, so that a batch ends where it would without the cache
 type followRead struct {
-	tx       sqlite.Reader
-	after    Cursor
-	limit    int
-	budget   int
-	names    *streams
-	holders  map[int64]*heldSegment
-	taken    []followedPlace
-	gathered int
-	fetched  int
-	spent    int
+	tx           sqlite.Reader
+	after        Cursor
+	limit        int
+	budget       int
+	names        *streams
+	cache        *followCache
+	holders      map[int64]*heldSegment
+	taken        []followedPlace
+	gathered     int
+	spent        int
+	fetched      int // blocks read from the file
+	fetchedBytes int // bytes read from the file
 }
 
 func (r *followRead) places(ctx context.Context) ([]followedPlace, error) {
@@ -202,11 +210,14 @@ func (r *followRead) holderOf(ctx context.Context, place *followedPlace) (*heldS
 	}
 	holder := &heldSegment{id: place.holderID, decoded: map[int64][]Record{}}
 	err := sqlite.QueryRow(ctx, r.tx, selectHolder, holder.id).Scan(&holder.stream, &holder.first, &holder.last,
-		&holder.firstBlock, &holder.lastBlock, &holder.row)
+		&holder.firstBlock, &holder.lastBlock)
 	if errors.Is(err, sql.ErrNoRows) {
 		found := Damage{Stream: r.names.name(place.stream), Segment: place.id}
 		gone := corrupt(fmt.Sprintf("place %d names segment %d, which is gone", place.id, holder.id))
 		return nil, damageOf(found, gone)
+	}
+	if err == nil {
+		holder.row, _, err = r.fetch(ctx, rowCacheKey(holder), selectHolderRow, holder.id)
 	}
 	if err != nil || (len(r.taken) > 0 && r.spent+len(holder.row) > r.budget) {
 		return nil, err
@@ -214,6 +225,21 @@ func (r *followRead) holderOf(ctx context.Context, place *followedPlace) (*heldS
 	r.spent += len(holder.row)
 	r.holders[holder.id] = holder
 	return holder, r.listBlocks(ctx, holder)
+}
+
+// fetch is a block's or a segment row's bytes, from the cache or else from
+// the file, and whether the file was read
+func (r *followRead) fetch(ctx context.Context, key cacheKey, query string, id int64) ([]byte, bool, error) {
+	if body, ok := r.cache.get(key); ok {
+		return body, false, nil
+	}
+	var body []byte
+	if err := sqlite.QueryRow(ctx, r.tx, query, id).Scan(&body); err != nil {
+		return nil, false, err
+	}
+	r.fetchedBytes += len(body)
+	r.cache.put(key, body)
+	return body, true, nil
 }
 
 func (r *followRead) listBlocks(ctx context.Context, holder *heldSegment) error {
@@ -246,11 +272,15 @@ func (r *followRead) placeBlocks(ctx context.Context, place *followedPlace) erro
 			break
 		}
 		if block.body == nil {
-			if err := sqlite.QueryRow(ctx, r.tx, selectBlockBody, block.id).Scan(&block.body); err != nil {
+			body, read, err := r.fetch(ctx, blockCacheKey(block.id), selectBlockBody, block.id)
+			if err != nil {
 				return err
 			}
-			r.spent += len(block.body)
-			r.fetched++
+			if read {
+				r.fetched++
+			}
+			block.body = body
+			r.spent += len(body)
 		}
 		r.gathered += min(to, blockStart+block.count) - max(from, blockStart)
 		blockStart += block.count

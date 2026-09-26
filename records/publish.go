@@ -38,10 +38,11 @@ func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segm
 	return nil
 }
 
-const selectNextBlockID = `select coalesce(max(id), 0) + 1 from blocks`
+const selectNextBlockID = `select coalesce(max(seq), 0) + 1 from sqlite_sequence where name = 'blocks'`
 
 // nextBlockID is the id a segment's first block takes: the writer is alone,
-// so a segment's blocks are the ids from it on, named by the segment row
+// so a segment's blocks are the ids from it on, named by the segment row; the
+// sequence remembers the ids of deleted blocks, so none is given twice
 func nextBlockID(ctx context.Context, tx sqlite.Writer) (int64, error) {
 	var id int64
 	err := sqlite.QueryRow(ctx, tx, selectNextBlockID).Scan(&id)
