@@ -345,8 +345,8 @@ The application's current state in `kv.db`: buckets of one value type with
 text keys and branches, expiry by the store's clock, versions that never
 repeat, writes from many goroutines committed together by
 `internal/sqlite.File.UpdateGrouped`, point reads by `File.Lookup` without a
-transaction. Counters, `Sliding` expiry and `Clear` are designed, not
-built.
+transaction, and counters. `LoseAtMost` counters, `Sliding` expiry and
+`Clear` are designed, not built.
 
 ```go
 state, err := kv.Open(ctx, store, kv.Options{})

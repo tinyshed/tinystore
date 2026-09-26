@@ -269,20 +269,6 @@ func (c call) absent() error {
 	return nil
 }
 
-// expiresFor is the expiry a write gives: the call's own, the one a live key
-// has, or the bucket's default for a key the write creates
-func (b *Bucket[V]) expiresFor(c call, existing cell) sql.NullInt64 {
-	switch {
-	case c.options.hasExpiry():
-		return sql.NullInt64{Int64: c.options.expiry(c.now), Valid: true}
-	case existing.live(c.now):
-		return existing.expires
-	case b.ttl > 0:
-		return sql.NullInt64{Int64: c.now + b.ttl.Milliseconds(), Valid: true}
-	}
-	return sql.NullInt64{}
-}
-
 // writeSpilled keeps a value over inlineLimit in a row of its own
 func writeSpilled(ctx context.Context, w sqlite.Writer, value []byte) (sql.NullInt64, error) {
 	if value == nil {

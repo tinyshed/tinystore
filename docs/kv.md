@@ -1,8 +1,8 @@
 # KV: the application's current state
 
-The design of the kv engine, built in part: `kv/` holds buckets, branches,
-expiry, versions, grouped writes, point reads, `Scan`, `Tx` and `View`, and
-its contract is [kv/README.md](../kv/README.md); counters, `LoseAtMost`,
+The design of the kv engine, built in part: `kv/` holds buckets, counters,
+branches, expiry, versions, grouped writes, point reads, `Scan`, `Tx` and
+`View`, and its contract is [kv/README.md](../kv/README.md); `LoseAtMost`,
 `Sliding` and `Clear` are designed here and not built. The API and the
 contracts below are settled, and what lies under
 [Storage](#storage) was measured by
@@ -47,6 +47,10 @@ n, err := attempts.Add(ctx, ip, 1)
 - **A plain verb returns the least; its `Entry` twin returns the version.**
   `Get` and `GetEntry`, `Set` and `SetEntry`, `SetIfAbsent` and
   `SetEntryIfAbsent`.
+- **An option of one kind does not compile for the other.** `Sliding` and
+  `WithCodec` are a bucket's, `LoseAtMost` is counters', `DefaultTTL` fits
+  both, so `OpenBucket(…, kv.LoseAtMost(time.Second))` is a compile error
+  rather than an `ErrInvalid` at start.
 
 ```go
 // Bucket[V]
@@ -369,7 +373,7 @@ The five cases are the gates' workloads.
 | one of concurrent `Take`s gets the value | `TestConcurrentTakesGiveTheValueOnce` |
 | a stale claim cannot finish or delete the next | `TestAStaleClaimCannotFinishOrDeleteTheNext` |
 | one of two versioned writes conflicts | `TestOneOfTwoVersionedWritesConflicts` |
-| an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded`, not built |
+| an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded` |
 | `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval`, not built |
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
 | `Clear` empties a branch and those under it at once, over the generation bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt`, not built |

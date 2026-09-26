@@ -12,6 +12,7 @@ state, err := kv.Open(ctx, store, kv.Options{}) // data/kv.db
 sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.DefaultTTL(30*24*time.Hour))
 codes, err := kv.OpenBucket[int64](ctx, state, "login-codes", kv.DefaultTTL(15*time.Minute))
 seen, err := kv.OpenBucket[struct{}](ctx, state, "stripe-events") // a set
+attempts, err := kv.OpenCounters(ctx, state, "login-attempts", kv.DefaultTTL(15*time.Minute))
 
 err = sessions.Of(user.ID).Set(ctx, token, Session{Device: device})
 s, found, err := sessions.Of(user.ID).Get(ctx, token)
@@ -19,6 +20,7 @@ page, err := sessions.Of(user.ID).Scan(ctx, kv.Query{Limit: 20})
 userID, found, err := codes.Take(ctx, digest(code)) // read and burn
 claim, first, err := seen.SetEntryIfAbsent(ctx, event.ID, struct{}{}, kv.TTL(10*time.Minute))
 err = seen.Set(ctx, event.ID, struct{}{}, kv.IfVersion(claim.Version), kv.TTL(7*24*time.Hour))
+n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 again fifteen minutes after the first
 ```
 
 ## Contracts
@@ -36,6 +38,13 @@ err = seen.Set(ctx, event.ID, struct{}{}, kv.IfVersion(claim.Version), kv.TTL(7*
   and a value JSON cannot write is `ErrInvalid` at `Set`. `WithCodec` replaces
   the choice. A value over 512 bytes lives in a row of its own; one over 1 MiB
   is `ErrLimit`.
+- **A counter is an int64 a key.** `OpenCounters` opens them: `Add` returns
+  the new value, `Max` keeps the larger, and an absent or expired counter is
+  0. An expired counter starts again from zero with the counters'
+  `DefaultTTL`, and a live one keeps its expiry, so a window of attempts does
+  not slide. A sum past the int64 range is `tinystore.ErrLimit` and changes
+  nothing, since SQLite would quietly write a REAL. An option of one kind
+  does not compile for the other: `DefaultTTL` fits both.
 - **Expiry follows three rules.** A key created without `kv.TTL` or
   `kv.ExpireAt` gets the bucket's `DefaultTTL`, if it has one; a later `Set`
   keeps the expiry a live key has; `Touch` gives a new expiry and keeps the
@@ -65,5 +74,5 @@ err = seen.Set(ctx, event.ID, struct{}{}, kv.IfVersion(claim.Version), kv.TTL(7*
 
 ## Not built yet
 
-Counters with `LoseAtMost`, `Sliding` expiry, `Clear` with generations past
-10,000 keys. [docs/kv.md](../docs/kv.md) says what each is to be.
+`LoseAtMost` counters, `Sliding` expiry, `Clear`.
+[docs/kv.md](../docs/kv.md) says what each is to be.

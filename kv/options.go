@@ -31,29 +31,50 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // BucketOption changes how a bucket serves its values; none changes what its
 // bytes mean, so a program may change them between runs.
-type BucketOption func(*bucketSettings)
+type BucketOption interface{ bucketOption(*settings) }
 
-type bucketSettings struct {
+// CounterOption changes how counters serve their numbers.
+type CounterOption interface{ counterOption(*settings) }
+
+// OpenOption fits a bucket and counters alike.
+type OpenOption interface {
+	BucketOption
+	CounterOption
+}
+
+// settings is what the options of a bucket or of counters say
+type settings struct {
 	ttl   time.Duration
 	codec any
 	err   error
 }
 
+// an option of one kind only, so that the compiler refuses it for the other,
+// and one of both
+type (
+	forBuckets func(*settings)
+	forBoth    func(*settings)
+)
+
+func (f forBuckets) bucketOption(s *settings) { f(s) }
+func (f forBoth) bucketOption(s *settings)    { f(s) }
+func (f forBoth) counterOption(s *settings)   { f(s) }
+
 // DefaultTTL is the expiry a key gets when it is created without kv.TTL or
-// kv.ExpireAt; a later Set keeps the expiry a key has.
-func DefaultTTL(d time.Duration) BucketOption {
-	return func(s *bucketSettings) {
+// kv.ExpireAt; a later Set or Add keeps the expiry a key has.
+func DefaultTTL(d time.Duration) OpenOption {
+	return forBoth(func(s *settings) {
 		if d <= 0 {
 			s.err = fmt.Errorf("%w: kv: a default TTL of %v", tinystore.ErrInvalid, d)
 		}
 		s.ttl = d
-	}
+	})
 }
 
 // WithCodec writes a bucket's values through codec instead of the bytes their
 // type would get; a codec of another value type is ErrInvalid at OpenBucket.
 func WithCodec[V any](codec Codec[V]) BucketOption {
-	return func(s *bucketSettings) { s.codec = codec }
+	return forBuckets(func(s *settings) { s.codec = codec })
 }
 
 // Option changes one call.

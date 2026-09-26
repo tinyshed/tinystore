@@ -272,11 +272,13 @@ func TestTouchRenewsAndKeepsTheVersion(t *testing.T) {
 
 func TestABucketCannotChangeItsKindUnderItsData(t *testing.T) {
 	state := openTestState(t, t.TempDir())
-	if _, err := state.claimBucket(t.Context(), "hits", "counters"); err != nil {
-		t.Fatal(err)
-	}
+	openTestCounters(t, state, "hits")
 	if _, err := OpenBucket[int](t.Context(), state.Store, "hits"); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a bucket of counters opened for values: %v", err)
+	}
+	openTestBucket[int](t, state, "scores")
+	if _, err := OpenCounters(t.Context(), state.Store, "scores"); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a bucket of values opened as counters: %v", err)
 	}
 	if _, err := OpenBucket[int](t.Context(), state.Store, "Hits!"); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a name that is not plain: %v", err)

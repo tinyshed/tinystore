@@ -1,6 +1,6 @@
 // Package kv keeps an application's current state in kv.db inside a
-// tinystore.Store: buckets of one value type, keyed by text in branches, with
-// expiry by the store's clock and versions that never repeat.
+// tinystore.Store: buckets of one value type and counters, keyed by text in
+// branches, with expiry by the store's clock and versions that never repeat.
 //
 //	state, err := kv.Open(ctx, store, kv.Options{})
 //	sessions, err := kv.OpenBucket[Session](ctx, state, "sessions")
@@ -12,8 +12,10 @@
 // statement. Start with kv.go and bucket.go; every other file holds one step:
 //
 //	kv.go        Open, Close, Snapshot: the handle, its revision and admission
-//	bucket.go    OpenBucket, Of, WithTx: a handle on a bucket, and where its calls run
-//	options.go   the engine's bounds, a bucket's options and a call's
+//	bucket.go    OpenBucket, Of, WithTx: a handle on a bucket of values
+//	counters.go  OpenCounters, Add, Max, Get, Delete: a handle on counters
+//	branch.go    what both handles share: a branch's path and where its calls run
+//	options.go   the engine's bounds, the options of buckets, counters and calls
 //	keys.go      a key's text and the path owners and a key make
 //	values.go    a value's bytes by its type, and where they are kept
 //	entry.go     Entry, Version, Query, Page, KeyError
