@@ -323,6 +323,10 @@ record written again one and a half times, and the default stays an hour.
 
 ## Open
 
+- Measured since: reads beside a writer appending and sealing, in
+  [the load round](reports/records-load-2026-09-26.md); not measured on macOS,
+  bare Linux or a disk.
+
 - Text: templates with typed variables beyond a line's own time, which is
   built; one zstd frame per segment showed about 2.5 bytes a record that
   independent blocks leave, measured before the times were kept apart.
