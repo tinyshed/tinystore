@@ -9,6 +9,7 @@
 //	records -stage replay -dir <dir> -corpus <corpus>      the same corpus on its own clock, sealed hourly
 //	records -stage reach -dir <dir> -records <n>           one-second reads near a large store's start and end
 //	records -stage lines -dir <dir> -corpus <corpus>       the corpus through writers of Lines, as a follower of it
+//	records -stage load -dir <dir> -records <n>            reads alone, appends and seals alone, and both at once
 package main
 
 import (
@@ -21,7 +22,10 @@ import (
 )
 
 func main() {
-	stage := flag.String("stage", "density", "density, late, docker, replay, reach or lines")
+	stage := flag.String("stage", "density", "density, late, docker, replay, reach, lines or load")
+	readers := flag.Int("readers", 2, "readers reading one second at a time, for load")
+	phase := flag.Duration("phase", 20*time.Second, "how long each phase of load lasts")
+	rate := flag.Int("rate", 0, "records a second the writer of load appends; as fast as it can when zero")
 	dir := flag.String("dir", "", "an empty directory for the store")
 	corpus := flag.String("corpus", "", "a docker json-file corpus, for docker and replay")
 	count := flag.Int("records", 1_000_000, "frontend records, for density and late")
@@ -49,6 +53,8 @@ func main() {
 		measureReach(ctx, path, *count)
 	case "lines":
 		measureLines(ctx, path, *corpus)
+	case "load":
+		measureLoad(ctx, path, *count, *readers, *rate, *phase)
 	default:
 		log.Fatalf("unknown stage %q", *stage)
 	}
