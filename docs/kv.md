@@ -1,9 +1,10 @@
 # KV: the application's current state
 
 The design of the kv engine: agreed, not built. There is no `kv/` package yet.
-The API and the contracts below are settled; what lies under
-[Storage](#storage) is provisional until the round under [Open](#open) has
-measured it.
+The API and the contracts below are settled, and what lies under
+[Storage](#storage) was measured by
+[the mechanics round](reports/kv-mechanics-2026-09-26.md) on one development
+machine, not yet on a production host.
 
 ## What it is for
 
@@ -259,8 +260,11 @@ err = state.View(ctx, func(tx *kv.Tx) error { … }) // reads from one snapshot
 session read and a counter's `Add`, and neither waits for a disk: a read is one
 point statement, a `LoseAtMost` counter lives in memory between flushes, and a
 `Sliding` renewal waits for the flush. What writes durably, a sign-in, a code,
-a claim, a draft, comes after a limit has let the request in. The round
-measures each path's ceiling against the peak a production service sees.
+a claim, a draft, comes after a limit has let the request in. On the
+development machine a point read held 97,000 to 244,000 a second over eight
+readers in the container, an `Add` millions, and grouped durable writes
+53,000, against 106 requests in the busiest second of the production services
+that log theirs; a production host's own ceilings are [open](#open).
 
 ## Errors
 
@@ -277,17 +281,22 @@ An error about one key is a `*kv.KeyError` naming its bucket and path;
 
 ## Storage
 
-Provisional: the round settles the page size, the inline threshold and whether
-writes need group commit.
-
 ```text
-buckets   id | name | kind                                     values or counters
-cells     bucket | path | version | expires | value | spill     without rowid, key (bucket, path)
-          index (expires, bucket, path) where expires is not null
-spilled   id | value                                            values past the inline threshold
-meta      name | value                                          the revision's high-water mark
+buckets    id | name | kind                                     values or counters
+cells      bucket | path | version | expires | value | spill     without rowid, key (bucket, path)
+           index (expires, bucket, path) where expires is not null
+spilled    id | value                                            values over 512 bytes
+branches   bucket | prefix | generation                          a Clear past 10,000 keys
+meta       name | value                                          the revision's high-water mark
 ```
 
+- **4 KiB pages.** At 1 KiB a row with a 256-byte value no longer fits what a
+  page keeps of a row, and SQLite leaves most of an overflow page empty: 1,158
+  bytes a row and a lookup three times slower.
+- **A value over 512 bytes spills** to `spilled`, and its cell keeps the id. Up
+  to 512 bytes a row costs what spilling does, 745 against 698 bytes, and a
+  `Get` reads one row; a 1024-byte value in the row costs 4,740 bytes against
+  1,480.
 - **One table for every kind.** `value` has no declared type, so a row holds a
   blob, an integer or nothing, and a member of a set costs its path, its
   version and one header byte.
@@ -301,17 +310,28 @@ delete from cells where bucket = ?1 and path = ?2 and (expires is null or expire
 returning version, value, spill;
 ```
 
-- **A read is one statement** on a reader, and a `Scan` page comes from one
-  snapshot.
+- **A point read is one statement without a transaction.** A statement is its
+  own snapshot, and without `View`'s transaction around it eight readers
+  served 8 to 31 % more Gets a second. `internal/sqlite` gains that path; a
+  read of several statements, a `Scan` page or a `View`, keeps its snapshot.
+- **Durable writes commit in groups.** A caller that finds no leader commits
+  every write queued behind it, each in a savepoint, and hands the lead to the
+  first caller still waiting; no goroutine is started, and a caller alone pays
+  one commit as before. A transaction each held 340 `Set`s a second in the
+  container at any concurrency, 512 callers waiting 1.5 s at the median;
+  grouped, 53,000 a second at 9 ms. The failure paths are
+  [the contract](group-commit-contract.md)'s.
+- **A `LoseAtMost` flush writes at most 10,000 keys a transaction**, 45 to 92
+  ms of the writer, so that a flood of distinct keys does not hold a sign-in
+  behind half a second of flush; 100,000 keys may wait.
+- **`Clear` deletes up to 10,000 keys in its own transaction**, 35 to 45 ms. A
+  larger branch gets the next generation in `branches`: its keys are hidden at
+  once, and maintenance deletes them 10,000 a transaction. A million keys in
+  one transaction held the writer for 5.3 to 8.7 s. The generations in use are
+  kept in memory, which one owner of the directory makes safe.
 - **Maintenance runs through `Store.Every`**: expired rows in batches through
-  the expiry index, the `LoseAtMost` and `Sliding` flushes, spilled rows no
-  cell names any more.
-- **`Clear` deletes the branch's range in one transaction.** If the round finds
-  that a large branch holds the writer too long, a branch gets a generation,
-  hidden at once and swept by maintenance; the contract does not change.
-- **A durable write is one transaction.** Group commit, under
-  [its contract](group-commit-contract.md), comes if the round shows that
-  independent writers need it.
+  the expiry index, the `LoseAtMost` and `Sliding` flushes, the keys of old
+  generations, spilled rows no cell names any more.
 - **Backup copies `kv.db`** like any engine's file; the deltas a `LoseAtMost`
   counter holds in memory are not in the copy.
 
@@ -324,7 +344,11 @@ returning version, value, spill;
 | A `Scan` page | 1000 keys, 4 MiB of values |
 | A `View` snapshot | 5 s |
 | `Sliding` renewals | one a key per thirtieth of the term |
-| Keys waiting in a `LoseAtMost` bucket | set by the round |
+| A value kept in its row | 512 bytes; a larger one spills |
+| Keys waiting in a `LoseAtMost` bucket | 100,000 |
+| A `LoseAtMost` flush | 10,000 keys a transaction |
+| A `Clear` in its own transaction | 10,000 keys; a larger one takes a generation |
+| Durable writes committed together | 1024 |
 
 ## Gates
 
@@ -344,7 +368,10 @@ The five cases are the gates' workloads.
 | an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded` |
 | `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval` |
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
-| `Clear` empties a branch and those under it at once | `TestClearEmptiesTheBranchAndThoseUnderIt` |
+| `Clear` empties a branch and those under it at once, over the generation bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt` |
+| a refused write fails alone in its group | `TestOneRefusedWriteDoesNotFailItsGroup` |
+| a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |
+| a value over 512 bytes reads back from `spilled` | `TestALargeValueSpillsAndReadsBack` |
 
 ## Not in the first version
 
@@ -357,15 +384,31 @@ Each waits for a workload that needs it and a measurement that pays for it.
 - A GCRA limiter, one `int64` a key, and `AddWithin` for quotas.
 - Listing a branch's branches; secondary indexes.
 
+## What was measured
+
+The prototype `spike/kv_*` on one AMD Ryzen 7 7700 with an NVMe disk, in a
+`golang:1.27` container and on Windows 11;
+[the round](reports/kv-mechanics-2026-09-26.md) has the environment, the
+commands and every figure.
+
+| | Container | Windows |
+|---|---:|---:|
+| durable `Set`s a second, 512 callers: a transaction each, grouped | 343; 53,338 | 654; 84,808 |
+| point `Get`s a second, one million sessions, eight callers: `View`, a statement | 187,403; 244,127 | 108,160; 132,204 |
+| the same at ten million sessions | 96,696; 111,084 | — |
+| a `LoseAtMost` flush of 100,000 keys, new and onto them | 547 ms; 853 ms | 730 ms; 926 ms |
+| `Clear` of 10,000 and 1,000,000 keys in one transaction | 35 ms; 5.3 s | 45 ms; 8.7 s |
+| production services that log their requests: busiest minute, peak second | 4.9 and 106 requests a second | |
+
 ## Open
 
-The round before the code:
-
-| Question | What it decides |
-|---|---|
-| durable `Set`s a second through `internal/sqlite` from 1, 8, 64 and 512 goroutines, a transaction each and grouped | whether group commit is in the first version |
-| a point `Get` through `View`, which begins a transaction, against one statement without one: 1 and 10 million keys, hits and misses, 1 to 512 readers | whether `internal/sqlite` needs a point-read path, and the read ceiling |
-| a `LoseAtMost` flush of 1,000 to 100,000 distinct keys | how many distinct keys a second a flood may bring, and the bound on keys waiting |
-| `dbstat` by object for `cells` and its expiry index at 1 and 4 KiB pages, values of 16 to 4096 bytes | the page size and the inline threshold |
-| `Clear` of 1,000 to 100,000 keys | whether a branch needs generations |
-| the requests a second a production service peaks at, from the log corpus, as aggregates | how far those ceilings are from what production sees |
+- **A production host's ceilings.** The standing permission reads its logs and
+  nothing else; running the round there needs its owner's word.
+- **The read path past eight readers**, `mmap_size`, and one page cache for the
+  file rather than 1 MiB a connection: 64 MiB a connection helped on Windows
+  and not in the container.
+- **A spilled value's `Get`**, two rows, not timed.
+- **The writer's cache** under random upserts into a large file: ten million
+  sessions took 6 min 44 s to write, 25,000 a second.
+- **Services that do not log their requests.** The production rates are a
+  floor.
