@@ -7,7 +7,7 @@ create table streams (
 ) strict;
 
 -- a head row is one stream's flush, its records in arrival order under zstd;
--- late: more than a minute behind the newest record its stream has shown;
+-- late: more than ten seconds behind the newest record its stream showed before it;
 -- input: what its records weigh against a segment's bounds; size: the body's bytes;
 -- ids only grow, so a row reported damaged is never another row later
 create table heads (

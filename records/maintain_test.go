@@ -52,7 +52,7 @@ func TestAHeadSealsWhenFullOrOld(t *testing.T) {
 	sameRecords(t, sortedByTime(records), s.readAll(t, Query{}))
 }
 
-// a record more than a minute behind its batch goes to the stream's late head
+// a record more than ten seconds behind its stream goes to the stream's late head
 // and seals into a segment of its own
 func TestLateRecordsSealFromTheirOwnHead(t *testing.T) {
 	s := openRecords(t)

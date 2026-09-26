@@ -55,17 +55,17 @@ const (
 
 // what the engine does on its own schedule, and how long it waits
 const (
-	lateness           = time.Minute     // behind its stream's newest, a record goes to the late head
-	maintenanceEvery   = time.Minute     // seal and expire
-	snapshotTimeout    = 5 * time.Second // the longest a read holds its snapshot
-	segmentReservation = 24 << 20        // what encoding or decoding one segment allocates at most
-	readSlots          = 2               // reads and follows at once, decoding included: the reader connections
-	appendSlots        = 2               // appends at once: one encodes while another writes
-	recordReservation  = 1 << 10         // what one decoded record holds
-	blockReservation   = 2 << 20         // what decoding one block allocates at most
-	defaultLimit       = 1000            // records a page returns when a query does not say
-	maxLimit           = 10_000          // records a page may return
-	maxLevel           = 1<<31 - 1       // levels travel as 32-bit integers on every platform
+	lateness           = 10 * time.Second // behind its stream's newest before it, a record goes to the late head
+	maintenanceEvery   = time.Minute      // seal and expire
+	snapshotTimeout    = 5 * time.Second  // the longest a read holds its snapshot
+	segmentReservation = 24 << 20         // what encoding or decoding one segment allocates at most
+	readSlots          = 2                // reads and follows at once, decoding included: the reader connections
+	appendSlots        = 2                // appends at once: one encodes while another writes
+	recordReservation  = 1 << 10          // what one decoded record holds
+	blockReservation   = 2 << 20          // what decoding one block allocates at most
+	defaultLimit       = 1000             // records a page returns when a query does not say
+	maxLimit           = 10_000           // records a page may return
+	maxLevel           = 1<<31 - 1        // levels travel as 32-bit integers on every platform
 	minLevel           = -1 << 31
 )
 

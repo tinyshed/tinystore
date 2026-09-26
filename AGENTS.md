@@ -388,6 +388,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | only what no longer reads can be dropped            | `TestDropRefusesWhatStillReads`                                                 |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
 | a record appended alone can be late                 | `TestARecordAppendedAloneCanBeLate`                                             |
+| a batch in time order makes none of its own late    | `TestARecordTenSecondsBehindItsStreamsNewestIsLate`                             |
 | a reopened store knows what its heads hold          | `TestAReopenedStoreKnowsWhatItsHeadsHold`                                       |
 | a producer ahead of the store makes no one late     | `TestAProducerAheadOfTheStoreDoesNotMakeItsNeighboursLate`                      |
 | a time outside its engine's window is refused       | `TestARecordOutsideItsWindowIsRefused`, `TestASampleAheadOfTheClockIsRefused`   |

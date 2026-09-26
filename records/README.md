@@ -61,11 +61,12 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   spells them.
 - A record's order is its time. A segment stores one stream's records in time
   order, equal times in the order they arrived; nothing else of the arrival
-  order is kept. A record more than a minute behind the newest record its
-  stream has shown, in its batch or waiting in the head, or behind the store's
-  clock when that is earlier, goes to the stream's late head, so that it does
-  not stretch the blocks of its neighbours; a producer whose clock runs ahead
-  of the store's does not send its neighbours there.
+  order is kept. A record more than ten seconds behind the newest record its
+  stream showed before it, earlier in its batch or waiting in the head, or
+  behind the store's clock when that is earlier, goes to the stream's late
+  head, so that it does not stretch the blocks of its neighbours; a batch in
+  time order sends none of its records there, and a producer whose clock runs
+  ahead of the store's does not send its neighbours there.
 - Records wait in a durable head until their head holds a segment's worth
   (16,384 records or 4 MiB) or its oldest row is `Options.SealAge` old (an
   hour), which is how far behind them `Follow` may be. `Maintain`, every

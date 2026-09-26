@@ -17,21 +17,23 @@ type headBatch struct {
 	records []Record
 }
 
-// routeToHeads splits a batch by stream, sends what lags more than a minute
-// behind the newest record its stream has shown, in the batch or waiting on
-// time in its head, or behind the store's clock when that is earlier, to that
-// stream's late head, and cuts each head's share at a block's bounds; a record
-// appended alone can be late too, and a producer ahead of the store's clock
-// does not make its neighbours late:
+// routeToHeads splits a batch by stream, sends what lags more than ten
+// seconds behind the newest record its stream showed before it, earlier in
+// the batch or waiting on time in its head, or behind the store's clock when
+// that is earlier, to that stream's late head, and cuts each head's share at a
+// block's bounds. A record appended alone can be late too; a batch in time
+// order makes none of its own records late however long it spans; a producer
+// ahead of the store's clock does not make its neighbours late:
 //
-//	clock 12:01, web waiting until 12:00:40; batch 12:00:10 12:00:31 11:50:02 12:00:45
-//	→ newest 12:00:45: on time 12:00:10 12:00:31 12:00:45, late 11:50:02
-//	clock 12:01, web waiting until 12:00:40; batch 11:59:30 alone  → 70 s behind: late
-//	clock 12:00, web waiting until 12:05:00; batch 11:59:30 alone  → 30 s behind the clock: on time
+//	clock 12:01, web waiting until 12:00:40; batch 12:00:35 12:00:41 11:50:02 12:00:45
+//	→ on time 12:00:35 12:00:41 12:00:45, late 11:50:02
+//	clock 12:01, nothing waiting; batch 11:58:30 11:59:10 12:00:45   → all on time
+//	clock 12:01, web waiting until 12:00:40; batch 12:00:20 alone    → 20 s behind: late
+//	clock 12:00, web waiting until 12:05:00; batch 11:59:55 alone    → 5 s behind the clock: on time
 func routeToHeads(batch []Record, waiting *waitingTimes, now int64) []headBatch {
 	var routed []headBatch
 	for _, records := range byStream(batch) {
-		onTime, late := splitLate(records, min(waiting.reference(records), now))
+		onTime, late := splitLate(records, waiting.newestOf(records[0].Stream), now)
 		routed = appendCut(routed, onTime, false)
 		routed = appendCut(routed, late, true)
 	}
@@ -55,16 +57,16 @@ func byStream(batch []Record) [][]Record {
 	return streams
 }
 
-func splitLate(records []Record, reference int64) (onTime, late []Record) {
-	if reference < math.MinInt64+int64(lateness) {
-		return records, nil
-	}
+// splitLate measures each record against the newest its stream showed before
+// it, newest, which each record on time moves on
+func splitLate(records []Record, newest, now int64) (onTime, late []Record) {
 	for _, record := range records {
-		if record.At.UnixNano() < reference-int64(lateness) {
+		at := record.At.UnixNano()
+		if reference := min(newest, now); reference > math.MinInt64+int64(lateness) && at < reference-int64(lateness) {
 			late = append(late, record)
-		} else {
-			onTime = append(onTime, record)
+			continue
 		}
+		onTime, newest = append(onTime, record), max(newest, at)
 	}
 	return onTime, late
 }
@@ -110,19 +112,15 @@ func (w *waitingTimes) load(ctx context.Context, file *sqlite.File, names *strea
 	return nil
 }
 
-// reference is the newest record a stream has shown, in this batch of its
-// records or waiting on time in its head
-func (w *waitingTimes) reference(records []Record) int64 {
-	newest := records[0].At.UnixNano()
-	for _, record := range records[1:] {
-		newest = max(newest, record.At.UnixNano())
-	}
+// newestOf is the newest record waiting on time in a stream's head, or the
+// earliest time there is when none waits
+func (w *waitingTimes) newestOf(stream string) int64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if waiting, ok := w.newest[records[0].Stream]; ok {
-		return max(newest, waiting)
+	if waiting, ok := w.newest[stream]; ok {
+		return waiting
 	}
-	return newest
+	return math.MinInt64
 }
 
 // remember takes the newest on-time record of every row an append wrote

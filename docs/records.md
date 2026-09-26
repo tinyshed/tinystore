@@ -159,14 +159,15 @@ places 1 4 7 9 of a stream, 30 40 35 38 records   → 1 holds 143; 1 4 7 9 start
 four such, 143 150 160 140 records                → one holds 593
 ```
 
-**Late records have a head of their own.** What arrives more than a minute
-behind the newest record its stream has shown, in the same batch or waiting on
-time in its head, or behind the store's clock when that is earlier, goes to a
-late head of the same stream and seals the same way; a record appended alone
-can be late too, and a producer ahead of the store's clock does not make its
-neighbours late. Without it, one record in a hundred arriving ten minutes late
-made one-second reads read thirteen times as many blocks; with it, under three
-times.
+**Late records have a head of their own.** What arrives more than ten
+seconds behind the newest record its stream showed before it, earlier in the
+same batch or waiting on time in its head, or behind the store's clock when
+that is earlier, goes to a late head of the same stream and seals the same
+way. A record appended alone can be late too; a batch in time order makes
+none of its own records late, however long it spans; a producer ahead of the
+store's clock does not make its neighbours late. Without a late head, one
+record in a hundred arriving ten minutes late made one-second reads read
+thirteen times as many blocks; with it, one and a half times.
 
 **What no longer reads is reported once and dropped by hand.** A head row or
 a segment whose bytes fail their checksum is logged the first time the engine
@@ -257,7 +258,7 @@ column, with exact exceptions. The engine leaves both out; what that costs is
 | Layouts of those times in one column | 64 |
 | Expanded or copied text per block | 4 MiB |
 | Head row | a block's bounds |
-| Head | an hour of age; a minute behind the stream's newest, or the clock, is late |
+| Head | an hour of age; ten seconds behind the stream's newest before it, or the clock, is late |
 | Time | from the retention cutoff to `ClockSkew`, ten minutes, past the store's clock |
 | Memory reservation | 24 MiB per segment in flight |
 
@@ -285,7 +286,7 @@ since small segments merge.
 | encoder, one CPU | 405,000 to 480,000 frontend records/s | 495,000 to 593,000; 800,000 to 864,000 text |
 | decoder, one CPU | about 1.5 million records/s | 1.25 to 1.42 million; 1.73 to 1.89 million text |
 | one second of one million records | 2 of 977 blocks read | 1.92 blocks |
-| the same, one record in a hundred ten minutes late | 5.12 blocks | 4.63; 5.24 in flushes of 1024 |
+| the same, one record in a hundred ten minutes late | 5.12 blocks | 2.93, in flushes of 1024 or 16,384 |
 | one request id among 1.32 million | 11 blocks read, 21 ms | 11 blocks, 6 ms |
 
 ## What the engine leaves out
@@ -314,10 +315,6 @@ record written again one and a half times, and the default stays an hour.
 - Text: templates with typed variables beyond a line's own time, which is
   built; one zstd frame per segment showed about 2.5 bytes a record that
   independent blocks leave, measured before the times were kept apart.
-- Late records: measured against the stream's newest record, one-second reads
-  fetch 5.24 blocks when the late fixture arrives in flushes of 1024, above the
-  hand-off's 5.2; the minute itself is the lever left
-  ([the round](reports/records-late-reference-2026-09-25.md)).
 - Input: a continuation rule for multi-line records; adapters for pino, logfmt,
   glog and log4j lines.
 - Encoding: a store-level context registry, per-context numeric state, nested

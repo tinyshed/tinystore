@@ -11,12 +11,12 @@ import (
 )
 
 // the examples in the comment on routeToHeads
-func TestARecordAMinuteBehindItsStreamsNewestIsLate(t *testing.T) {
+func TestARecordTenSecondsBehindItsStreamsNewestIsLate(t *testing.T) {
 	noon := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	waiting := waitingTimes{newest: map[string]int64{"web": noon.Add(40 * time.Second).UnixNano()}}
 	batch := []Record{
-		{At: noon.Add(10 * time.Second), Stream: "web", Name: "a"},
-		{At: noon.Add(31 * time.Second), Stream: "web", Name: "b"},
+		{At: noon.Add(35 * time.Second), Stream: "web", Name: "a"},
+		{At: noon.Add(41 * time.Second), Stream: "web", Name: "b"},
 		{At: noon.Add(-10*time.Minute + 2*time.Second), Stream: "web", Name: "c"},
 		{At: noon.Add(45 * time.Second), Stream: "web", Name: "d"},
 	}
@@ -36,14 +36,22 @@ func TestARecordAMinuteBehindItsStreamsNewestIsLate(t *testing.T) {
 		!slices.Equal(names(routed[1].records), []string{"c"}) {
 		t.Fatalf("on time %v, late %v", names(routed[0].records), names(routed[1].records))
 	}
-	alone := routeToHeads([]Record{{At: noon.Add(-30 * time.Second), Stream: "web", Name: "e"}}, &waiting, clock)
+	inOrder := []Record{
+		{At: noon.Add(-90 * time.Second), Stream: "web", Name: "f"},
+		{At: noon.Add(-50 * time.Second), Stream: "web", Name: "g"},
+		{At: noon.Add(45 * time.Second), Stream: "web", Name: "h"},
+	}
+	if routed = routeToHeads(inOrder, &waitingTimes{newest: map[string]int64{}}, clock); len(routed) != 1 || routed[0].late {
+		t.Fatalf("a batch in time order over two minutes: %+v", routed)
+	}
+	alone := routeToHeads([]Record{{At: noon.Add(20 * time.Second), Stream: "web", Name: "e"}}, &waiting, clock)
 	if len(alone) != 1 || !alone[0].late {
-		t.Fatalf("a record appended alone, 70 s behind what waits: %+v", alone)
+		t.Fatalf("a record appended alone, 20 s behind what waits: %+v", alone)
 	}
 	ahead := waitingTimes{newest: map[string]int64{"web": noon.Add(5 * time.Minute).UnixNano()}}
-	alone = routeToHeads([]Record{{At: noon.Add(-30 * time.Second), Stream: "web", Name: "e"}}, &ahead, noon.UnixNano())
+	alone = routeToHeads([]Record{{At: noon.Add(-5 * time.Second), Stream: "web", Name: "e"}}, &ahead, noon.UnixNano())
 	if len(alone) != 1 || alone[0].late {
-		t.Fatalf("30 s behind the clock, behind a producer five minutes ahead of it: %+v", alone)
+		t.Fatalf("5 s behind the clock, behind a producer five minutes ahead of it: %+v", alone)
 	}
 }
 
@@ -73,7 +81,7 @@ func TestARecordAppendedAloneCanBeLate(t *testing.T) {
 func TestAProducerAheadOfTheStoreDoesNotMakeItsNeighboursLate(t *testing.T) {
 	s := openRecords(t)
 	s.append(t, Record{At: testNow.Add(5 * time.Minute), Stream: "web", Name: "ahead"})
-	s.append(t, Record{At: testNow.Add(-30 * time.Second), Stream: "web", Name: "on time"})
+	s.append(t, Record{At: testNow.Add(-5 * time.Second), Stream: "web", Name: "on time"})
 	if late := s.recordsInLateHeads(t); late != 0 {
 		t.Fatalf("%d records in the late head, want none", late)
 	}
