@@ -143,6 +143,8 @@ bytes. One that keeps up reads places before they merge.
   above full segments, each record written again one and a half times.
 - A follower far behind pays for merged places in bytes fetched; keeping a
   batch's blocks past the batch would take most of it back, and is not built.
+  Follow-up: [the follow round](records-follow-2026-09-26.md) keeps them, and
+  a follower of the whole corpus fetches 21.4 MB.
 - Merged quiet streams make wide blocks: the widest spans about 337 hours,
   where the hourly file's spanned an hour. The time index scans every block ending after
   a read's start, which wide blocks make worth bounding.
