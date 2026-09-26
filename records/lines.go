@@ -14,21 +14,29 @@ import (
 )
 
 // Lines is a writer for another program's output, a child process's stdout or
-// a file being followed: each line it is given becomes a record named "log" in
-// stream, queued as the handler queues its lines, so a Write never waits and a
-// record the buffer has no room for is dropped and counted in Stats.
-// The lines of one record are joined first: a stack trace's frames, a
-// traceback, a JSON value printed over several lines. A record keeps its text
-// byte for byte, or a JSON object's fields when they spell the line again,
-// and takes its level from where pino, logfmt, glog, log4j and their kin
-// write it; its time is when its first line arrived. A record still growing
-// waits a flush or two for a line that joins it; Close hands it over.
+// a file being followed: each line it is given becomes a record in stream,
+// queued as the handler queues its lines, so a Write never waits and a record
+// the buffer has no room for is dropped and counted in Stats. The lines of one
+// record are joined first: a stack trace's frames, a traceback, a JSON value
+// printed over several lines. A record named "log" keeps its text byte for
+// byte as its body; one named "json" or "logfmt" keeps a JSON object's fields
+// or logfmt pairs, which spell its line again. Its level is taken from where
+// pino, logfmt, glog, Redis, log4j and their kin write it, in colour or not,
+// and its time is when its first line arrived. A record still growing waits a
+// flush or two for a line that joins it; Close hands it over.
 func (s *Store) Lines(stream string) io.WriteCloser {
-	w := &lineWriter{stream: stream, now: s.now, enqueue: s.enqueue}
+	w := newLineWriter(stream, s.now, s.enqueue)
 	w.release = func() { s.lines.remove(w) }
 	s.lines.add(w)
 	return w
 }
+
+// the names Lines gives its records, which say how each spells its line again
+const (
+	textLine   = "log"    // the body is the line
+	jsonLine   = "json"   // the attributes are a JSON object's fields, as exactFields reads them
+	logfmtLine = "logfmt" // the attributes are logfmt pairs, as spellLogfmt writes them
+)
 
 // maxJoinedLines is how many lines one record joins
 const maxJoinedLines = 1000
@@ -40,10 +48,16 @@ type lineWriter struct {
 	now     func() time.Time
 	enqueue func(Record) // where a record goes once its lines are joined
 	release func()       // what Close lets go of
+	room    int          // the most text a record of the stream can keep
 	mu      sync.Mutex
 	partial []byte // a line not yet ended
 	pending *pendingRecord
 	closed  bool
+}
+
+func newLineWriter(stream string, now func() time.Time, enqueue func(Record)) *lineWriter {
+	room := maxBlockInput - inputSize(&Record{Stream: stream, Name: textLine})
+	return &lineWriter{stream: stream, now: now, enqueue: enqueue, release: func() {}, room: room}
 }
 
 // pendingRecord is one record's lines so far
@@ -51,6 +65,7 @@ type pendingRecord struct {
 	text   []byte
 	at     time.Time
 	lines  int
+	room   int
 	open   brackets // what a JSON value begun on its first line left open
 	waited bool     // a flush found it, and it has not grown since
 }
@@ -127,7 +142,7 @@ func (w *lineWriter) feed(line []byte) {
 		return
 	}
 	w.handOverPending()
-	w.pending = &pendingRecord{at: w.now()}
+	w.pending = &pendingRecord{at: w.now(), room: w.room}
 	w.pending.add(line)
 }
 
@@ -159,7 +174,7 @@ func (p *pendingRecord) add(line []byte) {
 //	[2026-09-26 12:00:03] info done                a record: brackets begin no value but a line's own
 func (p *pendingRecord) joins(line []byte) bool {
 	switch {
-	case p.lines >= maxJoinedLines || len(p.text)+1+len(line) > maxBlockInput-maxJoinedLines:
+	case p.lines >= maxJoinedLines || len(p.text)+1+len(line) > p.room:
 		return false
 	case p.open.depth > 0:
 		return true
@@ -237,13 +252,18 @@ func (w *lineWriter) handOverPending() {
 	}
 }
 
+// record keeps a JSON object's fields or logfmt pairs when they spell the
+// line again and fit a record, and the text as it is otherwise
 func (w *lineWriter) record(p *pendingRecord) Record {
 	text := string(p.text)
-	record := Record{At: p.at, Stream: w.stream, Name: "log"}
+	record := Record{At: p.at, Stream: w.stream, Name: textLine}
 	if fields, ok := exactFields(text); ok {
-		record.Attrs = fields
-	} else {
-		record.Body = &text
+		record.Name, record.Attrs = jsonLine, fields
+	} else if fields, ok = logfmtFields(text); ok {
+		record.Name, record.Attrs = logfmtLine, fields
+	}
+	if record.Attrs == nil || inputSize(&record) > maxBlockInput {
+		record.Name, record.Attrs, record.Body = textLine, nil, &text
 	}
 	if level, ok := levelOf(text, record.Attrs); ok {
 		record.Level = &level

@@ -35,8 +35,8 @@ durable head, segments of event-time blocks written column by column, a line's
 own time kept apart from its text, a quiet stream's small segments merged
 four of a size, paged reads pruned by time, level, keys and blooms, a follow
 cursor that a merge leaves in its place, a writer for another program's lines
-that joins their stack traces and finds their levels, and rows that no longer
-read reported once and removed by `Drop`
+that joins their stack traces, keeps JSON and logfmt lines as fields and finds
+their levels, and rows that no longer read reported once and removed by `Drop`
 ([records/README.md](records/README.md)). `kv` keeps the application's
 current state in `kv.db`: buckets of one value type, keys in branches, expiry
 by the store's clock, versions that never repeat, writes committed in groups
@@ -372,6 +372,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a writer of lines never waits, and closes with the store | `TestLinesNeverWaitAndCloseWithTheStore`                                   |
 | a stack trace's lines make one record               | `TestLinesJoinWhatBelongsTogether`, `TestAStackTraceGoesOn`                     |
 | a line's level is found where its program writes it | `TestLinesFindTheLevelWhereProgramsWriteIt`                                     |
+| a level in colour counts as one in brackets         | `TestAColourMarksALevelAsBracketsDo`                                            |
+| a logfmt line keeps its pairs when they spell it    | `TestLogfmtLinesKeepTheirPairsWhenTheySpellTheLineAgain`, `TestLinesKeepALogfmtLinesPairs` |
 | a record survives the records format exactly        | `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`      |
 | a changed records byte is refused                   | `TestAChangedOrMissingByteIsRefused`, `TestAChangedHeadRowIsRefused`, fuzzers   |
 | a records decode stays bounded                      | `TestExpandedTextIsBounded`; every copy is charged before it is made            |

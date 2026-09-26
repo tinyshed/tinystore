@@ -174,10 +174,12 @@ func TestLinesNeverWaitAndCloseWithTheStore(t *testing.T) {
 func FuzzLinesLoseNoByte(f *testing.F) {
 	f.Add("2026-09-26 12:00:01,500 ERROR failed\n  at frame\nnext\n{\n\"a\": [1,\n2]}\n", uint8(3))
 	f.Add(`{"level":30,"msg":"ok"}`+"\nplain\r\n\n", uint8(1))
+	f.Add(`level=info msg="slow \"request\"" ms=1200 ok=true`+"\nlevel=warn  msg=x\na= b=\n", uint8(2))
 	f.Fuzz(func(t *testing.T, text string, cut uint8) {
 		var got []string
-		w := &lineWriter{stream: "fuzz", now: func() time.Time { return testNow }, release: func() {}}
-		w.enqueue = func(record Record) { got = append(got, lineOf(&record)) }
+		w := newLineWriter("fuzz", func() time.Time { return testNow }, func(record Record) {
+			got = append(got, lineOf(&record))
+		})
 		step := int(cut) + 1
 		for i := 0; i < len(text); i += step {
 			if _, err := io.WriteString(w, text[i:min(i+step, len(text))]); err != nil {
@@ -196,8 +198,11 @@ func FuzzLinesLoseNoByte(f *testing.F) {
 
 // lineOf writes a record of Lines as the line it came from
 func lineOf(record *Record) string {
-	if record.Body != nil {
+	switch record.Name {
+	case textLine:
 		return *record.Body
+	case logfmtLine:
+		return spellLogfmt(record.Attrs)
 	}
 	var fields []string
 	for _, field := range record.Attrs {
@@ -236,10 +241,7 @@ func BenchmarkLines(b *testing.B) {
 	lines := strings.Count(text.String(), "\n")
 	b.SetBytes(int64(text.Len()))
 	for b.Loop() {
-		w := &lineWriter{
-			stream: "bench", now: func() time.Time { return testNow }, enqueue: func(Record) {},
-			release: func() {},
-		}
+		w := newLineWriter("bench", func() time.Time { return testNow }, func(Record) {})
 		if _, err := io.WriteString(w, text.String()); err != nil {
 			b.Fatal(err)
 		}

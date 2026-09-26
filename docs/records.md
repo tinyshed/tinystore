@@ -49,13 +49,21 @@ batch, err := logs.Follow(ctx, records.Cursor{Segment: s, Row: r}, 1000)
   named `log`, the message its body, `logger.With` its context, the call's
   attributes its attributes.
 - **Another program's lines keep their bytes.** A writer of `Lines` makes a
-  record named `log` of each line at the time it arrived, joins the lines of
-  a stack trace, a traceback or a JSON value printed over lines, keeps the
-  text byte for byte, or a JSON object's fields when they spell the line
-  again, and takes the level from where pino, logfmt, glog, log4j and
-  Postgres write it, so that `MinLevel` finds their errors through the
-  blocks' level masks. A line's own time stays in its text, where the codec
+  record of each line at the time it arrived and joins the lines of a stack
+  trace, a traceback or a JSON value printed over lines. A record named `log`
+  keeps the text byte for byte; one named `json` keeps a JSON object's
+  fields and one named `logfmt` a logfmt line's pairs, when they spell the
+  line again, so that `Attrs` finds them. The level comes from where pino,
+  logfmt, glog, Redis, log4j, zerolog and Postgres write it, in colour or
+  not, so that `MinLevel` finds their errors through the blocks' level masks.
+  A line's own time stays in its text, or in its time pair, where the codec
   keeps it at a few bits.
+
+```text
+level=info msg="slow request" ms=1200   → logfmt: level "info", msg "slow request", ms 1200
+level=info msg="ok"                     → log: the rule spells ok bare, so the line stays text
+\x1b[32mINFO\x1b[0m started              → log, level info: a word in colour counts as one in brackets
+```
 
 ## The record
 
@@ -339,7 +347,7 @@ record written again one and a half times, and the default stays an hour.
 - Text: templates with typed variables beyond a line's own time, which is
   built; one zstd frame per segment showed about 2.5 bytes a record that
   independent blocks leave, measured before the times were kept apart.
-- Input: logfmt pairs as attributes; OTLP, and a server taking lines from
-  programs that do not embed the store.
+- Input: OTLP, and a server taking lines from programs that do not embed the
+  store.
 - Encoding: a store-level context registry, per-context numeric state, nested
   JSON decomposition.

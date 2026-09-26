@@ -61,13 +61,16 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   spells them.
 - `Lines(stream)` is a writer for another program's output, a child process's
   stdout or a followed file, and never blocks as the handler never does. Each
-  line becomes a record named `log` at the time it arrived; the lines of a
-  stack trace, a traceback or a JSON value printed over lines join into one,
-  an indented line, a traceback, a cause or an exception's name going on the
-  record before it. The text is kept byte for byte, or a JSON object's fields
-  when they spell the line again, and the level is found where pino, logfmt,
-  glog, log4j and Postgres write it. A record that may still grow is written
-  once a flush passes without a line joining it, and on `Close`.
+  line becomes a record at the time it arrived; the lines of a stack trace, a
+  traceback or a JSON value printed over lines join into one, an indented
+  line, a traceback, a cause or an exception's name going on the record
+  before it. A record named `log` keeps its text byte for byte as its body;
+  one named `json` keeps a JSON object's fields, and one named `logfmt` a
+  logfmt line's pairs, as its attributes when they spell the line again, so
+  that a query finds them by `Attrs`. The level is found where pino, logfmt,
+  glog, Redis, log4j, zerolog and Postgres write it, in colour or not. A
+  record that may still grow is written once a flush passes without a line
+  joining it, and on `Close`.
 - A record's order is its time. A segment stores one stream's records in time
   order, equal times in the order they arrived; nothing else of the arrival
   order is kept. A record more than ten seconds behind the newest record its
@@ -136,6 +139,6 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 ## What it does not do yet
 
 No text templates beyond the times a line spells, no full-text search, no
-logfmt pairs as attributes, no OTLP. Text compresses per block, without the
+OTLP. Text compresses per block, without the
 per-segment sample the research measured; see docs/records.md for what that
 costs.

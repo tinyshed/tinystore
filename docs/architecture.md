@@ -262,12 +262,12 @@ enter the root module's dependencies. The design follows from that caller.
 
 Built since, inside the engine: `Lines(stream)`, a writer for another
 program's output. It joins a record's lines at ingest by a continuation rule,
-keeps a text line byte for byte and a JSON object line as its fields when they
-spell it again, and maps only the level. Its choices differ from the design
-below in two places, each measured on the production corpus: a record's time
-is when its first line arrived, since a time whose zone a line does not say
-cannot be placed and its text keeps it at a few bits; and a logfmt line stays
-text, since its pairs would not spell it again.
+keeps a text line byte for byte, and a JSON object line or a logfmt line as
+its fields when they spell it again, naming the record `log`, `json` or
+`logfmt` so that it can be spelled back, and maps only the level. Its choices
+differ from the design below in one place, measured on the production corpus:
+a record's time is when its first line arrived, since a time whose zone a line
+does not say cannot be placed and its text keeps it at a few bits.
 
 **A stream names a source class, not every combination of metadata.** Producer
 and session metadata can share context snapshots. Unique session and trace ids
