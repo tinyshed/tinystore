@@ -39,9 +39,10 @@ that joins their stack traces, keeps JSON and logfmt lines as fields and finds
 their levels, and rows that no longer read reported once and removed by `Drop`
 ([records/README.md](records/README.md)). `kv` keeps the application's
 current state in `kv.db`: buckets of one value type and counters, keys in
-branches, expiry by the store's clock, versions that never repeat, writes
-committed in groups and point reads without a transaction
-([kv/README.md](kv/README.md)).
+branches, expiry by the store's clock, sliding or fixed, versions that never
+repeat, writes committed in groups, point reads without a transaction,
+counters kept in memory between flushes when a crash may lose a second of
+them, and a branch cleared at once however large ([kv/README.md](kv/README.md)).
 `Store.Snapshot` copies every engine's file while it works, and `backup`
 writes those copies as one zip and restores it before `Open`.
 
@@ -52,8 +53,7 @@ which cost more than zstd there; its format is version one and reads no
 earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
-Designed, not built: `blobs`, `jobs`, self-metrics, and kv's `Sliding`
-expiry ([docs/kv.md](docs/kv.md)).
+Designed, not built: `blobs`, `jobs` and self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -480,6 +480,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a cleared key is absent to every operation             | `TestAClearedKeyIsAbsentToEveryOperation`                                       |
 | a Clear never brings back counters waiting to flush    | `TestAClearDoesNotResurrectCountersWaitingForTheFlush`                          |
 | a Clear inside Tx deletes what it clears or refuses    | `TestAClearInATransactionOverTheBoundIsRefused`                                 |
+| a sliding read writes at most once per refresh         | `TestASlidingReadWritesAtMostOncePerRefresh`                                    |
+| a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation`, bound to version and expiry       |
+| a key read in its last minute is renewed at once       | `TestAReadNearItsExpiryRenewsAtOnce`                                            |
+| kv's All holds no snapshot between its pages           | `TestAllWalksEveryKeyAPageAtATime`                                              |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

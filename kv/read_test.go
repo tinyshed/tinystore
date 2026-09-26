@@ -2,6 +2,7 @@ package kv
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -44,6 +45,45 @@ func TestScanReadsABranchsOwnKeysInPages(t *testing.T) {
 	}
 	if _, err := drafts.Scan(t.Context(), Query{Limit: maxScanLimit + 1}); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a page over the limit: %v", err)
+	}
+}
+
+// All walks every key of a branch across pages, holds no snapshot between
+// them, so a key written after the first page is met, and stops when its loop
+// does
+func TestAllWalksEveryKeyAPageAtATime(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	drafts := openTestBucket[int](t, state, "drafts")
+	const keys = maxScanLimit + 500
+	err := state.Tx(t.Context(), func(tx *Tx) error {
+		for n := range keys {
+			if setErr := drafts.WithTx(tx).Of(7).Set(t.Context(), fmt.Sprintf("k%05d", n), n); setErr != nil {
+				return setErr
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	walked := 0
+	for entry, walkErr := range drafts.Of(7).All(t.Context()) {
+		if walkErr != nil || entry.Value != walked && entry.Key != "z" {
+			t.Fatalf("key %d of the walk: %+v, %v", walked, entry, walkErr)
+		}
+		if walked == 0 {
+			if err = drafts.Of(7).Set(t.Context(), "z", -1); err != nil {
+				t.Fatal(err)
+			}
+		}
+		walked++
+	}
+	if walked != keys+1 {
+		t.Fatalf("All met %d keys; want %d and the one written during the walk", walked, keys+1)
+	}
+	for range drafts.Of(7).All(t.Context()) {
+		break
 	}
 }
 

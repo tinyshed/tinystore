@@ -21,7 +21,8 @@
 //	keys.go      a key's text and the path owners and a key make
 //	values.go    a value's bytes by its type, and where they are kept
 //	entry.go     Entry, Version, Query, Page, KeyError
-//	read.go      Get, GetEntry, Has, Scan
+//	read.go      Get, GetEntry, Has, Scan, All
+//	renew.go     what Sliding reads ask for, and the flush that writes it
 //	write.go     Set, SetEntry, SetIfAbsent, SetEntryIfAbsent, Take, Delete, Touch
 //	tx.go        Tx and View: several calls in one transaction or snapshot
 //	expiry.go    Maintain: expired keys and the values they spilled

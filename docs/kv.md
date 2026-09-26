@@ -1,13 +1,10 @@
 # KV: the application's current state
 
-The design of the kv engine, built in part: `kv/` holds buckets, counters,
-branches, expiry, versions, grouped writes, point reads, `Scan`, `Tx` and
-`View`, `LoseAtMost` and `Clear`, and its contract is
-[kv/README.md](../kv/README.md); `Sliding` is designed here and not built. The API and the
-contracts below are settled, and what lies under
-[Storage](#storage) was measured by
-[the mechanics round](reports/kv-mechanics-2026-09-26.md) on one development
-machine, not yet on a production host.
+The design of the kv engine, built: `kv/` holds everything below but what
+[Not in the first version](#not-in-the-first-version) leaves, and its contract
+is [kv/README.md](../kv/README.md). What lies under [Storage](#storage) was
+measured by [the mechanics round](reports/kv-mechanics-2026-09-26.md) on one
+development machine and on a production host.
 
 ## What it is for
 
@@ -65,6 +62,7 @@ Take(ctx, key, opts...) (V, bool, error)                          // read and de
 Delete(ctx, key, opts...) error                                   // an absent key is not an error
 Touch(ctx, key, opts...) (bool, error)                            // a new expiry; value and version kept
 Scan(ctx, kv.Query) (kv.Page[V], error)                           // this branch's own keys
+All(ctx) iter.Seq2[kv.Entry[V], error]                            // the same, a page at a time, no snapshot held
 Clear(ctx) error                                                  // this branch and every branch under it
 Of(owners ...any) *kv.Bucket[V]
 WithTx(tx *kv.Tx) *kv.Bucket[V]
@@ -201,15 +199,27 @@ devices.Of("tenant-7", 42).Set(ctx, "iPhone", d)
 ```text
 DefaultTTL(15m)    a key created without kv.TTL gets it; a later Set or Add keeps the expiry the key has
 kv.TTL, ExpireAt   replace the expiry
-Sliding(30d)       a read renews it to now + 30d, at most once per RefreshEvery, a thirtieth of the term
+Sliding(30d)       a key created gets 30d, and a Get, GetEntry or Has renews it to now + 30d
+                   once a thirtieth of the term, a day, has passed since it last did; Scan does not
 Touch              replaces the expiry and nothing else
 ```
 
   An attempt counter keeps its fixed fifteen minutes: its `Add`s do not slide
-  it.
-- **A read does not write.** A `Sliding` renewal is written with the next
-  flush, and a crash forgets the renewals since the last one; otherwise an
-  entry read at `t` lives at least until `t + term − RefreshEvery`.
+  it. `Sliding` and `DefaultTTL` on one bucket are `ErrInvalid`.
+- **A read does not write.** A `Sliding` renewal waits for the next flush, a
+  second at most, and a crash forgets the renewals since the last one;
+  otherwise an entry read at `t` lives at least until `t + term − term/30`. A
+  key read in its last minute is renewed before the read returns, since the
+  flush might come after it expired.
+- **A renewal is bound to the row its read saw**, its version and its expiry,
+  and changes nothing else. A key written again since, even with the very
+  expiry the read saw, touched, deleted or cleared keeps what was done to it;
+  its next read asks again.
+
+```sql
+update cells set expires = :until where bucket = ?1 and path = ?2 and version = :seen and expires = :seen_expiry
+```
+
 - **An expiry is not a version.** `Touch` and `Sliding` keep the version, so a
   renewal never fails a writer's `IfVersion`.
 
@@ -377,7 +387,7 @@ Clear(42) at revision R
 | A value | 1 MiB |
 | A `Scan` page | 1000 keys, 4 MiB of values |
 | A `View` snapshot | 5 s |
-| `Sliding` renewals | one a key per thirtieth of the term |
+| `Sliding` renewals | one a key per thirtieth of the term; 100,000 waiting, past them the next read asks again |
 | A value kept in its row | 512 bytes; a larger one spills |
 | Keys waiting in a `LoseAtMost` bucket | 100,000 |
 | A `LoseAtMost` flush | 10,000 keys a transaction |
@@ -393,7 +403,10 @@ The five cases are the gates' workloads.
 | a `Set` that returned survives an abrupt exit | `TestAWriteThatReturnedSurvivesAnAbruptExit` |
 | an expired key is absent to every operation | `TestAnExpiredKeyIsAbsentToEveryOperation` |
 | a default TTL is given once, at creation | `TestADefaultTTLIsGivenOnceAtCreation` |
-| a sliding read writes at most once per refresh | `TestASlidingReadWritesAtMostOncePerRefresh`, not built |
+| a sliding read writes at most once per refresh | `TestASlidingReadWritesAtMostOncePerRefresh` |
+| a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation` |
+| a key read in its last minute is renewed at once | `TestAReadNearItsExpiryRenewsAtOnce` |
+| `All` walks pages and holds no snapshot between them | `TestAllWalksEveryKeyAPageAtATime` |
 | an integer key is its decimal text | `TestAnIntegerKeyIsItsDecimalText` |
 | a version never repeats | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen` |
 | one of concurrent `Take`s gets the value | `TestConcurrentTakesGiveTheValueOnce` |

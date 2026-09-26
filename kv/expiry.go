@@ -17,16 +17,17 @@ const expireCells = `delete from cells where (bucket, path) in (
 // Maintenance is what one Maintain call did.
 type Maintenance struct {
 	Flushed int // LoseAtMost counters written
+	Renewed int // Sliding keys renewed
 	Cleared int // rows a marked Clear hid, deleted
 	Expired int
 }
 
-// Maintain writes what LoseAtMost counters hold, deletes the rows a marked
-// Clear hid, then deletes expired keys and the values they spilled, 10,000 a
-// transaction and at most ten transactions a call; the store calls it every
-// minute unless it is Manual, and flushes each LoseAtMost memory on its own
-// interval. No read returns an expired or cleared key, whether Maintain has
-// deleted it or not.
+// Maintain writes what LoseAtMost counters hold and the renewals Sliding reads
+// asked for, deletes the rows a marked Clear hid, then deletes expired keys and
+// the values they spilled, 10,000 a transaction and at most ten transactions a
+// call; the store calls it every minute unless it is Manual, and flushes
+// counters and renewals on their own intervals. No read returns an expired or
+// cleared key, whether Maintain has deleted it or not.
 func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	release, err := s.holdMaintenance(ctx)
 	if err != nil {
@@ -40,10 +41,11 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	defer leave()
 
 	var done Maintenance
-	var errs [3]error
+	var errs [4]error
 	done.Flushed, errs[0] = s.flushCounters(ctx)
-	done.Cleared, errs[1] = s.dropCleared(ctx)
-	done.Expired, errs[2] = s.expire(ctx)
+	done.Renewed, errs[1] = s.flushRenewals(ctx)
+	done.Cleared, errs[2] = s.dropCleared(ctx)
+	done.Expired, errs[3] = s.expire(ctx)
 	return done, errors.Join(errs[:]...)
 }
 

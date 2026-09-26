@@ -27,6 +27,10 @@ const (
 	maxWaiting    = 100_000         // LoseAtMost counters changed and not yet written, about 1 s of flushing
 	flushBatch    = 10_000          // counters a flush writes a transaction, 45 to 92 ms of the writer
 	clearAtOnce   = 10_000          // keys a Clear deletes in its transaction, 35 to 52 ms; past them it marks
+	refreshes     = 30              // a Sliding key is renewed once a thirtieth of its term has passed
+	renewAtOnce   = time.Minute     // a Sliding key this close to its expiry is renewed before its read returns
+	renewEvery    = time.Second     // how often the renewals reads asked for are written
+	maxRenewals   = 100_000         // renewals that may wait; past them a key's next read asks again
 )
 
 // a bucket's name, as a file's is: short and plain
@@ -48,6 +52,7 @@ type OpenOption interface {
 // settings is what the options of a bucket or of counters say
 type settings struct {
 	ttl        time.Duration
+	sliding    time.Duration
 	codec      any
 	loseAtMost time.Duration
 	err        error
@@ -88,6 +93,23 @@ func DefaultTTL(d time.Duration) OpenOption {
 			s.err = fmt.Errorf("%w: kv: a default TTL of %v", tinystore.ErrInvalid, d)
 		}
 		s.ttl = d
+	})
+}
+
+// Sliding gives a key term from the last time it was read: a key created
+// without kv.TTL or kv.ExpireAt gets term, and a Get, GetEntry or Has renews a
+// live key to term from now once a thirtieth of the term has passed since it
+// last did. A read does not write: the renewal waits a second for the next
+// flush, and a crash forgets the renewals since the last, so a key read at t
+// lives at least until t + term − term/30 unless it is renewed. A key with less
+// than a minute left is renewed before its read returns. With DefaultTTL it is
+// ErrInvalid.
+func Sliding(term time.Duration) BucketOption {
+	return forBuckets(func(s *settings) {
+		if term <= 0 {
+			s.err = fmt.Errorf("%w: kv: Sliding(%v)", tinystore.ErrInvalid, term)
+		}
+		s.sliding = term
 	})
 }
 

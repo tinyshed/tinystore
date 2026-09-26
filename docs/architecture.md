@@ -2,7 +2,7 @@
 
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
-store, `sqldb/`, `records/`, `kv/` in part, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+store, `sqldb/`, `records/`, `kv/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every`, the memory budget and snapshots. Everything else here is designed and
 agreed, not built. [examples/notes](../examples/notes/main.go) is a program
 using the built part, and [samples/](samples/README.md) holds a reference
@@ -340,13 +340,13 @@ err = app.Tx(ctx, func(tx *sqldb.Tx) error { … }) // several statements, one w
   applied migration, another engine's file, or a database newer than the binary
   refuses to open.
 
-**kv** (built in part; contract in `kv/README.md`, design in [kv.md](kv.md)).
+**kv** (built; contract in `kv/README.md`, design in [kv.md](kv.md)).
 The application's current state in `kv.db`: buckets of one value type with
-text keys and branches, expiry by the store's clock, versions that never
-repeat, writes from many goroutines committed together by
+text keys and branches, expiry by the store's clock, fixed or sliding, versions
+that never repeat, writes from many goroutines committed together by
 `internal/sqlite.File.UpdateGrouped`, point reads by `File.Lookup` without a
 transaction, counters, `LoseAtMost` ones in memory between flushes, and
-`Clear` of a branch. `Sliding` expiry is designed, not built.
+`Clear` of a branch however large.
 
 ```go
 state, err := kv.Open(ctx, store, kv.Options{})

@@ -43,6 +43,7 @@ type Store struct {
 
 	opened   sync.Mutex
 	counters map[string]openCounters
+	renewals renewals
 }
 
 // openCounters is how the counters of one name are open in this process:
@@ -82,6 +83,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
 		clearBound: clearAtOnce, counters: map[string]openCounters{},
+		renewals: renewals{waiting: map[renewed]renewal{}},
 	}
 	state.maintenance <- struct{}{}
 	if err = state.loadRevision(ctx); err == nil {
@@ -146,8 +148,9 @@ func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFil
 }
 
 // Close lets the work in flight finish, writes what LoseAtMost counters hold
-// and closes kv.db; cancellation stops waiting, not the cleanup. The store
-// calls it: an application closes the store instead.
+// and the renewals reads asked for, and closes kv.db; cancellation stops
+// waiting, not the cleanup. The store calls it: an application closes the
+// store instead.
 func (s *Store) Close(ctx context.Context) error {
 	drained, _ := s.gate.Close()
 	select {
@@ -156,8 +159,9 @@ func (s *Store) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 	s.closing.Do(func() {
-		_, flushErr := s.flushCounters(ctx)
-		s.closeErr = errors.Join(flushErr, s.file.Close())
+		_, countersErr := s.flushCounters(ctx)
+		_, renewalsErr := s.flushRenewals(ctx)
+		s.closeErr = errors.Join(countersErr, renewalsErr, s.file.Close())
 		s.log.Info("closed")
 	})
 	return s.closeErr

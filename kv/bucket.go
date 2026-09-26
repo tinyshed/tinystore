@@ -20,7 +20,8 @@ const kindValues = "values"
 // bucket, and a handle may be used from any number of goroutines.
 type Bucket[V any] struct {
 	branch
-	codec codec[V]
+	codec   codec[V]
+	sliding time.Duration
 }
 
 // OpenBucket opens the bucket name of kv.db for values of type V, creating it
@@ -36,14 +37,19 @@ func OpenBucket[V any](ctx context.Context, state *Store, name string, options .
 		return nil, err
 	}
 
+	if settings.sliding > 0 {
+		state.scheduleRenewals()
+	}
 	opened := branch{state: state, id: id, name: name, ttl: settings.ttl}
-	return &Bucket[V]{branch: opened, codec: settings.codec}, nil
+	return &Bucket[V]{branch: opened, codec: settings.codec, sliding: settings.sliding}, nil
 }
 
-// settled is a bucket's options, its codec chosen
+// settled is a bucket's options, its codec chosen and a Sliding term given
+// to new keys as their lifetime
 type settled[V any] struct {
-	codec codec[V]
-	ttl   time.Duration
+	codec   codec[V]
+	ttl     time.Duration
+	sliding time.Duration
 }
 
 func settle[V any](options []BucketOption) (settled[V], error) {
@@ -51,10 +57,14 @@ func settle[V any](options []BucketOption) (settled[V], error) {
 	for _, option := range options {
 		option.bucketOption(&said)
 	}
+	if said.err == nil && said.sliding > 0 && said.ttl > 0 {
+		said.err = fmt.Errorf("%w: Sliding gives new keys its term, and DefaultTTL beside it another",
+			tinystore.ErrInvalid)
+	}
 	if said.err != nil {
 		return settled[V]{}, said.err
 	}
-	chosen := settled[V]{codec: codecFor[V](), ttl: said.ttl}
+	chosen := settled[V]{codec: codecFor[V](), ttl: max(said.ttl, said.sliding), sliding: said.sliding}
 	if said.codec != nil {
 		custom, ok := said.codec.(Codec[V])
 		if !ok {
@@ -102,7 +112,7 @@ func (s *Store) claimBucket(ctx context.Context, name, kind string) (int64, erro
 // string, a []byte or an integer each, an integer by its decimal text. A
 // branch exists while it holds keys; there is nothing to create or drop.
 func (b *Bucket[V]) Of(owners ...any) *Bucket[V] {
-	return &Bucket[V]{branch: b.under(owners), codec: b.codec}
+	return &Bucket[V]{branch: b.under(owners), codec: b.codec, sliding: b.sliding}
 }
 
 // WithTx is this bucket inside tx: its calls run in tx's transaction and see

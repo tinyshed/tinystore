@@ -9,18 +9,20 @@ design and the measurements behind it are [docs/kv.md](../docs/kv.md).
 ```go
 state, err := kv.Open(ctx, store, kv.Options{}) // data/kv.db
 
-sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.DefaultTTL(30*24*time.Hour))
+sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.Sliding(30*24*time.Hour))
 codes, err := kv.OpenBucket[int64](ctx, state, "login-codes", kv.DefaultTTL(15*time.Minute))
 seen, err := kv.OpenBucket[struct{}](ctx, state, "stripe-events") // a set
-attempts, err := kv.OpenCounters(ctx, state, "login-attempts", kv.DefaultTTL(15*time.Minute))
+attempts, err := kv.OpenCounters(ctx, state, "login-attempts",
+	kv.DefaultTTL(15*time.Minute), kv.LoseAtMost(time.Second))
 
 err = sessions.Of(user.ID).Set(ctx, token, Session{Device: device})
-s, found, err := sessions.Of(user.ID).Get(ctx, token)
-page, err := sessions.Of(user.ID).Scan(ctx, kv.Query{Limit: 20})
+s, found, err := sessions.Of(user.ID).Get(ctx, token) // and thirty more days from now, once a day
+err = sessions.Of(user.ID).Clear(ctx)                 // signed out everywhere
+for entry, err := range sessions.Of(user.ID).All(ctx) { … }
 userID, found, err := codes.Take(ctx, digest(code)) // read and burn
 claim, first, err := seen.SetEntryIfAbsent(ctx, event.ID, struct{}{}, kv.TTL(10*time.Minute))
 err = seen.Set(ctx, event.ID, struct{}{}, kv.IfVersion(claim.Version), kv.TTL(7*24*time.Hour))
-n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 again fifteen minutes after the first
+n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and from 1 again fifteen minutes on
 ```
 
 ## Contracts
@@ -60,6 +62,17 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 agai
   is a new key. Inside `Tx` a branch over 10,000 keys is `tinystore.ErrLimit`.
   A Clear of `LoseAtMost` counters drops what their memory holds under the
   branch, so no flush writes it again.
+- **`Sliding(term)` keeps a key term from its last read.** A key created gets
+  term; a `Get`, `GetEntry` or `Has` renews a live key to term from now once
+  a thirtieth of the term has passed since it last did, and `Scan` does not. A
+  read writes nothing: the renewal waits a second for the flush, bound to the
+  version and expiry the read saw, so it never extends a key written again,
+  touched or deleted since. A key in its last minute is renewed before its
+  read returns. `Sliding` beside `DefaultTTL` is `ErrInvalid`.
+- **`All(ctx)` walks a branch** in `Scan`'s pages: `for entry, err := range
+  sessions.Of(uid).All(ctx)`. No snapshot is held between pages, so a slow
+  loop keeps no reader open, and a key written during the walk may or may not
+  be met; `View` reads one snapshot.
 - **Expiry follows three rules.** A key created without `kv.TTL` or
   `kv.ExpireAt` gets the bucket's `DefaultTTL`, if it has one; a later `Set`
   keeps the expiry a live key has; `Touch` gives a new expiry and keeps the
@@ -87,6 +100,25 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 agai
   finds the store's sentinel in it. A bucket name is `[a-z0-9][a-z0-9_-]{0,63}`
   and keeps its kind: a name holding counters does not open for values.
 
-## Not built yet
+## Testing without waiting
 
-`Sliding` expiry. [docs/kv.md](../docs/kv.md) says what it is to be.
+A Manual store with a clock the test moves runs no background work, so
+expiry, renewals and flushes happen when the test says:
+
+```go
+now := time.Now()
+store, err := tinystore.Open(ctx, t.TempDir(), tinystore.Options{Manual: true, Clock: func() time.Time { return now }})
+state, err := kv.Open(ctx, store, kv.Options{})
+codes, err := kv.OpenBucket[int64](ctx, state, "login-codes", kv.DefaultTTL(15*time.Minute))
+
+err = codes.Set(ctx, "code", 42)
+now = now.Add(16 * time.Minute)
+_, found, err := codes.Take(ctx, "code") // false: expired
+_, err = state.Maintain(ctx)             // writes counters and renewals, deletes what expired or was cleared
+```
+
+## Not in the first version
+
+What [docs/kv.md](../docs/kv.md) leaves for later: a bucket held in memory, a
+filter that answers a miss without SQLite, history and watching, a rate
+limiter, listing a branch's branches.

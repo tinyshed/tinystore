@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"iter"
 	"slices"
 
 	"github.com/tinyshed/tinystore"
@@ -15,7 +16,7 @@ const (
 	selectLive = `select c.version, c.expires, c.value, c.spill, s.value from cells as c
 		left join spilled as s on s.id = c.spill
 		where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ` + hiddenC
-	selectHas = `select 1 from cells
+	selectHas = `select version, expires from cells
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
 	scanBranch = `select c.path, c.version, c.expires, c.value, c.spill, s.value from cells as c
 		left join spilled as s on s.id = c.spill
@@ -30,7 +31,8 @@ func (b *Bucket[V]) Get(ctx context.Context, key any) (V, bool, error) {
 	return entry.Value, found, err
 }
 
-// GetEntry is Get with the key's version and expiry.
+// GetEntry is Get with the key's version and expiry, the expiry as the file
+// has it: a Sliding renewal waiting for its flush is not in it yet.
 func (b *Bucket[V]) GetEntry(ctx context.Context, key any) (Entry[V], bool, error) {
 	c, err := b.begin(key, nil)
 	if err != nil {
@@ -47,6 +49,7 @@ func (b *Bucket[V]) GetEntry(ctx context.Context, key any) (Entry[V], bool, erro
 		return Entry[V]{}, false, b.fail(c, err)
 	}
 
+	b.renew(ctx, c, got.version, got.expires)
 	entry, err := b.entryOf(c.key, got)
 	return entry, err == nil, b.fail(c, err)
 }
@@ -59,16 +62,47 @@ func (b *Bucket[V]) Has(ctx context.Context, key any) (bool, error) {
 	}
 
 	found := false
+	var version int64
+	var expires sql.NullInt64
 	err = b.read(ctx, func(r sqlite.Reader) error {
-		var one int
-		scanErr := sqlite.QueryRow(ctx, r, selectHas, b.id, c.path, c.now).Scan(&one)
+		scanErr := sqlite.QueryRow(ctx, r, selectHas, b.id, c.path, c.now).Scan(&version, &expires)
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return nil
 		}
 		found = scanErr == nil
 		return scanErr
 	})
+	if found {
+		b.renew(ctx, c, version, expires)
+	}
 	return found, b.fail(c, err)
+}
+
+// All is every one of this branch's own keys, in Scan's order, a page of Scan
+// at a time. Each page is its own snapshot and none is held between pages, so
+// a slow loop keeps no reader open, and a key written or deleted during the
+// walk may or may not be met; inside View or Tx the pages share its snapshot.
+// An error ends the walk as its last element.
+func (b *Bucket[V]) All(ctx context.Context) iter.Seq2[Entry[V], error] {
+	return func(yield func(Entry[V], error) bool) {
+		query := Query{Limit: maxScanLimit}
+		for {
+			page, err := b.Scan(ctx, query)
+			if err != nil {
+				yield(Entry[V]{}, err)
+				return
+			}
+			for _, entry := range page.Entries {
+				if !yield(entry, nil) {
+					return
+				}
+			}
+			if !page.More {
+				return
+			}
+			query = page.Next
+		}
+	}
 }
 
 // Scan is a page of this branch's own keys, not those of the branches under
