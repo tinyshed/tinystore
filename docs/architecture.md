@@ -359,8 +359,18 @@ under `blobs/`; external bytes are durable before the metadata that points at
 them commits, and readers hold a lease that collection respects.
 `docs/storage-runtime-direction.md` has the reasoning.
 
-**jobs** (boundary only). A durable queue in `jobs.db` with leases, retries and
-schedules.
+**jobs** (designed, not built; the design is [jobs.md](jobs.md)). Work that
+runs at its time, in `jobs.db`: typed queues whose jobs wait for their time, a
+lease that gives a job back when its worker vanishes, retries, repeats kept as
+cron text, at least once. Every call is one operation of a protocol a server
+could speak to another language; `Work` is a loop over `Claim` and `Ack`.
+
+```go
+queues, err := jobs.Open(ctx, store, jobs.Options{})
+reminders, err := jobs.OpenQueue[Reminder](ctx, queues, "reminders")
+err = reminders.Enqueue(ctx, Reminder{User: 42, Text: "call mom"}, jobs.At(evening))
+go reminders.Work(ctx, remind, jobs.Workers(4))
+```
 
 **Backup** (built). One format for every engine: a zip holding
 `manifest.json` (format, time, engines, schema versions, sizes, checksums) and

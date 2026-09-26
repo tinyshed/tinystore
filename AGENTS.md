@@ -53,7 +53,8 @@ which cost more than zstd there; its format is version one and reads no
 earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
-Designed, not built: `blobs`, `jobs` and self-metrics.
+Designed, not built: `jobs` ([docs/jobs.md](docs/jobs.md)), `blobs` and
+self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
