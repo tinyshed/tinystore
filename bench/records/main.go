@@ -8,6 +8,7 @@
 //	records -stage docker -dir <dir> -corpus <corpus>      production container logs, full segments
 //	records -stage replay -dir <dir> -corpus <corpus>      the same corpus on its own clock, sealed hourly
 //	records -stage reach -dir <dir> -records <n>           one-second reads near a large store's start and end
+//	records -stage lines -dir <dir> -corpus <corpus>       the corpus through writers of Lines, as a follower of it
 package main
 
 import (
@@ -20,7 +21,7 @@ import (
 )
 
 func main() {
-	stage := flag.String("stage", "density", "density, late, docker, replay or reach")
+	stage := flag.String("stage", "density", "density, late, docker, replay, reach or lines")
 	dir := flag.String("dir", "", "an empty directory for the store")
 	corpus := flag.String("corpus", "", "a docker json-file corpus, for docker and replay")
 	count := flag.Int("records", 1_000_000, "frontend records, for density and late")
@@ -46,6 +47,8 @@ func main() {
 		replayDocker(ctx, path, readCorpus(*corpus), *sealAge)
 	case "reach":
 		measureReach(ctx, path, *count)
+	case "lines":
+		measureLines(ctx, path, *corpus)
 	default:
 		log.Fatalf("unknown stage %q", *stage)
 	}
