@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,14 +19,16 @@ const (
 var opsDevice = strings.Repeat("d", 64)
 
 // opsLoad is one operation of the sessions case alone, as the mechanics round
-// measured its prototype: a new session written, or a stored one read and
-// found, or a token read and missed. Every session was renewed just before the
-// phase, so that no read in it renews one.
+// measured its prototype: a session of a new user written, the users arriving
+// in order as the prototype's did, or a stored one read and found, or a token
+// read and missed. Every session was renewed just before the phase, so that no
+// read in it renews one.
 type opsLoad struct {
-	store sessions
-	keys  int
-	now   func() time.Time
-	op    string
+	store   sessions
+	keys    int
+	now     func() time.Time
+	op      string
+	written atomic.Int64 // the sessions written, the prepared ones included
 }
 
 func loadWrites(ctx context.Context, b *backend, keys int) (workload, error) {
@@ -45,7 +48,9 @@ func openOps(ctx context.Context, b *backend, keys int, op string) (workload, er
 	if err != nil {
 		return nil, err
 	}
-	return &opsLoad{store: store, keys: keys, now: b.now, op: op}, nil
+	l := &opsLoad{store: store, keys: keys, now: b.now, op: op}
+	l.written.Store(int64(keys))
+	return l, nil
 }
 
 // prepare signs in keys sessions in a scattered order, every one just now
@@ -70,7 +75,8 @@ func (l *opsLoad) requests(worker, _ int) (request, error) {
 		switch l.op {
 		case opWrite:
 			s := session{Device: opsDevice, Since: l.now().UnixMilli()}
-			return step{opWrite, "written"}, l.store.signIn(ctx, random.Int64N(int64(l.keys)), randomToken(random), s)
+			user := l.written.Add(1) / sessionsPerUser
+			return step{opWrite, "written"}, l.store.signIn(ctx, user, randomToken(random), s)
 		case opHit:
 			i := random.Int64N(int64(l.keys))
 			found, _, err := l.store.read(ctx, i/sessionsPerUser, token(seedTokens, i))
