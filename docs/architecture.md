@@ -240,9 +240,10 @@ pages in event-time order from one snapshot, pruned by a covering time index,
 level masks, the keys each segment holds and blooms over trace ids and id-like
 attributes; `Follow` reads sealed segments through a `(segment, row)` cursor.
 Retention removes whole segments, fourteen days by default. On the research
-corpora it keeps 7.89 bytes a frontend record and 20.77 a production log line;
+corpora it keeps 7.89 bytes a frontend record and 16.55 a production log line,
+whose own time it keeps apart from its text;
 [the engine report](reports/records-engine-2026-09-25.md) and
-[the rice round](reports/records-rice-2026-09-26.md) have the rest.
+[the stamps round](reports/records-stamps-2026-09-26.md) have the rest.
 
 ```go
 logger := slog.New(logs.Handler("notes"))

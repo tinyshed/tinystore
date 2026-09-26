@@ -14,7 +14,9 @@ research's batches and 5.24 in flushes, and a record appended alone is late
 again. [The rice parameter round](records-rice-2026-09-26.md) chooses each rice
 column's parameter among all 64 and takes the production corpus from 20.8984
 to 20.7738 bytes a record in full segments, and from 22.9463 to 22.8333 sealed
-hourly; the frontend fixture does not move.
+hourly; the frontend fixture does not move. [The stamps round](records-stamps-2026-09-26.md)
+keeps the times a line spells apart from its text and takes the corpus to
+16.5527 in full segments and 18.9278 sealed hourly.
 
 ## Environment and reproduction
 

@@ -241,18 +241,19 @@ and a segment row may decompress or copy at most twice a segment's input.
 
 The prototype, and the engine on the same fixtures and corpus, in the same
 kind of container; [the engine report](reports/records-engine-2026-09-25.md)
-has the environment and the commands, and [the rice round](reports/records-rice-2026-09-26.md)
-the corpus's figures since it chose each rice parameter among all 64.
+has the environment and the commands, [the rice round](reports/records-rice-2026-09-26.md)
+chose each rice parameter among all 64, and [the stamps round](reports/records-stamps-2026-09-26.md)
+has the corpus's figures since a line's own time is kept apart.
 
 | | Prototype | Engine |
 |---|---|---|
 | frontend fixture, one million records, B/record in the file | 7.85; its time-order floor is 7.74 | 7.89 |
-| production logs, 1.32 million records, full segments | 20.09, blooms included | 20.77, without the text sample |
-| the same, sealed hourly on the corpus's own clock | 21.96 | 22.83; 21.21 at six hours, 20.87 at a day |
+| production logs, 1.32 million records, full segments | 20.09, blooms included | 16.55, without the text sample |
+| the same, sealed hourly on the corpus's own clock | 21.96 | 18.93; 17.04 at six hours, 16.67 at a day |
 | structured services, as `slog` records | 18.99, 15.84 of it a random request id | — |
-| text from third-party software | about zstd over the same lines, 19.28 against 19.64 | 20.02 |
-| encoder, one CPU | 405,000 to 480,000 frontend records/s | 570,000 to 710,000 |
-| decoder, one CPU | about 1.5 million records/s | 1.29 to 1.44 million |
+| text from third-party software | about zstd over the same lines, 19.28 against 19.64 | 15.48 |
+| encoder, one CPU | 405,000 to 480,000 frontend records/s | 495,000 to 593,000; 800,000 to 864,000 text |
+| decoder, one CPU | about 1.5 million records/s | 1.25 to 1.42 million; 1.73 to 1.89 million text |
 | one second of one million records | 2 of 977 blocks read | 1.92 blocks |
 | the same, one record in a hundred ten minutes late | 5.12 blocks | 4.63; 5.24 in flushes of 1024 |
 | one request id among 1.32 million | 11 blocks read, 21 ms | 11 blocks, 6 ms |
@@ -265,11 +266,12 @@ left it out for the decoder state it costs a segment and counted its gain at
 2.6 % of text records. The engine measures more: without it the production
 corpus's text grows from 19.28 to 20.16 bytes a record, and the whole corpus
 from 20.09 to 20.90, 0.80 bytes, where the JSON services' bytes are the
-prototype's to the hundredth; the rice round has since taken the engine to
-20.77. Decided on 25 September: the engine stays
+prototype's to the hundredth. Decided on 25 September: the engine stays
 without it, and text's next lever is templates, not a decoder state per
-segment. Recipe and affine predictions are left out as well, at no cost on the
-production logs.
+segment. The first of them, a line's own time kept apart, has since taken the
+corpus to 16.55; what the sample would add beside it is not measured. Recipe
+and affine predictions are left out as well, at no cost on the production
+logs.
 
 **Sealing sparse streams sooner than it pays.** `SealAge` trades how soon
 `Follow` sees a record for the bytes a sparse stream's small segments cost:
@@ -280,10 +282,9 @@ for long and follows them rarely raises it.
 
 ## Open
 
-- Text: the per-segment sample back, 0.80 B/record on the production corpus,
-  or templates with typed variables, a line's own timestamp first; one zstd
-  frame per segment shows about 2.5 bytes a record that independent blocks
-  leave.
+- Text: templates with typed variables beyond a line's own time, which is
+  built; one zstd frame per segment showed about 2.5 bytes a record that
+  independent blocks leave, measured before the times were kept apart.
 - Late records: measured against the stream's newest record, one-second reads
   fetch 5.24 blocks when the late fixture arrives in flushes of 1024, above the
   hand-off's 5.2; the minute itself is the lever left

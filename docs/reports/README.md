@@ -101,6 +101,7 @@ fetch and normalise them.
 | [records-engine-2026-09-25.md](records-engine-2026-09-25.md) | the engine on the research's fixtures and production corpus: 7.89 B/record frontend, 20.90 production without the text sample, the speed, reads and late-record gates, and what hourly sealing costs |
 | [records-late-reference-2026-09-25.md](records-late-reference-2026-09-25.md) | a late record measured against its stream's newest record rather than its batch's median: a record appended alone is late again, 4.63 blocks a one-second read in the research's batches |
 | [records-rice-2026-09-26.md](records-rice-2026-09-26.md) | the rice parameter chosen among all 64: the production corpus at 20.77 B/record in full segments and 22.83 sealed hourly, the frontend fixture unchanged, the speed within this machine's spread |
+| [records-stamps-2026-09-26.md](records-stamps-2026-09-26.md) | a line's own time kept behind its record's: the production corpus at 16.55 B/record in full segments and 18.93 sealed hourly, text from 20.02 to 15.48, the frontend fixture and its reads unchanged, about 1.2 µs a text line to find its times |
 
 ## 26 September 2026 — kv
 

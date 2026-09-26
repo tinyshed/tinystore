@@ -1,5 +1,10 @@
 # The rice parameter chosen among all 64 — 2026-09-26
 
+Follow-up: [the stamps round](records-stamps-2026-09-26.md) keeps the times a
+line spells apart from its text and takes the production corpus from 20.7738
+to 16.5527 bytes a record in full segments, and from 22.8333 to 18.9278 sealed
+hourly.
+
 An integer column written with a rice code used to price four parameters
 around the logarithm of its residuals' mean and keep the cheapest. A few wide
 gaps raise the mean for every value, so a column of small residuals with two

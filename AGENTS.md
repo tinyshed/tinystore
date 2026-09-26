@@ -31,9 +31,10 @@ time only inside its window of the store's clock, and lets work in through the
 gate and slots of `internal/admission`. `sqldb` gives the
 application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
 states its contract. `records` keeps logs and events in `records.db`: a
-durable head, segments of event-time blocks written column by column, paged
-reads pruned by time, level, keys and blooms, a follow cursor, and rows that
-no longer read reported once and removed by `Drop`
+durable head, segments of event-time blocks written column by column, a line's
+own time kept apart from its text, paged reads pruned by time, level, keys and
+blooms, a follow cursor, and rows that no longer read reported once and
+removed by `Drop`
 ([records/README.md](records/README.md)). `kv` keeps the application's
 current state in `kv.db`: buckets of one value type, keys in branches, expiry
 by the store's clock, versions that never repeat, writes committed in groups
@@ -42,8 +43,9 @@ and point reads without a transaction ([kv/README.md](kv/README.md)).
 writes those copies as one zip and restores it before `Open`.
 
 `records` is built to [docs/records.md](docs/records.md), except the
-per-segment text sample, which the production corpus measures at 0.80 bytes a
-record; its format is version one and reads no earlier prototype.
+per-segment text sample, which the production corpus measured at 0.80 bytes a
+record before its lines' own times were kept apart; its format is version one
+and reads no earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
 Designed, not built: `blobs`, `jobs`, self-metrics, and kv's counters,
