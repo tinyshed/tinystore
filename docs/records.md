@@ -262,14 +262,16 @@ and a segment row may decompress or copy at most twice a segment's input.
 The prototype, and the engine on the same fixtures and corpus, in the same
 kind of container; [the engine report](reports/records-engine-2026-09-25.md)
 has the environment and the commands, [the rice round](reports/records-rice-2026-09-26.md)
-chose each rice parameter among all 64, and [the stamps round](reports/records-stamps-2026-09-26.md)
-has the corpus's figures since a line's own time is kept apart.
+chose each rice parameter among all 64, [the stamps round](reports/records-stamps-2026-09-26.md)
+has the corpus's figures since a line's own time is kept apart, and
+[the merge round](reports/records-merge-2026-09-26.md) those sealed hourly
+since small segments merge.
 
 | | Prototype | Engine |
 |---|---|---|
 | frontend fixture, one million records, B/record in the file | 7.85; its time-order floor is 7.74 | 7.89 |
 | production logs, 1.32 million records, full segments | 20.09, blooms included | 16.55, without the text sample |
-| the same, sealed hourly on the corpus's own clock | 21.96 | 18.93; 17.04 at six hours, 16.67 at a day |
+| the same, sealed hourly on the corpus's own clock | 21.96 | 16.77, merged; 16.69 at six hours, 16.62 at a day |
 | structured services, as `slog` records | 18.99, 15.84 of it a random request id | — |
 | text from third-party software | about zstd over the same lines, 19.28 against 19.64 | 15.48 |
 | encoder, one CPU | 405,000 to 480,000 frontend records/s | 495,000 to 593,000; 800,000 to 864,000 text |
@@ -296,7 +298,8 @@ logs.
 **Sealing sparse streams sooner than it pays.** `SealAge` trades how soon
 `Follow` sees a record for the bytes a sparse stream's small segments cost:
 an hour, the default, keeps a follower an hour behind at most. Merging takes
-most of those bytes back, and the default stays an hour.
+back 2.16 of the 2.38 bytes a record the hour cost the production corpus, each
+record written again one and a half times, and the default stays an hour.
 
 ## Open
 

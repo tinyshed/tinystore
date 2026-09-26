@@ -1,5 +1,9 @@
 # The times a line spells, kept behind its record's time — 2026-09-26
 
+Follow-up: [the merge round](records-merge-2026-09-26.md) merges a quiet
+stream's small segments and takes the corpus sealed hourly from 18.9278 to
+16.7724 bytes a record.
+
 Most lines a program writes begin with a time of their own, and a store that
 receives them keeps its own time beside it. Under zstd, a block of such lines
 pays for every digit of the fraction that changes from one line to the next.
