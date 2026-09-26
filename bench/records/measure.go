@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -227,4 +228,54 @@ func fileObjects(ctx context.Context, db *sql.DB, count int) string {
 		log.Fatal(err)
 	}
 	return strings.Join(report, " ")
+}
+
+// measureReach writes count frontend records a flush at a time without
+// holding them all, then reads one second a hundred times in the first
+// hundredth of the store's time and a hundred in its last: the time index
+// finds a block by where it ends, and a read near the start may walk every
+// block after it
+func measureReach(ctx context.Context, dir string, count int) {
+	random := rand.New(rand.NewPCG(17, 23)) //nolint:gosec // a seeded fixture, the research round's
+	end := time.Unix(0, fixtureBase+int64(count)*1_234_567+int64(time.Second)).UTC()
+	h := openHarness(ctx, dir, end.Add(time.Minute))
+	start := time.Now()
+	for from := 0; from < count; from += 1024 {
+		batch := make([]records.Record, 0, 1024)
+		for i := from; i < min(from+1024, count); i++ {
+			batch = append(batch, frontendClick(random, i))
+		}
+		h.append(ctx, batch)
+		if h.appended%16_384 < len(batch) {
+			h.maintain(ctx)
+		}
+	}
+	h.sealAll(ctx, end)
+	fmt.Printf("stage=reach records=%d append_and_seal=%v\n", count, time.Since(start).Round(time.Millisecond))
+	for _, place := range []struct {
+		name  string
+		first int
+	}{{"start", 0}, {"end", count - count/100}} {
+		readSeconds(ctx, h, place.name, place.first, count/10_000)
+	}
+	h.close(ctx)
+	reportFile(ctx, dir, count)
+}
+
+// readSeconds reads one second a hundred times, from the time of record first
+// on, step records apart
+func readSeconds(ctx context.Context, h *harness, name string, first, step int) {
+	before, start := h.logs.Stats(), time.Now()
+	rows := 0
+	for i := range 100 {
+		from := time.Unix(0, fixtureBase+int64(first+i*step)*1_234_567).UTC()
+		page, err := h.logs.Read(ctx, records.Query{From: from, To: from.Add(time.Second), Limit: 10_000})
+		if err != nil || page.More {
+			log.Fatalf("a one-second read: more %v, %v", page.More, err)
+		}
+		rows += len(page.Records)
+	}
+	took, after := time.Since(start)/100, h.logs.Stats()
+	fmt.Printf("reads=%s count=100 blocks_per_read=%.2f rows_per_read=%.0f time_per_read=%v\n", name,
+		float64(after.ReadBlocks-before.ReadBlocks)/100, float64(rows)/100, took.Round(time.Microsecond))
 }

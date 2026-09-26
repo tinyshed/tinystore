@@ -7,6 +7,7 @@
 //	records -stage late -dir <dir>                         the same, one in a hundred up to ten minutes late
 //	records -stage docker -dir <dir> -corpus <corpus>      production container logs, full segments
 //	records -stage replay -dir <dir> -corpus <corpus>      the same corpus on its own clock, sealed hourly
+//	records -stage reach -dir <dir> -records <n>           one-second reads near a large store's start and end
 package main
 
 import (
@@ -19,7 +20,7 @@ import (
 )
 
 func main() {
-	stage := flag.String("stage", "density", "density, late, docker or replay")
+	stage := flag.String("stage", "density", "density, late, docker, replay or reach")
 	dir := flag.String("dir", "", "an empty directory for the store")
 	corpus := flag.String("corpus", "", "a docker json-file corpus, for docker and replay")
 	count := flag.Int("records", 1_000_000, "frontend records, for density and late")
@@ -43,6 +44,8 @@ func main() {
 		measureDocker(ctx, path, readCorpus(*corpus))
 	case "replay":
 		replayDocker(ctx, path, readCorpus(*corpus), *sealAge)
+	case "reach":
+		measureReach(ctx, path, *count)
 	default:
 		log.Fatalf("unknown stage %q", *stage)
 	}
