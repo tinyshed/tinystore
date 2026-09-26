@@ -14,12 +14,13 @@ import (
 const (
 	selectLive = `select c.version, c.expires, c.value, c.spill, s.value from cells as c
 		left join spilled as s on s.id = c.spill
-		where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3)`
+		where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ` + hiddenC
 	selectHas = `select 1 from cells
-		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3)`
+		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
 	scanBranch = `select c.path, c.version, c.expires, c.value, c.spill, s.value from cells as c
 		left join spilled as s on s.id = c.spill
 		where c.bucket = ?1 and c.path > ?2 and c.path < ?3 and (c.expires is null or c.expires > ?4)
+			and not ` + hiddenC + `
 		order by c.path limit cast(?5 as integer)`
 )
 

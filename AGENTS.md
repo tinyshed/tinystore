@@ -53,7 +53,7 @@ earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
 Designed, not built: `blobs`, `jobs`, self-metrics, and kv's `Sliding`
-expiry and `Clear` ([docs/kv.md](docs/kv.md)).
+expiry ([docs/kv.md](docs/kv.md)).
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -476,6 +476,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | counters of one name keep their numbers one way        | `TestCountersOpenAgainOnlyAsTheyWereOpened`                                     |
 | a `LoseAtMost` counter joins no transaction            | `TestALoseAtMostCounterRefusesATransaction`                                     |
 | counters waiting for a flush stay within their bound   | `TestWaitingCountersStayWithinTheirBound`                                       |
+| a kv Clear empties a branch and those under it         | `TestClearEmptiesTheBranchAndThoseUnderIt`, over the bound and under it         |
+| a cleared key is absent to every operation             | `TestAClearedKeyIsAbsentToEveryOperation`                                       |
+| a Clear never brings back counters waiting to flush    | `TestAClearDoesNotResurrectCountersWaitingForTheFlush`                          |
+| a Clear inside Tx deletes what it clears or refuses    | `TestAClearInATransactionOverTheBoundIsRefused`                                 |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

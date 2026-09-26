@@ -15,6 +15,7 @@
 //	bucket.go    OpenBucket, Of, WithTx: a handle on a bucket of values
 //	counters.go  OpenCounters, Add, Max, Get, Delete: a handle on counters
 //	memory.go    what LoseAtMost counters hold between flushes, and the flush
+//	clear.go     Clear: a branch deleted at once, or marked and deleted by Maintain
 //	branch.go    what both handles share: a branch's path and where its calls run
 //	options.go   the engine's bounds, the options of buckets, counters and calls
 //	keys.go      a key's text and the path owners and a key make

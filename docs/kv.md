@@ -2,8 +2,8 @@
 
 The design of the kv engine, built in part: `kv/` holds buckets, counters,
 branches, expiry, versions, grouped writes, point reads, `Scan`, `Tx` and
-`View`, and `LoseAtMost`, and its contract is [kv/README.md](../kv/README.md);
-`Sliding` and `Clear` are designed here and not built. The API and the
+`View`, `LoseAtMost` and `Clear`, and its contract is
+[kv/README.md](../kv/README.md); `Sliding` is designed here and not built. The API and the
 contracts below are settled, and what lies under
 [Storage](#storage) was measured by
 [the mechanics round](reports/kv-mechanics-2026-09-26.md) on one development
@@ -305,7 +305,7 @@ buckets    id | name | kind                                     values or counte
 cells      bucket | path | version | expires | value | spill     without rowid, key (bucket, path)
            index (expires, bucket, path) where expires is not null
 spilled    id | value                                            values over 512 bytes
-branches   bucket | prefix | generation                          a Clear past 10,000 keys
+branches   bucket | prefix | cleared                             a Clear past 10,000 keys
 meta       name | value                                          the revision's high-water mark
 ```
 
@@ -344,13 +344,28 @@ returning version, value, spill;
   ms of the writer, so that a flood of distinct keys does not hold a sign-in
   behind half a second of flush; 100,000 keys may wait.
 - **`Clear` deletes up to 10,000 keys in its own transaction**, 35 to 45 ms. A
-  larger branch gets the next generation in `branches`: its keys are hidden at
-  once, and maintenance deletes them 10,000 a transaction. A million keys in
-  one transaction held the writer for 5.3 to 8.7 s. The generations in use are
-  kept in memory, which one owner of the directory makes safe.
-- **Maintenance runs through `Store.Every`**: expired rows in batches through
-  the expiry index, the `LoseAtMost` and `Sliding` flushes, the keys of old
-  generations, spilled rows no cell names any more.
+  larger branch is marked in `branches` with the file's revision: under its
+  prefix a row of that version or older is gone. Every statement that finds
+  live rows skips such a row, so the keys are hidden to readers and writers
+  alike the moment the mark commits, and maintenance deletes them 10,000 a
+  transaction, then the mark. A key written after the Clear has a later
+  version, so it is a new key and stays; paths never change. A million keys in
+  one transaction held the writer for 5.3 to 8.7 s.
+
+```text
+Clear(42) at revision R
+  under 01 42 00, version ≤ R   → hidden now, deleted by maintenance
+  under 01 42 00, version > R   → written after the Clear, kept
+  01 42 00 FF …, a name "42\x00" → not under the branch: after the prefix comes FF, not a mark
+```
+
+- **A `Clear` of `LoseAtMost` counters** holds their memory alone and drops
+  what lies under the branch inside its own transaction, so that a flush,
+  which takes what changed inside its transaction, runs wholly before it, and
+  its rows are cleared, or wholly after, and finds nothing to write.
+- **Maintenance runs through `Store.Every`**: the `LoseAtMost` and `Sliding`
+  flushes, the rows a mark hid, expired rows in batches through the expiry
+  index, spilled rows no cell names any more.
 - **Backup copies `kv.db`** like any engine's file; the deltas a `LoseAtMost`
   counter holds in memory are not in the copy.
 
@@ -366,7 +381,7 @@ returning version, value, spill;
 | A value kept in its row | 512 bytes; a larger one spills |
 | Keys waiting in a `LoseAtMost` bucket | 100,000 |
 | A `LoseAtMost` flush | 10,000 keys a transaction |
-| A `Clear` in its own transaction | 10,000 keys; a larger one takes a generation |
+| A `Clear` in its own transaction | 10,000 keys; a larger one is marked, and is `ErrLimit` inside `Tx` |
 | Durable writes committed together | 1024 |
 
 ## Gates
@@ -390,7 +405,10 @@ The five cases are the gates' workloads.
 | a `LoseAtMost` counter joins no transaction | `TestALoseAtMostCounterRefusesATransaction` |
 | the counters waiting for a flush stay within their bound | `TestWaitingCountersStayWithinTheirBound` |
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
-| `Clear` empties a branch and those under it at once, over the generation bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt`, not built |
+| `Clear` empties a branch and those under it at once, over the bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt` |
+| a cleared key is absent to every operation | `TestAClearedKeyIsAbsentToEveryOperation` |
+| a `Clear` never brings back counters waiting for a flush | `TestAClearDoesNotResurrectCountersWaitingForTheFlush` |
+| a `Clear` inside `Tx` deletes what it clears or refuses | `TestAClearInATransactionOverTheBoundIsRefused` |
 | a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |
 | a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |
 | a value over 512 bytes reads back from `spilled` | `TestALargeValueSpillsAndReadsBack` |

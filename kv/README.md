@@ -53,6 +53,13 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 agai
   change flushes first. Handles on one name opened with the same `d` share
   the memory; another `d`, or none, is `ErrInvalid`, and so is such a counter
   inside `Tx`.
+- **`Clear` removes a branch and every branch under it.** Up to 10,000 keys
+  go in one transaction; a larger branch is marked cleared at the file's
+  revision, which hides its keys from every call the moment it commits, and
+  `Maintain` deletes them 10,000 a transaction. A key written after the Clear
+  is a new key. Inside `Tx` a branch over 10,000 keys is `tinystore.ErrLimit`.
+  A Clear of `LoseAtMost` counters drops what their memory holds under the
+  branch, so no flush writes it again.
 - **Expiry follows three rules.** A key created without `kv.TTL` or
   `kv.ExpireAt` gets the bucket's `DefaultTTL`, if it has one; a later `Set`
   keeps the expiry a live key has; `Touch` gives a new expiry and keeps the
@@ -82,5 +89,4 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 agai
 
 ## Not built yet
 
-`Sliding` expiry, `Clear`. [docs/kv.md](../docs/kv.md) says what each is to
-be.
+`Sliding` expiry. [docs/kv.md](../docs/kv.md) says what it is to be.

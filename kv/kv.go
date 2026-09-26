@@ -39,6 +39,7 @@ type Store struct {
 	maintenance chan struct{}
 	closing     sync.Once
 	closeErr    error
+	clearBound  int // keys a Clear deletes in its transaction before it marks instead
 
 	opened   sync.Mutex
 	counters map[string]openCounters
@@ -80,7 +81,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 	state := &Store{
 		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
-		counters: map[string]openCounters{},
+		clearBound: clearAtOnce, counters: map[string]openCounters{},
 	}
 	state.maintenance <- struct{}{}
 	if err = state.loadRevision(ctx); err == nil {

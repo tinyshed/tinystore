@@ -30,6 +30,17 @@ create table spilled (
     value blob    not null
 ) strict;
 
+-- a Clear past its bound marks its branch instead of deleting it: under
+-- prefix, a row whose version is cleared or older is gone to every statement,
+-- and maintenance deletes such rows a batch at a time, then the mark; the
+-- bucket's root is the empty prefix
+create table branches (
+    bucket  integer not null,
+    prefix  blob    not null,
+    cleared integer not null,
+    primary key (bucket, prefix)
+) strict, without rowid;
+
 -- revision: the high-water mark of versions, kept with the writes that take them
 create table meta (
     name  text    primary key,

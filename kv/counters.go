@@ -56,24 +56,27 @@ func (c *Counters) WithTx(tx *Tx) *Counters {
 	return &bound
 }
 
-// the sum and the larger of a counter and n, in the writer: an expired counter
-// starts again from n with a new expiry, a live one keeps its own, and a sum
-// past the int64 range writes nothing, since SQLite would turn it into a REAL
+// the sum and the larger of a counter and n, in the writer: a counter expired
+// or hidden by a Clear starts again from n with a new expiry, a live one keeps
+// its own, and a sum past the int64 range writes nothing, since SQLite would
+// turn it into a REAL
 const (
-	addCounter = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)
+	counterGone = `(cells.expires <= ?6 or ` + hiddenCells + `)`
+	addCounter  = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)
 		on conflict (bucket, path) do update set
-			value   = iif(cells.expires <= ?6, excluded.value, cells.value + excluded.value),
-			expires = iif(cells.expires <= ?6, excluded.expires, cells.expires),
+			value   = iif(` + counterGone + `, excluded.value, cells.value + excluded.value),
+			expires = iif(` + counterGone + `, excluded.expires, cells.expires),
 			version = excluded.version
-		where cells.expires <= ?6 or typeof(cells.value + excluded.value) = 'integer'
+		where ` + counterGone + ` or typeof(cells.value + excluded.value) = 'integer'
 		returning value`
 	maxCounter = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, max(?5, 0))
 		on conflict (bucket, path) do update set
-			value   = iif(cells.expires <= ?6, excluded.value, max(cells.value, ?5)),
-			expires = iif(cells.expires <= ?6, excluded.expires, cells.expires),
+			value   = iif(` + counterGone + `, excluded.value, max(cells.value, ?5)),
+			expires = iif(` + counterGone + `, excluded.expires, cells.expires),
 			version = excluded.version
 		returning value`
-	selectCounter = `select value from cells where bucket = ?1 and path = ?2 and (expires is null or expires > ?3)`
+	selectCounter = `select value from cells
+		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
 	deleteCounter = `delete from cells where bucket = ?1 and path = ?2`
 )
 

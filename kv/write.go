@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	selectCell = `select version, expires, spill from cells where bucket = ?1 and path = ?2`
+	selectCell = `select version, expires, spill, ` + hiddenCells + ` from cells where bucket = ?1 and path = ?2`
 	upsertCell = `insert into cells (bucket, path, version, expires, value, spill) values (?1, ?2, ?3, ?4, ?5, ?6)
 		on conflict (bucket, path) do update set
 			version = excluded.version, expires = excluded.expires, value = excluded.value, spill = excluded.spill`
@@ -19,13 +19,16 @@ const (
 	deleteSpilled = `delete from spilled where id = ?1`
 	takeCell      = `delete from cells
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?4 = 0 or version = ?4)
+			and not ` + hiddenCells + `
 		returning version, expires, value, spill`
 	takeSpilled = `delete from spilled where id = ?1 returning value`
 	deleteCell  = `delete from cells
-		where bucket = ?1 and path = ?2 and (?4 = 0 or (version = ?4 and (expires is null or expires > ?3)))
+		where bucket = ?1 and path = ?2
+			and (?4 = 0 or (version = ?4 and (expires is null or expires > ?3) and not ` + hiddenCells + `))
 		returning spill`
 	touchCell = `update cells set expires = ?4
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?5 = 0 or version = ?5)
+			and not ` + hiddenCells + `
 		returning version`
 )
 
@@ -187,16 +190,17 @@ func (b *Bucket[V]) prepareWrite(key any, value V, options []Option) (call, stor
 	return c, kept, err
 }
 
-// cell is a key's row as a write finds it
+// cell is a key's row as a write finds it, hidden when a marked Clear hid it
 type cell struct {
 	found   bool
+	hidden  bool
 	version int64
 	expires sql.NullInt64
 	spill   sql.NullInt64
 }
 
 func (c cell) live(now int64) bool {
-	return c.found && (!c.expires.Valid || c.expires.Int64 > now)
+	return c.found && !c.hidden && (!c.expires.Valid || c.expires.Int64 > now)
 }
 
 // cellWrite is what a write gave a key
@@ -241,7 +245,8 @@ func (b *Bucket[V]) setCell(ctx context.Context, w sqlite.Writer, c call, value 
 
 func readCell(ctx context.Context, w sqlite.Writer, bucket int64, path []byte) (cell, error) {
 	found := cell{found: true}
-	err := sqlite.QueryRow(ctx, w, selectCell, bucket, path).Scan(&found.version, &found.expires, &found.spill)
+	err := sqlite.QueryRow(ctx, w, selectCell, bucket, path).
+		Scan(&found.version, &found.expires, &found.spill, &found.hidden)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cell{}, nil
 	}

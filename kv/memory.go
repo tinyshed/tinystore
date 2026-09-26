@@ -183,7 +183,7 @@ func (s *shard) valueAt(path string, now int64) (int64, bool) {
 }
 
 const selectCounterRow = `select value, expires from cells
-	where bucket = ?1 and path = ?2 and (expires is null or expires > ?3)`
+	where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
 
 // readFile is the counter at c's path as the file has it, absent when the
 // file has none or it expired
@@ -328,6 +328,34 @@ func (m *memory) giveBack(batch []flushed) {
 		}
 		target.mu.Unlock()
 	}
+}
+
+// dropUnder forgets the counters under a branch, changed or not, so that no
+// flush after the Clear calling it writes them again
+func (m *memory) dropUnder(prefix []byte) {
+	for i := range m.shards {
+		target := &m.shards[i]
+		target.mu.Lock()
+		for path, entry := range target.counters {
+			if !isUnder(path, prefix) {
+				continue
+			}
+			if entry.dirty {
+				m.waiting.Add(-1)
+			}
+			delete(target.counters, path)
+		}
+		target.mu.Unlock()
+	}
+}
+
+// isUnder says that path lies in the branch prefix names or below it: the
+// prefix, then an owner's mark or a key's
+func isUnder(path string, prefix []byte) bool {
+	if len(path) <= len(prefix) || path[:len(prefix)] != string(prefix) {
+		return false
+	}
+	return path[len(prefix)] == ownerMark || path[len(prefix)] == keyMark
 }
 
 // evict lets go of the counters the file now holds as memory does. It waits
