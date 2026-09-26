@@ -30,11 +30,14 @@ type blockFilter struct {
 	bloom []byte
 }
 
-// columns are one block's values, gathered by slot
+// columns are one block's values, gathered by slot, and the record times of
+// the values a time may be kept against
 type columns struct {
 	times, names, shapes, contexts, levels []int64
 	bodies, raws, traces, spans            []string
 	attrs                                  [][]string // by attribute column
+	bodyTimes                              []int64
+	attrTimes                              [][]int64
 }
 
 func (e *encoder) encodeBlock(s *schema, records []Record, ids recordIDs) encodedBlock {
@@ -71,7 +74,10 @@ func (e *encoder) appendBlock(s *schema, gathered *columns) []byte {
 }
 
 func gatherColumns(s *schema, records []Record, ids recordIDs) columns {
-	gathered := columns{attrs: make([][]string, s.columns)}
+	gathered := columns{attrs: make([][]string, s.columns), attrTimes: make([][]int64, s.columns)}
+	for column, count := range s.columnCounts(ids.shapes) {
+		gathered.attrs[column], gathered.attrTimes[column] = make([]string, 0, count), make([]int64, 0, count)
+	}
 	for i := range records {
 		r := &records[i]
 		gathered.times = append(gathered.times, r.At.UnixNano())
@@ -85,6 +91,7 @@ func gatherColumns(s *schema, records []Record, ids recordIDs) columns {
 		}
 		if r.Body != nil {
 			gathered.bodies = append(gathered.bodies, *r.Body)
+			gathered.bodyTimes = append(gathered.bodyTimes, r.At.UnixNano())
 		}
 		if r.TraceID != (TraceID{}) {
 			gathered.traces = append(gathered.traces, string(r.TraceID[:]))
@@ -100,6 +107,7 @@ func gatherColumns(s *schema, records []Record, ids recordIDs) columns {
 		for position, field := range r.Attrs {
 			column := shape.columns[position]
 			gathered.attrs[column] = append(gathered.attrs[column], field.Value)
+			gathered.attrTimes[column] = append(gathered.attrTimes[column], r.At.UnixNano())
 		}
 	}
 	return gathered
@@ -118,7 +126,7 @@ func (e *encoder) appendSlot(out []byte, slot slot, gathered *columns) []byte {
 	case slotLevel:
 		return appendIfAny(out, gathered.levels, e.appendInts)
 	case slotBody:
-		return appendIfAny(out, gathered.bodies, e.appendValues)
+		return e.appendTimedValues(out, gathered.bodies, gathered.bodyTimes)
 	case slotTrace:
 		return appendIfAny(out, gathered.traces, e.appendTexts)
 	case slotSpan:
@@ -126,7 +134,15 @@ func (e *encoder) appendSlot(out []byte, slot slot, gathered *columns) []byte {
 	case slotRaw:
 		return appendIfAny(out, gathered.raws, e.appendTexts)
 	}
-	return appendIfAny(out, gathered.attrs[slot.column], e.appendValues)
+	return e.appendTimedValues(out, gathered.attrs[slot.column], gathered.attrTimes[slot.column])
+}
+
+// appendTimedValues writes a value column whose times are its records'
+func (e *encoder) appendTimedValues(out []byte, values []string, times []int64) []byte {
+	if len(values) == 0 {
+		return out
+	}
+	return e.appendValues(out, values, times)
 }
 
 // appendIfAny writes nothing for a slot no record of the block carries
@@ -210,6 +226,7 @@ type openedBlock struct {
 	counts   []int    // how many values each slot holds
 	shapes   []int64  // each row's shape
 	names    []int64  // each row's event name
+	times    []int64  // each row's time
 	budget   expansion
 }
 
@@ -242,7 +259,8 @@ func (d *decoder) openBlock(s *schema, body []byte) (*openedBlock, error) {
 }
 
 // readDirectory decodes each row's shape and name, which say how many values
-// every other slot holds
+// every other slot holds, and each row's time, which every read asks for
+// first and a value column may be kept against
 func (d *decoder) readDirectory(block *openedBlock) error {
 	s := block.schema
 	block.shapes = d.idColumn(block, slotShape, len(s.shapes))
@@ -256,7 +274,9 @@ func (d *decoder) readDirectory(block *openedBlock) error {
 			block.counts[index]++
 		}
 	}
-	return nil
+	var err error
+	block.times, err = d.intColumn(block, 0)
+	return err
 }
 
 // idColumn reads ids that must stay below limit; a slot the segment does not
@@ -293,8 +313,15 @@ func (d *decoder) valueColumn(block *openedBlock, index int) ([]string, error) {
 	if block.counts[index] == 0 {
 		return nil, c.finish()
 	}
-	values := d.values(&c, block.counts[index])
+	values := d.values(&c, block.counts[index], func() []int64 { return block.slotTimes(index) })
 	return values, c.finish()
+}
+
+// slotTimes are the times of the rows that have a value in a slot
+func (b *openedBlock) slotTimes(index int) []int64 {
+	times := make([]int64, 0, b.counts[index])
+	b.eachValue(index, func(row, _ int) { times = append(times, b.times[row]) })
+	return times
 }
 
 func (d *decoder) textColumn(block *openedBlock, index, width int) ([]string, error) {
@@ -348,7 +375,9 @@ func (d *decoder) decodeColumns(block *openedBlock) (*decodedBlock, error) {
 		switch slot.kind {
 		case slotName, slotShape:
 			continue
-		case slotTime, slotContext:
+		case slotTime:
+			decoded.ints[index] = block.times
+		case slotContext:
 			decoded.ints[index], err = d.intColumn(block, index)
 		case slotLevel:
 			decoded.levels[index], err = d.levelColumn(block, index)

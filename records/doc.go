@@ -42,6 +42,7 @@
 //	block.go       the block row: columns in slot order; one parser
 //	ints.go        integer columns: transform, base and divisor, packer
 //	values.go      JSON value columns: integers, quoted integers, hex, uuids, text
+//	stamp.go       the times a text spells, kept behind its record's time
 //	text.go        text columns and the one zstd pass over a blob
 //	bits.go        bit packing and rice codes
 //	bloom.go       blooms over trace ids and id-like attributes

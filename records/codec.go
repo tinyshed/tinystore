@@ -21,6 +21,8 @@ type encoder struct {
 	inner   []string
 	counts  map[int64]int
 	words   map[string]int
+	stamps  []stamp
+	stamped []int // where each value's stamps end in stamps
 }
 
 func newEncoder(blobs *zstd.Encoder) *encoder {
@@ -30,8 +32,9 @@ func newEncoder(blobs *zstd.Encoder) *encoder {
 // decoder reads columns; one goroutine uses it at a time, and the zstd
 // decoder it holds is shared
 type decoder struct {
-	zstd *zstd.Decoder
-	fse  fse.Scratch
+	zstd    *zstd.Decoder
+	fse     fse.Scratch
+	spelled []byte
 }
 
 func newDecoder(blobs *zstd.Decoder) *decoder {

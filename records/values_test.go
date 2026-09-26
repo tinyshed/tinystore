@@ -16,9 +16,9 @@ import (
 
 func roundTripValues(t *testing.T, e *encoder, d *decoder, values []string) byte {
 	t.Helper()
-	encoded := e.appendValues(nil, values)
+	encoded := e.appendValues(nil, values, nil)
 	c := cursor{data: encoded, budget: &expansion{limit: maxExpandedText}}
-	decoded := d.values(&c, len(values))
+	decoded := d.values(&c, len(values), nil)
 	if err := c.finish(); err != nil {
 		t.Fatalf("%q: %v", values, err)
 	}
@@ -167,7 +167,7 @@ func TestValueAndTextColumnsTakeTheLayoutsTheirCommentsShow(t *testing.T) {
 		{[]string{`"154"`}, valueQuoted | valueInteger},
 		{[]string{"1920", "1366", "390", "1920", "1366", "390", "1920", "null"}, valueInteger | valueExceptions},
 	} {
-		if kind := e.appendValues(nil, test.values)[0]; kind != test.kind {
+		if kind := e.appendValues(nil, test.values, nil)[0]; kind != test.kind {
 			t.Errorf("%q typed as %#x, want %#x", test.values, kind, test.kind)
 		}
 	}

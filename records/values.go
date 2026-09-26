@@ -3,31 +3,44 @@ package records
 import (
 	"encoding/hex"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-// a value column keeps each value's spelling byte for byte, and types what it can:
+// a value column keeps each value's spelling byte for byte, and types what it
+// can; times are its values' record times, which a time it spells is kept
+// against, nil for a column outside a block:
 //
 //	"9cbaf3d1-0c27-47bc-8fed-cb6e0763b9b2"   → quoted uuid, 16 bytes
 //	"154"                                    → quoted integer 154
 //	1920 1366 390 1920 1366 390 1920 null    → integers, null an exception
+//	"2026-09-23 00:47:32,100 GET /notes"     → stamped text, see stamp.go
 const (
 	valueText byte = iota
 	valueInteger
 	valueHex
 	valueUUID
+	valueStamped
 )
 
+// integers that count time, as a JSON line's own "time" does, can be written
+// as their distance behind their record's time in the unit they count:
+//
+//	record 1727300000123456789 ns, "time" 1727300000121   → 2 ms behind
 const (
 	valueQuoted     = 1 << 4
 	valueExceptions = 1 << 5
+	valueTimed      = 1 << 6
 )
 
-func (e *encoder) appendValues(out []byte, values []string) []byte {
+func (e *encoder) appendValues(out []byte, values []string, times []int64) []byte {
 	flags := e.innerValues(values)
-	if typed, ok := e.appendTyped(out, flags); ok {
+	if typed, ok := e.appendTyped(out, flags, times); ok {
 		return typed
+	}
+	if stamped, ok := e.appendStamped(out, flags, times); ok {
+		return stamped
 	}
 	// the text kind is zero, so the flags alone name it
 	return e.appendTexts(append(out, flags), e.inner)
@@ -50,7 +63,7 @@ func (e *encoder) innerValues(values []string) byte {
 	return valueQuoted
 }
 
-func (e *encoder) appendTyped(out []byte, flags byte) ([]byte, bool) {
+func (e *encoder) appendTyped(out []byte, flags byte, times []int64) ([]byte, bool) {
 	integers, uuids, hexes := 0, 0, 0
 	for _, value := range e.inner {
 		if _, ok := parseInt(value); ok {
@@ -65,7 +78,7 @@ func (e *encoder) appendTyped(out []byte, flags byte) ([]byte, bool) {
 	}
 	switch n := len(e.inner); {
 	case n > 0 && integers == n:
-		return e.appendIntegers(append(out, flags|valueInteger)), true
+		return e.appendIntegers(out, flags, times), true
 	case n > 0 && uuids == n:
 		return e.appendFixed(append(out, flags|valueUUID), 16), true
 	case n > 0 && hexes == n:
@@ -77,13 +90,79 @@ func (e *encoder) appendTyped(out []byte, flags byte) ([]byte, bool) {
 	return out, false
 }
 
-func (e *encoder) appendIntegers(out []byte) []byte {
+// appendIntegers writes integers as they are, or as their distance behind
+// their records' times when that costs fewer bytes
+func (e *encoder) appendIntegers(out []byte, flags byte, times []int64) []byte {
 	e.numbers = e.numbers[:0]
 	for _, value := range e.inner {
 		number, _ := parseInt(value)
 		e.numbers = append(e.numbers, number)
 	}
-	return e.appendInts(out, e.numbers)
+	if exponent, distances, ok := e.timedIntegers(times); ok {
+		return e.appendInts(append(out, flags|valueInteger|valueTimed, exponent), distances)
+	}
+	return e.appendInts(append(out, flags|valueInteger), e.numbers)
+}
+
+// timeUnits are what an integer may count time in, as powers of ten of a
+// nanosecond: seconds, milliseconds, microseconds and nanoseconds
+var timeUnits = [...]byte{9, 6, 3, 0}
+
+// timedIntegers finds the unit whose distances cost fewest bytes, when they
+// cost fewer than the integers themselves
+func (e *encoder) timedIntegers(times []int64) (exponent byte, distances []int64, ok bool) {
+	if times == nil || len(e.numbers) < 8 {
+		return 0, nil, false
+	}
+	cheapest := -1
+	for _, unit := range timeUnits {
+		if !countsTime(e.numbers, times, unit) {
+			continue
+		}
+		candidate, fits := distancesBehind(e.numbers, times, unit)
+		if !fits {
+			continue
+		}
+		if cheapest < 0 {
+			cheapest = e.planInts(e.numbers).bytes
+		}
+		if cost := e.planInts(candidate).bytes; cost < cheapest {
+			cheapest, exponent, distances, ok = cost, unit, candidate, true
+		}
+	}
+	return exponent, distances, ok
+}
+
+// countsTime screens a unit on the first sixteen integers: a unit they count
+// time in leaves distances spread at most a quarter as wide as they are
+func countsTime(numbers, times []int64, unit byte) bool {
+	sample := min(16, len(numbers))
+	low, high := int64(math.MaxInt64), int64(math.MinInt64)
+	for i, number := range numbers[:sample] {
+		distance, ok := behindTime(times[i], number, int(unit))
+		if !ok {
+			return false
+		}
+		low, high = min(low, distance), max(high, distance)
+	}
+	return 4*distance(low, high) < spread(numbers[:sample])
+}
+
+func distancesBehind(numbers, times []int64, unit byte) ([]int64, bool) {
+	distances := make([]int64, len(numbers))
+	for i, number := range numbers {
+		distance, ok := behindTime(times[i], number, int(unit))
+		if !ok {
+			return nil, false
+		}
+		distances[i] = distance
+	}
+	return distances, true
+}
+
+// spread is how far apart the largest and the smallest value lie
+func spread(values []int64) uint64 {
+	return distance(slices.Min(values), slices.Max(values))
 }
 
 // appendExceptions writes where the values that are not integers stand, those
@@ -209,9 +288,13 @@ func appendHexBytes(out []byte, text string) []byte {
 	return out
 }
 
-func (d *decoder) values(c *cursor, count int) []string {
+// rowTimes gives a value column its records' times, when it keeps a time
+// against them; a column outside a block has none
+type rowTimes func() []int64
+
+func (d *decoder) values(c *cursor, count int, times rowTimes) []string {
 	flags := c.readByte()
-	values := d.typedValues(c, count, flags)
+	values := d.typedValues(c, count, flags, times)
 	if flags&valueQuoted != 0 {
 		return quote(c, values)
 	}
@@ -239,20 +322,28 @@ func quote(c *cursor, values []string) []string {
 	return column.values()
 }
 
-func (d *decoder) typedValues(c *cursor, count int, flags byte) []string {
+func (d *decoder) typedValues(c *cursor, count int, flags byte, times rowTimes) []string {
 	kind, quoted := flags&0x0f, flags&valueQuoted != 0
 	var values []string
 	switch {
-	case flags&^(0x0f|valueQuoted|valueExceptions) != 0:
+	case flags&^(0x0f|valueQuoted|valueExceptions|valueTimed) != 0:
 		c.fail("value flags")
 	case flags&valueExceptions != 0:
-		if kind != valueInteger || quoted {
+		if kind != valueInteger || quoted || flags&valueTimed != 0 {
 			c.fail("value exceptions")
 			return nil
 		}
 		values = d.exceptions(c, count)
+	case flags&valueTimed != 0:
+		if kind != valueInteger {
+			c.fail("timed values")
+			return nil
+		}
+		values = formatInts(d.timedInts(c, count, times))
 	case kind == valueInteger:
 		values = formatInts(d.ints(c, count))
+	case kind == valueStamped:
+		values = d.stamped(c, count, times)
 	case kind == valueUUID:
 		values = formatHex(c, d.texts(c, count), 16, true)
 	case kind == valueHex:
@@ -264,6 +355,42 @@ func (d *decoder) typedValues(c *cursor, count int, flags byte) []string {
 		c.fail("value kind")
 	}
 	return values
+}
+
+// timedInts reads integers written as their distance behind their records' times
+func (d *decoder) timedInts(c *cursor, count int, times rowTimes) []int64 {
+	unit := c.readByte()
+	distances := d.ints(c, count)
+	at := timesOf(c, times, count)
+	if c.err == nil && unit > maxStampDigits {
+		c.fail("timed integers' unit")
+	}
+	if c.err != nil {
+		return nil
+	}
+	for i, distance := range distances {
+		number, ok := subtract(floorDiv(at[i], pow10(int(unit))), distance)
+		if !ok {
+			c.fail("timed integer past 64 bits")
+			return nil
+		}
+		distances[i] = number
+	}
+	return distances
+}
+
+// timesOf asks for a column's record times, which it needs one of for each value
+func timesOf(c *cursor, times rowTimes, count int) []int64 {
+	if c.err != nil {
+		return nil
+	}
+	if times != nil {
+		if at := times(); len(at) == count {
+			return at
+		}
+	}
+	c.fail("a time kept against record times that are not there")
+	return nil
 }
 
 func formatInts(numbers []int64) []string {

@@ -151,3 +151,49 @@ func differ(want, got *Record) string {
 	}
 	return ""
 }
+
+// textRecords are lines of software that is not ours, each spelling its own
+// time a little before it was received, in the layouts stamps are found in,
+// and a JSON service's lines whose "time" counts milliseconds
+func textRecords(count int) []Record {
+	random := rand.New(rand.NewPCG(41, 43))
+	eastern := time.FixedZone("", 8*3600)
+	lines := []func(time.Time) string{
+		func(t time.Time) string {
+			return t.Format("2006-01-02 15:04:05,000") + " - app.access - INFO - GET /health 200"
+		},
+		func(t time.Time) string {
+			return "I" + t.Format("20060102 15:04:05.000000") + "   141 raft.cpp:60] Peer ok"
+		},
+		func(t time.Time) string {
+			return t.In(eastern).Format("2006/01/02 15:04:05.000000") + " [Info] core: started"
+		},
+		func(t time.Time) string {
+			return "1:M " + t.Format("02 Jan 2006 15:04:05.000") + " * Background saving"
+		},
+		func(t time.Time) string { return t.Format("Jan _2 15:04:05") + " host sshd[123]: Accepted publickey" },
+		func(t time.Time) string {
+			return t.Format("2006-01-02 15:04:05,000") + " - aiohttp.access - INFO - 10.0.0.7 [" +
+				t.Format("02/Jan/2006:15:04:05 -0700") + `] "GET /health HTTP/1.1" 200`
+		},
+		func(time.Time) string { return "connection reset by peer" },
+		func(t time.Time) string { return t.Format(time.RFC3339Nano) + " level=info msg=ok" },
+	}
+	records := make([]Record, count)
+	for i := range records {
+		at := time.Unix(0, fixtureBase+int64(i)*48_828_125+random.Int64N(1_000_000)).UTC()
+		written := at.Add(-time.Duration(random.Int64N(int64(2 * time.Millisecond))))
+		records[i] = Record{At: at, Stream: "text", Name: "stdout"}
+		if i%9 == 8 {
+			records[i].Attrs = []Field{
+				{"level", "30"},
+				{"time", strconv.FormatInt(written.UnixMilli(), 10)},
+				{"msg", `"request completed"`},
+			}
+			continue
+		}
+		body := lines[random.IntN(len(lines))](written)
+		records[i].Body = &body
+	}
+	return records
+}

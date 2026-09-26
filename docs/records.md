@@ -177,10 +177,22 @@ compressing candidates.**
 - Text of one length keeps a length column of one width and no bits; text
   without newlines is stored newline-separated; any other text keeps lengths.
   A text blob goes through zstd once, and not at all when its bytes look random.
+- A time a text spells, a log line's own timestamp first, is kept as its
+  distance behind its record's time in the unit its fraction counts, with the
+  layout that spells it back, up to four a value; the text keeps the rest. Its
+  layout is found among eight patterns: ISO and RFC 3339, Go's log, glog with
+  and without its year, Redis, syslog and access logs. A date no calendar has
+  and a leap second stay text, and so does a column where fewer than one value
+  in eight spells one.
+- Integers that count time, as a JSON line's own `time` does, are kept the same
+  way, in seconds, milliseconds, microseconds or nanoseconds, when that costs
+  fewer bytes than the integers.
 - Bodies come last in a block.
 
 ```text
 sorted times 1000 1250 1250 1900 → delta 250 0 650 → gcd 50 → 5 0 13 → 4 bits a value
+record 00:47:32.101187376, "I20260923 00:47:32.100929 raft.cpp:60] ok"
+       → "I raft.cpp:60] ok", "YMD h:m:s.6" 1 byte in, 258 µs behind
 ```
 
 The prototype also kept, for a segment whose bodies hold at least 256 KiB, a
@@ -213,6 +225,8 @@ column, with exact exceptions. The engine leaves both out; what that costs is
 | Attribute columns per segment | 1024 |
 | Context cells per segment | 2^20 |
 | Integer dictionary | 256 values |
+| Times one text value spells, kept apart | 4, each within 64 bytes of the last |
+| Layouts of those times in one column | 64 |
 | Expanded or copied text per block | 4 MiB |
 | Head row | a block's bounds |
 | Head | an hour of age; a minute behind the stream's newest, or the clock, is late |
@@ -220,8 +234,8 @@ column, with exact exceptions. The engine leaves both out; what that costs is
 | Memory reservation | 24 MiB per segment in flight |
 
 Counts, lengths, references, radix words, Rice streams, FSE expansion, text
-expansion and checksums are validated on decode, and a segment row may
-decompress or copy at most twice a segment's input.
+expansion, stamp layouts and places, and checksums are validated on decode,
+and a segment row may decompress or copy at most twice a segment's input.
 
 ## What was measured
 

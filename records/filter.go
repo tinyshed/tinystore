@@ -22,14 +22,13 @@ func (d *decoder) keepRows(block *openedBlock, q *checkedQuery) ([]bool, error) 
 	return keep, nil
 }
 
-// rowsInRange reads the time column, the first slot, which every record has
+// rowsInRange reads the time of every row, which the block's directory holds
 func (d *decoder) rowsInRange(block *openedBlock, q *checkedQuery) ([]bool, error) {
-	times, err := d.intColumn(block, 0)
 	keep := make([]bool, block.count)
-	for row, at := range times {
+	for row, at := range block.times {
 		keep[row] = at >= q.first && at <= q.last
 	}
-	return keep, err
+	return keep, nil
 }
 
 func (d *decoder) keepLevels(block *openedBlock, q *checkedQuery, keep []bool) error {

@@ -366,6 +366,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a record survives the records format exactly        | `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`      |
 | a changed records byte is refused                   | `TestAChangedOrMissingByteIsRefused`, `TestAChangedHeadRowIsRefused`, fuzzers   |
 | a records decode stays bounded                      | `TestExpandedTextIsBounded`; every copy is charged before it is made            |
+| a time a line spells comes back as it was spelled   | `TestEveryStampLayoutSpellsItsTextBack`, `FuzzStamps`                           |
+| what no calendar shows stays text                   | `TestATimeNoClockShowsStaysText`                                                |
+| a time kept against its record needs that record    | `TestStampsWithoutTheirTimesAreRefused`                                         |
 | equal times keep their arrival order                | `TestEqualTimesKeepTheirArrivalOrder`                                           |
 | a read merges segments and the head by time         | `TestReadMergesSegmentsAndTheHeadInEventTimeOrder`                              |
 | an appended record reads before it is sealed        | `TestAppendedRecordsAreReadBeforeTheyAreSealed`                                 |

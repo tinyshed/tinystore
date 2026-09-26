@@ -44,7 +44,9 @@ type goldenSegment struct {
 }
 
 func goldenFixtures() map[string][]Record {
-	return map[string][]Record{"frontend": frontendRecords(300), "backend": backendRecords(300), "edge": edgeRecords()}
+	return map[string][]Record{
+		"frontend": frontendRecords(300), "backend": backendRecords(300), "edge": edgeRecords(), "text": textRecords(300),
+	}
 }
 
 // the first format's bytes still read as the records they were written from,
@@ -150,6 +152,7 @@ func BenchmarkSegment(b *testing.B) {
 	for name, records := range map[string][]Record{
 		"frontend": frontendRecords(maxSegmentRecords),
 		"backend":  backendRecords(maxSegmentRecords),
+		"text":     textRecords(maxSegmentRecords),
 	} {
 		e, d := testCoders(b)
 		segment := e.encodeSegment(name, slices.Clone(records))

@@ -163,6 +163,22 @@ func carries(shape *shape, kind byte) bool {
 	return true
 }
 
+// columnCounts is how many values each attribute column takes from rows of
+// these shapes
+func (s *schema) columnCounts(shapes []int) []int {
+	rows := make([]int, len(s.shapes))
+	for _, shape := range shapes {
+		rows[shape]++
+	}
+	counts := make([]int, s.columns)
+	for shape, count := range rows {
+		for _, column := range s.shapes[shape].columns {
+			counts[column] += count
+		}
+	}
+	return counts
+}
+
 // slotOf is the index of a slot, or -1 when the segment's records never carry it
 func (s *schema) slotOf(kind byte, column int) int {
 	return slices.IndexFunc(s.slots, func(slot slot) bool { return slot.kind == kind && slot.column == column })
@@ -217,7 +233,7 @@ func (e *encoder) appendContexts(out []byte, contexts [][]Field) []byte {
 			for j, i := range members[list] {
 				values[j] = contexts[i][position].Value
 			}
-			out = e.appendValues(out, values)
+			out = e.appendValues(out, values, nil)
 		}
 	}
 	return out
@@ -315,7 +331,7 @@ func (d *decoder) contextValues(c *cursor, keyLists [][]string, members [][]int,
 	contexts := make([][]Field, count)
 	for list, keys := range keyLists {
 		for _, key := range keys {
-			values := d.values(c, len(members[list]))
+			values := d.values(c, len(members[list]), nil)
 			if c.err != nil {
 				return nil
 			}

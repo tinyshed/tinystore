@@ -58,7 +58,7 @@ func withChecksum(data []byte) []byte {
 func FuzzBlock(f *testing.F) {
 	e, _ := testCoders(f)
 	schemas := map[string][]byte{}
-	for _, records := range [][]Record{frontendRecords(300), backendRecords(300), edgeRecords()} {
+	for _, records := range [][]Record{frontendRecords(300), backendRecords(300), edgeRecords(), textRecords(300)} {
 		segment := e.encodeSegment(records[0].Stream, slices.Clone(records))
 		schemas[records[0].Stream] = segment.row
 		f.Add(records[0].Stream, segment.blocks[0].body)
