@@ -17,6 +17,7 @@ const kindCounters = "counters"
 // counters, and a handle may be used from any number of goroutines.
 type Counters struct {
 	branch
+	memory *memory // nil unless LoseAtMost
 }
 
 // OpenCounters opens the counters name of kv.db, creating them the first
@@ -35,12 +36,17 @@ func OpenCounters(ctx context.Context, state *Store, name string, options ...Cou
 		return nil, err
 	}
 
-	return &Counters{branch: branch{state: state, id: id, name: name, ttl: said.ttl}}, nil
+	held, err := state.memoryFor(name, id, said.loseAtMost)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Counters{branch: branch{state: state, id: id, name: name, ttl: said.ttl}, memory: held}, nil
 }
 
 // Of is the branch of these counters that owners name, as Bucket.Of names one.
 func (c *Counters) Of(owners ...any) *Counters {
-	return &Counters{branch: c.under(owners)}
+	return &Counters{branch: c.under(owners), memory: c.memory}
 }
 
 // WithTx is these counters inside tx, as Bucket.WithTx is a bucket.
@@ -76,17 +82,26 @@ const (
 // counters, and a live one keeps its expiry, so a window does not slide. A sum
 // past the int64 range is ErrLimit and changes nothing.
 func (c *Counters) Add(ctx context.Context, key any, n int64) (int64, error) {
+	if c.memory != nil {
+		return c.changeInMemory(ctx, key, addTo(n))
+	}
 	return c.change(ctx, key, addCounter, n)
 }
 
 // Max keeps the larger of the counter under key and n, an absent counter
 // counting as zero, and returns what it holds now.
 func (c *Counters) Max(ctx context.Context, key any, n int64) (int64, error) {
+	if c.memory != nil {
+		return c.changeInMemory(ctx, key, func(held int64) (int64, error) { return max(held, n), nil })
+	}
 	return c.change(ctx, key, maxCounter, n)
 }
 
 // Get is what the counter under key holds; an absent or expired one holds 0.
 func (c *Counters) Get(ctx context.Context, key any) (int64, error) {
+	if c.memory != nil {
+		return c.getInMemory(ctx, key)
+	}
 	cl, err := c.begin(key, nil)
 	if err != nil {
 		return 0, c.fail(cl, err)
@@ -110,6 +125,9 @@ func (c *Counters) Get(ctx context.Context, key any) (int64, error) {
 
 // Delete removes the counter under key; an absent one is not an error.
 func (c *Counters) Delete(ctx context.Context, key any) error {
+	if c.memory != nil {
+		return c.deleteInMemory(ctx, key)
+	}
 	cl, err := c.begin(key, nil)
 	if err != nil {
 		return c.fail(cl, err)
@@ -149,6 +167,68 @@ func (c *Counters) change(ctx context.Context, key any, statement string, n int6
 		return writeErr
 	})
 	return held, c.fail(cl, err)
+}
+
+// addTo is an Add in memory, refusing a sum past the int64 range as the
+// file's statement does
+func addTo(n int64) func(int64) (int64, error) {
+	return func(held int64) (int64, error) {
+		sum := held + n
+		if (n > 0 && sum < held) || (n < 0 && sum > held) {
+			return 0, fmt.Errorf("%w: adding %d passes the int64 range", tinystore.ErrLimit, n)
+		}
+		return sum, nil
+	}
+}
+
+var errRelaxedInTx = fmt.Errorf("%w: kv: LoseAtMost counters live in memory between flushes and join no "+
+	"transaction; open them without LoseAtMost to use them in Tx", tinystore.ErrInvalid)
+
+// beginInMemory is begin for LoseAtMost counters, which refuse a transaction,
+// and lets the call in while the store is open
+func (c *Counters) beginInMemory(ctx context.Context, key any) (call, func(), error) {
+	cl, err := c.begin(key, nil)
+	if err == nil && c.tx != nil {
+		err = errRelaxedInTx
+	}
+	if err != nil {
+		return cl, nil, c.fail(cl, err)
+	}
+	release, err := c.state.admit(ctx)
+	return cl, release, err
+}
+
+func (c *Counters) changeInMemory(ctx context.Context, key any, next func(int64) (int64, error)) (int64, error) {
+	cl, release, err := c.beginInMemory(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+
+	created := c.expiresFor(cl, cell{})
+	held, err := c.memory.change(ctx, cl, created.Int64, next)
+	return held, c.fail(cl, err)
+}
+
+func (c *Counters) getInMemory(ctx context.Context, key any) (int64, error) {
+	cl, release, err := c.beginInMemory(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+
+	held, err := c.memory.get(ctx, cl)
+	return held, c.fail(cl, err)
+}
+
+func (c *Counters) deleteInMemory(ctx context.Context, key any) error {
+	cl, release, err := c.beginInMemory(ctx, key)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return c.fail(cl, c.memory.forget(ctx, cl))
 }
 
 // counted is a counter's row value, which only an int64 can be

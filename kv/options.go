@@ -24,6 +24,8 @@ const (
 	scanLimit     = 100             // keys a page returns when a query does not say
 	maxScanLimit  = 1000            // keys a page may return
 	scanBytes     = 4 << 20         // value bytes a page may hold
+	maxWaiting    = 100_000         // LoseAtMost counters changed and not yet written, about 1 s of flushing
+	flushBatch    = 10_000          // counters a flush writes a transaction, 45 to 92 ms of the writer
 )
 
 // a bucket's name, as a file's is: short and plain
@@ -44,21 +46,38 @@ type OpenOption interface {
 
 // settings is what the options of a bucket or of counters say
 type settings struct {
-	ttl   time.Duration
-	codec any
-	err   error
+	ttl        time.Duration
+	codec      any
+	loseAtMost time.Duration
+	err        error
 }
 
 // an option of one kind only, so that the compiler refuses it for the other,
 // and one of both
 type (
-	forBuckets func(*settings)
-	forBoth    func(*settings)
+	forBuckets  func(*settings)
+	forCounters func(*settings)
+	forBoth     func(*settings)
 )
 
-func (f forBuckets) bucketOption(s *settings) { f(s) }
-func (f forBoth) bucketOption(s *settings)    { f(s) }
-func (f forBoth) counterOption(s *settings)   { f(s) }
+func (f forBuckets) bucketOption(s *settings)   { f(s) }
+func (f forCounters) counterOption(s *settings) { f(s) }
+func (f forBoth) bucketOption(s *settings)      { f(s) }
+func (f forBoth) counterOption(s *settings)     { f(s) }
+
+// LoseAtMost keeps the counters in memory and writes what changed every d, on
+// Close and on Maintain, so that an Add takes no write: a crash loses at most
+// the changes of the last d, a Delete's as an Add's. Handles on counters of one
+// name share the memory, and opening them again with another d, or without
+// LoseAtMost, is ErrInvalid; they join no transaction.
+func LoseAtMost(d time.Duration) CounterOption {
+	return forCounters(func(s *settings) {
+		if d <= 0 {
+			s.err = fmt.Errorf("%w: kv: LoseAtMost(%v)", tinystore.ErrInvalid, d)
+		}
+		s.loseAtMost = d
+	})
+}
 
 // DefaultTTL is the expiry a key gets when it is created without kv.TTL or
 // kv.ExpireAt; a later Set or Add keeps the expiry a key has.

@@ -45,6 +45,14 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 agai
   not slide. A sum past the int64 range is `tinystore.ErrLimit` and changes
   nothing, since SQLite would quietly write a REAL. An option of one kind
   does not compile for the other: `DefaultTTL` fits both.
+- **`LoseAtMost(d)` counters live in memory.** The first change of a key
+  since the last flush reads it from the file once; after that `Add`, `Max`
+  and `Delete` change memory and return, and every `d`, `Close` and `Maintain`
+  write what changed, 10,000 keys a transaction. A crash loses at most the
+  last `d` of changes, a `Delete`'s as well. Past 100,000 keys waiting a
+  change flushes first. Handles on one name opened with the same `d` share
+  the memory; another `d`, or none, is `ErrInvalid`, and so is such a counter
+  inside `Tx`.
 - **Expiry follows three rules.** A key created without `kv.TTL` or
   `kv.ExpireAt` gets the bucket's `DefaultTTL`, if it has one; a later `Set`
   keeps the expiry a live key has; `Touch` gives a new expiry and keeps the
@@ -74,5 +82,5 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // 1, 2, 3…, and from 1 agai
 
 ## Not built yet
 
-`LoseAtMost` counters, `Sliding` expiry, `Clear`.
-[docs/kv.md](../docs/kv.md) says what each is to be.
+`Sliding` expiry, `Clear`. [docs/kv.md](../docs/kv.md) says what each is to
+be.

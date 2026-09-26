@@ -2,7 +2,7 @@
 
 The design of the kv engine, built in part: `kv/` holds buckets, counters,
 branches, expiry, versions, grouped writes, point reads, `Scan`, `Tx` and
-`View`, and its contract is [kv/README.md](../kv/README.md); `LoseAtMost`,
+`View`, and `LoseAtMost`, and its contract is [kv/README.md](../kv/README.md);
 `Sliding` and `Clear` are designed here and not built. The API and the
 contracts below are settled, and what lies under
 [Storage](#storage) was measured by
@@ -231,11 +231,19 @@ Touch              replaces the expiry and nothing else
   and `Get` of an absent key is `0`.
 - **An overflow is refused.** An `Add` past the `int64` range is `ErrLimit`,
   since SQLite would quietly turn an overflowing integer sum into a `REAL`.
-- **`kv.LoseAtMost(d)`** changes memory and returns. A flush every `d`, and
-  `Close`, writes the deltas in one transaction; a crash loses at most `d` of
-  them. A `Get` sees the deltas not yet written. Past a bound of keys waiting,
-  the `Add` that crosses it flushes before it returns, so memory stays bounded
-  however many distinct keys arrive.
+- **`kv.LoseAtMost(d)`** keeps the counters in memory, and memory is the
+  truth for the keys it holds: the file is behind it by `d` at most. The first
+  change of a key since the last flush reads its row once; after it `Add`,
+  `Max` and `Delete` change memory and return. A flush every `d`, on `Close`
+  and on `Maintain` writes what changed, 10,000 keys a transaction, and lets go
+  of what did not change again. A crash loses at most the last `d` of every
+  mutation, a `Delete`'s as an `Add`'s: a deleted counter can come back. Past
+  100,000 keys waiting, the change that reaches the bound flushes first, so
+  memory stays bounded however many distinct keys arrive.
+- **One name, one way of keeping it.** Handles on counters of one name opened
+  with the same `LoseAtMost` share one memory; opening them again with another
+  interval, or without `LoseAtMost`, is `ErrInvalid`, since one handle would
+  read the file while another holds newer numbers.
 
 ## Transactions and snapshots
 
@@ -257,7 +265,10 @@ err = state.View(ctx, func(tx *kv.Tx) error { … }) // reads from one snapshot
 - `Tx` is one writer transaction over any buckets of `kv.db`: nil commits, an
   error or a panic rolls back. It never spans two engines.
 - A handle from `WithTx` works inside its callback only and is `ErrClosed`
-  after it. Inside `Tx` a `LoseAtMost` counter is as durable as the rest.
+  after it. A `LoseAtMost` counter joins no transaction and is `ErrInvalid`
+  inside one: a transaction promises its writes are in the file when it
+  commits, and memory cannot keep that promise without holding the key until
+  the transaction ends. Counters a transaction needs are opened without it.
 - `View` holds its snapshot for at most five seconds, as a records read does,
   and a write inside it is `ErrInvalid`.
 
@@ -374,7 +385,10 @@ The five cases are the gates' workloads.
 | a stale claim cannot finish or delete the next | `TestAStaleClaimCannotFinishOrDeleteTheNext` |
 | one of two versioned writes conflicts | `TestOneOfTwoVersionedWritesConflicts` |
 | an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded` |
-| `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval`, not built |
+| `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval` |
+| counters of one name keep their numbers one way | `TestCountersOpenAgainOnlyAsTheyWereOpened` |
+| a `LoseAtMost` counter joins no transaction | `TestALoseAtMostCounterRefusesATransaction` |
+| the counters waiting for a flush stay within their bound | `TestWaitingCountersStayWithinTheirBound` |
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
 | `Clear` empties a branch and those under it at once, over the generation bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt`, not built |
 | a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |

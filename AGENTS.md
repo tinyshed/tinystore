@@ -52,8 +52,8 @@ which cost more than zstd there; its format is version one and reads no
 earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
-Designed, not built: `blobs`, `jobs`, self-metrics, and kv's `LoseAtMost`
-counters, `Sliding` expiry and `Clear` ([docs/kv.md](docs/kv.md)).
+Designed, not built: `blobs`, `jobs`, self-metrics, and kv's `Sliding`
+expiry and `Clear` ([docs/kv.md](docs/kv.md)).
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -472,6 +472,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a stale claim cannot finish or delete the next         | `TestAStaleClaimCannotFinishOrDeleteTheNext`                                    |
 | a kv value comes back as it went in                    | `TestAValueComesBackAsItWentIn`, floats by their bits                           |
 | an overflowing counter is refused, not rounded         | `TestAnOverflowingCounterIsRefusedRatherThanRounded`                            |
+| `LoseAtMost` loses no more than its interval           | `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing         |
+| counters of one name keep their numbers one way        | `TestCountersOpenAgainOnlyAsTheyWereOpened`                                     |
+| a `LoseAtMost` counter joins no transaction            | `TestALoseAtMostCounterRefusesATransaction`                                     |
+| counters waiting for a flush stay within their bound   | `TestWaitingCountersStayWithinTheirBound`                                       |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

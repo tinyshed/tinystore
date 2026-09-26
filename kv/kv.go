@@ -39,6 +39,16 @@ type Store struct {
 	maintenance chan struct{}
 	closing     sync.Once
 	closeErr    error
+
+	opened   sync.Mutex
+	counters map[string]openCounters
+}
+
+// openCounters is how the counters of one name are open in this process:
+// every handle on them keeps its numbers the same way, in one memory or none
+type openCounters struct {
+	loseAtMost time.Duration
+	memory     *memory
 }
 
 // Open opens kv.db inside the store. The store closes it and, unless it is
@@ -70,6 +80,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 	state := &Store{
 		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
+		counters: map[string]openCounters{},
 	}
 	state.maintenance <- struct{}{}
 	if err = state.loadRevision(ctx); err == nil {
@@ -133,9 +144,9 @@ func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFil
 	return tinystore.SnapshotFile{Name: fileName, Engine: "kv", Schema: schema}, nil
 }
 
-// Close lets the work in flight finish and closes kv.db; cancellation stops
-// waiting, not the cleanup. The store calls it: an application closes the
-// store instead.
+// Close lets the work in flight finish, writes what LoseAtMost counters hold
+// and closes kv.db; cancellation stops waiting, not the cleanup. The store
+// calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
 	drained, _ := s.gate.Close()
 	select {
@@ -144,10 +155,62 @@ func (s *Store) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 	s.closing.Do(func() {
-		s.closeErr = s.file.Close()
+		_, flushErr := s.flushCounters(ctx)
+		s.closeErr = errors.Join(flushErr, s.file.Close())
 		s.log.Info("closed")
 	})
 	return s.closeErr
+}
+
+// memoryFor is the memory of the counters name, the one their first opening
+// made; opening them again with another LoseAtMost, or without, is ErrInvalid,
+// since one handle would read the file while another holds newer numbers
+func (s *Store) memoryFor(name string, bucket int64, loseAtMost time.Duration) (*memory, error) {
+	s.opened.Lock()
+	defer s.opened.Unlock()
+	if open, ok := s.counters[name]; ok {
+		if open.loseAtMost != loseAtMost {
+			return nil, fmt.Errorf("%w: kv: counters %q are open %s and opened again %s",
+				tinystore.ErrInvalid, name, keptBy(open.loseAtMost), keptBy(loseAtMost))
+		}
+		return open.memory, nil
+	}
+	var held *memory
+	if loseAtMost > 0 {
+		held = newMemory(s, bucket, name)
+		s.runtime.Every("kv flush "+name, loseAtMost, held.flushInBackground)
+	}
+	s.counters[name] = openCounters{loseAtMost: loseAtMost, memory: held}
+	return held, nil
+}
+
+func keptBy(loseAtMost time.Duration) string {
+	if loseAtMost == 0 {
+		return "without LoseAtMost"
+	}
+	return fmt.Sprintf("with LoseAtMost(%v)", loseAtMost)
+}
+
+// flushCounters writes what every LoseAtMost memory holds, and returns how
+// many counters it wrote
+func (s *Store) flushCounters(ctx context.Context) (int, error) {
+	s.opened.Lock()
+	var memories []*memory
+	for _, open := range s.counters {
+		if open.memory != nil {
+			memories = append(memories, open.memory)
+		}
+	}
+	s.opened.Unlock()
+
+	written := 0
+	var errs []error
+	for _, held := range memories {
+		wrote, err := held.flush(ctx)
+		written += wrote
+		errs = append(errs, err)
+	}
+	return written, errors.Join(errs...)
 }
 
 // admit lets one operation in while the store is open; release lets it out
