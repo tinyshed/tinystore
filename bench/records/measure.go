@@ -87,9 +87,9 @@ func (h *harness) maintain(ctx context.Context) records.Maintenance {
 }
 
 // sealAll moves the clock past every head's age, so that what waits seals
-func (h *harness) sealAll(ctx context.Context, after time.Time) {
+func (h *harness) sealAll(ctx context.Context, after time.Time) records.Maintenance {
 	h.setClock(after.Add(2 * time.Hour))
-	h.maintain(ctx)
+	return h.maintain(ctx)
 }
 
 func (h *harness) close(ctx context.Context) {
@@ -168,10 +168,20 @@ func reportFile(ctx context.Context, dir string, count int) {
 	fmt.Printf("objects %s\n", fileObjects(ctx, db, count))
 }
 
-// segmentSizes is how many segments there are and how many records they hold:
-// the quartiles, and the share of records in segments below a hundred
+// segmentSizes is how many segments hold records and how many they hold: the
+// quartiles, and the share of records in segments below a hundred; a segment
+// merged into another is a place, and holds none
 func segmentSizes(ctx context.Context, db *sql.DB) string {
-	rows, err := db.QueryContext(ctx, `select count from segments order by count`)
+	var places int
+	err := db.QueryRowContext(ctx, `select count(*) from segments where holder is not null`).Scan(&places)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return fmt.Sprintf("places=%d %s", places, heldSizes(ctx, db))
+}
+
+func heldSizes(ctx context.Context, db *sql.DB) string {
+	rows, err := db.QueryContext(ctx, `select held from segments where holder is null order by held`)
 	if err != nil {
 		log.Fatal(err)
 	}

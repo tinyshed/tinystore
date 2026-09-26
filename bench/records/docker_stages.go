@@ -92,8 +92,8 @@ func jsonLines(found []records.Record) int {
 
 // replayDocker runs the corpus on its own clock: each minute's records are
 // appended together, and maintenance runs every minute, sealing a head that is
-// full or an hour old, as a store in production would; then it asks what an
-// operator would
+// full or an hour old and merging small segments, as a store in production
+// would; then it asks what an operator would
 func replayDocker(ctx context.Context, dir string, containers []container, sealAge time.Duration) {
 	var all []records.Record
 	for _, found := range containers {
@@ -102,16 +102,18 @@ func replayDocker(ctx context.Context, dir string, containers []container, sealA
 	slices.SortStableFunc(all, func(a, b records.Record) int { return a.At.Compare(b.At) })
 	h := openHarnessSealing(ctx, dir, all[0].At, sealAge)
 	start := time.Now()
-	sealed := 0
+	var work records.Maintenance
 	for _, batch := range minuteBatches(all) {
 		h.setClock(batch[len(batch)-1].At.Truncate(time.Minute).Add(time.Minute))
 		h.append(ctx, batch)
-		sealed += h.maintain(ctx).SealedSegments
+		work = sum(work, h.maintain(ctx))
 	}
-	h.sealAll(ctx, all[len(all)-1].At.Add(sealAge))
+	work = sum(work, h.sealAll(ctx, all[len(all)-1].At.Add(sealAge)))
 	took := time.Since(start)
-	fmt.Printf("stage=replay seal_age=%v records=%d sealed_segments=%d replay=%v\n", sealAge, len(all), sealed,
-		took.Round(time.Millisecond))
+	fmt.Printf("stage=replay seal_age=%v records=%d sealed_segments=%d replay=%v\n", sealAge, len(all),
+		work.SealedSegments, took.Round(time.Millisecond))
+	fmt.Printf("merged_segments=%d merged_records=%d merged_records_per_record=%.2f\n", work.MergedSegments,
+		work.MergedRecords, float64(work.MergedRecords)/float64(len(all)))
 	operatorQueries(ctx, h, containers)
 	followEverything(ctx, h, len(all))
 	h.close(ctx)
@@ -240,6 +242,13 @@ func ask(ctx context.Context, h *harness, name string, query records.Query, want
 	}
 	fmt.Printf("query=%q rows=%d pages=%d blocks=%d bytes=%d time=%v\n", name, rows, pages,
 		after.ReadBlocks-before.ReadBlocks, after.ReadBytes-before.ReadBytes, time.Since(start).Round(time.Microsecond))
+}
+
+func sum(a, b records.Maintenance) records.Maintenance {
+	a.SealedSegments += b.SealedSegments
+	a.MergedSegments += b.MergedSegments
+	a.MergedRecords += b.MergedRecords
+	return a
 }
 
 // followEverything reads every sealed record from the first place, a
