@@ -137,11 +137,12 @@ their widths, not every block ending after its start.
 ```text
 span 29, blocks under half a second: a read of [12:00, 12:01) walks last_at in [12:00, 12:01 + 0.54 s)
 span 51, blocks under 26 days:       the same read walks last_at in [12:00, 12:01 + 26 days)
-``` A segment's keys and a block's filters
-are keyed by their owner: a query asks them about the candidates it already
-has, and retention deletes a segment's blocks, filters and keys as the id
-ranges the segment row names. Segment ids never repeat, so a consumer's
-cursor never meets one twice.
+```
+
+A segment's keys and a block's filters are keyed by their owner: a query asks
+them about the candidates it already has, and retention deletes a segment's
+blocks, filters and keys as the id ranges the segment row names. Segment ids
+never repeat, so a consumer's cursor never meets one twice.
 
 **A head collects, a segment seals.** The head keeps one row per stream and
 flush, the records under zstd; a segment of two records costs more than the
