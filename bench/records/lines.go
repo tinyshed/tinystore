@@ -121,9 +121,10 @@ func (h *harness) flush(ctx context.Context) {
 }
 
 // linesCensus follows everything the writers wrote and counts the records of
-// several lines and each level found; it returns how many are errors or worse
+// several lines, each name and each level found; it returns how many are
+// errors or worse
 func linesCensus(ctx context.Context, h *harness) int {
-	levels := map[string]int{}
+	levels, names := map[string]int{}, map[string]int{}
 	joined, errors := 0, 0
 	cursor := records.Cursor{}
 	for {
@@ -146,10 +147,11 @@ func linesCensus(ctx context.Context, h *harness) int {
 				}
 			}
 			levels[name]++
+			names[record.Name]++
 		}
 		cursor = batch.Next
 	}
-	fmt.Printf("records_of_several_lines=%d levels=%v\n", joined, levels)
+	fmt.Printf("records_of_several_lines=%d names=%v levels=%v\n", joined, names, levels)
 	return errors
 }
 
