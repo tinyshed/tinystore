@@ -138,7 +138,7 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 
 ## What it does not do yet
 
-No text templates beyond the times a line spells, no full-text search, no
-OTLP. Text compresses per block, without the
-per-segment sample the research measured; see docs/records.md for what that
-costs.
+No text templates beyond the times a line spells, which cost more than zstd
+on the corpus measured; no full-text search; no OTLP. Text compresses per
+block, without the per-segment sample the research measured; see
+docs/records.md for what that costs.

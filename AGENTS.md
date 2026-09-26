@@ -45,9 +45,10 @@ and point reads without a transaction ([kv/README.md](kv/README.md)).
 writes those copies as one zip and restores it before `Open`.
 
 `records` is built to [docs/records.md](docs/records.md), except the
-per-segment text sample, which the production corpus measured at 0.80 bytes a
-record before its lines' own times were kept apart; its format is version one
-and reads no earlier prototype.
+per-segment text sample, which one zstd frame a segment bounds at 0.48 bytes a
+record on the production corpus, and text templates beyond a line's own time,
+which cost more than zstd there; its format is version one and reads no
+earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
 Designed, not built: `blobs`, `jobs`, self-metrics, and kv's counters,

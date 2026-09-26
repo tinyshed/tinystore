@@ -133,6 +133,7 @@ lines.
   a record in full segments and 18.93 sealed hourly. The one-second reads,
   the request id and the frontend fixture are where they were.
 - Text's next lever is the rest of a template: numbers typed where they stand,
-  which a time is only the first of. A column where fewer than one value in
+  which a time is only the first of. Follow-up: [the text round](records-text-2026-09-26.md)
+  measured them, and they cost more than zstd. A column where fewer than one value in
   eight spells a time stays text, as does a time in a layout none of the
   patterns names.

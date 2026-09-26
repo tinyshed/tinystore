@@ -103,7 +103,8 @@ entries as records took 12.139.
 - A program following other programs' output gets their records whole, with
   their levels, in fewer bytes than one record an entry.
 - 14.9 % of the corpus's records name no level the writer knows: plain text,
-  and levels written as colour-coded words.
+  and levels written as colour-coded words. Follow-up: [the levels round](records-levels-2026-09-26.md)
+  finds those in colour, and 2.0 % name none.
 - A logfmt line stays text: its pairs would not spell it again. OTLP, and a
   server taking lines from programs that do not embed the store, are not
   built.
