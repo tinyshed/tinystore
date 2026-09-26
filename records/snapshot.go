@@ -86,22 +86,12 @@ const (
 // out, in the order a page takes them. The head rows are read first: the
 // snapshot begins with them, and the spans are known from then on.
 func (r *snapshotRead) candidates(ctx context.Context) ([]source, error) {
-	q := r.query
-	heads, err := r.indexed(ctx, false, selectHeadCandidates, q.first, q.last, q.levels, q.levels)
+	heads, err := r.headCandidates(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var blocks []source
-	for span := range r.spans.each() {
-		var found []source
-		found, err = r.indexed(ctx, true, selectBlockCandidates, span, q.first, latestEnd(span, q.last), q.last,
-			q.levels, q.levels)
-		if err != nil {
-			return nil, err
-		}
-		blocks = append(blocks, found...)
-	}
-	if blocks, err = r.withoutExcluded(ctx, blocks); err != nil {
+	blocks, err := r.blockCandidates(ctx)
+	if err != nil {
 		return nil, err
 	}
 	all := append(blocks, heads...)
@@ -109,6 +99,28 @@ func (r *snapshotRead) candidates(ctx context.Context) ([]source, error) {
 	return all, nil
 }
 
+func (r *snapshotRead) headCandidates(ctx context.Context) ([]source, error) {
+	q := r.query
+	return r.indexed(ctx, false, selectHeadCandidates, q.first, q.last, q.levels, q.levels)
+}
+
+// blockCandidates asks the time index once for each span a block has had
+func (r *snapshotRead) blockCandidates(ctx context.Context) ([]source, error) {
+	q := r.query
+	var blocks []source
+	for span := range r.spans.each() {
+		lastEnd := latestEnd(span, q.last)
+		found, err := r.indexed(ctx, true, selectBlockCandidates, span, q.first, lastEnd, q.last, q.levels, q.levels)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, found...)
+	}
+	return r.withoutExcluded(ctx, blocks)
+}
+
+// indexed runs one candidate query, a block's or a head row's, and keeps the
+// candidates of the streams asked for
 func (r *snapshotRead) indexed(ctx context.Context, block bool, query string, arguments ...any) ([]source, error) {
 	q := r.query
 	rows, err := r.tx.QueryContext(ctx, query, arguments...) //nolint:rowserrcheck // EachRow checks Err

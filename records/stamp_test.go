@@ -20,7 +20,7 @@ func TestAStampIsKeptBehindItsRecordsTime(t *testing.T) {
 	if len(found) != 1 || found[0].start != 1 || found[0].layout() != patterns("YMD h:m:s")[0]+".\x09\x06" {
 		t.Fatalf("found %+v", found)
 	}
-	if distance, ok := behindTime(at, found[0].wall, maxStampDigits-int(found[0].digits)); !ok || distance != 258 {
+	if distance, ok := distanceBehind(at, found[0].wall, maxStampDigits-int(found[0].digits)); !ok || distance != 258 {
 		t.Errorf("%d µs behind, want 258", distance)
 	}
 	if rest := text[:found[0].start] + text[found[0].end:]; rest != "I   141 raft_server.h:60] Peer refresh succeeded!" {
@@ -137,10 +137,13 @@ func TestAColumnKeepsItsStampsWhenTheyPay(t *testing.T) {
 
 // integers that count their records' time are kept as their distance behind
 // it, and integers that do not are kept as they are; the first is the example
-// in the comment on valueTimed
+// in the comments on valueTimed and distanceBehind
 func TestIntegersThatCountTimeAreKeptBehindIt(t *testing.T) {
-	if distance, ok := behindTime(1727300000123456789, 1727300000121, 6); !ok || distance != 2 {
+	if distance, ok := distanceBehind(1727300000123456789, 1727300000121, 6); !ok || distance != 2 {
 		t.Errorf("%d ms behind, want 2", distance)
+	}
+	if value, ok := valueBehind(1727300000123456789, 2, 6); !ok || value != 1727300000121 {
+		t.Errorf("2 ms behind is %d, want 1727300000121", value)
 	}
 	var clocks, measures []string
 	var times []int64

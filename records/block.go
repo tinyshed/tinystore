@@ -30,8 +30,8 @@ type blockFilter struct {
 	bloom []byte
 }
 
-// columns are one block's values, gathered by slot, and the record times of
-// the values a time may be kept against
+// columns are one block's values, gathered by slot; bodyTimes and attrTimes
+// are the times of the records each body and attribute value belongs to
 type columns struct {
 	times, names, shapes, contexts, levels []int64
 	bodies, raws, traces, spans            []string
@@ -259,8 +259,8 @@ func (d *decoder) openBlock(s *schema, body []byte) (*openedBlock, error) {
 }
 
 // readDirectory decodes each row's shape and name, which say how many values
-// every other slot holds, and each row's time, which every read asks for
-// first and a value column may be kept against
+// every other slot holds, and each row's time, which every read needs first
+// and every time a value keeps behind its record's
 func (d *decoder) readDirectory(block *openedBlock) error {
 	s := block.schema
 	block.shapes = d.idColumn(block, slotShape, len(s.shapes))

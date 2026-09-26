@@ -14,6 +14,15 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
+// the examples in the comment on sizeClass
+func TestASizeClassIsThePowerOfFourItsRecordsStayUnder(t *testing.T) {
+	for records, want := range map[int]int{1: 1, 3: 1, 4: 2, 15: 2, 16: 3, 63: 3, 143: 4, 593: 5} {
+		if got := sizeClass(records); got != want {
+			t.Errorf("%d records: size class %d, want %d", records, got, want)
+		}
+	}
+}
+
 // the example in the comment on merging: four of a power of four make one of the next
 func TestSmallSegmentsMergeFourOfASize(t *testing.T) {
 	for _, sizes := range [][]int{{30, 40, 35, 38}, {143, 150, 160, 140}} {

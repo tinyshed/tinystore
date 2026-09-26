@@ -16,19 +16,14 @@ func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segm
 	s.spans.note(segment.blocks)
 	emptied := false
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		firstBlock, err := nextBlockID(ctx, tx)
+		owner, err := insertSegmentRow(ctx, tx, head.stream, &segment)
 		if err != nil {
 			return err
 		}
-		id, err := insertSegmentRow(ctx, tx, head.stream, &segment, firstBlock)
-		if err != nil {
+		if err = insertBlocks(ctx, tx, owner, segment.blocks); err != nil {
 			return err
 		}
-		place := blockPlace{segment: id, stream: head.stream, first: firstBlock}
-		if err = insertBlocks(ctx, tx, place, segment.blocks); err != nil {
-			return err
-		}
-		if err = insertKeys(ctx, tx, id, segment.keys); err != nil {
+		if err = insertKeys(ctx, tx, owner.segment, segment.keys); err != nil {
 			return err
 		}
 		emptied, err = removeHeadRows(ctx, tx, head, chunk)
@@ -59,19 +54,28 @@ const insertSegment = `
 	values (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
 	returning id`
 
+// insertSegmentRow writes a sealed segment's row, which names the blocks it
+// is about to be given, and returns their owner
 func insertSegmentRow(
-	ctx context.Context, tx sqlite.Writer, stream int64, segment *encodedSegment, firstBlock int64,
-) (int64, error) {
-	lastBlock := firstBlock + int64(len(segment.blocks)) - 1
-	var id int64
-	err := sqlite.QueryRow(ctx, tx, insertSegment, stream, segment.first, segment.last, segment.count,
-		segment.count, segment.input, firstBlock, lastBlock, segment.row).Scan(&id)
-	return id, err
+	ctx context.Context, tx sqlite.Writer, stream int64, segment *encodedSegment,
+) (blockOwner, error) {
+	firstBlock, err := nextBlockID(ctx, tx)
+	if err != nil {
+		return blockOwner{}, err
+	}
+	owner := blockOwner{stream: stream, firstBlock: firstBlock}
+	err = sqlite.QueryRow(ctx, tx, insertSegment, stream, segment.first, segment.last, segment.count,
+		segment.count, segment.input, firstBlock, owner.lastBlock(segment.blocks), segment.row).Scan(&owner.segment)
+	return owner, err
 }
 
-// blockPlace is where a segment's blocks go: its id, its stream, the first block id
-type blockPlace struct {
-	segment, stream, first int64
+// blockOwner is the segment new blocks belong to, and the id the first of them takes
+type blockOwner struct {
+	segment, stream, firstBlock int64
+}
+
+func (o blockOwner) lastBlock(blocks []encodedBlock) int64 {
+	return o.firstBlock + int64(len(blocks)) - 1
 }
 
 const (
@@ -82,10 +86,10 @@ const (
 	insertFilter = `insert into block_filters (block, key, bloom) values (?, ?, ?)`
 )
 
-func insertBlocks(ctx context.Context, tx sqlite.Writer, place blockPlace, blocks []encodedBlock) error {
+func insertBlocks(ctx context.Context, tx sqlite.Writer, owner blockOwner, blocks []encodedBlock) error {
 	for i, block := range blocks {
-		id := place.first + int64(i)
-		_, err := tx.ExecContext(ctx, insertBlock, id, place.segment, place.stream, block.first, block.last,
+		id := owner.firstBlock + int64(i)
+		_, err := tx.ExecContext(ctx, insertBlock, id, owner.segment, owner.stream, block.first, block.last,
 			spanOf(block.first, block.last), block.levels, block.count, len(block.body), block.body)
 		if err != nil {
 			return err
@@ -125,7 +129,12 @@ func removeHeadRows(ctx context.Context, tx sqlite.Writer, head headKey, chunk h
 			return false, err
 		}
 	}
-	return settleHead(ctx, tx, head, chunk.count, chunk.input)
+	return settleHead(ctx, tx, head, chunk.headWeight)
+}
+
+// headWeight is what rows take from their head's state: their records and their input
+type headWeight struct {
+	count, input int
 }
 
 const (
@@ -135,10 +144,10 @@ const (
 	deleteHeadState  = `delete from head_state where stream = ? and late = ?`
 )
 
-// settleHead takes what left a head off its state, then dates the state by
-// the oldest row left, or removes it and says so when none is
-func settleHead(ctx context.Context, tx sqlite.Writer, head headKey, count, input int) (emptied bool, err error) {
-	if _, err = tx.ExecContext(ctx, subtractFromHead, count, input, head.stream, head.late); err != nil {
+// settleHead takes what rows left a head off its state, then dates the state
+// by the oldest row left, or removes it and says so when none is
+func settleHead(ctx context.Context, tx sqlite.Writer, head headKey, left headWeight) (emptied bool, err error) {
+	if _, err = tx.ExecContext(ctx, subtractFromHead, left.count, left.input, head.stream, head.late); err != nil {
 		return false, err
 	}
 	var since int64

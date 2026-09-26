@@ -141,9 +141,10 @@ func (s *Store) dropHeadRow(ctx context.Context, id int64) error {
 	var head headKey
 	emptied := false
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		var count, input int
+		var left headWeight
 		var body []byte
-		err := sqlite.QueryRow(ctx, tx, selectHeadRowToDrop, id).Scan(&head.stream, &head.late, &count, &input, &body)
+		err := sqlite.QueryRow(ctx, tx, selectHeadRowToDrop, id).Scan(&head.stream, &head.late, &left.count,
+			&left.input, &body)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -156,7 +157,7 @@ func (s *Store) dropHeadRow(ctx context.Context, id int64) error {
 		if _, err = tx.ExecContext(ctx, deleteHeadRow, id); err != nil {
 			return err
 		}
-		emptied, err = settleHead(ctx, tx, head, count, input)
+		emptied, err = settleHead(ctx, tx, head, left)
 		return err
 	})
 	if err == nil && emptied && !head.late {
@@ -181,22 +182,23 @@ const (
 // segment's rows through its blocks
 func (s *Store) dropSegment(ctx context.Context, id int64) error {
 	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		err := sqlite.QueryRow(ctx, tx, selectHolderToDrop, id).Scan(&id)
+		holder := id
+		err := sqlite.QueryRow(ctx, tx, selectHolderToDrop, id).Scan(&holder)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		found, reads, err := s.segmentReads(ctx, tx, id)
+		found, reads, err := s.segmentReads(ctx, tx, holder)
 		if err != nil || !found {
 			return err
 		}
 		if reads {
-			return fmt.Errorf("%w: segment %d reads", tinystore.ErrConflict, id)
+			return fmt.Errorf("%w: segment %d reads", tinystore.ErrConflict, holder)
 		}
 		for _, statement := range []string{
 			deleteSegmentFilters, deleteSegmentTraces, deleteSegmentBlocks, deleteSegmentKeys, deleteMergedPlaces,
 			deleteSegment,
 		} {
-			if _, err = tx.ExecContext(ctx, statement, id); err != nil {
+			if _, err = tx.ExecContext(ctx, statement, holder); err != nil {
 				return err
 			}
 		}

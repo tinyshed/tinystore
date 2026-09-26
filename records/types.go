@@ -130,10 +130,10 @@ type Stats struct {
 }
 
 // Maintenance is what one Maintain call did. MergedSegments counts the
-// segments whose records moved into another of their stream, which keep
-// their places for Follow, and MergedRecords the records those merges wrote
-// again; Damaged counts the head rows it found no longer read, whose heads
-// it sealed around them.
+// segments a merge moved into another segment of their stream, each keeping
+// its place for Follow, and MergedRecords the records the merges wrote again.
+// Damaged counts the head rows that no longer read, which the rest of their
+// heads sealed around.
 type Maintenance struct {
 	SealedSegments, SealedRecords int
 	ExpiredSegments, ExpiredHeads int

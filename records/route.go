@@ -57,18 +57,25 @@ func byStream(batch []Record) [][]Record {
 	return streams
 }
 
-// splitLate measures each record against the newest its stream showed before
-// it, newest, which each record on time moves on
+// splitLate measures each record against newest, the newest time its stream
+// showed before it, which every record found on time moves on
 func splitLate(records []Record, newest, now int64) (onTime, late []Record) {
 	for _, record := range records {
 		at := record.At.UnixNano()
-		if reference := min(newest, now); reference > math.MinInt64+int64(lateness) && at < reference-int64(lateness) {
+		if isLate(at, min(newest, now)) {
 			late = append(late, record)
 			continue
 		}
-		onTime, newest = append(onTime, record), max(newest, at)
+		onTime = append(onTime, record)
+		newest = max(newest, at)
 	}
 	return onTime, late
+}
+
+// isLate is a time more than lateness behind reference; nothing is behind the
+// earliest time there is
+func isLate(at, reference int64) bool {
+	return reference > math.MinInt64+int64(lateness) && at < reference-int64(lateness)
 }
 
 // appendCut cuts one head's records into rows no larger than a block

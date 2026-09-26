@@ -18,13 +18,13 @@ import (
 func (s *Store) buildPage(ctx context.Context, q *checkedQuery, f fetched) (Page, error) {
 	d := newDecoder(s.unpack)
 	chosen := selection{limit: q.limit, newest: q.asked.Newest, kept: rankedHeap{newest: q.asked.Newest}}
-	schemas := map[int64]*schema{}
+	segments := parsedSegments{rows: f.segments, schemas: map[int64]*schema{}}
 	for i := range f.sources {
 		if err := ctx.Err(); err != nil {
 			return Page{}, err
 		}
 		source := &f.sources[i]
-		records, err := s.sourceRecords(d, q, source, f.segments, schemas)
+		records, err := s.sourceRecords(d, q, source, &segments)
 		if err != nil {
 			return Page{}, err
 		}
@@ -35,11 +35,28 @@ func (s *Store) buildPage(ctx context.Context, q *checkedQuery, f fetched) (Page
 	return chosen.page(q, f)
 }
 
+// parsedSegments are the segment rows a page fetched, each parsed once the
+// first of its blocks needs it
+type parsedSegments struct {
+	rows    map[int64]segmentRow
+	schemas map[int64]*schema
+}
+
+func (p *parsedSegments) schema(d *decoder, segment int64) (*schema, error) {
+	if parsed, ok := p.schemas[segment]; ok {
+		return parsed, nil
+	}
+	parsed, err := d.parseSchema(p.rows[segment].body)
+	if err != nil {
+		return nil, err
+	}
+	p.schemas[segment] = parsed
+	return parsed, nil
+}
+
 // sourceRecords decodes one block or head row and returns the records it
 // holds that match, in the order it stores them
-func (s *Store) sourceRecords(
-	d *decoder, q *checkedQuery, src *source, segments map[int64]segmentRow, schemas map[int64]*schema,
-) ([]Record, error) {
+func (s *Store) sourceRecords(d *decoder, q *checkedQuery, src *source, segments *parsedSegments) ([]Record, error) {
 	stream := s.streams.name(src.stream)
 	if !src.block {
 		records, err := d.parseHeadRow(stream, src.body)
@@ -49,25 +66,19 @@ func (s *Store) sourceRecords(
 		}
 		return slices.DeleteFunc(records, func(r Record) bool { return !q.matches(&r) }), nil
 	}
-	records, err := d.blockMatches(q, src, segments, schemas)
+	records, err := d.blockMatches(q, src, segments)
 	if err != nil {
-		segment := segments[src.segment]
+		segment := segments.rows[src.segment]
 		found := Damage{Stream: stream, Segment: src.segment, From: timeOf(segment.first), To: timeOf(segment.last)}
 		return nil, damageOf(found, fmt.Errorf("block %d: %w", src.id, err))
 	}
 	return records, nil
 }
 
-func (d *decoder) blockMatches(
-	q *checkedQuery, src *source, segments map[int64]segmentRow, schemas map[int64]*schema,
-) ([]Record, error) {
-	s, ok := schemas[src.segment]
-	if !ok {
-		var err error
-		if s, err = d.parseSchema(segments[src.segment].body); err != nil {
-			return nil, err
-		}
-		schemas[src.segment] = s
+func (d *decoder) blockMatches(q *checkedQuery, src *source, segments *parsedSegments) ([]Record, error) {
+	s, err := segments.schema(d, src.segment)
+	if err != nil {
+		return nil, err
 	}
 	block, err := d.openBlock(s, src.body)
 	if err != nil {

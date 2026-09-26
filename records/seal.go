@@ -12,12 +12,12 @@ import (
 // headChunk is the head rows one segment is made of: whole rows in arrival
 // order, as many as fit a segment's bounds, less the rows known to be damaged
 type headChunk struct {
-	ids          []int64
-	spans        [][2]int64 // each row's first and last time
-	bodies       [][]byte
-	count, input int
-	oldest       int64 // when its first row was written
-	full         bool  // the head's next row would not fit
+	ids    []int64
+	spans  [][2]int64 // each row's first and last time
+	bodies [][]byte
+	headWeight
+	oldest int64 // when its first row was written
+	full   bool  // the head's next row would not fit
 }
 
 // sealHead seals a head a segment at a time: a full segment at once, and what

@@ -103,18 +103,22 @@ func findStamps(found []stamp, text string, at int64) []stamp {
 	return found
 }
 
-// shortestStamp is the fewest bytes a pattern spells: "0923 00:47:32"
-const shortestStamp = 13
+const (
+	shortestStamp = 13         // the fewest bytes a pattern spells: "0923 00:47:32"
+	monthInitials = "ADFJMNOS" // the letters a month's name begins with
+)
 
-// nextStamp tries the patterns at each place a stamp could start: a digit for
-// all but one, a capital for a month's name
+// nextStamp tries the patterns at each place a stamp could start: those that
+// begin with a digit at a digit, the one that begins with a month's name at
+// its initial
 func nextStamp(text string, from int, at int64) (stamp, bool) {
 	for i := from; i < min(len(text)-shortestStamp+1, from+stampReach); i++ {
-		if !isDigit(text[i]) && (text[i] < 'A' || text[i] > 'S') {
+		byName := strings.IndexByte(monthInitials, text[i]) >= 0
+		if !byName && !isDigit(text[i]) {
 			continue
 		}
 		for pattern, layout := range stampPatterns {
-			if isDigit(text[i]) != (layout[0] != fieldMonthName) {
+			if (layout[0] == fieldMonthName) != byName {
 				continue
 			}
 			if found, ok := readStamp(text, i, layout, at); ok {
@@ -133,23 +137,23 @@ func isDigit(c byte) bool {
 // readStamp reads a stamp in one pattern at text[i:], and the fraction after
 // it, and keeps it only when it is a time a calendar and a clock can show
 func readStamp(text string, i int, layout string, at int64) (stamp, bool) {
-	var clock civil
-	end, ok := clock.read(text, i, layout)
+	var spelled civil
+	end, ok := spelled.read(text, i, layout)
 	if !ok {
 		return stamp{}, false
 	}
 	found := stamp{start: i, end: end}
 	if end+1 < len(text) && (text[end] == '.' || text[end] == ',') && isDigit(text[end+1]) {
 		found.separator = text[end]
-		found.end, clock.fraction, found.digits = readFraction(text, end+1)
+		found.end, spelled.fraction, found.digits = readFraction(text, end+1)
 	}
 	if strings.IndexByte(layout, fieldYear) < 0 {
-		clock.year, _, _ = civilFromDays(floorDiv(at, nanosInDay))
+		spelled.year, _, _ = civilFromDays(floorDiv(at, nanosInDay))
 	}
-	if !clock.valid() {
+	if !spelled.valid() {
 		return stamp{}, false
 	}
-	found.wall, ok = clock.wall(int(found.digits))
+	found.wall, ok = spelled.wall(int(found.digits))
 	return found, ok
 }
 
@@ -206,8 +210,9 @@ func readField(text string, i int, field byte) (value int64, next int, ok bool) 
 		return readDigits(text, i, 2)
 	case fieldMonth, fieldDay, fieldHour, fieldMinute, fieldSecond:
 		return readDigits(text, i, 2)
+	default: // a byte between fields, spelled as it is
+		return 0, i + 1, i < len(text) && text[i] == field
 	}
-	return 0, i + 1, i < len(text) && text[i] == field
 }
 
 func readDigits(text string, i, width int) (value int64, next int, ok bool) {
@@ -302,10 +307,17 @@ func pow10(digits int) int64 {
 	return scale
 }
 
-// behindTime is how far a time counted in units of 10^exponent nanoseconds
-// lies behind a record's time; false when an int64 cannot hold the distance
-func behindTime(at, value int64, exponent int) (int64, bool) {
-	return subtract(floorDiv(at, pow10(exponent)), value)
+// distanceBehind is how far a time counted in units of 10^unit nanoseconds lies
+// behind a record's time at, and valueBehind the time that lies distance behind
+// it; false when an int64 cannot hold the result:
+//
+//	at 1727300000123456789 ns, value 1727300000121 in milliseconds (unit 6) → 2 behind
+func distanceBehind(at, value int64, unit int) (int64, bool) {
+	return subtract(floorDiv(at, pow10(unit)), value)
+}
+
+func valueBehind(at, distance int64, unit int) (int64, bool) {
+	return subtract(floorDiv(at, pow10(unit)), distance)
 }
 
 // subtract is a - b, and false when an int64 cannot hold it
@@ -316,22 +328,22 @@ func subtract(a, b int64) (int64, bool) {
 
 // stampedColumn is a column's values cut apart: the rest of each, and its stamps
 type stampedColumn struct {
-	layouts []string
-	known   map[int]int // a layout's key to its place in layouts
-	counts  []int64     // how many stamps each value holds
-	layout  []int64     // each stamp's layout
-	places  []int64     // bytes of the rest between a stamp and the one before it in its value
-	behind  []int64     // how far a stamp lies behind its record's time, in its unit
-	rest    []string
+	layouts   []string
+	known     map[int]int // a layout's key to its index in layouts
+	counts    []int64     // how many stamps each value holds
+	layoutIDs []int64     // each stamp's index in layouts
+	gaps      []int64     // bytes of the rest between a stamp and the one before it in its value
+	behind    []int64     // how far a stamp lies behind its record's time, in its unit
+	rest      []string
 }
 
 // findColumnStamps finds every value's stamps, and says whether they are
 // enough to pay for the columns they take: at least eight, one a value in eight
 func (e *encoder) findColumnStamps(values []string, times []int64) bool {
-	e.stamps, e.stamped = e.stamps[:0], e.stamped[:0]
+	e.stamps, e.stampEnds = e.stamps[:0], e.stampEnds[:0]
 	for i, value := range values {
 		e.stamps = findStamps(e.stamps, value, times[i])
-		e.stamped = append(e.stamped, len(e.stamps))
+		e.stampEnds = append(e.stampEnds, len(e.stamps))
 	}
 	return len(e.stamps) >= 8 && len(e.stamps)*8 >= len(values)
 }
@@ -345,21 +357,23 @@ func (e *encoder) cutStamps(values []string, times []int64) *stampedColumn {
 	first := 0
 	for i, value := range values {
 		from, kept := 0, int64(0)
-		for _, found := range e.stamps[first:e.stamped[i]] {
-			layout, fits := column.layoutOf(&found)
-			distance, near := behindTime(times[i], found.wall, maxStampDigits-int(found.digits))
+		for _, found := range e.stamps[first:e.stampEnds[i]] {
+			layoutID, fits := column.layoutOf(&found)
+			distance, near := distanceBehind(times[i], found.wall, maxStampDigits-int(found.digits))
 			if !fits || !near {
 				break
 			}
 			rest.text.WriteString(value[from:found.start])
-			column.layout = append(column.layout, int64(layout))
-			column.places = append(column.places, int64(found.start-from))
+			column.layoutIDs = append(column.layoutIDs, int64(layoutID))
+			column.gaps = append(column.gaps, int64(found.start-from))
 			column.behind = append(column.behind, distance)
-			from, kept = found.end, kept+1
+			from = found.end
+			kept++
 		}
 		rest.text.WriteString(value[from:])
 		rest.end()
-		column.counts, first = append(column.counts, kept), e.stamped[i]
+		column.counts = append(column.counts, kept)
+		first = e.stampEnds[i]
 	}
 	column.rest = rest.values()
 	return column
@@ -384,18 +398,18 @@ func (e *encoder) appendStamped(out []byte, flags byte, times []int64) ([]byte, 
 	}
 	column := e.cutStamps(e.inner, times)
 	out = appendStrings(append(out, flags|valueStamped), column.layouts)
-	for _, ints := range [][]int64{column.counts, column.layout, column.places, column.behind} {
+	for _, ints := range [][]int64{column.counts, column.layoutIDs, column.gaps, column.behind} {
 		out = e.appendInts(out, ints)
 	}
 	return e.appendTexts(out, column.rest), true
 }
 
-// stamped rebuilds a column's values from the rest of each and its stamps,
-// and each value's record time
-func (d *decoder) stamped(c *cursor, count int, times rowTimes) []string {
+// stampedValues rebuilds a column's values from the rest of each and its
+// stamps, and each value's record time
+func (d *decoder) stampedValues(c *cursor, count int, times rowTimes) []string {
 	column := stampedColumn{layouts: readLayouts(c), counts: d.ints(c, count)}
 	total := stampTotal(c, column.counts)
-	column.layout, column.places, column.behind = d.ints(c, total), d.ints(c, total), d.ints(c, total)
+	column.layoutIDs, column.gaps, column.behind = d.ints(c, total), d.ints(c, total), d.ints(c, total)
 	column.rest = d.texts(c, count)
 	at := timesOf(c, times, count)
 	if c.err != nil {
@@ -445,56 +459,80 @@ func stampTotal(c *cursor, counts []int64) int {
 // rebuild charges what the values will hold before it builds them, then
 // puts each stamp back where it was taken from
 func (s *stampedColumn) rebuild(c *cursor, d *decoder, times []int64) []string {
-	size := 0
-	for _, rest := range s.rest {
-		size += len(rest)
-	}
-	for _, id := range s.layout {
-		if id < 0 || id >= int64(len(s.layouts)) {
-			c.fail("stamp layout reference")
-			return nil
-		}
-		size += layoutWidth(s.layouts[id])
+	size, ok := s.rebuiltSize()
+	if !ok {
+		c.fail("stamp layout reference")
+		return nil
 	}
 	if !c.expand(size) {
 		return nil
 	}
-	var column joiner
-	column.text.Grow(size)
-	next := 0
+	rebuilt := stampRebuild{column: s, spelled: d.spelled}
+	rebuilt.values.text.Grow(size)
 	for i := range s.rest {
-		var ok bool
-		if next, ok = s.rebuildValue(&column, d, i, times[i], next); !ok {
+		if !rebuilt.add(i, times[i]) {
 			c.fail("stamp place or time")
 			return nil
 		}
-		column.end()
 	}
-	return column.values()
+	d.spelled = rebuilt.spelled
+	return rebuilt.values.values()
 }
 
-// rebuildValue writes value i with its stamps, the first of them stamp next,
-// and returns the stamp after its last
-func (s *stampedColumn) rebuildValue(column *joiner, d *decoder, i int, at int64, next int) (int, bool) {
+// rebuiltSize is how many bytes the values hold once their stamps are back
+func (s *stampedColumn) rebuiltSize() (int, bool) {
+	size := 0
+	for _, rest := range s.rest {
+		size += len(rest)
+	}
+	for _, id := range s.layoutIDs {
+		if id < 0 || id >= int64(len(s.layouts)) {
+			return 0, false
+		}
+		size += layoutWidth(s.layouts[id])
+	}
+	return size, true
+}
+
+// stampRebuild puts a column's values back together one after another
+type stampRebuild struct {
+	column  *stampedColumn
+	values  joiner
+	next    int    // the first stamp of the value added next
+	spelled []byte // one stamp as its layout spells it
+}
+
+// add writes value i with its stamps, spelled from its record's time at
+func (r *stampRebuild) add(i int, at int64) bool {
+	s := r.column
 	rest, from := s.rest[i], 0
 	for range s.counts[i] {
-		place, layout := s.places[next], s.layouts[s.layout[next]]
-		if place < 0 || place > int64(len(rest)-from) {
-			return next, false
+		gap := s.gaps[r.next]
+		if gap < 0 || gap > int64(len(rest)-from) {
+			return false
 		}
-		column.text.WriteString(rest[from : from+int(place)])
-		from += int(place)
-		digits, _ := layoutDigits(layout)
-		wall, near := subtract(floorDiv(at, pow10(maxStampDigits-digits)), s.behind[next])
-		var spelled bool
-		if d.spelled, spelled = appendStamp(d.spelled[:0], layout, wall, digits); !near || !spelled {
-			return next, false
+		r.values.text.WriteString(rest[from : from+int(gap)])
+		from += int(gap)
+		if !r.spell(s.layouts[s.layoutIDs[r.next]], at, s.behind[r.next]) {
+			return false
 		}
-		column.text.Write(d.spelled)
-		next++
+		r.values.text.Write(r.spelled)
+		r.next++
 	}
-	column.text.WriteString(rest[from:])
-	return next, true
+	r.values.text.WriteString(rest[from:])
+	r.values.end()
+	return true
+}
+
+// spell writes into spelled the time behind lies behind at, as layout spells it
+func (r *stampRebuild) spell(layout string, at, behind int64) bool {
+	digits, _ := layoutDigits(layout)
+	wall, ok := valueBehind(at, behind, maxStampDigits-digits)
+	if !ok {
+		return false
+	}
+	r.spelled, ok = appendStamp(r.spelled[:0], layout, wall, digits)
+	return ok
 }
 
 // layoutWidth is how many bytes a layout spells

@@ -37,14 +37,14 @@ func (h *handler) Enabled(context.Context, slog.Level) bool {
 func (h *handler) Handle(_ context.Context, line slog.Record) error {
 	record, own := h.record(line)
 	if !h.own && !own {
-		h.store.queue1(record)
+		h.store.enqueue(record)
 	}
 	return nil
 }
 
-// queue1 queues a record for the next flush, or drops and counts it when it
+// enqueue queues a record for the next flush, or drops and counts it when it
 // does not fit the format or the store's window, or the buffer has no room
-func (s *Store) queue1(record Record) {
+func (s *Store) enqueue(record Record) {
 	if !s.fits(&record) {
 		s.dropped.Add(1)
 		return
@@ -164,8 +164,8 @@ func (s *Store) Flush(ctx context.Context) error {
 	return s.flush(ctx, (*lineWriter).handOverIdle)
 }
 
-// flush takes the queue, then what the writers of Lines hand over into the
-// room that left, and writes both
+// flush takes what the queue holds, then has the writers of Lines hand over
+// into the queue it emptied, and writes both
 func (s *Store) flush(ctx context.Context, handOver func(*lineWriter)) error {
 	queued := s.drain()
 	s.lines.each(handOver)

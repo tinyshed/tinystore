@@ -104,8 +104,8 @@ const selectExpiredHeads = `select id, stream, late, count, input from heads whe
 
 // expiredHead is what leaves one head: its rows, their records and their input
 type expiredHead struct {
-	ids          []int64
-	count, input int
+	ids []int64
+	headWeight
 }
 
 func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
@@ -121,7 +121,7 @@ func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
 					return err
 				}
 			}
-			if _, err = settleHead(ctx, tx, head, expired.count, expired.input); err != nil {
+			if _, err = settleHead(ctx, tx, head, expired.headWeight); err != nil {
 				return err
 			}
 			removed += len(expired.ids)

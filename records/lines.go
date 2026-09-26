@@ -14,9 +14,9 @@ import (
 )
 
 // Lines is a writer for another program's output, a child process's stdout or
-// a file being followed: each line it is given becomes a record of stream
-// named "log", queued as the handler queues its lines, so a Write never waits
-// and a record the buffer has no room for is dropped and counted in Stats.
+// a file being followed: each line it is given becomes a record named "log" in
+// stream, queued as the handler queues its lines, so a Write never waits and a
+// record the buffer has no room for is dropped and counted in Stats.
 // The lines of one record are joined first: a stack trace's frames, a
 // traceback, a JSON value printed over several lines. A record keeps its text
 // byte for byte, or a JSON object's fields when they spell the line again,
@@ -24,7 +24,7 @@ import (
 // write it; its time is when its first line arrived. A record still growing
 // waits a flush or two for a line that joins it; Close hands it over.
 func (s *Store) Lines(stream string) io.WriteCloser {
-	w := &lineWriter{stream: stream, now: s.now, hand: s.queue1}
+	w := &lineWriter{stream: stream, now: s.now, enqueue: s.enqueue}
 	w.release = func() { s.lines.remove(w) }
 	s.lines.add(w)
 	return w
@@ -38,16 +38,16 @@ var errLinesClosed = fmt.Errorf("records: lines: %w", tinystore.ErrClosed)
 type lineWriter struct {
 	stream  string
 	now     func() time.Time
-	hand    func(Record) // where a record goes once its lines are joined
+	enqueue func(Record) // where a record goes once its lines are joined
 	release func()       // what Close lets go of
 	mu      sync.Mutex
 	partial []byte // a line not yet ended
-	pending *joining
+	pending *pendingRecord
 	closed  bool
 }
 
-// joining is one record's lines so far
-type joining struct {
+// pendingRecord is one record's lines so far
+type pendingRecord struct {
 	text   []byte
 	at     time.Time
 	lines  int
@@ -85,25 +85,25 @@ func (w *lineWriter) Close() error {
 	if w.closed {
 		return nil
 	}
-	w.handOverAll()
+	w.handOverAllLocked()
 	w.closed = true
 	w.release()
 	return nil
 }
 
-// handOverEverything hands over what the writer holds, as the store closes
-func (w *lineWriter) handOverEverything() {
+// handOverAll hands over what the writer holds, as the store closes
+func (w *lineWriter) handOverAll() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.handOverAll()
+	w.handOverAllLocked()
 }
 
-func (w *lineWriter) handOverAll() {
+func (w *lineWriter) handOverAllLocked() {
 	if len(w.partial) > 0 {
 		w.feed(w.partial)
 		w.partial = nil
 	}
-	w.emit()
+	w.handOverPending()
 }
 
 // handOverIdle hands over a record that did not grow since the flush before
@@ -113,7 +113,7 @@ func (w *lineWriter) handOverIdle() {
 	switch {
 	case w.pending == nil:
 	case w.pending.waited:
-		w.emit()
+		w.handOverPending()
 	default:
 		w.pending.waited = true
 	}
@@ -126,22 +126,22 @@ func (w *lineWriter) feed(line []byte) {
 		w.pending.add(line)
 		return
 	}
-	w.emit()
-	w.pending = &joining{at: w.now()}
+	w.handOverPending()
+	w.pending = &pendingRecord{at: w.now()}
 	w.pending.add(line)
 }
 
-func (j *joining) add(line []byte) {
-	if j.lines > 0 {
-		j.text = append(j.text, '\n')
+func (p *pendingRecord) add(line []byte) {
+	if p.lines > 0 {
+		p.text = append(p.text, '\n')
 	}
-	j.text = append(j.text, line...)
-	j.lines++
-	j.waited = false
-	if j.lines == 1 && (bytes.HasPrefix(line, []byte("{")) || string(bytes.TrimSpace(line)) == "[") {
-		j.open.json = true
+	p.text = append(p.text, line...)
+	p.lines++
+	p.waited = false
+	if p.lines == 1 && (bytes.HasPrefix(line, []byte("{")) || string(bytes.TrimSpace(line)) == "[") {
+		p.open.json = true
 	}
-	j.open.scan(line)
+	p.open.scan(line)
 }
 
 // joins says whether a line belongs to the record before it: an indented
@@ -157,11 +157,11 @@ func (j *joining) add(line []byte) {
 //	"status": 200                                  joins: the value is open
 //	}                                              joins, and closes it
 //	[2026-09-26 12:00:03] info done                a record: brackets begin no value but a line's own
-func (j *joining) joins(line []byte) bool {
+func (p *pendingRecord) joins(line []byte) bool {
 	switch {
-	case j.lines >= maxJoinedLines || len(j.text)+1+len(line) > maxBlockInput-maxJoinedLines:
+	case p.lines >= maxJoinedLines || len(p.text)+1+len(line) > maxBlockInput-maxJoinedLines:
 		return false
-	case j.open.depth > 0:
+	case p.open.depth > 0:
 		return true
 	case len(line) > 0 && (line[0] == ' ' || line[0] == '\t'):
 		return true
@@ -206,40 +206,40 @@ type brackets struct {
 	inString, escape bool
 }
 
-func (j *brackets) scan(line []byte) {
-	if !j.json {
+func (b *brackets) scan(line []byte) {
+	if !b.json {
 		return
 	}
 	for _, c := range line {
 		switch {
-		case j.escape:
-			j.escape = false
-		case j.inString && c == '\\':
-			j.escape = true
+		case b.escape:
+			b.escape = false
+		case b.inString && c == '\\':
+			b.escape = true
 		case c == '"':
-			j.inString = !j.inString
-		case j.inString:
+			b.inString = !b.inString
+		case b.inString:
 		case c == '{' || c == '[':
-			j.depth++
+			b.depth++
 		case c == '}' || c == ']':
-			j.depth--
+			b.depth--
 		}
 	}
-	j.inString = j.inString && j.depth > 0
-	j.json = j.depth > 0
+	b.inString = b.inString && b.depth > 0
+	b.json = b.depth > 0
 }
 
-// emit hands over the record being joined
-func (w *lineWriter) emit() {
+// handOverPending hands over the record being joined
+func (w *lineWriter) handOverPending() {
 	if w.pending != nil {
-		w.hand(w.record(w.pending))
+		w.enqueue(w.record(w.pending))
 		w.pending = nil
 	}
 }
 
-func (w *lineWriter) record(j *joining) Record {
-	text := string(j.text)
-	record := Record{At: j.at, Stream: w.stream, Name: "log"}
+func (w *lineWriter) record(p *pendingRecord) Record {
+	text := string(p.text)
+	record := Record{At: p.at, Stream: w.stream, Name: "log"}
 	if fields, ok := exactFields(text); ok {
 		record.Attrs = fields
 	} else {
@@ -309,8 +309,8 @@ func objectFields(text string) ([]Field, error) {
 	return fields, nil
 }
 
-// lineWriters are the writers Lines gave out and not yet closed; a flush
-// hands over what they hold once it has waited a flush
+// lineWriters are the writers Lines gave out and not yet closed, which every
+// flush asks for the records they hold
 type lineWriters struct {
 	mu      sync.Mutex
 	writers map[*lineWriter]struct{}

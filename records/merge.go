@@ -25,8 +25,8 @@ import (
 // cursor that names it still finds each of them once
 const (
 	mergeFanIn   = 4
-	smallRecords = maxSegmentRecords / mergeFanIn // fewer records than this, and
-	smallInput   = maxSegmentInput / mergeFanIn   // less input, and four still fit a segment
+	smallRecords = maxSegmentRecords / mergeFanIn // a segment under both is small: four of them fit one
+	smallInput   = maxSegmentInput / mergeFanIn
 )
 
 // mergeable is a segment holding its own records, few enough to merge
@@ -101,7 +101,7 @@ func (s *Store) mergeable(ctx context.Context, stream int64) ([]mergeable, error
 func pickMerge(candidates []mergeable) []mergeable {
 	bySize := map[int][]mergeable{}
 	for _, candidate := range candidates {
-		size := (bits.Len(uint(candidate.held)) + 1) / 2
+		size := sizeClass(candidate.held)
 		bySize[size] = append(bySize[size], candidate)
 	}
 	for _, size := range slices.Sorted(maps.Keys(bySize)) {
@@ -110,6 +110,13 @@ func pickMerge(candidates []mergeable) []mergeable {
 		}
 	}
 	return nil
+}
+
+// sizeClass is the power of four a segment's records stay under:
+//
+//	1…3 → 1      4…15 → 2      16…63 → 3      143 → 4      593 → 5
+func sizeClass(records int) int {
+	return (bits.Len(uint(records)) + 1) / 2
 }
 
 // inTimeOrder takes, earliest first, up to four segments that do not overlap;
@@ -150,7 +157,7 @@ func (p *maintenancePass) merge(ctx context.Context, stream int64, run []mergeab
 	}
 
 	segment := newEncoder(p.store.blobs).encodeSegment(p.store.streams.name(stream), records)
-	if err = p.store.publishMerge(ctx, stream, members, segment); err != nil {
+	if err = p.store.publishMerge(ctx, stream, planMerge(members), segment); err != nil {
 		return err
 	}
 
@@ -204,23 +211,35 @@ func (s *Store) readMembers(ctx context.Context, run []mergeable) ([]member, err
 	return members, nil
 }
 
-// memberRecords decodes each member in the order it stores its records, one
-// member after another in time order; a member that no longer reads is its damage
+// memberRecords decodes the members one after another, in time order, and
+// fails with a DamageError naming the first that no longer reads
 func (s *Store) memberRecords(stream int64, members []member) ([]Record, error) {
 	d := newDecoder(s.unpack)
 	var records []Record
 	for _, m := range members {
-		schema, err := d.parseSchema(m.row)
-		for i := 0; err == nil && i < len(m.blocks); i++ {
-			var decoded []Record
-			if decoded, err = d.blockRecords(schema, m.blocks[i]); err == nil {
-				records = append(records, decoded...)
-			}
-		}
+		decoded, err := d.segmentRecords(m.row, m.blocks)
 		if err != nil {
 			found := Damage{Stream: s.streams.name(stream), Segment: m.id, From: timeOf(m.first), To: timeOf(m.last)}
 			return nil, damageOf(found, err)
 		}
+		records = append(records, decoded...)
+	}
+	return records, nil
+}
+
+// segmentRecords decodes a segment's blocks in the order it stores its records
+func (d *decoder) segmentRecords(row []byte, blocks [][]byte) ([]Record, error) {
+	schema, err := d.parseSchema(row)
+	if err != nil {
+		return nil, err
+	}
+	var records []Record
+	for _, block := range blocks {
+		decoded, err := d.blockRecords(schema, block)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, decoded...)
 	}
 	return records, nil
 }
@@ -237,52 +256,57 @@ const (
 		where id = ?`
 )
 
-// publishMerge writes the merged segment into the row of its members' lowest
-// id, which keeps its place, deletes the blocks and keys the members were
-// made of, and makes every other member a place the first holds, in one
-// transaction: a reader finds each record once, before or after it
-func (s *Store) publishMerge(ctx context.Context, stream int64, members []member, segment encodedSegment) error {
-	holder := slices.MinFunc(members, func(a, b member) int { return cmp.Compare(a.id, b.id) }).id
-	begins := beginnings(members)
+// mergePlan is which member holds a merge's records, the one of lowest id, and
+// where each member's records begin among them
+type mergePlan struct {
+	holder  int64
+	members []member
+	begins  map[int64]int
+}
+
+func planMerge(members []member) mergePlan {
+	plan := mergePlan{members: members, begins: make(map[int64]int, len(members))}
+	plan.holder = slices.MinFunc(members, func(a, b member) int { return cmp.Compare(a.id, b.id) }).id
+	begin := 0
+	for _, m := range members {
+		plan.begins[m.id] = begin
+		begin += m.held
+	}
+	return plan
+}
+
+// publishMerge writes the merged segment into the holder's row, which keeps
+// its place, deletes the blocks and keys the members were made of, and makes
+// every other member a place the holder holds, in one transaction: a reader
+// finds each record once, before or after it
+func (s *Store) publishMerge(ctx context.Context, stream int64, plan mergePlan, segment encodedSegment) error {
 	s.spans.note(segment.blocks)
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		if err := deleteMembers(ctx, tx, members); err != nil {
+		if err := deleteMembers(ctx, tx, plan.members); err != nil {
 			return err
 		}
 		firstBlock, err := nextBlockID(ctx, tx)
 		if err != nil {
 			return err
 		}
-		place := blockPlace{segment: holder, stream: stream, first: firstBlock}
-		if err = insertBlocks(ctx, tx, place, segment.blocks); err != nil {
+		owner := blockOwner{segment: plan.holder, stream: stream, firstBlock: firstBlock}
+		if err = insertBlocks(ctx, tx, owner, segment.blocks); err != nil {
 			return err
 		}
-		if err = insertKeys(ctx, tx, holder, segment.keys); err != nil {
+		if err = insertKeys(ctx, tx, plan.holder, segment.keys); err != nil {
 			return err
 		}
-		if err = movePlaces(ctx, tx, holder, members, begins); err != nil {
+		if err = movePlaces(ctx, tx, plan); err != nil {
 			return err
 		}
-		lastBlock := firstBlock + int64(len(segment.blocks)) - 1
-		_, err = tx.ExecContext(ctx, rewriteHolder, segment.first, segment.last, begins[holder], segment.count,
-			segment.input, firstBlock, lastBlock, segment.row, holder)
+		_, err = tx.ExecContext(ctx, rewriteHolder, segment.first, segment.last, plan.begins[plan.holder],
+			segment.count, segment.input, firstBlock, owner.lastBlock(segment.blocks), segment.row, plan.holder)
 		return err
 	})
 	if err != nil {
 		return fmt.Errorf("records: publish a merge of %s: %w", segment.stream, err)
 	}
 	return nil
-}
-
-// beginnings is where each member's records begin among the merged segment's
-func beginnings(members []member) map[int64]int {
-	begins := make(map[int64]int, len(members))
-	begin := 0
-	for _, m := range members {
-		begins[m.id] = begin
-		begin += m.held
-	}
-	return begins
 }
 
 func deleteMembers(ctx context.Context, tx sqlite.Writer, members []member) error {
@@ -301,18 +325,18 @@ func deleteMembers(ctx context.Context, tx sqlite.Writer, members []member) erro
 
 // movePlaces gives the holder the places its members held, then the members
 // themselves; the holder's own places move first, so that none moves twice
-func movePlaces(ctx context.Context, tx sqlite.Writer, holder int64, members []member, begins map[int64]int) error {
-	if _, err := tx.ExecContext(ctx, movePlacesInto, holder, begins[holder], holder); err != nil {
+func movePlaces(ctx context.Context, tx sqlite.Writer, plan mergePlan) error {
+	if _, err := tx.ExecContext(ctx, movePlacesInto, plan.holder, plan.begins[plan.holder], plan.holder); err != nil {
 		return err
 	}
-	for _, m := range members {
-		if m.id == holder {
+	for _, m := range plan.members {
+		if m.id == plan.holder {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, movePlacesInto, holder, begins[m.id], m.id); err != nil {
+		if _, err := tx.ExecContext(ctx, movePlacesInto, plan.holder, plan.begins[m.id], m.id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, mergeIntoPlace, holder, begins[m.id], m.id); err != nil {
+		if _, err := tx.ExecContext(ctx, mergeIntoPlace, plan.holder, plan.begins[m.id], m.id); err != nil {
 			return err
 		}
 	}

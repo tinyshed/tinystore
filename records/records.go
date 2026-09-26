@@ -160,10 +160,15 @@ func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFil
 
 func (s *Store) Stats() Stats {
 	return Stats{
-		Appended: s.appended.Load(), Dropped: s.dropped.Load(),
-		SealedSegments: s.sealed.Load(), ExpiredSegments: s.expired.Load(), MergedSegments: s.merged.Load(),
-		Queries:    s.queries.Load(),
-		ReadBlocks: s.readBlocks.Load(), ReadBytes: s.readBytes.Load(), Damaged: uint64(len(s.damaged.list())),
+		Appended:        s.appended.Load(),
+		Dropped:         s.dropped.Load(),
+		SealedSegments:  s.sealed.Load(),
+		ExpiredSegments: s.expired.Load(),
+		MergedSegments:  s.merged.Load(),
+		Queries:         s.queries.Load(),
+		ReadBlocks:      s.readBlocks.Load(),
+		ReadBytes:       s.readBytes.Load(),
+		Damaged:         uint64(len(s.damaged.list())),
 	}
 }
 
@@ -172,7 +177,7 @@ func (s *Store) Stats() Stats {
 // store calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
 	var flushErr error
-	s.finalFlush.Do(func() { flushErr = s.flush(ctx, (*lineWriter).handOverEverything) })
+	s.finalFlush.Do(func() { flushErr = s.flush(ctx, (*lineWriter).handOverAll) })
 
 	drained, _ := s.gate.Close()
 	select {

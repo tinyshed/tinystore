@@ -10,19 +10,19 @@ import (
 // encoder writes columns. It keeps its buffers between columns, so one
 // goroutine uses it at a time; the zstd encoder it holds is shared.
 type encoder struct {
-	zstd    *zstd.Encoder
-	fse     fse.Scratch
-	symbols []byte
-	rice    []byte
-	blob    []byte
-	flat    []byte
-	numbers []int64
-	lengths []int64
-	inner   []string
-	counts  map[int64]int
-	words   map[string]int
-	stamps  []stamp
-	stamped []int // where each value's stamps end in stamps
+	zstd      *zstd.Encoder
+	fse       fse.Scratch
+	symbols   []byte
+	rice      []byte
+	blob      []byte
+	flat      []byte
+	numbers   []int64
+	lengths   []int64
+	inner     []string
+	counts    map[int64]int
+	words     map[string]int
+	stamps    []stamp
+	stampEnds []int // where each value's stamps end in stamps
 }
 
 func newEncoder(blobs *zstd.Encoder) *encoder {
@@ -34,7 +34,7 @@ func newEncoder(blobs *zstd.Encoder) *encoder {
 type decoder struct {
 	zstd    *zstd.Decoder
 	fse     fse.Scratch
-	spelled []byte
+	spelled []byte // a stamp as its layout spells it
 }
 
 func newDecoder(blobs *zstd.Decoder) *decoder {

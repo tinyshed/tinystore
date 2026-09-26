@@ -9,8 +9,8 @@ import (
 )
 
 // a value column keeps each value's spelling byte for byte, and types what it
-// can; times are its values' record times, which a time it spells is kept
-// against, nil for a column outside a block:
+// can; inside a block, a time a value spells is kept as its distance behind
+// its record's time:
 //
 //	"9cbaf3d1-0c27-47bc-8fed-cb6e0763b9b2"   → quoted uuid, 16 bytes
 //	"154"                                    → quoted integer 154
@@ -98,8 +98,8 @@ func (e *encoder) appendIntegers(out []byte, flags byte, times []int64) []byte {
 		number, _ := parseInt(value)
 		e.numbers = append(e.numbers, number)
 	}
-	if exponent, distances, ok := e.timedIntegers(times); ok {
-		return e.appendInts(append(out, flags|valueInteger|valueTimed, exponent), distances)
+	if unit, distances, ok := e.timedIntegers(times); ok {
+		return e.appendInts(append(out, flags|valueInteger|valueTimed, unit), distances)
 	}
 	return e.appendInts(append(out, flags|valueInteger), e.numbers)
 }
@@ -110,27 +110,28 @@ var timeUnits = [...]byte{9, 6, 3, 0}
 
 // timedIntegers finds the unit whose distances cost fewest bytes, when they
 // cost fewer than the integers themselves
-func (e *encoder) timedIntegers(times []int64) (exponent byte, distances []int64, ok bool) {
+func (e *encoder) timedIntegers(times []int64) (unit byte, distances []int64, ok bool) {
 	if times == nil || len(e.numbers) < 8 {
 		return 0, nil, false
 	}
-	cheapest := -1
-	for _, unit := range timeUnits {
-		if !countsTime(e.numbers, times, unit) {
+	cheapest := -1 // what the integers cost as they are, planned once a unit counts time
+	for _, candidate := range timeUnits {
+		if !countsTime(e.numbers, times, candidate) {
 			continue
 		}
-		candidate, fits := distancesBehind(e.numbers, times, unit)
+		behind, fits := distancesBehind(e.numbers, times, candidate)
 		if !fits {
 			continue
 		}
 		if cheapest < 0 {
 			cheapest = e.planInts(e.numbers).bytes
 		}
-		if cost := e.planInts(candidate).bytes; cost < cheapest {
-			cheapest, exponent, distances, ok = cost, unit, candidate, true
+		if cost := e.planInts(behind).bytes; cost < cheapest {
+			cheapest = cost
+			unit, distances, ok = candidate, behind, true
 		}
 	}
-	return exponent, distances, ok
+	return unit, distances, ok
 }
 
 // countsTime screens a unit on the first sixteen integers: a unit they count
@@ -139,7 +140,7 @@ func countsTime(numbers, times []int64, unit byte) bool {
 	sample := min(16, len(numbers))
 	low, high := int64(math.MaxInt64), int64(math.MinInt64)
 	for i, number := range numbers[:sample] {
-		distance, ok := behindTime(times[i], number, int(unit))
+		distance, ok := distanceBehind(times[i], number, int(unit))
 		if !ok {
 			return false
 		}
@@ -151,7 +152,7 @@ func countsTime(numbers, times []int64, unit byte) bool {
 func distancesBehind(numbers, times []int64, unit byte) ([]int64, bool) {
 	distances := make([]int64, len(numbers))
 	for i, number := range numbers {
-		distance, ok := behindTime(times[i], number, int(unit))
+		distance, ok := distanceBehind(times[i], number, int(unit))
 		if !ok {
 			return nil, false
 		}
@@ -288,8 +289,8 @@ func appendHexBytes(out []byte, text string) []byte {
 	return out
 }
 
-// rowTimes gives a value column its records' times, when it keeps a time
-// against them; a column outside a block has none
+// rowTimes gives a value column the times of its records, asked for only when
+// it keeps a time behind them; nil for a column outside a block
 type rowTimes func() []int64
 
 func (d *decoder) values(c *cursor, count int, times rowTimes) []string {
@@ -343,7 +344,7 @@ func (d *decoder) typedValues(c *cursor, count int, flags byte, times rowTimes) 
 	case kind == valueInteger:
 		values = formatInts(d.ints(c, count))
 	case kind == valueStamped:
-		values = d.stamped(c, count, times)
+		values = d.stampedValues(c, count, times)
 	case kind == valueUUID:
 		values = formatHex(c, d.texts(c, count), 16, true)
 	case kind == valueHex:
@@ -369,7 +370,7 @@ func (d *decoder) timedInts(c *cursor, count int, times rowTimes) []int64 {
 		return nil
 	}
 	for i, distance := range distances {
-		number, ok := subtract(floorDiv(at[i], pow10(int(unit))), distance)
+		number, ok := valueBehind(at[i], distance, int(unit))
 		if !ok {
 			c.fail("timed integer past 64 bits")
 			return nil
@@ -379,7 +380,8 @@ func (d *decoder) timedInts(c *cursor, count int, times rowTimes) []int64 {
 	return distances
 }
 
-// timesOf asks for a column's record times, which it needs one of for each value
+// timesOf asks for the times of a column's records, one a value, and refuses
+// a column that has none
 func timesOf(c *cursor, times rowTimes, count int) []int64 {
 	if c.err != nil {
 		return nil
