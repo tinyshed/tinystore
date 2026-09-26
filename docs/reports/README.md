@@ -105,6 +105,7 @@ fetch and normalise them.
 | [records-merge-2026-09-26.md](records-merge-2026-09-26.md) | a quiet stream's small segments merged four of a size, each keeping its place for Follow: the corpus sealed hourly at 16.77 B/record against 18.93, every record written again 1.53 times, the operator's queries and a follower behind by the whole corpus measured |
 | [records-spans-2026-09-26.md](records-spans-2026-09-26.md) | the time index walked within each width of block: a one-second read at the start of ten million records from 2.16 to 1.31 ms, the same as at their end, the blocks fetched unchanged, a byte a block in the file |
 | [records-late-2026-09-26.md](records-late-2026-09-26.md) | a late record measured against the newest its stream showed before it and late at ten seconds: one-second reads of the late fixture at 2.93 blocks in flushes of 1024 and batches of 16,384 alike, against 5.24 and 4.63 |
+| [records-lines-2026-09-26.md](records-lines-2026-09-26.md) | another program's lines through a writer that joins stack traces and finds levels: the corpus's 1.33 million entries as 1.06 million records, 85 % with a level, 5.3 % less file, every container's errors in 31 blocks |
 
 ## 26 September 2026 — kv
 
