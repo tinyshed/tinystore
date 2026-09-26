@@ -1,5 +1,10 @@
 # What a late record is behind — 2026-09-25
 
+Follow-up: [the late round of 26 September](records-late-2026-09-26.md) measures
+a record against the newest its stream showed before it and calls it late ten
+seconds behind: one-second reads of the late fixture fetch 2.93 blocks at
+every batch size.
+
 A record goes to its stream's late head when it lags the stream by more than
 a minute. [The engine round](records-engine-2026-09-25.md) measured the stream
 by the median of the batch the record came in, as the research did, and
