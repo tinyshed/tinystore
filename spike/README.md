@@ -47,3 +47,14 @@ measurements need `TINYSTORE_SPIKE=1`; `TINYSTORE_KV_DIR`, `TINYSTORE_KV_SECONDS
 and `TINYSTORE_KV_LARGE=1` tune them, and `TINYSTORE_KV_DOCKER` points the rates
 at a corpus `bench/fetch-docker-logs.sh` collected, of which only aggregates
 are printed. See `docs/reports/kv-mechanics-2026-09-26.md`.
+
+`spike/jobs_*` is the round `docs/jobs.md` asks for before the jobs engine
+exists: a million jobs due within one minute drained in batches from a table
+in the order jobs arrived with an index by time, and from tables ordered by
+time whose leases move the row, mark it or live in a table of their own; the
+file divided by `dbstat`, values in the row and spilled, grouped Enqueues,
+a Work loop with an alarm in memory and its wake-up, a handler's insert into
+another database a transaction each and grouped, and Claim and Ack one at a
+time. The measurements need `TINYSTORE_SPIKE=1`; `TINYSTORE_JOBS_DIR`,
+`TINYSTORE_JOBS_SECONDS` and `TINYSTORE_JOBS_COUNT` tune them. See
+`docs/reports/jobs-mechanics-2026-09-27.md`.
