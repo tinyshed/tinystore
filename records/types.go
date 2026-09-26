@@ -123,15 +123,20 @@ func (e *DamageError) Unwrap() error { return e.Err }
 type Stats struct {
 	Appended, Dropped               uint64
 	SealedSegments, ExpiredSegments uint64
+	MergedSegments                  uint64
 	Queries                         uint64
 	ReadBlocks, ReadBytes           uint64
 	Damaged                         uint64
 }
 
-// Maintenance is what one Maintain call did. Damaged counts the head rows it
-// found no longer read, whose heads it sealed around them.
+// Maintenance is what one Maintain call did. MergedSegments counts the
+// segments whose records moved into another of their stream, which keep
+// their places for Follow, and MergedRecords the records those merges wrote
+// again; Damaged counts the head rows it found no longer read, whose heads
+// it sealed around them.
 type Maintenance struct {
 	SealedSegments, SealedRecords int
 	ExpiredSegments, ExpiredHeads int
+	MergedSegments, MergedRecords int
 	Damaged                       int
 }

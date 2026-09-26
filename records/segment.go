@@ -10,6 +10,7 @@ type encodedSegment struct {
 	stream      string
 	first, last int64
 	count       int
+	input       int // what its records weigh against a segment's bounds
 	row         []byte
 	blocks      []encodedBlock
 	keys        []segmentKey
@@ -44,6 +45,9 @@ func (e *encoder) encodeSegment(stream string, records []Record) encodedSegment 
 		block := e.encodeBlock(s, records[start:end], ids.slice(start, end))
 		segment.blocks = append(segment.blocks, block)
 		start = end
+	}
+	for i := range records {
+		segment.input += inputSize(&records[i])
 	}
 	return segment
 }

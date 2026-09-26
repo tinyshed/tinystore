@@ -51,8 +51,8 @@ type Store struct {
 	closing     sync.Once
 	closeErr    error
 
-	appended, dropped, sealed, expired, queries atomic.Uint64
-	readBlocks, readBytes                       atomic.Uint64
+	appended, dropped, sealed, expired, merged, queries atomic.Uint64
+	readBlocks, readBytes                               atomic.Uint64
 }
 
 // Open opens records.db inside the store. The store closes it and, unless it
@@ -156,7 +156,8 @@ func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFil
 func (s *Store) Stats() Stats {
 	return Stats{
 		Appended: s.appended.Load(), Dropped: s.dropped.Load(),
-		SealedSegments: s.sealed.Load(), ExpiredSegments: s.expired.Load(), Queries: s.queries.Load(),
+		SealedSegments: s.sealed.Load(), ExpiredSegments: s.expired.Load(), MergedSegments: s.merged.Load(),
+		Queries:    s.queries.Load(),
 		ReadBlocks: s.readBlocks.Load(), ReadBytes: s.readBytes.Load(), Damaged: uint64(len(s.damaged.list())),
 	}
 }

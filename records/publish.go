@@ -52,9 +52,10 @@ func nextBlockID(ctx context.Context, tx sqlite.Writer) (int64, error) {
 	return id, err
 }
 
+// a sealed segment holds its own records, and they begin its blocks
 const insertSegment = `
-	insert into segments (stream, first_at, last_at, count, first_block, last_block, body)
-	values (?, ?, ?, ?, ?, ?, ?)
+	insert into segments (stream, first_at, last_at, count, start, held, input, first_block, last_block, body)
+	values (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
 	returning id`
 
 func insertSegmentRow(
@@ -63,7 +64,7 @@ func insertSegmentRow(
 	lastBlock := firstBlock + int64(len(segment.blocks)) - 1
 	var id int64
 	err := sqlite.QueryRow(ctx, tx, insertSegment, stream, segment.first, segment.last, segment.count,
-		firstBlock, lastBlock, segment.row).Scan(&id)
+		segment.count, segment.input, firstBlock, lastBlock, segment.row).Scan(&id)
 	return id, err
 }
 

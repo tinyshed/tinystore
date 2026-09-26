@@ -239,7 +239,9 @@ order, each column written the cheapest exact way by computed size. `Read`
 pages in event-time order from one snapshot, pruned by a covering time index,
 level masks, the keys each segment holds and blooms over trace ids and id-like
 attributes; `Follow` reads sealed segments through a `(segment, row)` cursor.
-Retention removes whole segments, fourteen days by default. On the research
+A quiet stream's small segments merge four of a size at a time, and each
+keeps its place for that cursor. Retention removes whole segments, fourteen
+days by default. On the research
 corpora it keeps 7.89 bytes a frontend record and 16.55 a production log line,
 whose own time it keeps apart from its text;
 [the engine report](reports/records-engine-2026-09-25.md) and

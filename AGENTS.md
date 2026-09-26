@@ -32,9 +32,10 @@ gate and slots of `internal/admission`. `sqldb` gives the
 application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
 states its contract. `records` keeps logs and events in `records.db`: a
 durable head, segments of event-time blocks written column by column, a line's
-own time kept apart from its text, paged reads pruned by time, level, keys and
-blooms, a follow cursor, and rows that no longer read reported once and
-removed by `Drop`
+own time kept apart from its text, a quiet stream's small segments merged
+four of a size, paged reads pruned by time, level, keys and blooms, a follow
+cursor that a merge leaves in its place, and rows that no longer read
+reported once and removed by `Drop`
 ([records/README.md](records/README.md)). `kv` keeps the application's
 current state in `kv.db`: buckets of one value type, keys in branches, expiry
 by the store's clock, versions that never repeat, writes committed in groups
@@ -380,6 +381,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a damaged head does not stop the others             | `TestADamagedHeadDoesNotStopTheOthers`                                          |
 | a damaged row is logged once, its head still seals  | `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals`                     |
 | a damaged segment is dropped whole, followed past   | `TestDropRemovesADamagedSegmentAndFollowPassesIt`                               |
+| a follower keeps its place across merges            | `TestAFollowerKeepsItsPlaceAcrossMerges`, the middle of a merged place included |
+| a merge is one write, and readers see a record once | `TestAFailedMergeLeavesTheSegmentsAsTheyWere`, `TestReadersSeeEveryRecordOnceWhileMerging` |
+| a merged segment goes whole, with its places        | `TestAMergedSegmentExpiresWithItsPlaces`, `TestDropRemovesAMergedSegmentWithItsPlaces` |
+| a merge joins four of a size, in time order         | `TestSmallSegmentsMergeFourOfASize`, `TestAMergeLeavesOverlappingSegmentsOut`   |
 | only what no longer reads can be dropped            | `TestDropRefusesWhatStillReads`                                                 |
 | a late record seals from its own head               | `TestLateRecordsSealFromTheirOwnHead`                                           |
 | a record appended alone can be late                 | `TestARecordAppendedAloneCanBeLate`                                             |

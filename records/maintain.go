@@ -9,9 +9,10 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Maintain removes the segments and head rows retention has passed, then
-// seals every head that holds a segment's worth or has waited
-// Options.SealAge. A head row that no longer reads is logged once, counted in
+// Maintain removes the segments and head rows retention has passed, seals
+// every head that holds a segment's worth or has waited Options.SealAge, and
+// merges the small segments of the streams it sealed, four of a size at a
+// time. A head row that no longer reads is logged once, counted in
 // Maintenance.Damaged and left for Drop; the rest of its head seals.
 func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	release, err := s.admit(ctx)
@@ -26,20 +27,26 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	}
 	defer hold()
 
-	pass := maintenancePass{store: s, now: s.now()}
+	pass := maintenancePass{store: s, now: s.now(), sealedStreams: map[int64]bool{}}
 	if err = pass.expire(ctx); err != nil {
 		return pass.result, err
 	}
 
-	err = pass.sealReady(ctx)
+	if err = pass.sealReady(ctx); err != nil {
+		return pass.result, err
+	}
+
+	err = pass.mergeSmall(ctx)
 	return pass.result, err
 }
 
-// maintenancePass is one Maintain call: the time it runs at, and what it did
+// maintenancePass is one Maintain call: the time it runs at, what it did, and
+// the streams it sealed, whose small segments it then merges
 type maintenancePass struct {
-	store  *Store
-	now    time.Time
-	result Maintenance
+	store         *Store
+	now           time.Time
+	result        Maintenance
+	sealedStreams map[int64]bool
 }
 
 // cutoff is the oldest time retention keeps

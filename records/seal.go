@@ -64,6 +64,7 @@ func (p *maintenancePass) seal(ctx context.Context, head headKey, chunk headChun
 
 	p.result.SealedSegments++
 	p.result.SealedRecords += segment.count
+	p.sealedStreams[head.stream] = true
 	p.store.sealed.Add(1)
 	return nil
 }

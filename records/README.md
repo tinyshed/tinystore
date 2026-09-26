@@ -68,12 +68,14 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   of the store's does not send its neighbours there.
 - Records wait in a durable head until their head holds a segment's worth
   (16,384 records or 4 MiB) or its oldest row is `Options.SealAge` old (an
-  hour). A longer `SealAge` trades how soon `Follow` sees a sparse stream's
-  records for fewer, larger segments: on the production corpus 18.93 bytes a
-  record at an hour, 17.04 at six, 16.67 at a day, 16.55 in full segments.
-  `Maintain`, every minute unless the store is Manual, seals them: the
-  segment, its blocks, filters and keys are written and the head rows deleted
-  in one transaction, so a reader finds each record once.
+  hour), which is how far behind them `Follow` may be. `Maintain`, every
+  minute unless the store is Manual, seals them: the segment, its blocks,
+  filters and keys are written and the head rows deleted in one transaction,
+  so a reader finds each record once.
+- A quiet stream's small segments merge, four of a size at a time, into one
+  segment of their records, so that sealing every hour costs few bytes more
+  than full segments do; each merged segment keeps its place in the order
+  segments were sealed, and a merge is one transaction too.
 - `Read` returns one page, oldest first or newest first, from one snapshot,
   decoded after the snapshot is released. A page never splits a timestamp; it
   ends early when its `Limit` (1000, at most 10000) or its `Budget` (the
@@ -88,13 +90,15 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   bloom over each block's trace ids and a bloom over each id-like attribute
   (short strings nearly all distinct) skip the blocks that cannot match.
 - `Follow` reads sealed segments in the order they were sealed, each in time
-  order, from a `(segment, row)` cursor the caller keeps; `Batch.Expired`
-  counts the segments retention removed before the cursor reached them. A
-  record reaches `Follow` only once it is sealed.
+  order, from a `(segment, row)` cursor the caller keeps; a merge leaves every
+  segment its place, so a cursor, the middle of a merged segment included,
+  goes on where it was. `Batch.Expired` counts the segments retention removed
+  before the cursor reached them. A record reaches `Follow` only once it is
+  sealed.
 - Retention removes whole segments whose newest record is older than
-  `Options.Retention` (fourteen days) by the store's clock, and head rows
-  likewise; a read never returns an older record, even from a segment only
-  partly past it.
+  `Options.Retention` (fourteen days) by the store's clock, a merged segment
+  with the places it holds, and head rows likewise; a read never returns an
+  older record, even from a segment only partly past it.
 - Every operation reserves its weight in the store's memory: an append its
   input, a seal 24 MiB for a segment in flight, a read its budget's bytes, a
   decoded block and a page of records. Without `tinystore.Options.Memory` the
@@ -119,6 +123,5 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 ## What it does not do yet
 
 No text templates beyond the times a line spells, no full-text search, no
-merging of a stream's small segments, no adapters beyond `slog`. Text
-compresses per block, without the per-segment sample the research measured;
-see docs/records.md for what that costs.
+adapters beyond `slog`. Text compresses per block, without the per-segment
+sample the research measured; see docs/records.md for what that costs.

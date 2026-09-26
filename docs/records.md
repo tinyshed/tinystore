@@ -100,7 +100,8 @@ most 1024 records is a row of its own, decodable with that segment row and
 nothing else.
 
 ```text
-segments       id | stream | first_at | last_at | count | first_block | last_block | body: names, shapes, contexts
+segments       id | stream | first_at | last_at | count | holder | start | held | input | first_block | last_block
+               | body: names, shapes, contexts
 segment_keys   segment | kind | key          the event names, attribute keys and context keys it holds
 blocks         id | segment | stream | first_at | last_at | levels | count | size | body: column directory, columns
                index (last_at, first_at, levels, stream, segment, count, size)
@@ -130,6 +131,25 @@ waiting record is an hour old. On production logs sealing after an hour costs
 9 % of the file and after a minute triples it. Sealing writes the segment, its
 blocks and filters and deletes the head rows in one transaction, as metrics
 does.
+
+**Small segments merge, and keep their places.** A segment's id is its place
+in the order segments were sealed, the place a `Follow` cursor names. After a
+pass seals a stream, its segments holding fewer than a quarter of a
+segment's records and input merge four of a size at a time, four whose
+records share a power of four, taken in time order so that one after another
+their records stay in time order; a record is written again a few times,
+not once a seal. The merged segment is written into the row of the lowest
+id, and every other member keeps its row as a place: `holder` names the
+segment that holds its records now, `start` where they begin among the
+holder's, and a cursor at the place, or inside it, finds each record once.
+Merging writes the segment, deletes the blocks and keys its members were
+made of and turns them into places in one transaction; a holder's places come
+after it, and retention and `Drop` remove a holder with its places.
+
+```text
+places 1 4 7 9 of a stream, 30 40 35 38 records   → 1 holds 143; 1 4 7 9 start at 0 30 70 105
+four such, 143 150 160 140 records                → one holds 593
+```
 
 **Late records have a head of their own.** What arrives more than a minute
 behind the newest record its stream has shown, in the same batch or waiting on
@@ -275,10 +295,8 @@ logs.
 
 **Sealing sparse streams sooner than it pays.** `SealAge` trades how soon
 `Follow` sees a record for the bytes a sparse stream's small segments cost:
-an hour, the default, keeps a follower an hour behind at most; six hours takes
-back four fifths of what the hour costs on the production corpus, and a day
-nearly all of it. The default stays an hour; a store that keeps sparse streams
-for long and follows them rarely raises it.
+an hour, the default, keeps a follower an hour behind at most. Merging takes
+most of those bytes back, and the default stays an hour.
 
 ## Open
 
@@ -291,9 +309,7 @@ for long and follows them rarely raises it.
   ([the round](reports/records-late-reference-2026-09-25.md)).
 - Input: a continuation rule for multi-line records; adapters for pino, logfmt,
   glog and log4j lines.
-- Storage: a merge of a stream's small sealed segments, which cost the hourly
-  replay 2.06 bytes a record over full segments, where a six-hour `SealAge`
-  costs 0.44; a merge has to keep a follower's `(segment, row)` cursor valid.
-  A bound on the time-index scan when late blocks are wide.
+- Storage: a bound on the time-index scan when blocks are wide, late ones and
+  a sparse stream's merged ones alike.
 - Encoding: a store-level context registry, per-context numeric state, nested
   JSON decomposition.

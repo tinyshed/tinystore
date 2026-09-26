@@ -166,8 +166,9 @@ func (s *Store) dropHeadRow(ctx context.Context, id int64) error {
 }
 
 // a segment is dropped by its id, so that a block whose segment row is gone
-// goes too
+// goes too, and a place merged into another is dropped with the one holding it
 const (
+	selectHolderToDrop   = `select coalesce(holder, id) from segments where id = ?`
 	selectSegmentToDrop  = `select body from segments where id = ?`
 	selectBlocksToDrop   = `select body from blocks where segment = ? order by id`
 	deleteSegmentFilters = `delete from block_filters where block in (select id from blocks where segment = ?)`
@@ -175,10 +176,15 @@ const (
 	deleteSegmentBlocks  = `delete from blocks where segment = ?`
 )
 
-// dropSegment removes a segment that no longer reads, whole: a block cannot go
-// alone, since a Follow cursor counts a segment's rows through its blocks
+// dropSegment removes a segment that no longer reads, whole, with the places
+// merged into it: a block cannot go alone, since a Follow cursor counts a
+// segment's rows through its blocks
 func (s *Store) dropSegment(ctx context.Context, id int64) error {
 	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
+		err := sqlite.QueryRow(ctx, tx, selectHolderToDrop, id).Scan(&id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		found, reads, err := s.segmentReads(ctx, tx, id)
 		if err != nil || !found {
 			return err
@@ -187,7 +193,8 @@ func (s *Store) dropSegment(ctx context.Context, id int64) error {
 			return fmt.Errorf("%w: segment %d reads", tinystore.ErrConflict, id)
 		}
 		for _, statement := range []string{
-			deleteSegmentFilters, deleteSegmentTraces, deleteSegmentBlocks, deleteSegmentKeys, deleteSegment,
+			deleteSegmentFilters, deleteSegmentTraces, deleteSegmentBlocks, deleteSegmentKeys, deleteMergedPlaces,
+			deleteSegment,
 		} {
 			if _, err = tx.ExecContext(ctx, statement, id); err != nil {
 				return err

@@ -38,20 +38,33 @@ create table head_state (
     primary key (stream, late)
 ) without rowid, strict;
 
--- ids only grow, so a cursor never meets one twice; a segment's blocks are
--- the ids from first_block to last_block
+-- a segment's id is its place in the order segments were sealed, the place a
+-- Follow cursor names, and ids only grow, so a cursor never meets one twice.
+-- A merge moves a small segment's records into another of its stream and
+-- keeps its place: holder names that segment and start where its records
+-- begin among the holder's, and nothing else of it is kept; the holder is
+-- the lowest id of every merge it took part in, so its places come after it.
+-- A segment that
+-- holds records keeps held of them in the blocks from first_block to
+-- last_block, weighing input against a segment's bounds, between first_at
+-- and last_at; count is how many of them are its own place's
 create table segments (
     id          integer primary key autoincrement,
     stream      integer not null,
-    first_at    integer not null,
-    last_at     integer not null,
+    first_at    integer,
+    last_at     integer,
     count       integer not null,
+    holder      integer,
+    start       integer not null,
+    held        integer not null,
+    input       integer not null,
     first_block integer not null,
     last_block  integer not null,
     body        blob    not null
 ) strict;
 
-create index segments_by_end on segments (last_at);
+create index segments_by_end on segments (last_at) where holder is null;
+create index segments_by_size on segments (stream, held) where holder is null;
 
 -- kind: 0 an event name, 1 an attribute key, 2 a context key
 create table segment_keys (

@@ -34,7 +34,7 @@ func (s *Store) Follow(ctx context.Context, after Cursor, limit int) (Batch, err
 
 	followed, err := s.fetchFollowed(ctx, after, limit)
 	if err != nil {
-		return Batch{}, err
+		return Batch{}, s.noted(err)
 	}
 
 	batch, err := s.buildBatch(ctx, after, limit, followed)
@@ -57,22 +57,37 @@ func (s *Store) followReservation(limit int) int64 {
 }
 
 // followed is what one batch decodes, copied out of one read transaction:
-// the segments from the cursor on, each with the blocks the batch needs
+// the places from the cursor on, each with the blocks of its holder the batch
+// needs
 type followed struct {
-	segments []followedSegment
-	sequence int64 // the last segment id ever given, when no segment was found
+	places   []followedPlace
+	sequence int64 // the last segment id ever given, when no place was found
 	blocks   int
 	bytes    int
 }
 
-type followedSegment struct {
-	id, stream  int64
-	first, last int64
-	count       int
-	row         []byte
-	skip        int // rows the cursor has passed in this segment
-	start       int // rows before the first block fetched
-	blocks      []followedBlock
+// followedPlace is one place in the order segments were sealed: its records
+// are count of its holder's, from start on
+type followedPlace struct {
+	id, stream int64
+	count      int
+	start      int
+	holder     *heldSegment
+	skip       int // rows the cursor has passed at this place
+	first      int // the holder's records before the first block fetched
+	blocks     []followedBlock
+}
+
+// heldSegment is a segment that holds records, its own place's and those of
+// the places merged into it, with what one batch fetched and decoded of it
+type heldSegment struct {
+	id, stream            int64
+	first, last           int64
+	firstBlock, lastBlock int64
+	row                   []byte
+	listed                []followedBlock
+	schema                *schema
+	decoded               map[int64][]Record
 }
 
 type followedBlock struct {
@@ -82,11 +97,14 @@ type followedBlock struct {
 }
 
 const (
-	selectFollowedSegments = `
-		select id, stream, first_at, last_at, count, first_block, last_block, body from segments
+	selectFollowedPlaces = `
+		select id, stream, count, coalesce(holder, id), start from segments
 		where id >= ?
 		order by id
 		limit cast(? as integer)`
+	selectHolder = `
+		select stream, first_at, last_at, first_block, last_block, body from segments
+		where id = ? and holder is null`
 	selectFollowedBlocks  = `select id, count from blocks where id between ? and ? order by id`
 	selectSegmentSequence = `select coalesce(max(seq), 0) from sqlite_sequence where name = 'segments'`
 )
@@ -96,11 +114,11 @@ func (s *Store) fetchFollowed(ctx context.Context, after Cursor, limit int) (fol
 	defer cancel()
 	var out followed
 	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
-		read := followRead{tx: tx, after: after, limit: limit, budget: s.opts.Budget.Bytes}
+		read := followRead{tx: tx, after: after, limit: limit, budget: s.opts.Budget.Bytes, names: &s.streams}
 		var err error
-		out.segments, err = read.segments(ctx)
+		out.places, err = read.places(ctx)
 		out.blocks, out.bytes = read.fetched, read.spent
-		if err != nil || len(out.segments) > 0 {
+		if err != nil || len(out.places) > 0 {
 			return err
 		}
 		return sqlite.QueryRow(ctx, tx, selectSegmentSequence).Scan(&out.sequence)
@@ -111,100 +129,136 @@ func (s *Store) fetchFollowed(ctx context.Context, after Cursor, limit int) (fol
 	return out, nil
 }
 
-// followRead gathers segments and their blocks until the batch has limit
-// records or has spent its bytes
+// followRead gathers places and the blocks holding them until the batch has
+// limit records or has spent its bytes
 type followRead struct {
 	tx       sqlite.Reader
 	after    Cursor
 	limit    int
 	budget   int
+	names    *streams
+	holders  map[int64]*heldSegment
 	gathered int
 	fetched  int
 	spent    int
 }
 
-func (r *followRead) segments(ctx context.Context) ([]followedSegment, error) {
+func (r *followRead) places(ctx context.Context) ([]followedPlace, error) {
 	//nolint:rowserrcheck // EachRow checks Err
-	rows, err := r.tx.QueryContext(ctx, selectFollowedSegments, max(r.after.Segment, 1), r.limit)
+	rows, err := r.tx.QueryContext(ctx, selectFollowedPlaces, max(r.after.Segment, 1), r.limit)
 	if err != nil {
 		return nil, err
 	}
-	var found []followedSegment
-	var blocks [][2]int64
-	err = sqlite.EachRow(rows, "followed segments", func(rows *sql.Rows) error {
-		var segment followedSegment
-		var first, last int64
-		scanErr := rows.Scan(&segment.id, &segment.stream, &segment.first, &segment.last, &segment.count, &first, &last,
-			&segment.row)
-		found, blocks = append(found, segment), append(blocks, [2]int64{first, last})
+	var found []followedPlace
+	var holders []int64
+	err = sqlite.EachRow(rows, "followed places", func(rows *sql.Rows) error {
+		var place followedPlace
+		var holder int64
+		scanErr := rows.Scan(&place.id, &place.stream, &place.count, &holder, &place.start)
+		found, holders = append(found, place), append(holders, holder)
 		return scanErr
 	})
 	if err != nil {
 		return nil, err
 	}
-	return r.withBlocks(ctx, found, blocks)
+	return r.withBlocks(ctx, found, holders)
 }
 
-// withBlocks fetches, segment by segment, the blocks holding the rows the batch returns
-func (r *followRead) withBlocks(ctx context.Context, found []followedSegment, blocks [][2]int64) (
-	[]followedSegment, error,
+// withBlocks fetches, place by place, the holder's blocks holding the rows
+// the batch returns; a holder is fetched once a batch
+func (r *followRead) withBlocks(ctx context.Context, found []followedPlace, holders []int64) (
+	[]followedPlace, error,
 ) {
-	var taken []followedSegment
+	r.holders = map[int64]*heldSegment{}
+	var taken []followedPlace
 	for i := range found {
-		segment := &found[i]
-		if segment.id == r.after.Segment {
-			segment.skip = r.after.Row
+		place := &found[i]
+		if place.id == r.after.Segment {
+			place.skip = r.after.Row
 		}
-		if segment.skip >= segment.count {
-			taken = append(taken, *segment)
+		if place.skip >= place.count {
+			taken = append(taken, *place)
 			continue
 		}
-		if r.gathered >= r.limit || (len(taken) > 0 && r.spent+len(segment.row) > r.budget) {
+		if r.gathered >= r.limit {
 			break
 		}
-		r.spent += len(segment.row)
-		if err := r.segmentBlocks(ctx, segment, blocks[i]); err != nil {
+		holder, affordable, err := r.holder(ctx, place, holders[i], len(taken) > 0)
+		if err != nil || !affordable {
+			return taken, err
+		}
+		place.holder = holder
+		if err = r.placeBlocks(ctx, place); err != nil {
 			return nil, err
 		}
-		taken = append(taken, *segment)
+		taken = append(taken, *place)
 	}
 	return taken, nil
 }
 
-func (r *followRead) segmentBlocks(ctx context.Context, segment *followedSegment, ids [2]int64) error {
+// holder is the segment holding a place's records, fetched once a batch, and
+// whether the batch's bytes afford it when the batch has records already
+func (r *followRead) holder(ctx context.Context, place *followedPlace, id int64, taken bool) (
+	*heldSegment, bool, error,
+) {
+	if holder, ok := r.holders[id]; ok {
+		return holder, true, nil
+	}
+	holder := &heldSegment{id: id, decoded: map[int64][]Record{}}
+	err := sqlite.QueryRow(ctx, r.tx, selectHolder, id).Scan(&holder.stream, &holder.first, &holder.last,
+		&holder.firstBlock, &holder.lastBlock, &holder.row)
+	if errors.Is(err, sql.ErrNoRows) {
+		found := Damage{Stream: r.names.name(place.stream), Segment: place.id}
+		gone := corrupt(fmt.Sprintf("place %d names segment %d, which is gone", place.id, id))
+		return nil, false, damageOf(found, gone)
+	}
+	if err != nil || (taken && r.spent+len(holder.row) > r.budget) {
+		return nil, false, err
+	}
+	r.spent += len(holder.row)
+	r.holders[id] = holder
+	return holder, true, r.listBlocks(ctx, holder)
+}
+
+func (r *followRead) listBlocks(ctx context.Context, holder *heldSegment) error {
 	//nolint:rowserrcheck // EachRow checks Err
-	rows, err := r.tx.QueryContext(ctx, selectFollowedBlocks, ids[0], ids[1])
+	rows, err := r.tx.QueryContext(ctx, selectFollowedBlocks, holder.firstBlock, holder.lastBlock)
 	if err != nil {
 		return err
 	}
-	var listed []followedBlock
-	err = sqlite.EachRow(rows, "followed blocks", func(rows *sql.Rows) error {
+	return sqlite.EachRow(rows, "followed blocks", func(rows *sql.Rows) error {
 		var block followedBlock
 		scanErr := rows.Scan(&block.id, &block.count)
-		listed = append(listed, block)
+		holder.listed = append(holder.listed, block)
 		return scanErr
 	})
-	if err != nil {
-		return err
-	}
+}
+
+// placeBlocks fetches the holder's blocks that hold the place's rows past the
+// cursor, each block's bytes once a batch
+func (r *followRead) placeBlocks(ctx context.Context, place *followedPlace) error {
+	from, to := place.start+place.skip, place.start+place.count
 	passed := 0
-	for _, block := range listed {
-		if passed+block.count <= segment.skip {
+	for i := range place.holder.listed {
+		block := &place.holder.listed[i]
+		if passed+block.count <= from {
 			passed += block.count
-			segment.start = passed
+			place.first = passed
 			continue
 		}
-		if r.gathered >= r.limit || (r.gathered > 0 && r.spent >= r.budget) {
+		if passed >= to || r.gathered >= r.limit || (r.gathered > 0 && r.spent >= r.budget) {
 			break
 		}
-		if err = sqlite.QueryRow(ctx, r.tx, selectBlockBody, block.id).Scan(&block.body); err != nil {
-			return err
+		if block.body == nil {
+			if err := sqlite.QueryRow(ctx, r.tx, selectBlockBody, block.id).Scan(&block.body); err != nil {
+				return err
+			}
+			r.spent += len(block.body)
+			r.fetched++
 		}
-		r.spent += len(block.body)
-		r.fetched++
-		r.gathered += block.count - max(0, segment.skip-passed)
+		r.gathered += min(to, passed+block.count) - max(from, passed)
 		passed += block.count
-		segment.blocks = append(segment.blocks, block)
+		place.blocks = append(place.blocks, *block)
 	}
 	return nil
 }
@@ -213,23 +267,24 @@ func (r *followRead) segmentBlocks(ctx context.Context, segment *followedSegment
 // cursor, and the cursor after the last one
 func (s *Store) buildBatch(ctx context.Context, after Cursor, limit int, f followed) (Batch, error) {
 	batch := Batch{Next: after, Expired: expiredBefore(after, f)}
-	if len(f.segments) == 0 {
+	if len(f.places) == 0 {
 		if f.sequence >= after.Segment {
 			batch.Next = Cursor{Segment: f.sequence + 1}
 		}
 		return batch, nil
 	}
 	d := newDecoder(s.unpack)
-	for i := range f.segments {
+	for i := range f.places {
 		if err := ctx.Err(); err != nil {
 			return Batch{}, err
 		}
-		segment := &f.segments[i]
-		next, err := s.followSegment(d, segment, limit, &batch)
+		place := &f.places[i]
+		next, err := s.followPlace(d, place, limit, &batch)
 		if err != nil {
+			holder := place.holder
 			found := Damage{
-				Stream: s.streams.name(segment.stream), Segment: segment.id,
-				From: timeOf(segment.first), To: timeOf(segment.last),
+				Stream: s.streams.name(holder.stream), Segment: holder.id,
+				From: timeOf(holder.first), To: timeOf(holder.last),
 			}
 			return Batch{}, fmt.Errorf("records: follow: %w", damageOf(found, err))
 		}
@@ -241,47 +296,75 @@ func (s *Store) buildBatch(ctx context.Context, after Cursor, limit int, f follo
 	return batch, nil
 }
 
-// expiredBefore counts the segments between the cursor and the first one
-// found: ids only grow and only retention removes a segment
+// expiredBefore counts the places between the cursor and the first one
+// found: ids only grow, and only retention and Drop remove a place
 func expiredBefore(after Cursor, f followed) int {
 	if after.Segment == 0 {
 		return 0
 	}
-	if len(f.segments) == 0 {
+	if len(f.places) == 0 {
 		return int(max(0, f.sequence-after.Segment+1))
 	}
-	return int(max(0, f.segments[0].id-after.Segment))
+	return int(max(0, f.places[0].id-after.Segment))
 }
 
-// followSegment adds a segment's records past the cursor, and returns the
-// cursor after the last one it added
-func (s *Store) followSegment(d *decoder, segment *followedSegment, limit int, batch *Batch) (Cursor, error) {
-	schema, err := d.parseSchema(segment.row)
+// followPlace adds a place's records past the cursor, and returns the cursor
+// after the last one it added
+func (s *Store) followPlace(d *decoder, place *followedPlace, limit int, batch *Batch) (Cursor, error) {
+	if place.skip >= place.count {
+		return Cursor{Segment: place.id + 1}, nil
+	}
+	schema, err := place.holder.parse(d, s.streams.name(place.holder.stream))
 	if err != nil {
 		return Cursor{}, err
 	}
-	if schema.stream != s.streams.name(segment.stream) {
-		return Cursor{}, corrupt("segment row names another stream")
-	}
-	row, passed := segment.skip, segment.start
-	for _, block := range segment.blocks {
-		records, err := d.blockRecords(schema, block.body)
+	at, end, passed := place.start+place.skip, place.start+place.count, place.first
+	for _, block := range place.blocks {
+		records, err := place.holder.decode(d, schema, block)
 		if err != nil {
-			return Cursor{}, errors.Join(fmt.Errorf("block %d", block.id), err)
+			return Cursor{}, err
 		}
-		for _, record := range records[max(0, row-passed):] {
+		for ; at < end && at-passed < len(records); at++ {
 			if len(batch.Records) == limit {
-				return Cursor{Segment: segment.id, Row: row}, nil
+				return Cursor{Segment: place.id, Row: at - place.start}, nil
 			}
-			batch.Records = append(batch.Records, record)
-			row++
+			batch.Records = append(batch.Records, records[at-passed])
 		}
 		passed += len(records)
 	}
-	if row >= segment.count {
-		return Cursor{Segment: segment.id + 1}, nil
+	if at >= end {
+		return Cursor{Segment: place.id + 1}, nil
 	}
-	return Cursor{Segment: segment.id, Row: row}, nil
+	return Cursor{Segment: place.id, Row: at - place.start}, nil
+}
+
+// parse reads the holder's row once a batch
+func (h *heldSegment) parse(d *decoder, stream string) (*schema, error) {
+	if h.schema != nil {
+		return h.schema, nil
+	}
+	parsed, err := d.parseSchema(h.row)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.stream != stream {
+		return nil, corrupt("segment row names another stream")
+	}
+	h.schema = parsed
+	return parsed, nil
+}
+
+// decode reads one of the holder's blocks once a batch, however many places it holds
+func (h *heldSegment) decode(d *decoder, s *schema, block followedBlock) ([]Record, error) {
+	if records, ok := h.decoded[block.id]; ok {
+		return records, nil
+	}
+	records, err := d.blockRecords(s, block.body)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("block %d", block.id), err)
+	}
+	h.decoded[block.id] = records
+	return records, nil
 }
 
 func (d *decoder) blockRecords(s *schema, body []byte) ([]Record, error) {

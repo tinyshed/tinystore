@@ -25,9 +25,10 @@
 //	head.go        the head row: one stream's flush under zstd; one parser
 //	handler.go     the slog.Handler: map, check, queue; Flush
 //
-//	maintain.go    Maintain: expire, then seal what is ready
+//	maintain.go    Maintain: expire, seal what is ready, merge what it sealed small
 //	seal.go        a head read a segment's worth at a time, and encoded
 //	publish.go     segment, blocks, filters and keys in, head rows out: one transaction
+//	merge.go       a stream's small segments, four of a size, into one that keeps their places
 //	retention.go   whole segments and head rows past the cutoff
 //	damage.go      Damaged, Drop: rows that no longer read, reported once
 //
@@ -35,7 +36,7 @@
 //	snapshot.go    candidates and their rows from one read transaction
 //	filter.go      the rows of a block a query keeps, one column at a time
 //	page.go        records merged in event-time order, and where a page ends
-//	follow.go      Follow: sealed segments by (segment, row)
+//	follow.go      Follow: sealed segments by (segment, row), through the segment holding each
 //
 //	segment.go     a segment: records sorted, cut into blocks, keys listed
 //	schema.go      the segment row: names, shapes, contexts; one parser

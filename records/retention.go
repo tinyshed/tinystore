@@ -12,9 +12,10 @@ import (
 // does not hold the writer for all of it
 const expireBatch = 64
 
-// expire removes whole segments whose newest record is past the cutoff, and
-// head rows likewise. A read clips what is left by the same kind of cutoff,
-// so a segment retention has partly passed answers only what it keeps.
+// expire removes whole segments whose newest record is past the cutoff, with
+// the places merged into them, and head rows likewise. A read clips what is
+// left by the same kind of cutoff, so a segment retention has partly passed
+// answers only what it keeps.
 func (p *maintenancePass) expire(ctx context.Context) error {
 	for {
 		removed, err := p.store.expireSegments(ctx, p.cutoff())
@@ -35,13 +36,15 @@ func (p *maintenancePass) expire(ctx context.Context) error {
 const (
 	selectExpiredSegments = `
 		select id, first_block, last_block from segments
-		where last_at < ?
+		where last_at < ? and holder is null
 		order by id
 		limit cast(? as integer)`
 	deleteBlockFilters = `delete from block_filters where block between ? and ?`
 	deleteBlockTraces  = `delete from block_traces where block between ? and ?`
 	deleteBlocks       = `delete from blocks where id between ? and ?`
 	deleteSegmentKeys  = `delete from segment_keys where segment = ?`
+	// a holder's places come after it, so they are found without an index
+	deleteMergedPlaces = `delete from segments where id > ?1 and holder = ?1`
 	deleteSegment      = `delete from segments where id = ?`
 )
 
@@ -89,7 +92,7 @@ func deleteExpiredSegment(ctx context.Context, tx sqlite.Writer, segment expired
 			return err
 		}
 	}
-	for _, statement := range []string{deleteSegmentKeys, deleteSegment} {
+	for _, statement := range []string{deleteSegmentKeys, deleteMergedPlaces, deleteSegment} {
 		if _, err := tx.ExecContext(ctx, statement, segment.id); err != nil {
 			return err
 		}
