@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -134,6 +136,53 @@ func TestConcurrentTakesGiveTheValueOnce(t *testing.T) {
 	wg.Wait()
 	if winners != 1 {
 		t.Fatalf("%d callers took the one value", winners)
+	}
+}
+
+// refusingCodec writes a string's bytes and refuses to read them back, or
+// panics reading them
+type refusingCodec struct{ panics bool }
+
+func (refusingCodec) Encode(s string) ([]byte, error) { return []byte(s), nil }
+
+func (c refusingCodec) Decode([]byte) (string, error) {
+	if c.panics {
+		panic("a codec that panics")
+	}
+	return "", errors.New("a codec that refuses")
+}
+
+// a Take whose value no longer decodes is ErrCorrupt and keeps the value, a
+// spilled one too, in a group and inside Tx; a codec's panic is such a
+// failure of its own write rather than of the writes beside it
+func TestAFailedTakeKeepsItsValue(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	for _, panics := range []bool{false, true} {
+		values := openTestBucket[string](t, state, fmt.Sprintf("refused-%v", panics),
+			WithCodec[string](refusingCodec{panics: panics}))
+		for key, value := range map[string]string{"inline": "payload", "spilled": strings.Repeat("s", inlineLimit+1)} {
+			if err := values.Set(t.Context(), key, value); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := values.Take(t.Context(), key); !errors.Is(err, tinystore.ErrCorrupt) {
+				t.Fatalf("a Take of a value that no longer decodes: %v", err)
+			}
+			err := state.Tx(t.Context(), func(tx *Tx) error {
+				if _, _, takeErr := values.WithTx(tx).Take(t.Context(), key); !errors.Is(takeErr, tinystore.ErrCorrupt) {
+					t.Errorf("the same Take inside Tx: %v", takeErr)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found, hasErr := values.Has(t.Context(), key); !found || hasErr != nil {
+				t.Fatalf("the refused Takes of %s took it: %v, %v", key, found, hasErr)
+			}
+		}
+	}
+	if rows := state.spilledRows(t); rows != 2 {
+		t.Fatalf("%d spilled rows after refused Takes of two spilled values", rows)
 	}
 }
 

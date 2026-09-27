@@ -118,7 +118,8 @@ func (b *Bucket[V]) SetEntryIfAbsent(ctx context.Context, key any, value V, opti
 }
 
 // Take reads the value under key and deletes it in one step, so that of the
-// callers taking one key only one gets it.
+// callers taking one key only one gets it. A value that no longer decodes is
+// ErrCorrupt and stays where it was, inside Tx as well.
 func (b *Bucket[V]) Take(ctx context.Context, key any, options ...Option) (V, bool, error) {
 	c, err := b.begin(key, options)
 	if err != nil {
@@ -131,18 +132,22 @@ func (b *Bucket[V]) Take(ctx context.Context, key any, options ...Option) (V, bo
 	}
 	defer entered.leave()
 
-	var taken row
+	var entry Entry[V]
 	found := false
-	err = b.commit(ctx, 0, func(w sqlite.Writer) (takeErr error) {
-		taken, found, takeErr = takeRow(ctx, w, b.id, c)
+	err = b.commitAlone(ctx, func(w sqlite.Writer) error {
+		taken, there, takeErr := takeRow(ctx, w, b.id, c)
+		if takeErr != nil || !there {
+			return takeErr
+		}
+		entry, takeErr = b.entryInWriter(c.key, taken)
+		found = takeErr == nil
 		return takeErr
 	})
 	if err != nil || !found {
 		return zeroFound[V](b.fail(c, err))
 	}
 
-	entry, err := b.entryOf(c.key, taken)
-	return entry.Value, err == nil, b.fail(c, err)
+	return entry.Value, true, nil
 }
 
 // Delete removes key; an absent key is not an error, except to IfVersion.

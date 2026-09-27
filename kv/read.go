@@ -271,6 +271,17 @@ func weigh(value any) int {
 	return 8
 }
 
+// entryInWriter is entryOf inside a write, where a codec's panic would stop
+// the writer and the writes of its group: the panic fails this write alone
+func (b *Bucket[V]) entryInWriter(key string, r row) (entry Entry[V], err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("%w: the bucket's codec panicked: %v", tinystore.ErrCorrupt, recovered)
+		}
+	}()
+	return b.entryOf(key, r)
+}
+
 // entryOf decodes a row's value into an entry of this bucket
 func (b *Bucket[V]) entryOf(key string, r row) (Entry[V], error) {
 	held, err := r.held()

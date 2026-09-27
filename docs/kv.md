@@ -331,7 +331,10 @@ meta       name | value                                          the revision's 
   version and one header byte.
 - **An operation runs whole in the writer.** Its statements read and write
   the key's row inside one savepoint of the writer's transaction, so no other
-  write comes between them; a `Take` is one `delete … returning`.
+  write comes between them; a `Take` is one `delete … returning`, and decodes
+  what it took inside that savepoint, so that a value that no longer decodes
+  rolls the delete back rather than burning the value; inside `Tx` it takes a
+  savepoint of its own.
 
 ```sql
 -- Take: read and burn
@@ -422,6 +425,7 @@ The five cases are the gates' workloads.
 | an integer key is its decimal text | `TestAnIntegerKeyIsItsDecimalText` |
 | a version never repeats | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen` |
 | one of concurrent `Take`s gets the value | `TestConcurrentTakesGiveTheValueOnce` |
+| a `Take` whose value no longer decodes keeps it | `TestAFailedTakeKeepsItsValue` |
 | a stale claim cannot finish or delete the next | `TestAStaleClaimCannotFinishOrDeleteTheNext` |
 | one of two versioned writes conflicts | `TestOneOfTwoVersionedWritesConflicts` |
 | an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded` |

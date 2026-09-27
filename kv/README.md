@@ -92,7 +92,10 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   to text and compares only for equality.
 - **A write returns once it is durable.** Writes from many goroutines wait for
   the file's one writer and commit together, each in a savepoint of one
-  transaction, with one fsync; a write that fails rolls back alone. A caller
+  transaction, with one fsync; a write that fails rolls back alone. A `Take`
+  decodes what it took inside its savepoint, so a value that no longer
+  decodes, or a codec that panics, is `ErrCorrupt` and the value stays, inside
+  `Tx` as well. A caller
   whose context ends before its write starts writes nothing; a write that has
   started finishes with its group. A group whose commit fails answers
   `kv.ErrOutcomeUnknown`, and its caller reads the key before writing again.

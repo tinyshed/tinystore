@@ -177,6 +177,32 @@ func (b *branch) commit(ctx context.Context, bytes int, work func(sqlite.Writer)
 	return b.state.file.UpdateGrouped(ctx, bytes, work)
 }
 
+const (
+	savepointAlone = `savepoint alone`
+	releaseAlone   = `release alone`
+	rollbackAlone  = `rollback to alone`
+)
+
+// commitAlone is commit for a write that must fail alone: a group gives each
+// write a savepoint, and inside Tx it takes one of its own
+func (b *branch) commitAlone(ctx context.Context, work func(sqlite.Writer) error) error {
+	if b.tx == nil {
+		return b.commit(ctx, 0, work)
+	}
+	return b.commit(ctx, 0, func(w sqlite.Writer) error {
+		if _, err := w.ExecContext(ctx, savepointAlone); err != nil {
+			return err
+		}
+		if failed := work(w); failed != nil {
+			_, rollbackErr := w.ExecContext(ctx, rollbackAlone)
+			_, releaseErr := w.ExecContext(ctx, releaseAlone)
+			return errors.Join(failed, rollbackErr, releaseErr)
+		}
+		_, err := w.ExecContext(ctx, releaseAlone)
+		return err
+	})
+}
+
 // expiresFor is the expiry a write gives: the call's own, the one a live key
 // has, or the branch's default for a key the write creates
 func (b *branch) expiresFor(c call, existing cell) sql.NullInt64 {

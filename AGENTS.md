@@ -485,6 +485,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an integer key is its decimal text                     | `TestAnIntegerKeyIsItsDecimalText`                                              |
 | a kv version never repeats                             | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen`                             |
 | a stale claim cannot finish or delete the next         | `TestAStaleClaimCannotFinishOrDeleteTheNext`                                    |
+| a kv Take whose value no longer decodes keeps it       | `TestAFailedTakeKeepsItsValue`, a codec's panic and inside Tx included          |
 | a kv value comes back as it went in                    | `TestAValueComesBackAsItWentIn`, floats by their bits                           |
 | an overflowing counter is refused, not rounded         | `TestAnOverflowingCounterIsRefusedRatherThanRounded`                            |
 | `LoseAtMost` loses no more than its interval           | `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing         |
