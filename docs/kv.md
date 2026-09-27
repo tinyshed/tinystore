@@ -300,7 +300,7 @@ second and grouped writes 55,000.
 | Sentinel | When |
 |---|---|
 | `ErrInvalid` | a key that is not text or an integer, an empty key, a path over 1 KiB, a value JSON cannot write, a bucket opened as another kind, a write inside `View` |
-| `ErrLimit` | a value over 1 MiB, a counter past the `int64` range |
+| `ErrLimit` | a value over 1 MiB, a counter past the `int64` range, a call inside `Tx` needing more of the store's memory than is free |
 | `ErrConflict` | `IfVersion` against another version, or an expired or absent key |
 | `ErrClosed` | the store closed, or a `WithTx` handle used after its callback |
 | `ErrCorrupt` | a row that no longer decodes |
@@ -429,6 +429,7 @@ The five cases are the gates' workloads.
 | a `Clear` whose commit fails lets memory go as a crash would | `TestAClearWhoseCommitFailsLetsGoAsACrashWould` |
 | Clears beside changes and flushes keep their branches apart | `TestClearsBesideChangesAndFlushesKeepTheirBranchesApart` |
 | a `Clear` inside `Tx` deletes what it clears or refuses | `TestAClearInATransactionOverTheBoundIsRefused` |
+| a call inside `Tx` waits for no memory its waiting writes hold | `TestATransactionWaitsForNoMemoryTheWritesWaitingForItHold` |
 | a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |
 | a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |
 | a value over 512 bytes reads back from `spilled` | `TestALargeValueSpillsAndReadsBack` |

@@ -99,6 +99,15 @@ func (b *branch) read(ctx context.Context, work func(sqlite.Reader) error) error
 	return b.state.file.Lookup(ctx, work)
 }
 
+// reserve holds bytes of the store's memory for a call of this handle; inside
+// Tx it waits for nothing, since the writes holding memory wait for its writer
+func (b *branch) reserve(ctx context.Context, bytes int) (*tinystore.Reservation, error) {
+	if b.tx != nil && b.tx.writes != nil {
+		return b.state.reserveNow(bytes)
+	}
+	return b.state.reserve(ctx, bytes)
+}
+
 // write runs a write where this handle writes: its transaction, or a group
 // that shares one commit with the writes beside it
 func (b *branch) write(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {

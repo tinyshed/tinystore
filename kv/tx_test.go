@@ -1,6 +1,8 @@
 package kv
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -53,6 +55,56 @@ func TestATransactionWritesEveryBucketOrNone(t *testing.T) {
 	}
 	if err = sessions.WithTx(inside).Set(t.Context(), "late", "x"); !errors.Is(err, tinystore.ErrClosed) {
 		t.Fatalf("a transaction used after it ended: %v", err)
+	}
+}
+
+// a call inside Tx waits for none of the store's memory, which the writes
+// waiting for its writer hold: it takes what is free and is ErrLimit at once
+// past it. A View holds no writer, so its calls wait as any other does.
+func TestATransactionWaitsForNoMemoryTheWritesWaitingForItHold(t *testing.T) {
+	budget := int64(pageHeld(3))
+	state := openTestStateWith(t, t.TempDir(), tinystore.Options{Memory: budget})
+	values := openTestBucket[[]byte](t, state, "values")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	written := make(chan error, 1)
+	err := state.Tx(ctx, func(tx *Tx) error {
+		go func() { written <- values.Set(ctx, "waiting", bytes.Repeat([]byte{1}, maxValue)) }()
+		for state.runtime.Memory().Used < int64(maxValue) {
+			time.Sleep(time.Millisecond)
+		}
+		if _, err := values.WithTx(tx).Scan(ctx, Query{Limit: 1}); err != nil {
+			t.Errorf("a page that fits what is free: %v", err)
+		}
+		if _, err := values.WithTx(tx).Scan(ctx, Query{Limit: 3}); !errors.Is(err, tinystore.ErrLimit) {
+			t.Errorf("a page of the whole budget while a write holds some: %v", err)
+		}
+		return nil
+	})
+	if err != nil || ctx.Err() != nil {
+		t.Fatalf("the transaction: %v, %v", err, ctx.Err())
+	}
+	if err = <-written; err != nil {
+		t.Fatalf("the write waiting for the transaction: %v", err)
+	}
+
+	taken, err := state.runtime.Reserve(ctx, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer stop()
+	err = state.View(short, func(tx *Tx) error {
+		_, scanErr := values.WithTx(tx).Scan(short, Query{Limit: 1})
+		return scanErr
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a page inside View while the memory is taken: %v", err)
+	}
+	taken.Release()
+	if usage := state.runtime.Memory(); usage.Used != 0 {
+		t.Fatalf("%d bytes are held after every call returned", usage.Used)
 	}
 }
 

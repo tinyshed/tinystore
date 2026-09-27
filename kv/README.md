@@ -100,7 +100,10 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   transaction of its own. `Store.View` reads several keys from one snapshot,
   held at most five seconds; `Store.Tx` writes several buckets in one
   transaction, nil committing, an error or a panic rolling back. A bucket works
-  in either through `WithTx`; a write inside `View` is `ErrInvalid`.
+  in either through `WithTx`; a write inside `View` is `ErrInvalid`. A call
+  inside `Tx` waits for none of the store's memory, since the writes holding
+  it wait for the writer `Tx` holds: it takes what is free, and past that it
+  is `tinystore.ErrLimit` at once, for the caller to run `Tx` again.
 - **An error names its key.** A call refused because of one key is a
   `*kv.KeyError` with the bucket and the path of owners and key; `errors.Is`
   finds the store's sentinel in it. A bucket name is `[a-z0-9][a-z0-9_-]{0,63}`

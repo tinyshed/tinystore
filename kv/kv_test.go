@@ -44,8 +44,15 @@ type testState struct {
 // kv inside it; the test closes it
 func openTestState(t *testing.T, dir string) *testState {
 	t.Helper()
+	return openTestStateWith(t, dir, tinystore.Options{})
+}
+
+// openTestStateWith is openTestState with the store's other options
+func openTestStateWith(t *testing.T, dir string, options tinystore.Options) *testState {
+	t.Helper()
 	clock := &testClock{now: testStart}
-	runtime, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true, Clock: clock.Now})
+	options.Manual, options.Clock = true, clock.Now
+	runtime, err := tinystore.Open(t.Context(), dir, options)
 	if err != nil {
 		t.Fatal(err)
 	}

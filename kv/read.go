@@ -112,7 +112,7 @@ func (b *Bucket[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 	if err != nil {
 		return Page[V]{}, b.fail(call{key: query.After}, err)
 	}
-	reserved, err := b.state.reserve(ctx, pageHeld(limit))
+	reserved, err := b.reserve(ctx, pageHeld(limit))
 	if err != nil {
 		return Page[V]{}, err
 	}
