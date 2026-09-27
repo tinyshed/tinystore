@@ -53,8 +53,12 @@ which cost more than zstd there; its format is version one and reads no
 earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
-Designed, not built: `jobs` ([docs/jobs.md](docs/jobs.md)), `blobs` and
-self-metrics.
+`jobs` keeps work that runs at its time in `jobs.db`, in a first slice: typed
+queues ordered by time, leases in a table of their own, retries, repeats kept
+as cron text, and a Work loop that claims and settles in one write
+([docs/jobs.md](docs/jobs.md), [the round](docs/reports/jobs-mechanics-2026-09-27.md)).
+
+Designed, not built: `blobs` and self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -141,7 +145,9 @@ store has no accessors. One `Close` closes every engine, the last opened first.
 **The root package imports no engine.** A program links the engines it opens
 and nothing else. Engines import the root and `internal/`, never each other.
 
-**Only the store starts goroutines.** Engines register periodic work with
+**Only the store starts goroutines that outlive a call.** A blocking call that
+runs work, jobs' `Work`, starts its workers inside itself and waits for them
+before it returns. Engines register periodic work with
 `Store.Every`; `Options.Manual` stops all of it. Metrics maintenance runs by
 default.
 

@@ -117,3 +117,9 @@ fetch and normalise them.
 |---|---|
 | [kv-mechanics-2026-09-26.md](kv-mechanics-2026-09-26.md) | what kv's mechanics cost before the engine exists: durable Sets a transaction each against a group, point Gets with and without View's transaction, a LoseAtMost counter's flush, the file by object at 1 and 4 KiB pages, Clear, and production request rates as aggregates |
 | [kv-engine-2026-09-26.md](kv-engine-2026-09-26.md) | the kv engine on its five cases against hand-written tables, and bare reads and writes against its prototype: grouped Sets at 43,002 a second against 53,338, reads at 289,717 against 244,127, every case 25 to 190 times the tables at 512 goroutines |
+
+## 27 September 2026 — jobs
+
+| | |
+|---|---|
+| [jobs-mechanics-2026-09-27.md](jobs-mechanics-2026-09-27.md) | what jobs' mechanics cost before the storage is settled: a million jobs due in one minute drained from four layouts, where a lease lives, the file by object, values in the row and spilled, grouped Enqueues, a Work loop and its wake-up, a handler's own writes, and raw Claim and Ack |

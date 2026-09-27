@@ -1,9 +1,9 @@
 # Jobs: work that runs at its time
 
-The design of the jobs engine: agreed, not built. There is no `jobs/` package
-yet. The API and the contracts below are settled; what lies under
-[Storage](#storage) is provisional until the round under [Open](#open) has
-measured it.
+The design of the jobs engine, built in its first slice: `jobs/` holds the API
+and the contracts below. What lies under [Storage](#storage) was settled by
+[the mechanics round](reports/jobs-mechanics-2026-09-27.md) in a container on
+one development machine; what the round left is under [Open](#open).
 
 ## What it is for
 
@@ -453,31 +453,37 @@ An error about one job is a `*jobs.JobError` naming its queue and key;
 
 ## Storage
 
-Provisional: the round settles the layout, where a lease lives, the page size
-and the inline threshold.
+Settled by the round: rows in the order of their time, a lease in a table of
+its own, 4 KiB pages, values past 512 bytes spilled.
 
 ```text
-queues    id | name | kind | repeat                  queue or schedule, and a schedule's repeat
-jobs      queue | next | id | key | at | attempt | lease | again | repeat | value | spill | error
-          ordered by (queue, next, id); unique index (queue, key) where key is not null
-          again: the earliest time an Enqueue asked of a running job, for its run after this one
-spilled   id | value                                   values past the inline threshold
-done      queue | key | until                          keys KeepDone remembers
-meta      name | value                                 the next job id
+queues    id | name | kind                          a queue or a schedule
+jobs      queue | next | id | key | at | attempt | again | repeat | error | value | spill
+          without rowid, primary key (queue, next, id); unique index (queue, key) where key is not null
+leases    id | queue | next | attempt | until       a claimed job's lease; attempt is its token
+failed    queue | id | key | at | attempt | failed | error | value | spill   kept KeepFailed
+spilled   id | value                                values past 512 bytes
+done      queue | key | until                       keys KeepDone remembers
+meta      name | value                              the high-water mark of job ids
 ```
 
-- **`next` is when a row next needs the engine**: a waiting job's time, a
-  leased job's lease end or a failed job's removal. A row ordered by it is
-  where the claims find it, so the jobs of one minute sit together however
-  long before they were enqueued, and a table in the order jobs arrived
-  scatters them.
-- **A lease moves the row or marks it.** A claim that moves the row to the end
-  of its lease finds an ended lease as it finds a due job, and needs nothing
-  at the next open; one that marks the row in place writes less and must find
-  its marks after a crash. The round measures both and a lease in a table of
-  its own.
-- **Maintenance runs through `Store.Every`**: failed jobs past `KeepFailed`,
-  keys past `KeepDone`, spilled values no job names any more.
+- **Rows lie in the order of their time**, so the jobs of one minute sit on
+  neighbouring pages however long before they were enqueued: a million of
+  them drained 5.4 times faster than from a table in the order they arrived,
+  which scatters them. A job due at a random time pays for it when it is
+  enqueued, into the middle of the tree.
+- **A claim leaves the job's row alone**: it writes a row of `leases`, and the
+  claims after it pass over jobs a live lease holds. Settling drops the lease
+  row, the token, then deletes, moves or fails the job's row; an attempt the
+  lease counted is written to the job's row only when it failed, so a
+  `Snooze` or a job given back counts none. A next open counts the attempts of
+  the leases the file still holds and empties the table, and their jobs are
+  due at once.
+- **A job's id is never given twice**, not after a crash: ids come from a block
+  of a thousand reserved in `meta` by a transaction of its own, and a `Tx`
+  reserves its own.
+- **Maintenance runs through `Store.Every`**: failed jobs past `KeepFailed` of
+  the queues this process opened, keys past `KeepDone`.
 - **Backup copies `jobs.db`** like any engine's file; settlements `Work` has
   not written yet are not in the copy, and those jobs run again after a
   restore.
@@ -552,14 +558,12 @@ Each waits for a workload that needs it and a measurement that pays for it.
 
 ## Open
 
-The round before the code:
+What [the round](reports/jobs-mechanics-2026-09-27.md) left, for the next:
 
-| Question | What it decides |
+| Question | Why |
 |---|---|
-| a million jobs due within one minute, enqueued in their order and shuffled, drained in batches of 1 to 1000: a table in the order of arrival with an index by time, against one ordered by time | the layout |
-| a lease as a mark in the row, as a row of a table of its own, and as the row moved to the lease's end, with what each costs at the next open after a crash | where a lease lives |
-| `dbstat` by object for a million scheduled messages with keys, and values of 64 to 4096 bytes in the row and spilled | the page size and the inline threshold |
-| `Enqueue` from 1, 8, 64 and 512 goroutines, grouped: due now, at random times, and under keys | the enqueue ceiling |
-| a `Work` loop of 1 to 512 workers with a handler that does nothing, over a million jobs due, and one `Enqueue` at a time: jobs a second, and the time from `Enqueue` to the handler | the pipeline and its wake-up |
-| a handler inserting one row into `sql/app.db`, a transaction each and grouped, from 8 and 64 workers | the sqldb change before the engine |
-| `Claim` and `Ack` one at a time from 1 to 512 goroutines | the ceiling of the raw calls, which a remote worker meets |
+| a key index a burst does not scatter: keys dropped lazily, in key order, by maintenance | a keyed burst drained 14,000 jobs a second against 93,000 without keys |
+| a Work loop that claims ahead of its free workers | eight workers carried four jobs a write, 1,400 a second |
+| sqldb's `Exec` grouped as kv's writes are | a handler inserting through it held 300 a second at any concurrency |
+| the engine against a table an application polls by hand, on the five cases | what the engine buys over the way it replaces |
+| the page cache of the writer in a burst over a large file | every burst ran with 1 MiB a connection |
