@@ -16,7 +16,6 @@ type renewals struct {
 	scheduled sync.Once
 }
 
-// renewed is the key a renewal is for
 type renewed struct {
 	bucket int64
 	path   string
@@ -75,7 +74,7 @@ func (r *renewals) ask(key renewed, due renewal) {
 // Sliding bucket on
 func (s *Store) scheduleRenewals() {
 	s.renewals.scheduled.Do(func() {
-		s.runtime.Every("kv renewals", renewEvery, func(ctx context.Context) error {
+		s.runtime.EveryEngine("kv", "kv renewals", renewEvery, func(ctx context.Context) error {
 			_, err := s.flushRenewals(ctx)
 			return err
 		})
@@ -101,7 +100,6 @@ func (s *Store) flushRenewals(ctx context.Context) (int, error) {
 	return renewedKeys, nil
 }
 
-// askedRenewal is one renewal a flush took, with its key
 type askedRenewal struct {
 	key renewed
 	due renewal

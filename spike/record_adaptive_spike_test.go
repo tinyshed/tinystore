@@ -117,7 +117,7 @@ func recordFixture(kind string, count int) []recordEvent {
 			user := random.IntN(1_000_000)
 			events[i] = recordEvent{
 				at: int64(i), stream: "backend", name: "user.loaded",
-				body: recordPointer(fmt.Sprintf("loaded user %d", user)),
+				body: new(fmt.Sprintf("loaded user %d", user)),
 				attrs: []recordField{
 					{"user_id", strconv.Itoa(user)},
 					{"route", recordJSON(fmt.Sprintf("/users/%d", user))},
@@ -125,7 +125,7 @@ func recordFixture(kind string, count int) []recordEvent {
 				},
 			}
 			if i%97 == 0 {
-				events[i].body = recordPointer("user lookup failed")
+				events[i].body = new("user lookup failed")
 			}
 		case "mixed":
 			switch i % 3 {
@@ -136,7 +136,7 @@ func recordFixture(kind string, count int) []recordEvent {
 			case 2:
 				events[i] = recordEvent{
 					at: int64(i), stream: "java", name: "log",
-					body: recordPointer(fmt.Sprintf("worker %d failed\n\tat Example.java:%d\n", i%8, i%200)),
+					body: new(fmt.Sprintf("worker %d failed\n\tat Example.java:%d\n", i%8, i%200)),
 				}
 			}
 		case "shape_churn":
@@ -149,7 +149,7 @@ func recordFixture(kind string, count int) []recordEvent {
 			for j := range randomBytes {
 				randomBytes[j] = byte(random.Uint32())
 			}
-			events[i] = recordEvent{at: int64(i), name: "opaque", body: recordPointer(hex.EncodeToString(randomBytes[:]))}
+			events[i] = recordEvent{at: int64(i), name: "opaque", body: new(hex.EncodeToString(randomBytes[:]))}
 		}
 	}
 	return events
@@ -450,7 +450,7 @@ func measureRecordLoghub(t *testing.T, corpus string) []recordDensityResult {
 		events := make([]recordEvent, len(lines))
 		name := filepath.Base(filepath.Dir(path))
 		for i, line := range lines {
-			events[i] = recordEvent{at: int64(i), stream: name, name: "log", body: recordPointer(string(line))}
+			events[i] = recordEvent{at: int64(i), stream: name, name: "log", body: new(string(line))}
 		}
 		results = append(results, measureRecordDensity(t, name, events))
 	}

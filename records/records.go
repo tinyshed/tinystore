@@ -21,7 +21,6 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// the file this engine claims inside the store's directory
 const fileName = "records.db"
 
 // recordsApplicationID is "TREC", the SQLite application id that claims a file for this engine
@@ -55,8 +54,9 @@ type Store struct {
 	closing     sync.Once
 	closeErr    error
 
-	appended, dropped, sealed, expired, merged, queries atomic.Uint64
-	readBlocks, readBytes                               atomic.Uint64
+	appended, dropped, droppedFull, droppedInvalid, droppedWrite atomic.Uint64
+	sealed, expired, merged, queries                             atomic.Uint64
+	readBlocks, readBytes                                        atomic.Uint64
 }
 
 // Open opens records.db inside the store. The store closes it and, unless it
@@ -79,8 +79,8 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 		return nil, err
 	}
 
-	store.Every("records flush", opts.Flush, engine.Flush)
-	store.Every("records maintenance", maintenanceEvery, engine.maintainInBackground)
+	store.EveryEngine("records", "records flush", opts.Flush, engine.flushInBackground)
+	store.EveryEngine("records", "records maintenance", maintenanceEvery, engine.maintainInBackground)
 	engine.log.Info("opened", "path", path)
 	return engine, nil
 }
@@ -144,7 +144,15 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 }
 
 func (s *Store) maintainInBackground(ctx context.Context) error {
-	_, err := s.Maintain(ctx)
+	started := time.Now()
+	done, err := s.Maintain(ctx)
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		s.log.Debug("maintenance finished", "duration", time.Since(started),
+			"sealed_segments", done.SealedSegments, "sealed_records", done.SealedRecords,
+			"expired_segments", done.ExpiredSegments, "expired_heads", done.ExpiredHeads,
+			"merged_segments", done.MergedSegments, "merged_records", done.MergedRecords,
+			"damaged", done.Damaged, "failed", err != nil)
+	}
 	return err
 }
 
@@ -162,6 +170,9 @@ func (s *Store) Stats() Stats {
 	return Stats{
 		Appended:        s.appended.Load(),
 		Dropped:         s.dropped.Load(),
+		DroppedFull:     s.droppedFull.Load(),
+		DroppedInvalid:  s.droppedInvalid.Load(),
+		DroppedWrite:    s.droppedWrite.Load(),
 		SealedSegments:  s.sealed.Load(),
 		ExpiredSegments: s.expired.Load(),
 		MergedSegments:  s.merged.Load(),
@@ -188,7 +199,9 @@ func (s *Store) Close(ctx context.Context) error {
 
 	s.closing.Do(func() {
 		s.closeErr = s.release()
-		s.log.Info("closed", "appended", s.appended.Load(), "dropped", s.dropped.Load())
+		s.log.Info("closed", "appended", s.appended.Load(), "dropped", s.dropped.Load(),
+			"dropped_full", s.droppedFull.Load(), "dropped_invalid", s.droppedInvalid.Load(),
+			"dropped_write", s.droppedWrite.Load())
 	})
 	return errors.Join(flushErr, s.closeErr)
 }

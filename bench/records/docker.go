@@ -65,7 +65,7 @@ func containerNames(host string) map[string]string {
 	if err != nil {
 		return names
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 		parts := strings.Split(strings.TrimSpace(line), "|")
 		if len(parts) == 3 {
 			names[filepath.Base(filepath.Dir(parts[2]))] = strings.TrimPrefix(parts[0], "/")

@@ -55,8 +55,6 @@ func (s *Store) commitIngest(ctx context.Context, input []preparedBatch, cutoff 
 	})
 }
 
-// writeSeries registers a series the first time it arrives, then writes its
-// samples into its head.
 func (s *Store) writeSeries(ctx context.Context, tx sqlite.Writer, series preparedBatch, cutoff int64) error {
 	id, err := s.resolveSeries(ctx, tx, series)
 	if err != nil {
@@ -65,7 +63,6 @@ func (s *Store) writeSeries(ctx context.Context, tx sqlite.Writer, series prepar
 	return s.writeHead(ctx, tx, id, series.samples, cutoff)
 }
 
-// writeHead puts one series' new samples into its packed head.
 func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, incoming []Sample, cutoff int64) error {
 	state, err := s.loadIngestState(ctx, tx, id)
 	if err != nil {
@@ -122,12 +119,10 @@ type headWrite struct {
 	cutoff   int64
 }
 
-// newest is the series' newest timestamp once this write lands.
 func (w headWrite) newest() int64 {
 	return max(w.state.maxSeen, w.incoming[len(w.incoming)-1].At)
 }
 
-// headUpdate is a head after one write, ready to be stored.
 type headUpdate struct {
 	packed      []byte
 	count       int
@@ -228,7 +223,6 @@ func (s *Store) mergeIntoHead(ctx context.Context, write headWrite) (headUpdate,
 	}, nil
 }
 
-// countRejection counts a failed call, whichever step failed.
 func (s *Store) countRejection(err *error) {
 	if *err != nil {
 		s.rejected.Add(1)

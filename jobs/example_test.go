@@ -37,7 +37,6 @@ func exampleQueues() (queues *jobs.Store, at *clock, done func()) {
 	}
 }
 
-// check ends an example that meets an error
 func check(err error) {
 	if err != nil {
 		panic(err)

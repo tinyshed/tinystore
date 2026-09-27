@@ -54,7 +54,8 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   `Options.Flush` (a second), on `Close`, or on `Flush(ctx)` in a Manual store;
   a line that does not fit the buffer or the format, or a batch whose write
   failed, or a line outside the store's window, is dropped and counted in
-  `Stats`. Lines of the records engine itself
+  `Stats`, with separate full-buffer, invalid/out-of-window and failed-write
+  counts. Lines of the records engine itself
   are refused. A line is a record named `log`: its message is the body, the
   attributes of `logger.With` its context, the call's its attributes, a
   group's keys written `group.key`, values spelled as `slog.JSONHandler`

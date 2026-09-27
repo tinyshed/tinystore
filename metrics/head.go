@@ -39,7 +39,6 @@ type headSnapshot struct {
 	chunks   []headChunk
 }
 
-// headChunk is one chunk of a parsed head.
 type headChunk struct {
 	header codec.Head
 	body   []byte
@@ -124,7 +123,6 @@ func readHeadChunk(r *binaryReader, remaining int) (headChunk, error) {
 	}, nil
 }
 
-// decodeHead returns every sample of a head.
 func (s *Store) decodeHead(ctx context.Context, head headSnapshot) ([]Sample, error) {
 	if head.count < 0 || head.count > s.opts.MaxHeadSamples {
 		return nil, fmt.Errorf("%w: mutable head samples", ErrLimit)
@@ -197,7 +195,6 @@ func selectedHeadSamples(chunks []headChunk, from, to int64) int {
 	return count
 }
 
-// encodeHead packs samples into a new head.
 func (s *Store) encodeHead(ctx context.Context, id int64, points []Sample) ([]byte, error) {
 	return s.encodeHeadAfter(ctx, id, nil, points)
 }

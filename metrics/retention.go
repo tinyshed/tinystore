@@ -86,11 +86,11 @@ func (s *Store) expireSeries(ctx context.Context, id, cutoff int64) (int, bool, 
 			}
 		}
 
-		expiredBlocks, err := s.expireBlocks(ctx, tx, id, cutoff)
+		expiredSamples, err := s.expireBlocks(ctx, tx, id, cutoff)
 		if err != nil {
 			return err
 		}
-		expired = len(points) - len(kept) + expiredBlocks
+		expired = len(points) - len(kept) + expiredSamples
 
 		if len(kept) == 0 {
 			if reclaimed, err = reclaimIfEmpty(ctx, tx, id); err != nil || reclaimed {
@@ -126,7 +126,6 @@ func readExpiryState(ctx context.Context, tx *sql.Tx, id int64) (int64, error) {
 	return maxSeen, nil
 }
 
-// expiredPrefix counts the head points before the cutoff, which lead a sorted head.
 func expiredPrefix(points []Sample, cutoff int64) int {
 	expired := 0
 	for expired < len(points) && points[expired].At < cutoff {

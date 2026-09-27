@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -212,16 +213,19 @@ func (a *app) scheduleFor(ctx context.Context, note int64) error {
 // useJobs indexes the notes waiting for it, as a worker would all day, and
 // counts the reminders still ahead
 func (a *app) useJobs(ctx context.Context, out io.Writer) error {
-	indexed := 0
+	var indexed atomic.Int64
 	err := a.indexing.Work(ctx, func(context.Context, jobs.Job[int64]) error {
-		indexed++ // a search index would read the note, and skip one deleted since
+		indexed.Add(1) // a search index would read the note, and skip one deleted since
 		return nil
 	}, jobs.Workers(2), jobs.UntilIdle())
 	if err != nil {
 		return err
 	}
 	page, err := a.reminders.Scan(ctx, jobs.Query{Prefix: "note:"})
-	fmt.Fprintf(out, "notes indexed: %d, reminders ahead: %d\n", indexed, len(page.Entries))
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "notes indexed: %d, reminders ahead: %d\n", indexed.Load(), len(page.Entries))
 	return err
 }
 

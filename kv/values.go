@@ -256,7 +256,6 @@ func customCodec[V any](custom Codec[V]) codec[V] {
 	}
 }
 
-// as is a value converted to V's own type, as a V
 func as[V any](value reflect.Value) (V, error) {
 	converted, ok := value.Interface().(V)
 	if !ok {

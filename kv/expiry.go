@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
@@ -46,7 +49,15 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	done.Renewed, errs[1] = s.flushRenewals(ctx)
 	done.Cleared, errs[2] = s.dropCleared(ctx)
 	done.Expired, errs[3] = s.expire(ctx)
-	return done, errors.Join(errs[:]...)
+	return done, errors.Join(maintenanceError("flush counters", errs[0]), maintenanceError("renew keys", errs[1]),
+		maintenanceError("clear branches", errs[2]), maintenanceError("expire keys", errs[3]))
+}
+
+func maintenanceError(phase string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("kv: %s: %w", phase, err)
 }
 
 // expire deletes expired keys a batch at a time, the oldest first
@@ -64,7 +75,12 @@ func (s *Store) expire(ctx context.Context) (int, error) {
 }
 
 func (s *Store) maintainInBackground(ctx context.Context) error {
-	_, err := s.Maintain(ctx)
+	started := time.Now()
+	done, err := s.Maintain(ctx)
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		s.log.Debug("maintenance finished", "duration", time.Since(started), "flushed", done.Flushed,
+			"renewed", done.Renewed, "cleared", done.Cleared, "expired", done.Expired, "failed", err != nil)
+	}
 	return err
 }
 

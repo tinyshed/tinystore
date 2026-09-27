@@ -32,9 +32,9 @@ func (p *maintenancePass) sealHead(ctx context.Context, head headKey) error {
 		if len(chunk.ids) == 0 || (!chunk.full && chunk.oldest > p.sealBefore()) {
 			return nil
 		}
-		err = p.store.noted(p.seal(ctx, head, chunk))
-		var damage *DamageError
-		if errors.As(err, &damage) {
+		err = p.seal(ctx, head, chunk)
+		if damage, ok := errors.AsType[*DamageError](err); ok {
+			p.store.noteDamage(damage)
 			p.result.Damaged++
 			continue
 		}

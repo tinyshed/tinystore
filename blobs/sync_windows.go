@@ -4,9 +4,13 @@ package blobs
 
 import (
 	"errors"
+	"sync"
 	"syscall"
 	"unsafe"
 )
+
+// simultaneous directory walks contend inside Windows while opening and closing their handles
+type nameCalls struct{ sync.Mutex }
 
 // ERROR_SHARING_VIOLATION, which syscall does not name
 const errorSharingViolation syscall.Errno = 32

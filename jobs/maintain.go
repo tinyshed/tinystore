@@ -112,7 +112,12 @@ func (s *Store) dropKeysLeft(ctx context.Context, state *queueState) (int, error
 }
 
 func (s *Store) maintainInBackground(ctx context.Context) error {
-	_, err := s.Maintain(ctx)
+	started := time.Now()
+	done, err := s.Maintain(ctx)
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		s.log.Debug("maintenance finished", "duration", time.Since(started), "failed_jobs_removed", done.Failed,
+			"done_keys_removed", done.Done, "orphan_keys_removed", done.Keys, "failed", err != nil)
+	}
 	return err
 }
 

@@ -20,8 +20,6 @@ func recordTestCodec(t testing.TB) *recordBlockCodec {
 	return codec
 }
 
-func recordPointer[T any](value T) *T { return &value }
-
 func assertRecordEvents(t testing.TB, expected, actual []recordEvent) {
 	t.Helper()
 	if len(expected) != len(actual) {
@@ -71,8 +69,8 @@ func TestRecordEventWireKeepsTypesOrderAndOptionalFields(t *testing.T) {
 func recordEdgeEvents() []recordEvent {
 	return []recordEvent{
 		{at: math.MinInt64, name: "event", attrs: []recordField{{"n", "18446744073709551615"}}},
-		{at: math.MaxInt64, stream: "java", name: "log", body: recordPointer("java.Exception\n\tat X\t\x00\xff")},
-		{at: 0, stream: "browser", name: "click", body: recordPointer(""), level: recordPointer(int64(0))},
+		{at: math.MaxInt64, stream: "java", name: "log", body: new("java.Exception\n\tat X\t\x00\xff")},
+		{at: 0, stream: "browser", name: "click", body: new(""), level: new(int64(0))},
 		{
 			at: -1, name: "log", traceID: make([]byte, 16), spanID: make([]byte, 8),
 			context: []recordField{{"a", `"Chrome"`}}, attrs: []recordField{{"n", "-0"}, {"n", "null"}},
@@ -169,7 +167,7 @@ func TestRecordStreamBoundsOwnershipAndIndependentBlocks(t *testing.T) {
 	codec := recordTestCodec(t)
 	stream := recordStream{codec: codec}
 	event := recordEvent{
-		name: "click", body: recordPointer("before"), level: recordPointer(int64(0)),
+		name: "click", body: new("before"), level: new(int64(0)),
 		attrs: []recordField{{"key", "42"}}, traceID: make([]byte, 16),
 	}
 	if _, err := stream.add(event); err != nil {
@@ -184,14 +182,14 @@ func TestRecordStreamBoundsOwnershipAndIndependentBlocks(t *testing.T) {
 	if err != nil || decoded[0].attrs[0].value != "42" || *decoded[0].body != "before" || *decoded[0].level != 0 || decoded[0].traceID[0] != 0 {
 		t.Fatalf("buffer borrowed caller memory: %v", err)
 	}
-	event = recordEvent{name: "later", body: recordPointer(strings.Repeat("x", recordByteLimit/2))}
+	event = recordEvent{name: "later", body: new(strings.Repeat("x", recordByteLimit/2))}
 	if block, addErr := stream.add(event); addErr != nil || block != nil {
 		t.Fatal("first half block", addErr)
 	}
 	if block, addErr := stream.add(event); addErr != nil || block == nil {
 		t.Fatal("byte boundary failed to seal", addErr)
 	}
-	if _, err = stream.add(recordEvent{name: "oversized", body: recordPointer(strings.Repeat("x", recordByteLimit))}); err == nil {
+	if _, err = stream.add(recordEvent{name: "oversized", body: new(strings.Repeat("x", recordByteLimit))}); err == nil {
 		t.Fatal("oversized event accepted")
 	}
 	if len(stream.pending) != 1 {

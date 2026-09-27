@@ -34,7 +34,6 @@ const (
 	maxRenewals   = 100_000         // renewals that may wait; past them a key's next read asks again
 )
 
-// a bucket's name, as a file's is: short and plain
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // BucketOption changes how a bucket serves its values; none changes what its
@@ -50,7 +49,6 @@ type OpenOption interface {
 	CounterOption
 }
 
-// settings is what the options of a bucket or of counters say
 type settings struct {
 	ttl        time.Duration
 	sliding    time.Duration

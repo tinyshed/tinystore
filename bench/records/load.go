@@ -195,7 +195,7 @@ func residentBytes() int64 {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(status), "\n") {
+	for line := range strings.SplitSeq(string(status), "\n") {
 		if rest, ok := strings.CutPrefix(line, "VmRSS:"); ok {
 			kib, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "kB")), 10, 64)
 			if err == nil {

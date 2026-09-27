@@ -68,7 +68,7 @@ func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error
 		return nil, err
 	}
 
-	store.Every("kv expiry", expiryEvery, state.maintainInBackground)
+	store.EveryEngine("kv", "kv expiry", expiryEvery, state.maintainInBackground)
 	state.log.Info("opened", "path", path)
 	return state, nil
 }
@@ -185,7 +185,7 @@ func (s *Store) memoryFor(name string, bucket int64, loseAtMost time.Duration) (
 	var held *memory
 	if loseAtMost > 0 {
 		held = newMemory(s, bucket, name)
-		s.runtime.Every("kv flush "+name, loseAtMost, held.flushInBackground)
+		s.runtime.EveryEngine("kv", "kv flush "+name, loseAtMost, held.flushInBackground)
 	}
 	s.counters[name] = openCounters{loseAtMost: loseAtMost, memory: held}
 	return held, nil
@@ -215,12 +215,13 @@ func (s *Store) flushCounters(ctx context.Context) (int, error) {
 	for _, held := range memories {
 		wrote, err := held.flush(ctx)
 		written += wrote
-		errs = append(errs, err)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("counter bucket %q: %w", held.name, err))
+		}
 	}
 	return written, errors.Join(errs...)
 }
 
-// admit lets one operation in while the store is open; release lets it out
 func (s *Store) admit(ctx context.Context) (release func(), err error) {
 	if err = s.gate.Enter(ctx, errClosed); err != nil {
 		return nil, err

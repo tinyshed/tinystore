@@ -22,12 +22,11 @@ type branch struct {
 	ttl    time.Duration
 	owners []string
 	prefix []byte
-	hidden int64 // the lengths of the prefixes above the branch's rows, as the test of a hidden row reads them
+	hidden int64 // packed prefix lengths for the branch's ancestor clear marks
 	tx     *Tx
 	err    error
 }
 
-// under is the branch that owners name below this one, one after another
 func (b *branch) under(owners []any) branch {
 	below := *b
 	below.owners = slices.Clone(b.owners)
@@ -64,11 +63,10 @@ type call struct {
 	key     string
 	now     int64 // unix milliseconds: the store's clock, read once a call
 	options callOptions
-	hidden  int64 // the branch's, for the test of a hidden row
+	hidden  int64 // packed prefix lengths for clear-mark checks
 }
 
-// args are a statement's own arguments, then what the test of a hidden row
-// binds after them
+// args appends the packed prefix lengths used by clear-mark checks
 func (c call) args(own ...any) []any {
 	return append(own, c.hidden)
 }

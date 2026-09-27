@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -60,7 +60,7 @@ func ramQuery(endpoint, shape string, workers, seconds int) {
 	}
 	group.Wait()
 	elapsed := time.Since(start)
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	slices.Sort(durations)
 	p50, p99 := durations[(len(durations)*50+99)/100-1], durations[(len(durations)*99+99)/100-1]
 	fmt.Printf("stage=ram_query shape=%s workers=%d calls=%d response_bytes=%d elapsed_s=%.3f qps=%.1f p50_ms=%.1f p99_ms=%.1f\n", shape, workers, calls, bytes, elapsed.Seconds(), float64(calls)/elapsed.Seconds(), float64(p50.Milliseconds()), float64(p99.Milliseconds()))
 }

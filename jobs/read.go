@@ -217,7 +217,6 @@ func checkQuery(query Query) (int, error) {
 	return limit, nil
 }
 
-// scanRows reads up to limit rows of the page query names
 func (q *Queue[V]) scanRows(ctx context.Context, r sqlite.Reader, query Query, limit int) ([]found, error) {
 	now := q.store.clock()
 	if query.Prefix == "" && query.State == Failed {

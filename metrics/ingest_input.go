@@ -164,7 +164,6 @@ func (p *pendingSeries) add(point Sample) {
 	p.batch.samples = append(p.batch.samples, point)
 }
 
-// extends reports whether at comes strictly after everything collected so far.
 func (p *pendingSeries) extends(at int64) bool {
 	samples := p.batch.samples
 	return len(samples) == 0 || at > samples[len(samples)-1].At

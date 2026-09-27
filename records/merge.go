@@ -58,9 +58,9 @@ func (p *maintenancePass) mergeStream(ctx context.Context, stream int64) error {
 		if run == nil {
 			return nil
 		}
-		err = p.store.noted(p.merge(ctx, stream, run))
-		var damage *DamageError
-		if errors.As(err, &damage) {
+		err = p.merge(ctx, stream, run)
+		if damage, ok := errors.AsType[*DamageError](err); ok {
+			p.store.noteDamage(damage)
 			return nil
 		}
 		if err != nil {

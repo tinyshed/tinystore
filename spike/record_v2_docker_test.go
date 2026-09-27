@@ -64,7 +64,7 @@ func readDockerCorpus(t *testing.T, root string) []v2DockerContainer {
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 			parts := strings.Split(strings.TrimSpace(line), "|")
 			if len(parts) == 3 {
 				names[filepath.Base(filepath.Dir(parts[2]))] = host.Name() + "/" + strings.TrimPrefix(parts[0], "/")

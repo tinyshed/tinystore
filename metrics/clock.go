@@ -255,7 +255,6 @@ func decodeClockGroup(body []byte) ([]storedBlock, error) {
 	return blocks, nil
 }
 
-// readClockBlock reads one block's time bounds, count and clock body.
 func readClockBlock(r *binaryReader) (storedBlock, error) {
 	start := unfoldSigned(r.unsigned())
 	span := r.unsigned()

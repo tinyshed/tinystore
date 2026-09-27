@@ -79,13 +79,18 @@ func damageOf(found Damage, err error) error {
 
 // noted remembers the damage err carries and logs it the first time
 func (s *Store) noted(err error) error {
-	var damage *DamageError
-	if errors.As(err, &damage) && s.damaged.note(damage.Damage) {
+	if damage, ok := errors.AsType[*DamageError](err); ok {
+		s.noteDamage(damage)
+	}
+	return err
+}
+
+func (s *Store) noteDamage(damage *DamageError) {
+	if s.damaged.note(damage.Damage) {
 		found := damage.Damage
 		s.log.Error("a row no longer reads", "stream", found.Stream, "segment", found.Segment,
 			"head_row", found.HeadRow, "from", found.From, "to", found.To, "reason", found.Reason)
 	}
-	return err
 }
 
 // Damaged lists the rows this handle has met that no longer read, in the order

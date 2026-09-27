@@ -32,7 +32,8 @@ after reopening. No binary-format knowledge is needed to use or follow it.
    moves the sealed frontier in the same transaction.
    It stages at most eight series and 1 MiB for a publication transaction;
    savepoints isolate conflicts, and counters advance after the outer commit.
-   A local corrupt or over-limit series is suspended and recorded so later series
+   A local corrupt or over-limit series is suspended, logged once after commit,
+   and recorded so later series
    can continue; `RetryFailedMaintenance` re-enables a bounded group after repair
    or a limit change. File and I/O failures still stop the pass.
 5. **Expire** (`retention.go`) removes expired head points and whole expired

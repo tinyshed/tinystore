@@ -13,11 +13,20 @@ const quietFailures = 10 * time.Minute
 // Every runs work at each interval until the store closes. A Manual store runs
 // nothing; a failure is logged, and the next run still happens.
 func (s *Store) Every(name string, interval time.Duration, work func(context.Context) error) {
+	s.every(s.logger, name, interval, work)
+}
+
+// EveryEngine runs engine work with the same engine attribute as Store.Logger.
+func (s *Store) EveryEngine(engine, name string, interval time.Duration, work func(context.Context) error) {
+	s.every(s.Logger(engine), name, interval, work)
+}
+
+func (s *Store) every(logger *slog.Logger, name string, interval time.Duration, work func(context.Context) error) {
 	if s.manual {
 		return
 	}
 	if interval <= 0 {
-		s.logger.Warn("background work refused: interval must be positive", "work", name, "interval", interval)
+		logger.Warn("background work refused: interval must be positive", "work", name, "interval", interval)
 		return
 	}
 
@@ -26,7 +35,7 @@ func (s *Store) Every(name string, interval time.Duration, work func(context.Con
 	if s.closed {
 		return
 	}
-	failures := &failureLog{logger: s.logger, work: name, quiet: quietFailures}
+	failures := &failureLog{logger: logger, work: name, quiet: quietFailures}
 	s.running.Go(func() { s.repeat(interval, work, failures) })
 }
 

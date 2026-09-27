@@ -84,7 +84,6 @@ const (
 	registerQueue = `insert into queues (name, kind) values (?1, ?2) on conflict (name) do nothing`
 	queueNamed    = `select id, kind from queues where name = ?1`
 	countWaiting  = `select count(*) from jobs where queue = ?1`
-	firstDue      = `select next from jobs where queue = ?1 order by next, id limit 1`
 )
 
 // openQueue finds or registers a queue, and, the first time this process

@@ -47,12 +47,14 @@ func (h *handler) Handle(_ context.Context, line slog.Record) error {
 func (s *Store) enqueue(record Record) {
 	if !s.fits(&record) {
 		s.dropped.Add(1)
+		s.droppedInvalid.Add(1)
 		return
 	}
 	select {
 	case s.queue <- record:
 	default:
 		s.dropped.Add(1)
+		s.droppedFull.Add(1)
 	}
 }
 
@@ -164,6 +166,22 @@ func (s *Store) Flush(ctx context.Context) error {
 	return s.flush(ctx, (*lineWriter).handOverIdle)
 }
 
+func (s *Store) flushInBackground(ctx context.Context) error {
+	started := time.Now()
+	beforeAppended := s.appended.Load()
+	beforeFull, beforeInvalid, beforeWrite := s.droppedFull.Load(), s.droppedInvalid.Load(), s.droppedWrite.Load()
+	err := s.Flush(ctx)
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		s.log.Debug("flush finished", "duration", time.Since(started),
+			"appended_delta", s.appended.Load()-beforeAppended,
+			"dropped_full_delta", s.droppedFull.Load()-beforeFull,
+			"dropped_invalid_delta", s.droppedInvalid.Load()-beforeInvalid,
+			"dropped_write_delta", s.droppedWrite.Load()-beforeWrite,
+			"failed", err != nil)
+	}
+	return err
+}
+
 // flush takes what the queue holds, then has the writers of Lines hand over
 // into the queue it emptied, and writes both
 func (s *Store) flush(ctx context.Context, handOver func(*lineWriter)) error {
@@ -174,6 +192,7 @@ func (s *Store) flush(ctx context.Context, handOver func(*lineWriter)) error {
 		if err := s.appendChecked(ctx, piece); err != nil {
 			for _, lost := range pieces[i:] {
 				s.dropped.Add(uint64(len(lost)))
+				s.droppedWrite.Add(uint64(len(lost)))
 			}
 			return err
 		}

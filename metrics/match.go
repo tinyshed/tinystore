@@ -14,8 +14,8 @@ import (
 )
 
 type matcherPosting struct {
-	labelID int64
-	names   int
+	labelID     int64
+	seriesCount int
 }
 
 // one JSON lookup lost to point lookups on two matchers and won on 32 (matcher-batching-2026-09-23)
@@ -40,7 +40,7 @@ func rankMatchers(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]ma
 		return nil, false, err
 	}
 
-	slices.SortStableFunc(ranked, func(a, b matcherPosting) int { return a.names - b.names })
+	slices.SortStableFunc(ranked, func(a, b matcherPosting) int { return a.seriesCount - b.seriesCount })
 	return ranked, true, nil
 }
 
@@ -66,8 +66,8 @@ func countEachMatcher(ctx context.Context, tx sqlite.Reader, matchers []Label) (
 	for _, matcher := range matchers {
 		var posting matcherPosting
 		err := sqlite.QueryRow(ctx, tx, labelPostingsQuery, matcher.Name, matcher.Value).
-			Scan(&posting.labelID, &posting.names)
-		if errors.Is(err, sql.ErrNoRows) || posting.names == 0 && err == nil {
+			Scan(&posting.labelID, &posting.seriesCount)
+		if errors.Is(err, sql.ErrNoRows) || posting.seriesCount == 0 && err == nil {
 			return nil, false, nil
 		}
 		if err != nil {
@@ -102,17 +102,17 @@ func countMatchersAtOnce(ctx context.Context, tx sqlite.Reader, matchers []Label
 
 	ranked := make([]matcherPosting, 0, len(matchers))
 	for rows.Next() {
-		var id, names sql.NullInt64
-		if err = rows.Scan(&id, &names); err != nil {
+		var id, seriesCount sql.NullInt64
+		if err = rows.Scan(&id, &seriesCount); err != nil {
 			return nil, false, fmt.Errorf("read matcher: %w", err)
 		}
-		if !id.Valid || !names.Valid || names.Int64 == 0 {
+		if !id.Valid || !seriesCount.Valid || seriesCount.Int64 == 0 {
 			return nil, false, nil
 		}
-		if names.Int64 < 0 || names.Int64 > math.MaxInt {
+		if seriesCount.Int64 < 0 || seriesCount.Int64 > math.MaxInt {
 			return nil, false, fmt.Errorf("%w: posting count", ErrCorrupt)
 		}
-		ranked = append(ranked, matcherPosting{labelID: id.Int64, names: int(names.Int64)})
+		ranked = append(ranked, matcherPosting{labelID: id.Int64, seriesCount: int(seriesCount.Int64)})
 	}
 	if err = rows.Err(); err != nil {
 		return nil, false, fmt.Errorf("iterate matchers: %w", err)

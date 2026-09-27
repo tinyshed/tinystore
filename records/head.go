@@ -15,8 +15,6 @@ const headVersion = 1
 //
 //	version | count | zstd frame of the records | crc-32
 //	record  = at | name | presence | level | body | trace | span | context | attributes
-//
-// headRow is one head row as it is written
 type headRow struct {
 	stream      string
 	late        bool

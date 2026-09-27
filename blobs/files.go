@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -64,7 +65,7 @@ func (s *Store) makeDir(dir string) error {
 // a scanner that opened the new file without sharing it refuses the rename
 func (s *Store) rename(from, to string) error {
 	for try := 0; ; try++ {
-		err := s.root.Rename(from, to)
+		err := s.renameFile(from, to)
 		if err == nil {
 			return nil
 		}
@@ -74,6 +75,18 @@ func (s *Store) rename(from, to string) error {
 		s.retries.Add(1)
 		time.Sleep(time.Millisecond << try)
 	}
+}
+
+func (s *Store) renameFile(from, to string) error {
+	s.nameCalls.Lock()
+	defer s.nameCalls.Unlock()
+	return s.root.Rename(from, to)
+}
+
+func (s *Store) createUpload(id int64) (*os.File, error) {
+	s.nameCalls.Lock()
+	defer s.nameCalls.Unlock()
+	return s.root.OpenFile(uploadName(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 }
 
 // syncShared syncs a directory of blobs/ once for the files that arrive in it

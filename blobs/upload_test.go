@@ -214,17 +214,101 @@ func TestAnUploadPastItsBoundsStopsAndLeavesNothing(t *testing.T) {
 // endless yields a chunk again and again up to its length, so that a large
 // upload's bytes take no memory of the test's own
 type endless struct {
-	chunk []byte
-	left  int64
+	chunk  []byte
+	left   int64
+	offset int
 }
 
 func (e *endless) Read(p []byte) (int, error) {
 	if e.left == 0 {
 		return 0, io.EOF
 	}
-	n := copy(p[:min(int64(len(p)), e.left)], e.chunk)
+	n := int(min(int64(len(p)), e.left))
+	for copied := 0; copied < n; {
+		read := copy(p[copied:n], e.chunk[e.offset:])
+		copied += read
+		e.offset = (e.offset + read) % len(e.chunk)
+	}
 	e.left -= int64(n)
 	return n, nil
+}
+
+func TestTheStreamingFixtureKeepsItsBytesAtEveryReadSize(t *testing.T) {
+	chunk := randomBytes(55, 64<<10)
+	want := bytes.Repeat(chunk, 3)
+	for _, width := range []int{7, 16 << 10, 64 << 10, 128 << 10} {
+		reader := &endless{chunk: chunk, left: int64(len(want))}
+		var got bytes.Buffer
+		buffer := make([]byte, width)
+		for {
+			n, err := reader.Read(buffer)
+			got.Write(buffer[:n])
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !bytes.Equal(got.Bytes(), want) {
+			t.Fatalf("fixture differs with a %d-byte read", width)
+		}
+	}
+}
+
+type observedStream struct {
+	io.Reader
+	largest int
+}
+
+func (r *observedStream) Read(p []byte) (int, error) {
+	r.largest = max(r.largest, len(p))
+	return r.Reader.Read(p)
+}
+
+func TestStreamingUsesOnlyTheBufferItsBudgetCanHold(t *testing.T) {
+	data := randomBytes(5, 1<<20)
+	for _, budget := range []int64{inlineSize, 64 << 10, 80 << 10} {
+		s := openTestStoreWith(t, t.TempDir(), tinystore.Options{Memory: budget}, Options{})
+		media := openTestBucket(t, s, "media")
+		reader := &observedStream{Reader: bytes.NewReader(data)}
+		if _, err := media.Put(t.Context(), "stream", reader); err != nil {
+			t.Fatal(err)
+		}
+		want := inlineSize
+		if budget >= 80<<10 {
+			want = 64 << 10
+		}
+		if reader.largest != want {
+			t.Fatalf("budget %d: largest read %d, want %d", budget, reader.largest, want)
+		}
+		if usage := s.runtime.Memory(); usage.Used != 0 || usage.Peak > budget {
+			t.Fatalf("budget %d: %+v", budget, usage)
+		}
+		mustHold(t, media, "stream", data)
+	}
+}
+
+type failedStream struct{ err error }
+
+func (r failedStream) Read([]byte) (int, error) { return 0, r.err }
+
+func TestAFailedStreamReleasesItsLargerBuffer(t *testing.T) {
+	s := openTestStoreWith(t, t.TempDir(), tinystore.Options{Memory: 80 << 10}, Options{})
+	media := openTestBucket(t, s, "media")
+	failure := errors.New("the source stopped")
+	reader := io.MultiReader(bytes.NewReader(randomBytes(6, 512<<10)), failedStream{err: failure})
+	if _, err := media.Put(t.Context(), "stream", reader); !errors.Is(err, failure) {
+		t.Fatalf("failed source: %v", err)
+	}
+	if usage := s.runtime.Memory(); usage.Used != 0 || usage.Peak != 80<<10 {
+		t.Fatalf("failed stream memory: %+v", usage)
+	}
+	mustBeAbsent(t, media, "stream")
+	s.mustHoldFiles(t, 0)
+	if left := s.filesIn(t, uploadsDir); len(left) != 0 {
+		t.Fatalf("failed stream left uploads: %v", left)
+	}
 }
 
 // memory does not follow an object's size: an upload of 64 MiB holds the

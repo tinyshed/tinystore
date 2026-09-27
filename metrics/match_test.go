@@ -54,8 +54,8 @@ func TestTheShortestPostingListDrivesTheMatch(t *testing.T) {
 	if len(ranked) != 2 {
 		t.Fatalf("ranked %d matchers, want 2", len(ranked))
 	}
-	if ranked[0].names != 1 || ranked[1].names != crowd {
-		t.Fatalf("drove from a list of %d with %d behind it, want 1 then %d", ranked[0].names, ranked[1].names, crowd)
+	if ranked[0].seriesCount != 1 || ranked[1].seriesCount != crowd {
+		t.Fatalf("drove from a list of %d with %d behind it, want 1 then %d", ranked[0].seriesCount, ranked[1].seriesCount, crowd)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestPostingCountsRankAboveTheOldProbeCap(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !possible || len(ranked) != 2 || ranked[0].names != 1025 || ranked[1].names != 2048 {
+		if !possible || len(ranked) != 2 || ranked[0].seriesCount != 1025 || ranked[1].seriesCount != 2048 {
 			t.Fatalf("ranked posting counts: %+v, possible %v", ranked, possible)
 		}
 		var name string

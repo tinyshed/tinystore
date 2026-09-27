@@ -23,22 +23,23 @@ import (
 // too; used after either, or after Commit or Abort, it is the context's error
 // or tinystore.ErrClosed. An Upload is one goroutine's.
 type Upload struct {
-	ctx      context.Context
-	bucket   *Bucket
-	call     call
-	mu       sync.Mutex
-	buffer   []byte   // the bytes while they may stay inline, then what carries a Put's bytes to the file
-	probe    [1]byte  // the byte a full buffer reads to learn whether more follow
-	at       lying    // where the bytes are
-	file     *os.File // the file in uploads/, open while bytes go to it
-	id       int64    // the content's id, once it has one
-	hash     hash.Hash
-	written  int64
-	synced   int64 // bytes the file held at its last sync
-	checked  int64 // bytes it held when the disk's free space was last checked
-	ended    error // why the upload ended; nil while it lives
-	reserved *tinystore.Reservation
-	leave    func() // gives back its slot and its place in the store
+	ctx         context.Context
+	bucket      *Bucket
+	call        call
+	mu          sync.Mutex
+	buffer      []byte // the bytes while they may stay inline, then what carries a Put's bytes to the file
+	bufferTried bool
+	probe       [1]byte  // the byte a full buffer reads to learn whether more follow
+	at          lying    // where the bytes are
+	file        *os.File // the file in uploads/, open while bytes go to it
+	id          int64    // the content's id, once it has one
+	hash        hash.Hash
+	written     int64
+	synced      int64 // bytes the file held at its last sync
+	checked     int64 // bytes it held when the disk's free space was last checked
+	ended       error // why the upload ended; nil while it lives
+	reserved    *tinystore.Reservation
+	leave       func() // gives back its slot and its place in the store
 }
 
 // lying is where an upload's bytes are
@@ -71,8 +72,9 @@ func (b *Bucket) Create(ctx context.Context, key string, options ...Option) (*Up
 // its bytes synced and its row committed. Whatever the key held is replaced
 // whole at that moment. Memory does not follow the object's size: 16 KiB hold
 // the bytes while they may stay inline, and past them the bytes go to a file
-// as they arrive. A *bytes.Reader, *bytes.Buffer or *strings.Reader says its
-// own Size.
+// as they arrive. A long stream may use 64 KiB when the store's memory is
+// available immediately. A *bytes.Reader, *bytes.Buffer or *strings.Reader
+// says its own Size.
 func (b *Bucket) Put(ctx context.Context, key string, r io.Reader, options ...Option) (Object, error) {
 	c, err := b.begin(key, "Put", withLength(r, options), putTakes)
 	if err != nil {
@@ -216,6 +218,9 @@ func (u *Upload) readFrom(r io.Reader) error {
 func (u *Upload) room() (space []byte, gathering bool, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if u.ended == nil && u.at == inUploads && u.written >= streamAfter && !u.bufferTried {
+		u.growBuffer()
+	}
 	switch {
 	case u.ended != nil:
 		return nil, false, u.ended
@@ -225,6 +230,18 @@ func (u *Upload) room() (space []byte, gathering bool, err error) {
 		return u.buffer[len(u.buffer):cap(u.buffer)], true, nil
 	}
 	return u.probe[:], false, nil
+}
+
+// reserve both buffers while replacing one; a tight budget keeps streaming with the smaller one
+func (u *Upload) growBuffer() {
+	u.bufferTried = true
+	reserved, err := u.bucket.store.runtime.ReserveNow(streamBuffer)
+	if err != nil {
+		return
+	}
+	u.buffer = make([]byte, 0, streamBuffer)
+	u.reserved.Release()
+	u.reserved = reserved
 }
 
 // took accounts for bytes a read put where room said: in the buffer's free end
@@ -307,7 +324,7 @@ func (u *Upload) spill() error {
 		return err
 	}
 	u.id = id
-	u.file, err = s.root.OpenFile(uploadName(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	u.file, err = s.createUpload(id)
 	if err != nil {
 		return fmt.Errorf("blobs: create %s: %w", uploadName(id), err)
 	}

@@ -37,6 +37,7 @@ type Store struct {
 	runtime     *tinystore.Store
 	dir         string
 	root        *os.Root // blobs/, through which every file is opened, so that a reader shares its deletion
+	nameCalls   nameCalls
 	file        *sqlite.File
 	log         *slog.Logger
 	now         func() time.Time
@@ -75,7 +76,7 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 		return nil, err
 	}
 
-	store.Every("blobs maintenance", maintainEvery, objects.maintainInBackground)
+	store.EveryEngine("blobs", "blobs maintenance", maintainEvery, objects.maintainInBackground)
 	objects.log.Info("opened", "path", dir)
 	return objects, nil
 }

@@ -121,7 +121,11 @@ func (s *Store) shutdown(ctx context.Context) {
 	}
 	err = errors.Join(err, s.lock.Close())
 
-	s.logger.Info("store closed", "dir", s.dir)
+	if err != nil {
+		s.logger.Warn("store closed with errors", "dir", s.dir, "error", err)
+	} else {
+		s.logger.Info("store closed", "dir", s.dir)
+	}
 	s.closeErr = err
 	close(s.done)
 }

@@ -7,6 +7,11 @@ import (
 	"os"
 )
 
+type nameCalls struct{}
+
+func (*nameCalls) Lock()   {}
+func (*nameCalls) Unlock() {}
+
 // syncDirectory makes a directory's names durable: its own fsync
 func syncDirectory(path string) error {
 	dir, err := os.Open(path) //nolint:gosec // a directory of the store's own

@@ -60,7 +60,7 @@ func newHeadBatch(matched []registeredSeries, heads []headSnapshot) headBatch {
 	return batch
 }
 
-// headDescriptor is one head's row before its tail is fetched.
+// lengths are read first so a selected tail is charged before SQLite fetches its bytes
 type headDescriptor struct {
 	id          int64
 	count, size int

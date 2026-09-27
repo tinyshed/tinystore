@@ -59,7 +59,7 @@ func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error
 		return nil, err
 	}
 
-	store.Every("jobs maintenance", maintainEvery, s.maintainInBackground)
+	store.EveryEngine("jobs", "jobs maintenance", maintainEvery, s.maintainInBackground)
 	s.log.Info("opened", "path", path)
 	return s, nil
 }

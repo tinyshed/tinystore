@@ -41,7 +41,7 @@ func OpenCounters(ctx context.Context, state *Store, name string, options ...Cou
 		return nil, err
 	}
 
-	return &Counters{branch: branch{state: state, id: id, name: name, ttl: said.ttl}, memory: held}, nil
+	return &Counters{state: state, id: id, name: name, ttl: said.ttl, memory: held}, nil
 }
 
 // Of is the branch of these counters that owners name, as Bucket.Of names one.
@@ -49,7 +49,7 @@ func (c *Counters) Of(owners ...any) *Counters {
 	return &Counters{branch: c.under(owners), memory: c.memory}
 }
 
-// WithTx is these counters inside tx, as Bucket.WithTx is a bucket.
+// WithTx binds these counters to tx; LoseAtMost counters refuse calls through it.
 func (c *Counters) WithTx(tx *Tx) *Counters {
 	bound := *c
 	bound.tx = tx

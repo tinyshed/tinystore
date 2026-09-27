@@ -1,7 +1,9 @@
 package records
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"math"
@@ -10,6 +12,50 @@ import (
 
 	"github.com/tinyshed/tinystore"
 )
+
+func TestBackgroundFlushSummaryDoesNotEnterRecordsHandler(t *testing.T) {
+	s := openLogging(t, t.TempDir(), Options{})
+	var output bytes.Buffer
+	s.log = slog.New(slog.NewMultiHandler(
+		slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}), s.Handler("diagnostics"),
+	)).With("engine", "records")
+	if err := s.flushInBackground(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output.Bytes(), []byte(`"msg":"flush finished"`)) ||
+		!bytes.Contains(output.Bytes(), []byte(`"engine":"records"`)) {
+		t.Fatalf("missing scoped Debug summary: %s", output.String())
+	}
+	if len(s.queue) != 0 {
+		t.Fatal("records queued its own flush summary")
+	}
+}
+
+func TestAFailedFlushCountsItsDroppedRecordsByReason(t *testing.T) {
+	s := openLogging(t, t.TempDir(), Options{})
+	slog.New(s.Handler("app")).Info("waiting")
+	err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, updateErr := tx.ExecContext(t.Context(), `create trigger refuse_head before insert on heads begin select raise(abort,'refused flush'); end`)
+		return updateErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Flush(t.Context()); err == nil {
+		t.Fatal("flush ignored the injected writer failure")
+	}
+	if stats := s.Stats(); stats.Dropped != 1 || stats.DroppedWrite != 1 ||
+		stats.DroppedFull != 0 || stats.DroppedInvalid != 0 {
+		t.Fatalf("failed flush: %+v", stats)
+	}
+	err = s.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, updateErr := tx.ExecContext(t.Context(), `drop trigger refuse_head`)
+		return updateErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 // openLogging opens a store on the wall clock, the one slog stamps its lines with
 func openLogging(t *testing.T, dir string, options Options) *testStore {
@@ -64,7 +110,8 @@ func TestAFullBufferDropsAndCountsWithoutWaiting(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if stats := s.Stats(); stats.Appended != 2 || stats.Dropped != 3 {
+	if stats := s.Stats(); stats.Appended != 2 || stats.Dropped != 3 || stats.DroppedFull != 3 ||
+		stats.DroppedInvalid != 0 || stats.DroppedWrite != 0 {
 		t.Fatalf("stats %+v", stats)
 	}
 }
@@ -96,7 +143,7 @@ func TestALineOutOfBoundsIsDroppedAndCounted(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if stats := s.Stats(); stats.Dropped != 3 || stats.Appended != 1 {
+	if stats := s.Stats(); stats.Dropped != 3 || stats.DroppedInvalid != 3 || stats.Appended != 1 {
 		t.Fatalf("stats %+v", stats)
 	}
 }

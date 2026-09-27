@@ -156,8 +156,7 @@ func subtreeOf(prefix []byte) (from, to []byte) {
 	return append(slices.Clone(prefix), ownerMark), append(slices.Clone(prefix), keyMark+1)
 }
 
-// deleteRange deletes the rows between from and to with the values they
-// spilled, and returns how many it deleted
+// deleteRange deletes the rows between from and to and their spilled values
 func deleteRange(ctx context.Context, w sqlite.Writer, bucket int64, from, to []byte) error {
 	rows, err := w.QueryContext(ctx, deleteUnder, bucket, from, to)
 	if err != nil {

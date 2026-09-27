@@ -88,7 +88,6 @@ func openTestQueue[V any](t *testing.T, queues *testQueues, name string, options
 	return queue
 }
 
-// mustClaim claims the next due job, which the test expects to be there
 func mustClaim[V any](t *testing.T, queue *Queue[V], options ...ClaimOption) Job[V] {
 	t.Helper()
 	job, found, err := queue.Claim(t.Context(), options...)
@@ -105,7 +104,6 @@ func mustEnqueue[V any](t *testing.T, queue *Queue[V], value V, options ...Enque
 	}
 }
 
-// nothingDue fails the test when a claim finds a job
 func nothingDue[V any](t *testing.T, queue *Queue[V]) {
 	t.Helper()
 	job, found, err := queue.Claim(t.Context())

@@ -23,6 +23,8 @@ const (
 	writeSlots      = 2048        // writes at once: a group of 1024 gathering while one commits
 	uploadSlots     = 1024        // uploads at once; past them an upload waits for a slot
 	inlineSize      = 16 << 10    // a content up to it is a row of bodies: the round's crossing on both systems
+	streamBuffer    = 64 << 10    // a long Put can carry more bytes when the memory is free immediately
+	streamAfter     = 256 << 10   // small files keep the initial buffer
 	idBlock         = 1000        // content ids reserved in one write of meta
 	idsPerDir       = 12          // bits of an id that name its file within its directory: 4,096 a directory
 	syncEvery       = 256 << 20   // an upload's bytes synced this often, so that no commit waits on gigabytes

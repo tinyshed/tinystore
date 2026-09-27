@@ -68,14 +68,14 @@ func main() {
 		}
 		parts := strings.Split(head, ",")
 		measurement, tags := parts[0], parts[1:]
-		for _, field := range strings.Split(fields, ",") {
+		for field := range strings.SplitSeq(fields, ",") {
 			key, raw, ok := strings.Cut(field, "=")
 			if !ok {
 				log.Fatalf("no field value: %s", field)
 			}
 			var value float64
-			if strings.HasSuffix(raw, "i") {
-				n, err := strconv.ParseInt(strings.TrimSuffix(raw, "i"), 10, 64)
+			if before, ok0 := strings.CutSuffix(raw, "i"); ok0 {
+				n, err := strconv.ParseInt(before, 10, 64)
 				if err != nil {
 					log.Fatal(err)
 				}

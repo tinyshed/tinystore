@@ -36,6 +36,7 @@ func (s *Store) handleMaintenanceFailure(ctx context.Context, id int64, phase st
 	}
 	if changed == 1 {
 		s.quarantined.Add(1)
+		s.log.Warn("series suspended", "series_id", id, "phase", phase, "reason", reason)
 	}
 	return changed == 1, nil
 }

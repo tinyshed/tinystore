@@ -333,8 +333,6 @@ func insertSeries(ctx context.Context, tx sqlite.Writer, identity string, ids []
 
 const insertPostingQuery = `insert into postings(label_id,series_id) values(?,?)`
 
-// indexSeries adds the series to the posting list of each of its labels, and
-// counts it there.
 func indexSeries(ctx context.Context, tx sqlite.Writer, id int64, labelIDs []int64) error {
 	for _, labelID := range labelIDs {
 		if _, err := tx.ExecContext(ctx, insertPostingQuery, labelID, id); err != nil {

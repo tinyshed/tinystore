@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
+	"time"
 
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
@@ -49,7 +51,13 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 }
 
 func (s *Store) maintainInBackground(ctx context.Context) error {
-	_, err := s.Maintain(ctx)
+	started := time.Now()
+	done, err := s.Maintain(ctx)
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		s.log.Debug("maintenance finished", "duration", time.Since(started), "expired", done.Expired,
+			"cleared", done.Cleared, "removed", done.Removed, "aborted", done.Aborted,
+			"scrubbed_bytes", done.Scrubbed, "damaged", done.Damaged, "failed", err != nil)
+	}
 	return err
 }
 

@@ -115,18 +115,20 @@ func (e *DamageError) Error() string {
 
 func (e *DamageError) Unwrap() error { return e.Err }
 
-// Stats counts this handle's work. Dropped is what the handler let go: a full
-// buffer, a record out of bounds, a write that failed. ReadBlocks and ReadBytes
+// Stats counts this handle's work. Dropped is the sum of its three reasons:
+// a full buffer, an invalid or out-of-window record, and a failed flush.
+// ReadBlocks and ReadBytes
 // are what reads and follows fetched: blocks and head rows, and their bytes
 // with the segment rows beside them, the figures a Budget bounds. Damaged is
 // how many rows this handle has met that no longer read and are not dropped.
 type Stats struct {
-	Appended, Dropped               uint64
-	SealedSegments, ExpiredSegments uint64
-	MergedSegments                  uint64
-	Queries                         uint64
-	ReadBlocks, ReadBytes           uint64
-	Damaged                         uint64
+	Appended, Dropped                         uint64
+	DroppedFull, DroppedInvalid, DroppedWrite uint64
+	SealedSegments, ExpiredSegments           uint64
+	MergedSegments                            uint64
+	Queries                                   uint64
+	ReadBlocks, ReadBytes                     uint64
+	Damaged                                   uint64
 }
 
 // Maintenance is what one Maintain call did. MergedSegments counts the

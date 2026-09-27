@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -300,9 +301,7 @@ func serve(t *testing.T, method, url string, header http.Header) served {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, values := range header {
-		request.Header[name] = values
-	}
+	maps.Copy(request.Header, header)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)

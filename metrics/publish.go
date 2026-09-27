@@ -182,11 +182,15 @@ func (s *Store) publishBatch(ctx context.Context, staged []stagedPublication, cu
 		return Maintenance{}, nil
 	}
 	var pending Maintenance
+	var suspended []suspendedPublication
 	err := s.file.Update(ctx, func(tx *sql.Tx) error {
 		for _, item := range staged {
-			outcome, err := s.publishIsolated(ctx, tx, item, cutoff)
+			outcome, reason, err := s.publishIsolated(ctx, tx, item, cutoff)
 			if err != nil {
 				return err
+			}
+			if outcome.QuarantinedSeries != 0 {
+				suspended = append(suspended, suspendedPublication{seriesID: item.candidate.seriesID, reason: reason})
 			}
 			pending.SealedBlocks += outcome.SealedBlocks
 			pending.Conflicts += outcome.Conflicts
@@ -197,7 +201,15 @@ func (s *Store) publishBatch(ctx context.Context, staged []stagedPublication, cu
 	if err != nil {
 		return Maintenance{}, err
 	}
+	for _, event := range suspended {
+		s.log.Warn("series suspended", "series_id", event.seriesID, "phase", "publish block", "reason", event.reason)
+	}
 	return pending, nil
+}
+
+type suspendedPublication struct {
+	seriesID int64
+	reason   string
 }
 
 const (
@@ -210,36 +222,36 @@ const (
 // or a corrupt series undoes only its own changes and the batch goes on.
 func (s *Store) publishIsolated(
 	ctx context.Context, tx *sql.Tx, item stagedPublication, cutoff int64,
-) (Maintenance, error) {
+) (Maintenance, string, error) {
 	if _, err := tx.ExecContext(ctx, savepointQuery); err != nil {
-		return Maintenance{}, fmt.Errorf("start series publication: %w", err)
+		return Maintenance{}, "", fmt.Errorf("start series publication: %w", err)
 	}
 	publishErr := s.publishTx(ctx, tx, item.candidate, item.group, cutoff)
 	if publishErr == nil {
 		if _, err := tx.ExecContext(ctx, releaseSavepointQuery); err != nil {
-			return Maintenance{}, fmt.Errorf("finish series publication: %w", err)
+			return Maintenance{}, "", fmt.Errorf("finish series publication: %w", err)
 		}
-		return Maintenance{SealedBlocks: len(item.group.blocks)}, nil
+		return Maintenance{SealedBlocks: len(item.group.blocks)}, "", nil
 	}
 
 	_, rollbackErr := tx.ExecContext(ctx, rollbackSavepointQuery)
 	_, releaseErr := tx.ExecContext(ctx, releaseSavepointQuery)
 	if rollbackErr != nil || releaseErr != nil {
-		return Maintenance{}, errors.Join(publishErr, rollbackErr, releaseErr)
+		return Maintenance{}, "", errors.Join(publishErr, rollbackErr, releaseErr)
 	}
 	switch {
 	case errors.Is(publishErr, ErrConflict):
-		return Maintenance{Conflicts: 1}, nil
+		return Maintenance{Conflicts: 1}, "", nil
 	case errors.Is(publishErr, ErrCorrupt):
-		suspended, err := s.suspendInPublication(ctx, tx, item.candidate.seriesID, publishErr)
-		return Maintenance{QuarantinedSeries: suspended}, err
+		reason := maintenanceFailureReason("publish block", publishErr)
+		suspended, err := s.suspendInPublication(ctx, tx, item.candidate.seriesID, reason)
+		return Maintenance{QuarantinedSeries: suspended}, reason, err
 	default:
-		return Maintenance{}, publishErr
+		return Maintenance{}, "", publishErr
 	}
 }
 
-func (s *Store) suspendInPublication(ctx context.Context, tx *sql.Tx, id int64, cause error) (int, error) {
-	reason := maintenanceFailureReason("publish block", cause)
+func (s *Store) suspendInPublication(ctx context.Context, tx *sql.Tx, id int64, reason string) (int, error) {
 	result, err := tx.ExecContext(ctx, suspendQuery, s.now().UnixMilli(), reason, id)
 	if err != nil {
 		return 0, fmt.Errorf("suspend failed publication: %w", err)

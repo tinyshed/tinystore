@@ -2,6 +2,7 @@ package records
 
 import (
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -52,10 +53,8 @@ var levelKeys = []string{"level", "lvl", "severity", "levelname", "log.level"}
 
 func fieldLevel(fields []Field) (slog.Level, bool) {
 	for _, field := range fields {
-		for _, key := range levelKeys {
-			if field.Key == key {
-				return valueLevel(field.Value)
-			}
+		if slices.Contains(levelKeys, field.Key) {
+			return valueLevel(field.Value)
 		}
 	}
 	return 0, false

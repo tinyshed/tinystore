@@ -42,7 +42,6 @@ type Store struct {
 	finalFlush                                              sync.Once
 }
 
-// the file this engine claims inside the store's directory
 const fileName = "metrics.db"
 
 // Open opens metrics.db inside the store. The store closes it, and unless it
@@ -64,13 +63,12 @@ func Open(ctx context.Context, runtime *tinystore.Store, options Options) (*Stor
 		return nil, err
 	}
 
-	runtime.Every("metrics maintenance", opts.MaintenanceInterval, store.maintainInBackground)
-	runtime.Every("metrics instruments", opts.Flush, store.Flush)
+	runtime.EveryEngine("metrics", "metrics maintenance", opts.MaintenanceInterval, store.maintainInBackground)
+	runtime.EveryEngine("metrics", "metrics instruments", opts.Flush, store.Flush)
 	store.log.Info("opened", "path", path, "suspended", store.quarantined.Load())
 	return store, nil
 }
 
-// openEngine opens and migrates the file, then hands the engine to the store
 func openEngine(ctx context.Context, runtime *tinystore.Store, path string, opts Options) (*Store, error) {
 	f, err := openFile(ctx, path, opts.MaxReaders)
 	if err != nil {
@@ -97,7 +95,14 @@ func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotF
 }
 
 func (s *Store) maintainInBackground(ctx context.Context) error {
-	_, err := s.Maintain(ctx)
+	started := time.Now()
+	done, err := s.Maintain(ctx)
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		s.log.Debug("maintenance finished", "duration", time.Since(started), "sealed_blocks", done.SealedBlocks,
+			"expired_samples", done.ExpiredSamples, "conflicts", done.Conflicts,
+			"quarantined_series", done.QuarantinedSeries, "reclaimed_series", done.ReclaimedSeries,
+			"failed", err != nil)
+	}
 	return err
 }
 

@@ -83,7 +83,6 @@ func (e *KeyError) Unwrap() error { return e.Err }
 // be in the file, and its caller reads it back before writing again.
 var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
 
-// expiryTime is a row's expiry as a caller sees it
 func expiryTime(expires int64, valid bool) time.Time {
 	if !valid {
 		return time.Time{}

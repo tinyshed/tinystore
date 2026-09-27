@@ -164,7 +164,7 @@ func (b *Bucket[V]) ownEnd() []byte {
 	return append(slices.Clone(b.prefix), keyMark+1)
 }
 
-// page turns rows into entries, the next query starting after the last
+// more rows resume after the last returned key
 func (b *Bucket[V]) page(query Query, rows []row, more bool) (Page[V], error) {
 	page := Page[V]{Entries: make([]Entry[V], 0, len(rows)), More: more}
 	for _, found := range rows {
@@ -191,7 +191,6 @@ type row struct {
 	spilled any
 }
 
-// held is the value the row keeps, from spilled when it is there
 func (r row) held() (any, error) {
 	if !r.spill.Valid {
 		return r.value, nil
@@ -212,7 +211,6 @@ func readLive(ctx context.Context, r sqlite.Reader, bucket int64, c call) (row, 
 	return found, err == nil, err
 }
 
-// errPageFull ends a scan's rows once a page holds what it may
 var errPageFull = errors.New("the page is full")
 
 // what a row of a page holds beside its path and its value
@@ -282,7 +280,6 @@ func (b *Bucket[V]) entryInWriter(key string, r row) (entry Entry[V], err error)
 	return b.entryOf(key, r)
 }
 
-// entryOf decodes a row's value into an entry of this bucket
 func (b *Bucket[V]) entryOf(key string, r row) (Entry[V], error) {
 	held, err := r.held()
 	if err != nil {

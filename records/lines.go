@@ -198,8 +198,8 @@ func continues(line []byte) bool {
 		}
 	}
 	name := line
-	if end := bytes.IndexByte(line, ':'); end >= 0 {
-		name = line[:end]
+	if before, _, ok := bytes.Cut(line, []byte{':'}); ok {
+		name = before
 	}
 	for _, c := range name {
 		if !isLetter(c) && !isDigit(c) && c != '.' && c != '_' && c != '$' {

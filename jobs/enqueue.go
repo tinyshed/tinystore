@@ -118,7 +118,6 @@ type enqueued struct {
 	keepDone    bool
 }
 
-// prepare checks a call's options
 func (q *Queue[V]) prepare(options []EnqueueOption) (enqueued, error) {
 	s, err := collectEnqueue(options)
 	e := enqueued{
@@ -210,7 +209,6 @@ func moveKeyTo(ctx context.Context, w sqlite.Writer, queue int64, key string, ne
 	return err
 }
 
-// enqueue writes one job and says whether it added a row
 func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err error) {
 	if !e.key.Valid {
 		return true, insertRow(ctx, w, e)

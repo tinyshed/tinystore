@@ -50,8 +50,11 @@ err = avatars.Of(user.ID).Clear(ctx)                             // the account 
   file is never written again nor given another name.
 - **Memory does not follow size.** An upload holds 16 KiB of the store's
   memory while it may yet be inline; past it the bytes go to its file as they
-  arrive, synced every 256 MiB. `Size(n)` says the stream's length, and a
-  stream shorter or longer is `ErrInvalid`; a `*bytes.Reader`, `*bytes.Buffer`
+  arrive, synced every 256 MiB. After 256 KiB, `Put` tries a 64 KiB transfer
+  buffer once, reserving both buffers during the change (80 KiB). If that
+  memory is not free immediately, it keeps the 16 KiB buffer without waiting.
+  `Create`/`Write` needs only the initial buffer. `Size(n)` says the stream's
+  length; a shorter or longer stream is `ErrInvalid`. A `*bytes.Reader`, `*bytes.Buffer`
   or `*strings.Reader` says its own. `MaxSize(n)` bounds a bucket's objects and
   `Options.KeepFree` what an upload leaves free on the disk, 1 GiB unless it
   says, checked at the start for a declared size and every 64 MiB; either

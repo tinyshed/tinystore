@@ -243,7 +243,6 @@ func (c cell) live(now int64) bool {
 	return c.found && !c.hidden && (!c.expires.Valid || c.expires.Int64 > now)
 }
 
-// cellWrite is what a write gave a key
 type cellWrite struct {
 	version int64
 	expires sql.NullInt64
