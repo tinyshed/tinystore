@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // a Scan reads a branch's own keys, in the byte order of their text, a page
@@ -107,6 +109,47 @@ func pageSizes(t *testing.T, page Page[[]byte], first int) []int {
 		t.Fatalf("page %d holds %d bytes of values, over %d", first, held, scanBytes)
 	}
 	return sizes
+}
+
+// BenchmarkGetBesideClearMarks reads one key of 64 bytes under one owner,
+// beside the marks of Clears of up to 1000 other branches, each cleared after
+// the key was written, so that each passes the version test: what a point read
+// pays for the marks of its bucket
+func BenchmarkGetBesideClearMarks(b *testing.B) {
+	for _, marks := range []int{0, 10, 100, 1000} {
+		b.Run(fmt.Sprintf("marks=%d", marks), func(b *testing.B) {
+			state := openBenchmarkStore(b)
+			values, err := OpenBucket[string](b.Context(), state, "values")
+			if err != nil {
+				b.Fatal(err)
+			}
+			live := values.Of("live")
+			if err = live.Set(b.Context(), "key", strings.Repeat("v", 64)); err != nil {
+				b.Fatal(err)
+			}
+			err = state.file.UpdatePrepared(b.Context(), func(w sqlite.Writer) error {
+				for i := range marks {
+					other := appendOwner(nil, fmt.Sprintf("cleared-%06d", i))
+					if _, markErr := w.ExecContext(b.Context(), markCleared, values.id, other,
+						state.revision.Load()+1); markErr != nil {
+						return markErr
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				value, found, getErr := live.Get(b.Context(), "key")
+				if getErr != nil || !found || len(value) != 64 {
+					b.Fatalf("the key beside %d marks: %q, %v, %v", marks, value, found, getErr)
+				}
+			}
+		})
+	}
 }
 
 // All walks every key of a branch across pages, holds no snapshot between

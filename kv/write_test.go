@@ -317,12 +317,15 @@ func BenchmarkRandomSetsByWriterCache(b *testing.B) {
 }
 
 func overwriteWithWriterCache(b *testing.B, count, mib int) {
-	state := openTestState(b, b.TempDir())
-	sessions := openTestBucket[string](b, state, "sessions", DefaultTTL(time.Hour))
+	state := openBenchmarkStore(b)
+	sessions, err := OpenBucket[string](b.Context(), state, "sessions", DefaultTTL(time.Hour))
+	if err != nil {
+		b.Fatal(err)
+	}
 	keys, value := overwrittenKeysOf(b, state, sessions, count), strings.Repeat("v", 64)
-	err := state.file.UpdatePrepared(b.Context(), func(w sqlite.Writer) error {
-		_, err := w.ExecContext(b.Context(), fmt.Sprintf("pragma cache_size(-%d)", mib<<10))
-		return err
+	err = state.file.UpdatePrepared(b.Context(), func(w sqlite.Writer) error {
+		_, pragmaErr := w.ExecContext(b.Context(), fmt.Sprintf("pragma cache_size(-%d)", mib<<10))
+		return pragmaErr
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -350,7 +353,7 @@ func overwriteWithWriterCache(b *testing.B, count, mib int) {
 
 // overwrittenKeysOf writes the keys an overwrite chooses among, a thousand a
 // transaction, and returns them
-func overwrittenKeysOf(b *testing.B, state *testState, sessions *Bucket[string], count int) []string {
+func overwrittenKeysOf(b *testing.B, state *Store, sessions *Bucket[string], count int) []string {
 	b.Helper()
 	keys := make([]string, count)
 	for i := range keys {
@@ -374,7 +377,7 @@ func overwrittenKeysOf(b *testing.B, state *testState, sessions *Bucket[string],
 
 // reportWriterCache reports the Sets a second and what the writer's cache
 // missed and spilled for each of them
-func reportWriterCache(b *testing.B, state *testState, before sqlite.WriterCounters) {
+func reportWriterCache(b *testing.B, state *Store, before sqlite.WriterCounters) {
 	b.Helper()
 	after, err := state.file.WriterCounters(b.Context())
 	if err != nil {

@@ -352,6 +352,18 @@ func BenchmarkChangesInMemory(b *testing.B) {
 // benchmarkCounters opens LoseAtMost counters of an hour on a Manual store
 func benchmarkCounters(b *testing.B) *Counters {
 	b.Helper()
+	attempts, err := OpenCounters(b.Context(), openBenchmarkStore(b), "attempts", LoseAtMost(time.Hour))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	return attempts.Of("ip")
+}
+
+// openBenchmarkStore opens kv on a Manual store of its own; it uses nothing a
+// test helper gives, so that a benchmark runs against an earlier kv as it is
+func openBenchmarkStore(b *testing.B) *Store {
+	b.Helper()
 	runtime, err := tinystore.Open(b.Context(), b.TempDir(), tinystore.Options{Manual: true})
 	if err != nil {
 		b.Fatal(err)
@@ -361,12 +373,7 @@ func benchmarkCounters(b *testing.B) *Counters {
 	if err != nil {
 		b.Fatal(err)
 	}
-	attempts, err := OpenCounters(b.Context(), state, "attempts", LoseAtMost(time.Hour))
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.ReportAllocs()
-	return attempts.Of("ip")
+	return state
 }
 
 // Close writes what memory holds, so a store closed as it should be loses

@@ -43,27 +43,39 @@ func TestKVClearMarks(t *testing.T) {
 	kvMeasuring(t)
 	for _, depth := range []int{1, 3} {
 		for _, marks := range []int{0, 10, 100, 1000} {
-			file := kvMarksFile(t, depth, marks)
-			variants := kvMarkVariants(depth)
-			for _, variant := range variants {
-				kvCheckMarkVariant(t, file, variant, depth)
-			}
-			times := map[string][]time.Duration{}
-			for range 3 {
-				for _, variant := range variants {
-					perGet, err := kvTimeMarkVariant(t.Context(), file, variant, depth, kvSeconds()/3)
-					if err != nil {
-						t.Fatalf("%s: %v", variant.name, err)
-					}
-					times[variant.name] = append(times[variant.name], perGet)
-				}
-			}
-			for _, variant := range variants {
-				slices.Sort(times[variant.name])
-				t.Logf("depth=%d marks=%d variant=%s get=%v runs=%v", depth, marks, variant.name,
-					times[variant.name][1], times[variant.name])
-			}
+			t.Run(fmt.Sprintf("depth=%d/marks=%d", depth, marks), func(t *testing.T) {
+				kvMeasureMarks(t, depth, marks)
+			})
 		}
+	}
+}
+
+// kvMeasureMarks times every variant a third of the load at a time, three
+// times over, after a warming second, so that no variant has the file to
+// itself first
+func kvMeasureMarks(t *testing.T, depth, marks int) {
+	file := kvMarksFile(t, depth, marks)
+	variants := kvMarkVariants(depth)
+	for _, variant := range variants {
+		kvCheckMarkVariant(t, file, variant, depth)
+		if _, err := kvTimeMarkVariant(t.Context(), file, variant, depth, time.Second/4); err != nil {
+			t.Fatal(err)
+		}
+	}
+	times := map[string][]time.Duration{}
+	for range 3 {
+		for _, variant := range variants {
+			perGet, err := kvTimeMarkVariant(t.Context(), file, variant, depth, kvSeconds()/3)
+			if err != nil {
+				t.Fatalf("%s: %v", variant.name, err)
+			}
+			times[variant.name] = append(times[variant.name], perGet)
+		}
+	}
+	for _, variant := range variants {
+		slices.Sort(times[variant.name])
+		t.Logf("depth=%d marks=%d variant=%s get=%v runs=%v", depth, marks, variant.name,
+			times[variant.name][1], times[variant.name])
 	}
 }
 
@@ -149,6 +161,8 @@ func kvMarkVariants(depth int) []kvMarkVariant {
 			and m.prefix in (select unhex(value) from json_each(?4)) and m.cleared >= c.version)`,
 			bound: kvJSONPrefixes,
 		},
+		{name: "lengths-8", test: kvLengths(8), bound: kvPrefixLengths(8)},
+		{name: "guarded-lengths-8", test: kvGuarded + kvLengths(8) + ")", bound: kvPrefixLengths(8)},
 		{name: "guarded-in-8", test: kvGuarded + kvInList(8) + ")", bound: padded(8)},
 		{name: "guarded-in-depth", test: kvGuarded + kvInList(depth+1) + ")", bound: padded(depth + 1)},
 		{
@@ -156,6 +170,30 @@ func kvMarkVariants(depth int) []kvMarkVariant {
 			and m.prefix in (select unhex(value) from json_each(?4)) and m.cleared >= c.version))`,
 			bound: kvJSONPrefixes,
 		},
+	}
+}
+
+// kvLengths looks up each branch above a row by its prefix's length, bound as
+// an integer rather than as the prefix's bytes: a prefix of the row's own path
+//
+//	01 tenant-7 00 02 key, lengths 0 and 10 → x'' and 01 tenant-7 00
+func kvLengths(count int) string {
+	var tests []string
+	for i := range count {
+		tests = append(tests, fmt.Sprintf(`exists (select 1 from branches as m where m.bucket = c.bucket
+			and m.prefix = substr(c.path, 1, ?%d) and m.cleared >= c.version)`, 4+i))
+	}
+	return "(" + strings.Join(tests, " or ") + ")"
+}
+
+// kvPrefixLengths binds the lengths of a row's branches, padded with nulls
+func kvPrefixLengths(count int) func([][]byte) []any {
+	return func(ancestors [][]byte) []any {
+		bound := make([]any, count)
+		for i, ancestor := range ancestors[:min(len(ancestors), count)] {
+			bound[i] = len(ancestor)
+		}
+		return bound
 	}
 }
 
