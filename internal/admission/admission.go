@@ -6,63 +6,61 @@ package admission
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Gate counts the work inside an engine. Its zero value is open.
 type Gate struct {
-	mu      sync.Mutex
-	active  int
-	closing bool
-	drained chan struct{}
+	state    atomic.Int64 // the closing bit, and below it the work inside
+	making   sync.Mutex   // makes drained, which the zero Gate lacks
+	drained  chan struct{}
+	finished sync.Once
 }
 
+// the bit of a gate's state that says Close was called
+const closing = 1 << 62
+
 // Enter lets one piece of work in, or refuses it with closed once Close was
-// called; a caller that entered calls Leave once
+// called; a caller that entered calls Leave once. It counts itself in before
+// it looks, so that entering is one atomic add and never a lock that every
+// call of the engine would queue on.
 func (g *Gate) Enter(ctx context.Context, closed error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.closing {
+	if g.state.Add(1)&closing != 0 {
+		g.Leave()
 		return closed
 	}
-	g.active++
 	return nil
 }
 
 func (g *Gate) Leave() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.active--
-	if g.closing && g.active == 0 {
-		close(g.drainedChannel())
+	if g.state.Add(-1) == closing {
+		g.finish()
 	}
 }
 
 // Close refuses new work and returns what closes when the work already in has
 // left; first says this call was the one that closed the gate
 func (g *Gate) Close() (drained <-chan struct{}, first bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	drainedChannel := g.drainedChannel()
-	if g.closing {
-		return drainedChannel, false
-	}
-	g.closing = true
-	if g.active == 0 {
-		close(drainedChannel)
-	}
-	return drainedChannel, true
-}
-
-// drainedChannel is made on first use, so that the zero Gate is ready; the
-// caller holds mu
-func (g *Gate) drainedChannel() chan struct{} {
+	g.making.Lock()
 	if g.drained == nil {
 		g.drained = make(chan struct{})
 	}
-	return g.drained
+	g.making.Unlock()
+
+	before := g.state.Or(closing)
+	if before == 0 {
+		g.finish()
+	}
+	return g.drained, before&closing == 0
+}
+
+// finish closes drained once the last work has left a closing gate; a refused
+// Enter counts itself in and out too, so that more than one may find it empty
+func (g *Gate) finish() {
+	g.finished.Do(func() { close(g.drained) })
 }
 
 // Slots bounds how many of one kind of work run at once; a caller waiting for

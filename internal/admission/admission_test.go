@@ -3,6 +3,7 @@ package admission
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,6 +32,42 @@ func TestAClosedGateRefusesWorkAndDrainsWhenTheWorkLeaves(t *testing.T) {
 	<-drained
 	if again, first := gate.Close(); first || again != drained {
 		t.Fatal("a second Close closed the gate again")
+	}
+}
+
+// work entering and leaving from many goroutines while the gate closes is
+// either refused or counted, and the gate drains once all it counted left
+func TestAGateClosingBesideWorkDrainsOnceItsWorkHasLeft(t *testing.T) {
+	for range 100 {
+		var gate Gate
+		var inside sync.WaitGroup
+		start := make(chan struct{})
+		for range 16 {
+			inside.Go(func() {
+				<-start
+				for range 100 {
+					if gate.Enter(t.Context(), errClosed) == nil {
+						gate.Leave()
+					}
+				}
+			})
+		}
+		if err := gate.Enter(t.Context(), errClosed); err != nil {
+			t.Fatal(err)
+		}
+		close(start)
+		drained, _ := gate.Close()
+		select {
+		case <-drained:
+			t.Fatal("drained while work was in")
+		default:
+		}
+		gate.Leave()
+		inside.Wait()
+		<-drained
+		if err := gate.Enter(t.Context(), errClosed); !errors.Is(err, errClosed) {
+			t.Fatalf("work entered a drained gate: %v", err)
+		}
 	}
 }
 
