@@ -123,3 +123,4 @@ fetch and normalise them.
 | | |
 |---|---|
 | [jobs-mechanics-2026-09-27.md](jobs-mechanics-2026-09-27.md) | what jobs' mechanics cost before the storage is settled: a million jobs due in one minute drained from four layouts, where a lease lives, the file by object, values in the row and spilled, grouped Enqueues, a Work loop and its wake-up, a handler's own writes, and raw Claim and Ack |
+| [jobs-engine-2026-09-27.md](jobs-engine-2026-09-27.md) | the engine under a burst: a Work loop that wrote twice for a job fixed, two jobs a worker, 350 to 41,820 jobs a second from 1 to 512 workers; a random key halving a burst, keys kept apart in a prototype 2.6 times faster; a million-job queue opened in 110 ms; sqldb's grouped inserts at 63,727 a second |
