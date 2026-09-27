@@ -376,6 +376,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
 | engines never import each other                     | `TestEnginesDoNotImportEachOther`, over every engine package                    |
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
+| an application's writes share a commit, fail alone  | `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone` |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |

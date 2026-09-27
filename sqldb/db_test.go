@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 
@@ -131,6 +133,69 @@ func TestTxCommitsOnNilAndRollsBackOnErrorOrPanic(t *testing.T) {
 	}
 	if count, _ := Scalar[int](ctx, db, `select count(*) from notes`); count != 2 {
 		t.Fatalf("committed %d rows, want 2", count)
+	}
+}
+
+// statements from many goroutines share a commit, and one that fails rolls
+// back alone
+func TestExecsShareACommitAndFailAlone(t *testing.T) {
+	db := openNotes(t)
+	ctx := t.Context()
+	before, err := db.file.WriterCounters(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 64
+	errs := make([]error, writers+1)
+	var wg sync.WaitGroup
+	for n := range writers {
+		wg.Go(func() {
+			_, errs[n] = db.Exec(ctx, `insert into notes (id, title) values (?, ?)`, n+1, fmt.Sprint("note ", n))
+		})
+	}
+	wg.Go(func() { _, errs[writers] = db.Exec(ctx, `insert into notes (id, title) values (1000, null)`) })
+	wg.Wait()
+
+	if err = errors.Join(errs[:writers]...); err != nil || errs[writers] == nil {
+		t.Fatalf("the writes answered %v, the failing one %v", err, errs[writers])
+	}
+	count, err := Scalar[int](ctx, db, `select count(*) from notes`)
+	if err != nil || count != writers {
+		t.Fatalf("%d notes after %d writes: %v", count, writers, err)
+	}
+	after, err := db.file.WriterCounters(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commits := after.Commits - before.Commits; commits > writers/4 {
+		t.Fatalf("%d writes took %d commits", writers+1, commits)
+	}
+}
+
+// throughNil takes its columns through an embedded pointer, which is nil in a
+// new value, so reflection panics reaching them
+type throughNil struct{ *note }
+
+// a panic inside a grouped statement's own work rolls back that statement
+// alone and goes on in its caller's goroutine, whichever goroutine ran it, and
+// the writer takes the next write
+func TestAPanicInsideAWriteRollsBackItsStatementAlone(t *testing.T) {
+	db := openNotes(t)
+	ctx := t.Context()
+	func() {
+		defer func() {
+			if recovered := fmt.Sprint(recover()); !strings.Contains(recovered, "nil pointer to embedded struct") {
+				t.Fatalf("the caller recovered %v", recovered)
+			}
+		}()
+		_, _ = ExecOne[throughNil](ctx, db, `insert into notes (id, title) values (7, 'lost') returning id, title`)
+	}()
+	if _, err := db.Exec(ctx, `insert into notes (title) values ('after')`); err != nil {
+		t.Fatalf("a write after the panic: %v", err)
+	}
+	if count, err := Scalar[int](ctx, db, `select count(*) from notes`); err != nil || count != 1 {
+		t.Fatalf("%d notes after a panicked write and a good one: %v", count, err)
 	}
 }
 

@@ -32,19 +32,27 @@ err = app.Tx(ctx, func(tx *sqldb.Tx) error {
 ## Contracts
 
 - What a call's name starts with says where it runs. `Exec`, `ExecOne`,
-  `ExecAll` and `ExecScalar` may write and run on the file's one writer, each
-  in a transaction of its own unless given a `*Tx`. `One`, `All` and `Scalar`
-  read, each from its own snapshot, on readers that refuse to write: a write
-  sent to them fails before writing anything, with `tinystore.ErrInvalid`
-  naming the call to use.
+  `ExecAll` and `ExecScalar` may write and run on the file's one writer. `One`,
+  `All` and `Scalar` read, each from its own snapshot, on readers that refuse
+  to write: a write sent to them fails before writing anything, with
+  `tinystore.ErrInvalid` naming the call to use.
+- A write returns once it is durable. Writes from many goroutines wait for the
+  writer together and commit in one transaction, each in a savepoint, with
+  one fsync: a statement that fails rolls back alone, a caller whose context
+  ends before its statement starts writes nothing, and a statement that has
+  started finishes with its group. A group whose commit fails answers
+  `sqldb.ErrOutcomeUnknown`, and its caller reads back before writing again.
+  A panic while an `Exec` form reads its rows into their destination rolls
+  back its statement alone and goes on in the caller's goroutine.
 - `One` and `ExecOne`: no row is `sql.ErrNoRows`, two are `ErrManyRows`.
   `Scalar` reads one column; asked for a struct it is `ErrShape`, as is a
   column no field takes.
 - A struct takes each column by its `db` tag, or by its field name in
   snake_case (`CreatedAt` → `created_at`); embedded structs' fields count, and
   `db:"-"` skips a field. `time.Time` and any `sql.Scanner` are one column.
-- `Tx`: nil commits, an error or a panic rolls back. Calls inside take the
-  `*Tx`, not the `*DB`.
+- `Tx` is a transaction of its own, run on the caller's goroutine: nil
+  commits, an error or a panic rolls back. Calls inside take the `*Tx`, not the
+  `*DB`.
 - Migrations are the `*.sql` files of the given `fs.FS`, applied in name order,
   all pending ones in one transaction, their checksums verified on every open.
   A migration changed after it was applied, a database newer than the binary's

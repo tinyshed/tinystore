@@ -17,6 +17,14 @@ import (
 // sqlApplicationID is "TSQL", the SQLite application id that claims a file for this engine
 const sqlApplicationID = 0x5453514c
 
+// ErrOutcomeUnknown is a write whose group's commit failed: it may or may not
+// be in the file, and its caller reads it back before writing again.
+var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
+
+// errPanicked rolls back the statement whose reading panicked; the panic goes
+// on in its caller's goroutine
+var errPanicked = errors.New("sqldb: a write panicked")
+
 // readers is each database's pool of read connections
 const readers = 4
 
@@ -88,7 +96,11 @@ func (d *DB) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, 
 	return tinystore.SnapshotFile{Name: fileName(d.name), Engine: "sql", Schema: schema}, nil
 }
 
-// Exec runs one statement on the writer, in a transaction of its own.
+// Exec runs one statement on the file's one writer. Statements from many
+// goroutines commit together, each in a savepoint of one transaction, with one
+// fsync: one that fails rolls back alone, a caller whose context ends before
+// its statement starts writes nothing, and a group whose commit fails answers
+// ErrOutcomeUnknown.
 func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	var result sql.Result
 	err := d.write(ctx, func(q querier) (err error) {
@@ -98,10 +110,16 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 	return result, err
 }
 
-// Tx runs work in one writer transaction: nil commits, an error or a panic
-// rolls back. Every call inside it takes tx, not the DB.
+// Tx runs work in one writer transaction of its own, on the caller's
+// goroutine: nil commits, an error or a panic rolls back. Every call inside it
+// takes tx, not the DB.
 func (d *DB) Tx(ctx context.Context, work func(tx *Tx) error) error {
-	return d.write(ctx, func(q querier) error { return work(&Tx{q: q}) })
+	if err := d.enter(); err != nil {
+		return err
+	}
+	defer d.running.Done()
+	err := d.file.Update(ctx, func(tx *sql.Tx) error { return work(&Tx{q: tx}) })
+	return d.explain(err)
 }
 
 // Close waits for the calls in flight and closes the file. The store calls it:
@@ -140,12 +158,26 @@ func (d *DB) read(ctx context.Context, work func(querier) error) error {
 	return d.explain(err)
 }
 
+// write runs one statement's work grouped with the writes other goroutines
+// are waiting to commit, which may run it on theirs: a panic reading its rows
+// rolls back its savepoint alone and goes on in its caller's goroutine
 func (d *DB) write(ctx context.Context, work func(querier) error) error {
 	if err := d.enter(); err != nil {
 		return err
 	}
 	defer d.running.Done()
-	err := d.file.Update(ctx, func(tx *sql.Tx) error { return work(tx) })
+	var panicked any
+	err := d.file.UpdateGrouped(ctx, 0, func(w sqlite.Writer) (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicked, err = recovered, errPanicked
+			}
+		}()
+		return work(w)
+	})
+	if panicked != nil {
+		panic(panicked)
+	}
 	return d.explain(err)
 }
 
