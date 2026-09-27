@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -45,8 +46,16 @@ type testQueues struct {
 
 func openTestQueues(t *testing.T, dir string) *testQueues {
 	t.Helper()
+	return openTestQueuesWith(t, dir, tinystore.Options{})
+}
+
+// openTestQueuesWith opens the queues on a store with options, Manual and on
+// the test's clock
+func openTestQueuesWith(t *testing.T, dir string, options tinystore.Options) *testQueues {
+	t.Helper()
 	clock := &testClock{now: testStart}
-	runtime, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true, Clock: clock.Now})
+	options.Manual, options.Clock = true, clock.Now
+	runtime, err := tinystore.Open(t.Context(), dir, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,5 +234,55 @@ func TestCloseGivesRunningJobsBackUncounted(t *testing.T) {
 	}
 	if job := mustClaim(t, queue); job.Attempt != 1 {
 		t.Fatalf("the next claim is attempt %d", job.Attempt)
+	}
+}
+
+// every call that holds a value waits until the store's memory has room for
+// it and gives the room back when it is done: an Enqueue while it waits for the
+// writer, a Get or a Scan while it reads, a handler while it runs
+func TestStoreMemoryBoundsEnqueuesReadsAndHandlers(t *testing.T) {
+	const capacity = 8 << 20
+	queues := openTestQueuesWith(t, t.TempDir(), tinystore.Options{Memory: capacity})
+	queue := openTestQueue[[]byte](t, queues, "uploads")
+	upload := bytes.Repeat([]byte("u"), 600_000)
+	mustEnqueue(t, queue, upload, Key("first"))
+	ran := 0
+	work := map[string]func(context.Context) error{
+		"enqueue": func(ctx context.Context) error { return queue.Enqueue(ctx, upload, Key("second")) },
+		"get": func(ctx context.Context) error {
+			_, _, err := queue.Get(ctx, "first")
+			return err
+		},
+		"scan": func(ctx context.Context) error {
+			_, err := queue.Scan(ctx, Query{})
+			return err
+		},
+		"work": func(ctx context.Context) error {
+			return queue.Work(ctx, func(context.Context, Job[[]byte]) error {
+				ran++
+				return nil
+			}, UntilIdle())
+		},
+	}
+	for _, name := range []string{"enqueue", "get", "scan", "work"} {
+		release, err := queues.runtime.Reserve(t.Context(), capacity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		if err = work[name](short); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s while the store's memory is taken: %v", name, err)
+		}
+		cancel()
+		release()
+		if err = work[name](t.Context()); err != nil {
+			t.Fatalf("%s once the memory is free: %v", name, err)
+		}
+		if usage := queues.runtime.Memory(); usage.Used != 0 {
+			t.Fatalf("%s kept %d bytes", name, usage.Used)
+		}
+	}
+	if ran != 2 {
+		t.Fatalf("the handler ran %d times, not once an upload", ran)
 	}
 }

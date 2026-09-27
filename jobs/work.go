@@ -49,17 +49,23 @@ type workLoop[V any] struct {
 	handle   func(context.Context, Job[V]) error
 	settings workSettings
 	hold     int                 // jobs the loop may hold: running, or claimed for a worker
-	hand     chan Job[V]         // claimed jobs, for the workers
+	hand     chan handed[V]      // claimed jobs, for the workers
 	finished chan settlement     // what each handler's return says
 	holding  map[*lease]struct{} // the leases of the jobs it holds, which it extends
 	pending  []settlement
+}
+
+// handed is a claimed job on its way to a worker, which reads its value
+type handed[V any] struct {
+	job Job[V]
+	row claimedRow
 }
 
 func newWorkLoop[V any](q *Queue[V], handle func(context.Context, Job[V]) error, settings workSettings) *workLoop[V] {
 	hold := settings.workers
 	return &workLoop[V]{
 		q: q, handle: handle, settings: settings, hold: hold,
-		hand: make(chan Job[V], hold), finished: make(chan settlement, hold), holding: map[*lease]struct{}{},
+		hand: make(chan handed[V], hold), finished: make(chan settlement, hold), holding: map[*lease]struct{}{},
 	}
 }
 
@@ -69,8 +75,8 @@ func (l *workLoop[V]) run(ctx context.Context) error {
 	var workers sync.WaitGroup
 	for range l.settings.workers {
 		workers.Go(func() {
-			for job := range l.hand {
-				l.finished <- l.runOne(handlers, job)
+			for claimed := range l.hand {
+				l.finished <- l.runOne(handlers, claimed)
 			}
 		})
 	}
@@ -108,11 +114,11 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		l.dispatch(result.claimed, now)
+		l.dispatch(result.claimed)
 		if want > 0 && !result.full {
 			l.q.state.alarm.set(result.next)
 		}
-		if l.settings.untilIdle && len(l.holding) == 0 && len(l.pending) == 0 && (want == 0 || !result.full) {
+		if l.settings.untilIdle && l.idle(now) {
 			return nil
 		}
 		if want > 0 && result.full {
@@ -120,6 +126,13 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 		}
 		l.wait(ctx, now)
 	}
+}
+
+// idle says the loop holds nothing, has nothing to write, and no job is due:
+// a loop whose workers were all busy has not asked the file, and its alarm,
+// which a claim that came back short set, still says a job may be due
+func (l *workLoop[V]) idle(now int64) bool {
+	return len(l.holding) == 0 && len(l.pending) == 0 && !l.q.state.alarm.due(now)
 }
 
 func (l *workLoop[V]) stopped(ctx context.Context) error {
@@ -131,14 +144,26 @@ func (l *workLoop[V]) stopped(ctx context.Context) error {
 	}
 }
 
-// runOne runs the handler on one job and says how to settle it
-func (l *workLoop[V]) runOne(handlers context.Context, job Job[V]) settlement {
+// runOne reads a job's value once the store's memory holds room for it, runs
+// the handler on it and says how to settle it; the room is given back when the
+// handler returns
+func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settlement {
+	job := claimed.job
 	if handlers.Err() != nil {
 		return settlement{lease: job.lease, how: givenBack}
 	}
+	release, err := l.q.store.reserve(handlers, claimed.row.size)
+	if err != nil {
+		return unstarted(handlers, job, err)
+	}
+	defer release()
+	if job.Value, err = l.q.valueOf(handlers, claimed.row); err != nil {
+		return unstarted(handlers, job, err)
+	}
+
 	ctx, cancel := context.WithTimeout(handlers, l.settings.timeout)
 	defer cancel()
-	err := l.call(ctx, job)
+	err = l.call(ctx, job)
 	switch {
 	case job.lease.isSettled():
 		return settlement{lease: job.lease}
@@ -146,6 +171,19 @@ func (l *workLoop[V]) runOne(handlers context.Context, job Job[V]) settlement {
 		return settlement{lease: job.lease, how: givenBack}
 	case err == nil:
 		return settlement{lease: job.lease, how: acked}
+	}
+	return settlement{lease: job.lease, how: retried, cause: err}
+}
+
+// unstarted settles a job whose handler never ran: a value that no longer
+// reads fails it for good, a stopping loop gives it back, and anything else
+// costs the attempt
+func unstarted[V any](handlers context.Context, job Job[V], err error) settlement {
+	switch {
+	case errors.Is(err, errUnreadable):
+		return settlement{lease: job.lease, how: failedForGood, cause: err}
+	case handlers.Err() != nil:
+		return settlement{lease: job.lease, how: givenBack}
 	}
 	return settlement{lease: job.lease, how: retried, cause: err}
 }
@@ -258,7 +296,7 @@ func settleAll(ctx context.Context, w sqlite.Writer, pending []settlement, now i
 		result, err := s.write(ctx, w, now)
 		switch {
 		case errors.Is(err, tinystore.ErrConflict):
-			done[i] = settled{}
+			done[i] = settled{lost: true}
 		case err != nil:
 			return nil, err
 		default:
@@ -268,30 +306,29 @@ func settleAll(ctx context.Context, w sqlite.Writer, pending []settlement, now i
 	return done, nil
 }
 
-// settled follows in memory what the written settlements changed
+// settled follows in memory what the written settlements changed. A lease lost
+// while its handler runs is let go and no longer extended, but still holds its
+// worker until the handler returns
 func (l *workLoop[V]) settled(done []settled) {
 	for i, s := range l.pending {
 		done[i].apply(l.q.state)
-		if s.how != extended {
+		switch {
+		case s.how != extended:
 			s.lease.markSettled()
 			delete(l.holding, s.lease)
+		case done[i].lost:
+			s.lease.markLost()
 		}
 	}
 	l.pending = l.pending[:0]
 }
 
-// dispatch hands claimed jobs to the workers; a value that no longer decodes
-// fails its job for good in the next write
-func (l *workLoop[V]) dispatch(claimed []claimedRow, now int64) {
-	until := now + l.q.state.policy.lease.Milliseconds()
-	for _, c := range claimed {
-		job, err := l.q.jobOf(c, until)
+// dispatch hands claimed jobs to the workers, which read their values
+func (l *workLoop[V]) dispatch(claimed []claimedRow) {
+	for _, row := range claimed {
+		job := l.q.jobOf(row)
 		l.holding[job.lease] = struct{}{}
-		if err != nil {
-			l.pending = append(l.pending, settlement{lease: job.lease, how: failedForGood, cause: err})
-			continue
-		}
-		l.hand <- job
+		l.hand <- handed[V]{job: job, row: row}
 	}
 }
 
@@ -324,9 +361,9 @@ func (l *workLoop[V]) nextExtension(now int64) (time.Duration, bool) {
 	first, any := int64(0), false
 	for held := range l.holding {
 		held.mu.Lock()
-		due := held.until - half
+		due, settled := held.until-half, held.settled
 		held.mu.Unlock()
-		if !any || due < first {
+		if !settled && (!any || due < first) {
 			first, any = due, true
 		}
 	}
@@ -338,8 +375,8 @@ func (l *workLoop[V]) nextExtension(now int64) (time.Duration, bool) {
 func (l *workLoop[V]) giveBackUnstarted() {
 	for {
 		select {
-		case job := <-l.hand:
-			l.pending = append(l.pending, settlement{lease: job.lease, how: givenBack})
+		case claimed := <-l.hand:
+			l.pending = append(l.pending, settlement{lease: claimed.job.lease, how: givenBack})
 		default:
 			return
 		}

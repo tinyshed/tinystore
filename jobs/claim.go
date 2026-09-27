@@ -92,6 +92,7 @@ type lease struct {
 	mu      sync.Mutex
 	until   int64
 	settled bool
+	lost    bool // another claim, or a Cancel, took the job after the lease ended
 }
 
 // how a lease is settled
@@ -119,7 +120,9 @@ func (l *lease) settleNow(ctx context.Context, s settlement) error {
 	if l == nil {
 		return errNotClaimed
 	}
-	if l.isSettled() {
+	if settled, lost := l.state(); lost {
+		return errLeaseLost
+	} else if settled {
 		return errSettled
 	}
 	s.lease = l
@@ -145,9 +148,14 @@ func (l *lease) settleNow(ctx context.Context, s settlement) error {
 }
 
 func (l *lease) isSettled() bool {
+	settled, _ := l.state()
+	return settled
+}
+
+func (l *lease) state() (settled, lost bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.settled
+	return l.settled, l.lost
 }
 
 func (l *lease) markSettled() {
@@ -156,11 +164,18 @@ func (l *lease) markSettled() {
 	l.settled = true
 }
 
+func (l *lease) markLost() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.settled, l.lost = true, true
+}
+
 // settled is what a settlement changed that memory follows once it commits
 type settled struct {
 	gone   bool  // the job left the queue's rows
 	due    int64 // when it is due again, zero when it is not
 	failed string
+	lost   bool // the lease was no longer the settlement's: nothing was written
 }
 
 func (d settled) apply(q *queueState) {
@@ -172,6 +187,9 @@ func (d settled) apply(q *queueState) {
 	}
 	if d.failed != "" {
 		q.failures.observe(time.Now(), d.failed)
+	}
+	if d.lost {
+		q.lost.observe(time.Now(), "a lease ended while its handler ran, and another claim or a Cancel took the job")
 	}
 }
 
@@ -386,7 +404,9 @@ func describe(cause error) string {
 // what a claim reads and writes: the due jobs no live lease holds, then a
 // lease each, whose attempt counts the attempt a lease that ended held
 const (
-	claimJobs = `select next, id, key, at, attempt, repeat, value, spill from jobs j
+	claimJobs = `select next, id, key, at, attempt, repeat, value, spill,
+			coalesce(length(j.value), (select length(s.value) from spilled s where s.id = j.spill), 0)
+		from jobs j
 		where queue = ?1 and next <= ?2 and not exists (select 1 from leases l where l.id = j.id and l.until > ?2)
 		order by next, id limit cast(?3 as integer)`
 	takeLease = `insert into leases (id, queue, next, attempt, until) values (?1, ?2, ?3, ?4, ?5)
@@ -399,12 +419,16 @@ const (
 	earliestLease = `select min(until) from leases where queue = ?1 and until > ?2`
 )
 
-// claimedRow is a due job a claim leased, before its value is decoded
+// claimedRow is a due job a claim leased: its value when the row holds it, or
+// where it spilled, and its size, so that memory holds room for it before
+// anyone reads it
 type claimedRow struct {
 	next, id, at, attempt int64
 	key, repeat           sql.NullString
 	value                 []byte
 	spill                 sql.NullInt64
+	size                  int
+	until                 int64 // the lease's end
 }
 
 // claiming is one claim's facts: its queue, its time, its lease's end, how
@@ -414,10 +438,10 @@ type claiming struct {
 	limit, maxAttempts int
 }
 
-// claimRows leases up to limit due jobs until until, and reads the values
-// they spilled. A job whose attempts all ended without a settlement, its
-// process dead or its worker gone each time, fails for good instead of
-// running again; abandoned counts them
+// claimRows leases up to limit due jobs until until, leaving the values they
+// spilled for their workers to read outside the writer. A job whose attempts
+// all ended without a settlement, its process dead or its worker gone each
+// time, fails for good instead of running again; abandoned counts them
 func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []claimedRow, abandoned int, err error) {
 	rows, err := w.QueryContext(ctx, claimJobs, c.queue, c.now, c.limit) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
@@ -426,7 +450,9 @@ func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []clai
 	var due []claimedRow
 	err = sqlite.EachRow(rows, "due jobs", func(rows *sql.Rows) error {
 		var row claimedRow
-		scanErr := rows.Scan(&row.next, &row.id, &row.key, &row.at, &row.attempt, &row.repeat, &row.value, &row.spill)
+		scanErr := rows.Scan(&row.next, &row.id, &row.key, &row.at, &row.attempt, &row.repeat, &row.value, &row.spill,
+			&row.size)
+		row.until = c.until
 		due = append(due, row)
 		return scanErr
 	})
@@ -456,10 +482,7 @@ func leaseRow(ctx context.Context, w sqlite.Writer, c claiming, row *claimedRow)
 	if int(row.attempt) > c.maxAttempts {
 		return false, abandon(ctx, w, c, *row)
 	}
-	if !row.spill.Valid {
-		return true, nil
-	}
-	return true, sqlite.QueryRow(ctx, w, valueSpilled, row.spill.Int64).Scan(&row.value)
+	return true, nil
 }
 
 // abandon fails for good a job whose every attempt ended without a settlement
@@ -498,54 +521,95 @@ func nextTime(ctx context.Context, w sqlite.Writer, queue, now int64) (int64, er
 
 // Claim leases the next due job to the caller for the queue's Lease, or
 // jobs.Lease's, and says whether one was due; it does not wait. The caller
-// settles it, or the lease ends and another claim may take it.
+// settles it, or the lease ends and another claim may take it. A job whose
+// value no longer reads into V fails for good, and the claim takes the next.
 func (q *Queue[V]) Claim(ctx context.Context, options ...ClaimOption) (Job[V], bool, error) {
 	settings, err := collectClaim(q.state.policy, options)
 	if err != nil {
 		return Job[V]{}, false, q.fail("", err)
 	}
 	for {
-		c := q.claiming(1, settings.lease)
-		var claimed []claimedRow
-		abandoned := 0
-		err = q.write(ctx, 0, func(w sqlite.Writer) (writeErr error) {
-			claimed, abandoned, writeErr = claimRows(ctx, w, c)
-			return writeErr
-		})
-		if err != nil {
-			return Job[V]{}, false, q.fail("", err)
+		row, found, err := q.claimOne(ctx, settings.lease)
+		if err != nil || !found {
+			return Job[V]{}, false, err
 		}
-		q.state.abandoned(abandoned)
-		if len(claimed) == 0 && abandoned > 0 {
-			continue
-		}
-		if len(claimed) == 0 {
-			return Job[V]{}, false, nil
-		}
-		q.state.alarm.lower(c.until)
-		job, decodeErr := q.jobOf(claimed[0], c.until)
-		if decodeErr == nil {
+
+		job := q.jobOf(row)
+		job.Value, err = q.valueHeld(ctx, row)
+		if err == nil {
 			return job, true, nil
 		}
-		if err = job.lease.settleNow(ctx, settlement{how: failedForGood, cause: decodeErr}); err != nil {
+		if !errors.Is(err, errUnreadable) {
+			return Job[V]{}, false, q.fail(job.Key, err)
+		}
+		if err = job.lease.settleNow(ctx, settlement{how: failedForGood, cause: err}); err != nil {
 			return Job[V]{}, false, err
 		}
 	}
 }
 
-// jobOf makes a claimed row a Job; a value that no longer decodes leaves the
-// Job with its lease, for the caller to fail
-func (q *Queue[V]) jobOf(c claimedRow, until int64) (Job[V], error) {
-	job := Job[V]{
+// claimOne leases the next due job, passing over the jobs it fails for good
+// because their attempts all ended without a settlement
+func (q *Queue[V]) claimOne(ctx context.Context, lease time.Duration) (claimedRow, bool, error) {
+	for {
+		c := q.claiming(1, lease)
+		var claimed []claimedRow
+		abandoned := 0
+		err := q.write(ctx, 0, func(w sqlite.Writer) (writeErr error) {
+			claimed, abandoned, writeErr = claimRows(ctx, w, c)
+			return writeErr
+		})
+		if err != nil {
+			return claimedRow{}, false, q.fail("", err)
+		}
+		q.state.abandoned(abandoned)
+		if len(claimed) > 0 {
+			q.state.alarm.lower(c.until)
+			return claimed[0], true, nil
+		}
+		if abandoned == 0 {
+			return claimedRow{}, false, nil
+		}
+	}
+}
+
+// valueHeld reads a claimed job's value once the store's memory holds room
+// for it, and gives the room back: the value is the caller's from then on
+func (q *Queue[V]) valueHeld(ctx context.Context, row claimedRow) (V, error) {
+	release, err := q.store.reserve(ctx, row.size)
+	if err != nil {
+		var zero V
+		return zero, err
+	}
+	defer release()
+	return q.valueOf(ctx, row)
+}
+
+// valueOf reads a claimed job's value, from a reader when it spilled; one that
+// no longer decodes is errUnreadable
+func (q *Queue[V]) valueOf(ctx context.Context, row claimedRow) (V, error) {
+	encoded := row.value
+	if row.spill.Valid {
+		err := q.store.file.Lookup(ctx, func(r sqlite.Reader) error {
+			return sqlite.QueryRow(ctx, r, valueSpilled, row.spill.Int64).Scan(&encoded)
+		})
+		if err != nil {
+			var zero V
+			return zero, fmt.Errorf("jobs: read the value a claimed job spilled: %w", err)
+		}
+	}
+	return q.codec.decode(encoded)
+}
+
+// jobOf makes a claimed row a Job, its value not yet read
+func (q *Queue[V]) jobOf(c claimedRow) Job[V] {
+	return Job[V]{
 		Key: c.key.String, At: time.UnixMilli(c.at), Attempt: int(c.attempt),
 		lease: &lease{
 			queue: q.state, store: q.store, next: c.next, id: c.id, attempt: c.attempt, at: c.at,
-			key: c.key.String, repeat: c.repeat.String, spill: c.spill, until: until,
+			key: c.key.String, repeat: c.repeat.String, spill: c.spill, until: c.until,
 		},
 	}
-	var err error
-	job.Value, err = q.codec.decode(c.value)
-	return job, err
 }
 
 // claiming is a claim of up to limit jobs now, leased for lease

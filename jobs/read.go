@@ -98,22 +98,28 @@ type found struct {
 	failure  sql.NullString
 	value    []byte
 	spill    sql.NullInt64
+	size     int // the value's bytes, in the row or spilled
 }
 
+// a value's size is read without its bytes: SQLite's length() of a blob
+// column takes it from the row's header and leaves its overflow pages alone
 const (
-	waitingColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill
+	waitingColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
+			coalesce(length(j.value), (select length(s.value) from spilled s where s.id = j.spill), 0)
 		from jobs j left join leases l on l.id = j.id and l.until > ?9`
-	failedColumns = `f.key, f.failed, f.id, f.at, f.attempt, null, 1, null, f.error, f.value, f.spill from failed f`
-	getWaiting    = `select ` + waitingColumns + ` where j.queue = ?1 and j.key = ?2`
-	getFailed     = `select ` + failedColumns + ` where f.queue = ?1 and f.key = ?2`
-	valueSpilled  = `select value from spilled where id = ?1`
+	failedColumns = `f.key, f.failed, f.id, f.at, f.attempt, null, 1, null, f.error, f.value, f.spill,
+			coalesce(length(f.value), (select length(s.value) from spilled s where s.id = f.spill), 0)
+		from failed f`
+	getWaiting   = `select ` + waitingColumns + ` where j.queue = ?1 and j.key = ?2`
+	getFailed    = `select ` + failedColumns + ` where f.queue = ?1 and f.key = ?2`
+	valueSpilled = `select value from spilled where id = ?1`
 )
 
 // Get reads the job under key from one snapshot: waiting, leased or failed.
 func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) {
 	var entry Entry[V]
 	var there bool
-	err := q.read(ctx, func(r sqlite.Reader) error {
+	err := q.read(ctx, maxValue, func(r sqlite.Reader) error {
 		for _, query := range []string{getWaiting, getFailed} {
 			rows, err := r.QueryContext(ctx, query, q.state.id, key, nil, nil, nil, nil, nil, nil, q.store.clock())
 			if err != nil {
@@ -149,6 +155,9 @@ const (
 		order by f.failed desc, f.id desc limit cast(?6 as integer)`
 )
 
+// what a Scan holds at most: its page's values and the rows it read past them
+const scanHeld = scanBytes + (maxScanLimit+1)*inlineValue
+
 // Scan reads a page of the queue's jobs from one snapshot; see Query.
 func (q *Queue[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 	limit, err := checkQuery(query)
@@ -156,7 +165,7 @@ func (q *Queue[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 		return Page[V]{}, q.fail("", err)
 	}
 	var page Page[V]
-	err = q.read(ctx, func(r sqlite.Reader) error {
+	err = q.read(ctx, scanHeld, func(r sqlite.Reader) error {
 		jobs, scanErr := q.scanRows(ctx, r, query, limit+1)
 		if scanErr != nil {
 			return scanErr
@@ -231,12 +240,14 @@ func (q *Queue[V]) scanRows(ctx context.Context, r sqlite.Reader, query Query, l
 	return scanFound(rows)
 }
 
-// pageOf makes the entries of a page, stopping early past 4 MiB of values
+// pageOf makes the entries of a page, ending it before the value that would
+// take it past 4 MiB, a spilled value's bytes counted as a row's are; the
+// first entry is taken whatever its size, so that every page moves on
 func (q *Queue[V]) pageOf(ctx context.Context, r sqlite.Reader, query Query, jobs []found, limit int) (Page[V], error) {
 	page := Page[V]{Next: query}
 	bytes := 0
 	for i, job := range jobs {
-		if i == limit || bytes > scanBytes {
+		if i == limit || i > 0 && bytes+job.size > scanBytes {
 			page.More = true
 			break
 		}
@@ -245,7 +256,7 @@ func (q *Queue[V]) pageOf(ctx context.Context, r sqlite.Reader, query Query, job
 			return page, err
 		}
 		page.Entries = append(page.Entries, entry)
-		bytes += len(job.value)
+		bytes += job.size
 		page.Next.After = cursorOf(query, job)
 	}
 	return page, nil
@@ -293,7 +304,7 @@ func scanFound(rows *sql.Rows) ([]found, error) {
 		var job found
 		var failed int
 		err := rows.Scan(&job.key, &job.time, &job.id, &job.at, &job.attempt, &job.leased, &failed, &job.repeat,
-			&job.failure, &job.value, &job.spill)
+			&job.failure, &job.value, &job.spill, &job.size)
 		job.failed = failed == 1
 		jobs = append(jobs, job)
 		return err
@@ -328,8 +339,11 @@ func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Ent
 }
 
 // read runs work on one snapshot of jobs.db: inside the handle's transaction,
-// which sees its own writes, or on a reader
-func (q *Queue[V]) read(ctx context.Context, work func(sqlite.Reader) error) error {
+// which sees its own writes, or on a reader once the store's memory holds the
+// bytes it may read. A read inside a transaction waits for no memory, since it
+// holds the writer that the writes holding memory wait for; one transaction
+// runs at a time, so it holds at most one read's bytes beyond the budget
+func (q *Queue[V]) read(ctx context.Context, bytes int, work func(sqlite.Reader) error) error {
 	if q.tx != nil {
 		return q.tx.run(func(w sqlite.Writer) error { return work(w) })
 	}
@@ -338,5 +352,10 @@ func (q *Queue[V]) read(ctx context.Context, work func(sqlite.Reader) error) err
 		return err
 	}
 	defer leave()
+	unreserve, err := q.store.reserve(ctx, bytes)
+	if err != nil {
+		return err
+	}
+	defer unreserve()
 	return q.store.file.ViewPrepared(ctx, work)
 }

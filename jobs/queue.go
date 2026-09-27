@@ -30,6 +30,7 @@ type queueState struct {
 	failures *quietLog
 	limits   *quietLog
 	panics   *quietLog
+	lost     *quietLog
 }
 
 // Queue is a handle on the jobs of one type in one queue; Work and Claim hand
@@ -119,6 +120,7 @@ func (s *Store) registerQueue(ctx context.Context, name, kind string, p policy) 
 		failures: newQuietLog(s.log, "jobs failed for good", name),
 		limits:   newQuietLog(s.log, "a queue past MaxWaiting refused jobs", name),
 		panics:   newQuietLog(s.log, "a handler panicked", name),
+		lost:     newQuietLog(s.log, "a Work loop lost the leases of jobs it ran", name),
 	}
 	var stored string
 	var waiting int64
@@ -150,7 +152,8 @@ func (q *Queue[V]) WithTx(tx *Tx) *Queue[V] {
 }
 
 // write runs work in the file's writer: inside the handle's transaction, or
-// grouped with the writes other goroutines are waiting to commit
+// grouped with the writes other goroutines are waiting to commit, its bytes
+// held in the store's memory while they wait
 func (q *Queue[V]) write(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
 	if q.tx != nil {
 		return q.tx.run(work)
@@ -160,6 +163,11 @@ func (q *Queue[V]) write(ctx context.Context, bytes int, work func(sqlite.Writer
 		return err
 	}
 	defer release()
+	unreserve, err := q.store.reserve(ctx, bytes)
+	if err != nil {
+		return err
+	}
+	defer unreserve()
 	return q.store.file.UpdateGrouped(ctx, bytes, work)
 }
 

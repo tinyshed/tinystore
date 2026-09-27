@@ -1,7 +1,9 @@
 package jobs
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,5 +151,32 @@ func TestExtendKeepsTheJob(t *testing.T) {
 	nothingDue(t, queue)
 	if err := job.Ack(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// a value that no longer reads into the queue's type, because the type
+// changed, fails its job for good with the reason, and a Claim or a Work goes
+// on to the next job rather than stopping
+func TestAValueThatNoLongerReadsFailsItsJob(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	texts := openTestQueue[string](t, queues, "changed")
+	mustEnqueue(t, texts, "call mom", Key("claimed"))
+	mustEnqueue(t, texts, "buy milk", Key("also claimed"))
+	numbers := openTestQueue[int](t, queues, "changed")
+	nothingDue(t, numbers)
+
+	mustEnqueue(t, texts, "walk the dog", Key("worked"))
+	err := numbers.Work(t.Context(), func(context.Context, Job[int]) error {
+		return errors.New("a handler ran on a value that does not read")
+	}, UntilIdle())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"claimed", "also claimed", "worked"} {
+		entry, _, err := texts.Get(t.Context(), key)
+		if err != nil || entry.State != Failed || !strings.Contains(entry.Err, "no longer reads") {
+			t.Fatalf("the job %q is %+v: %v", key, entry, err)
+		}
 	}
 }

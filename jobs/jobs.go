@@ -180,6 +180,19 @@ func (s *Store) admitWrite(ctx context.Context) (release func(), err error) {
 	}, nil
 }
 
+// reserve holds a call's bytes in the store's memory before it materialises
+// them; a store without Options.Memory is not asked
+func (s *Store) reserve(ctx context.Context, bytes int) (release func(), err error) {
+	if bytes <= 0 || s.runtime.Memory().Capacity == 0 {
+		return func() {}, nil
+	}
+	release, err = s.runtime.Reserve(ctx, int64(bytes))
+	if errors.Is(err, tinystore.ErrLimit) {
+		return nil, fmt.Errorf("jobs: %w", err)
+	}
+	return release, err
+}
+
 // clock is the store's time in unix milliseconds, read once a call
 func (s *Store) clock() int64 {
 	return s.now().UnixMilli()

@@ -47,6 +47,13 @@ func (a *alarm) rung(now int64) bool {
 	return now >= a.at
 }
 
+// due says whether a job may be due at now, without starting a read
+func (a *alarm) due(now int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return now >= a.at
+}
+
 // set is a loop's after the file said when the queue next needs a claim, or
 // zero for never; a write that lowered the alarm since keeps its time
 func (a *alarm) set(next int64) {

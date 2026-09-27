@@ -2,11 +2,16 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 
 	"github.com/tinyshed/tinystore"
 )
+
+// errUnreadable is a value that no longer reads into its queue's type: its job
+// fails for good with the reason rather than stopping the queue
+var errUnreadable = errors.New("the value no longer reads into the queue's type")
 
 // valueCodec writes a queue's values as JSON, so that a worker in another
 // language reads what Go wrote, and keeps a []byte or json.RawMessage as it is
@@ -47,7 +52,7 @@ func (c valueCodec[V]) decode(encoded []byte) (V, error) {
 		return value, nil
 	}
 	if err := json.Unmarshal(encoded, &value); err != nil {
-		return value, fmt.Errorf("the value does not read as %T: %w", value, err)
+		return value, fmt.Errorf("%w %T: %w", errUnreadable, value, err)
 	}
 	return value, nil
 }
