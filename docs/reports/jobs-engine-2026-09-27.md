@@ -102,8 +102,9 @@ burst 2.7 times as fast.
 ## Keys kept apart, in the engine
 
 The engine with keys in a table of their own, left behind by jobs that leave
-and dropped by maintenance, against the engine before it, in one container
-session, alternated twice. A keyed burst, jobs a second:
+and dropped by maintenance, at `38b4cdc`, against the engine before it at
+`45ee344`, each built with its own burst test, in one container session,
+alternated twice. A keyed burst, jobs a second:
 
 | workers, held a worker | keys on the jobs' table | keys apart |
 |---|---:|---:|

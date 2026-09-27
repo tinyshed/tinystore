@@ -53,13 +53,16 @@ which cost more than zstd there; its format is version one and reads no
 earlier prototype.
 [examples/notes](examples/notes/main.go) is a program using all of it.
 
-`jobs` keeps work that runs at its time in `jobs.db`, in a first slice: typed
-queues ordered by time, leases in a table of their own, retries, repeats kept
-as cron text, and a Work loop that claims and settles in one write
-([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
-[the round](docs/reports/jobs-mechanics-2026-09-27.md)).
+`jobs` keeps work that runs at its time in `jobs.db`: typed queues ordered by
+time, leases and keys in tables of their own, retries, repeats kept as cron
+text, and a Work loop that holds two jobs a worker and claims and settles in
+one write ([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
+[the round](docs/reports/jobs-mechanics-2026-09-27.md),
+[the engine's](docs/reports/jobs-engine-2026-09-27.md)).
 
-Designed, not built: `blobs` and self-metrics.
+Designed, not built: `blobs`, a draft to settle with the user
+([docs/blobs.md](docs/blobs.md), [its round](docs/reports/blobs-mechanics-2026-09-27.md)),
+and self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
