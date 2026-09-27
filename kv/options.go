@@ -24,7 +24,7 @@ const (
 	scanLimit     = 100             // keys a page returns when a query does not say
 	maxScanLimit  = 1000            // keys a page may return
 	scanBytes     = 4 << 20         // value bytes a page may hold
-	maxWaiting    = 100_000         // LoseAtMost counters changed and not yet written, about 1 s of flushing
+	maxHeld       = 100_000         // LoseAtMost counters memory holds, changed or not: about 1 s of flushing
 	flushBatch    = 10_000          // counters a flush writes a transaction, 45 to 92 ms of the writer
 	clearAtOnce   = 10_000          // keys a Clear deletes in its transaction, 35 to 52 ms; past them it marks
 	refreshes     = 30              // a Sliding key is renewed once a thirtieth of its term has passed

@@ -55,8 +55,10 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   since the last flush reads it from the file once; after that `Add`, `Max`
   and `Delete` change memory and return, and every `d`, `Close` and `Maintain`
   write what changed, 10,000 keys a transaction. A crash loses at most the
-  last `d` of changes, a `Delete`'s as well. Past 100,000 keys waiting a
-  change flushes first. Handles on one name opened with the same `d` share
+  last `d` of changes, a `Delete`'s as well. Memory holds at most 100,000
+  keys, changed or not: a change of a key it does not hold flushes first when
+  it is full, and while the file refuses that flush the change is refused
+  with the flush's error. Handles on one name opened with the same `d` share
   the memory; another `d`, or none, is `ErrInvalid`, and so is such a counter
   inside `Tx`.
 - **`Clear` removes a branch and every branch under it.** Up to 10,000 keys

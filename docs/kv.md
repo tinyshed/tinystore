@@ -247,9 +247,11 @@ update cells set expires = :until where bucket = ?1 and path = ?2 and version = 
   `Max` and `Delete` change memory and return. A flush every `d`, on `Close`
   and on `Maintain` writes what changed, 10,000 keys a transaction, and lets go
   of what did not change again. A crash loses at most the last `d` of every
-  mutation, a `Delete`'s as an `Add`'s: a deleted counter can come back. Past
-  100,000 keys waiting, the change that reaches the bound flushes first, so
-  memory stays bounded however many distinct keys arrive.
+  mutation, a `Delete`'s as an `Add`'s: a deleted counter can come back.
+  Memory holds at most 100,000 keys, changed or not, a key read for a change
+  that failed included: a change of a key it does not hold takes a place
+  first, one at a time, and flushes when there is none, so memory stays
+  bounded however many distinct keys arrive together.
 - **One name, one way of keeping it.** Handles on counters of one name opened
   with the same `LoseAtMost` share one memory; opening them again with another
   interval, or without `LoseAtMost`, is `ErrInvalid`, since one handle would
@@ -355,7 +357,7 @@ returning version, value, spill;
   [the contract](group-commit-contract.md)'s.
 - **A `LoseAtMost` flush writes at most 10,000 keys a transaction**, 45 to 92
   ms of the writer, so that a flood of distinct keys does not hold a sign-in
-  behind half a second of flush; 100,000 keys may wait.
+  behind half a second of flush; memory holds 100,000 keys at most.
 - **`Clear` deletes up to 10,000 keys in its own transaction**, 35 to 45 ms. A
   larger branch is marked in `branches` with the file's revision: under its
   prefix a row of that version or older is gone. Every statement that finds
@@ -403,7 +405,7 @@ Clear(42) at revision R
 | A `View` snapshot | 5 s |
 | `Sliding` renewals | one a key per thirtieth of the term; 100,000 waiting, past them the next read asks again |
 | A value kept in its row | 512 bytes; a larger one spills |
-| Keys waiting in a `LoseAtMost` bucket | 100,000 |
+| Keys a `LoseAtMost` bucket holds in memory, changed or not | 100,000 |
 | A `LoseAtMost` flush | 10,000 keys a transaction |
 | A `Clear` in its own transaction | 10,000 keys; a larger one is marked, and is `ErrLimit` inside `Tx` |
 | Durable writes committed together | 1024 |
@@ -432,7 +434,9 @@ The five cases are the gates' workloads.
 | `LoseAtMost` loses no more than it says | `TestLoseAtMostLosesNoMoreThanItsInterval` |
 | counters of one name keep their numbers one way | `TestCountersOpenAgainOnlyAsTheyWereOpened` |
 | a `LoseAtMost` counter joins no transaction | `TestALoseAtMostCounterRefusesATransaction` |
-| the counters waiting for a flush stay within their bound | `TestWaitingCountersStayWithinTheirBound` |
+| the counters memory holds stay within their bound, failed changes included | `TestCountersInMemoryStayWithinTheirBound`, `TestFailedChangesStayWithinTheBound` |
+| cold counters arriving together pass no bound | `TestColdCountersArrivingTogetherStayWithinTheBound` |
+| a failed flush refuses new counters and loses none held | `TestAFailedFlushRefusesNewCountersRatherThanHoldThem` |
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
 | `Clear` empties a branch and those under it at once, over the bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt` |
 | a cleared key is absent to every operation | `TestAClearedKeyIsAbsentToEveryOperation` |

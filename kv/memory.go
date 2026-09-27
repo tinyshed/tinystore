@@ -24,7 +24,7 @@ type memory struct {
 	state  *Store
 	bucket int64
 	name   string
-	bound  int64 // counters that may wait for a flush before a change flushes them
+	bound  int64 // counters memory may hold, changed or not, before a new one waits for a flush
 	seed   maphash.Seed
 	shards [memoryShards]shard
 
@@ -32,7 +32,7 @@ type memory struct {
 	// read; eviction and Clear hold it alone, so that nothing keeps a value the
 	// file held before them
 	gate     sync.RWMutex
-	waiting  atomic.Int64 // counters changed since the flush that wrote them
+	held     atomic.Int64 // counters in the shards, and the places taken for ones on their way
 	flushing sync.Mutex   // one flush at a time, and none while a Clear runs
 }
 
@@ -63,7 +63,7 @@ func (c *counter) valueAt(now int64) int64 {
 }
 
 func newMemory(state *Store, bucket int64, name string) *memory {
-	m := &memory{state: state, bucket: bucket, name: name, bound: maxWaiting, seed: maphash.MakeSeed()}
+	m := &memory{state: state, bucket: bucket, name: name, bound: maxHeld, seed: maphash.MakeSeed()}
 	for i := range m.shards {
 		m.shards[i].counters = map[string]*counter{}
 	}
@@ -78,43 +78,95 @@ func (m *memory) shardOf(path string) *shard {
 // now; a counter it finds absent or expired starts from zero with the expiry
 // created, 0 for never
 func (m *memory) change(ctx context.Context, c call, created int64, next func(held int64) (int64, error)) (
-	int64, error,
+	value int64, err error,
 ) {
-	if err := m.makeRoom(ctx); err != nil {
-		return 0, err
+	err = m.withRoom(ctx, func() (full bool, err error) {
+		value, full, err = m.tryChange(ctx, c, created, next)
+		return full, err
+	})
+	return value, err
+}
+
+// forget marks the counter at c's path absent, to be deleted by the next flush
+func (m *memory) forget(ctx context.Context, c call) error {
+	return m.withRoom(ctx, func() (bool, error) { return m.tryForget(c), nil })
+}
+
+// withRoom runs try until it finds room for a counter it adds, flushing when
+// memory holds as many as it may, so that memory lets go of what the file
+// then holds as memory does
+func (m *memory) withRoom(ctx context.Context, try func() (full bool, err error)) error {
+	for {
+		full, err := try()
+		if !full || err != nil {
+			return err
+		}
+		if _, err = m.flush(ctx); err != nil {
+			return err
+		}
 	}
+}
+
+// tryChange is change while memory has room for a counter it has to add; full
+// says that it had none and changed nothing
+func (m *memory) tryChange(ctx context.Context, c call, created int64, next func(int64) (int64, error)) (
+	value int64, full bool, err error,
+) {
 	m.gate.RLock()
 	defer m.gate.RUnlock()
 
 	path := string(c.path)
 	target := m.shardOf(path)
 	if !target.holds(path) {
-		loaded, err := m.readFile(ctx, c)
-		if err != nil {
-			return 0, err
+		if !m.takeRoom() {
+			return 0, true, nil
 		}
-		target.keep(path, loaded)
+		loaded, readErr := m.readFile(ctx, c)
+		if readErr != nil || !target.keep(path, loaded) {
+			m.held.Add(-1)
+		}
+		if readErr != nil {
+			return 0, false, readErr
+		}
 	}
 
-	value, newlyDirty, err := target.change(path, c.now, created, next)
-	if newlyDirty {
-		m.waiting.Add(1)
-	}
-	return value, err
+	value, err = target.change(path, c.now, created, next)
+	return value, false, err
 }
 
-// forget marks the counter at c's path absent, to be deleted by the next flush
-func (m *memory) forget(ctx context.Context, c call) error {
-	if err := m.makeRoom(ctx); err != nil {
-		return err
-	}
+// tryForget is forget while memory has room for a counter it has to add
+func (m *memory) tryForget(c call) (full bool) {
 	m.gate.RLock()
 	defer m.gate.RUnlock()
 
-	if m.shardOf(string(c.path)).forget(string(c.path)) {
-		m.waiting.Add(1)
+	path := string(c.path)
+	target := m.shardOf(path)
+	if target.holds(path) {
+		target.forget(path)
+		return false
 	}
-	return nil
+	if !m.takeRoom() {
+		return true
+	}
+	if !target.forget(path) {
+		m.held.Add(-1)
+	}
+	return false
+}
+
+// takeRoom takes a place for one more counter below the bound, and says
+// whether there was one; places are taken one at a time, so that callers
+// arriving together cannot pass the bound between a look and an add
+func (m *memory) takeRoom() bool {
+	for {
+		held := m.held.Load()
+		if held >= m.bound {
+			return false
+		}
+		if m.held.CompareAndSwap(held, held+1) {
+			return true
+		}
+	}
 }
 
 // get is what the counter at c's path holds, from memory or else the file
@@ -133,18 +185,19 @@ func (s *shard) holds(path string) bool {
 	return ok
 }
 
-// keep holds what the file had for path, unless another change kept it first
-func (s *shard) keep(path string, loaded counter) {
+// keep holds what the file had for path, and says whether it did: another
+// change may have kept it first
+func (s *shard) keep(path string, loaded counter) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.counters[path]; !ok {
-		s.counters[path] = &loaded
+	if _, ok := s.counters[path]; ok {
+		return false
 	}
+	s.counters[path] = &loaded
+	return true
 }
 
-func (s *shard) change(path string, now, created int64, next func(int64) (int64, error)) (
-	value int64, newlyDirty bool, err error,
-) {
+func (s *shard) change(path string, now, created int64, next func(int64) (int64, error)) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	held := s.counters[path]
@@ -152,15 +205,16 @@ func (s *shard) change(path string, now, created int64, next func(int64) (int64,
 	if held.live(now) {
 		current, expires = held.value, held.expires
 	}
-	if value, err = next(current); err != nil {
-		return 0, false, err
+	value, err := next(current)
+	if err != nil {
+		return 0, err
 	}
-	newlyDirty = !held.dirty
 	*held = counter{value: value, expires: expires, dirty: true}
-	return value, newlyDirty, nil
+	return value, nil
 }
 
-func (s *shard) forget(path string) (newlyDirty bool) {
+// forget marks path absent, and says whether it added the counter to do so
+func (s *shard) forget(path string) (added bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	held, ok := s.counters[path]
@@ -168,9 +222,8 @@ func (s *shard) forget(path string) (newlyDirty bool) {
 		held = &counter{}
 		s.counters[path] = held
 	}
-	newlyDirty = !held.dirty
 	*held = counter{absent: true, dirty: true}
-	return newlyDirty
+	return !ok
 }
 
 func (s *shard) valueAt(path string, now int64) (int64, bool) {
@@ -202,16 +255,6 @@ func (m *memory) readFile(ctx context.Context, c call) (counter, error) {
 	}
 	held, err := counted(value)
 	return counter{value: held, expires: expires.Int64}, err
-}
-
-// makeRoom flushes before a change once the counters waiting reach the bound,
-// so that memory stays bounded however many keys arrive
-func (m *memory) makeRoom(ctx context.Context) error {
-	if m.waiting.Load() < m.bound {
-		return nil
-	}
-	_, err := m.flush(ctx)
-	return err
 }
 
 // flushed is one changed counter as a flush took it, and the entry it came from
@@ -296,7 +339,6 @@ func (m *memory) takeChanged(limit int) []flushed {
 			break
 		}
 	}
-	m.waiting.Add(-int64(len(batch)))
 	return batch
 }
 
@@ -321,9 +363,8 @@ func (m *memory) giveBack(batch []flushed) {
 	for _, taken := range batch {
 		target := m.shardOf(taken.path)
 		target.mu.Lock()
-		if target.counters[taken.path] == taken.entry && !taken.entry.dirty {
+		if target.counters[taken.path] == taken.entry {
 			taken.entry.dirty = true
-			m.waiting.Add(1)
 		}
 		target.mu.Unlock()
 	}
@@ -377,14 +418,11 @@ func (m *memory) unlockShards() {
 // caller holds every shard
 func (m *memory) forgetUnder(prefix []byte) {
 	for i := range m.shards {
-		for path, entry := range m.shards[i].counters {
-			if !isUnder(path, prefix) {
-				continue
+		for path := range m.shards[i].counters {
+			if isUnder(path, prefix) {
+				delete(m.shards[i].counters, path)
+				m.held.Add(-1)
 			}
-			if entry.dirty {
-				m.waiting.Add(-1)
-			}
-			delete(m.shards[i].counters, path)
 		}
 	}
 }
@@ -407,7 +445,9 @@ func (m *memory) evict() {
 	for i := range m.shards {
 		target := &m.shards[i]
 		target.mu.Lock()
+		before := len(target.counters)
 		maps.DeleteFunc(target.counters, func(_ string, entry *counter) bool { return !entry.dirty })
+		m.held.Add(int64(len(target.counters) - before))
 		target.mu.Unlock()
 	}
 }

@@ -491,7 +491,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | `LoseAtMost` loses no more than its interval           | `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing         |
 | counters of one name keep their numbers one way        | `TestCountersOpenAgainOnlyAsTheyWereOpened`                                     |
 | a `LoseAtMost` counter joins no transaction            | `TestALoseAtMostCounterRefusesATransaction`                                     |
-| counters waiting for a flush stay within their bound   | `TestWaitingCountersStayWithinTheirBound`                                       |
+| counters in memory stay within their bound            | `TestCountersInMemoryStayWithinTheirBound`, `TestFailedChangesStayWithinTheBound` |
+| cold counters arriving together pass no bound          | `TestColdCountersArrivingTogetherStayWithinTheBound`                            |
+| a failed flush refuses new counters, loses none held   | `TestAFailedFlushRefusesNewCountersRatherThanHoldThem`                          |
 | a kv Clear empties a branch and those under it         | `TestClearEmptiesTheBranchAndThoseUnderIt`, over the bound and under it         |
 | a cleared key is absent to every operation             | `TestAClearedKeyIsAbsentToEveryOperation`                                       |
 | a Clear never brings back counters waiting to flush    | `TestAClearDoesNotResurrectCountersWaitingForTheFlush`                          |

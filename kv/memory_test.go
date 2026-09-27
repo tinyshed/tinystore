@@ -130,9 +130,20 @@ func TestALoseAtMostCounterRefusesATransaction(t *testing.T) {
 	}
 }
 
-// however many keys arrive, the counters waiting for a flush stay within the
-// bound: the change that reaches it flushes first
-func TestWaitingCountersStayWithinTheirBound(t *testing.T) {
+// countersHeld counts what memory holds in its shards
+func countersHeld(held *memory) int {
+	count := 0
+	for i := range held.shards {
+		held.shards[i].mu.Lock()
+		count += len(held.shards[i].counters)
+		held.shards[i].mu.Unlock()
+	}
+	return count
+}
+
+// however many keys arrive, the counters memory holds stay within the bound:
+// the change that finds no room flushes first
+func TestCountersInMemoryStayWithinTheirBound(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
 	attempts.memory.bound = 10
@@ -140,12 +151,108 @@ func TestWaitingCountersStayWithinTheirBound(t *testing.T) {
 		if _, err := attempts.Add(t.Context(), n, 1); err != nil {
 			t.Fatal(err)
 		}
-		if waiting := attempts.memory.waiting.Load(); waiting > 10 {
-			t.Fatalf("%d counters wait after %d Adds", waiting, n+1)
+		if held := countersHeld(attempts.memory); held > 10 {
+			t.Fatalf("memory holds %d counters after %d Adds", held, n+1)
 		}
 	}
 	if rows := state.rowsOf(t, "attempts"); rows != 90 {
 		t.Fatalf("the flushes wrote %d counters; want 90", rows)
+	}
+}
+
+// a change that fails leaves the counter it read held and unchanged, and
+// such counters count against the bound as changed ones do
+func TestFailedChangesStayWithinTheBound(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
+	for n := range 30 {
+		if _, err := attempts.Add(t.Context(), n, math.MaxInt64); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := state.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	attempts.memory.bound = 10
+	for n := range 30 {
+		if _, err := attempts.Add(t.Context(), n, 1); !errors.Is(err, tinystore.ErrLimit) {
+			t.Fatalf("an Add past the int64 range: %v", err)
+		}
+		if held := countersHeld(attempts.memory); held > 10 {
+			t.Fatalf("memory holds %d counters after %d refused Adds", held, n+1)
+		}
+	}
+}
+
+// callers arriving together with keys memory does not hold take their places
+// one at a time, so that none passes the bound between a look and an add
+func TestColdCountersArrivingTogetherStayWithinTheBound(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
+	attempts.memory.bound = 10
+	var adders sync.WaitGroup
+	for worker := range 64 {
+		adders.Go(func() {
+			for n := range 20 {
+				if _, err := attempts.Add(t.Context(), worker*100+n, 1); err != nil {
+					t.Error(err)
+					return
+				}
+				if held := attempts.memory.held.Load(); held > 10 {
+					t.Errorf("memory took places for %d counters", held)
+					return
+				}
+			}
+		})
+	}
+	adders.Wait()
+	if held := countersHeld(attempts.memory); held > 10 {
+		t.Fatalf("memory holds %d counters", held)
+	}
+	if _, err := state.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rows := state.rowsOf(t, "attempts"); rows != 64*20 {
+		t.Fatalf("the flushes wrote %d counters; want %d", rows, 64*20)
+	}
+}
+
+// while the file refuses what a flush writes, a counter memory does not hold
+// is refused with the flush's error rather than held past the bound; the ones
+// it holds still change, and nothing is lost once the file accepts again
+func TestAFailedFlushRefusesNewCountersRatherThanHoldThem(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
+	attempts.memory.bound = 10
+	for n := range 10 {
+		if _, err := attempts.Add(t.Context(), n, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state.exec(t, `create trigger refuse_flush before insert on cells begin select raise(abort, 'a refused flush'); end`)
+	if _, err := attempts.Add(t.Context(), "new", 1); err == nil {
+		t.Fatal("a new counter was held while the flush that makes room failed")
+	}
+	if n, err := attempts.Add(t.Context(), 3, 1); n != 2 || err != nil {
+		t.Fatalf("a counter memory holds, while the file refuses: %d, %v", n, err)
+	}
+	if held := countersHeld(attempts.memory); held > 10 {
+		t.Fatalf("memory holds %d counters", held)
+	}
+	state.exec(t, `drop trigger refuse_flush`)
+
+	if n, err := attempts.Add(t.Context(), "new", 1); n != 1 || err != nil {
+		t.Fatalf("a new counter once the file accepts: %d, %v", n, err)
+	}
+	if _, err := state.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reopened := state.reopen(t)
+	attempts = openTestCounters(t, reopened, "attempts", LoseAtMost(time.Hour))
+	for key, want := range map[any]int64{0: 1, 3: 2, 9: 1, "new": 1} {
+		if n, err := attempts.Get(t.Context(), key); n != want || err != nil {
+			t.Fatalf("counter %v holds %d, %v; want %d", key, n, err, want)
+		}
 	}
 }
 
