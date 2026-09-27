@@ -82,6 +82,23 @@ under [Both runs](#both-runs).
   second, a commit each, which is what `Exec` did before and a `Tx` a call
   still does.
 
+## Keys kept apart, on an idle host
+
+The keyed prototype ran again after the blobs round, the host doing nothing
+else and its enqueue writing a job's key with a statement of its own, as the
+engine would, instead of the trigger of the first run. It supersedes that
+run's enqueue figure:
+
+| a million keyed jobs, shuffled, due within one minute | key index on the jobs' table | keys in a table of their own |
+|---|---:|---:|
+| enqueued, 10,000 a transaction | 20,413 a second | 20,998 |
+| a key read | 9.0 µs | 12.7 µs |
+| drained in batches of 1000 | 21,367 a second | 58,176 |
+| the keys left behind dropped, 10,000 a transaction | — | 2.9 s, the slowest 43 ms |
+
+Keys kept apart cost an enqueue nothing, a key read 3.7 µs, and drain a keyed
+burst 2.7 times as fast.
+
 ## Environment and reproduction
 
 - AMD Ryzen 7 7700, 8 cores / 16 logical processors, Samsung 990 PRO NVMe;
@@ -148,8 +165,9 @@ Jobs a second, first run and second, without keys and then with them.
 
 ## What this leaves
 
-- **Keys a burst does not scatter**, decided by an enqueue measured on an idle
-  host with the engine's own statements.
+- **Keys a burst does not scatter**: measured again on an idle host, keys
+  kept apart cost an enqueue nothing and drain a keyed burst 2.7 times as
+  fast, which is the engine's next change.
 - **The engine against a table an application polls by hand**, on the five
   cases: what the engine buys over the way it replaces.
 - **A queue's count kept rather than read at open**, when a queue of ten

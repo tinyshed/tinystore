@@ -23,14 +23,16 @@ var jobsLazySchema = append([]string{
 		id    integer not null,
 		primary key (queue, key)
 	) strict, without rowid`,
-	`create trigger jobs_keyed after insert on jobs when new.key is not null begin
-		insert or replace into keys (queue, key, next, id) values (new.queue, new.key, new.next, new.id);
-	end`,
 }, jobsTimeSchema[2:]...)
+
+// a keyed job's key, written by the enqueue beside the job's row as the engine
+// would write it; a key left behind by a job gone is replaced
+const jobsLazyKey = `insert into keys (queue, key, next, id) values (?1, ?4, ?2, ?3)
+	on conflict (queue, key) do update set next = excluded.next, id = excluded.id`
 
 func init() {
 	jobsLayouts["time-lazy"] = jobsLayout{
-		name: "time-lazy", schema: jobsLazySchema, insert: jobsTimeInsert,
+		name: "time-lazy", schema: jobsLazySchema, insert: jobsTimeInsert, keyed: jobsLazyKey,
 		claim: jobsClaimInTable, ack: jobsAckInTable, next: jobsNextTabled, recover: jobsTableRecall,
 	}
 }

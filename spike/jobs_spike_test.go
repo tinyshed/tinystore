@@ -34,6 +34,7 @@ type jobsLayout struct {
 	name    string
 	schema  []string
 	insert  string // ?1 queue, ?2 next, ?3 id, ?4 key, ?5 at, ?6 value
+	keyed   string // what a keyed job's insert runs after it, with the insert's arguments, when not empty
 	claim   func(ctx context.Context, w sqlite.Writer, now, until int64, batch int) ([]jobsClaimed, error)
 	ack     func(ctx context.Context, w sqlite.Writer, job jobsClaimed) error
 	next    string // ?1 queue, ?2 now: when the next job not leased falls due
@@ -315,6 +316,9 @@ func jobsInsert(ctx context.Context, w sqlite.Writer, layout jobsLayout, f jobsF
 	value := jobsValue(i, f.valueSize)
 	if !f.spilled {
 		_, err := w.ExecContext(ctx, layout.insert, jobsQueue, at, i+1, key, at, value)
+		if err == nil && key != nil && layout.keyed != "" {
+			_, err = w.ExecContext(ctx, layout.keyed, jobsQueue, at, i+1, key, at, value)
+		}
 		return err
 	}
 	if _, err := w.ExecContext(ctx, jobsSpill, i+1, value); err != nil {
