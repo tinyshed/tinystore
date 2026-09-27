@@ -99,6 +99,24 @@ run's enqueue figure:
 Keys kept apart cost an enqueue nothing, a key read 3.7 µs, and drain a keyed
 burst 2.7 times as fast.
 
+## Keys kept apart, in the engine
+
+The engine with keys in a table of their own, left behind by jobs that leave
+and dropped by maintenance, against the engine before it, in one container
+session, alternated twice. A keyed burst, jobs a second:
+
+| workers, held a worker | keys on the jobs' table | keys apart |
+|---|---:|---:|
+| 1, two | 485 · 446 | 526 · 524 |
+| 8, two | 2,675 · 2,382 | 2,657 · 2,409 |
+| 64, two | 10,274 · 10,010 | 15,019 · 13,860 |
+| 512, two | 19,863 · 19,695 | 40,582 · 37,056 |
+| 512, four | 21,693 · 21,453 | 42,684 · 39,469 |
+
+A keyed burst now drains as fast as one without keys, 38,997 to 40,350 a
+second at 512 workers holding two in the same session; without keys nothing
+changed beyond the runs' spread.
+
 ## Environment and reproduction
 
 - AMD Ryzen 7 7700, 8 cores / 16 logical processors, Samsung 990 PRO NVMe;
@@ -165,9 +183,8 @@ Jobs a second, first run and second, without keys and then with them.
 
 ## What this leaves
 
-- **Keys a burst does not scatter**: measured again on an idle host, keys
-  kept apart cost an enqueue nothing and drain a keyed burst 2.7 times as
-  fast, which is the engine's next change.
+- **Keys a burst does not scatter**: built, and measured above; a key read
+  costs 3.7 µs more, and a key left behind costs its row until maintenance.
 - **The engine against a table an application polls by hand**, on the five
   cases: what the engine buys over the way it replaces.
 - **A queue's count kept rather than read at open**, when a queue of ten
