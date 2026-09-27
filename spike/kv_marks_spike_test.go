@@ -149,8 +149,19 @@ func kvMarkVariants(depth int) []kvMarkVariant {
 			and m.prefix in (select unhex(value) from json_each(?4)) and m.cleared >= c.version)`,
 			bound: kvJSONPrefixes,
 		},
+		{name: "guarded-in-8", test: kvGuarded + kvInList(8) + ")", bound: padded(8)},
+		{name: "guarded-in-depth", test: kvGuarded + kvInList(depth+1) + ")", bound: padded(depth + 1)},
+		{
+			name: "guarded-json", test: kvGuarded + `exists (select 1 from branches as m where m.bucket = c.bucket
+			and m.prefix in (select unhex(value) from json_each(?4)) and m.cleared >= c.version))`,
+			bound: kvJSONPrefixes,
+		},
 	}
 }
+
+// kvGuarded looks for a mark of the bucket before it looks up the branches, so
+// that a bucket without one pays a single seek, as the substring does
+const kvGuarded = `(exists (select 1 from branches as g where g.bucket = c.bucket) and `
 
 func kvInList(count int) string {
 	var placeholders []string
