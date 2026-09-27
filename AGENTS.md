@@ -60,7 +60,7 @@ one write ([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
 [the round](docs/reports/jobs-mechanics-2026-09-27.md),
 [the engine's](docs/reports/jobs-engine-2026-09-27.md)).
 
-Designed, not built: `blobs`, a draft to settle with the user
+Designed, not built: `blobs`, its questions settled with the user
 ([docs/blobs.md](docs/blobs.md), [its round](docs/reports/blobs-mechanics-2026-09-27.md)),
 and self-metrics.
 

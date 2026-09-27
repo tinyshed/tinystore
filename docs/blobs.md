@@ -1,12 +1,12 @@
 # Blobs: the application's files
 
-The design of the blobs engine, not built. It is a draft to build with the
-user: the surface and the contracts below are proposals, what lies under
-[Storage](#storage) waits for the mechanics round, and every decision this
-draft could not settle is a question under [Open](#open), with a
-recommendation. Figures marked as the probe come from throwaway programs run
-on 27 September 2026 outside the repository; the round repeats them in
-`spike/` before any of them is relied on. The probe ran on an AMD Ryzen 7
+The design of the blobs engine, not built. Its questions were settled with
+the user on 27 September after [the mechanics round](reports/blobs-mechanics-2026-09-27.md),
+and the engine is built from this page with the user; what those decisions
+were is under [Decided](#decided), and what is still to measure under
+[Open](#open). Figures marked as the probe come from throwaway programs run on
+27 September 2026 outside the repository; the round repeated them in
+`spike/blobs_*`, and where the two differ the round's stand. The probe ran on an AMD Ryzen 7
 7700 with a Samsung 990 PRO NVMe disk, on Windows 11 Pro 10.0.26200 with NTFS
 and Defender's real-time protection on, and in Docker Desktop 29.6.2 on WSL2,
 `golang:1.27` on a named ext4 volume; go1.27.1; random bytes from a seeded
@@ -73,7 +73,7 @@ Copy(ctx, from, to, opts...) (blobs.Object, error)    // shares the bytes; Conte
 Move(ctx, from, to, opts...) (blobs.Object, error)    // one write; the same options
 Scan(ctx, blobs.Query) (blobs.Page, error)            // every key under this folder, in byte order
 All(ctx, blobs.Query) iter.Seq2[blobs.Object, error]  // the same, a page at a time, no snapshot held
-Usage(ctx) (blobs.Usage, error)                       // objects and bytes under this folder, one row
+Usage(ctx) (blobs.Usage, error)                       // objects and bytes under this folder, counted
 Clear(ctx) error                                      // this folder and every folder under it
 Of(owners ...any) *blobs.Bucket
 
@@ -195,7 +195,7 @@ while its ETag holds; deleting the account runs `avatars.Of(id).Clear(ctx)`.
 
 **Chat attachments.** The composer uploads a file while its user types; a file
 never sent is gone in a day, one sent moves out of `pending/` and stays, and
-the user's folder answers a quota check from one row.
+the user's folder answers a quota check by counting its objects' rows.
 
 ```go
 files, err := blobs.OpenBucket(ctx, objects, "chat-files")
@@ -444,15 +444,16 @@ type Object struct {
 - **An object appears at its commit, whole, or not at all.** No reader sees a
   part of one, under its key or under any other.
 - **Memory does not follow size.** An upload holds at most the inline size in
-  memory, 64 KiB until the round says otherwise, while it does not know
-  whether its object is larger; past it, bytes go to the object's file as they
-  arrive. A 64-byte icon and a 17 GB film pass through one call and one
+  memory, 16 KiB, while it does not know whether its object is larger; past
+  it, bytes go to the upload's file as they arrive. A 64-byte icon and a 17 GB film pass through one call and one
   buffer.
 - **`blobs.Size(n)` says the stream's length.** The engine places the object
   before its first byte, and a stream that ends short of `n` or runs past it is
   `ErrInvalid` and leaves nothing. A negative `n` says nothing, so
   `blobs.Size(r.ContentLength)` needs no condition around it; a
   `*bytes.Reader` or a `*strings.Reader` says its own length.
+- **An unfinished upload is not an object.** Its bytes wait in `uploads/`,
+  where no reader looks, until its commit names them.
 - **An upload lives as long as the context given to `Create`.** A request
   that ends mid-upload leaves nothing, and the store's `Close` aborts every
   upload that has not committed; an upload used after that, after `Commit` or
@@ -537,8 +538,14 @@ type Object struct {
 ## Usage
 
 - **`Usage(ctx)` is the objects and bytes under a folder**, the bucket's own
-  included, read from one row: every folder keeps its totals, updated in the
-  transaction of each write, `Move`, `Delete`, expiry and `Clear`.
+  included, counted from the objects' rows over the folder's range of keys: a
+  millisecond over ten thousand objects, 8 over a hundred thousand and 89 over
+  a million in [the round](reports/blobs-mechanics-2026-09-27.md). No write
+  pays for it. Totals kept for every folder would cost up to half the writes
+  of deep paths under load, for a call many applications never make; they come
+  when a workload calls `Usage` often over folders that large.
+- **An expired object is absent from it at once**, as from every call, and so
+  are the objects a `Clear` hid.
 - **It counts objects, not files.** A `Copy` counts its bytes under its
   destination although no byte was copied.
 - **A check is not a limit.** Two uploads that each pass a quota check can
@@ -560,9 +567,9 @@ between them decides what a crash leaves:
 
 ## Deleting and replacing under readers
 
-A file is never renamed, never written after its commit and never given a name
-it had before, so a reader that opened one reads exactly the object it
-looked up. The open file is the reader's lease: removing its name leaves the
+A file is renamed once, into `objects/` before any row names it, and never
+after; it is never written after its commit and never given a name it had
+before, so a reader that opened one reads exactly the object it looked up. The open file is the reader's lease: removing its name leaves the
 bytes to the handles that have them, and the disk takes them back when the
 last handle closes. [The earlier direction](storage-runtime-direction.md)
 asked for leases that collection respects; a name that is never used twice
@@ -610,25 +617,37 @@ No transaction spans the file system and SQLite, so the order of a file's
 writes is the whole protocol:
 
 ```text
-step                                                an exit after it leaves           the next Open
-1  commit a row of uploads naming the content's id  a row, maybe a partial file       removes the file, then the row
-2  create objects/1a3/1a3f07, write it, hash it     the row and a partial file        the same
-3  sync the file, then its directory                the row and a whole file          the same
-4  commit the content, the object, the folders'     the object, and bytes no key      nothing: maintenance
-   totals and the replaced content; drop the row    names any more                    removes those bytes
-5  remove the file of a content no key names        nothing                           nothing
+step                                                    an exit after it leaves            the next Open
+1  take the content's id from the block held in memory  nothing                            nothing
+2  create uploads/1a3f07, write it, hash it             a partial file in uploads/         empties uploads/
+3  sync the file                                        a whole file in uploads/           the same
+4  rename it to objects/1a3/1a3f07, sync that directory a file in objects/ no row names    removes it: its id is past the settled mark
+5  commit the content, the object, the replaced one     the object, and bytes no key       nothing: maintenance
+                                                        names any more                     removes those bytes
+6  remove the file of a content no key names            nothing                            nothing
 ```
 
 - **A committed row never names bytes that are not durable**: the file and its
-  name are synced before the commit that names them.
-- **An inline object is one commit**: its bytes, its row, the totals and the
-  replaced content, together. So is a `Delete`, a `Copy` and a `Move`.
-- **`Open` repairs only what `uploads` names**, the uploads in flight when the
-  process died, 1024 at most, and walks no directory. Contents no key names are
-  maintenance's, in batches.
-- **A commit whose outcome is unknown decides nothing wrongly**: the row of
-  `uploads` is dropped by the commit that names the content, so a file is
-  removed only when its content was never committed.
+  name in `objects/` are synced before the commit that names them.
+- **No write happens before the first byte.** A content's id comes from a
+  block of a thousand reserved in `meta` by a transaction of its own, as jobs
+  reserves its ids, so an upload names its file without a commit, and the
+  round's cost of a row before the first byte, 3.8 ms alone on Linux, is gone.
+- **An inline object is one commit**: its bytes, its row and the replaced
+  content, together. So is a `Delete`, a `Copy` and a `Move`.
+- **`Open` walks what a crash can have left, and nothing else**: `uploads/`,
+  which holds the uploads in flight when the process died, 1024 at most; and
+  the directories of `objects/` that hold the ids past the settled mark, the
+  ids reserved since maintenance last moved it, where a file no content names
+  is removed. Maintenance moves the mark up to the first id an upload still
+  holds, so a crash leaves it at most a minute and the longest upload behind.
+- **A commit whose outcome is unknown decides nothing wrongly**: the upload
+  keeps its id unsettled, asks once the file answers whether a content names
+  it, and removes its file when none does; a process that dies first leaves
+  it to the next `Open`.
+- **A rename can meet a scanner on Windows.** One that opened the new file
+  without sharing its deletion makes the rename fail; the upload tries again a
+  few times before it fails, and the gates show how often it must.
 - **A process that dies and a disk that loses power are different tests.** The
   gates kill the process at every step; a power cut is argued from the order
   above and not tested, since no gate can cut the power.
@@ -655,8 +674,8 @@ step                                                an exit after it leaves     
   and hashing 64 KiB takes about 27 µs at the probe's rate.
 - **A range is not checked.** Its bytes come from the file as they are; the
   scrub finds a change among them within its pass.
-- **The scrub reads every content once a pass**, 30 days by default, a slice
-  each minute, and keeps its place and its hash state in `blobs.db`, so a
+- **The scrub reads every content once a pass**, 30 days as its target
+  until its pace is measured beside readers, a slice each minute, and keeps its place and its hash state in `blobs.db`, so a
   restart does not start it again. A changed or missing content is marked,
   logged once at Error with the keys that name it, and its next `Open` is
   `ErrCorrupt` naming the key; `Put`, `Delete` and `Clear` work over it as over
@@ -666,15 +685,18 @@ step                                                an exit after it leaves     
 
 ## Storage
 
-A proposal the round settles. The engine claims `blobs/`, a directory, where
-every other engine claims a file.
+Settled by [the round](reports/blobs-mechanics-2026-09-27.md) and the user.
+The engine claims `blobs/`, a directory, where every other engine claims a
+file.
 
 ```text
 data/blobs/
-├── blobs.db          buckets, objects, contents, the bytes kept inline, folders, uploads
+├── blobs.db          buckets, objects, contents, the bytes kept inline
+├── uploads/
+│   └── 1a3f08        an upload's bytes until its commit; emptied at open
 └── objects/
     ├── 1a3/
-    │   └── 1a3f07    content 0x1a3f07: the object's bytes, written once, never renamed
+    │   └── 1a3f07    content 0x1a3f07: the object's bytes, renamed here once, then never changed
     └── 1a4/          a directory for each 4,096 ids, so none holds more names than that
 ```
 
@@ -722,14 +744,15 @@ chunks, which a file does already; every byte would go through the WAL twice,
 every snapshot would copy all of them with `blobs.db`, and deleting them would
 leave the file its size.
 
-**The inline size** is the round's, from 16, 64 and 256 KiB. Inline costs
-every byte written twice, to the WAL and then to the file, a copy in every
-snapshot of `blobs.db`, and a body read whole: 64 KiB is a chain of sixteen
-overflow pages, and the driver cannot read part of one, since
-`modernc.org/sqlite` v1.59.0 hands out no incremental BLOB I/O
-(`sqlite3_blob_open` is in its `lib` and nowhere in the driver, as
-`bench/blob` found). A file costs a sync of its own, a commit before its
-first byte, and an open a read. Nothing else the driver ships changes this:
+**The inline size is 16 KiB.** Up to it inline wrote and read faster than a
+file on Linux and on Windows at every concurrency the round tried; at 64 KiB a
+file read faster on both. Inline costs every byte written twice, to the WAL and
+then to the file, a copy in every snapshot of `blobs.db`, and a body read
+whole: 64 KiB is a chain of sixteen overflow pages, and the driver cannot read
+part of one, since `modernc.org/sqlite` v1.59.0 hands out no incremental BLOB
+I/O (`sqlite3_blob_open` is in its `lib` and nowhere in the driver, as
+`bench/blob` found). A file costs a sync of its own and its directory's, and
+an open a read. Nothing else the driver ships changes this:
 `vfs`, `pcache`, `vtab` and `vec` answer other questions, and each would be an
 import the size probe weighs.
 
@@ -740,20 +763,20 @@ objects    bucket | path | revision | content | size | etag | type | modified | 
 contents   id | names | size | sha256 | inline | damaged      names 0: bytes to remove
            index (id) where names = 0
 bodies     id | bytes                                          an inline content's bytes
-folders    bucket | path | objects | bytes                     each folder's totals, the bucket's own at ""
-uploads    id | bucket | path | started                        a file being written; at open, each is abandoned
 cleared    bucket | prefix | revision                          a Clear past 10,000 objects, as kv marks a branch
-meta       name | value                                        the revision's high-water mark, the scrub's place
+meta       name | value                                        the revision's high-water mark, the ids reserved
+                                                               and settled, the scrub's place
 ```
 
 - **4 KiB pages**, as kv and jobs have: an object's row holds its path, a few
   numbers, its type and its meta, and a `Scan` or a `Stat` never reads an
   inline body, which is a row of `bodies`; the round's `dbstat` says what each
   table costs.
-- **One sequence for revisions and contents.** Every write takes the file's
-  next revision, kept as its high-water mark in the write's own transaction as
-  kv's is; a content written by it takes the same number, which names its
-  file, so no name is given twice after a delete or a crash.
+- **A content's id names its file and is never given twice**, not after a
+  delete or a crash: ids come from blocks reserved in `meta`, and every id at
+  or below the settled mark is committed or has no file. A write's revision is
+  apart from it, the file's high-water mark in the write's own transaction as
+  kv's is.
 - **A content counts its names**: `Copy` adds one, a `Delete`, a replacement,
   an expiry and a `Clear` take one away, and a content without names is
   removed, an inline one inside that transaction and a file after it.
@@ -766,8 +789,8 @@ meta       name | value                                        the revision's hi
   `Open` and `Stat` read the object, its content and, when inline, its bytes
   together. A `Scan` page is one snapshot of at most five seconds.
 - **Maintenance runs through `Store.Every`**: expired objects, objects a mark
-  hid, files no key names, uploads whose context ended, and a slice of the
-  scrub.
+  hid, files no key names, uploads whose context ended, the settled mark, and
+  a slice of the scrub.
 
 ## Snapshot and backup
 
@@ -819,15 +842,15 @@ meta       name | value                                        the revision's hi
 | Objects a bucket holds | the disk's |
 | A content type | 256 bytes |
 | Meta | 2 KiB |
-| Kept inline | 64 KiB, set by the round |
-| Memory an upload holds | the inline size |
+| Kept inline | 16 KiB |
+| Memory an upload holds | the inline size, 16 KiB |
 | Uploads at once | 1024 |
 | Free space kept | 1 GiB by default, `Options.KeepFree` |
 | A `Scan` page | 1000 objects, 4 MiB |
 | A `Clear` in its own transaction | 10,000 objects; a larger one is marked |
 | Expired objects a maintenance transaction removes | 10,000 |
 | Lookups an `Open` makes while its key changes | 3 |
-| A scrub pass | 30 days by default |
+| A scrub pass | 30 days as its target, measured before it is promised |
 
 ## Errors
 
@@ -854,7 +877,8 @@ The five cases are the gates' workloads.
 | an object appears whole at its commit or not at all | `TestAnObjectAppearsWholeAtItsCommitOrNotAtAll` |
 | an exit at every step of an upload leaves no row naming missing bytes, and no file the next open keeps | `TestAnExitAtEveryStepOfAnUploadLeavesNothingBehind` |
 | an upload aborted, abandoned or ended by its context leaves nothing | `TestAnAbortedOrAbandonedUploadLeavesNothing` |
-| the next open repairs only what `uploads` names | `TestOpenRemovesOnlyAbandonedUploads` |
+| the next open empties `uploads/` and walks only the unsettled ids of `objects/` | `TestOpenRemovesWhatAbandonedUploadsLeft` |
+| a commit whose outcome is unknown leaves no file no row names | `TestAnUnknownCommitLeavesNoFileBehind` |
 | a reader keeps what it opened through a delete, a replace, an expiry and a `Clear`, on Windows too | `TestAReaderKeepsWhatItOpened` |
 | an `Open` racing a replace opens the new object | `TestAnOpenRacingAReplaceOpensTheNewObject` |
 | a whole read of a changed byte fails before its end | `TestAWholeReadOfAChangedByteFailsBeforeItsEnd` |
@@ -868,7 +892,7 @@ The five cases are the gates' workloads.
 | an expired object is absent to every operation | `TestAnExpiredObjectIsAbsentToEveryOperation` |
 | a copy or a move takes the expiry a `Put` would give it | `TestACopyOrMoveTakesTheExpiryOfAWrite` |
 | a copy shares the bytes and outlives its source | `TestACopySharesTheBytesAndOutlivesItsSource` |
-| `Usage` follows every write, move, delete, expiry and `Clear` | `TestUsageFollowsEveryChange` |
+| `Usage` counts what every write, move, delete, expiry and `Clear` left | `TestUsageCountsWhatIsThere` |
 | `Clear` empties a folder and those under it at once, over the bound and under it | `TestClearEmptiesAFolderAndThoseUnderIt` |
 | a key is its own bytes on every file system | `TestAKeyIsItsOwnBytesOnEveryFileSystem` |
 | a path that is not one is refused | `TestAPathThatIsNotOneIsRefused` |
@@ -898,12 +922,16 @@ The five cases are the gates' workloads.
 
 Each waits for a workload that needs it and a measurement that pays for it.
 
-- Resuming an upload after a lost connection or a restart: the upload's row
-  keeps its offset and its SHA-256 state, which `crypto/sha256` marshals, and
-  the protocol's `write` carries the offset, as tus does.
+- Resuming an upload after a lost connection or a restart: a row of its own
+  would keep its offset and its SHA-256 state, which `crypto/sha256` marshals,
+  and the protocol's `write` would carry the offset, as tus does.
 - Packs for the sizes above inline, with their compaction; a snapshot would
   link a pack as it links a file and read it to the length its copy of
-  `blobs.db` names, since a pack only grows.
+  `blobs.db` names, since a pack only grows. What would bring them is a store
+  of a million small files, whose zip backup took 183 s and whose restore held
+  198 MiB of headers in the round.
+- Totals kept for every folder, for a workload that calls `Usage` often over
+  folders of a million objects.
 - Ranges that are checked: a CRC-32C a 64 KiB block, which would cost each
   reader a 64 KiB buffer and each file a table of its own.
 - Sharing the bytes of equal uploads: contents found by their SHA-256 and
@@ -914,61 +942,34 @@ Each waits for a workload that needs it and a measurement that pays for it.
 - A quota enforced inside the commit.
 - Transactions over several blob calls, and `Copy` or `Move` between buckets.
 - Appending to an object, and reading one while it is written.
-- A walk for files no row names: only something outside the engine makes one.
+- A walk of every directory for files no row names: only something outside
+  the engine makes one, since the next `Open` walks what a crash can leave.
 - Signed URLs, resizing, HTTP handlers: the application's.
+
+## Decided
+
+With the user on 27 September, after [the round](reports/blobs-mechanics-2026-09-27.md):
+
+| Question | Decided | Why |
+|---|---|---|
+| the inline size | 16 KiB | inline won both ways up to it on both systems; at 64 KiB a file read faster; 32 KiB is not worth a round |
+| `Usage` | a count over the folder's rows, no totals kept | 10⁵ objects in 8 ms, against up to 47 % of the writes of deep paths for totals |
+| an upload's first row | none: ids reserved in blocks | a commit before the first byte cost 3.8 ms alone on Linux; an unfinished upload is not an object |
+| packs | none in the first version | 1.3 to 1.9 times on Linux, a loss on Windows, and compaction's whole class of trouble; a million small files is the trigger for later |
+| places | two: inline and a file | the round |
+| keys | paths, `Of` naming a folder as kv names a branch | a path is what URLs, S3 and file systems speak, and `Of` makes `users/4` unable to meet `users/42` |
+| what `Scan` walks | every key under the folder | reconciling with the application's rows and deleting an account need every key; kv's `Scan`, own keys only, differs here |
+| a replacement's expiry | every write gets its own term | an export generated again lives its day again |
+| `KeepFree` | 1 GiB by default | one upload must not take the space every engine's commits need |
+| the scrub | on, 30 days as its target | its pace is measured beside readers before the default is promised |
+| checked ranges | not in the first version | a file stays the object's bytes; a whole read is checked at 2 GB/s |
+| the ETag | the bytes' hash | HTTP and S3 speak it |
+| `MaxSize` | no bound by default | a film is 17 to 80 GB |
+| resuming uploads, what `Put` returns, a download's name, absence, an upload's life, `Copy` and `Move` | as the draft proposed | starting again, the `Object`, a string of `Meta`, a found flag, the context given to `Create`, inside one bucket |
 
 ## Open
 
-[The mechanics round](reports/blobs-mechanics-2026-09-27.md) ran these on 27
-September, in the container and on Windows, and repeated the probe's figures
-in `spike/blobs_*`; where its numbers and this page's differ, the round's
-stand. It proposes inline up to 16 KiB rather than 64, files and no pack,
-whole reads checked and ranges not, a large upload synced every 256 MiB,
-backup entries stored, and it leaves to the user a folder's totals, an
-upload's first row and backups of a million small files.
-
-### For the round
-
-Environments: the `golang:1.27` container on a named volume, and Windows 11 on
-NTFS with Defender's real-time protection on, as a user has it; the
-production host where kv's round ran, if the user allows it again. Bytes are
-random from a seeded source, as media is; JPEGs come from `image/jpeg` over
-generated images.
-
-| Question | Why | What decides it |
-|---|---|---|
-| the inline size: 16, 64 or 256 KiB | inline shares its commit, a file pays a sync; inline bytes cross the WAL twice and land in every snapshot's copy | `Put` and `Open` throughput and p99 from 4 to 256 KiB at 1, 16 and 128 callers, inline against a file; `blobs.db` by object from `dbstat`, the WAL's peak, `VACUUM INTO` seconds a GB: the largest size at which inline writes and reads at least as fast as a file, unless its snapshot costs more than the file it saves |
-| whether a million files need packs | files need no compaction, packs fewer names | 10⁵ and 10⁶ files from 64 KiB to 1 MiB: create rate as directories fill, a snapshot's links, a backup's zip, a restore's memory, the disk used against the bytes; beside them a pack writer that batches before it syncs: packs come when files lose by more than twice at a size many objects have, or a snapshot of 10⁶ files takes longer than copying their bytes |
-| the upload's first commit | a file-sized upload commits before its first byte | `Put` latency from 64 KiB to 4 MiB with the row and without it, against ids reserved in blocks and checked by range at open |
-| the directory's sync | a name must be durable before the row that names it | its cost after the file's sync, alone and shared by concurrent uploads, on Linux and through `CreateFile` on Windows |
-| how often a large upload syncs | one sync at the end waits for every dirty page | `Commit` latency and dirty memory after 4 GiB with one sync, and with one every 64 and 256 MiB |
-| uploads at once | each holds the inline size until it knows more | 16 to 1024 concurrent `Put`s of 1 MiB and of 1 GiB: throughput, `Store.Memory`'s peak, open handles |
-| `Usage` from counters or a scan | a quota check reads one row, and every write updates a row a folder | `Put` throughput with paths of 1, 4 and 16 segments, with and without counters; `Usage` by a scan over 10³ to 10⁶ objects, warm and cold |
-| checked ranges | a range is unchecked until the scrub | `http.ServeContent` throughput, whole and ranged, with the whole-object hash against a CRC-32C every 64 KiB, and memory a reader |
-| the scrub's pace | it reads every byte a pass | `Open`'s p99 while the scrub reads 100 GB at 30 days a pass |
-| `blobs.db`'s copy | `VACUUM INTO` rebuilds the file; the driver's online backup API (`NewBackup`) copies pages and costs no import | seconds a GB of inline bodies both ways |
-| entries stored or deflated | deflate ran at 7 GB/s on random bytes | backup and restore time of a 17 GB object and of 10⁵ JPEGs |
-| the probe itself | its figures are one run each outside the repository | every figure on this page, repeated in `spike/` with its command |
-
-### For the user
-
-Decisions this draft could not make alone, each with a recommendation.
-
-| Question | Recommendation | Why |
-|---|---|---|
-| two places or three in the first version | two: inline and files; packs when the round shows a million files cost too much | in the probe a shared pack gained less than twice at 64 and 256 KiB with 128 writers on Linux, little at 1 MiB, and lost on Windows, while compaction is the most delicate code a blob store has |
-| keys | paths, with `Of` naming a folder as kv names a branch | a path is what URLs, S3 and file systems speak, and `Of` makes `users/4` unable to meet `users/42` |
-| what `Scan` walks | every key under the folder; a folder view later | reconciling with the application's rows and totals need every key; kv's `Scan`, own keys only, differs here |
-| checked ranges | not in the first version: whole reads and the scrub | a file stays the object's bytes, which `sha256sum`, `ffprobe` and a hard link read as they are |
-| resuming uploads | starting again in the first version; resuming next | the protocol's `write` gains an offset then, and the upload's row its hash state |
-| `Usage` | counters kept for every folder | a quota check reads one row; an expired object counts until maintenance removes it |
-| the ETag | the bytes' hash, not a version | HTTP and S3 speak it, and the only replace it lets through replaces the bytes the writer saw |
-| a replacement's expiry | every write gets its own term | an export generated again lives its day again; kv keeps a live key's expiry instead |
-| `KeepFree` | 1 GiB by default | one upload must not take the space every engine's commits need |
-| `MaxSize` | no bound by default | a film is 17 to 80 GB |
-| the scrub | on, a pass every 30 days | a changed byte is otherwise found only by a whole read |
-| what `Put` returns | the `Object` | the ETag and the size are what an upload learns, and what the application's row keeps |
-| a download's file name | a string of `Meta`, not a field | only `ContentType` is needed to serve an object; `Content-Disposition` is the application's header, as the exports case writes it |
-| absence | a found flag, as kv's and jobs' `Get` | no new sentinel in the root |
-| an upload's life | the context given to `Create` | a dropped request leaves nothing: its next call aborts it, or maintenance does when no call comes |
-| `Copy` and `Move` | inside one bucket | across buckets needs a second handle in the call and no case asked for it |
+| Question | What decides it |
+|---|---|
+| the scrub's pace | `Open`'s p99 while the scrub reads at 30 days a pass, on both systems |
+| how often a rename on Windows meets a scanner | the gates' count of retried renames with Defender's real-time protection on |
