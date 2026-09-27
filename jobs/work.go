@@ -32,14 +32,20 @@ func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]
 	if err != nil {
 		return q.fail("", err)
 	}
+	return q.work(ctx, handle, settings, settings.workers)
+}
+
+// work runs a Work loop that holds at most hold jobs: running, or claimed for
+// a worker still busy with the one before
+func (q *Queue[V]) work(ctx context.Context, handle func(context.Context, Job[V]) error, settings workSettings,
+	hold int,
+) error {
 	leave, err := q.store.admit(ctx)
 	if err != nil {
 		return err
 	}
 	defer leave()
-
-	loop := newWorkLoop(q, handle, settings)
-	return loop.run(ctx)
+	return newWorkLoop(q, handle, settings, hold).run(ctx)
 }
 
 // workLoop is one Work: the jobs it holds, which its workers run, and the
@@ -61,8 +67,9 @@ type handed[V any] struct {
 	row claimedRow
 }
 
-func newWorkLoop[V any](q *Queue[V], handle func(context.Context, Job[V]) error, settings workSettings) *workLoop[V] {
-	hold := settings.workers
+func newWorkLoop[V any](q *Queue[V], handle func(context.Context, Job[V]) error, settings workSettings,
+	hold int,
+) *workLoop[V] {
 	return &workLoop[V]{
 		q: q, handle: handle, settings: settings, hold: hold,
 		hand: make(chan handed[V], hold), finished: make(chan settlement, hold), holding: map[*lease]struct{}{},

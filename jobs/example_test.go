@@ -134,8 +134,8 @@ func Example_pushes() {
 		return queues.Tx(ctx, func(tx *jobs.Tx) error {
 			for _, member := range members {
 				push := Push{User: member, Message: message}
-				if err := pushes.WithTx(tx).Enqueue(ctx, push, jobs.Key(message+":"+member)); err != nil {
-					return err
+				if enqueueErr := pushes.WithTx(tx).Enqueue(ctx, push, jobs.Key(message+":"+member)); enqueueErr != nil {
+					return enqueueErr
 				}
 			}
 			return nil
