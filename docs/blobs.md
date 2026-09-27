@@ -1,10 +1,12 @@
 # Blobs: the application's files
 
-The design of the blobs engine, not built. Its questions were settled with
-the user on 27 September after [the mechanics round](reports/blobs-mechanics-2026-09-27.md),
-and the engine is built from this page with the user; what those decisions
-were is under [Decided](#decided), and what is still to measure under
-[Open](#open). Figures marked as the probe come from throwaway programs run on
+The design of the blobs engine, built on 27 September from this page:
+[blobs/README.md](../blobs/README.md) states its contract as built, and
+[What building it settled](#what-building-it-settled) what the code decided
+that the draft had not. Its questions were settled with the user after
+[the mechanics round](reports/blobs-mechanics-2026-09-27.md); what those
+decisions were is under [Decided](#decided), and what is still to measure
+under [Open](#open). Figures marked as the probe come from throwaway programs run on
 27 September 2026 outside the repository; the round repeated them in
 `spike/blobs_*`, and where the two differ the round's stand. The probe ran on an AMD Ryzen 7
 7700 with a Samsung 990 PRO NVMe disk, on Windows 11 Pro 10.0.26200 with NTFS
@@ -69,7 +71,7 @@ Create(ctx, key, opts...) (*blobs.Upload, error)      // the same options; the o
 Open(ctx, key) (*blobs.Reader, bool, error)           // io.ReadSeekCloser and io.ReaderAt, with the Object's fields
 Stat(ctx, key) (blobs.Object, bool, error)
 Delete(ctx, key, opts...) error                       // blobs.IfMatch; an absent key is not an error
-Copy(ctx, from, to, opts...) (blobs.Object, error)    // shares the bytes; ContentType, Meta, TTL, ExpireAt, IfNoneMatch
+Copy(ctx, from, to, opts...) (blobs.Object, error)    // shares the bytes; every option but Size, conditions for to
 Move(ctx, from, to, opts...) (blobs.Object, error)    // one write; the same options
 Scan(ctx, blobs.Query) (blobs.Page, error)            // every key under this folder, in byte order
 All(ctx, blobs.Query) iter.Seq2[blobs.Object, error]  // the same, a page at a time, no snapshot held
@@ -303,7 +305,7 @@ ETag it read, and a save over someone else's is refused.
 
 ```go
 func (a *app) putDocument(w http.ResponseWriter, r *http.Request) {
-	options := []blobs.WriteOption{blobs.ContentType(r.Header.Get("Content-Type")), blobs.Size(r.ContentLength)}
+	options := []blobs.Option{blobs.ContentType(r.Header.Get("Content-Type")), blobs.Size(r.ContentLength)}
 	switch {
 	case r.Header.Get("If-None-Match") == "*":
 		options = append(options, blobs.IfNoneMatch())
@@ -455,9 +457,12 @@ type Object struct {
 - **An unfinished upload is not an object.** Its bytes wait in `uploads/`,
   where no reader looks, until its commit names them.
 - **An upload lives as long as the context given to `Create`.** A request
-  that ends mid-upload leaves nothing, and the store's `Close` aborts every
-  upload that has not committed; an upload used after that, after `Commit` or
-  after `Abort` is `ErrClosed`. An `Upload` is one goroutine's.
+  that ends mid-upload leaves nothing: a call on the upload after its context
+  ended finds it aborted, and maintenance aborts one left without calls, since
+  only the store starts goroutines that outlive a call. The store's `Close`
+  aborts every upload that has not committed; an upload used after that, after
+  `Commit` or after `Abort` is `ErrClosed`, and after its context ended that
+  context's error. An `Upload` is one goroutine's.
 - **`MaxSize(n)` bounds a bucket's objects.** The upload that passes it stops
   with `ErrLimit` and leaves nothing; there is no bound by default, since a
   film is 17 to 80 GB.
@@ -471,7 +476,9 @@ type Object struct {
 - **`IfNoneMatch()` creates only.** A live object under the key is
   `ErrConflict`, so an upload retried after a timeout adds nothing.
 - **`IfMatch(etag)` replaces or deletes only the version with that ETag**; any
-  other, and an absent key, is `ErrConflict`.
+  other, and an absent key, is `ErrConflict`. It takes an `If-Match` header as
+  it is: a list of ETags, any of which matches, `*` for any live object, and
+  a weak ETag, which matches nothing, since `If-Match` compares strongly.
 - **A condition is checked twice**: when an upload begins, so that a doomed
   upload of gigabytes stops before its first byte, and in its commit, which
   decides.
@@ -501,8 +508,8 @@ type Object struct {
 
 - **`TTL(d)` and `ExpireAt(t)` on a write, `DefaultTTL(d)` on a bucket.** The
   store's clock, read once a call. An expiry is a schedule and not an
-  observation, so blobs has no `ErrTooOld` window; `Options.Clock` moves a test
-  a month ahead without sleeping.
+  observation, so blobs has no `ErrTooOld` window; the store's
+  `Options.Clock` moves a test a month ahead without sleeping.
 - **Every write gives its object the expiry a `Put` would**: the call's, else
   the bucket's `DefaultTTL` from now, else none. An export generated again
   lives its day again, and a file moved out of `pending/` into a bucket
@@ -511,8 +518,8 @@ type Object struct {
 - **Expired is absent to every operation.** `Open`, `Stat` and `Scan` do not
   see it, `IfNoneMatch` claims its key, and `IfMatch` conflicts with it.
 - **Maintenance removes expired objects every minute**, 10,000 a transaction,
-  and their bytes when no other key names them. Until then an expired object
-  still counts in `Usage`.
+  and their bytes when no other key names them. Until then its bytes stay on
+  the disk, though no call counts them.
 
 ## Copy, Move, Delete and Clear
 
@@ -524,7 +531,7 @@ type Object struct {
   in one commit, the bytes untouched.
 - **A `Copy` or `Move` from an absent key is `ErrConflict`**, as jobs'
   `Update` of an absent key is. Both stay inside one bucket, and both take
-  `IfNoneMatch` for the destination.
+  `IfNoneMatch` or `IfMatch` for the destination.
 - **`Delete` removes a key**; an absent key is not an error, and `IfMatch`
   makes it conditional.
 - **`Clear` removes a folder and every folder under it**, at once. Up to
@@ -580,6 +587,12 @@ a wrong byte:
   changed: `Open` looks the key up again, three lookups in all, and then
   answers `ErrConflict`. A file gone while its key still names it is
   `ErrCorrupt` naming the key.
+- **On Windows a name goes when the handle that removes it closes.** Go's
+  `Root.Remove` deletes with POSIX semantics, and for the moment between its
+  delete and its close an open of the name is refused with access denied
+  rather than not found; the engine's gates met that moment within a few
+  hundred replacements. `Open` treats that refusal as a key that changed, and
+  a refusal while the key still names the file as the open's error.
 
 On Windows this holds only for files opened with `FILE_SHARE_DELETE`, which
 `os.Open` does not ask for and `os.Root`'s opens do, as the Go 1.27.1 source
@@ -675,8 +688,11 @@ step                                                    an exit after it leaves 
 - **A range is not checked.** Its bytes come from the file as they are; the
   scrub finds a change among them within its pass.
 - **The scrub reads every content once a pass**, 30 days as its target
-  until its pace is measured beside readers, a slice each minute, and keeps its place and its hash state in `blobs.db`, so a
-  restart does not start it again. A changed or missing content is marked,
+  until its pace is measured beside readers, a slice each minute: a
+  43,200th of the contents' bytes and at least 1 MiB, so a small store is read
+  sooner. It keeps its place and its hash state in `blobs.db`, so a restart
+  does not start it again, and a slice for which the store's memory is taken
+  waits for the next minute. A changed or missing content is marked,
   logged once at Error with the keys that name it, and its next `Open` is
   `ErrCorrupt` naming the key; `Put`, `Delete` and `Clear` work over it as over
   any other. A backup is what repairs it.
@@ -765,7 +781,8 @@ contents   id | names | size | sha256 | inline | damaged      names 0: bytes to 
 bodies     id | bytes                                          an inline content's bytes
 cleared    bucket | prefix | revision                          a Clear past 10,000 objects, as kv marks a branch
 meta       name | value                                        the revision's high-water mark, the ids reserved
-                                                               and settled, the scrub's place
+                                                               and settled
+scrub      content | offset | state | pace                     the scrub's place, its hash's state, a slice's bytes
 ```
 
 - **4 KiB pages**, as kv and jobs have: an object's row holds its path, a few
@@ -782,12 +799,12 @@ meta       name | value                                        the revision's hi
   removed, an inline one inside that transaction and a file after it.
 - **A write's statements run in a savepoint of a grouped transaction**,
   through `internal/sqlite.File.UpdateGrouped` as kv's do: 1024 writes and 8
-  MiB a group, so 128 inline objects of 64 KiB share one commit. A file's
+  MiB a group, so 512 inline objects of 16 KiB share one commit. A file's
   commit joins a group; its sync cannot, and its directory's is shared by the
   uploads that finish together in one directory.
 - **A lookup is one statement** through `File.Lookup`, its own snapshot:
   `Open` and `Stat` read the object, its content and, when inline, its bytes
-  together. A `Scan` page is one snapshot of at most five seconds.
+  together. A `Scan` page and a `Usage` are one statement each too.
 - **Maintenance runs through `Store.Every`**: expired objects, objects a mark
   hid, files no key names, uploads whose context ended, the settled mark, and
   a slice of the scrub.
@@ -824,7 +841,7 @@ meta       name | value                                        the revision's hi
 | a reader of a file | its handle | nothing |
 | a reader of an inline object | its bytes | at `Open`, until `Close` |
 | a `Scan` page | 1000 objects, 4 MiB of their fields | before its read |
-| the scrub | a buffer of 1 MiB | for its slice |
+| the scrub | a buffer of 1 MiB, or a quarter of the store's memory when that is less | for its slice, if free at once |
 
 - **Uploads at once are bounded**: 1024 slots, then an upload waits for a slot
   or for memory, and leaves when its context ends. Grouped writes wait in 2048
@@ -898,25 +915,48 @@ The five cases are the gates' workloads.
 | a path that is not one is refused | `TestAPathThatIsNotOneIsRefused` |
 | a stream that disagrees with its `Size` is refused | `TestAStreamThatDisagreesWithItsSizeIsRefused` |
 | an upload past `MaxSize` or `KeepFree` stops and leaves nothing | `TestAnUploadPastItsBoundsStopsAndLeavesNothing` |
-| a file another program holds is removed later | `TestAFileHeldElsewhereIsRemovedLater` |
+| a file another program holds is removed later | `TestAFileHeldElsewhereIsRemovedLater`, on Windows |
 | a snapshot links the files and copies `blobs.db` | `TestASnapshotLinksFilesAndCopiesTheDatabase` |
 | collection waits for a snapshot | `TestCollectionWaitsForASnapshot` |
-| a backup restores every object bit for bit | `TestABackupRestoresEveryObject`, one past 4 GiB opt-in |
+| a backup restores every object bit for bit | `TestABackupRestoresEveryObject`; `TestABackupRestoresAnObjectPast4GiB` when `TINYSTORE_LARGE_BACKUP` is set |
 | the engine links no `net/http` | `TestBlobsImportsNoHTTP` |
 | engines never import each other | `TestEnginesDoNotImportEachOther`, with blobs in its list |
+| an upload left without calls after its context ended is aborted | `TestMaintenanceAbortsAnUploadItsContextLeft` |
+| uploads, readers and pages hold the store's memory | `TestStoreMemoryBoundsUploadsReadsAndScans` |
+| a file missing while its key names it is corrupt | `TestAMissingFileIsCorruptNamingItsKey` |
+| a scrub cut by a reopen goes on where it was | `TestTheScrubKeepsItsPlaceAcrossReopens` |
+| a directory's sync is shared by the files arriving together | `TestADirectorySyncIsSharedByTheFilesArrivingTogether` |
 
-## What the runtime gains
+## What the runtime gained
 
-- **An engine snapshots several files.** `Snapshotter.Snapshot` returns one
-  `SnapshotFile`; blobs returns `blobs.db` and every file it linked, and the
+- **An engine snapshots several files.** `Snapshotter.Snapshot` returns a
+  `[]SnapshotFile`; blobs returns `blobs.db` and every file it linked, and the
   manifest lists each.
-- **The backup stores what does not compress**, and opens files through an
-  `os.Root`: a file the backup holds through `os.Open` cannot be removed on
-  Windows until the backup moves past it.
-- **The architecture's blobs paragraph changes**: a reader's lease is its open
+- **The backup stores what does not compress**, a `SnapshotFile` marked
+  `Stored`, and opens files through an `os.Root`: a file the backup holds
+  through `os.Open` cannot be removed on Windows until the backup moves past
+  it.
+- **`Claim` makes a directory it is asked for**, a name ending in `/`, as it
+  makes the directory a file lies in.
+- **`internal/sqlite.ReadCopy` reads a snapshot's copy**, read-only, so that
+  blobs links the files its copy names rather than the live file's.
+- **The architecture's blobs paragraph changed**: a reader's lease is its open
   file, and the snapshot is what collection waits for.
-- **`AGENTS.md` changes with the code**: blobs in the status, the shape and
-  the gates, and in `TestEnginesDoNotImportEachOther`.
+
+## What building it settled
+
+What the draft left to the code, and what the code found:
+
+| Question | Built | Why |
+|---|---|---|
+| a call's options | one `blobs.Option`, and a call refuses one it does not take with `ErrInvalid` | kv's calls take one `Option`; three kinds of option cost three names at every call site for one refusal the compiler would make |
+| conditions on `Copy` and `Move` | `IfNoneMatch` and `IfMatch`, both for the destination | a write names the key it writes, and the source's absence is `ErrConflict` already |
+| an upload whose context ended | aborted by its next call, or by maintenance, not by a goroutine of its own | only the store starts goroutines that outlive a call; the slot and 16 KiB it holds wait at most a minute |
+| an open refused while its file is being removed | a key that changed, on Windows | the gates met the delete-pending moment within a few hundred replacements |
+| the scrub's memory | 1 MiB, or a quarter of the store's memory, taken only if free at once | a slice that waited would hold the whole of maintenance |
+| what a slice of the scrub reads | a 43,200th of the bytes and at least 1 MiB | 30 days at one slice a minute, and a small store read within the hour |
+| an ETag | the first 16 bytes of the SHA-256, in hex and quoted | the length of S3's, an MD5 in hex; equal bytes, one ETag |
+| an expired object's bytes in `Usage` | not counted, as no call counts it | the draft said both |
 
 ## Not in the first version
 

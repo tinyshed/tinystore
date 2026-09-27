@@ -5,6 +5,9 @@
 //	├── LOCK           held while a store is open
 //	├── metrics.db     metrics.Open(ctx, store, …)
 //	├── records.db     records.Open(ctx, store, …)
+//	├── kv.db          kv.Open(ctx, store, …)
+//	├── jobs.db        jobs.Open(ctx, store, …)
+//	├── blobs/         blobs.Open(ctx, store, …): blobs.db and the files
 //	└── sql/
 //	    └── app.db     sqldb.Open(ctx, store, "app", migrations)
 //

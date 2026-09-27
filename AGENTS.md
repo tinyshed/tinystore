@@ -43,8 +43,9 @@ branches, expiry by the store's clock, sliding or fixed, versions that never
 repeat, writes committed in groups, point reads without a transaction,
 counters kept in memory between flushes when a crash may lose a second of
 them, and a branch cleared at once however large ([kv/README.md](kv/README.md)).
-`Store.Snapshot` copies every engine's file while it works, and `backup`
-writes those copies as one zip and restores it before `Open`.
+`Store.Snapshot` copies every engine's files while it works, blobs' linked
+rather than copied, and `backup` writes those copies as one zip and restores
+it before `Open`.
 
 `records` is built to [docs/records.md](docs/records.md), except the
 per-segment text sample, which one zstd frame a segment bounds at 0.48 bytes a
@@ -60,9 +61,16 @@ one write ([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
 [the round](docs/reports/jobs-mechanics-2026-09-27.md),
 [the engine's](docs/reports/jobs-engine-2026-09-27.md)).
 
-Designed, not built: `blobs`, its questions settled with the user
-([docs/blobs.md](docs/blobs.md), [its round](docs/reports/blobs-mechanics-2026-09-27.md)),
-and self-metrics.
+`blobs` keeps the application's files in `blobs/`: objects under keys that
+are paths, their rows in `blobs.db` with the bytes up to 16 KiB, and above it
+a file each, written in `uploads/` and renamed into `objects/` before the row
+that names it commits; readers that keep what they opened, whole reads
+checked by their SHA-256, `Copy` and `Move` that share the bytes, a `Clear`
+however large, a scrub, and snapshots that link the files
+([blobs/README.md](blobs/README.md), [docs/blobs.md](docs/blobs.md),
+[the round](docs/reports/blobs-mechanics-2026-09-27.md)).
+
+Designed, not built: self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -84,6 +92,7 @@ Do not describe unbuilt behaviour as though it works.
 | `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
 | `kv/`                | the application's current state: typed buckets, branches, expiry, versions    |
 | `jobs/`              | work that runs at its time: queues ordered by time, leases, retries, repeats  |
+| `blobs/`             | the application's files: objects by path, inline or a file each, checked reads |
 | `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
@@ -537,6 +546,27 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | jobs hold values in the store's memory                 | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers`                                 |
 | an Enqueue waiting for memory has written nothing      | `TestAnEnqueueWaitingForMemoryHasWrittenNothing`                                |
 | a jobs Tx takes only the memory that is free           | `TestATransactionTakesOnlyTheMemoryThatIsFree`                                  |
+| a Put that returned survives an abrupt exit            | `TestAPutThatReturnedSurvivesAnAbruptExit`, inline and in files                 |
+| an object appears whole at its commit or not at all    | `TestAnObjectAppearsWholeAtItsCommitOrNotAtAll`, readers racing its replacements |
+| an exit at any step of an upload leaves nothing behind | `TestAnExitAtEveryStepOfAnUploadLeavesNothingBehind`, the next Open cleaning up  |
+| Open walks only what a crash can have left             | `TestOpenRemovesWhatAbandonedUploadsLeft`, past the settled mark alone          |
+| a commit whose outcome is unknown leaves no file       | `TestAnUnknownCommitLeavesNoFileBehind`                                         |
+| an upload that does not commit leaves nothing          | `TestAnAbortedOrAbandonedUploadLeavesNothing`, `TestMaintenanceAbortsAnUploadItsContextLeft` |
+| a reader keeps what it opened, on Windows too          | `TestAReaderKeepsWhatItOpened`, through a delete, a replace, an expiry, a Clear |
+| an Open racing a replace opens the new object          | `TestAnOpenRacingAReplaceOpensTheNewObject`                                     |
+| a whole read of a changed byte fails before its end    | `TestAWholeReadOfAChangedByteFailsBeforeItsEnd`; a range is not checked         |
+| the scrub finds what changed and names its keys        | `TestTheScrubNamesTheKeysOfWhatChanged`, `TestTheScrubKeepsItsPlaceAcrossReopens` |
+| memory does not follow an object's size                | `TestMemoryDoesNotGrowWithAnObjectsSize`, `TestStoreMemoryBoundsUploadsReadsAndScans` |
+| a stream that disagrees with its Size is refused       | `TestAStreamThatDisagreesWithItsSizeIsRefused`                                  |
+| an upload past MaxSize or KeepFree leaves nothing      | `TestAnUploadPastItsBoundsStopsAndLeavesNothing`                                |
+| of two conditional replaces, one conflicts             | `TestOneOfTwoConditionalReplacesConflicts`, `TestIfNoneMatchCreatesOnce`        |
+| a copy shares the bytes and outlives its source        | `TestACopySharesTheBytesAndOutlivesItsSource`                                   |
+| a blobs Clear empties a folder and those under it      | `TestClearEmptiesAFolderAndThoseUnderIt`, over the bound and under it           |
+| a key is its own bytes on every file system            | `TestAKeyIsItsOwnBytesOnEveryFileSystem`, `TestAPathThatIsNotOneIsRefused`      |
+| a file another program holds is removed later          | `TestAFileHeldElsewhereIsRemovedLater`, on Windows                              |
+| a snapshot links the files, and removal waits for it   | `TestASnapshotLinksFilesAndCopiesTheDatabase`, `TestCollectionWaitsForASnapshot` |
+| a backup restores every object bit for bit             | `TestABackupRestoresEveryObject`; past 4 GiB when `TINYSTORE_LARGE_BACKUP` is set |
+| the blobs engine links no net/http                     | `TestBlobsImportsNoHTTP`                                                        |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

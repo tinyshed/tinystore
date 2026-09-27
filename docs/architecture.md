@@ -2,7 +2,7 @@
 
 The contract for the runtime and every engine beyond metrics. What is built
 today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
-store, `sqldb/`, `records/`, `kv/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
+store, `sqldb/`, `records/`, `kv/`, `jobs/`, `blobs/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every`, the memory budget and snapshots. Everything else here is designed and
 agreed, not built. [examples/notes](../examples/notes/main.go) is a program
 using the built part, and [samples/](samples/README.md) holds a reference
@@ -27,7 +27,7 @@ data/
 ├── records.db      records: logs and events
 ├── jobs.db         jobs
 ├── kv.db           kv
-├── blobs/          blobs: objects, segments, packs
+├── blobs/          blobs: blobs.db, uploads/, objects/
 └── sql/
     └── app.db      databases the application names
 ```
@@ -359,10 +359,21 @@ sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.Sliding(30*24
 s, found, err := sessions.Of(userID).Get(ctx, token)
 ```
 
-**blobs** (boundary only). Metadata in SQLite, bytes in files and segments
-under `blobs/`; external bytes are durable before the metadata that points at
-them commits, and readers hold a lease that collection respects.
-`docs/storage-runtime-direction.md` has the reasoning.
+**blobs** (built; contract in [blobs/README.md](../blobs/README.md), design
+in [blobs.md](blobs.md)). The application's files in `blobs/`: rows in
+`blobs.db`, bytes up to 16 KiB inline and above it a file each, synced and
+renamed into `objects/` before the row that names it commits, so a crash
+leaves no row naming missing bytes and the next open removes what uploads
+left. A file is never written or renamed again, and a reader's lease is its
+open file, opened through an `os.Root` so that Windows lets the engine remove
+it underneath; a snapshot is what collection waits for, since it links the
+files its copy of `blobs.db` names.
+
+```go
+objects, err := blobs.Open(ctx, store, blobs.Options{})
+avatars, err := blobs.OpenBucket(ctx, objects, "avatars", blobs.MaxSize(20<<20))
+obj, err := avatars.Of(user.ID).Put(ctx, "original", r.Body, blobs.Size(r.ContentLength))
+```
 
 **jobs** (built, a first slice: [jobs/README.md](../jobs/README.md); the
 design is [jobs.md](jobs.md)). Work that
@@ -442,10 +453,16 @@ a claim extended and snoozed by hand, a Work loop and maintenance. Built the
 same way from Windows 11, it adds 8 064 KiB, against 7 812 at `24d9b91`
 without it: jobs costs a program 252 KiB.
 
+On 27 September the probe also opens blobs: a Put and an upload, a reader
+that seeks and reads a range, Stat, Copy, Move, a conditional Delete, a walk,
+Usage, a Clear and maintenance. Built the same way from Windows 11, it adds
+8 388 KiB, against 8 104 without it at `624263f`: blobs costs a program
+284 KiB.
+
 ## Where the examples are
 
 - `examples/notes`: a program using the store, `sqldb`, metrics instruments,
-  `records` and `backup`, built and tested with the module. It replaces the
-  text prototype the runtime was designed from.
+  `records`, `kv`, `jobs`, `blobs` and `backup`, built and tested with the
+  module. It replaces the text prototype the runtime was designed from.
 - Commit `407e728`, merged into `main`: the metrics ingest path rewritten in
   the target style, behaviour and bytes unchanged; see `docs/rewrite.md`.
