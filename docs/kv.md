@@ -412,6 +412,7 @@ Clear(42) at revision R
 | A `LoseAtMost` flush | 10,000 keys a transaction |
 | A `Clear` in its own transaction | 10,000 keys; a larger one is marked, and is `ErrLimit` inside `Tx` |
 | Durable writes committed together | 1024 |
+| The writer's page cache | 4 MiB; a reader's 1 MiB |
 
 ## Gates
 

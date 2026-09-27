@@ -98,7 +98,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 }
 
 func openFile(ctx context.Context, path string) (*sqlite.File, error) {
-	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers, PageSize: pageSize})
+	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers, PageSize: pageSize, WriterCache: writerCache})
 	if err != nil {
 		return nil, fmt.Errorf("kv: open: %w", err)
 	}

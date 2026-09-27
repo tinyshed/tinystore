@@ -85,8 +85,9 @@ func readCacheCounters(driverConn any, result *WriterCounters) error {
 // connection and nothing in the pool may expire and reopen. PageSize applies
 // only to a file this call creates; zero keeps SQLite's default.
 type Config struct {
-	Readers  int
-	PageSize int
+	Readers     int
+	PageSize    int
+	WriterCache int // bytes of the writer's page cache; zero keeps the readers' 1 MiB
 }
 
 func (c Config) check() error {
@@ -95,6 +96,9 @@ func (c Config) check() error {
 	}
 	if c.PageSize != 0 && (c.PageSize < 512 || c.PageSize > 65536 || c.PageSize&(c.PageSize-1) != 0) {
 		return fmt.Errorf("open SQLite: page size %d is not a power of two from 512 to 65536", c.PageSize)
+	}
+	if c.WriterCache < 0 {
+		return fmt.Errorf("open SQLite: a writer's cache of %d bytes", c.WriterCache)
 	}
 	return nil
 }
@@ -111,7 +115,7 @@ func Open(ctx context.Context, path string, config Config) (*File, error) {
 		return nil, fmt.Errorf("resolve SQLite path: %w", err)
 	}
 
-	f, err := openWriter(ctx, abs, config.PageSize)
+	f, err := openWriter(ctx, abs, config)
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +137,13 @@ const walQuery = `pragma journal_mode=WAL`
 // file to WAL, so that readers keep their snapshots while it writes. The page
 // size is a pragma of the connection because it must precede the file's first
 // write, which turning on WAL is.
-func openWriter(ctx context.Context, abs string, pageSize int) (*File, error) {
+func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	arguments := writerArguments()
-	if pageSize > 0 {
-		arguments.Add("_pragma", fmt.Sprintf("page_size(%d)", pageSize))
+	if config.PageSize > 0 {
+		arguments.Add("_pragma", fmt.Sprintf("page_size(%d)", config.PageSize))
+	}
+	if config.WriterCache > 0 {
+		withWriterCache(arguments, config.WriterCache)
 	}
 	writer, err := sql.Open("sqlite", connectionURL(abs, arguments))
 	if err != nil {
@@ -180,6 +187,16 @@ func (f *File) connectWriter(ctx context.Context) error {
 	}
 	f.writerConn = &writeConnection{conn: connection}
 	return nil
+}
+
+// withWriterCache gives the writer a page cache of bytes, the readers keeping
+// their own
+func withWriterCache(arguments url.Values, bytes int) {
+	for i, pragma := range arguments["_pragma"] {
+		if strings.HasPrefix(pragma, "cache_size(") {
+			arguments["_pragma"][i] = fmt.Sprintf("cache_size(-%d)", bytes>>10)
+		}
+	}
 }
 
 // connectionURL carries the pragmas, because each pooled connection applies

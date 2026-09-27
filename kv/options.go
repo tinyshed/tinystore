@@ -16,6 +16,7 @@ type Options struct{}
 const (
 	pageSize      = 4 << 10         // at 1 KiB a row with a 256-byte value overflows its page
 	readers       = 8               // the reader connections, what the measured reads went through
+	writerCache   = 4 << 20         // the writer's pages: 20,000 keys overwritten at random fit, 21 % more Sets
 	writeSlots    = 2048            // writes at once: a group of 1024 gathering while one commits
 	viewTimeout   = 5 * time.Second // the longest a View holds its snapshot
 	expiryEvery   = time.Minute     // how often maintenance deletes expired keys

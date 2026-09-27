@@ -299,6 +299,24 @@ func (s *testState) spilledRows(t *testing.T) int {
 	return count
 }
 
+// the writer keeps 4 MiB of pages, the readers 1 MiB each
+func TestTheWriterKeepsFourMiBOfPages(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	var kib int64
+	err := state.file.UpdatePrepared(t.Context(), func(w sqlite.Writer) error {
+		return sqlite.QueryRow(t.Context(), w, "pragma cache_size").Scan(&kib)
+	})
+	if err != nil || kib != -4096 {
+		t.Fatalf("the writer's cache_size is %d, %v", kib, err)
+	}
+	err = state.file.Lookup(t.Context(), func(r sqlite.Reader) error {
+		return sqlite.QueryRow(t.Context(), r, "pragma cache_size").Scan(&kib)
+	})
+	if err != nil || kib != -1024 {
+		t.Fatalf("a reader's cache_size is %d, %v", kib, err)
+	}
+}
+
 // the goroutines a processor writes from: 512 at sixteen
 const writersPerCPU = 32
 
