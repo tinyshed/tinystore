@@ -81,7 +81,9 @@ err = store.Attach(engine)              // Close will close it
 logger := store.Logger("metrics")       // the application's logger, engine=metrics
 store.Every("metrics maintenance", time.Minute, engine.maintain)
 now := store.Now()                      // the store's clock, replaceable in tests
-release, err := store.Reserve(ctx, n)   // n bytes of the store's memory, in arrival order
+reserved, err := store.Reserve(ctx, n)  // n bytes of the store's memory, in arrival order
+reserved.Shrink(m)                      // keep m of them, having learnt what the work holds
+now, err := store.ReserveNow(n)         // never waits: ErrLimit unless n bytes are free
 ```
 
 Every engine's `Open` has the same shape: claim, open and migrate its file,
@@ -118,7 +120,10 @@ possible if exporting them turns out to be a mistake.
 `Options.Memory` bounds the bytes that every engine's in-flight work holds at
 once. An engine reserves before it materialises (`Store.Reserve`); waiters are
 served in arrival order, a cancelled waiter leaves the queue, and a reservation
-larger than the whole budget is refused with `ErrLimit`. Zero leaves each
+larger than the whole budget is refused with `ErrLimit`. Work that learns its
+size as it goes reserves its worst case and shrinks to what it holds. Work
+holding a file's writer reserves with `ReserveNow`, which never waits: the
+writes it would wait for hold their memory while they wait for that writer. Zero leaves each
 engine to its own per-call limits; `Store.Memory` reports use, peak and
 capacity. What was the metrics engine's `WorkBudget` lives here: a default
 `Read` reserves its worst case,

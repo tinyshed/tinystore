@@ -65,12 +65,12 @@ func TestAReservationLargerThanTheStoreIsRefused(t *testing.T) {
 	if _, err := store.Reserve(t.Context(), 101); !errors.Is(err, ErrLimit) {
 		t.Fatalf("101 bytes of 100: %v", err)
 	}
-	release, err := store.Reserve(t.Context(), 100)
+	reserved, err := store.Reserve(t.Context(), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	release()
-	release()
+	reserved.Release()
+	reserved.Release()
 	if usage := store.Memory(); usage != (MemoryUsage{Used: 0, Peak: 100, Capacity: 100}) {
 		t.Fatalf("usage after a release called twice: %+v", usage)
 	}
@@ -78,16 +78,87 @@ func TestAReservationLargerThanTheStoreIsRefused(t *testing.T) {
 
 func TestAStoreWithoutMemoryGrantsEveryReservation(t *testing.T) {
 	store := openTestStore(t, t.TempDir(), Options{})
-	release, err := store.Reserve(t.Context(), 1<<62)
+	reserved, err := store.Reserve(t.Context(), 1<<62)
 	if err != nil {
 		t.Fatal(err)
 	}
-	release()
+	reserved.Shrink(1)
+	reserved.Release()
+	if now, nowErr := store.ReserveNow(1 << 62); nowErr != nil || now != reserved {
+		t.Fatalf("a reservation that cannot wait, without a budget: %v", nowErr)
+	}
 	if usage := store.Memory(); usage != (MemoryUsage{}) {
 		t.Fatalf("usage %+v", usage)
 	}
 	if _, err = Open(t.Context(), t.TempDir(), Options{Memory: -1}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("negative memory: %v", err)
+	}
+}
+
+// a reservation that reserved its worst case gives back what it does not
+// hold, and a waiter the rest now fits is let in
+func TestAReservationShrinksToWhatItHolds(t *testing.T) {
+	store := openTestStore(t, t.TempDir(), Options{Memory: 10})
+	worst, err := store.Reserve(t.Context(), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter := make(chan error, 1)
+	go func() {
+		reserved, reserveErr := store.Reserve(t.Context(), 5)
+		if reserveErr == nil {
+			defer reserved.Release()
+		}
+		waiter <- reserveErr
+	}()
+	waitForWaiters(t, store.memory, 1)
+
+	worst.Shrink(12)
+	worst.Shrink(3)
+	if err := <-waiter; err != nil {
+		t.Fatal(err)
+	}
+	worst.Release()
+	worst.Shrink(3)
+	if usage := store.Memory(); usage != (MemoryUsage{Used: 0, Peak: 8, Capacity: 10}) {
+		t.Fatalf("usage after shrinking and releasing: %+v", usage)
+	}
+}
+
+// a reservation that cannot wait takes what is free, ahead of a waiter, and
+// is refused at once when it does not fit
+func TestAReservationThatCannotWaitTakesOnlyWhatIsFree(t *testing.T) {
+	store := openTestStore(t, t.TempDir(), Options{Memory: 10})
+	held, err := store.Reserve(t.Context(), 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter := make(chan error, 1)
+	go func() {
+		reserved, reserveErr := store.Reserve(t.Context(), 7)
+		if reserveErr == nil {
+			reserved.Release()
+		}
+		waiter <- reserveErr
+	}()
+	waitForWaiters(t, store.memory, 1)
+
+	if _, err = store.ReserveNow(5); !errors.Is(err, ErrLimit) {
+		t.Fatalf("5 bytes that cannot wait, with 4 free: %v", err)
+	}
+	now, err := store.ReserveNow(4)
+	if err != nil {
+		t.Fatalf("4 bytes that cannot wait, with 4 free: %v", err)
+	}
+	held.Release()
+	select {
+	case err := <-waiter:
+		t.Fatalf("the waiter was let in beside a reservation holding its room: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	now.Release()
+	if err := <-waiter; err != nil {
+		t.Fatal(err)
 	}
 }
 

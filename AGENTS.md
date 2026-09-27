@@ -469,6 +469,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | narrow reads pay only for selected packed chunks     | `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks` |
 | an engine's work honors the store's memory           | `TestStoreMemoryBoundsReadsIngestAndMaintenance`                         |
 | a large reservation is not passed over by small ones | `TestMemoryGrantsInArrivalOrder` and `TestMemoryCancelledWaiterLetsTheNextOneIn` |
+| a reservation shrinks to what its work holds         | `TestAReservationShrinksToWhatItHolds`                                    |
+| work holding a writer never waits for memory         | `TestAReservationThatCannotWaitTakesOnlyWhatIsFree`                       |
 | streaming owns each result and exposes partial failure | `TestStreamOwnsResultsAndReportsPartialFailure`                         |
 | an error about one series carries its labels           | `TestIngestRefusalNamesItsSeries` and `TestIngestValidationNamesItsSeries` |
 | a series that cannot be repaired can still be dropped  | `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours` |

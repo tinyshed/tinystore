@@ -44,11 +44,14 @@ func (s *Store) reserve(ctx context.Context, weigh func() int64) (release func()
 	if s.runtime == nil || s.runtime.Memory().Capacity == 0 {
 		return func() {}, nil
 	}
-	release, err = s.runtime.Reserve(ctx, max(weigh(), 1))
+	reserved, err := s.runtime.Reserve(ctx, max(weigh(), 1))
 	if errors.Is(err, tinystore.ErrLimit) {
 		return nil, fmt.Errorf("records: %w", err)
 	}
-	return release, err
+	if err != nil {
+		return nil, err
+	}
+	return reserved.Release, nil
 }
 
 // holdMaintenance lets one Maintain at a time run on a store

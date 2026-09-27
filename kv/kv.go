@@ -244,15 +244,12 @@ func (s *Store) admitWrite(ctx context.Context) (release func(), err error) {
 	}, nil
 }
 
-// reserve holds an operation's weight in the store's memory; a store without
-// Options.Memory is not asked
-func (s *Store) reserve(ctx context.Context, bytes int) (release func(), err error) {
-	if s.runtime.Memory().Capacity == 0 {
-		return func() {}, nil
-	}
-	release, err = s.runtime.Reserve(ctx, int64(max(bytes, 1)))
+// reserve holds an operation's weight in the store's memory, waiting in
+// arrival order until it fits
+func (s *Store) reserve(ctx context.Context, bytes int) (*tinystore.Reservation, error) {
+	reserved, err := s.runtime.Reserve(ctx, int64(max(bytes, 1)))
 	if errors.Is(err, tinystore.ErrLimit) {
 		return nil, fmt.Errorf("kv: %w", err)
 	}
-	return release, err
+	return reserved, err
 }

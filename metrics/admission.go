@@ -39,11 +39,14 @@ func (s *Store) reserve(ctx context.Context, weigh func() (int64, error)) (relea
 	if err != nil {
 		return nil, err
 	}
-	release, err = s.runtime.Reserve(ctx, weight)
+	reserved, err := s.runtime.Reserve(ctx, weight)
 	if errors.Is(err, tinystore.ErrLimit) {
 		return nil, fmt.Errorf("%w: %s", ErrLimit, err.Error())
 	}
-	return release, err
+	if err != nil {
+		return nil, err
+	}
+	return reserved.Release, nil
 }
 
 func (s *Store) enter(ctx context.Context) error {

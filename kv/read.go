@@ -112,11 +112,11 @@ func (b *Bucket[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 	if err != nil {
 		return Page[V]{}, b.fail(call{key: query.After}, err)
 	}
-	unreserve, err := b.state.reserve(ctx, scanBytes)
+	reserved, err := b.state.reserve(ctx, scanBytes)
 	if err != nil {
 		return Page[V]{}, err
 	}
-	defer unreserve()
+	defer reserved.Release()
 
 	var rows []row
 	more := false

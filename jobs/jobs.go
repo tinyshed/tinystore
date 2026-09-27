@@ -186,11 +186,14 @@ func (s *Store) reserve(ctx context.Context, bytes int) (release func(), err err
 	if bytes <= 0 || s.runtime.Memory().Capacity == 0 {
 		return func() {}, nil
 	}
-	release, err = s.runtime.Reserve(ctx, int64(bytes))
+	reserved, err := s.runtime.Reserve(ctx, int64(bytes))
 	if errors.Is(err, tinystore.ErrLimit) {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
-	return release, err
+	if err != nil {
+		return nil, err
+	}
+	return reserved.Release, nil
 }
 
 // clock is the store's time in unix milliseconds, read once a call

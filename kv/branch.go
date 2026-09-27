@@ -114,11 +114,11 @@ func (b *branch) write(ctx context.Context, bytes int, work func(sqlite.Writer) 
 		return err
 	}
 	defer release()
-	unreserve, err := b.state.reserve(ctx, bytes)
+	reserved, err := b.state.reserve(ctx, bytes)
 	if err != nil {
 		return err
 	}
-	defer unreserve()
+	defer reserved.Release()
 	return b.state.file.UpdateGrouped(ctx, bytes, work)
 }
 

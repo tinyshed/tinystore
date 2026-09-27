@@ -62,7 +62,7 @@ func TestStoreMemoryBoundsReadsIngestAndMaintenance(t *testing.T) {
 		},
 	}
 	for _, name := range []string{"ingest", "read", "maintain"} {
-		release, err := runtime.Reserve(t.Context(), capacity)
+		reserved, err := runtime.Reserve(t.Context(), capacity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func TestStoreMemoryBoundsReadsIngestAndMaintenance(t *testing.T) {
 			t.Fatalf("%s while the store's memory is taken: %v", name, err)
 		}
 		cancel()
-		release()
+		reserved.Release()
 		if err = work[name](t.Context()); err != nil {
 			t.Fatalf("%s once the memory is free: %v", name, err)
 		}

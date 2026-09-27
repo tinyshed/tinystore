@@ -13,18 +13,60 @@ type MemoryUsage struct {
 	Used, Peak, Capacity int64
 }
 
-// Reserve waits, in arrival order, until bytes fit the store's memory, and
-// returns the release that gives them back; call it once. A reservation larger
-// than the whole budget is refused at once with ErrLimit, and a store without
-// Options.Memory grants every reservation.
-func (s *Store) Reserve(ctx context.Context, bytes int64) (release func(), err error) {
+// Reservation is bytes of the store's memory that one piece of work holds.
+type Reservation struct {
+	memory *memory // nil when the store has no Options.Memory
+	mu     sync.Mutex
+	bytes  int64
+}
+
+// unbudgeted is every reservation of a store without Options.Memory
+var unbudgeted Reservation
+
+// Reserve waits, in arrival order, until bytes fit the store's memory. A
+// reservation larger than the whole budget is refused at once with ErrLimit,
+// and a store without Options.Memory grants every reservation.
+func (s *Store) Reserve(ctx context.Context, bytes int64) (*Reservation, error) {
 	if s.memory == nil {
-		return func() {}, nil
+		return &unbudgeted, nil
 	}
 	if err := s.memory.acquire(ctx, bytes); err != nil {
 		return nil, err
 	}
-	return sync.OnceFunc(func() { s.memory.release(bytes) }), nil
+	return &Reservation{memory: s.memory, bytes: bytes}, nil
+}
+
+// ReserveNow takes bytes only if they fit at once, ahead of any reservation
+// waiting, and is ErrLimit otherwise. Work holding what a waiting reservation
+// may need, such as a file's writer, reserves this way: waiting, it could wait
+// for itself.
+func (s *Store) ReserveNow(bytes int64) (*Reservation, error) {
+	if s.memory == nil {
+		return &unbudgeted, nil
+	}
+	if err := s.memory.acquireNow(bytes); err != nil {
+		return nil, err
+	}
+	return &Reservation{memory: s.memory, bytes: bytes}, nil
+}
+
+// Shrink gives back all but n of the bytes, for work that reserved its worst
+// case and has learnt what it holds.
+func (r *Reservation) Shrink(n int64) {
+	if r.memory == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if kept := max(n, 0); kept < r.bytes {
+		r.memory.release(r.bytes - kept)
+		r.bytes = kept
+	}
+}
+
+// Release gives back what the reservation holds; a second call gives nothing.
+func (r *Reservation) Release() {
+	r.Shrink(0)
 }
 
 func (s *Store) Memory() MemoryUsage {
@@ -56,8 +98,8 @@ func (m *memory) usage() MemoryUsage {
 }
 
 func (m *memory) acquire(ctx context.Context, bytes int64) error {
-	if bytes <= 0 || bytes > m.capacity {
-		return fmt.Errorf("%w: a reservation of %d bytes against the store's %d", ErrLimit, bytes, m.capacity)
+	if err := m.fits(bytes); err != nil {
+		return err
 	}
 	m.mu.Lock()
 	if err := ctx.Err(); err != nil {
@@ -84,6 +126,29 @@ func (m *memory) acquire(ctx context.Context, bytes int64) error {
 		m.abandon(waiter)
 		return ctx.Err()
 	}
+}
+
+// acquireNow takes bytes if they fit beside what is held; the reservations
+// waiting wait for more than is free, or they would have been granted
+func (m *memory) acquireNow(bytes int64) error {
+	if err := m.fits(bytes); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if free := m.capacity - m.used; bytes > free {
+		return fmt.Errorf("%w: a reservation of %d bytes that cannot wait, and %d of the store's %d are free",
+			ErrLimit, bytes, free, m.capacity)
+	}
+	m.take(bytes)
+	return nil
+}
+
+func (m *memory) fits(bytes int64) error {
+	if bytes <= 0 || bytes > m.capacity {
+		return fmt.Errorf("%w: a reservation of %d bytes against the store's %d", ErrLimit, bytes, m.capacity)
+	}
+	return nil
 }
 
 // abandon takes a cancelled waiter out of the queue, or gives its bytes back

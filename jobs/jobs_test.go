@@ -265,7 +265,7 @@ func TestStoreMemoryBoundsEnqueuesReadsAndHandlers(t *testing.T) {
 		},
 	}
 	for _, name := range []string{"enqueue", "get", "scan", "work"} {
-		release, err := queues.runtime.Reserve(t.Context(), capacity)
+		reserved, err := queues.runtime.Reserve(t.Context(), capacity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,7 +274,7 @@ func TestStoreMemoryBoundsEnqueuesReadsAndHandlers(t *testing.T) {
 			t.Fatalf("%s while the store's memory is taken: %v", name, err)
 		}
 		cancel()
-		release()
+		reserved.Release()
 		if err = work[name](t.Context()); err != nil {
 			t.Fatalf("%s once the memory is free: %v", name, err)
 		}
