@@ -137,12 +137,9 @@ func (p place) leave() {
 // makes anything, so that a write waiting for its turn holds nothing the store
 // has not counted; inside Tx the place is the transaction's
 func (b *branch) enter(ctx context.Context, held int) (place, error) {
-	out := func() {}
-	if b.tx == nil {
-		var err error
-		if out, err = b.state.admitWrite(ctx); err != nil {
-			return place{}, err
-		}
+	out, err := b.takeTurn(ctx)
+	if err != nil {
+		return place{}, err
 	}
 	if held <= 0 {
 		return place{out: out}, nil
@@ -153,6 +150,18 @@ func (b *branch) enter(ctx context.Context, held int) (place, error) {
 		return place{}, err
 	}
 	return place{reserved: reserved, out: out}, nil
+}
+
+// takeTurn lets a write in among the writes waiting for the writer; inside Tx
+// the turn is the transaction's, and a View has none to give
+func (b *branch) takeTurn(ctx context.Context) (out func(), err error) {
+	if b.tx == nil {
+		return b.state.admitWrite(ctx)
+	}
+	if _, err = b.tx.writer(b.state); err != nil {
+		return nil, err
+	}
+	return func() {}, nil
 }
 
 // write runs a write where this handle writes, holding held bytes of the
