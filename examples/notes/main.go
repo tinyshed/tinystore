@@ -1,5 +1,6 @@
 // Command notes is what a program using TinyStore looks like: one directory,
-// its own SQL, its own metrics and logs, its drafts, a backup, and one Close.
+// its own SQL, its own metrics and logs, its drafts, its jobs, a backup, and
+// one Close.
 //
 //	go run ./examples/notes -dir ./data
 package main
@@ -20,6 +21,7 @@ import (
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/backup"
+	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
@@ -46,15 +48,18 @@ func main() {
 
 // app is the handles a program keeps: the store has no accessors
 type app struct {
-	store    *tinystore.Store
-	db       *sqldb.DB
-	stats    *metrics.Store
-	logs     *records.Store
-	state    *kv.Store
-	drafts   *kv.Bucket[string]
-	logger   *slog.Logger
-	created  metrics.CounterInstrument
-	requests metrics.CounterInstrument
+	store     *tinystore.Store
+	db        *sqldb.DB
+	stats     *metrics.Store
+	logs      *records.Store
+	state     *kv.Store
+	drafts    *kv.Bucket[string]
+	queues    *jobs.Store
+	indexing  *jobs.Queue[int64] // a note to index for search, now
+	reminders *jobs.Queue[int64] // a note to look at again tomorrow, keyed by the note
+	logger    *slog.Logger
+	created   metrics.CounterInstrument
+	requests  metrics.CounterInstrument
 }
 
 func run(ctx context.Context, dir string, out io.Writer) (err error) {
@@ -68,6 +73,9 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 		return err
 	}
 	if err = a.useDrafts(ctx, out); err != nil {
+		return err
+	}
+	if err = a.useJobs(ctx, out); err != nil {
 		return err
 	}
 	if err = a.readBack(ctx, out); err != nil {
@@ -110,6 +118,9 @@ func (a *app) openEngines(ctx context.Context, console slog.Handler) error {
 	if a.drafts, err = kv.OpenBucket[string](ctx, a.state, "drafts", kv.DefaultTTL(7*24*time.Hour)); err != nil {
 		return err
 	}
+	if err = a.openQueues(ctx); err != nil {
+		return err
+	}
 
 	a.logger = slog.New(slog.NewMultiHandler(console, a.logs.Handler("notes")))
 	a.created = a.stats.Counter("notes_created_total")
@@ -121,7 +132,19 @@ func (a *app) openEngines(ctx context.Context, console slog.Handler) error {
 	return nil
 }
 
+func (a *app) openQueues(ctx context.Context) (err error) {
+	if a.queues, err = jobs.Open(ctx, a.store, jobs.Options{}); err != nil {
+		return err
+	}
+	if a.indexing, err = jobs.OpenQueue[int64](ctx, a.queues, "indexing"); err != nil {
+		return err
+	}
+	a.reminders, err = jobs.OpenQueue[int64](ctx, a.queues, "reminders")
+	return err
+}
+
 func (a *app) useNotes(ctx context.Context, out io.Writer) error {
+	var ideas int64
 	for _, title := range []string{"groceries", "ideas"} {
 		note, err := sqldb.ExecOne[Note](ctx, a.db,
 			`insert into notes (title, created_at) values (?, ?) returning id, title, body, created_at`,
@@ -132,6 +155,10 @@ func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 		a.created.Inc()
 		a.requests.With("route", "/notes", "method", "POST").Inc()
 		a.logger.Info("note created", "id", note.ID, "title", note.Title)
+		if err = a.scheduleFor(ctx, note.ID); err != nil {
+			return err
+		}
+		ideas = note.ID
 	}
 
 	err := a.db.Tx(ctx, func(tx *sqldb.Tx) error {
@@ -141,6 +168,9 @@ func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 		_, err := tx.Exec(ctx, `delete from notes where title = 'ideas'`)
 		return err
 	})
+	if err == nil {
+		_, err = a.reminders.Cancel(ctx, fmt.Sprint("note:", ideas))
+	}
 	if err != nil {
 		return err
 	}
@@ -149,6 +179,32 @@ func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 	for _, note := range notes {
 		fmt.Fprintf(out, "note %d: %s — %s\n", note.ID, note.Title, note.Body)
 	}
+	return err
+}
+
+// scheduleFor asks for a new note to be indexed now and looked at again
+// tomorrow; the reminder is keyed by the note, so that deleting it cancels it
+func (a *app) scheduleFor(ctx context.Context, note int64) error {
+	if err := a.indexing.Enqueue(ctx, note); err != nil {
+		return err
+	}
+	tomorrow := time.Now().Add(24 * time.Hour)
+	return a.reminders.Enqueue(ctx, note, jobs.At(tomorrow), jobs.Key(fmt.Sprint("note:", note)))
+}
+
+// useJobs indexes the notes waiting for it, as a worker would all day, and
+// counts the reminders still ahead
+func (a *app) useJobs(ctx context.Context, out io.Writer) error {
+	indexed := 0
+	err := a.indexing.Work(ctx, func(context.Context, jobs.Job[int64]) error {
+		indexed++ // a search index would read the note, and skip one deleted since
+		return nil
+	}, jobs.Workers(2), jobs.UntilIdle())
+	if err != nil {
+		return err
+	}
+	page, err := a.reminders.Scan(ctx, jobs.Query{Prefix: "note:"})
+	fmt.Fprintf(out, "notes indexed: %d, reminders ahead: %d\n", indexed, len(page.Entries))
 	return err
 }
 
