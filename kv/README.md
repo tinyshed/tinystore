@@ -35,7 +35,8 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   key, or a path of owners and key over 1 KiB is `tinystore.ErrInvalid`.
   `Of(owners...)` names a branch by the same rule; a branch exists while it
   holds keys. `Scan` reads a branch's own keys, a page at a time, in the byte
-  order of their text.
+  order of their text: at most 1000 keys and 4 MiB of values a page, which
+  ends before the value that would pass them, the next page beginning there.
 - **A value is kept by its type.** `[]byte` and `string` as their bytes; bool
   and integers up to 32 unsigned bits as an integer of the row; `uint64` as
   eight bytes; floats as their bits, `-0` and a NaN's payload included;

@@ -502,6 +502,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation`, bound to version and expiry       |
 | a key read in its last minute is renewed at once       | `TestAReadNearItsExpiryRenewsAtOnce`                                            |
 | kv's All holds no snapshot between its pages           | `TestAllWalksEveryKeyAPageAtATime`                                              |
+| a kv page ends before the value that passes its bytes  | `TestAPageEndsBeforeTheValueThatPassesItsBytes`                                 |
 | an Enqueue that returned survives an abrupt exit       | `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once           |
 | a job runs at its time and not before                  | `TestAJobRunsAtItsTimeAndNotBefore`                                             |
 | a key names one job, and enqueuing it only brings it forward | `TestAKeyNamesOneJobAndARepeatOnlyBringsItForward`                        |

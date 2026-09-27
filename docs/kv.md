@@ -410,6 +410,7 @@ The five cases are the gates' workloads.
 | a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation` |
 | a key read in its last minute is renewed at once | `TestAReadNearItsExpiryRenewsAtOnce` |
 | `All` walks pages and holds no snapshot between them | `TestAllWalksEveryKeyAPageAtATime` |
+| a page ends before the value that passes its bytes | `TestAPageEndsBeforeTheValueThatPassesItsBytes` |
 | an integer key is its decimal text | `TestAnIntegerKeyIsItsDecimalText` |
 | a version never repeats | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen` |
 | one of concurrent `Take`s gets the value | `TestConcurrentTakesGiveTheValueOnce` |

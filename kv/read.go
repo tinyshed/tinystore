@@ -112,7 +112,7 @@ func (b *Bucket[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 	if err != nil {
 		return Page[V]{}, b.fail(call{key: query.After}, err)
 	}
-	reserved, err := b.state.reserve(ctx, scanBytes)
+	reserved, err := b.state.reserve(ctx, pageHeld(limit))
 	if err != nil {
 		return Page[V]{}, err
 	}
@@ -208,8 +208,17 @@ func readLive(ctx context.Context, r sqlite.Reader, bucket int64, c call) (row, 
 // errPageFull ends a scan's rows once a page holds what it may
 var errPageFull = errors.New("the page is full")
 
-// scanRows reads at most limit rows, and fewer once their values pass
-// scanBytes; more says that rows were left
+// what a row of a page holds beside its path and its value
+const rowHeld = 128
+
+// pageHeld is what a page of limit keys may hold while it is read: its values,
+// the row past them that says more are left, and every row's path
+func pageHeld(limit int) int {
+	return min(scanBytes, limit*maxValue) + maxValue + (limit+1)*(maxPath+rowHeld)
+}
+
+// scanRows reads at most limit rows, and ends before the row whose value would
+// take them past scanBytes; more says that rows were left
 func scanRows(ctx context.Context, r sqlite.Reader, bucket int64, bounds [2][]byte, now int64, limit int) (
 	rows []row, more bool, err error,
 ) {
@@ -220,7 +229,7 @@ func scanRows(ctx context.Context, r sqlite.Reader, bucket int64, bounds [2][]by
 	}
 	bytes := 0
 	err = sqlite.EachRow(result, "a branch", func(result *sql.Rows) error {
-		if len(rows) == limit || bytes > scanBytes {
+		if len(rows) == limit {
 			more = true
 			return errPageFull
 		}
@@ -229,7 +238,12 @@ func scanRows(ctx context.Context, r sqlite.Reader, bucket int64, bounds [2][]by
 			&found.spilled); scanErr != nil {
 			return scanErr
 		}
-		bytes += weigh(found.value) + weigh(found.spilled)
+		size := weigh(found.value) + weigh(found.spilled)
+		if len(rows) > 0 && bytes+size > scanBytes {
+			more = true
+			return errPageFull
+		}
+		bytes += size
 		rows = append(rows, found)
 		return nil
 	})
@@ -239,9 +253,14 @@ func scanRows(ctx context.Context, r sqlite.Reader, bucket int64, bounds [2][]by
 	return rows, more, err
 }
 
+// weigh is what a column of a row holds: its bytes, an integer's eight, or
+// nothing where a value spilled or a set keeps none
 func weigh(value any) int {
-	if raw, ok := value.([]byte); ok {
-		return len(raw)
+	switch held := value.(type) {
+	case nil:
+		return 0
+	case []byte:
+		return len(held)
 	}
 	return 8
 }

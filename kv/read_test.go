@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -46,6 +47,66 @@ func TestScanReadsABranchsOwnKeysInPages(t *testing.T) {
 	if _, err := drafts.Scan(t.Context(), Query{Limit: maxScanLimit + 1}); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a page over the limit: %v", err)
 	}
+}
+
+// a page ends before the value that would take it past its bytes, and the
+// next begins with that value, so that no key is lost or read twice; a page
+// that its values fill exactly keeps them all
+func TestAPageEndsBeforeTheValueThatPassesItsBytes(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	values := openTestBucket[[]byte](t, state, "values")
+	sizes := []int{maxValue, maxValue, maxValue, maxValue, 10, 900_000, 900_000, 900_000, 900_000, 900_000, 10}
+	err := state.Tx(t.Context(), func(tx *Tx) error {
+		for i, size := range sizes {
+			if err := values.WithTx(tx).Set(t.Context(), fmt.Sprintf("%02d", i), bytes.Repeat([]byte{byte(i)}, size)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for limit, want := range map[int][][]int{
+		0: {sizes[:4], sizes[4:9], sizes[9:]},
+		2: {sizes[:2], sizes[2:4], sizes[4:6], sizes[6:8], sizes[8:10], sizes[10:]},
+	} {
+		var pages [][]int
+		query := Query{Limit: limit}
+		for {
+			page, err := values.Scan(t.Context(), query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pages = append(pages, pageSizes(t, page, len(pages)))
+			if !page.More {
+				break
+			}
+			query = page.Next
+		}
+		if !slices.EqualFunc(pages, want, slices.Equal) {
+			t.Fatalf("pages of %d keys held %v, want %v", limit, pages, want)
+		}
+	}
+}
+
+// pageSizes is the size of each value on a page, which the page's keys say
+// in order: key 03 holds bytes of 3
+func pageSizes(t *testing.T, page Page[[]byte], first int) []int {
+	t.Helper()
+	sizes, held := []int{}, 0
+	for _, entry := range page.Entries {
+		if len(entry.Value) > 0 && fmt.Sprintf("%02d", entry.Value[0]) != entry.Key {
+			t.Fatalf("page %d: key %s holds the value of %d", first, entry.Key, entry.Value[0])
+		}
+		sizes = append(sizes, len(entry.Value))
+		held += len(entry.Value)
+	}
+	if held > scanBytes {
+		t.Fatalf("page %d holds %d bytes of values, over %d", first, held, scanBytes)
+	}
+	return sizes
 }
 
 // All walks every key of a branch across pages, holds no snapshot between
