@@ -2,6 +2,7 @@ package kv
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -142,8 +143,9 @@ func BenchmarkGetBesideClearMarks(b *testing.B) {
 			}
 
 			b.ReportAllocs()
+			ctx := context.Background() // it cannot end, so that database/sql starts no goroutine a statement
 			for b.Loop() {
-				value, found, getErr := live.Get(b.Context(), "key")
+				value, found, getErr := live.Get(ctx, "key")
 				if getErr != nil || !found || len(value) != 64 {
 					b.Fatalf("the key beside %d marks: %q, %v, %v", marks, value, found, getErr)
 				}
