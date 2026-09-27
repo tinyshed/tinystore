@@ -200,7 +200,9 @@ const (
 	extendLease = `update leases set until = ?3 where id = ?1 and attempt = ?2`
 	jobHeld     = `select again, repeat, error, attempt from jobs where queue = ?1 and next = ?2 and id = ?3`
 	deleteJob   = `delete from jobs where queue = ?1 and next = ?2 and id = ?3 returning spill`
-	moveJob     = `update jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7
+	deleteDone  = `delete from jobs where queue = ?1 and next = ?2 and id = ?3 and again is null and repeat is null
+		returning spill`
+	moveJob = `update jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7
 		where queue = ?1 and next = ?2 and id = ?3`
 	keepDoneKey = `insert into done (queue, key, until) values (?1, ?2, ?3)
 		on conflict (queue, key) do update set until = excluded.until`
@@ -220,11 +222,32 @@ func (s settlement) write(ctx context.Context, w sqlite.Writer, now int64) (sett
 	if err := l.drop(ctx, w); err != nil {
 		return settled{}, err
 	}
+	if s.how == acked {
+		if done, gone, err := l.ackAlone(ctx, w, now); gone || err != nil {
+			return done, err
+		}
+	}
 	held, err := l.held(ctx, w)
 	if err != nil {
 		return settled{}, err
 	}
 	return s.apply(ctx, w, held, now)
+}
+
+// ackAlone deletes an acknowledged job that neither repeats nor was asked to
+// run again, reading nothing first; gone is false for a job that must move to
+// its next time instead
+func (l *lease) ackAlone(ctx context.Context, w sqlite.Writer, now int64) (settled, bool, error) {
+	var spill sql.NullInt64
+	err := sqlite.QueryRow(ctx, w, deleteDone, l.queue.id, l.next, l.id).Scan(&spill)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settled{}, false, nil
+	}
+	if err != nil {
+		return settled{}, false, err
+	}
+	done, err := l.forget(ctx, w, spill, now)
+	return done, true, err
 }
 
 func (l *lease) extend(ctx context.Context, w sqlite.Writer, until int64) error {
@@ -304,6 +327,12 @@ func (l *lease) ack(ctx context.Context, w sqlite.Writer, h heldRow, now int64) 
 	if err := sqlite.QueryRow(ctx, w, deleteJob, l.queue.id, l.next, l.id).Scan(&spill); err != nil {
 		return settled{}, err
 	}
+	return l.forget(ctx, w, spill, now)
+}
+
+// forget drops the value a deleted job spilled, and remembers its key done
+// when the queue keeps done keys
+func (l *lease) forget(ctx context.Context, w sqlite.Writer, spill sql.NullInt64, now int64) (settled, error) {
 	if err := dropSpilled(ctx, w, spill); err != nil {
 		return settled{}, err
 	}

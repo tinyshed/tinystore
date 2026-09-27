@@ -81,9 +81,12 @@ func remind(ctx context.Context, job jobs.Job[Reminder]) error {
   one repeating job under the queue's name, with the program's repeat.
 - **`Work` settles by what the handler returns**: nil acknowledges, an error
   retries, a panic is an error with its stack, and a handler that settled its
-  job itself is left as it settled it. It claims as many jobs as it has free
-  workers, 1,000 at most, in one write with the settlements of the jobs its
-  workers finished since. It extends a running job's lease every half lease;
+  job itself is left as it settled it. It holds two jobs a worker, the one
+  the worker runs and its next, and claims what it lacks, 1,000 at most, in
+  one write with the settlements of the jobs its workers finished since. A job
+  claimed ahead is leased: `Update` and `Cancel` find it too late, and a crash
+  counts its attempt though it never ran. It extends a held job's lease every
+  half lease;
   `Timeout(d)`, a minute unless it says, is the deadline of the handler's
   context. A lease lost while its handler runs, because a stall let it end
   and another claim took the job, is let go and logged once a quiet period.

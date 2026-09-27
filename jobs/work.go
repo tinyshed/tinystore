@@ -22,8 +22,9 @@ const lastWrite = 10 * time.Second
 // by the queue's policy; a handler that settles its job itself is left as it
 // settled it, and a panic is an error. While a handler runs its lease is
 // extended. A handler stopped by ctx or by Close gives its job back, the
-// attempt not counted. A job claimed is settled in the same write that claims
-// the next ones, so that a queue under load commits once for many jobs.
+// attempt not counted. Each worker's next job is claimed while it runs the one
+// before, and a job claimed is settled in the same write that claims the next
+// ones, so that a queue under load commits once for many jobs.
 func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]) error, options ...WorkOption) error {
 	settings, err := collectWork(options)
 	if err == nil && q.tx != nil {
@@ -32,7 +33,7 @@ func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]
 	if err != nil {
 		return q.fail("", err)
 	}
-	return q.work(ctx, handle, settings, settings.workers)
+	return q.work(ctx, handle, settings, settings.workers*claimAhead)
 }
 
 // work runs a Work loop that holds at most hold jobs: running, or claimed for
@@ -114,7 +115,7 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 		now := l.q.store.clock()
 		l.extendDue(now)
 		want := 0
-		if free := l.hold - len(l.holding); free > 0 && l.q.state.alarm.rung(now) {
+		if free := l.hold - len(l.holding) + l.finishing(); free > 0 && l.q.state.alarm.rung(now) {
 			want = min(free, claimBatch)
 		}
 		result, err := l.write(ctx, now, want)
@@ -133,6 +134,18 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 		}
 		l.wait(ctx, now)
 	}
+}
+
+// finishing is how many held jobs the next write settles for good: their
+// workers are free for the jobs that write claims
+func (l *workLoop[V]) finishing() int {
+	finished := 0
+	for _, s := range l.pending {
+		if s.how != extended {
+			finished++
+		}
+	}
+	return finished
 }
 
 // idle says the loop holds nothing, has nothing to write, and no job is due:

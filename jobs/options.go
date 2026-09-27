@@ -25,6 +25,7 @@ const (
 	maxScanLimit   = 1000             // jobs a page may return
 	scanBytes      = 4 << 20          // value bytes a page may hold
 	claimBatch     = 1000             // jobs one Work write claims at most
+	claimAhead     = 2                // jobs a Work loop holds a worker: the one it runs and the next
 	maintainEvery  = time.Minute      // how often maintenance removes what the queues keep no longer
 	maintainBatch  = 10_000           // rows one maintenance transaction removes
 	quietFailures  = 10 * time.Minute // a repeated failure is logged once in this long

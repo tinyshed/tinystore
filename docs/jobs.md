@@ -292,7 +292,8 @@ none        a new job at 9:00                   —
 
 - **The store's clock, read once a call.** A job's time is a schedule, not an
   observation, so jobs has no `ErrTooOld` window; a time in the past runs now.
-  `Options.Clock` moves a test a month ahead without sleeping.
+  The store's `tinystore.Options.Clock` moves a test a month ahead without
+  sleeping.
 - **A job runs when it is due and a worker is free**, in the order of its
   time, equal times in the order they were enqueued. With several workers
   jobs run side by side, so `Workers(1)` is the one order a queue promises.
@@ -388,9 +389,12 @@ if found {
   lease, so `Lease` bounds how long a vanished worker keeps a job, not how
   long a handler may take. `jobs.Timeout(d)`, a minute by default, is the
   deadline of the handler's context; past it the attempt failed.
-- **`Work` claims as many jobs as it has free workers**, in one transaction
-  with the settlements of the jobs its workers finished since, so that a queue
-  under load commits once for many jobs and one alone waits for nothing.
+- **`Work` holds two jobs a worker**, the one it runs and the next, and claims
+  what it lacks in one transaction with the settlements of the jobs its
+  workers finished since, a finished worker counted free in that same write,
+  so that a queue under load commits once for many jobs and a worker never
+  waits for a commit to start its next. A job claimed ahead is leased:
+  `Update` and `Cancel` find it too late, and a crash counts its attempt.
 - **A handler stopped by its caller's context or by `Close`** gives its job
   back, and that attempt is not counted.
 - **`Work` starts its workers inside the call** and waits for them before it
@@ -573,8 +577,10 @@ What [the round](reports/jobs-mechanics-2026-09-27.md) left, for the next:
 
 | Question | Why |
 |---|---|
-| a key index a burst does not scatter: keys dropped lazily, in key order, by maintenance | a keyed burst drained 14,000 jobs a second against 93,000 without keys |
-| a Work loop that claims ahead of its free workers | eight workers carried four jobs a write, 1,400 a second |
-| sqldb's `Exec` grouped as kv's writes are | a handler inserting through it held 300 a second at any concurrency |
+| a key index a burst does not scatter: keys dropped lazily, in key order, by maintenance | a keyed burst drained 14,000 jobs a second against 93,000 without keys; through the engine, 23,145 against 47,339 at 512 workers |
 | the engine against a table an application polls by hand, on the five cases | what the engine buys over the way it replaces |
 | the page cache of the writer in a burst over a large file | every burst ran with 1 MiB a connection |
+| a queue's count at open | `OpenQueue` counts the queue's rows for `MaxWaiting`, which reads every page of a large queue |
+
+Settled since, in [the engine's round](reports/jobs-engine-2026-09-27.md): a
+Work loop holds two jobs a worker, and sqldb's `Exec` commits grouped.
