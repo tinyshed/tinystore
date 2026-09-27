@@ -444,6 +444,7 @@ The five cases are the gates' workloads.
 | a bucket keeps its kind under its data | `TestABucketCannotChangeItsKindUnderItsData` |
 | `Clear` empties a branch and those under it at once, over the bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt` |
 | a cleared key is absent to every operation | `TestAClearedKeyIsAbsentToEveryOperation` |
+| a mark hides what lies under it at every depth, and nothing beside | `TestAMarkHidesWhatLiesUnderItAtEveryDepth` |
 | a `Clear` never brings back counters waiting for a flush | `TestAClearDoesNotResurrectCountersWaitingForTheFlush` |
 | a failed `Clear` keeps what counters wait to flush | `TestAFailedClearKeepsTheCountersWaitingForTheFlush` |
 | a `Clear` whose commit fails lets memory go as a crash would | `TestAClearWhoseCommitFailsLetsGoAsACrashWould` |

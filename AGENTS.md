@@ -496,6 +496,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a failed flush refuses new counters, loses none held   | `TestAFailedFlushRefusesNewCountersRatherThanHoldThem`                          |
 | a kv Clear empties a branch and those under it         | `TestClearEmptiesTheBranchAndThoseUnderIt`, over the bound and under it         |
 | a cleared key is absent to every operation             | `TestAClearedKeyIsAbsentToEveryOperation`                                       |
+| a mark hides what lies under it at every depth         | `TestAMarkHidesWhatLiesUnderItAtEveryDepth`, deeper than the lookups included   |
 | a Clear never brings back counters waiting to flush    | `TestAClearDoesNotResurrectCountersWaitingForTheFlush`                          |
 | a failed Clear keeps what counters wait to flush       | `TestAFailedClearKeepsTheCountersWaitingForTheFlush`                            |
 | a Clear whose commit fails lets go as a crash would    | `TestAClearWhoseCommitFailsLetsGoAsACrashWould`                                 |

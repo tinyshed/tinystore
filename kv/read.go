@@ -12,16 +12,16 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-const (
+var (
 	selectLive = `select c.version, c.expires, c.value, c.spill, s.value from cells as c
 		left join spilled as s on s.id = c.spill
-		where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ` + hiddenC
+		where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ` + hidden("c", 4)
 	selectHas = `select version, expires from cells
-		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
+		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hidden("cells", 4)
 	scanBranch = `select c.path, c.version, c.expires, c.value, c.spill, s.value from cells as c
 		left join spilled as s on s.id = c.spill
 		where c.bucket = ?1 and c.path > ?2 and c.path < ?3 and (c.expires is null or c.expires > ?4)
-			and not ` + hiddenC + `
+			and not ` + hidden("c", 6) + `
 		order by c.path limit cast(?5 as integer)`
 )
 
@@ -71,7 +71,7 @@ func (b *Bucket[V]) Has(ctx context.Context, key any) (bool, error) {
 	var version int64
 	var expires sql.NullInt64
 	err = b.read(ctx, func(r sqlite.Reader) error {
-		scanErr := sqlite.QueryRow(ctx, r, selectHas, b.id, c.path, c.now).Scan(&version, &expires)
+		scanErr := sqlite.QueryRow(ctx, r, selectHas, c.args(b.id, c.path, c.now)...).Scan(&version, &expires)
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return nil
 		}
@@ -126,9 +126,10 @@ func (b *Bucket[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 
 	var rows []row
 	more := false
-	from, to, now := b.ownRange(query.After), b.ownEnd(), b.state.now().UnixMilli()
+	scan := call{now: b.state.now().UnixMilli(), hidden: b.hidden}
+	arguments := scan.args(b.id, b.ownRange(query.After), b.ownEnd(), scan.now, limit+1)
 	err = b.read(ctx, func(r sqlite.Reader) (readErr error) {
-		rows, more, readErr = scanRows(ctx, r, b.id, [2][]byte{from, to}, now, limit)
+		rows, more, readErr = scanRows(ctx, r, arguments, limit)
 		return readErr
 	})
 	if err != nil {
@@ -203,7 +204,7 @@ func (r row) held() (any, error) {
 
 func readLive(ctx context.Context, r sqlite.Reader, bucket int64, c call) (row, bool, error) {
 	found := row{path: c.path}
-	err := sqlite.QueryRow(ctx, r, selectLive, bucket, c.path, c.now).
+	err := sqlite.QueryRow(ctx, r, selectLive, c.args(bucket, c.path, c.now)...).
 		Scan(&found.version, &found.expires, &found.value, &found.spill, &found.spilled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row{}, false, nil
@@ -223,13 +224,12 @@ func pageHeld(limit int) int {
 	return min(scanBytes, limit*maxValue) + maxValue + (limit+1)*(maxPath+rowHeld)
 }
 
-// scanRows reads at most limit rows, and ends before the row whose value would
-// take them past scanBytes; more says that rows were left
-func scanRows(ctx context.Context, r sqlite.Reader, bucket int64, bounds [2][]byte, now int64, limit int) (
-	rows []row, more bool, err error,
-) {
+// scanRows reads at most limit rows of scanBranch, asking for one more, and
+// ends before the row whose value would take them past scanBytes; more says
+// that rows were left
+func scanRows(ctx context.Context, r sqlite.Reader, arguments []any, limit int) (rows []row, more bool, err error) {
 	//nolint:rowserrcheck // EachRow checks Err
-	result, err := r.QueryContext(ctx, scanBranch, bucket, bounds[0], bounds[1], now, limit+1)
+	result, err := r.QueryContext(ctx, scanBranch, arguments...)
 	if err != nil {
 		return nil, false, err
 	}

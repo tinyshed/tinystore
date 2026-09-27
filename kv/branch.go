@@ -22,6 +22,7 @@ type branch struct {
 	ttl    time.Duration
 	owners []string
 	prefix []byte
+	hidden int64 // the lengths of the prefixes above the branch's rows, as the test of a hidden row reads them
 	tx     *Tx
 	err    error
 }
@@ -40,8 +41,21 @@ func (b *branch) under(owners []any) branch {
 		}
 		below.owners = append(below.owners, text)
 		below.prefix = appendOwner(below.prefix, text)
+		below.markDepth()
 	}
 	return below
+}
+
+// markDepth packs the length of the branch's prefix in the bits of its depth,
+// or says that it lies deeper than they reach
+//
+//	Of("tenant-7", 42) → prefixes of 10 and 14 bytes → 10 | 14<<10 = 14346
+func (b *branch) markDepth() {
+	if depth := len(b.owners); depth <= hiddenLevels && len(b.prefix) < 1<<lengthBits {
+		b.hidden |= int64(len(b.prefix)) << ((depth - 1) * lengthBits)
+		return
+	}
+	b.hidden |= 1 << deeperBit
 }
 
 // call is one operation's facts, gathered before it waits for anything
@@ -50,6 +64,13 @@ type call struct {
 	key     string
 	now     int64 // unix milliseconds: the store's clock, read once a call
 	options callOptions
+	hidden  int64 // the branch's, for the test of a hidden row
+}
+
+// args are a statement's own arguments, then what the test of a hidden row
+// binds after them
+func (c call) args(own ...any) []any {
+	return append(own, c.hidden)
 }
 
 // begin checks a call's key and options and reads the clock for it
@@ -66,7 +87,7 @@ func (b *branch) begin(key any, options []Option) (call, error) {
 		return call{key: text}, fmt.Errorf("%w: a path of %d bytes, over 1 KiB", tinystore.ErrInvalid, len(path))
 	}
 	collected, err := collect(options)
-	return call{path: path, key: text, now: b.state.now().UnixMilli(), options: collected}, err
+	return call{path: path, key: text, now: b.state.now().UnixMilli(), options: collected, hidden: b.hidden}, err
 }
 
 // fail names the bucket and key a call failed on; a cancellation, a closed

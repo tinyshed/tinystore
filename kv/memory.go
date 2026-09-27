@@ -237,8 +237,8 @@ func (s *shard) valueAt(path []byte, now int64) (int64, bool) {
 	return entry.valueAt(now), true
 }
 
-const selectCounterRow = `select value, expires from cells
-	where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
+var selectCounterRow = `select value, expires from cells
+	where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hidden("cells", 4)
 
 // readFile is the counter at c's path as the file has it, absent when the
 // file has none or it expired
@@ -246,7 +246,7 @@ func (m *memory) readFile(ctx context.Context, c call) (counter, error) {
 	var value any
 	var expires sql.NullInt64
 	err := m.state.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, selectCounterRow, m.bucket, c.path, c.now).Scan(&value, &expires)
+		return sqlite.QueryRow(ctx, r, selectCounterRow, c.args(m.bucket, c.path, c.now)...).Scan(&value, &expires)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return counter{absent: true}, nil

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -315,6 +317,61 @@ func TestClearsBesideChangesAndFlushesKeepTheirBranchesApart(t *testing.T) {
 		}
 		if total != 8*300 {
 			t.Fatalf("bound %d: %d Adds beside the cleared branch counted %d", bound, 8*300, total)
+		}
+	}
+}
+
+// a mark hides what lies under its branch at every depth, the branches the
+// statements look up by length and those deeper than their slots alike, and
+// nothing beside it or above it
+func TestAMarkHidesWhatLiesUnderItAtEveryDepth(t *testing.T) {
+	for _, depth := range []int{1, hiddenLevels, hiddenLevels + 1, hiddenLevels + 3} {
+		t.Run(fmt.Sprintf("depth=%d", depth), func(t *testing.T) {
+			state := openTestState(t, t.TempDir())
+			state.clearBound = 0
+			drafts := openTestBucket[string](t, state, "drafts")
+			owners := make([]any, depth)
+			for i := range owners {
+				owners[i] = fmt.Sprintf("o%d", i)
+			}
+			cleared, above := drafts.Of(owners...), drafts.Of(owners[:depth-1]...)
+			beside := above.Of("other")
+			for _, branch := range []*Bucket[string]{cleared, cleared.Of("under"), above, beside} {
+				if err := branch.Set(t.Context(), "note", "kept"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := cleared.Clear(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			expectNotes(t, map[*Bucket[string]]bool{
+				cleared: false, cleared.Of("under"): false, above: true,
+				beside: true,
+			})
+			if created, err := cleared.SetIfAbsent(t.Context(), "note", "again"); !created || err != nil {
+				t.Fatalf("SetIfAbsent under the mark: %v, %v", created, err)
+			}
+
+			if err := drafts.Clear(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			expectNotes(t, map[*Bucket[string]]bool{cleared: false, above: false, beside: false})
+		})
+	}
+}
+
+// expectNotes checks each branch's "note" through a Get, a Has and a Scan
+func expectNotes(t *testing.T, there map[*Bucket[string]]bool) {
+	t.Helper()
+	for branch, want := range there {
+		_, found, err := branch.Get(t.Context(), "note")
+		has, hasErr := branch.Has(t.Context(), "note")
+		page, scanErr := branch.Scan(t.Context(), Query{})
+		scanned := slices.ContainsFunc(page.Entries, func(entry Entry[string]) bool { return entry.Key == "note" })
+		if found != want || has != want || scanned != want || errors.Join(err, hasErr, scanErr) != nil {
+			t.Fatalf("%v: Get %v, Has %v, Scan %v, want %v: %v", branch.owners, found, has, scanned, want,
+				errors.Join(err, hasErr, scanErr))
 		}
 	}
 }

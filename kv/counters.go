@@ -60,8 +60,8 @@ func (c *Counters) WithTx(tx *Tx) *Counters {
 // or hidden by a Clear starts again from n with a new expiry, a live one keeps
 // its own, and a sum past the int64 range writes nothing, since SQLite would
 // turn it into a REAL
-const (
-	counterGone = `(cells.expires <= ?6 or ` + hiddenCells + `)`
+var (
+	counterGone = `(cells.expires <= ?6 or ` + hidden("cells", 7) + `)`
 	addCounter  = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)
 		on conflict (bucket, path) do update set
 			value   = iif(` + counterGone + `, excluded.value, cells.value + excluded.value),
@@ -76,9 +76,10 @@ const (
 			version = excluded.version
 		returning value`
 	selectCounter = `select value from cells
-		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hiddenCells
-	deleteCounter = `delete from cells where bucket = ?1 and path = ?2`
+		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hidden("cells", 4)
 )
+
+const deleteCounter = `delete from cells where bucket = ?1 and path = ?2`
 
 // Add adds n to the counter under key and returns what it holds now. An
 // absent or expired counter starts from zero with the DefaultTTL of the
@@ -113,7 +114,7 @@ func (c *Counters) Get(ctx context.Context, key any) (int64, error) {
 	var held int64
 	err = c.read(ctx, func(r sqlite.Reader) error {
 		var value any
-		readErr := sqlite.QueryRow(ctx, r, selectCounter, c.id, cl.path, cl.now).Scan(&value)
+		readErr := sqlite.QueryRow(ctx, r, selectCounter, cl.args(c.id, cl.path, cl.now)...).Scan(&value)
 		if errors.Is(readErr, sql.ErrNoRows) {
 			return nil
 		}
@@ -159,7 +160,8 @@ func (c *Counters) change(ctx context.Context, key any, statement string, n int6
 			return writeErr
 		}
 		var value any
-		writeErr = sqlite.QueryRow(ctx, w, statement, c.id, cl.path, version, expires, n, cl.now).Scan(&value)
+		writeErr = sqlite.QueryRow(ctx, w, statement, cl.args(c.id, cl.path, version, expires, n, cl.now)...).
+			Scan(&value)
 		if errors.Is(writeErr, sql.ErrNoRows) {
 			return fmt.Errorf("%w: adding %d passes the int64 range", tinystore.ErrLimit, n)
 		}

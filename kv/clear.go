@@ -5,24 +5,51 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// a row a marked Clear hid: its version is the mark's or older, and its path
-// goes on from the mark's prefix with an owner's mark or a key's, since a name
-// under another branch may begin with the prefix's bytes. Every statement that
-// finds live rows says "and not" one of these, so a mark hides its rows from
-// the moment it commits, to readers and writers alike.
+// the owners below a bucket's root whose branches the test of a hidden row
+// looks up by their prefixes' lengths, packed ten bits each into one integer:
+// a path is at most 1 KiB, so a prefix that leaves a key room fits; the bit
+// past them says that a branch lies deeper
 const (
-	hiddenC = `exists (select 1 from branches as m where m.bucket = c.bucket and m.cleared >= c.version
-		and substr(c.path, 1, length(m.prefix)) = m.prefix
-		and substr(c.path, length(m.prefix) + 1, 1) in (x'01', x'02'))`
-	hiddenCells = `exists (select 1 from branches as m where m.bucket = cells.bucket and m.cleared >= cells.version
-		and substr(cells.path, 1, length(m.prefix)) = m.prefix
-		and substr(cells.path, length(m.prefix) + 1, 1) in (x'01', x'02'))`
+	hiddenLevels = 6
+	lengthBits   = 10
+	deeperBit    = 60
 )
+
+// hidden is true of a row a marked Clear hid: its version is the mark's or
+// older, and the mark's prefix is a branch above it. Every statement that
+// finds live rows says "and not" this, so a mark hides its rows from the
+// moment it commits, to readers and writers alike.
+//
+// It asks first whether the row's bucket has a mark at all, which costs a
+// bucket without one a single seek. Then it looks up the root and each branch
+// above the row by its prefix, the first bytes of the row's path as many as
+// the lengths packed in ?param say, so that a thousand marks cost a seek a
+// branch rather than a thousand comparisons; one integer binds faster than a
+// length each. A row deeper than the lengths reach is compared with every mark
+// of its bucket instead: the prefix, then an owner's mark or a key's, since a
+// name under another branch may begin with the prefix's bytes. row names the
+// statement's table.
+func hidden(row string, param int) string {
+	lookups := []string{fmt.Sprintf(`exists (select 1 from branches as m where m.bucket = %[1]s.bucket
+		and m.prefix = x'' and m.cleared >= %[1]s.version)`, row)}
+	for level := range hiddenLevels {
+		lookups = append(lookups, fmt.Sprintf(`exists (select 1 from branches as m where m.bucket = %[1]s.bucket
+			and m.prefix = substr(%[1]s.path, 1, nullif((?%[2]d >> %[3]d) & %[4]d, 0))
+			and m.cleared >= %[1]s.version)`, row, param, level*lengthBits, 1<<lengthBits-1))
+	}
+	lookups = append(lookups, fmt.Sprintf(`((?%[2]d >> %[3]d) & 1 and exists (select 1 from branches as m
+			where m.bucket = %[1]s.bucket and m.cleared >= %[1]s.version
+			and substr(%[1]s.path, 1, length(m.prefix)) = m.prefix
+			and substr(%[1]s.path, length(m.prefix) + 1, 1) in (x'01', x'02')))`, row, param, deeperBit))
+	return fmt.Sprintf(`(exists (select 1 from branches as g where g.bucket = %s.bucket) and (%s))`, row,
+		strings.Join(lookups, " or "))
+}
 
 // Clear removes every key of this branch and of the branches under it. A
 // branch of up to 10,000 keys is deleted in one transaction; a larger one is

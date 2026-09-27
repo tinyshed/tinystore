@@ -10,26 +10,30 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
+var (
+	selectCell = `select version, expires, spill, ` + hidden("cells", 3) + `
+		from cells where bucket = ?1 and path = ?2`
+	takeCell = `delete from cells
+		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?4 = 0 or version = ?4)
+			and not ` + hidden("cells", 5) + `
+		returning version, expires, value, spill`
+	deleteCell = `delete from cells
+		where bucket = ?1 and path = ?2
+			and (?4 = 0 or (version = ?4 and (expires is null or expires > ?3) and not ` + hidden("cells", 5) + `))
+		returning spill`
+	touchCell = `update cells set expires = ?4
+		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?5 = 0 or version = ?5)
+			and not ` + hidden("cells", 6) + `
+		returning version`
+)
+
 const (
-	selectCell = `select version, expires, spill, ` + hiddenCells + ` from cells where bucket = ?1 and path = ?2`
 	upsertCell = `insert into cells (bucket, path, version, expires, value, spill) values (?1, ?2, ?3, ?4, ?5, ?6)
 		on conflict (bucket, path) do update set
 			version = excluded.version, expires = excluded.expires, value = excluded.value, spill = excluded.spill`
 	insertSpilled = `insert into spilled (value) values (?1)`
 	deleteSpilled = `delete from spilled where id = ?1`
-	takeCell      = `delete from cells
-		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?4 = 0 or version = ?4)
-			and not ` + hiddenCells + `
-		returning version, expires, value, spill`
-	takeSpilled = `delete from spilled where id = ?1 returning value`
-	deleteCell  = `delete from cells
-		where bucket = ?1 and path = ?2
-			and (?4 = 0 or (version = ?4 and (expires is null or expires > ?3) and not ` + hiddenCells + `))
-		returning spill`
-	touchCell = `update cells set expires = ?4
-		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?5 = 0 or version = ?5)
-			and not ` + hiddenCells + `
-		returning version`
+	takeSpilled   = `delete from spilled where id = ?1 returning value`
 )
 
 var errVersionMoved = fmt.Errorf("%w: the key is not live at the version given", tinystore.ErrConflict)
@@ -159,7 +163,8 @@ func (b *Bucket[V]) Delete(ctx context.Context, key any, options ...Option) erro
 
 	err = b.write(ctx, 0, func(w sqlite.Writer) error {
 		var spill sql.NullInt64
-		deleteErr := sqlite.QueryRow(ctx, w, deleteCell, b.id, c.path, c.now, c.options.version.revision).Scan(&spill)
+		deleteErr := sqlite.QueryRow(ctx, w, deleteCell, c.args(b.id, c.path, c.now, c.options.version.revision)...).
+			Scan(&spill)
 		if errors.Is(deleteErr, sql.ErrNoRows) {
 			return c.absent()
 		}
@@ -187,8 +192,8 @@ func (b *Bucket[V]) Touch(ctx context.Context, key any, options ...Option) (bool
 	found := false
 	err = b.write(ctx, 0, func(w sqlite.Writer) error {
 		var version int64
-		touchErr := sqlite.QueryRow(ctx, w, touchCell, b.id, c.path, c.now, expires, c.options.version.revision).
-			Scan(&version)
+		touchErr := sqlite.QueryRow(ctx, w, touchCell, c.args(b.id, c.path, c.now, expires,
+			c.options.version.revision)...).Scan(&version)
 		if errors.Is(touchErr, sql.ErrNoRows) {
 			return c.absent()
 		}
@@ -254,7 +259,7 @@ func entryWritten[V any](key string, value V, written cellWrite) Entry[V] {
 // setCell writes a value in the writer's transaction: the key's row as it is
 // decides the expiry and, with IfVersion, whether the write happens at all
 func (b *Bucket[V]) setCell(ctx context.Context, w sqlite.Writer, c call, value stored) (cellWrite, error) {
-	existing, err := readCell(ctx, w, b.id, c.path)
+	existing, err := readCell(ctx, w, b.id, c)
 	if err == nil {
 		err = c.checkVersion(existing)
 	}
@@ -278,9 +283,9 @@ func (b *Bucket[V]) setCell(ctx context.Context, w sqlite.Writer, c call, value 
 	return cellWrite{version: version, expires: expires}, dropSpilled(ctx, w, existing.spill)
 }
 
-func readCell(ctx context.Context, w sqlite.Writer, bucket int64, path []byte) (cell, error) {
+func readCell(ctx context.Context, w sqlite.Writer, bucket int64, c call) (cell, error) {
 	found := cell{found: true}
-	err := sqlite.QueryRow(ctx, w, selectCell, bucket, path).
+	err := sqlite.QueryRow(ctx, w, selectCell, c.args(bucket, c.path)...).
 		Scan(&found.version, &found.expires, &found.spill, &found.hidden)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cell{}, nil
@@ -333,7 +338,7 @@ func dropSpilled(ctx context.Context, w sqlite.Writer, spill sql.NullInt64) erro
 // takeRow deletes a live key's row and its spilled value, and returns them
 func takeRow(ctx context.Context, w sqlite.Writer, bucket int64, c call) (row, bool, error) {
 	taken := row{path: c.path}
-	err := sqlite.QueryRow(ctx, w, takeCell, bucket, c.path, c.now, c.options.version.revision).
+	err := sqlite.QueryRow(ctx, w, takeCell, c.args(bucket, c.path, c.now, c.options.version.revision)...).
 		Scan(&taken.version, &taken.expires, &taken.value, &taken.spill)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
