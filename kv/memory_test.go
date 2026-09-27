@@ -8,7 +8,9 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -302,6 +304,69 @@ func TestChangesCountOnceWhileFlushesRun(t *testing.T) {
 	if total != 16*200 {
 		t.Fatalf("%d Adds counted %d", 16*200, total)
 	}
+}
+
+// BenchmarkChangesInMemory adds to LoseAtMost counters from every processor
+// at once, on a Manual store that writes nothing while it runs: to 1024 keys
+// memory holds already, and to keys it never held, each of which reads the
+// file once. It opens the store itself, so that it runs against an earlier
+// kv as it is.
+func BenchmarkChangesInMemory(b *testing.B) {
+	b.Run("held", func(b *testing.B) {
+		attempts := benchmarkCounters(b)
+		var keys [1024]string
+		for i := range keys {
+			keys[i] = strconv.Itoa(i)
+			if _, err := attempts.Add(b.Context(), keys[i], 1); err != nil {
+				b.Fatal(err)
+			}
+		}
+		var workers atomic.Int64
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			i := int(workers.Add(1)) * 31
+			for pb.Next() {
+				i++
+				if _, err := attempts.Add(b.Context(), keys[i%len(keys)], 1); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		})
+	})
+	b.Run("new", func(b *testing.B) {
+		attempts := benchmarkCounters(b)
+		var next atomic.Int64
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				if _, err := attempts.Add(b.Context(), next.Add(1), 1); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		})
+	})
+}
+
+// benchmarkCounters opens LoseAtMost counters of an hour on a Manual store
+func benchmarkCounters(b *testing.B) *Counters {
+	b.Helper()
+	runtime, err := tinystore.Open(b.Context(), b.TempDir(), tinystore.Options{Manual: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = runtime.Close(context.Background()) })
+	state, err := Open(b.Context(), runtime, Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	attempts, err := OpenCounters(b.Context(), state, "attempts", LoseAtMost(time.Hour))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	return attempts.Of("ip")
 }
 
 // Close writes what memory holds, so a store closed as it should be loses
