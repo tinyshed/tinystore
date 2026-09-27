@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
 	"reflect"
+	"unsafe"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -152,36 +152,42 @@ func wideUnsignedCodec[V any](t reflect.Type) codec[V] {
 	}
 }
 
-// floatCodec keeps a float's bits; a named float32 type passes through
-// float64 on its way, which quiets a signaling NaN and changes nothing else
+// floatCodec keeps a float's bits, big-endian, read and written where the
+// float lies, named or not: a conversion through float64 would quiet a
+// signaling NaN of a float32
+//
+//	number(0x7f800001), a float32 NaN that signals → 7f 80 00 01
 func floatCodec[V any](t reflect.Type) codec[V] {
 	return codec[V]{
 		weigh: weighFixed[V],
 		encode: func(value V) (any, error) {
-			if f, ok := any(value).(float32); ok {
-				return binary.BigEndian.AppendUint32(nil, math.Float32bits(f)), nil
+			bits := bitsOf(&value)
+			if len(bits) == 4 {
+				return binary.BigEndian.AppendUint32(nil, binary.NativeEndian.Uint32(bits)), nil
 			}
-			of := reflect.ValueOf(value)
-			if of.Kind() == reflect.Float32 {
-				return binary.BigEndian.AppendUint32(nil, math.Float32bits(float32(of.Float()))), nil
-			}
-			return binary.BigEndian.AppendUint64(nil, math.Float64bits(of.Float())), nil
+			return binary.BigEndian.AppendUint64(nil, binary.NativeEndian.Uint64(bits)), nil
 		},
 		decode: func(stored any) (V, error) {
+			var value V
 			raw, ok := stored.([]byte)
+			bits := bitsOf(&value)
 			switch {
-			case ok && len(raw) == 4 && t.Kind() == reflect.Float32:
-				f := math.Float32frombits(binary.BigEndian.Uint32(raw))
-				if value, same := any(f).(V); same {
-					return value, nil
-				}
-				return as[V](reflect.ValueOf(f).Convert(t))
-			case ok && len(raw) == 8 && t.Kind() == reflect.Float64:
-				return as[V](reflect.ValueOf(math.Float64frombits(binary.BigEndian.Uint64(raw))).Convert(t))
+			case !ok || len(raw) != len(bits):
+				return zeroAnd[V](fmt.Errorf("%w: a %s's bits are %d bytes", corrupt("a float's bits", stored), t,
+					len(bits)))
+			case len(bits) == 4:
+				binary.NativeEndian.PutUint32(bits, binary.BigEndian.Uint32(raw))
+			default:
+				binary.NativeEndian.PutUint64(bits, binary.BigEndian.Uint64(raw))
 			}
-			return zeroAnd[V](corrupt("a float's bits", stored))
+			return value, nil
 		},
 	}
+}
+
+// bitsOf is the memory a float holds, which is its bits
+func bitsOf[V any](f *V) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(f)), unsafe.Sizeof(*f)) //nolint:gosec // a float's bytes are its bits
 }
 
 func nothingCodec[V any]() codec[V] {

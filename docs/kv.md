@@ -175,7 +175,8 @@ devices.Of("tenant-7", 42).Set(ctx, "iPhone", d)
 ## Values
 
 - **By their type.** `[]byte` and `string` are kept as they are; `bool`,
-  integers and floats as fixed-width binary, floats bit for bit; `struct{}` as
+  integers and floats as fixed-width binary, floats bit for bit, read where
+  they lie so that no widening quiets a named float32's NaN; `struct{}` as
   nothing, so a bucket of `struct{}` is a set whose rows hold no value bytes;
   anything else as JSON through `encoding/json`, which goes on reading a struct
   that gained a field.
@@ -428,6 +429,7 @@ The five cases are the gates' workloads.
 | a version never repeats | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen` |
 | one of concurrent `Take`s gets the value | `TestConcurrentTakesGiveTheValueOnce` |
 | a `Take` whose value no longer decodes keeps it | `TestAFailedTakeKeepsItsValue` |
+| a value comes back as it went in, a float bit for bit, named or not | `TestAValueComesBackAsItWentIn` |
 | a stale claim cannot finish or delete the next | `TestAStaleClaimCannotFinishOrDeleteTheNext` |
 | one of two versioned writes conflicts | `TestOneOfTwoVersionedWritesConflicts` |
 | an overflowing counter is refused, not rounded | `TestAnOverflowingCounterIsRefusedRatherThanRounded` |

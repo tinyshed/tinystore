@@ -69,11 +69,50 @@ func TestAValueComesBackAsItWentIn(t *testing.T) {
 	if got := roundTrip(t, openTestBucket[celsius](t, state, "celsius"), celsius(36.6)); got != 36.6 {
 		t.Fatalf("a named float: %v", got)
 	}
+	expectBits32(t, openTestBucket[float32](t, state, "float32-bits"))
+	expectBits32(t, openTestBucket[number](t, state, "number"))
+	roundTrip(t, openTestBucket[number](t, state, "number"), number(math.Float32frombits(0x7f80_0001)))
+	if row := state.valueBytes(t, "number", "k"); !bytes.Equal(row, []byte{0x7f, 0x80, 0x00, 0x01}) {
+		t.Fatalf("a float32 NaN that signals is kept as %x", row)
+	}
+	expectBits64(t, openTestBucket[float64](t, state, "float64-bits"))
+	expectBits64(t, openTestBucket[celsius](t, state, "celsius-bits"))
 
 	want := session{UserID: 42, Device: "iPhone", Tags: []string{"a", "b"}}
 	got := roundTrip(t, openTestBucket[session](t, state, "json"), want)
 	if got.UserID != 42 || got.Device != "iPhone" || strings.Join(got.Tags, ",") != "a,b" {
 		t.Fatalf("a struct: %+v", got)
+	}
+}
+
+type number float32
+
+// the float32 bits a value keeps: a NaN that signals and one that does not,
+// each with a payload, -0 and the largest finite
+var floats32 = []uint32{0x7f80_0001, 0xffc0_beef, 0x8000_0000, 0x7f7f_ffff}
+
+// the float64 bits: a NaN that signals, one that does not, -0, -Inf
+var floats64 = []uint64{0x7ff0_0000_0000_0001, 0xfff8_0000_dead_beef, 0x8000_0000_0000_0000, 0xfff0_0000_0000_0000}
+
+// expectBits32 writes each of floats32 through the bucket, named type or not,
+// and finds its bits in the value that comes back and in the row
+func expectBits32[V ~float32](t *testing.T, bucket *Bucket[V]) {
+	t.Helper()
+	for _, bits := range floats32 {
+		got := roundTrip(t, bucket, V(math.Float32frombits(bits)))
+		if back := math.Float32bits(float32(got)); back != bits {
+			t.Fatalf("%T bits %08x came back as %08x", got, bits, back)
+		}
+	}
+}
+
+func expectBits64[V ~float64](t *testing.T, bucket *Bucket[V]) {
+	t.Helper()
+	for _, bits := range floats64 {
+		got := roundTrip(t, bucket, V(math.Float64frombits(bits)))
+		if back := math.Float64bits(float64(got)); back != bits {
+			t.Fatalf("%T bits %016x came back as %016x", got, bits, back)
+		}
 	}
 }
 
@@ -127,6 +166,20 @@ func TestABucketWritesThroughItsCodec(t *testing.T) {
 	if _, err := OpenBucket[string](t.Context(), state.Store, "wrong", WithCodec[int64](bigEndian{})); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a codec of another type: %v", err)
 	}
+}
+
+// valueBytes is a key's value as its row keeps it, at the bucket's root
+func (s *testState) valueBytes(t *testing.T, bucket, key string) []byte {
+	t.Helper()
+	var kept []byte
+	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `select c.value from cells as c join buckets as b on b.id = c.bucket
+			where b.name = ?1 and c.path = ?2`, bucket, appendKey(nil, key)).Scan(&kept)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kept
 }
 
 // valueType is the SQLite type of a key's value in its row, at the bucket's root

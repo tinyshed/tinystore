@@ -39,7 +39,8 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   ends before the value that would pass them, the next page beginning there.
 - **A value is kept by its type.** `[]byte` and `string` as their bytes; bool
   and integers up to 32 unsigned bits as an integer of the row; `uint64` as
-  eight bytes; floats as their bits, `-0` and a NaN's payload included;
+  eight bytes; floats as their bits, named or not, `-0`, a NaN's payload
+  and whether it signals included;
   `struct{}` as nothing, so a bucket of them is a set; anything else as JSON,
   and a value JSON cannot write is `ErrInvalid` at `Set`. `WithCodec` replaces
   the choice. A value over 512 bytes lives in a row of its own; one over 1 MiB

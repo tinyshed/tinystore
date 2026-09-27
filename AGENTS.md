@@ -486,7 +486,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a kv version never repeats                             | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen`                             |
 | a stale claim cannot finish or delete the next         | `TestAStaleClaimCannotFinishOrDeleteTheNext`                                    |
 | a kv Take whose value no longer decodes keeps it       | `TestAFailedTakeKeepsItsValue`, a codec's panic and inside Tx included          |
-| a kv value comes back as it went in                    | `TestAValueComesBackAsItWentIn`, floats by their bits                           |
+| a kv value comes back as it went in                    | `TestAValueComesBackAsItWentIn`, floats by their bits, a named one's NaN that signals too |
 | an overflowing counter is refused, not rounded         | `TestAnOverflowingCounterIsRefusedRatherThanRounded`                            |
 | `LoseAtMost` loses no more than its interval           | `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing         |
 | counters of one name keep their numbers one way        | `TestCountersOpenAgainOnlyAsTheyWereOpened`                                     |
