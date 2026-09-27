@@ -6,7 +6,7 @@ The design of the blobs engine, built on 27 September from this page:
 that the draft had not. Its questions were settled with the user after
 [the mechanics round](reports/blobs-mechanics-2026-09-27.md); what those
 decisions were is under [Decided](#decided), and what is still to measure
-under [Open](#open). Figures marked as the probe come from throwaway programs run on
+under [Operational checks](#operational-checks). Figures marked as the probe come from throwaway programs run on
 27 September 2026 outside the repository; the round repeated them in
 `spike/blobs_*`, and where the two differ the round's stand. The probe ran on an AMD Ryzen 7
 7700 with a Samsung 990 PRO NVMe disk, on Windows 11 Pro 10.0.26200 with NTFS
@@ -447,8 +447,11 @@ type Object struct {
   part of one, under its key or under any other.
 - **Memory does not follow size.** An upload holds at most the inline size in
   memory, 16 KiB, while it does not know whether its object is larger; past
-  it, bytes go to the upload's file as they arrive. A 64-byte icon and a 17 GB film pass through one call and one
-  buffer.
+  it, bytes go to the upload's file as they arrive. After 256 KiB, `Put`
+  tries once to grow its transfer buffer to 64 KiB. Both buffers are reserved
+  while replacing one (80 KiB); if the larger reservation cannot be taken
+  immediately, the upload continues with 16 KiB. It never waits for more
+  memory while holding its initial buffer. `Create`/`Write` does not grow it.
 - **`blobs.Size(n)` says the stream's length.** The engine places the object
   before its first byte, and a stream that ends short of `n` or runs past it is
   `ErrInvalid` and leaves nothing. A negative `n` says nothing, so
@@ -661,6 +664,11 @@ step                                                    an exit after it leaves 
 - **A rename can meet a scanner on Windows.** One that opened the new file
   without sharing its deletion makes the rename fail; the upload tries again a
   few times before it fails, and the gates show how often it must.
+- **Windows creates and renames upload files one call at a time per store.**
+  Concurrent rooted directory walks caused most of the syscall delay in
+  [the write round](reports/blobs-write-2026-09-27.md). The lock covers those
+  calls alone: writing bytes, syncs, publication and reads stay outside it;
+  other operating systems take no lock.
 - **A process that dies and a disk that loses power are different tests.** The
   gates kill the process at every step; a power cut is argued from the order
   above and not tested, since no gate can cut the power.
@@ -837,7 +845,7 @@ scrub      content | offset | state | pace                     the scrub's place
 
 | Work | Holds | Reserved from the store's memory |
 |---|---|---|
-| an upload | the inline size, until it ends | at `Create` or `Put` |
+| an upload | 16 KiB initially; a long `Put` may hold 64 KiB, briefly 80 KiB while growing | initial reservation at `Create` or `Put`; growth only if free immediately |
 | a reader of a file | its handle | nothing |
 | a reader of an inline object | its bytes | at `Open`, until `Close` |
 | a `Scan` page | 1000 objects, 4 MiB of their fields | before its read |
@@ -860,7 +868,7 @@ scrub      content | offset | state | pace                     the scrub's place
 | A content type | 256 bytes |
 | Meta | 2 KiB |
 | Kept inline | 16 KiB |
-| Memory an upload holds | the inline size, 16 KiB |
+| Memory an upload holds | 16 KiB; long `Put` up to 64 KiB, 80 KiB briefly during growth |
 | Uploads at once | 1024 |
 | Free space kept | 1 GiB by default, `Options.KeepFree` |
 | A `Scan` page | 1000 objects, 4 MiB |
@@ -951,7 +959,7 @@ What the draft left to the code, and what the code found:
 |---|---|---|
 | a call's options | one `blobs.Option`, and a call refuses one it does not take with `ErrInvalid` | kv's calls take one `Option`; three kinds of option cost three names at every call site for one refusal the compiler would make |
 | conditions on `Copy` and `Move` | `IfNoneMatch` and `IfMatch`, both for the destination | a write names the key it writes, and the source's absence is `ErrConflict` already |
-| an upload whose context ended | aborted by its next call, or by maintenance, not by a goroutine of its own | only the store starts goroutines that outlive a call; the slot and 16 KiB it holds wait at most a minute |
+| an upload whose context ended | aborted by its next call, or by maintenance, not by a goroutine of its own | only the store starts goroutines that outlive a call; its slot and buffer wait at most a minute |
 | an open refused while its file is being removed | a key that changed, on Windows | the gates met the delete-pending moment within a few hundred replacements |
 | the scrub's memory | 1 MiB, or a quarter of the store's memory, taken only if free at once | a slice that waited would hold the whole of maintenance |
 | what a slice of the scrub reads | a 43,200th of the bytes and at least 1 MiB | 30 days at one slice a minute, and a small store read within the hour |
@@ -1007,9 +1015,13 @@ With the user on 27 September, after [the round](reports/blobs-mechanics-2026-09
 | `MaxSize` | no bound by default | a film is 17 to 80 GB |
 | resuming uploads, what `Put` returns, a download's name, absence, an upload's life, `Copy` and `Move` | as the draft proposed | starting again, the `Object`, a string of `Meta`, a found flag, the context given to `Create`, inside one bucket |
 
-## Open
+## Operational checks
 
-| Question | What decides it |
+[The completion round](reports/blobs-completion-2026-09-27.md) covers the two
+first-version checks below, as well as streaming, mixed work, memory and scale.
+Its results apply to its measured fixtures and hosts, not every production load.
+
+| Question | What was checked |
 |---|---|
-| the scrub's pace | `Open`'s p99 while the scrub reads at 30 days a pass, on both systems |
-| how often a rename on Windows meets a scanner | the gates' count of retried renames with Defender's real-time protection on |
+| the scrub's pace | the actual minute tick with 16 readers on both systems; no increase in window p99 on the 16 MiB fixture, with the 1 MiB minimum slice confirmed |
+| a rename on Windows meets a scanner | forced transient and persistent holds, each passed 25 times; an earlier unforced run observed zero retries with Defender enabled, not a frequency guarantee |

@@ -1,0 +1,134 @@
+Sun Sep 27 16:16:21 UTC 2026
+go version go1.27.1 linux/amd64
+Linux 7a2688ef54b8 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+Filesystem     Type  1K-blocks     Used Available Use% Mounted on
+/dev/sde       ext4 1055762868 22527300 979532096   3% /perf
+=== RUN   TestBlobsPlaces
+    blobs_place_spike_test.go:253: inline   4 KiB   1 callers  Put       338 a second  p50    3203 µs p99    5651 µs  WAL peak   3.9 MiB
+    blobs_place_spike_test.go:253: inline   4 KiB   1 callers  Open    82101 a second  p50       9 µs p99      70 µs
+    blobs_place_spike_test.go:253: inline   4 KiB  16 callers  Put      2789 a second  p50    5208 µs p99   16553 µs  WAL peak   4.1 MiB
+    blobs_place_spike_test.go:253: inline   4 KiB  16 callers  Open   112113 a second  p50      77 µs p99     768 µs
+    blobs_place_spike_test.go:253: inline   4 KiB 128 callers  Put     10275 a second  p50    9767 µs p99   24837 µs  WAL peak   5.1 MiB
+    blobs_place_spike_test.go:253: inline   4 KiB 128 callers  Open   109547 a second  p50     951 µs p99    3237 µs
+    blobs_place_spike_test.go:256: inline   4 KiB   bodies      178.8 MiB, payload 88.3 %, unused 11.3 %
+    blobs_place_spike_test.go:256: inline   4 KiB   objects       2.6 MiB, payload 79.2 %, unused 16.1 %
+    blobs_place_spike_test.go:256: inline   4 KiB   VACUUM INTO   179.8 MiB in    274.7 ms,  0.69 GB/s
+    blobs_place_spike_test.go:253: file     4 KiB   1 callers  Put       156 a second  p50    6196 µs p99   11344 µs  WAL peak   2.4 MiB
+    blobs_place_spike_test.go:253: file     4 KiB   1 callers  Open    35484 a second  p50      18 µs p99     189 µs
+    blobs_place_spike_test.go:253: file     4 KiB  16 callers  Put      1083 a second  p50   12957 µs p99   22495 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: file     4 KiB  16 callers  Open    50463 a second  p50     129 µs p99    1562 µs
+    blobs_place_spike_test.go:253: file     4 KiB 128 callers  Put      5427 a second  p50   22680 µs p99   39414 µs  WAL peak   4.5 MiB
+    blobs_place_spike_test.go:253: file     4 KiB 128 callers  Open    59356 a second  p50    2111 µs p99    3434 µs
+    blobs_place_spike_test.go:253: inline  16 KiB   1 callers  Put       338 a second  p50    3213 µs p99    6572 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: inline  16 KiB   1 callers  Open    39819 a second  p50      17 µs p99     221 µs
+    blobs_place_spike_test.go:253: inline  16 KiB  16 callers  Put      2329 a second  p50    6575 µs p99   19380 µs  WAL peak   4.3 MiB
+    blobs_place_spike_test.go:253: inline  16 KiB  16 callers  Open    68026 a second  p50     150 µs p99     861 µs
+    blobs_place_spike_test.go:253: inline  16 KiB 128 callers  Put      6334 a second  p50   22882 µs p99   32230 µs  WAL peak   5.6 MiB
+    blobs_place_spike_test.go:253: inline  16 KiB 128 callers  Open    52402 a second  p50    2270 µs p99    4430 µs
+    blobs_place_spike_test.go:256: inline  16 KiB   bodies      438.6 MiB, payload 96.8 %, unused  3.0 %
+    blobs_place_spike_test.go:256: inline  16 KiB   objects       1.7 MiB, payload 82.3 %, unused 12.7 %
+    blobs_place_spike_test.go:256: inline  16 KiB   VACUUM INTO   439.4 MiB in    830.3 ms,  0.55 GB/s
+    blobs_place_spike_test.go:253: file    16 KiB   1 callers  Put       152 a second  p50    6502 µs p99    8036 µs  WAL peak   2.3 MiB
+    blobs_place_spike_test.go:253: file    16 KiB   1 callers  Open    28128 a second  p50      24 µs p99     198 µs
+    blobs_place_spike_test.go:253: file    16 KiB  16 callers  Put      1062 a second  p50   13284 µs p99   31326 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: file    16 KiB  16 callers  Open    50966 a second  p50     137 µs p99    1441 µs
+    blobs_place_spike_test.go:253: file    16 KiB 128 callers  Put      5137 a second  p50   23759 µs p99   42489 µs  WAL peak   4.4 MiB
+    blobs_place_spike_test.go:253: file    16 KiB 128 callers  Open    47234 a second  p50    2653 µs p99    4261 µs
+    blobs_place_spike_test.go:253: inline  64 KiB   1 callers  Put       327 a second  p50    3203 µs p99   11726 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: inline  64 KiB   1 callers  Open    11980 a second  p50      56 µs p99     339 µs
+    blobs_place_spike_test.go:253: inline  64 KiB  16 callers  Put      1365 a second  p50    8817 µs p99   26923 µs  WAL peak   4.9 MiB
+    blobs_place_spike_test.go:253: inline  64 KiB  16 callers  Open    27335 a second  p50     576 µs p99    1476 µs
+    blobs_place_spike_test.go:253: inline  64 KiB 128 callers  Put      2372 a second  p50   54070 µs p99   71903 µs  WAL peak  11.0 MiB
+    blobs_place_spike_test.go:253: inline  64 KiB 128 callers  Open    24278 a second  p50    5211 µs p99    7102 µs
+    blobs_place_spike_test.go:256: inline  64 KiB   bodies      776.9 MiB, payload 99.2 %, unused  0.7 %
+    blobs_place_spike_test.go:256: inline  64 KiB   VACUUM INTO   777.4 MiB in   1524.7 ms,  0.53 GB/s
+    blobs_place_spike_test.go:253: file    64 KiB   1 callers  Put       146 a second  p50    6482 µs p99   12059 µs  WAL peak   2.3 MiB
+    blobs_place_spike_test.go:253: file    64 KiB   1 callers  Open    15610 a second  p50      48 µs p99     270 µs
+    blobs_place_spike_test.go:253: file    64 KiB  16 callers  Put      1102 a second  p50   13258 µs p99   23069 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: file    64 KiB  16 callers  Open    42742 a second  p50     169 µs p99    1730 µs
+    blobs_place_spike_test.go:253: file    64 KiB 128 callers  Put      4960 a second  p50   24875 µs p99   42957 µs  WAL peak   4.4 MiB
+    blobs_place_spike_test.go:253: file    64 KiB 128 callers  Open    38271 a second  p50    3287 µs p99    4956 µs
+    blobs_place_spike_test.go:253: inline 256 KiB   1 callers  Put       231 a second  p50    3604 µs p99   14472 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: inline 256 KiB   1 callers  Open     3055 a second  p50     252 µs p99     839 µs
+    blobs_place_spike_test.go:253: inline 256 KiB  16 callers  Put       562 a second  p50   30492 µs p99   42439 µs  WAL peak   5.4 MiB
+    blobs_place_spike_test.go:253: inline 256 KiB  16 callers  Open     9197 a second  p50    1667 µs p99    3292 µs
+    blobs_place_spike_test.go:253: inline 256 KiB 128 callers  Put       712 a second  p50  179004 µs p99  198986 µs  WAL peak   8.9 MiB
+    blobs_place_spike_test.go:253: inline 256 KiB 128 callers  Open     8041 a second  p50   15820 µs p99   19294 µs
+    blobs_place_spike_test.go:256: inline 256 KiB   bodies     1161.9 MiB, payload 99.8 %, unused  0.1 %
+    blobs_place_spike_test.go:256: inline 256 KiB   VACUUM INTO  1162.0 MiB in   2311.8 ms,  0.53 GB/s
+    blobs_place_spike_test.go:253: file   256 KiB   1 callers  Put       136 a second  p50    7122 µs p99    9514 µs  WAL peak   2.1 MiB
+    blobs_place_spike_test.go:253: file   256 KiB   1 callers  Open     5270 a second  p50     177 µs p99     481 µs
+    blobs_place_spike_test.go:253: file   256 KiB  16 callers  Put       993 a second  p50   16000 µs p99   25097 µs  WAL peak   4.0 MiB
+    blobs_place_spike_test.go:253: file   256 KiB  16 callers  Open    29150 a second  p50     238 µs p99    2319 µs
+    blobs_place_spike_test.go:253: file   256 KiB 128 callers  Put      3636 a second  p50   34197 µs p99   57550 µs  WAL peak   4.3 MiB
+    blobs_place_spike_test.go:253: file   256 KiB 128 callers  Open    22648 a second  p50    5594 µs p99    7831 µs
+--- PASS: TestBlobsPlaces (152.88s)
+=== RUN   TestBlobsLargeUpload
+    blobs_upload_spike_test.go:60: 4 GiB synced at its end     written in   2717.9 ms,  1.58 GB/s; the last sync    232.6 ms; dirty at most 1395 MiB
+    blobs_upload_spike_test.go:60: 4 GiB synced every 256 MiB  written in   3324.1 ms,  1.29 GB/s; the last sync      0.6 ms; dirty at most 268 MiB
+    blobs_upload_spike_test.go:60: 4 GiB synced every 64 MiB   written in   3609.5 ms,  1.19 GB/s; the last sync      0.6 ms; dirty at most 83 MiB
+--- PASS: TestBlobsLargeUpload (10.35s)
+=== RUN   TestBlobsUploadsAtOnce
+    blobs_upload_spike_test.go:153:   16 uploads of  1 MiB at once     835 a second,  0.88 GB/s; heap at most 7 MiB; files open at most 16
+    blobs_upload_spike_test.go:153:   64 uploads of  1 MiB at once    1679 a second,  1.76 GB/s; heap at most 8 MiB; files open at most 64
+    blobs_upload_spike_test.go:153:  256 uploads of  1 MiB at once    1453 a second,  1.52 GB/s; heap at most 12 MiB; files open at most 231
+    blobs_upload_spike_test.go:153: 1024 uploads of  1 MiB at once    1378 a second,  1.44 GB/s; heap at most 23 MiB; files open at most 1024
+    blobs_upload_spike_test.go:153:   16 uploads of 64 MiB at once      20 a second,  1.34 GB/s; heap at most 13 MiB; files open at most 16
+    blobs_upload_spike_test.go:153:   64 uploads of 64 MiB at once      22 a second,  1.50 GB/s; heap at most 13 MiB; files open at most 64
+--- PASS: TestBlobsUploadsAtOnce (20.38s)
+PASS
+ok  	github.com/tinyshed/tinystore/spike	183.629s
+=== RUN   TestPlacesMeasured
+    load_test.go:141: engine   4 KiB   1 callers  Put       135 a second  p50    7757 µs p99   15114 µs
+    load_test.go:146: engine   4 KiB   1 callers  Open    62403 a second  p50      12 µs p99     159 µs
+    load_test.go:141: engine   4 KiB  16 callers  Put      1323 a second  p50   12012 µs p99   28805 µs
+    load_test.go:146: engine   4 KiB  16 callers  Open    67528 a second  p50     140 µs p99    1055 µs
+    load_test.go:141: engine   4 KiB 128 callers  Put      5755 a second  p50   18382 µs p99  103746 µs
+    load_test.go:146: engine   4 KiB 128 callers  Open    82017 a second  p50    1623 µs p99    2962 µs
+    load_test.go:148: engine   4 KiB  renames a scanner made wait: 0
+    load_test.go:141: engine  16 KiB   1 callers  Put       159 a second  p50    5895 µs p99   15336 µs
+    load_test.go:146: engine  16 KiB   1 callers  Open    29026 a second  p50      22 µs p99     255 µs
+    load_test.go:141: engine  16 KiB  16 callers  Put      1253 a second  p50   12231 µs p99   29160 µs
+    load_test.go:146: engine  16 KiB  16 callers  Open    40313 a second  p50     356 µs p99    1258 µs
+    load_test.go:141: engine  16 KiB 128 callers  Put      4328 a second  p50   30249 µs p99   52432 µs
+    load_test.go:146: engine  16 KiB 128 callers  Open    49377 a second  p50    2574 µs p99    3734 µs
+    load_test.go:148: engine  16 KiB  renames a scanner made wait: 0
+    load_test.go:141: engine  64 KiB   1 callers  Put       101 a second  p50    9683 µs p99   14164 µs
+    load_test.go:146: engine  64 KiB   1 callers  Open    16688 a second  p50      51 µs p99     127 µs
+    load_test.go:141: engine  64 KiB  16 callers  Put       848 a second  p50   18353 µs p99   25358 µs
+    load_test.go:146: engine  64 KiB  16 callers  Open    33987 a second  p50     251 µs p99    2051 µs
+    load_test.go:141: engine  64 KiB 128 callers  Put      4221 a second  p50   28151 µs p99   62886 µs
+    load_test.go:146: engine  64 KiB 128 callers  Open    70202 a second  p50    1434 µs p99    4131 µs
+    load_test.go:148: engine  64 KiB  renames a scanner made wait: 0
+    load_test.go:141: engine 256 KiB   1 callers  Put        96 a second  p50   10262 µs p99   14244 µs
+    load_test.go:146: engine 256 KiB   1 callers  Open     5198 a second  p50     185 µs p99     373 µs
+    load_test.go:141: engine 256 KiB  16 callers  Put       761 a second  p50   20256 µs p99   29444 µs
+    load_test.go:146: engine 256 KiB  16 callers  Open    52511 a second  p50     187 µs p99    1750 µs
+    load_test.go:141: engine 256 KiB 128 callers  Put      2823 a second  p50   41486 µs p99   97209 µs
+    load_test.go:146: engine 256 KiB 128 callers  Open    37335 a second  p50    2893 µs p99    6201 µs
+    load_test.go:148: engine 256 KiB  renames a scanner made wait: 0
+--- PASS: TestPlacesMeasured (73.14s)
+=== RUN   TestLargeUploadMeasured
+    load_test.go:178: Put, 16 KiB carried a time        4 GiB in    7.83 s,  0.55 GB/s
+    load_test.go:193: Create, Write 64 KiB a time       4 GiB in    4.63 s,  0.93 GB/s
+    load_test.go:194:   of which the Commit                  9.3 ms
+    load_test.go:200: a whole read, checked             4 GiB in    2.37 s,  1.81 GB/s
+    load_test.go:201: ranges, unchecked                  3123 of 4 MiB a second, 13.10 GB/s
+--- PASS: TestLargeUploadMeasured (15.77s)
+=== RUN   TestUploadsAtOnceMeasured
+    load_test.go:262:   16 Puts of 1 MiB at once     580 a second,  0.61 GB/s; heap at most 5 MiB
+    load_test.go:262:   64 Puts of 1 MiB at once    1545 a second,  1.62 GB/s; heap at most 7 MiB
+    load_test.go:262:  256 Puts of 1 MiB at once    3008 a second,  3.15 GB/s; heap at most 16 MiB
+    load_test.go:262: 1024 Puts of 1 MiB at once    3978 a second,  4.17 GB/s; heap at most 47 MiB
+--- PASS: TestUploadsAtOnceMeasured (14.58s)
+=== RUN   TestScrubBesideReadersMeasured
+    load_test.go:326: Open of 64 KiB, 16 callers, alone            79975 a second  p50     155 µs p99    1080 µs
+    load_test.go:355: Open of 64 KiB, 16 callers, beside a scrub    78018 a second  p50     158 µs p99    1091 µs
+    load_test.go:356: the scrub read 0.14 GB/s meanwhile
+--- PASS: TestScrubBesideReadersMeasured (46.58s)
+=== RUN   TestUsageMeasured
+    load_test.go:389: Usage over 100000 objects: 14.8 ms, the median of five
+--- PASS: TestUsageMeasured (11.94s)
+PASS
+ok  	github.com/tinyshed/tinystore/blobs	162.009s
+Sun Sep 27 16:22:18 UTC 2026

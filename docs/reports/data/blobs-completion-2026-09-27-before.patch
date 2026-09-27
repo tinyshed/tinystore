@@ -1,0 +1,100 @@
+diff --git a/blobs/blobs.go b/blobs/blobs.go
+index 834c08d..5c6b175 100644
+--- a/blobs/blobs.go
++++ b/blobs/blobs.go
+@@ -37,6 +37,7 @@ type Store struct {
+ 	runtime     *tinystore.Store
+ 	dir         string
+ 	root        *os.Root // blobs/, through which every file is opened, so that a reader shares its deletion
++	nameCalls   nameCalls
+ 	file        *sqlite.File
+ 	log         *slog.Logger
+ 	now         func() time.Time
+diff --git a/blobs/files.go b/blobs/files.go
+index e65f1aa..27edca9 100644
+--- a/blobs/files.go
++++ b/blobs/files.go
+@@ -4,6 +4,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io/fs"
++	"os"
+ 	"path/filepath"
+ 	"strconv"
+ 	"sync"
+@@ -64,7 +65,7 @@ func (s *Store) makeDir(dir string) error {
+ // a scanner that opened the new file without sharing it refuses the rename
+ func (s *Store) rename(from, to string) error {
+ 	for try := 0; ; try++ {
+-		err := s.root.Rename(from, to)
++		err := s.renameFile(from, to)
+ 		if err == nil {
+ 			return nil
+ 		}
+@@ -76,6 +77,18 @@ func (s *Store) rename(from, to string) error {
+ 	}
+ }
+ 
++func (s *Store) renameFile(from, to string) error {
++	s.nameCalls.Lock()
++	defer s.nameCalls.Unlock()
++	return s.root.Rename(from, to)
++}
++
++func (s *Store) createUpload(id int64) (*os.File, error) {
++	s.nameCalls.Lock()
++	defer s.nameCalls.Unlock()
++	return s.root.OpenFile(uploadName(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
++}
++
+ // syncShared syncs a directory of blobs/ once for the files that arrive in it
+ // together: each waits for a sync that began after its own rename
+ func (s *Store) syncShared(dir string) error {
+diff --git a/blobs/sync_other.go b/blobs/sync_other.go
+index 4f3d91c..a4bb1d9 100644
+--- a/blobs/sync_other.go
++++ b/blobs/sync_other.go
+@@ -7,6 +7,11 @@ import (
+ 	"os"
+ )
+ 
++type nameCalls struct{}
++
++func (*nameCalls) Lock()   {}
++func (*nameCalls) Unlock() {}
++
+ // syncDirectory makes a directory's names durable: its own fsync
+ func syncDirectory(path string) error {
+ 	dir, err := os.Open(path) //nolint:gosec // a directory of the store's own
+diff --git a/blobs/sync_windows.go b/blobs/sync_windows.go
+index 9fa5fe8..a2c9a62 100644
+--- a/blobs/sync_windows.go
++++ b/blobs/sync_windows.go
+@@ -4,10 +4,14 @@ package blobs
+ 
+ import (
+ 	"errors"
++	"sync"
+ 	"syscall"
+ 	"unsafe"
+ )
+ 
++// simultaneous directory walks contend inside Windows while opening and closing their handles
++type nameCalls struct{ sync.Mutex }
++
+ // ERROR_SHARING_VIOLATION, which syscall does not name
+ const errorSharingViolation syscall.Errno = 32
+ 
+
+diff --git a/blobs/upload.go b/blobs/upload.go
+--- a/blobs/upload.go
++++ b/blobs/upload.go
+@@ -307,7 +307,7 @@
+ 		return err
+ 	}
+ 	u.id = id
+-	u.file, err = s.root.OpenFile(uploadName(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
++	u.file, err = s.createUpload(id)
+ 	if err != nil {
+ 		return fmt.Errorf("blobs: create %s: %w", uploadName(id), err)
+ 	}

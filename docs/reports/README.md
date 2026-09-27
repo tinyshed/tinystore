@@ -130,6 +130,17 @@ fetch and normalise them.
 | | |
 |---|---|
 | [blobs-mechanics-2026-09-27.md](blobs-mechanics-2026-09-27.md) | where a blob's bytes go before the engine exists, on Linux and Windows: inline up to 16 KiB beats a file both ways, a file above it; a reader keeps its bytes through a delete only when opened through an `os.Root` on Windows; a pack gains 1.3 to 1.9 times on Linux and loses on Windows; a million files created steadily, linked faster than copied; a checked whole read at 2 GB/s; a large upload synced every 256 MiB |
+| [blobs-engine-2026-09-27.md](blobs-engine-2026-09-27.md) | the public blobs engine beside its prototype on Windows and Linux: placement, 4 GiB streaming writes, concurrent uploads, readers beside scrub, and Usage over 100,000 objects; raw logs and reproduction commands |
+| [blobs-write-2026-09-27.md](blobs-write-2026-09-27.md) | the Windows write gap profiled: rooted creation and rename account for 97% of summed syscall delay; admitting one at a time raises concurrent 64 KiB writes 4.3 to 6.8 times in paired runs, preserving file syncs, publication and recovery |
+| [blobs-completion-2026-09-27.md](blobs-completion-2026-09-27.md) | long Put gets an optional memory-reserved 64 KiB buffer: 23% less time on Windows and 9–11% on Linux; mixed reads and mutations, actual scheduled scrub, forced Windows rename retries, 64 concurrent large uploads within finite budgets, a million-object Usage, and cold or uncached read diagnostics |
+
+## 27 September 2026 — readability and diagnostics
+
+| | |
+|---|---|
+| [readability-2026-09-27.md](readability-2026-09-27.md) | four complete engine reads, conservative comment cleanup and two metrics names clarified; independent engineering verdicts, existing shared mechanics and candidates, and an audit of missing diagnostic events and background-log scope |
+| [logging-2026-09-27.md](logging-2026-09-27.md) | background engine identity and records self-log routing, committed metrics quarantine events, per-engine Debug maintenance summaries, KV error phase and bucket, records drop reasons, and failed Close outcome |
+| [modernize-2026-09-27.md](modernize-2026-09-27.md) | Go 1.27 modernizers across the root and selected bench modules, useful `AsType` without disabling errcheck, one fixed example race, a dead constant, and triage of GoLand warnings |
 
 ## 27 September 2026 — kv after its review
 

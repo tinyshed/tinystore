@@ -1,0 +1,8 @@
+=== RUN   TestLargeUploadMeasured
+    load_test.go:178: Put, bounded transfer buffer      4 GiB in    4.38 s,  0.98 GB/s
+    load_test.go:193: Create, Write 64 KiB a time       4 GiB in    3.84 s,  1.12 GB/s
+    load_test.go:194:   of which the Commit                  3.6 ms
+    load_test.go:200: a whole read, checked             4 GiB in    3.47 s,  1.24 GB/s
+    load_test.go:201: ranges, unchecked                  2597 of 4 MiB a second, 10.89 GB/s
+--- PASS: TestLargeUploadMeasured (12.61s)
+PASS

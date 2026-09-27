@@ -165,10 +165,12 @@ before it returns. Engines register periodic work with
 `Store.Every`; `Options.Manual` stops all of it. Metrics maintenance runs by
 default.
 
-**Logs never block and never loop.** Engines log through `Store.Logger(name)`
-into the application's `*slog.Logger`, never per sample. The records handler
-and a writer of `Lines` drop and count when full, and the handler refuses the
-records engine's own lines.
+**Engine logs do not loop.** Engines log through `Store.Logger(name)` into the
+application's `*slog.Logger`, never per sample. Background engine work uses
+`Store.EveryEngine` so its failures and recovery keep the same engine attribute;
+the records handler refuses its own lines. The records handler and a writer
+of `Lines` never wait for their queue: they drop and count when full. An
+arbitrary application-supplied slog handler controls its own call latency.
 
 **Records has one logical model for logs and events.** A producer's language
 is not a storage format, and template mining is optional for a text body.
@@ -557,6 +559,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a whole read of a changed byte fails before its end    | `TestAWholeReadOfAChangedByteFailsBeforeItsEnd`; a range is not checked         |
 | the scrub finds what changed and names its keys        | `TestTheScrubNamesTheKeysOfWhatChanged`, `TestTheScrubKeepsItsPlaceAcrossReopens` |
 | memory does not follow an object's size                | `TestMemoryDoesNotGrowWithAnObjectsSize`, `TestStoreMemoryBoundsUploadsReadsAndScans` |
+| a Put grows its buffer only when memory is free now    | `TestStreamingUsesOnlyTheBufferItsBudgetCanHold`, `TestAFailedStreamReleasesItsLargerBuffer` |
+| a Windows scanner's hold is retried and cleaned up     | `TestARenameRetriesAfterAWindowsScannerLetsGo`, `TestAHeldRenameExhaustsRetriesAndRecovers` |
 | a stream that disagrees with its Size is refused       | `TestAStreamThatDisagreesWithItsSizeIsRefused`                                  |
 | an upload past MaxSize or KeepFree leaves nothing      | `TestAnUploadPastItsBoundsStopsAndLeavesNothing`                                |
 | of two conditional replaces, one conflicts             | `TestOneOfTwoConditionalReplacesConflicts`, `TestIfNoneMatchCreatesOnce`        |

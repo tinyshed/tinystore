@@ -1,0 +1,76 @@
+== before 2026-09-27T16:56:21.0270844Z
+=== RUN   TestStreamingPutMeasured
+=== RUN   TestStreamingPutMeasured/budget-0
+    remaining_load_test.go:40: stream Put                        4 GiB in    5.50 s,  0.78 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:0 Capacity:0}
+=== RUN   TestStreamingPutMeasured/budget-16384
+    remaining_load_test.go:40: stream Put                        4 GiB in    7.96 s,  0.54 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:16384 Capacity:16384}
+--- PASS: TestStreamingPutMeasured (20.67s)
+    --- PASS: TestStreamingPutMeasured/budget-0 (9.11s)
+    --- PASS: TestStreamingPutMeasured/budget-16384 (11.56s)
+=== RUN   TestMixedMeasured
+    remaining_load_test.go:116: Put:      234 a second  p50   20074 µs p99  193338 µs
+    remaining_load_test.go:116: Delete:       59 a second  p50    4141 µs p99   87198 µs
+    remaining_load_test.go:116: Open:    27039 a second  p50       0 µs p99    1061 µs
+    remaining_load_test.go:116: whole read:    18905 a second  p50       0 µs p99    2586 µs
+    remaining_load_test.go:118: absent 163010, changed-too-often 0, memory {Used:0 Peak:262144 Capacity:1048576}
+--- PASS: TestMixedMeasured (20.21s)
+PASS
+== after 2026-09-27T16:57:02.0082010Z
+=== RUN   TestStreamingPutMeasured
+=== RUN   TestStreamingPutMeasured/budget-0
+    remaining_load_test.go:40: stream Put                        4 GiB in    4.23 s,  1.02 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:0 Capacity:0}
+=== RUN   TestStreamingPutMeasured/budget-16384
+    remaining_load_test.go:40: stream Put                        4 GiB in    6.49 s,  0.66 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:16384 Capacity:16384}
+--- PASS: TestStreamingPutMeasured (18.33s)
+    --- PASS: TestStreamingPutMeasured/budget-0 (8.06s)
+    --- PASS: TestStreamingPutMeasured/budget-16384 (10.27s)
+=== RUN   TestMixedMeasured
+    remaining_load_test.go:116: Put:      229 a second  p50   22617 µs p99  164917 µs
+    remaining_load_test.go:116: Delete:       58 a second  p50    3862 µs p99   78712 µs
+    remaining_load_test.go:116: Open:    31239 a second  p50       0 µs p99    1043 µs
+    remaining_load_test.go:116: whole read:    21093 a second  p50       0 µs p99    2316 µs
+    remaining_load_test.go:118: absent 203095, changed-too-often 0, memory {Used:0 Peak:671744 Capacity:1048576}
+--- PASS: TestMixedMeasured (20.61s)
+PASS
+== after 2026-09-27T16:57:41.0148597Z
+=== RUN   TestStreamingPutMeasured
+=== RUN   TestStreamingPutMeasured/budget-0
+    remaining_load_test.go:40: stream Put                        4 GiB in    4.24 s,  1.01 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:0 Capacity:0}
+=== RUN   TestStreamingPutMeasured/budget-16384
+    remaining_load_test.go:40: stream Put                        4 GiB in    6.46 s,  0.66 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:16384 Capacity:16384}
+--- PASS: TestStreamingPutMeasured (18.19s)
+    --- PASS: TestStreamingPutMeasured/budget-0 (8.03s)
+    --- PASS: TestStreamingPutMeasured/budget-16384 (10.16s)
+=== RUN   TestMixedMeasured
+    remaining_load_test.go:116: Delete:       58 a second  p50    3901 µs p99   83089 µs
+    remaining_load_test.go:116: Open:    29062 a second  p50       0 µs p99    1043 µs
+    remaining_load_test.go:116: whole read:    20234 a second  p50       0 µs p99    2575 µs
+    remaining_load_test.go:116: Put:      231 a second  p50   22909 µs p99  191668 µs
+    remaining_load_test.go:118: absent 176579, changed-too-often 0, memory {Used:0 Peak:671744 Capacity:1048576}
+--- PASS: TestMixedMeasured (20.16s)
+PASS
+== before 2026-09-27T16:58:19.3934017Z
+=== RUN   TestStreamingPutMeasured
+=== RUN   TestStreamingPutMeasured/budget-0
+    remaining_load_test.go:40: stream Put                        4 GiB in    5.52 s,  0.78 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:0 Capacity:0}
+=== RUN   TestStreamingPutMeasured/budget-16384
+    remaining_load_test.go:40: stream Put                        4 GiB in    7.75 s,  0.55 GB/s
+    remaining_load_test.go:41: memory {Used:0 Peak:16384 Capacity:16384}
+--- PASS: TestStreamingPutMeasured (20.79s)
+    --- PASS: TestStreamingPutMeasured/budget-0 (9.23s)
+    --- PASS: TestStreamingPutMeasured/budget-16384 (11.56s)
+=== RUN   TestMixedMeasured
+    remaining_load_test.go:116: Put:      222 a second  p50   23113 µs p99  181207 µs
+    remaining_load_test.go:116: Delete:       56 a second  p50    3836 µs p99   81837 µs
+    remaining_load_test.go:116: Open:    32901 a second  p50       0 µs p99    1037 µs
+    remaining_load_test.go:116: whole read:    22182 a second  p50       0 µs p99    2268 µs
+    remaining_load_test.go:118: absent 214567, changed-too-often 0, memory {Used:0 Peak:262144 Capacity:1048576}
+--- PASS: TestMixedMeasured (20.26s)
+PASS

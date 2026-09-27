@@ -1,0 +1,64 @@
+== base 2026-09-27T16:36:24.8198355Z
+=== RUN   TestPutCompared
+=== RUN   TestPutCompared/4KiB/128
+    put_compare_test.go:53: 16384 objects of 4096 bytes:    16674 a second  p50    6089 µs p99   20057 µs
+=== RUN   TestPutCompared/64KiB/1
+    put_compare_test.go:53: 128 objects of 65536 bytes:      220 a second  p50    4635 µs p99    6279 µs
+=== RUN   TestPutCompared/64KiB/128
+    put_compare_test.go:53: 2048 objects of 65536 bytes:      173 a second  p50  739023 µs p99  884420 µs
+=== RUN   TestPutCompared/1024KiB/64
+    put_compare_test.go:53: 1024 objects of 1048576 bytes:      153 a second  p50  412469 µs p99  616406 µs
+--- PASS: TestPutCompared (20.54s)
+    --- PASS: TestPutCompared/4KiB/128 (1.02s)
+    --- PASS: TestPutCompared/64KiB/1 (0.62s)
+    --- PASS: TestPutCompared/64KiB/128 (12.03s)
+    --- PASS: TestPutCompared/1024KiB/64 (6.87s)
+PASS
+== names 2026-09-27T16:36:45.3957789Z
+=== RUN   TestPutCompared
+=== RUN   TestPutCompared/4KiB/128
+    put_compare_test.go:53: 16384 objects of 4096 bytes:     6964 a second  p50    6386 µs p99  227722 µs
+=== RUN   TestPutCompared/64KiB/1
+    put_compare_test.go:53: 128 objects of 65536 bytes:      218 a second  p50    4654 µs p99    5704 µs
+=== RUN   TestPutCompared/64KiB/128
+    put_compare_test.go:53: 2048 objects of 65536 bytes:     1182 a second  p50  100628 µs p99  158310 µs
+=== RUN   TestPutCompared/1024KiB/64
+    put_compare_test.go:53: 1024 objects of 1048576 bytes:      410 a second  p50   75110 µs p99  519729 µs
+--- PASS: TestPutCompared (7.58s)
+    --- PASS: TestPutCompared/4KiB/128 (2.39s)
+    --- PASS: TestPutCompared/64KiB/1 (0.62s)
+    --- PASS: TestPutCompared/64KiB/128 (1.89s)
+    --- PASS: TestPutCompared/1024KiB/64 (2.68s)
+PASS
+== names 2026-09-27T16:36:53.0319726Z
+=== RUN   TestPutCompared
+=== RUN   TestPutCompared/4KiB/128
+    put_compare_test.go:53: 16384 objects of 4096 bytes:    16923 a second  p50    6132 µs p99   18700 µs
+=== RUN   TestPutCompared/64KiB/1
+    put_compare_test.go:53: 128 objects of 65536 bytes:      216 a second  p50    4636 µs p99    7708 µs
+=== RUN   TestPutCompared/64KiB/128
+    put_compare_test.go:53: 2048 objects of 65536 bytes:      698 a second  p50  108049 µs p99  449257 µs
+=== RUN   TestPutCompared/1024KiB/64
+    put_compare_test.go:53: 1024 objects of 1048576 bytes:      893 a second  p50   67676 µs p99  122616 µs
+--- PASS: TestPutCompared (6.08s)
+    --- PASS: TestPutCompared/4KiB/128 (1.01s)
+    --- PASS: TestPutCompared/64KiB/1 (0.63s)
+    --- PASS: TestPutCompared/64KiB/128 (3.10s)
+    --- PASS: TestPutCompared/1024KiB/64 (1.34s)
+PASS
+== base 2026-09-27T16:36:59.1260250Z
+=== RUN   TestPutCompared
+=== RUN   TestPutCompared/4KiB/128
+    put_compare_test.go:53: 16384 objects of 4096 bytes:    16829 a second  p50    6209 µs p99   18734 µs
+=== RUN   TestPutCompared/64KiB/1
+    put_compare_test.go:53: 128 objects of 65536 bytes:      217 a second  p50    4636 µs p99    5809 µs
+=== RUN   TestPutCompared/64KiB/128
+    put_compare_test.go:53: 2048 objects of 65536 bytes:      163 a second  p50  762355 µs p99 1255739 µs
+=== RUN   TestPutCompared/1024KiB/64
+    put_compare_test.go:53: 1024 objects of 1048576 bytes:      153 a second  p50  436001 µs p99  594010 µs
+--- PASS: TestPutCompared (21.17s)
+    --- PASS: TestPutCompared/4KiB/128 (1.01s)
+    --- PASS: TestPutCompared/64KiB/1 (0.63s)
+    --- PASS: TestPutCompared/64KiB/128 (12.70s)
+    --- PASS: TestPutCompared/1024KiB/64 (6.84s)
+PASS

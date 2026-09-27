@@ -1,0 +1,27 @@
+=== RUN   TestConcurrentLargeBoundedMeasured
+=== RUN   TestConcurrentLargeBoundedMeasured/16384
+    remaining_load_test.go:150: 64 uploads of 64 MiB              4 GiB in    5.51 s,  0.78 GB/s
+    remaining_load_test.go:151: budget 16384, memory {Used:0 Peak:16384 Capacity:16384}, sampled heap 3 MiB
+=== RUN   TestConcurrentLargeBoundedMeasured/262144
+    remaining_load_test.go:150: 64 uploads of 64 MiB              4 GiB in    3.31 s,  1.30 GB/s
+    remaining_load_test.go:151: budget 262144, memory {Used:0 Peak:262144 Capacity:262144}, sampled heap 5 MiB
+=== RUN   TestConcurrentLargeBoundedMeasured/4194304
+    remaining_load_test.go:150: 64 uploads of 64 MiB              4 GiB in    0.90 s,  4.79 GB/s
+    remaining_load_test.go:151: budget 4194304, memory {Used:0 Peak:4161536 Capacity:4194304}, sampled heap 8 MiB
+--- PASS: TestConcurrentLargeBoundedMeasured (11.17s)
+    --- PASS: TestConcurrentLargeBoundedMeasured/16384 (5.89s)
+    --- PASS: TestConcurrentLargeBoundedMeasured/262144 (3.85s)
+    --- PASS: TestConcurrentLargeBoundedMeasured/4194304 (1.42s)
+=== RUN   TestMillionUsageMeasured
+    remaining_load_test.go:191: one million populated through Put in 71.49 s
+    remaining_load_test.go:202: Usage million median 151.84 ms; all [150.8848ms 151.2809ms 151.8374ms 158.0888ms 166.4562ms]
+    remaining_load_test.go:208: Scan first 1000 of million 4.93 ms
+--- PASS: TestMillionUsageMeasured (72.32s)
+=== RUN   TestScheduledScrubMeasured
+    remaining_load_test.go:235: reading across the actual one-minute maintenance tick, until 75 seconds after Open
+    remaining_load_test.go:270: window 0 Open    30283 a second  p50     519 µs p99    1091 µs; whole    30283 a second  p50     520 µs p99    1553 µs
+    remaining_load_test.go:270: window 1 Open    32858 a second  p50     519 µs p99     834 µs; whole    32858 a second  p50     520 µs p99    1042 µs
+    remaining_load_test.go:270: window 2 Open    33026 a second  p50     519 µs p99     796 µs; whole    33026 a second  p50     520 µs p99    1040 µs
+    remaining_load_test.go:279: scheduled scrub content 17 offset 0 pace 1048576; memory {Used:0 Peak:786432 Capacity:2097152}
+--- PASS: TestScheduledScrubMeasured (75.08s)
+PASS

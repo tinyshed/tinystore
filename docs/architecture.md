@@ -79,7 +79,7 @@ Decided, with the alternatives that lost:
 path, release, err := store.Claim("metrics.db") // ErrInUse if taken; release if Open fails
 err = store.Attach(engine)              // Close will close it
 logger := store.Logger("metrics")       // the application's logger, engine=metrics
-store.Every("metrics maintenance", time.Minute, engine.maintain)
+store.EveryEngine("metrics", "metrics maintenance", time.Minute, engine.maintain)
 now := store.Now()                      // the store's clock, replaceable in tests
 reserved, err := store.Reserve(ctx, n)  // n bytes of the store's memory, in arrival order
 reserved.Shrink(m)                      // keep m of them, having learnt what the work holds
@@ -162,13 +162,23 @@ In: TinyStore logs through the application's `*slog.Logger`
 
 | level | what |
 |---|---|
-| Info | opened, migration applied, closed |
-| Warn | series suspended (with its labels), a limit reached, a snapshot deadline, background work failed |
+| Info | opened, closed; background work recovered |
+| Warn | series suspended (with its file-local id and persisted reason), background work failed; a failed store Close |
 | Error | corruption detected |
-| Debug | a maintenance pass or a flush, summarised |
+| Debug | a background maintenance pass or records flush, summarised |
 
-Nothing is logged per sample or per query on a hot path, and attributes are not
-built unless the level is enabled.
+This table describes the built event categories. Ordinary caller-visible
+limit and query-deadline errors are returned, not logged again; migration
+notifications are not implemented. [The diagnostics audit](reports/readability-2026-09-27.md)
+records the original gaps, and [the logging round](reports/logging-2026-09-27.md)
+states what changed. Background engine work uses `Store.EveryEngine` to keep
+`engine=name` on failure and recovery records. The public `Store.Every` still
+registers application work without an engine attribute.
+
+Nothing is logged per sample or per query on a hot path. Debug summaries
+check the level before building their fields. The supplied `Options.Logger`
+is called synchronously: its application's handler determines logging
+latency. The built-in records handler queues or drops without waiting.
 
 Out: the records engine provides `Handler(stream) slog.Handler`, so an
 application sends its own logs to both places with the standard library:
@@ -182,6 +192,8 @@ work and on `Close`; when it is full a record is dropped and counted. It refuses
 lines from the records engine itself, or writing a log would log again.
 
 ## Self-metrics
+
+Designed, not built.
 
 An engine that can describe its work implements `Report() []tinystore.Measure`;
 the metrics engine also implements `WriteSelf`. With `Options.SelfMetrics` set,
