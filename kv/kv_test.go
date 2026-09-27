@@ -43,13 +43,13 @@ type testState struct {
 
 // openTestState opens a Manual store on dir with a clock the test moves, and
 // kv inside it; the test closes it
-func openTestState(t *testing.T, dir string) *testState {
+func openTestState(t testing.TB, dir string) *testState {
 	t.Helper()
 	return openTestStateWith(t, dir, tinystore.Options{})
 }
 
 // openTestStateWith is openTestState with the store's other options
-func openTestStateWith(t *testing.T, dir string, options tinystore.Options) *testState {
+func openTestStateWith(t testing.TB, dir string, options tinystore.Options) *testState {
 	t.Helper()
 	clock := &testClock{now: testStart}
 	options.Manual, options.Clock = true, clock.Now
@@ -75,7 +75,7 @@ func (s *testState) reopen(t *testing.T) *testState {
 	return reopened
 }
 
-func openTestBucket[V any](t *testing.T, state *testState, name string, options ...BucketOption) *Bucket[V] {
+func openTestBucket[V any](t testing.TB, state *testState, name string, options ...BucketOption) *Bucket[V] {
 	t.Helper()
 	bucket, err := OpenBucket[V](t.Context(), state.Store, name, options...)
 	if err != nil {

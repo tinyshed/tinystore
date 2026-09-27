@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // an expired key is absent to every operation, whether maintenance has
@@ -294,6 +297,93 @@ func (s *testState) spilledRows(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// the goroutines a processor writes from: 512 at sixteen
+const writersPerCPU = 32
+
+// BenchmarkRandomSetsByWriterCache overwrites keys at random, 64 bytes each,
+// from many goroutines at once, with the writer's page cache at 1, 4, 8 and
+// 16 MiB, in a file of 20,000 keys and of 200,000: what a larger cache is
+// worth to grouped writes that land on pages all over the file
+func BenchmarkRandomSetsByWriterCache(b *testing.B) {
+	for _, count := range []int{20_000, 200_000} {
+		for _, mib := range []int{1, 4, 8, 16} {
+			b.Run(fmt.Sprintf("keys=%d/cache=%dMiB", count, mib), func(b *testing.B) {
+				overwriteWithWriterCache(b, count, mib)
+			})
+		}
+	}
+}
+
+func overwriteWithWriterCache(b *testing.B, count, mib int) {
+	state := openTestState(b, b.TempDir())
+	sessions := openTestBucket[string](b, state, "sessions", DefaultTTL(time.Hour))
+	keys, value := overwrittenKeysOf(b, state, sessions, count), strings.Repeat("v", 64)
+	err := state.file.UpdatePrepared(b.Context(), func(w sqlite.Writer) error {
+		_, err := w.ExecContext(b.Context(), fmt.Sprintf("pragma cache_size(-%d)", mib<<10))
+		return err
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	before, err := state.file.WriterCounters(b.Context())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var writers atomic.Uint64
+	b.SetParallelism(writersPerCPU)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		random := rand.New(rand.NewPCG(13, writers.Add(1)))
+		for pb.Next() {
+			if setErr := sessions.Set(b.Context(), keys[random.IntN(len(keys))], value); setErr != nil {
+				b.Error(setErr)
+				return
+			}
+		}
+	})
+	b.StopTimer()
+	reportWriterCache(b, state, before)
+}
+
+// overwrittenKeysOf writes the keys an overwrite chooses among, a thousand a
+// transaction, and returns them
+func overwrittenKeysOf(b *testing.B, state *testState, sessions *Bucket[string], count int) []string {
+	b.Helper()
+	keys := make([]string, count)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("session-%08d", i)
+	}
+	for from := 0; from < len(keys); from += 1000 {
+		err := state.Tx(b.Context(), func(tx *Tx) error {
+			for _, key := range keys[from:min(from+1000, len(keys))] {
+				if err := sessions.WithTx(tx).Set(b.Context(), key, "first"); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	return keys
+}
+
+// reportWriterCache reports the Sets a second and what the writer's cache
+// missed and spilled for each of them
+func reportWriterCache(b *testing.B, state *testState, before sqlite.WriterCounters) {
+	b.Helper()
+	after, err := state.file.WriterCounters(b.Context())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "sets/s")
+	b.ReportMetric(float64(after.CacheMisses-before.CacheMisses)/float64(b.N), "misses/set")
+	b.ReportMetric(float64(after.CacheSpills-before.CacheSpills)/float64(b.N), "spills/set")
+	b.ReportMetric(float64(after.Commits-before.Commits)/float64(b.N), "commits/set")
 }
 
 // a Touch renews a live key and keeps its version, so a renewal fails no
