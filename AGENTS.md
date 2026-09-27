@@ -56,7 +56,8 @@ earlier prototype.
 `jobs` keeps work that runs at its time in `jobs.db`, in a first slice: typed
 queues ordered by time, leases in a table of their own, retries, repeats kept
 as cron text, and a Work loop that claims and settles in one write
-([docs/jobs.md](docs/jobs.md), [the round](docs/reports/jobs-mechanics-2026-09-27.md)).
+([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
+[the round](docs/reports/jobs-mechanics-2026-09-27.md)).
 
 Designed, not built: `blobs` and self-metrics.
 
@@ -79,6 +80,7 @@ Do not describe unbuilt behaviour as though it works.
 | `sqldb/`             | the application's SQL databases: migrations, typed reads, `Exec…` writes, `Tx` |
 | `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
 | `kv/`                | the application's current state: typed buckets, branches, expiry, versions    |
+| `jobs/`              | work that runs at its time: queues ordered by time, leases, retries, repeats  |
 | `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
@@ -491,6 +493,30 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation`, bound to version and expiry       |
 | a key read in its last minute is renewed at once       | `TestAReadNearItsExpiryRenewsAtOnce`                                            |
 | kv's All holds no snapshot between its pages           | `TestAllWalksEveryKeyAPageAtATime`                                              |
+| an Enqueue that returned survives an abrupt exit       | `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once           |
+| a job runs at its time and not before                  | `TestAJobRunsAtItsTimeAndNotBefore`                                             |
+| a key names one job, and enqueuing it only brings it forward | `TestAKeyNamesOneJobAndARepeatOnlyBringsItForward`                        |
+| an enqueue while its job runs asks for one run more    | `TestAnEnqueueWhileItsJobRunsAsksForOneRunMore`                                 |
+| `KeepDone` makes a key run once                        | `TestKeepDoneMakesAKeyRunOnce`                                                  |
+| `Update` changes only a job that still waits           | `TestUpdateChangesOnlyAWaitingJob`                                              |
+| `Cancel` says whether it came in time                  | `TestCancelSaysWhetherItCameInTime`                                             |
+| a job whose lease ended runs again                     | `TestAJobWhoseLeaseEndedRunsAgain`                                              |
+| a stale lease settles nothing                          | `TestAStaleLeaseSettlesNothing`                                                 |
+| a job that kills its process fails after its attempts  | `TestAJobThatKillsItsProcessFailsAfterItsAttempts`                              |
+| a retry waits longer each time, then fails for good    | `TestARetryWaitsLongerEachTimeThenFailsForGood`                                 |
+| a snooze counts no attempt                             | `TestASnoozeCountsNoAttempt`                                                    |
+| a repeating job neither overlaps nor piles up          | `TestARepeatingJobNeitherOverlapsNorPilesUp`                                    |
+| a schedule keeps its zone across daylight saving       | `TestAScheduleKeepsItsZoneAcrossDaylightSaving`                                 |
+| `Work` settles by what the handler returns             | `TestWorkSettlesByWhatTheHandlerReturns`, `UntilIdle` with one worker included  |
+| jobs due together are claimed in batches               | `TestJobsDueTogetherAreClaimedInBatches`                                        |
+| a Work loop lets go of a lease another claim took      | `TestWorkLetsGoOfALeaseAnotherClaimTook`, without writing again at once         |
+| a handler stopped by `Close` gives its job back uncounted | `TestCloseGivesRunningJobsBackUncounted`                                     |
+| a job value comes back as the JSON it went in          | `TestAValueComesBackAsTheJSONItWentIn`                                          |
+| a value that no longer reads fails its job, not its queue | `TestAValueThatNoLongerReadsFailsItsJob`, through Claim and Work             |
+| a queue past `MaxWaiting` refuses the next job         | `TestAQueuePastMaxWaitingRefusesTheNextJob`                                     |
+| a failed job is kept, then removed                     | `TestAFailedJobIsKeptThenRemoved`                                               |
+| a jobs Scan page holds at most its jobs and bytes      | `TestAScanPageHoldsAtMostItsBytes`, spilled values counted                      |
+| jobs hold values in the store's memory                 | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers`                                 |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

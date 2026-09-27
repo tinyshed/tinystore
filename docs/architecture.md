@@ -359,7 +359,8 @@ under `blobs/`; external bytes are durable before the metadata that points at
 them commits, and readers hold a lease that collection respects.
 `docs/storage-runtime-direction.md` has the reasoning.
 
-**jobs** (designed, not built; the design is [jobs.md](jobs.md)). Work that
+**jobs** (built, a first slice: [jobs/README.md](../jobs/README.md); the
+design is [jobs.md](jobs.md)). Work that
 runs at its time, in `jobs.db`: typed queues whose jobs wait for their time, a
 lease that gives a job back when its worker vanishes, retries, repeats kept as
 cron text, at least once. Every call is one operation of a protocol a server

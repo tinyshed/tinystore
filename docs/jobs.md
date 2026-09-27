@@ -417,6 +417,12 @@ pages, which the probe found worth several times the throughput.
 claims; what they share is the file's one writer, which a batch holds for tens
 of milliseconds at most. Priority within a queue is a second queue.
 
+**What the calls hold is the store's memory.** With `Options.Memory`, an
+`Enqueue` holds its encoded value while it waits for the writer, a `Get` 1 MiB
+and a `Scan` 4.5 MiB while they read, and a worker of `Work` a job's value from
+before it reads it until its handler returns: a claim reads no spilled value
+inside the writer, where waiting for memory would hold the writer too.
+
 **What a program adds is bounded.** `MaxWaiting(n)`, ten million by default,
 refuses the job past it with `ErrLimit` and logs it once, so a loop that
 enqueues without end stops at a limit and not at a full disk. A limit a user
@@ -501,7 +507,7 @@ meta      name | value                              the high-water mark of job i
 | A failed job kept | 7 days by default |
 | A handler's deadline | 1 min by default |
 | A `Scan` page | 1000 jobs, 4 MiB of values |
-| Jobs a claim takes | set by the round |
+| Jobs a claim takes | one a `Claim`, the free workers of a `Work`, 1,000 at most |
 
 ## Gates
 
@@ -525,10 +531,15 @@ The five cases are the gates' workloads.
 | a schedule keeps its zone across daylight saving | `TestAScheduleKeepsItsZoneAcrossDaylightSaving` |
 | `Work` settles by what the handler returns | `TestWorkSettlesByWhatTheHandlerReturns` |
 | a handler stopped by `Close` gives its job back uncounted | `TestCloseGivesRunningJobsBackUncounted` |
-| a value comes back as the JSON it went in as | `TestAValueComesBackAsTheJSONItWentInAs` |
+| a value comes back as the JSON it went in as | `TestAValueComesBackAsTheJSONItWentIn` |
+| a value that no longer reads fails its job, not its queue | `TestAValueThatNoLongerReadsFailsItsJob` |
 | a queue past `MaxWaiting` refuses the next job | `TestAQueuePastMaxWaitingRefusesTheNextJob` |
 | a failed job is kept, then removed | `TestAFailedJobIsKeptThenRemoved` |
 | jobs due together are claimed in batches | `TestJobsDueTogetherAreClaimedInBatches` |
+| a Work loop lets go of a lease another claim took | `TestWorkLetsGoOfALeaseAnotherClaimTook` |
+| a Scan walks keys under a prefix, and the failed jobs by time | `TestScanWalksTheKeysUnderAPrefixAPageAtATime`, `TestScanListsTheFailedJobsTheLastFailedFirst` |
+| a Scan page holds at most its jobs and bytes | `TestAScanPageHoldsAtMostItsBytes` |
+| values are held in the store's memory | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers` |
 
 ## What the runtime gains
 
