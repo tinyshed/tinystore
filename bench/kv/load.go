@@ -57,12 +57,13 @@ func runPhase(ctx context.Context, load workload, workers int, length time.Durat
 		running.Go(func() { tallies[worker] = drive(ctx, next, deadline) })
 	}
 	running.Wait()
+	elapsed := time.Since(start)
 
 	total := newTally()
 	for _, t := range tallies {
 		total.add(t)
 	}
-	total.elapsed = time.Since(start)
+	total.elapsed = elapsed
 	return total, nil
 }
 
@@ -131,20 +132,26 @@ func (t *tally) add(other *tally) {
 	t.violations += other.violations
 }
 
-// summary is the phase as a whole: its requests, their rate and latencies, and
-// its errors
+// summary is the phase as a whole: its requests and their rate, the rate of
+// those that did not fail, their latencies, and its errors
 func (t *tally) summary() string {
 	var all []time.Duration
 	for _, latencies := range t.latencies {
 		all = append(all, latencies...)
 	}
 	slices.Sort(all)
+	failed := t.failed()
+	return fmt.Sprintf("operations=%d operations_per_second=%.0f answered_per_second=%.0f %s errors=%d", len(all),
+		float64(len(all))/t.elapsed.Seconds(), float64(len(all)-failed)/t.elapsed.Seconds(), percentiles(all), failed)
+}
+
+// failed is how many requests ended in an error, a broken promise included
+func (t *tally) failed() int {
 	failed := 0
 	for _, count := range t.errors {
 		failed += count
 	}
-	return fmt.Sprintf("operations=%d operations_per_second=%.0f %s errors=%d", len(all),
-		float64(len(all))/t.elapsed.Seconds(), percentiles(all), failed)
+	return failed
 }
 
 // print writes the phase's outcomes, each operation's latencies, and each

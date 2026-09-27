@@ -80,9 +80,15 @@ func (l *opsLoad) requests(worker, _ int) (request, error) {
 		case opHit:
 			i := random.Int64N(int64(l.keys))
 			found, _, err := l.store.read(ctx, i/sessionsPerUser, token(seedTokens, i))
+			if err == nil && !found {
+				err = violation("stored_session_missing")
+			}
 			return step{opHit, foundOrMissing(found)}, err
 		}
 		found, _, err := l.store.read(ctx, random.Int64N(int64(l.keys)), randomToken(random))
+		if err == nil && found {
+			err = violation("unknown_token_found")
+		}
 		return step{opMiss, foundOrMissing(found)}, err
 	}, nil
 }

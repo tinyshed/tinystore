@@ -50,7 +50,7 @@ func main() {
 	}
 
 	if r.broken {
-		log.Fatal("a promise of the case was broken: see the lines above")
+		log.Fatal("a promise of the case was broken or a request failed: see the lines above")
 	}
 }
 
@@ -215,7 +215,7 @@ func (r *run) measure(ctx context.Context, impl string, workers int) {
 	printVerified(label, verified)
 	must(reportFile(ctx, label, b, r.stage.rows))
 	must(os.RemoveAll(dir))
-	r.broken = r.broken || requests.violations > 0 || verified != nil
+	r.broken = r.broken || requests.failed() > 0 || verified != nil
 }
 
 func printVerified(label string, err error) {
