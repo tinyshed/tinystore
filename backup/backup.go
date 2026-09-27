@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -49,11 +50,16 @@ func Write(ctx context.Context, store *tinystore.Store, w io.Writer) (err error)
 		return err
 	}
 	defer func() { err = errors.Join(err, snapshot.Remove()) }()
+	copies, err := os.OpenRoot(snapshot.Dir)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	defer func() { err = errors.Join(err, copies.Close()) }()
 
 	archive := zip.NewWriter(w)
 	manifest := Manifest{Format: format, Created: store.Now().UTC()}
 	for _, file := range snapshot.Files {
-		entry, addErr := addFile(archive, tinystore.SnapshotPath(snapshot.Dir, file.Name), file)
+		entry, addErr := addFile(archive, copies, file)
 		if addErr != nil {
 			return errors.Join(addErr, archive.Close())
 		}
@@ -65,15 +71,21 @@ func Write(ctx context.Context, store *tinystore.Store, w io.Writer) (err error)
 	return archive.Close()
 }
 
-// addFile streams one copy into the zip and sums it on the way
-func addFile(archive *zip.Writer, path string, file tinystore.SnapshotFile) (ManifestFile, error) {
-	source, err := os.Open(path) //nolint:gosec // a copy the store just wrote
+// addFile streams one copy into the zip and sums it on the way. It opens the
+// copy through the snapshot's root: a file opened so shares its deletion on
+// Windows, where an engine may remove the copy's other name while it is read.
+func addFile(archive *zip.Writer, copies *os.Root, file tinystore.SnapshotFile) (ManifestFile, error) {
+	source, err := copies.Open(filepath.FromSlash(file.Name))
 	if err != nil {
 		return ManifestFile{}, fmt.Errorf("backup %s: %w", file.Name, err)
 	}
 	defer source.Close()
 
-	target, err := archive.Create(file.Name)
+	method := zip.Deflate
+	if file.Stored {
+		method = zip.Store
+	}
+	target, err := archive.CreateHeader(&zip.FileHeader{Name: file.Name, Method: method})
 	if err != nil {
 		return ManifestFile{}, fmt.Errorf("backup %s: %w", file.Name, err)
 	}

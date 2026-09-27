@@ -124,12 +124,12 @@ func (s *Store) endDeadLeases(ctx context.Context) error {
 }
 
 // Snapshot copies jobs.db into dir while the engine keeps working.
-func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
 	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
 	if err != nil {
-		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot jobs: %w", err)
+		return nil, fmt.Errorf("snapshot jobs: %w", err)
 	}
-	return tinystore.SnapshotFile{Name: fileName, Engine: "jobs", Schema: schema}, nil
+	return []tinystore.SnapshotFile{{Name: fileName, Engine: "jobs", Schema: schema}}, nil
 }
 
 // Close stops every Work, which gives back the jobs its handlers had without

@@ -88,12 +88,12 @@ func openFile(ctx context.Context, path, name string, migrations fs.FS) (*DB, er
 func fileName(name string) string { return "sql/" + name + ".db" }
 
 // Snapshot copies the database into dir while it keeps working.
-func (d *DB) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+func (d *DB) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
 	schema, err := d.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName(d.name)))
 	if err != nil {
-		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot sql %q: %w", d.name, err)
+		return nil, fmt.Errorf("snapshot sql %q: %w", d.name, err)
 	}
-	return tinystore.SnapshotFile{Name: fileName(d.name), Engine: "sql", Schema: schema}, nil
+	return []tinystore.SnapshotFile{{Name: fileName(d.name), Engine: "sql", Schema: schema}}, nil
 }
 
 // Exec runs one statement on the file's one writer. Statements from many

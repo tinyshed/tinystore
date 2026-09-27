@@ -8,17 +8,21 @@ import (
 	"path/filepath"
 )
 
-// Snapshotter is an engine that can copy its file while it keeps working.
+// Snapshotter is an engine that can copy its files while it keeps working.
 type Snapshotter interface {
-	Snapshot(ctx context.Context, dir string) (SnapshotFile, error)
+	Snapshot(ctx context.Context, dir string) ([]SnapshotFile, error)
 }
 
-// SnapshotFile is one engine's copy: Name is its path inside the store, such
-// as "metrics.db" or "sql/app.db", and Schema how many migrations it has.
+// SnapshotFile is one file of an engine's copy: Name is its path inside the
+// store, such as "metrics.db", "sql/app.db" or "blobs/objects/1a3/1a3f07",
+// and Schema how many migrations its engine's database has. Stored asks a
+// backup to keep the bytes as they are rather than deflate them: an
+// application's files are mostly media, which does not compress.
 type SnapshotFile struct {
 	Name   string `json:"name"`
 	Engine string `json:"engine"`
 	Schema int    `json:"schema"`
+	Stored bool   `json:"-"`
 }
 
 // Snapshot is a copy of every engine's file, in Dir inside the store's
@@ -53,11 +57,11 @@ func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
 		if !ok {
 			continue
 		}
-		file, err := snapshotter.Snapshot(ctx, dir)
+		files, err := snapshotter.Snapshot(ctx, dir)
 		if err != nil {
 			return Snapshot{}, errors.Join(err, snapshot.Remove())
 		}
-		snapshot.Files = append(snapshot.Files, file)
+		snapshot.Files = append(snapshot.Files, files...)
 	}
 	return snapshot, nil
 }

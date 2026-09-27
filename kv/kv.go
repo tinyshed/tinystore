@@ -141,12 +141,12 @@ func (s *Store) nextRevision(ctx context.Context, w sqlite.Writer) (int64, error
 }
 
 // Snapshot copies kv.db into dir while the engine keeps working.
-func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
 	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
 	if err != nil {
-		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot kv: %w", err)
+		return nil, fmt.Errorf("snapshot kv: %w", err)
 	}
-	return tinystore.SnapshotFile{Name: fileName, Engine: "kv", Schema: schema}, nil
+	return []tinystore.SnapshotFile{{Name: fileName, Engine: "kv", Schema: schema}}, nil
 }
 
 // Close lets the work in flight finish, writes what LoseAtMost counters hold

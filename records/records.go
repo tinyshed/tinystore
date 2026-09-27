@@ -150,12 +150,12 @@ func (s *Store) maintainInBackground(ctx context.Context) error {
 
 // Snapshot copies records.db into dir while the engine keeps working; what the
 // handler holds in memory is not in the copy, and the head is.
-func (s *Store) Snapshot(ctx context.Context, dir string) (tinystore.SnapshotFile, error) {
+func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
 	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
 	if err != nil {
-		return tinystore.SnapshotFile{}, fmt.Errorf("snapshot records: %w", err)
+		return nil, fmt.Errorf("snapshot records: %w", err)
 	}
-	return tinystore.SnapshotFile{Name: fileName, Engine: "records", Schema: schema}, nil
+	return []tinystore.SnapshotFile{{Name: fileName, Engine: "records", Schema: schema}}, nil
 }
 
 func (s *Store) Stats() Stats {
