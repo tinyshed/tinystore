@@ -10,6 +10,7 @@ import (
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/codec"
+	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
@@ -61,6 +62,7 @@ func main() {
 	fmt.Println(len(result), store.Stats())
 	probeRecords(ctx, runtime)
 	probeKV(ctx, runtime)
+	probeJobs(ctx, runtime)
 }
 
 // probeRecords links the records engine the way an application uses it: its
@@ -171,4 +173,73 @@ func probeBucket(ctx context.Context, state *kv.Store) (value string, found bool
 		panic(err)
 	}
 	return value, found, walked
+}
+
+// probeJobs links the jobs engine the way an application uses it: keyed and
+// timed enqueues in a transaction, an update, a cancel and reads, a schedule,
+// a claim settled by hand, a Work loop and maintenance
+func probeJobs(ctx context.Context, runtime *tinystore.Store) {
+	queues, err := jobs.Open(ctx, runtime, jobs.Options{})
+	if err != nil {
+		panic(err)
+	}
+	later := probeEnqueues(ctx, queues)
+	if _, err = jobs.OpenSchedule(ctx, queues, "purge", jobs.Daily("03:10", time.UTC)); err != nil {
+		panic(err)
+	}
+	if job, found, claimErr := later.Claim(ctx, jobs.Lease(time.Minute)); claimErr != nil {
+		panic(claimErr)
+	} else if found {
+		if err = job.Extend(ctx, time.Minute); err == nil {
+			err = job.Snooze(ctx, jobs.After(time.Second))
+		}
+	}
+	if err != nil {
+		panic(err)
+	}
+	err = later.Work(ctx, func(ctx context.Context, job jobs.Job[string]) error {
+		return job.Retry(ctx, fmt.Errorf("probe %s", job.Value), jobs.After(time.Hour))
+	}, jobs.Workers(2), jobs.Timeout(time.Minute), jobs.UntilIdle())
+	if err != nil {
+		panic(err)
+	}
+	done, err := queues.Maintain(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(done)
+}
+
+func probeEnqueues(ctx context.Context, queues *jobs.Store) *jobs.Queue[string] {
+	later, err := jobs.OpenQueue[string](ctx, queues, "later", jobs.MaxAttempts(3), jobs.KeepDone(time.Hour))
+	if err != nil {
+		panic(err)
+	}
+	err = queues.Tx(ctx, func(tx *jobs.Tx) error {
+		repeat := jobs.Cron("*/15 9-18 * * 1-5", time.UTC)
+		return later.WithTx(tx).Enqueue(ctx, "digest", jobs.Key("digest"), repeat)
+	})
+	if err == nil {
+		err = later.Enqueue(ctx, "draft", jobs.Key("chat:1"), jobs.At(time.Now()))
+	}
+	if err == nil {
+		err = later.Update(ctx, "chat:1", "edited", jobs.Every(time.Hour))
+	}
+	if err != nil {
+		panic(err)
+	}
+	if _, err = later.Cancel(ctx, "digest"); err != nil {
+		panic(err)
+	}
+	entry, _, err := later.Get(ctx, "chat:1")
+	if err != nil {
+		panic(err)
+	}
+	for _, walkErr := range later.All(ctx, jobs.Query{Prefix: "chat:"}) {
+		if walkErr != nil {
+			panic(walkErr)
+		}
+	}
+	fmt.Println(entry.State)
+	return later
 }

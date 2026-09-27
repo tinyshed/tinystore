@@ -431,6 +431,12 @@ with `All`, clears a branch and counts attempts in memory with `LoseAtMost`.
 Built the same way from Windows 11, it adds 7 812 KiB, against 7 724 at
 `7178c38` before them: the rest of kv costs 88 KiB.
 
+On 27 September the probe also opens jobs: keyed, timed and repeating
+enqueues in a transaction, an update, a cancel, a read and a walk, a schedule,
+a claim extended and snoozed by hand, a Work loop and maintenance. Built the
+same way from Windows 11, it adds 8 064 KiB, against 7 812 at `24d9b91`
+without it: jobs costs a program 252 KiB.
+
 ## Where the examples are
 
 - `examples/notes`: a program using the store, `sqldb`, metrics instruments,
