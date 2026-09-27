@@ -259,8 +259,7 @@ func (s *Store) reserve(ctx context.Context, bytes int) (*tinystore.Reservation,
 func (s *Store) reserveNow(bytes int) (*tinystore.Reservation, error) {
 	reserved, err := s.runtime.ReserveNow(int64(max(bytes, 1)))
 	if err != nil {
-		return nil, fmt.Errorf("kv: inside Tx, which holds the writer that the writes holding memory wait for: %w",
-			err)
+		return nil, fmt.Errorf("kv: inside Tx or View, which hold what the calls holding memory wait for: %w", err)
 	}
 	return reserved, nil
 }

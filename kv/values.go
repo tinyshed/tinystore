@@ -26,11 +26,19 @@ type Codec[V any] interface {
 }
 
 // codec is how a bucket keeps its values in a row: encode gives a []byte, an
-// int64 or nil, and decode takes back what the row holds
+// int64 or nil, decode takes back what the row holds, and weigh says what the
+// encoding may hold before it is made
 type codec[V any] struct {
 	encode func(V) (any, error)
 	decode func(any) (V, error)
+	weigh  func(V) int
 }
+
+// a value whose row is an integer, or nothing, weighs an integer's bytes
+func weighFixed[V any](V) int { return 8 }
+
+// a value only its encoding measures weighs the largest until it is encoded
+func weighLargest[V any](V) int { return maxValue }
 
 // codecFor chooses a value's representation by its type, named types by what
 // they are named for:
@@ -70,6 +78,7 @@ var int64Type = reflect.TypeFor[int64]()
 
 func bytesCodec[V any](t reflect.Type) codec[V] {
 	return codec[V]{
+		weigh: func(value V) int { return reflect.ValueOf(value).Len() },
 		encode: func(value V) (any, error) {
 			of := reflect.ValueOf(value)
 			if of.Kind() == reflect.String {
@@ -89,6 +98,7 @@ func bytesCodec[V any](t reflect.Type) codec[V] {
 
 func integerCodec[V any](t reflect.Type) codec[V] {
 	return codec[V]{
+		weigh: weighFixed[V],
 		encode: func(value V) (any, error) {
 			of := reflect.ValueOf(value)
 			switch {
@@ -124,6 +134,7 @@ func outOf(t reflect.Type, n int64) bool {
 
 func wideUnsignedCodec[V any](t reflect.Type) codec[V] {
 	return codec[V]{
+		weigh: weighFixed[V],
 		encode: func(value V) (any, error) {
 			return binary.BigEndian.AppendUint64(nil, reflect.ValueOf(value).Uint()), nil
 		},
@@ -145,6 +156,7 @@ func wideUnsignedCodec[V any](t reflect.Type) codec[V] {
 // float64 on its way, which quiets a signaling NaN and changes nothing else
 func floatCodec[V any](t reflect.Type) codec[V] {
 	return codec[V]{
+		weigh: weighFixed[V],
 		encode: func(value V) (any, error) {
 			if f, ok := any(value).(float32); ok {
 				return binary.BigEndian.AppendUint32(nil, math.Float32bits(f)), nil
@@ -174,6 +186,7 @@ func floatCodec[V any](t reflect.Type) codec[V] {
 
 func nothingCodec[V any]() codec[V] {
 	return codec[V]{
+		weigh:  weighFixed[V],
 		encode: func(V) (any, error) { return nil, nil },
 		decode: func(stored any) (V, error) {
 			if stored != nil {
@@ -187,6 +200,7 @@ func nothingCodec[V any]() codec[V] {
 
 func jsonCodec[V any]() codec[V] {
 	return codec[V]{
+		weigh: weighLargest[V],
 		encode: func(value V) (any, error) {
 			encoded, err := json.Marshal(value)
 			if err != nil {
@@ -211,10 +225,14 @@ func jsonCodec[V any]() codec[V] {
 // customCodec keeps a value as the bytes an application's codec gives it
 func customCodec[V any](custom Codec[V]) codec[V] {
 	return codec[V]{
+		weigh: weighLargest[V],
 		encode: func(value V) (any, error) {
 			encoded, err := custom.Encode(value)
-			if err != nil {
+			switch {
+			case err != nil:
 				return nil, fmt.Errorf("%w: the bucket's codec: %w", tinystore.ErrInvalid, err)
+			case len(encoded) > maxValue:
+				return nil, tooLarge(len(encoded))
 			}
 			return bytes.Clone(encoded), nil
 		},
@@ -262,18 +280,25 @@ func keep(value any) (stored, error) {
 	raw, isBytes := value.([]byte)
 	switch {
 	case isBytes && len(raw) > maxValue:
-		return stored{}, fmt.Errorf("%w: a value of %d bytes, over 1 MiB: keep it in blobs and its key here",
-			tinystore.ErrLimit, len(raw))
+		return stored{}, tooLarge(len(raw))
 	case isBytes && len(raw) > inlineLimit:
 		return stored{spill: raw}, nil
 	}
 	return stored{inline: value}, nil
 }
 
+func tooLarge(size int) error {
+	return fmt.Errorf("%w: a value of %d bytes, over 1 MiB: keep it in blobs and its key here", tinystore.ErrLimit,
+		size)
+}
+
 // size is what a value weighs against a group of writes and the store's memory
 func (s stored) size() int {
-	if raw, ok := s.inline.([]byte); ok {
-		return len(raw) + len(s.spill)
+	switch inline := s.inline.(type) {
+	case nil:
+		return len(s.spill)
+	case []byte:
+		return len(inline)
 	}
-	return len(s.spill) + 8
+	return 8
 }

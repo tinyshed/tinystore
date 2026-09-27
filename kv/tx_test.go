@@ -60,8 +60,9 @@ func TestATransactionWritesEveryBucketOrNone(t *testing.T) {
 
 // a call inside Tx waits for none of the store's memory, which the writes
 // waiting for its writer hold: it takes what is free and is ErrLimit at once
-// past it. A View holds no writer, so its calls wait as any other does.
-func TestATransactionWaitsForNoMemoryTheWritesWaitingForItHold(t *testing.T) {
+// past it. A call inside View holds a reader the reads holding memory wait
+// for, and waits for none either.
+func TestTxAndViewWaitForNoMemoryTheCallsWaitingForThemHold(t *testing.T) {
 	budget := int64(pageHeld(3))
 	state := openTestStateWith(t, t.TempDir(), tinystore.Options{Memory: budget})
 	values := openTestBucket[[]byte](t, state, "values")
@@ -93,13 +94,11 @@ func TestATransactionWaitsForNoMemoryTheWritesWaitingForItHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	short, stop := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer stop()
-	err = state.View(short, func(tx *Tx) error {
-		_, scanErr := values.WithTx(tx).Scan(short, Query{Limit: 1})
+	err = state.View(ctx, func(tx *Tx) error {
+		_, scanErr := values.WithTx(tx).Scan(ctx, Query{Limit: 1})
 		return scanErr
 	})
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if !errors.Is(err, tinystore.ErrLimit) || ctx.Err() != nil {
 		t.Fatalf("a page inside View while the memory is taken: %v", err)
 	}
 	taken.Release()

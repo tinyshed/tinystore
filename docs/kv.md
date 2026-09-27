@@ -300,7 +300,7 @@ second and grouped writes 55,000.
 | Sentinel | When |
 |---|---|
 | `ErrInvalid` | a key that is not text or an integer, an empty key, a path over 1 KiB, a value JSON cannot write, a bucket opened as another kind, a write inside `View` |
-| `ErrLimit` | a value over 1 MiB, a counter past the `int64` range, a call inside `Tx` needing more of the store's memory than is free |
+| `ErrLimit` | a value over 1 MiB, a counter past the `int64` range, a call inside `Tx` or `View` needing more of the store's memory than is free |
 | `ErrConflict` | `IfVersion` against another version, or an expired or absent key |
 | `ErrClosed` | the store closed, or a `WithTx` handle used after its callback |
 | `ErrCorrupt` | a row that no longer decodes |
@@ -376,6 +376,14 @@ Clear(42) at revision R
   leaves memory as it was; one whose commit fails may be in the file, so
   memory lets go of the branch as a crash would, within `LoseAtMost`'s loss,
   and the Clear is `ErrOutcomeUnknown`.
+- **A call holds the store's memory before it makes a value.** A write takes
+  its turn among the writes, then the memory its row may hold, then encodes:
+  a type that says its size reserves that, JSON and a codec the largest value
+  until the encoding says, so that 2048 writes waiting for a group have made
+  nothing the store has not counted. A read of a value holds the largest
+  value, a page its 4 MiB and the row past them. Inside `Tx` or `View` a
+  call holds the writer or a reader that the calls holding memory wait for,
+  so it takes only what is free and is `ErrLimit` past it.
 - **Maintenance runs through `Store.Every`**: the `LoseAtMost` and `Sliding`
   flushes, the rows a mark hid, expired rows in batches through the expiry
   index, spilled rows no cell names any more.
@@ -429,7 +437,9 @@ The five cases are the gates' workloads.
 | a `Clear` whose commit fails lets memory go as a crash would | `TestAClearWhoseCommitFailsLetsGoAsACrashWould` |
 | Clears beside changes and flushes keep their branches apart | `TestClearsBesideChangesAndFlushesKeepTheirBranchesApart` |
 | a `Clear` inside `Tx` deletes what it clears or refuses | `TestAClearInATransactionOverTheBoundIsRefused` |
-| a call inside `Tx` waits for no memory its waiting writes hold | `TestATransactionWaitsForNoMemoryTheWritesWaitingForItHold` |
+| a call inside `Tx` or `View` waits for no memory | `TestTxAndViewWaitForNoMemoryTheCallsWaitingForThemHold` |
+| a call holds the store's memory before it reads or makes a value | `TestStoreMemoryBoundsWritesReadsAndScans` |
+| a write waiting for memory has encoded nothing | `TestAWriteWaitingForMemoryHasEncodedNothing` |
 | a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |
 | a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |
 | a value over 512 bytes reads back from `spilled` | `TestALargeValueSpillsAndReadsBack` |

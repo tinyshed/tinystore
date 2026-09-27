@@ -44,13 +44,19 @@ func (b *Bucket[V]) Set(ctx context.Context, key any, value V, options ...Option
 
 // SetEntry is Set, returning what it wrote with its new version.
 func (b *Bucket[V]) SetEntry(ctx context.Context, key any, value V, options ...Option) (Entry[V], error) {
-	c, kept, err := b.prepareWrite(key, value, options)
+	c, err := b.begin(key, options)
 	if err != nil {
 		return Entry[V]{}, b.fail(c, err)
 	}
 
+	entered, kept, err := b.enterWith(ctx, value, 0)
+	if err != nil {
+		return Entry[V]{}, b.fail(c, err)
+	}
+	defer entered.leave()
+
 	var written cellWrite
-	err = b.write(ctx, kept.size(), func(w sqlite.Writer) (writeErr error) {
+	err = b.commit(ctx, kept.size(), func(w sqlite.Writer) (writeErr error) {
 		written, writeErr = b.setCell(ctx, w, c, kept)
 		return writeErr
 	})
@@ -73,7 +79,7 @@ func (b *Bucket[V]) SetIfAbsent(ctx context.Context, key any, value V, options .
 func (b *Bucket[V]) SetEntryIfAbsent(ctx context.Context, key any, value V, options ...Option) (
 	Entry[V], bool, error,
 ) {
-	c, kept, err := b.prepareWrite(key, value, options)
+	c, err := b.begin(key, options)
 	if err == nil && c.options.version.revision != 0 {
 		err = fmt.Errorf("%w: IfVersion with SetIfAbsent", tinystore.ErrInvalid)
 	}
@@ -81,10 +87,16 @@ func (b *Bucket[V]) SetEntryIfAbsent(ctx context.Context, key any, value V, opti
 		return Entry[V]{}, false, b.fail(c, err)
 	}
 
+	entered, kept, err := b.enterWith(ctx, value, maxValue)
+	if err != nil {
+		return Entry[V]{}, false, b.fail(c, err)
+	}
+	defer entered.leave()
+
 	var there row
 	var written cellWrite
 	created := false
-	err = b.write(ctx, kept.size(), func(w sqlite.Writer) error {
+	err = b.commit(ctx, kept.size(), func(w sqlite.Writer) error {
 		var found bool
 		var writeErr error
 		there, found, writeErr = readLive(ctx, w, b.id, c)
@@ -113,9 +125,15 @@ func (b *Bucket[V]) Take(ctx context.Context, key any, options ...Option) (V, bo
 		return zeroFound[V](b.fail(c, err))
 	}
 
+	entered, err := b.enter(ctx, maxValue)
+	if err != nil {
+		return zeroFound[V](b.fail(c, err))
+	}
+	defer entered.leave()
+
 	var taken row
 	found := false
-	err = b.write(ctx, 0, func(w sqlite.Writer) (takeErr error) {
+	err = b.commit(ctx, 0, func(w sqlite.Writer) (takeErr error) {
 		taken, found, takeErr = takeRow(ctx, w, b.id, c)
 		return takeErr
 	})
@@ -175,19 +193,31 @@ func (b *Bucket[V]) Touch(ctx context.Context, key any, options ...Option) (bool
 	return found, b.fail(c, err)
 }
 
-// prepareWrite checks a write and encodes its value before it waits for the
-// writer
-func (b *Bucket[V]) prepareWrite(key any, value V, options []Option) (call, stored, error) {
-	c, err := b.begin(key, options)
-	if err != nil {
-		return c, stored{}, err
+// enterWith takes a write's place and the memory its value's row may hold,
+// beside extra for a value it may read, then encodes the value and keeps of
+// that memory what the row holds. A value its type measures over 1 MiB is
+// refused before anything is made.
+func (b *Bucket[V]) enterWith(ctx context.Context, value V, extra int) (place, stored, error) {
+	weight := b.codec.weigh(value)
+	if weight > maxValue {
+		return place{}, stored{}, tooLarge(weight)
 	}
+	entered, err := b.enter(ctx, weight+extra)
+	if err != nil {
+		return place{}, stored{}, err
+	}
+
 	encoded, err := b.codec.encode(value)
-	if err != nil {
-		return c, stored{}, err
+	var kept stored
+	if err == nil {
+		kept, err = keep(encoded)
 	}
-	kept, err := keep(encoded)
-	return c, kept, err
+	if err != nil {
+		entered.leave()
+		return place{}, stored{}, err
+	}
+	entered.keep(kept.size() + extra)
+	return entered, kept, nil
 }
 
 // cell is a key's row as a write finds it, hidden when a marked Clear hid it

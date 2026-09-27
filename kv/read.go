@@ -39,6 +39,12 @@ func (b *Bucket[V]) GetEntry(ctx context.Context, key any) (Entry[V], bool, erro
 		return Entry[V]{}, false, b.fail(c, err)
 	}
 
+	reserved, err := b.reserve(ctx, maxValue)
+	if err != nil {
+		return Entry[V]{}, false, b.fail(c, err)
+	}
+	defer reserved.Release()
+
 	var got row
 	found := false
 	err = b.read(ctx, func(r sqlite.Reader) (readErr error) {

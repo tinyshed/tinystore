@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,6 +129,97 @@ func TestAbruptExitHelper(t *testing.T) {
 		}
 	}
 	os.Exit(0)
+}
+
+// every call that reads or makes values waits for the store's memory before
+// it does, and gives back all it held
+func TestStoreMemoryBoundsWritesReadsAndScans(t *testing.T) {
+	budget := int64(pageHeld(scanLimit))
+	state := openTestStateWith(t, t.TempDir(), tinystore.Options{Memory: budget})
+	values := openTestBucket[string](t, state, "values")
+	if err := values.Set(t.Context(), "kept", "value"); err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]func(context.Context) error{
+		"Set": func(ctx context.Context) error { return values.Set(ctx, "set", "value") },
+		"SetIfAbsent": func(ctx context.Context) error {
+			_, err := values.SetIfAbsent(ctx, "kept", "other")
+			return err
+		},
+		"Get": func(ctx context.Context) error {
+			_, _, err := values.Get(ctx, "kept")
+			return err
+		},
+		"Take": func(ctx context.Context) error {
+			_, _, err := values.Take(ctx, "set")
+			return err
+		},
+		"Scan": func(ctx context.Context) error {
+			_, err := values.Scan(ctx, Query{})
+			return err
+		},
+	}
+	for _, name := range []string{"Set", "SetIfAbsent", "Get", "Take", "Scan"} {
+		taken, err := state.runtime.Reserve(t.Context(), budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		if err = calls[name](short); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s while the store's memory is taken: %v", name, err)
+		}
+		cancel()
+		taken.Release()
+		if err = calls[name](t.Context()); err != nil {
+			t.Fatalf("%s once the memory is free: %v", name, err)
+		}
+		if usage := state.runtime.Memory(); usage.Used != 0 {
+			t.Fatalf("%s kept %d bytes", name, usage.Used)
+		}
+	}
+}
+
+// countingCodec counts its encodings, each of them the largest value
+type countingCodec struct{ encoded *atomic.Int64 }
+
+func (c countingCodec) Encode(int) ([]byte, error) {
+	c.encoded.Add(1)
+	return make([]byte, maxValue), nil
+}
+
+func (countingCodec) Decode([]byte) (int, error) { return 0, nil }
+
+// a write waiting for the store's memory has made nothing yet: a value only
+// its codec measures waits for the largest value's room before it is encoded
+func TestAWriteWaitingForMemoryHasEncodedNothing(t *testing.T) {
+	state := openTestStateWith(t, t.TempDir(), tinystore.Options{Memory: maxValue})
+	var encoded atomic.Int64
+	values := openTestBucket[int](t, state, "values", WithCodec[int](countingCodec{encoded: &encoded}))
+	taken, err := state.runtime.Reserve(t.Context(), maxValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var writes sync.WaitGroup
+	for n := range 24 {
+		writes.Go(func() {
+			if setErr := values.Set(t.Context(), n, n); setErr != nil {
+				t.Error(setErr)
+			}
+		})
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := encoded.Load(); n != 0 {
+		t.Fatalf("%d values were encoded while no memory was free", n)
+	}
+	taken.Release()
+	writes.Wait()
+	if n := encoded.Load(); n != 24 {
+		t.Fatalf("24 writes encoded %d values", n)
+	}
+	if usage := state.runtime.Memory(); usage.Used != 0 {
+		t.Fatalf("the writes kept %d bytes", usage.Used)
+	}
 }
 
 func TestACallAfterCloseIsClosed(t *testing.T) {

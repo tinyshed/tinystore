@@ -99,18 +99,74 @@ func (b *branch) read(ctx context.Context, work func(sqlite.Reader) error) error
 	return b.state.file.Lookup(ctx, work)
 }
 
-// reserve holds bytes of the store's memory for a call of this handle; inside
-// Tx it waits for nothing, since the writes holding memory wait for its writer
+// reserve holds bytes of the store's memory for a call of this handle. Inside
+// Tx or View it waits for nothing: the calls holding memory wait for the
+// writer or the reader it holds.
 func (b *branch) reserve(ctx context.Context, bytes int) (*tinystore.Reservation, error) {
-	if b.tx != nil && b.tx.writes != nil {
+	if b.tx != nil {
 		return b.state.reserveNow(bytes)
 	}
 	return b.state.reserve(ctx, bytes)
 }
 
-// write runs a write where this handle writes: its transaction, or a group
-// that shares one commit with the writes beside it
-func (b *branch) write(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
+// place is a write's place among the writes waiting for the writer, and the
+// store's memory it holds, nil for none
+type place struct {
+	reserved *tinystore.Reservation
+	out      func()
+}
+
+// keep gives back all but bytes of the memory the place holds
+func (p place) keep(bytes int) {
+	if p.reserved != nil {
+		p.reserved.Shrink(int64(bytes))
+	}
+}
+
+func (p place) leave() {
+	if p.reserved != nil {
+		p.reserved.Release()
+	}
+	p.out()
+}
+
+// enter takes a write's place and the memory it will hold before the write
+// makes anything, so that a write waiting for its turn holds nothing the store
+// has not counted; inside Tx the place is the transaction's
+func (b *branch) enter(ctx context.Context, held int) (place, error) {
+	out := func() {}
+	if b.tx == nil {
+		var err error
+		if out, err = b.state.admitWrite(ctx); err != nil {
+			return place{}, err
+		}
+	}
+	if held <= 0 {
+		return place{out: out}, nil
+	}
+	reserved, err := b.reserve(ctx, held)
+	if err != nil {
+		out()
+		return place{}, err
+	}
+	return place{reserved: reserved, out: out}, nil
+}
+
+// write runs a write where this handle writes, holding held bytes of the
+// store's memory for what it reads
+func (b *branch) write(ctx context.Context, held int, work func(sqlite.Writer) error) error {
+	entered, err := b.enter(ctx, held)
+	if err != nil {
+		return err
+	}
+	defer entered.leave()
+	return b.commit(ctx, 0, work)
+}
+
+// commit runs a write that holds its place: in the handle's transaction, or in
+// a group that shares one commit with the writes beside it, bytes weighing it
+// against the group's bound
+func (b *branch) commit(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
 	if b.tx != nil {
 		writer, err := b.tx.writer(b.state)
 		if err != nil {
@@ -118,16 +174,6 @@ func (b *branch) write(ctx context.Context, bytes int, work func(sqlite.Writer) 
 		}
 		return work(writer)
 	}
-	release, err := b.state.admitWrite(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	reserved, err := b.state.reserve(ctx, bytes)
-	if err != nil {
-		return err
-	}
-	defer reserved.Release()
 	return b.state.file.UpdateGrouped(ctx, bytes, work)
 }
 

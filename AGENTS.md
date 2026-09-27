@@ -498,7 +498,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a Clear whose commit fails lets go as a crash would    | `TestAClearWhoseCommitFailsLetsGoAsACrashWould`                                 |
 | Clears beside changes and flushes keep branches apart  | `TestClearsBesideChangesAndFlushesKeepTheirBranchesApart`                       |
 | a Clear inside Tx deletes what it clears or refuses    | `TestAClearInATransactionOverTheBoundIsRefused`                                 |
-| a kv Tx waits for no memory its waiting writes hold    | `TestATransactionWaitsForNoMemoryTheWritesWaitingForItHold`                     |
+| a call inside a kv Tx or View waits for no memory      | `TestTxAndViewWaitForNoMemoryTheCallsWaitingForThemHold`                        |
+| kv holds the store's memory before it makes a value    | `TestStoreMemoryBoundsWritesReadsAndScans`, `TestAWriteWaitingForMemoryHasEncodedNothing` |
 | a sliding read writes at most once per refresh         | `TestASlidingReadWritesAtMostOncePerRefresh`                                    |
 | a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation`, bound to version and expiry       |
 | a key read in its last minute is renewed at once       | `TestAReadNearItsExpiryRenewsAtOnce`                                            |
