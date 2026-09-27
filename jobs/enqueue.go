@@ -24,7 +24,7 @@ var (
 // failed one it starts the job again. A repeat needs a key. The call returns
 // once the job is in the file.
 func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOption) error {
-	e, err := q.prepare(value, options)
+	e, err := q.prepare(options)
 	if err == nil {
 		err = q.checkRoom()
 	}
@@ -36,7 +36,7 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 	}
 
 	added := false
-	err = q.write(ctx, e.value.size(), func(w sqlite.Writer) (writeErr error) {
+	err = q.writeValue(ctx, value, &e, func(w sqlite.Writer) (writeErr error) {
 		added, writeErr = enqueue(ctx, w, e)
 		return writeErr
 	})
@@ -58,7 +58,7 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 // zero, now unless they name a time. A job that runs, ran or was cancelled, or
 // a key that names none, is tinystore.ErrConflict.
 func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...EnqueueOption) error {
-	e, err := q.prepare(value, append(options, Key(key)))
+	e, err := q.prepare(append(options, Key(key)))
 	if err == nil {
 		e.id, err = q.newID(ctx)
 	}
@@ -68,7 +68,7 @@ func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...E
 
 	next := int64(0)
 	requeued := false
-	err = q.write(ctx, e.value.size(), func(w sqlite.Writer) (writeErr error) {
+	err = q.writeValue(ctx, value, &e, func(w sqlite.Writer) (writeErr error) {
 		next, requeued, writeErr = update(ctx, w, e)
 		return writeErr
 	})
@@ -108,7 +108,7 @@ func (q *Queue[V]) Cancel(ctx context.Context, key string) (bool, error) {
 }
 
 // enqueued is an Enqueue's or an Update's facts, gathered before it waits for
-// the writer
+// the writer, and its value once the write holds room for it
 type enqueued struct {
 	queue, id   int64
 	at, now     int64
@@ -118,8 +118,8 @@ type enqueued struct {
 	keepDone    bool
 }
 
-// prepare checks a call's options and encodes its value
-func (q *Queue[V]) prepare(value V, options []EnqueueOption) (enqueued, error) {
+// prepare checks a call's options
+func (q *Queue[V]) prepare(options []EnqueueOption) (enqueued, error) {
 	s, err := collectEnqueue(options)
 	e := enqueued{
 		queue: q.state.id, now: q.store.clock(), timed: s.timed, keepDone: q.state.policy.keepDone > 0,
@@ -138,9 +138,7 @@ func (q *Queue[V]) prepare(value V, options []EnqueueOption) (enqueued, error) {
 			e.at = s.repeat.next(time.UnixMilli(e.now)).UnixMilli()
 		}
 	}
-	encoded, err := q.codec.encode(value)
-	e.value = keep(encoded)
-	return e, err
+	return e, nil
 }
 
 // checkRoom refuses a job past the queue's MaxWaiting and logs it once a quiet

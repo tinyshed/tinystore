@@ -608,12 +608,12 @@ func (q *Queue[V]) claimOne(ctx context.Context, lease time.Duration) (claimedRo
 // valueHeld reads a claimed job's value once the store's memory holds room
 // for it, and gives the room back: the value is the caller's from then on
 func (q *Queue[V]) valueHeld(ctx context.Context, row claimedRow) (V, error) {
-	release, err := q.store.reserve(ctx, row.size)
+	reserved, err := q.store.reserve(ctx, row.size)
 	if err != nil {
 		var zero V
 		return zero, err
 	}
-	defer release()
+	defer reserved.Release()
 	return q.valueOf(ctx, row)
 }
 

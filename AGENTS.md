@@ -534,6 +534,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a job's key left behind names nothing, then is dropped | `TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt`                           |
 | a job that moves takes its key along                   | `TestAMovedJobTakesItsKeyAlong`                                                 |
 | jobs hold values in the store's memory                 | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers`                                 |
+| an Enqueue waiting for memory has written nothing      | `TestAnEnqueueWaitingForMemoryHasWrittenNothing`                                |
+| a jobs Tx takes only the memory that is free           | `TestATransactionTakesOnlyTheMemoryThatIsFree`                                  |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

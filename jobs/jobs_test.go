@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -284,5 +286,95 @@ func TestStoreMemoryBoundsEnqueuesReadsAndHandlers(t *testing.T) {
 	}
 	if ran != 2 {
 		t.Fatalf("the handler ran %d times, not once an upload", ran)
+	}
+}
+
+// counted is a job's value that counts how often it is written as JSON
+type counted struct {
+	N      int
+	writes *atomic.Int64
+}
+
+func (c counted) MarshalJSON() ([]byte, error) {
+	c.writes.Add(1)
+	return json.Marshal(c.N)
+}
+
+func (c *counted) UnmarshalJSON(raw []byte) error {
+	return json.Unmarshal(raw, &c.N)
+}
+
+// an Enqueue waiting for the store's memory has written nothing yet: a value
+// JSON writes waits for the largest value's room before it is written
+func TestAnEnqueueWaitingForMemoryHasWrittenNothing(t *testing.T) {
+	queues := openTestQueuesWith(t, t.TempDir(), tinystore.Options{Memory: maxValue})
+	queue := openTestQueue[counted](t, queues, "counted")
+	taken, err := queues.runtime.Reserve(t.Context(), maxValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var writes atomic.Int64
+	var enqueues sync.WaitGroup
+	for n := range 24 {
+		enqueues.Go(func() {
+			if enqueueErr := queue.Enqueue(t.Context(), counted{N: n, writes: &writes}); enqueueErr != nil {
+				t.Error(enqueueErr)
+			}
+		})
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := writes.Load(); n != 0 {
+		t.Fatalf("%d values were written while no memory was free", n)
+	}
+	taken.Release()
+	enqueues.Wait()
+	if n := writes.Load(); n != 24 {
+		t.Fatalf("24 enqueues wrote %d values", n)
+	}
+	if usage := queues.runtime.Memory(); usage.Used != 0 {
+		t.Fatalf("the enqueues kept %d bytes", usage.Used)
+	}
+}
+
+// a call inside Tx waits for none of the store's memory, which the writes
+// waiting for its writer hold: it takes what is free, and past that it is
+// ErrLimit at once
+func TestATransactionTakesOnlyTheMemoryThatIsFree(t *testing.T) {
+	const capacity = 4 << 20
+	queues := openTestQueuesWith(t, t.TempDir(), tinystore.Options{Memory: capacity})
+	queue := openTestQueue[string](t, queues, "mail")
+	mustEnqueue(t, queue, "hello", Key("first"))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	taken, err := queues.runtime.Reserve(ctx, capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = queues.Tx(ctx, func(tx *Tx) error {
+		if _, _, getErr := queue.WithTx(tx).Get(ctx, "first"); !errors.Is(getErr, tinystore.ErrLimit) {
+			t.Errorf("a Get inside Tx while the memory is taken: %v", getErr)
+		}
+		if enqueueErr := queue.WithTx(tx).Enqueue(ctx, "second"); !errors.Is(enqueueErr, tinystore.ErrLimit) {
+			t.Errorf("an Enqueue inside Tx while the memory is taken: %v", enqueueErr)
+		}
+		return nil
+	})
+	if err != nil || ctx.Err() != nil {
+		t.Fatalf("the transaction: %v, %v", err, ctx.Err())
+	}
+	taken.Release()
+	err = queues.Tx(ctx, func(tx *Tx) error {
+		if _, _, getErr := queue.WithTx(tx).Get(ctx, "first"); getErr != nil {
+			return getErr
+		}
+		return queue.WithTx(tx).Enqueue(ctx, "second")
+	})
+	if err != nil {
+		t.Fatalf("the transaction once the memory is free: %v", err)
+	}
+	if usage := queues.runtime.Memory(); usage.Used != 0 {
+		t.Fatalf("the transactions kept %d bytes", usage.Used)
 	}
 }

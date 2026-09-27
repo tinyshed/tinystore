@@ -180,20 +180,34 @@ func (s *Store) admitWrite(ctx context.Context) (release func(), err error) {
 	}, nil
 }
 
+// nothingReserved is what a call that holds no bytes reserves
+var nothingReserved tinystore.Reservation
+
 // reserve holds a call's bytes in the store's memory before it materialises
-// them; a store without Options.Memory is not asked
-func (s *Store) reserve(ctx context.Context, bytes int) (release func(), err error) {
-	if bytes <= 0 || s.runtime.Memory().Capacity == 0 {
-		return func() {}, nil
+// them, waiting in arrival order until they fit
+func (s *Store) reserve(ctx context.Context, bytes int) (*tinystore.Reservation, error) {
+	if bytes <= 0 {
+		return &nothingReserved, nil
 	}
 	reserved, err := s.runtime.Reserve(ctx, int64(bytes))
 	if errors.Is(err, tinystore.ErrLimit) {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
-	if err != nil {
-		return nil, err
+	return reserved, err
+}
+
+// reserveNow holds a call's bytes if they are free at once, for a call inside
+// Tx: the writes holding memory wait for the writer it holds
+func (s *Store) reserveNow(bytes int) (*tinystore.Reservation, error) {
+	if bytes <= 0 {
+		return &nothingReserved, nil
 	}
-	return reserved.Release, nil
+	reserved, err := s.runtime.ReserveNow(int64(bytes))
+	if err != nil {
+		return nil, fmt.Errorf("jobs: inside Tx, which holds the writer that the writes holding memory wait for: %w",
+			err)
+	}
+	return reserved, nil
 }
 
 // clock is the store's time in unix milliseconds, read once a call

@@ -343,11 +343,16 @@ func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Ent
 
 // read runs work on one snapshot of jobs.db: inside the handle's transaction,
 // which sees its own writes, or on a reader once the store's memory holds the
-// bytes it may read. A read inside a transaction waits for no memory, since it
-// holds the writer that the writes holding memory wait for; one transaction
-// runs at a time, so it holds at most one read's bytes beyond the budget
+// bytes it may read. Inside a transaction it waits for no memory, since it
+// holds the writer that the writes holding memory wait for: it takes what is
+// free, and past that it is ErrLimit.
 func (q *Queue[V]) read(ctx context.Context, bytes int, work func(sqlite.Reader) error) error {
 	if q.tx != nil {
+		reserved, err := q.store.reserveNow(bytes)
+		if err != nil {
+			return err
+		}
+		defer reserved.Release()
 		return q.tx.run(func(w sqlite.Writer) error { return work(w) })
 	}
 	leave, err := q.store.admit(ctx)
@@ -355,10 +360,10 @@ func (q *Queue[V]) read(ctx context.Context, bytes int, work func(sqlite.Reader)
 		return err
 	}
 	defer leave()
-	unreserve, err := q.store.reserve(ctx, bytes)
+	reserved, err := q.store.reserve(ctx, bytes)
 	if err != nil {
 		return err
 	}
-	defer unreserve()
+	defer reserved.Release()
 	return q.store.file.ViewPrepared(ctx, work)
 }

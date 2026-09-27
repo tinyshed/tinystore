@@ -110,12 +110,13 @@ func remind(ctx context.Context, job jobs.Job[Reminder]) error {
   says, refuses the job past it with `ErrLimit` and logs it once a quiet
   period.
 - **Values are held in the store's memory.** With `Options.Memory`, an
-  `Enqueue` or `Update` holds its encoded value while it waits for the writer,
-  a `Get` 1 MiB and a `Scan` 4.5 MiB while they read, and a `Work` worker a
-  job's value from before it reads it until its handler returns. A read inside
-  a `Tx` waits for no memory, since it holds the writer that the writes holding
-  memory wait for; one `Tx` runs at a time. A value is encoded before its
-  reservation, so what callers still waiting for memory encoded is theirs.
+  `Enqueue` or `Update` takes its turn and the memory its value may hold
+  before it encodes it, a `[]byte` its length and JSON the largest value until
+  it is written, and holds the value while it waits for the writer; a `Get`
+  holds 1 MiB and a `Scan` 4.5 MiB while they read, and a `Work` worker a job's
+  value from before it reads it until its handler returns. A call inside a `Tx`
+  waits for no memory, since it holds the writer that the writes holding
+  memory wait for: it takes what is free, and past that it is `ErrLimit`.
 - **Several enqueues, one commit.** `Store.Tx` runs work in one writer
   transaction, nil committing, an error or a panic rolling back; a queue works
   in it through `WithTx`, which is `ErrClosed` after the callback. `Work`

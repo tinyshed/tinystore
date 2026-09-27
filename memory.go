@@ -14,6 +14,7 @@ type MemoryUsage struct {
 }
 
 // Reservation is bytes of the store's memory that one piece of work holds.
+// The zero Reservation holds nothing, for work that needs no memory.
 type Reservation struct {
 	memory *memory // nil when the store has no Options.Memory
 	mu     sync.Mutex

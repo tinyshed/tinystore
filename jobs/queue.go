@@ -157,19 +157,69 @@ func (q *Queue[V]) WithTx(tx *Tx) *Queue[V] {
 // grouped with the writes other goroutines are waiting to commit, its bytes
 // held in the store's memory while they wait
 func (q *Queue[V]) write(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
+	_, leave, err := q.enter(ctx, bytes)
+	if err != nil {
+		return err
+	}
+	defer leave()
+	return q.commit(ctx, bytes, work)
+}
+
+// writeValue is write for a job's value, which it encodes into e once the
+// write holds its turn and the memory the value may take, so that a write
+// waiting for its turn has made nothing the store has not counted
+func (q *Queue[V]) writeValue(ctx context.Context, value V, e *enqueued, work func(sqlite.Writer) error) error {
+	weight := q.codec.weigh(value)
+	if weight > maxValue {
+		return tooLarge(weight)
+	}
+	reserved, leave, err := q.enter(ctx, weight)
+	if err != nil {
+		return err
+	}
+	defer leave()
+
+	encoded, err := q.codec.encode(value)
+	if err != nil {
+		return err
+	}
+	e.value = keep(encoded)
+	reserved.Shrink(int64(e.value.size()))
+	return q.commit(ctx, e.value.size(), work)
+}
+
+// enter takes a write's turn and bytes of the store's memory before the write
+// makes anything; inside Tx the turn is the transaction's, and the memory only
+// what is free
+func (q *Queue[V]) enter(ctx context.Context, bytes int) (*tinystore.Reservation, func(), error) {
 	if q.tx != nil {
-		return q.tx.run(work)
+		reserved, err := q.store.reserveNow(bytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		return reserved, reserved.Release, nil
 	}
 	release, err := q.store.admitWrite(ctx)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer release()
-	unreserve, err := q.store.reserve(ctx, bytes)
+	reserved, err := q.store.reserve(ctx, bytes)
 	if err != nil {
-		return err
+		release()
+		return nil, nil, err
 	}
-	defer unreserve()
+	return reserved, func() {
+		reserved.Release()
+		release()
+	}, nil
+}
+
+// commit runs a write that holds its turn: in the handle's transaction, or in
+// a group that shares one commit with the writes beside it
+func (q *Queue[V]) commit(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
+	if q.tx != nil {
+		return q.tx.run(work)
+	}
 	return q.store.file.UpdateGrouped(ctx, bytes, work)
 }
 

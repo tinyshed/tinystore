@@ -172,11 +172,11 @@ func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settle
 	if handlers.Err() != nil {
 		return settlement{lease: job.lease, how: givenBack}
 	}
-	release, err := l.q.store.reserve(handlers, claimed.row.size)
+	reserved, err := l.q.store.reserve(handlers, claimed.row.size)
 	if err != nil {
 		return unstarted(handlers, job, err)
 	}
-	defer release()
+	defer reserved.Release()
 	if job.Value, err = l.q.valueOf(handlers, claimed.row); err != nil {
 		return unstarted(handlers, job, err)
 	}

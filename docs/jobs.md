@@ -422,10 +422,13 @@ claims; what they share is the file's one writer, which a batch holds for tens
 of milliseconds at most. Priority within a queue is a second queue.
 
 **What the calls hold is the store's memory.** With `Options.Memory`, an
-`Enqueue` holds its encoded value while it waits for the writer, a `Get` 1 MiB
-and a `Scan` 4.5 MiB while they read, and a worker of `Work` a job's value from
-before it reads it until its handler returns: a claim reads no spilled value
-inside the writer, where waiting for memory would hold the writer too.
+`Enqueue` takes the memory its value may hold before it encodes it, and holds
+the value while it waits for the writer; a `Get` holds 1 MiB and a `Scan` 4.5
+MiB while they read, and a worker of `Work` a job's value from before it reads
+it until its handler returns: a claim reads no spilled value inside the writer,
+where waiting for memory would hold the writer too. A call inside `Tx` holds
+the writer, so it takes only the memory that is free and is `ErrLimit` past
+it.
 
 **What a program adds is bounded.** `MaxWaiting(n)`, ten million by default,
 refuses the job past it with `ErrLimit` and logs it once, so a loop that
@@ -557,6 +560,8 @@ The five cases are the gates' workloads.
 | a key left behind names nothing, and maintenance drops it | `TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt` |
 | a job that moves takes its key along | `TestAMovedJobTakesItsKeyAlong` |
 | values are held in the store's memory | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers` |
+| an `Enqueue` waiting for memory has written nothing | `TestAnEnqueueWaitingForMemoryHasWrittenNothing` |
+| a call inside `Tx` takes only the memory that is free | `TestATransactionTakesOnlyTheMemoryThatIsFree` |
 
 ## What the runtime gains
 

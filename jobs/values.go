@@ -38,9 +38,25 @@ func (c valueCodec[V]) encode(value V) ([]byte, error) {
 		}
 	}
 	if len(encoded) > maxValue {
-		return nil, fmt.Errorf("%w: jobs: a value of %d bytes, over 1 MiB", tinystore.ErrLimit, len(encoded))
+		return nil, tooLarge(len(encoded))
 	}
 	return encoded, nil
+}
+
+// weigh is what encoding value may hold before it is made: a []byte or a
+// json.RawMessage its length, JSON the largest value until it is written
+func (c valueCodec[V]) weigh(value V) int {
+	switch bytes := any(value).(type) {
+	case []byte:
+		return len(bytes)
+	case json.RawMessage:
+		return len(bytes)
+	}
+	return maxValue
+}
+
+func tooLarge(size int) error {
+	return fmt.Errorf("%w: jobs: a value of %d bytes, over 1 MiB", tinystore.ErrLimit, size)
 }
 
 // decode reads a value back; one that no longer reads into V, because the
