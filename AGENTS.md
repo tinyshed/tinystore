@@ -517,6 +517,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a queue past `MaxWaiting` refuses the next job         | `TestAQueuePastMaxWaitingRefusesTheNextJob`                                     |
 | a failed job is kept, then removed                     | `TestAFailedJobIsKeptThenRemoved`                                               |
 | a jobs Scan page holds at most its jobs and bytes      | `TestAScanPageHoldsAtMostItsBytes`, spilled values counted                      |
+| a job's key left behind names nothing, then is dropped | `TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt`                           |
+| a job that moves takes its key along                   | `TestAMovedJobTakesItsKeyAlong`                                                 |
 | jobs hold values in the store's memory                 | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers`                                 |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one

@@ -101,16 +101,19 @@ type found struct {
 	size     int // the value's bytes, in the row or spilled
 }
 
-// a value's size is read without its bytes: SQLite's length() of a blob
-// column takes it from the row's header and leaves its overflow pages alone
+// a job found through its key, whose row names where the job lies, and a
+// key a job left behind names nothing; a value's size is read without its
+// bytes, since SQLite's length() of a blob column takes it from the row's
+// header and leaves its overflow pages alone
 const (
-	waitingColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
+	keyedColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
 			coalesce(length(j.value), (select length(s.value) from spilled s where s.id = j.spill), 0)
-		from jobs j left join leases l on l.id = j.id and l.until > ?9`
+		from keys k join jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+		left join leases l on l.id = j.id and l.until > ?9`
 	failedColumns = `f.key, f.failed, f.id, f.at, f.attempt, null, 1, null, f.error, f.value, f.spill,
 			coalesce(length(f.value), (select length(s.value) from spilled s where s.id = f.spill), 0)
 		from failed f`
-	getWaiting   = `select ` + waitingColumns + ` where j.queue = ?1 and j.key = ?2`
+	getWaiting   = `select ` + keyedColumns + ` where k.queue = ?1 and k.key = ?2`
 	getFailed    = `select ` + failedColumns + ` where f.queue = ?1 and f.key = ?2`
 	valueSpilled = `select value from spilled where id = ?1`
 )
@@ -145,7 +148,7 @@ func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) 
 // or the failed jobs by when they failed, the last first
 const (
 	scanKeys = `select * from (
-			select ` + waitingColumns + ` where j.queue = ?1 and j.key > ?2 and j.key >= ?3 and j.key < ?4
+			select ` + keyedColumns + ` where k.queue = ?1 and k.key > ?2 and k.key >= ?3 and k.key < ?4
 				and (?5 = 0 or (?5 = 1 and l.attempt is null) or (?5 = 2 and l.attempt is not null))
 			union all
 			select ` + failedColumns + ` where f.queue = ?1 and f.key > ?2 and f.key >= ?3 and f.key < ?4

@@ -128,8 +128,9 @@ func remind(ctx context.Context, job jobs.Job[Reminder]) error {
   kind: a schedule does not open as a queue. A second handle on a queue in one
   process takes the same options, or is `ErrInvalid`.
 - **Maintenance** removes the failed jobs past `KeepFailed` of the queues this
-  process opened and the done keys past `KeepDone`, every minute unless the
-  store is Manual, 10,000 rows a transaction. `Store.Snapshot` copies
+  process opened, the keys their jobs left behind when they left the queue,
+  which name nothing meanwhile, and the done keys past `KeepDone`, every minute
+  unless the store is Manual, 10,000 rows a transaction. `Store.Snapshot` copies
   `jobs.db` like any engine's file; settlements a `Work` has not written yet
   are not in the copy.
 

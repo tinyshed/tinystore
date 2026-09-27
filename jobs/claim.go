@@ -393,6 +393,9 @@ func (l *lease) nextRun(h heldRow, now int64) (int64, bool) {
 
 func (l *lease) move(ctx context.Context, w sqlite.Writer, next, at, attempt int64, failure sql.NullString) error {
 	_, err := w.ExecContext(ctx, moveJob, l.queue.id, l.next, l.id, next, at, attempt, failure)
+	if err == nil && next != l.next {
+		err = moveKeyTo(ctx, w, l.queue.id, l.key, next)
+	}
 	return err
 }
 

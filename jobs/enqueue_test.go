@@ -2,14 +2,17 @@ package jobs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // a job is claimed at its time and not a moment before
@@ -245,4 +248,79 @@ func TestARepeatNeedsAKeyAndANamedZone(t *testing.T) {
 		tinystore.ErrInvalid) {
 		t.Fatalf("a repeat in time.Local: %v", err)
 	}
+}
+
+// a job that leaves the queue leaves its key behind, where it names nothing:
+// an Enqueue under it adds a job at once, and maintenance drops the rest
+func TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[string](t, queues, "later")
+	for n := range 3 {
+		mustEnqueue(t, queue, "first", Key(fmt.Sprint("k", n)))
+	}
+	if err := queue.Work(t.Context(), func(context.Context, Job[string]) error { return nil }, UntilIdle()); err != nil {
+		t.Fatal(err)
+	}
+	if left := keysKept(t, queues); left != 3 {
+		t.Fatalf("three jobs done left %d keys", left)
+	}
+
+	mustEnqueue(t, queue, "second", Key("k1"))
+	if entry, found, err := queue.Get(t.Context(), "k1"); err != nil || !found || entry.Value != "second" {
+		t.Fatalf("a key left behind named %+v, %v, %v", entry, found, err)
+	}
+	if page, err := queue.Scan(t.Context(), Query{Prefix: "k"}); err != nil || keysOf(page.Entries) != "k1" {
+		t.Fatalf("a scan over keys left behind found %v: %v", keysOf(page.Entries), err)
+	}
+	done, err := queues.Maintain(t.Context())
+	if err != nil || done.Keys != 2 || keysKept(t, queues) != 1 {
+		t.Fatalf("maintenance dropped %+v, %d keys kept: %v", done, keysKept(t, queues), err)
+	}
+}
+
+// a job that moves takes its key along, brought forward, snoozed, retried or
+// repeated: an Enqueue under the key finds it and adds nothing
+func TestAMovedJobTakesItsKeyAlong(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[string](t, queues, "later")
+	mustEnqueue(t, queue, "job", Key("k"), After(time.Hour))
+	mustEnqueue(t, queue, "job", Key("k"), After(time.Minute))
+	queues.clock.advance(time.Minute)
+	if err := mustClaim(t, queue).Snooze(t.Context(), After(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	mustEnqueue(t, queue, "job", Key("k"), After(2*time.Hour))
+	queues.clock.advance(time.Hour)
+	if err := mustClaim(t, queue).Retry(t.Context(), errors.New("down"), After(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	mustEnqueue(t, queue, "job", Key("k"), After(time.Hour))
+
+	mustEnqueue(t, queue, "digest", Key("d"), Every(time.Hour))
+	queues.clock.advance(time.Hour)
+	for range 2 {
+		if err := mustClaim(t, queue).Ack(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustEnqueue(t, queue, "digest", Key("d"), Every(time.Hour))
+	if waiting := queue.state.waiting.Load(); waiting != 1 {
+		t.Fatalf("%d jobs wait under two keys, one of them done", waiting)
+	}
+	if entry, found, err := queue.Get(t.Context(), "d"); err != nil || !found || entry.State != Waiting {
+		t.Fatalf("the repeating job moved on to %+v, %v, %v", entry, found, err)
+	}
+}
+
+// keysKept counts the rows of keys, those of jobs there and those left behind
+func keysKept(t *testing.T, queues *testQueues) int {
+	t.Helper()
+	var count int
+	err := queues.file.Lookup(t.Context(), func(r sqlite.Reader) error {
+		return sqlite.QueryRow(t.Context(), r, `select count(*) from keys`).Scan(&count)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

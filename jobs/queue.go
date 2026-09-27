@@ -31,6 +31,8 @@ type queueState struct {
 	limits   *quietLog
 	panics   *quietLog
 	lost     *quietLog
+
+	keysAfter string // where maintenance's walk over the keys left behind goes on
 }
 
 // Queue is a handle on the jobs of one type in one queue; Work and Claim hand
@@ -241,10 +243,12 @@ type scheduled struct {
 }
 
 const (
-	scheduleNamed = `select next, id, repeat from jobs where queue = ?1 and key = ?2`
-	moveSchedule  = `update jobs set next = ?4, at = ?4, repeat = ?5 where queue = ?1 and next = ?2 and id = ?3`
-	keepSchedule  = `update jobs set repeat = ?4 where queue = ?1 and next = ?2 and id = ?3`
-	addSchedule   = `insert into jobs (queue, next, id, key, at, attempt, repeat, value)
+	scheduleNamed = `select j.next, j.id, j.repeat
+		from keys k join jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+		where k.queue = ?1 and k.key = ?2`
+	moveSchedule = `update jobs set next = ?4, at = ?4, repeat = ?5 where queue = ?1 and next = ?2 and id = ?3`
+	keepSchedule = `update jobs set repeat = ?4 where queue = ?1 and next = ?2 and id = ?3`
+	addSchedule  = `insert into jobs (queue, next, id, key, at, attempt, repeat, value)
 		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6)`
 )
 
@@ -255,8 +259,10 @@ func setSchedule(ctx context.Context, w sqlite.Writer, s scheduled) error {
 	var there row
 	err := sqlite.QueryRow(ctx, w, scheduleNamed, s.queue, s.key).Scan(&there.next, &there.id, &there.repeat)
 	if errors.Is(err, sql.ErrNoRows) {
-		_, err = w.ExecContext(ctx, addSchedule, s.queue, s.next, s.id, s.key, s.repeat, s.value)
-		return err
+		if _, err = w.ExecContext(ctx, addSchedule, s.queue, s.next, s.id, s.key, s.repeat, s.value); err != nil {
+			return err
+		}
+		return keepKey(ctx, w, s.queue, sql.NullString{String: s.key, Valid: true}, s.next, s.id)
 	}
 	if err != nil || there.repeat.String == s.repeat {
 		return err
@@ -269,6 +275,8 @@ func setSchedule(ctx context.Context, w sqlite.Writer, s scheduled) error {
 		_, err = w.ExecContext(ctx, keepSchedule, s.queue, there.next, there.id, s.repeat)
 		return err
 	}
-	_, err = w.ExecContext(ctx, moveSchedule, s.queue, there.next, there.id, s.next, s.repeat)
-	return err
+	if _, err = w.ExecContext(ctx, moveSchedule, s.queue, there.next, there.id, s.next, s.repeat); err != nil {
+		return err
+	}
+	return moveKeyTo(ctx, w, s.queue, s.key, s.next)
 }

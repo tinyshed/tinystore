@@ -464,12 +464,15 @@ An error about one job is a `*jobs.JobError` naming its queue and key;
 ## Storage
 
 Settled by the round: rows in the order of their time, a lease in a table of
-its own, 4 KiB pages, values past 512 bytes spilled.
+its own, 4 KiB pages, values past 512 bytes spilled; and by
+[the engine's round](reports/jobs-engine-2026-09-27.md), keys in a table of
+their own.
 
 ```text
 queues    id | name | kind                          a queue or a schedule
 jobs      queue | next | id | key | at | attempt | again | repeat | error | value | spill
-          without rowid, primary key (queue, next, id); unique index (queue, key) where key is not null
+          without rowid, primary key (queue, next, id)
+keys      queue | key | next | id                   where a keyed job lies; left behind when it leaves
 leases    id | queue | next | attempt | until       a claimed job's lease; attempt is its token
 failed    queue | id | key | at | attempt | failed | error | value | spill   kept KeepFailed
 spilled   id | value                                values past 512 bytes
@@ -489,11 +492,19 @@ meta      name | value                              the high-water mark of job i
   `Snooze` or a job given back counts none. A next open counts the attempts of
   the leases the file still holds and empties the table, and their jobs are
   due at once.
+- **A key lives beside its job, not on its row.** A keyed job's key is a row
+  of `keys` naming where the job lies; a job that moves takes it along, and one
+  that leaves the queue leaves it behind, where it names nothing until
+  maintenance drops it in the order of the keys. Acknowledging a burst of
+  keyed jobs then writes no page outside the order of their time: 2.7 times
+  the jobs a second in the prototype, a key read 3.7 µs slower, an enqueue no
+  slower.
 - **A job's id is never given twice**, not after a crash: ids come from a block
   of a thousand reserved in `meta` by a transaction of its own, and a `Tx`
   reserves its own.
-- **Maintenance runs through `Store.Every`**: failed jobs past `KeepFailed` of
-  the queues this process opened, keys past `KeepDone`.
+- **Maintenance runs through `Store.Every`**: failed jobs past `KeepFailed` and
+  the keys their jobs left behind, of the queues this process opened, and
+  keys past `KeepDone`.
 - **Backup copies `jobs.db`** like any engine's file; settlements `Work` has
   not written yet are not in the copy, and those jobs run again after a
   restore.
@@ -543,6 +554,8 @@ The five cases are the gates' workloads.
 | a Work loop lets go of a lease another claim took | `TestWorkLetsGoOfALeaseAnotherClaimTook` |
 | a Scan walks keys under a prefix, and the failed jobs by time | `TestScanWalksTheKeysUnderAPrefixAPageAtATime`, `TestScanListsTheFailedJobsTheLastFailedFirst` |
 | a Scan page holds at most its jobs and bytes | `TestAScanPageHoldsAtMostItsBytes` |
+| a key left behind names nothing, and maintenance drops it | `TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt` |
+| a job that moves takes its key along | `TestAMovedJobTakesItsKeyAlong` |
 | values are held in the store's memory | `TestStoreMemoryBoundsEnqueuesReadsAndHandlers` |
 
 ## What the runtime gains
@@ -577,10 +590,10 @@ What [the round](reports/jobs-mechanics-2026-09-27.md) left, for the next:
 
 | Question | Why |
 |---|---|
-| a key index a burst does not scatter: keys dropped lazily, in key order, by maintenance | a keyed burst drained 14,000 jobs a second against 93,000 without keys; through the engine, 23,145 against 47,339 at 512 workers |
 | the engine against a table an application polls by hand, on the five cases | what the engine buys over the way it replaces |
 | the page cache of the writer in a burst over a large file | every burst ran with 1 MiB a connection |
 | a queue's count at open | `OpenQueue` counts the queue's rows for `MaxWaiting`, which reads every page of a large queue |
 
 Settled since, in [the engine's round](reports/jobs-engine-2026-09-27.md): a
-Work loop holds two jobs a worker, and sqldb's `Exec` commits grouped.
+Work loop holds two jobs a worker, sqldb's `Exec` commits grouped, and keys
+live in a table of their own, dropped lazily in key order by maintenance.

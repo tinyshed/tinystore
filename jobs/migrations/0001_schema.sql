@@ -29,7 +29,17 @@ create table jobs (
     primary key (queue, next, id)
 ) strict, without rowid;
 
-create unique index jobs_by_key on jobs (queue, key) where key is not null;
+-- a job's key and where its row lies: a job that moves takes its key along,
+-- and one that leaves the queue leaves its key behind, naming no row, until
+-- maintenance drops it in the order of the keys; so that settling a burst of
+-- keyed jobs writes no page outside the order of their time
+create table keys (
+    queue integer not null,
+    key   text    not null,
+    next  integer not null,
+    id    integer not null,
+    primary key (queue, key)
+) strict, without rowid;
 
 -- a claimed job's lease, beside its row so that a claim leaves the row alone:
 -- attempt: the attempt it was given for, the token that settles it; until: its end

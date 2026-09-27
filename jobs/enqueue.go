@@ -163,9 +163,11 @@ type row struct {
 }
 
 const (
-	jobByKey = `select next, id, at, attempt, again, repeat, error, spill from jobs where queue = ?1 and key = ?2`
-	leaseOf  = `select 1 from leases where id = ?1 and until > ?2`
-	doneKey  = `select 1 from done where queue = ?1 and key = ?2 and until > ?3`
+	jobByKey = `select j.next, j.id, j.at, j.attempt, j.again, j.repeat, j.error, j.spill
+		from keys k join jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+		where k.queue = ?1 and k.key = ?2`
+	leaseOf = `select 1 from leases where id = ?1 and until > ?2`
+	doneKey = `select 1 from done where queue = ?1 and key = ?2 and until > ?3`
 
 	insertJob = `insert into jobs (queue, next, id, key, at, attempt, repeat, value, spill)
 		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7)`
@@ -176,11 +178,39 @@ const (
 	dropFailed    = `delete from failed where queue = ?1 and key = ?2 returning spill`
 	updateWaiting = `update jobs set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat)
 		where queue = ?1 and next = ?2 and id = ?3`
-	cancelWaiting = `delete from jobs where queue = ?1 and key = ?2
+	cancelWaiting = `delete from jobs where (queue, next, id) in (
+			select k.queue, k.next, k.id from keys k where k.queue = ?1 and k.key = ?2)
 		and not exists (select 1 from leases l where l.id = jobs.id and l.until > ?3)
 		returning id, spill`
 	dropLeaseOf = `delete from leases where id = ?1`
 )
+
+// a key's row: where its job lies, replacing a key a job left behind, then
+// following the job as it moves; a job gone leaves it for maintenance
+const (
+	insertKey = `insert into keys (queue, key, next, id) values (?1, ?2, ?3, ?4)
+		on conflict (queue, key) do update set next = excluded.next, id = excluded.id`
+	moveKey = `update keys set next = ?3 where queue = ?1 and key = ?2`
+	dropKey = `delete from keys where queue = ?1 and key = ?2`
+)
+
+// keepKey names where a keyed job's row lies
+func keepKey(ctx context.Context, w sqlite.Writer, queue int64, key sql.NullString, next, id int64) error {
+	if !key.Valid {
+		return nil
+	}
+	_, err := w.ExecContext(ctx, insertKey, queue, key.String, next, id)
+	return err
+}
+
+// moveKeyTo follows a keyed job's row to its next time
+func moveKeyTo(ctx context.Context, w sqlite.Writer, queue int64, key string, next int64) error {
+	if key == "" {
+		return nil
+	}
+	_, err := w.ExecContext(ctx, moveKey, queue, key, next)
+	return err
+}
 
 // enqueue writes one job and says whether it added a row
 func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err error) {
@@ -219,7 +249,9 @@ func (e enqueued) onto(ctx context.Context, w sqlite.Writer, there row) error {
 	case leased:
 		_, err = w.ExecContext(ctx, askAgain, e.queue, there.next, there.id, e.at)
 	case e.at < there.next:
-		_, err = w.ExecContext(ctx, bringForward, e.queue, there.next, there.id, e.at)
+		if _, err = w.ExecContext(ctx, bringForward, e.queue, there.next, there.id, e.at); err == nil {
+			err = moveKeyTo(ctx, w, e.queue, e.key.String, e.at)
+		}
 	}
 	return err
 }
@@ -253,6 +285,9 @@ func update(ctx context.Context, w sqlite.Writer, e enqueued) (next int64, reque
 		_, err = w.ExecContext(ctx, updateWaiting, e.queue, there.next, there.id, next, inlineBytes(e.value), spill,
 			e.repeat)
 	}
+	if err == nil && next != there.next {
+		err = moveKeyTo(ctx, w, e.queue, e.key.String, next)
+	}
 	return next, false, err
 }
 
@@ -270,7 +305,7 @@ func requeue(ctx context.Context, w sqlite.Writer, e enqueued) (int64, bool, err
 }
 
 // cancel deletes the waiting or failed job under a key, with the lease an
-// ended claim left and the value it spilled
+// ended claim left, the value it spilled and its key
 func cancel(ctx context.Context, w sqlite.Writer, queue int64, key string, now int64) (waited, failed bool, err error) {
 	var id int64
 	var spill sql.NullInt64
@@ -279,6 +314,9 @@ func cancel(ctx context.Context, w sqlite.Writer, queue int64, key string, now i
 	case err == nil:
 		if _, err = w.ExecContext(ctx, dropLeaseOf, id); err == nil {
 			err = dropSpilled(ctx, w, spill)
+		}
+		if err == nil {
+			_, err = w.ExecContext(ctx, dropKey, queue, key)
 		}
 		return true, false, err
 	case !errors.Is(err, sql.ErrNoRows):
@@ -292,6 +330,9 @@ func insertRow(ctx context.Context, w sqlite.Writer, e enqueued) error {
 	spill, err := spillValue(ctx, w, e.id, e.value)
 	if err == nil {
 		_, err = w.ExecContext(ctx, insertJob, e.queue, e.at, e.id, e.key, e.repeat, inlineBytes(e.value), spill)
+	}
+	if err == nil {
+		err = keepKey(ctx, w, e.queue, e.key, e.at, e.id)
 	}
 	return err
 }

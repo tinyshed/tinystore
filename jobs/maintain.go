@@ -15,6 +15,7 @@ import (
 type Maintenance struct {
 	Failed int // failed jobs past their queue's KeepFailed
 	Done   int // keys past their queue's KeepDone
+	Keys   int // keys that jobs gone from the queue left behind
 }
 
 // the oldest failed jobs of a queue first, with the values they spilled, and
@@ -29,9 +30,10 @@ const (
 )
 
 // Maintain removes the failed jobs each queue this process opened keeps no
-// longer, and the done keys past their KeepDone, 10,000 a transaction and at
-// most ten transactions of each a call; the store calls it every minute unless
-// it is Manual. A queue this process has not opened keeps its failed jobs.
+// longer, the keys its jobs left behind and the done keys past their KeepDone,
+// 10,000 a transaction and at most ten transactions of each a call; the store
+// calls it every minute unless it is Manual. A queue this process has not
+// opened keeps its failed jobs and its keys.
 func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	release, err := s.holdMaintenance(ctx)
 	if err != nil {
@@ -52,7 +54,9 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 			return expireBatch(ctx, w, state.id, now-state.policy.keepFailed.Milliseconds())
 		})
 		done.Failed += removed
-		errs = append(errs, expireErr)
+		dropped, dropErr := s.dropKeysLeft(ctx, state)
+		done.Keys += dropped
+		errs = append(errs, expireErr, dropErr)
 	}
 	removed, forgetErr := s.batches(ctx, func(w sqlite.Writer) (int, error) {
 		result, err := w.ExecContext(ctx, forgetDone, now, maintainBatch)
@@ -64,6 +68,47 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	})
 	done.Done = removed
 	return done, errors.Join(append(errs, forgetErr)...)
+}
+
+// a slice of a queue's keys in their order after a place, and those of it
+// whose job has left the queue
+const (
+	keysSlice = `select count(*), coalesce(max(key), '') from (
+			select key from keys where queue = ?1 and key > ?2 order by key limit cast(?3 as integer))`
+	dropKeysLeft = `delete from keys where queue = ?1 and key > ?2 and key <= ?3
+		and not exists (select 1 from jobs j where j.queue = keys.queue and j.next = keys.next and j.id = keys.id)`
+)
+
+// dropKeysLeft removes the keys that jobs gone from a queue left behind,
+// walking its keys in their order from where the last call ended, 10,000 a
+// transaction and ten a call, and from the first again after the last
+func (s *Store) dropKeysLeft(ctx context.Context, state *queueState) (int, error) {
+	dropped := 0
+	for range 10 {
+		var examined, removed int64
+		var last string
+		err := s.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
+			err := sqlite.QueryRow(ctx, w, keysSlice, state.id, state.keysAfter, maintainBatch).Scan(&examined, &last)
+			if err != nil || examined == 0 {
+				return err
+			}
+			result, err := w.ExecContext(ctx, dropKeysLeft, state.id, state.keysAfter, last)
+			if err == nil {
+				removed, err = result.RowsAffected()
+			}
+			return err
+		})
+		if err != nil {
+			return dropped, err
+		}
+		dropped += int(removed)
+		if examined < maintainBatch {
+			state.keysAfter = ""
+			return dropped, nil
+		}
+		state.keysAfter = last
+	}
+	return dropped, nil
 }
 
 func (s *Store) maintainInBackground(ctx context.Context) error {
