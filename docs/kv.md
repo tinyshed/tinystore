@@ -243,12 +243,14 @@ update cells set expires = :until where bucket = ?1 and path = ?2 and version = 
 - **An overflow is refused.** An `Add` past the `int64` range is `ErrLimit`,
   since SQLite would quietly turn an overflowing integer sum into a `REAL`.
 - **`kv.LoseAtMost(d)`** keeps the counters in memory, and memory is the
-  truth for the keys it holds: the file is behind it by `d` at most. The first
-  change of a key since the last flush reads its row once; after it `Add`,
-  `Max` and `Delete` change memory and return. A flush every `d`, on `Close`
+  truth for the keys it holds: the file is behind it by what changed since the
+  last flush. The first change of a key since the last flush reads its row
+  once; after it `Add`, `Max` and `Delete` change memory and return. A flush every `d`, on `Close`
   and on `Maintain` writes what changed, 10,000 keys a transaction, and lets go
-  of what did not change again. A crash loses at most the last `d` of every
-  mutation, a `Delete`'s as an `Add`'s: a deleted counter can come back.
+  of what did not change again. A crash loses every mutation since the last
+  flush that committed, a `Delete`'s as an `Add`'s, so a deleted counter can
+  come back: that is `d`, and on a busy file the time a flush waits for the
+  writer as any write does, and takes.
   Memory holds at most 100,000 keys, changed or not, a key read for a change
   that failed included: a change of a key it does not hold takes a place
   first, one at a time, and flushes when there is none, so memory stays

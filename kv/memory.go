@@ -18,8 +18,8 @@ import (
 const memoryShards = 64
 
 // memory is what LoseAtMost counters hold between flushes. For the keys it
-// holds it is the truth and the file is behind it by an interval at most; a
-// key it does not hold is as the file has it.
+// holds it is the truth and the file is behind it by what changed since the
+// last flush; a key it does not hold is as the file has it.
 type memory struct {
 	state  *Store
 	bucket int64

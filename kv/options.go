@@ -72,10 +72,12 @@ func (f forBoth) bucketOption(s *settings)      { f(s) }
 func (f forBoth) counterOption(s *settings)     { f(s) }
 
 // LoseAtMost keeps the counters in memory and writes what changed every d, on
-// Close and on Maintain, so that an Add takes no write: a crash loses at most
-// the changes of the last d, a Delete's as an Add's. Handles on counters of one
-// name share the memory, and opening them again with another d, or without
-// LoseAtMost, is ErrInvalid; they join no transaction.
+// Close and on Maintain, so that an Add takes no write: a crash loses the
+// changes since the last flush that committed, a Delete's as an Add's. A flush
+// waits for the writer as any write does, so on a busy file that is d and the
+// flush's own wait and time. Handles on counters of one name share the memory,
+// and opening them again with another d, or without LoseAtMost, is ErrInvalid;
+// they join no transaction.
 func LoseAtMost(d time.Duration) CounterOption {
 	return forCounters(func(s *settings) {
 		if d <= 0 {

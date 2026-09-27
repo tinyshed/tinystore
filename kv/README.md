@@ -55,8 +55,9 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
 - **`LoseAtMost(d)` counters live in memory.** The first change of a key
   since the last flush reads it from the file once; after that `Add`, `Max`
   and `Delete` change memory and return, and every `d`, `Close` and `Maintain`
-  write what changed, 10,000 keys a transaction. A crash loses at most the
-  last `d` of changes, a `Delete`'s as well. Memory holds at most 100,000
+  write what changed, 10,000 keys a transaction. A crash loses the changes
+  since the last flush that committed, a `Delete`'s as well: `d`, and on a
+  busy file the time the flush waited for the writer and took. Memory holds at most 100,000
   keys, changed or not: a change of a key it does not hold flushes first when
   it is full, and while the file refuses that flush the change is refused
   with the flush's error. Handles on one name opened with the same `d` share
