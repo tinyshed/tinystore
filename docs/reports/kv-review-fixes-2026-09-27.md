@@ -75,9 +75,10 @@ three medians lie inside one spread, every run of all three between 5.8 and
 the packed test 0.2 µs under the substring. The lookups allocate twice more a
 read, 1,824 bytes against 1,696, where a statement's arguments grow by one.
 
-**KV-P2, the writer's page cache.** Nothing changed: the choice is the
-user's, since the cache is memory the writer holds for good. Random
-overwrites through `Set`, 512 goroutines, with the lookups of KV-P1:
+**KV-P2, the writer's page cache.** The user chose 4 MiB for kv's writer,
+3 MiB of memory held for good against a fifth more random `Set`s; the readers
+keep 1 MiB each, and the other engines' writers too. Random overwrites through
+`Set`, 512 goroutines, with the lookups of KV-P1:
 
 | writer cache | 20,000 keys: Sets a second, misses a Set | 200,000 keys |
 |---:|---:|---:|
@@ -105,6 +106,13 @@ A file whose pages the writer touches fit in 4 MiB at 20,000 keys and in
   transactions; the writer is let go between them, but the run is long.
 - Expiry deletes at most 100,000 rows a minute; a program creating keys with
   a TTL faster than that grows a backlog, as the review said.
+- The lookups of KV-P1 grow each statement's argument slice by one, two
+  allocations more a read; the slice could be made at its size.
+- `bench/kv` still keeps every latency of a phase, which a long run cannot
+  afford; the review asked for bounded histograms.
+- The host is also a workstation: a C++ build running beside a timing
+  tripled it, and Defender scanning the build's output after it added a
+  quarter. A timing waits for both.
 
 ## The runs
 
