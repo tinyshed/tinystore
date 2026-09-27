@@ -114,3 +114,36 @@ func enqueueBurst(t *testing.T, queues *testQueues, queue *Queue[burstMessage], 
 }
 
 var burstText = strings.Repeat("see you at nine by the station ", 4)
+
+// TestOpenQueueMeasured times opening a queue that holds a million jobs spread
+// over a week, which counts them for MaxWaiting, after the store reopens
+func TestOpenQueueMeasured(t *testing.T) {
+	if os.Getenv("TINYSTORE_SPIKE") != "1" {
+		t.Skip("a measurement: set TINYSTORE_SPIKE=1")
+	}
+	const jobs = 1_000_000
+	queues := openTestQueuesWith(t, burstDir(t), tinystore.Options{})
+	queue := openTestQueue[burstMessage](t, queues, "week")
+	for first := 0; first < jobs; first += 10_000 {
+		err := queues.Tx(t.Context(), func(tx *Tx) error {
+			for n := first; n < first+10_000; n++ {
+				at := After(time.Duration(n%(7*24*3600)) * time.Second)
+				message := burstMessage{ID: fmt.Sprint("m", n), Chat: "42", Author: "7", Text: burstText}
+				if err := queue.WithTx(tx).Enqueue(t.Context(), message, at); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		queues = queues.reopen(t)
+		started := time.Now()
+		queue = openTestQueue[burstMessage](t, queues, "week")
+		t.Logf("OpenQueue over %d jobs: %6.1f ms, %d counted", jobs,
+			float64(time.Since(started).Microseconds())/1000, queue.state.waiting.Load())
+	}
+}
