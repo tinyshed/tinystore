@@ -1,6 +1,6 @@
 // Command notes is what a program using TinyStore looks like: one directory,
-// its own SQL, its own metrics and logs, its drafts, its jobs, a backup, and
-// one Close.
+// its own SQL, its own metrics and logs, its drafts, its jobs, its notes'
+// attachments, a backup, and one Close.
 //
 //	go run ./examples/notes -dir ./data
 package main
@@ -17,10 +17,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/backup"
+	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
@@ -57,6 +59,8 @@ type app struct {
 	queues    *jobs.Store
 	indexing  *jobs.Queue[int64] // a note to index for search, now
 	reminders *jobs.Queue[int64] // a note to look at again tomorrow, keyed by the note
+	objects   *blobs.Store
+	files     *blobs.Bucket // a note's attachments, under notes/<id>/
 	logger    *slog.Logger
 	created   metrics.CounterInstrument
 	requests  metrics.CounterInstrument
@@ -73,6 +77,9 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 		return err
 	}
 	if err = a.useDrafts(ctx, out); err != nil {
+		return err
+	}
+	if err = a.useAttachments(ctx, out); err != nil {
 		return err
 	}
 	if err = a.useJobs(ctx, out); err != nil {
@@ -119,6 +126,12 @@ func (a *app) openEngines(ctx context.Context, console slog.Handler) error {
 		return err
 	}
 	if err = a.openQueues(ctx); err != nil {
+		return err
+	}
+	if a.objects, err = blobs.Open(ctx, a.store, blobs.Options{}); err != nil {
+		return err
+	}
+	if a.files, err = blobs.OpenBucket(ctx, a.objects, "attachments"); err != nil {
 		return err
 	}
 
@@ -170,6 +183,10 @@ func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 	})
 	if err == nil {
 		_, err = a.reminders.Cancel(ctx, fmt.Sprint("note:", ideas))
+	}
+	// the row first, its files after: a crash between leaves files no row names
+	if err == nil {
+		err = a.files.Of("notes", ideas).Clear(ctx)
 	}
 	if err != nil {
 		return err
@@ -224,6 +241,35 @@ func (a *app) useDrafts(ctx context.Context, out io.Writer) error {
 	}
 	draft, _, err := mine.Get(ctx, 1)
 	fmt.Fprintf(out, "draft of note 1: %s\n", draft)
+	return err
+}
+
+// useAttachments keeps a note's file beside its row: the row names the note
+// and the bucket holds the bytes; an edit made from a stale read is refused,
+// as a stale draft's save is
+func (a *app) useAttachments(ctx context.Context, out io.Writer) error {
+	files := a.files.Of("notes", 1)
+	list, err := files.Put(ctx, "list.txt", strings.NewReader("milk, bread, eggs, tea"),
+		blobs.ContentType("text/plain; charset=utf-8"))
+	if err != nil {
+		return err
+	}
+	_, err = files.Put(ctx, "list.txt", strings.NewReader("milk"), blobs.IfMatch(`"read-long-ago"`))
+	if !errors.Is(err, tinystore.ErrConflict) {
+		return errors.Join(err, errors.New("a stale edit replaced the list"))
+	}
+
+	file, found, err := files.Open(ctx, "list.txt")
+	if err != nil || !found {
+		return errors.Join(err, errors.New("the list is missing"))
+	}
+	defer file.Close()
+	head := make([]byte, 4)
+	if _, err = file.ReadAt(head, 0); err != nil {
+		return err
+	}
+	usage, err := files.Usage(ctx)
+	fmt.Fprintf(out, "attachment %s: %d bytes, starts %q; note 1 holds %d\n", list.Key, list.Size, head, usage.Bytes)
 	return err
 }
 
