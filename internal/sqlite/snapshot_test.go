@@ -1,7 +1,9 @@
 package sqlite
 
 import (
+	"bytes"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -60,5 +62,42 @@ func TestSnapshotCopiesWhileTheWriterWrites(t *testing.T) {
 	}
 	if _, err = f.Snapshot(t.Context(), into); err == nil {
 		t.Fatal("a snapshot overwrote an existing file")
+	}
+}
+
+// a copy is read as it was written: a reader of it changes no byte of it
+func TestACopyIsReadWithoutWritingIt(t *testing.T) {
+	dir := t.TempDir()
+	f, err := Open(t.Context(), filepath.Join(dir, "x.db"), Config{Readers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	scripts := fstest.MapFS{"0001.sql": {Data: []byte(`create table t (v integer) strict; insert into t values (7);`)}}
+	if err = f.Migrate(t.Context(), 1, scripts); err != nil {
+		t.Fatal(err)
+	}
+	into := filepath.Join(dir, "copy", "x.db")
+	if _, err = f.Snapshot(t.Context(), into); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(into)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var value int
+	err = ReadCopy(t.Context(), into, func(r Reader) error {
+		return QueryRow(t.Context(), r, `select v from t`).Scan(&value)
+	})
+	if err != nil || value != 7 {
+		t.Fatalf("the copy read %d: %v", value, err)
+	}
+	after, err := os.ReadFile(into)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("reading the copy changed it: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(into)); len(entries) != 1 {
+		t.Fatalf("reading the copy left %d files beside it", len(entries))
 	}
 }

@@ -38,6 +38,25 @@ func (f *File) Snapshot(ctx context.Context, into string) (applied int, err erro
 	return applied, nil
 }
 
+// ReadCopy runs read on a connection of its own, opened read-only at a copy
+// that Snapshot wrote, so that an engine can list what the copy names.
+func ReadCopy(ctx context.Context, path string, read func(Reader) error) (err error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("read SQLite copy: %w", err)
+	}
+	copied, err := sql.Open("sqlite", connectionURL(abs, snapshotArguments()))
+	if err != nil {
+		return fmt.Errorf("read SQLite copy: %w", err)
+	}
+	defer func() { err = errors.Join(err, copied.Close()) }()
+	copied.SetMaxOpenConns(1)
+	if err = read(copied); err != nil {
+		return fmt.Errorf("read SQLite copy %s: %w", path, err)
+	}
+	return nil
+}
+
 // snapshotArguments open the file read-only, and wait for the writer's
 // checkpoint rather than fail on it
 func snapshotArguments() url.Values {
