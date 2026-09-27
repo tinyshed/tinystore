@@ -4,11 +4,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/codec"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
@@ -63,6 +66,7 @@ func main() {
 	probeRecords(ctx, runtime)
 	probeKV(ctx, runtime)
 	probeJobs(ctx, runtime)
+	probeBlobs(ctx, runtime)
 }
 
 // probeRecords links the records engine the way an application uses it: its
@@ -242,4 +246,88 @@ func probeEnqueues(ctx context.Context, queues *jobs.Store) *jobs.Queue[string] 
 	}
 	fmt.Println(entry.State)
 	return later
+}
+
+// probeBlobs links the blobs engine the way an application uses it: a Put and
+// an upload, a reader that seeks and reads a range, Stat, Copy, Move, Delete,
+// a walk, Usage, a Clear and maintenance
+func probeBlobs(ctx context.Context, runtime *tinystore.Store) {
+	objects, err := blobs.Open(ctx, runtime, blobs.Options{})
+	if err != nil {
+		panic(err)
+	}
+	media, err := blobs.OpenBucket(ctx, objects, "media", blobs.DefaultTTL(time.Hour), blobs.MaxSize(1<<30))
+	if err != nil {
+		panic(err)
+	}
+	mine := media.Of("users", 42)
+	if _, err = mine.Put(ctx, "icon.png", strings.NewReader("png"), blobs.ContentType("image/png")); err != nil {
+		panic(err)
+	}
+	upload, err := mine.Create(ctx, "film.mp4", blobs.Meta("name", "film.mp4"), blobs.IfNoneMatch())
+	if err != nil {
+		panic(err)
+	}
+	defer upload.Abort()
+	if _, err = upload.Write([]byte("mp4")); err != nil {
+		panic(err)
+	}
+	film, err := upload.Commit(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(probeReader(ctx, mine), film.ETag)
+	probeObjects(ctx, mine)
+	done, err := objects.Maintain(ctx)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(done)
+}
+
+func probeReader(ctx context.Context, mine *blobs.Bucket) int {
+	reader, found, err := mine.Open(ctx, "film.mp4")
+	if err != nil || !found {
+		panic(fmt.Sprint(found, err))
+	}
+	defer func() { _ = reader.Close() }()
+	if _, err = reader.Seek(1, io.SeekStart); err != nil {
+		panic(err)
+	}
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		panic(err)
+	}
+	if _, err = reader.ReadAt(make([]byte, 1), 0); err != nil {
+		panic(err)
+	}
+	return len(rest)
+}
+
+func probeObjects(ctx context.Context, mine *blobs.Bucket) {
+	if _, _, err := mine.Stat(ctx, "icon.png"); err != nil {
+		panic(err)
+	}
+	if _, err := mine.Copy(ctx, "icon.png", "copy.png", blobs.TTL(time.Minute)); err != nil {
+		panic(err)
+	}
+	if _, err := mine.Move(ctx, "copy.png", "moved.png", blobs.ExpireAt(time.Now().Add(time.Hour))); err != nil {
+		panic(err)
+	}
+	if err := mine.Delete(ctx, "moved.png", blobs.IfMatch("*")); err != nil {
+		panic(err)
+	}
+	for _, err := range mine.All(ctx, blobs.Query{Prefix: "f"}) {
+		if err != nil {
+			panic(err)
+		}
+	}
+	usage, err := mine.Usage(ctx)
+	if err != nil {
+		panic(err)
+	}
+	if err = mine.Clear(ctx); err != nil {
+		panic(err)
+	}
+	fmt.Println(usage)
 }
