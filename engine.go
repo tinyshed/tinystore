@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -16,12 +17,14 @@ type Engine interface {
 }
 
 // Claim reserves a file or directory inside the store for one engine and
-// returns its path. release gives the name back to an engine that failed to
-// open; an attached engine keeps it until the store closes.
+// returns its path, creating the directory it lies in, or the directory
+// itself for a name that ends in /. release gives the name back to an engine
+// that failed to open; an attached engine keeps it until the store closes.
 //
 //	metrics.db  records.db  blobs/    engines
 //	sql/<name>.db                     databases the application names
 func (s *Store) Claim(name string) (filePath string, release func(), err error) {
+	directory := strings.HasSuffix(name, "/")
 	name = path.Clean(name)
 	if name == "." || name == lockName || !filepath.IsLocal(filepath.FromSlash(name)) {
 		return "", nil, fmt.Errorf("%w: %q is not a name inside the store", ErrInvalid, name)
@@ -37,8 +40,12 @@ func (s *Store) Claim(name string) (filePath string, release func(), err error) 
 	}
 
 	filePath = filepath.Join(s.dir, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
-		return "", nil, fmt.Errorf("create %s: %w", filepath.Dir(filePath), err)
+	made := filepath.Dir(filePath)
+	if directory {
+		made = filePath
+	}
+	if err := os.MkdirAll(made, 0o750); err != nil {
+		return "", nil, fmt.Errorf("create %s: %w", made, err)
 	}
 	s.claimed[name] = true
 	return filePath, func() { s.unclaim(name) }, nil

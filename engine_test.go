@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +22,9 @@ func TestClaimGivesEachNameToOneEngine(t *testing.T) {
 		}
 		if want := filepath.Join(dir, filepath.FromSlash(strings.TrimSuffix(name, "/"))); path != want {
 			t.Fatalf("%s is at %s, want %s", name, path, want)
+		}
+		if info, statErr := os.Stat(path); strings.HasSuffix(name, "/") && (statErr != nil || !info.IsDir()) {
+			t.Fatalf("the directory %s was not made: %v", name, statErr)
 		}
 		if _, _, err = store.Claim(name); !errors.Is(err, ErrInUse) {
 			t.Fatalf("%s claimed twice: %v", name, err)
