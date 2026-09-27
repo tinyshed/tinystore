@@ -130,3 +130,9 @@ fetch and normalise them.
 | | |
 |---|---|
 | [blobs-mechanics-2026-09-27.md](blobs-mechanics-2026-09-27.md) | where a blob's bytes go before the engine exists, on Linux and Windows: inline up to 16 KiB beats a file both ways, a file above it; a reader keeps its bytes through a delete only when opened through an `os.Root` on Windows; a pack gains 1.3 to 1.9 times on Linux and loses on Windows; a million files created steadily, linked faster than copied; a checked whole read at 2 GB/s; a large upload synced every 256 MiB |
+
+## 27 September 2026 — kv after its review
+
+| | |
+|---|---|
+| [kv-review-fixes-2026-09-27.md](kv-review-fixes-2026-09-27.md) | the review's seven defects fixed, each under a test the reviewed code fails; a hot counter 1.5 to 2.8 times faster through an atomic gate and fewer allocations; a read beside a thousand Clear marks from 146.9 µs to 10.8 through lookups of its own branches, their prefix lengths packed in one parameter; the writer's page cache at 1 to 16 MiB left to decide |
