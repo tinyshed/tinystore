@@ -1,7 +1,10 @@
 package kv
 
 import (
+	"context"
+	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,6 +146,175 @@ func TestAClearDoesNotResurrectCountersWaitingForTheFlush(t *testing.T) {
 		}
 		if held, _ := attempts.Of("email").Get(ctx, "kept"); held != 5 {
 			t.Fatalf("bound %d: a counter beside the cleared branch holds %d", bound, held)
+		}
+	}
+}
+
+// what makes a Clear fail: a statement it runs, or its commit
+const (
+	refuseClears = `create trigger refuse_delete before delete on cells
+			begin select raise(abort, 'a refused Clear'); end;
+		create trigger refuse_mark before insert on branches
+			begin select raise(abort, 'a refused Clear'); end`
+	refuseCommits = `create table refused_parent (id integer primary key);
+		create table refused_child (parent integer references refused_parent (id) deferrable initially deferred);
+		create trigger refuse_delete after delete on cells begin insert into refused_child values (1); end;
+		create trigger refuse_mark after insert on branches begin insert into refused_child values (1); end`
+	acceptAgain = `drop trigger refuse_delete; drop trigger refuse_mark;
+		drop table if exists refused_child; drop table if exists refused_parent`
+)
+
+func (s *testState) exec(t *testing.T, statements string) {
+	t.Helper()
+	err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), statements)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// attemptsWaiting is a counter the file holds at 7 and memory at 12, and one
+// beside it that only memory holds
+func attemptsWaiting(t *testing.T, state *testState) *Counters {
+	t.Helper()
+	attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
+	if _, err := attempts.Of("ip").Add(t.Context(), "key", 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attempts.Of("ip").Add(t.Context(), "key", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attempts.Of("email").Add(t.Context(), "kept", 3); err != nil {
+		t.Fatal(err)
+	}
+	return attempts
+}
+
+func (s *testState) expectAttempts(t *testing.T, attempts *Counters, key string, kept int64) {
+	t.Helper()
+	if held, err := attempts.Of("ip").Get(t.Context(), "key"); held != kept || err != nil {
+		t.Fatalf("%s: the counter under the branch holds %d, %v; want %d", key, held, err, kept)
+	}
+	if held, err := attempts.Of("email").Get(t.Context(), "kept"); held != 3 || err != nil {
+		t.Fatalf("%s: the counter beside the branch holds %d, %v", key, held, err)
+	}
+}
+
+// a Clear of LoseAtMost counters that rolls back leaves memory as it was, a
+// change waiting for the flush included, whether it deletes or marks
+func TestAFailedClearKeepsTheCountersWaitingForTheFlush(t *testing.T) {
+	for _, bound := range []int{clearAtOnce, 0} {
+		state := openTestState(t, t.TempDir())
+		state.clearBound = bound
+		attempts := attemptsWaiting(t, state)
+
+		cancelled, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := attempts.Of("ip").Clear(cancelled); !errors.Is(err, context.Canceled) {
+			t.Fatalf("bound %d: a Clear whose caller left: %v", bound, err)
+		}
+		state.exec(t, refuseClears)
+		err := attempts.Of("ip").Clear(t.Context())
+		state.exec(t, acceptAgain)
+		if err == nil || errors.Is(err, ErrOutcomeUnknown) {
+			t.Fatalf("bound %d: a refused Clear: %v", bound, err)
+		}
+		state.expectAttempts(t, attempts, "after the refused Clear", 12)
+
+		if _, err = state.Maintain(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		reopened := state.reopen(t)
+		reopened.expectAttempts(t, openTestCounters(t, reopened, "attempts", LoseAtMost(time.Hour)), "reopened", 12)
+	}
+}
+
+// a Clear whose commit fails may be in the file, so memory lets go of the
+// branch as a crash would: its reads go to the file, and nothing beside the
+// branch is lost
+func TestAClearWhoseCommitFailsLetsGoAsACrashWould(t *testing.T) {
+	for _, bound := range []int{clearAtOnce, 0} {
+		state := openTestState(t, t.TempDir())
+		state.clearBound = bound
+		attempts := attemptsWaiting(t, state)
+
+		state.exec(t, refuseCommits)
+		err := attempts.Of("ip").Clear(t.Context())
+		state.exec(t, acceptAgain)
+		if !errors.Is(err, ErrOutcomeUnknown) {
+			t.Fatalf("bound %d: a Clear whose commit failed: %v", bound, err)
+		}
+		state.expectAttempts(t, attempts, "after the failed commit", 7)
+
+		if _, err = state.Maintain(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		reopened := state.reopen(t)
+		reopened.expectAttempts(t, openTestCounters(t, reopened, "attempts", LoseAtMost(time.Hour)), "reopened", 7)
+	}
+}
+
+// Clears beside changes and flushes of counters in memory take nothing from
+// the branches beside them, and leave nothing of their own branch behind
+func TestClearsBesideChangesAndFlushesKeepTheirBranchesApart(t *testing.T) {
+	for _, bound := range []int{clearAtOnce, 0} {
+		state := openTestState(t, t.TempDir())
+		state.clearBound = bound
+		attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
+		ctx := t.Context()
+		var work sync.WaitGroup
+		for worker := range 10 {
+			branch := "email"
+			if worker < 2 {
+				branch = "ip"
+			}
+			work.Go(func() {
+				for n := range 300 {
+					if _, err := attempts.Of(branch).Add(ctx, n%5, 1); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			})
+		}
+		work.Go(func() {
+			for range 20 {
+				if _, err := state.Maintain(ctx); err != nil {
+					t.Error(err)
+				}
+				if err := attempts.Of("ip").Clear(ctx); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+		work.Wait()
+
+		if err := attempts.Of("ip").Clear(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.Maintain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		reopened := state.reopen(t)
+		attempts = openTestCounters(t, reopened, "attempts", LoseAtMost(time.Hour))
+		total := int64(0)
+		for key := range 5 {
+			if held, _ := attempts.Of("ip").Get(ctx, key); held != 0 {
+				t.Fatalf("bound %d: a cleared counter came back holding %d", bound, held)
+			}
+			held, err := attempts.Of("email").Get(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += held
+		}
+		if total != 8*300 {
+			t.Fatalf("bound %d: %d Adds beside the cleared branch counted %d", bound, 8*300, total)
 		}
 	}
 }

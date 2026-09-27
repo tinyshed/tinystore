@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"hash/maphash"
 	"maps"
 	"sync"
@@ -32,7 +33,7 @@ type memory struct {
 	// file held before them
 	gate     sync.RWMutex
 	waiting  atomic.Int64 // counters changed since the flush that wrote them
-	flushing sync.Mutex
+	flushing sync.Mutex   // one flush at a time, and none while a Clear runs
 }
 
 type shard struct {
@@ -252,9 +253,7 @@ func (m *memory) flushInBackground(ctx context.Context) error {
 	return err
 }
 
-// flushBatch writes at most flushBatch changed counters in one transaction.
-// It takes them inside the transaction, so that a Clear, which drops them in
-// a transaction of its own, runs wholly before it or wholly after.
+// flushBatch writes at most flushBatch changed counters in one transaction
 func (m *memory) flushBatch(ctx context.Context) (int, error) {
 	var batch []flushed
 	err := m.state.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
@@ -330,22 +329,63 @@ func (m *memory) giveBack(batch []flushed) {
 	}
 }
 
-// dropUnder forgets the counters under a branch, changed or not, so that no
-// flush after the Clear calling it writes them again
-func (m *memory) dropUnder(prefix []byte) {
+// clear runs a Clear of the branch under prefix in a transaction of its own,
+// and lets go of what memory holds under it once the Clear commits. Flushes
+// and changes wait throughout, and reads of memory from the commit until
+// memory has let go, so that no flush writes a cleared counter again and no
+// read finds one. A Clear that rolled back leaves memory as it was; one whose
+// commit failed may be in the file, so memory lets go as a crash would.
+func (m *memory) clear(ctx context.Context, prefix []byte, clearIn func(sqlite.Writer) error) error {
+	m.flushing.Lock()
+	defer m.flushing.Unlock()
+	m.gate.Lock()
+	defer m.gate.Unlock()
+
+	committing := false
+	err := m.state.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
+		if err := clearIn(w); err != nil {
+			return err
+		}
+		m.lockShards()
+		committing = true
+		return nil
+	})
+	if !committing {
+		return err
+	}
+	m.forgetUnder(prefix)
+	m.unlockShards()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
+	}
+	return nil
+}
+
+func (m *memory) lockShards() {
 	for i := range m.shards {
-		target := &m.shards[i]
-		target.mu.Lock()
-		for path, entry := range target.counters {
+		m.shards[i].mu.Lock()
+	}
+}
+
+func (m *memory) unlockShards() {
+	for i := range m.shards {
+		m.shards[i].mu.Unlock()
+	}
+}
+
+// forgetUnder lets go of the counters under a branch, changed or not; its
+// caller holds every shard
+func (m *memory) forgetUnder(prefix []byte) {
+	for i := range m.shards {
+		for path, entry := range m.shards[i].counters {
 			if !isUnder(path, prefix) {
 				continue
 			}
 			if entry.dirty {
 				m.waiting.Add(-1)
 			}
-			delete(target.counters, path)
+			delete(m.shards[i].counters, path)
 		}
-		target.mu.Unlock()
 	}
 }
 

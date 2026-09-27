@@ -64,7 +64,9 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   `Maintain` deletes them 10,000 a transaction. A key written after the Clear
   is a new key. Inside `Tx` a branch over 10,000 keys is `tinystore.ErrLimit`.
   A Clear of `LoseAtMost` counters drops what their memory holds under the
-  branch, so no flush writes it again.
+  branch once it commits, so no flush writes it again; one that fails leaves
+  memory as it was, and one whose commit fails, `kv.ErrOutcomeUnknown`, lets
+  go of the branch as a crash would.
 - **`Sliding(term)` keeps a key term from its last read.** A key created gets
   term; a `Get`, `GetEntry` or `Has` renews a live key to term from now once
   a thirtieth of the term has passed since it last did, and `Scan` does not. A

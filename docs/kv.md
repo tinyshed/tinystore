@@ -369,10 +369,13 @@ Clear(42) at revision R
   01 42 00 FF …, a name "42\x00" → not under the branch: after the prefix comes FF, not a mark
 ```
 
-- **A `Clear` of `LoseAtMost` counters** holds their memory alone and drops
-  what lies under the branch inside its own transaction, so that a flush,
-  which takes what changed inside its transaction, runs wholly before it, and
-  its rows are cleared, or wholly after, and finds nothing to write.
+- **A `Clear` of `LoseAtMost` counters** holds their flushes back and their
+  changes out while it runs, and every read of their memory from its commit
+  until memory has let go of the branch, so that no flush writes a cleared
+  counter again and no read finds one after the commit. One that rolls back
+  leaves memory as it was; one whose commit fails may be in the file, so
+  memory lets go of the branch as a crash would, within `LoseAtMost`'s loss,
+  and the Clear is `ErrOutcomeUnknown`.
 - **Maintenance runs through `Store.Every`**: the `LoseAtMost` and `Sliding`
   flushes, the rows a mark hid, expired rows in batches through the expiry
   index, spilled rows no cell names any more.
@@ -421,6 +424,9 @@ The five cases are the gates' workloads.
 | `Clear` empties a branch and those under it at once, over the bound and under it | `TestClearEmptiesTheBranchAndThoseUnderIt` |
 | a cleared key is absent to every operation | `TestAClearedKeyIsAbsentToEveryOperation` |
 | a `Clear` never brings back counters waiting for a flush | `TestAClearDoesNotResurrectCountersWaitingForTheFlush` |
+| a failed `Clear` keeps what counters wait to flush | `TestAFailedClearKeepsTheCountersWaitingForTheFlush` |
+| a `Clear` whose commit fails lets memory go as a crash would | `TestAClearWhoseCommitFailsLetsGoAsACrashWould` |
+| Clears beside changes and flushes keep their branches apart | `TestClearsBesideChangesAndFlushesKeepTheirBranchesApart` |
 | a `Clear` inside `Tx` deletes what it clears or refuses | `TestAClearInATransactionOverTheBoundIsRefused` |
 | a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |
 | a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |

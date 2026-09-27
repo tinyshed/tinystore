@@ -31,17 +31,20 @@ const (
 // the Clear is a new key. Inside Tx a branch over 10,000 keys is ErrLimit,
 // since deleting it would hold the writer for seconds.
 func (b *Bucket[V]) Clear(ctx context.Context) error {
-	return b.clear(ctx, nil)
+	return b.clear(ctx)
 }
 
 // Clear removes every counter of this branch and of the branches under it, as
-// Bucket.Clear does; LoseAtMost counters it removes from memory as well, so
-// that no flush writes them again.
+// Bucket.Clear does; LoseAtMost counters it removes from memory as well once
+// it commits, so that no flush writes them again. One that fails leaves them.
 func (c *Counters) Clear(ctx context.Context) error {
-	if c.memory != nil && c.tx != nil {
+	switch {
+	case c.memory == nil:
+		return c.clear(ctx)
+	case c.tx != nil:
 		return c.fail(call{}, errRelaxedInTx)
 	}
-	return c.clear(ctx, c.memory)
+	return c.clearHeld(ctx)
 }
 
 const (
@@ -54,25 +57,28 @@ const (
 )
 
 // clear deletes the branch or marks it, in a transaction of its own or the
-// handle's. LoseAtMost counters hold their memory alone throughout, so that no
-// change keeps a value read before the Clear, and drop what lies under the
-// branch inside the transaction, so that a flush runs wholly before or after.
-func (b *branch) clear(ctx context.Context, held *memory) error {
+// handle's
+func (b *branch) clear(ctx context.Context) error {
 	if b.err != nil {
 		return b.err
 	}
-	if held != nil {
-		held.gate.Lock()
-		defer held.gate.Unlock()
-	}
+	return b.fail(call{}, b.writeAlone(ctx, func(w sqlite.Writer) error { return b.clearIn(ctx, w) }))
+}
 
-	err := b.writeAlone(ctx, func(w sqlite.Writer) error {
-		if held != nil {
-			held.dropUnder(b.prefix)
-		}
-		return b.clearIn(ctx, w)
-	})
-	return b.fail(call{}, err)
+// clearHeld clears LoseAtMost counters in a transaction of their own, which
+// their memory commits beside
+func (c *Counters) clearHeld(ctx context.Context) error {
+	if c.err != nil {
+		return c.err
+	}
+	release, err := c.state.admitWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	err = c.memory.clear(ctx, c.prefix, func(w sqlite.Writer) error { return c.clearIn(ctx, w) })
+	return c.fail(call{}, err)
 }
 
 func (b *branch) clearIn(ctx context.Context, w sqlite.Writer) error {

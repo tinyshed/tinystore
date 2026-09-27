@@ -494,6 +494,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a kv Clear empties a branch and those under it         | `TestClearEmptiesTheBranchAndThoseUnderIt`, over the bound and under it         |
 | a cleared key is absent to every operation             | `TestAClearedKeyIsAbsentToEveryOperation`                                       |
 | a Clear never brings back counters waiting to flush    | `TestAClearDoesNotResurrectCountersWaitingForTheFlush`                          |
+| a failed Clear keeps what counters wait to flush       | `TestAFailedClearKeepsTheCountersWaitingForTheFlush`                            |
+| a Clear whose commit fails lets go as a crash would    | `TestAClearWhoseCommitFailsLetsGoAsACrashWould`                                 |
+| Clears beside changes and flushes keep branches apart  | `TestClearsBesideChangesAndFlushesKeepTheirBranchesApart`                       |
 | a Clear inside Tx deletes what it clears or refuses    | `TestAClearInATransactionOverTheBoundIsRefused`                                 |
 | a sliding read writes at most once per refresh         | `TestASlidingReadWritesAtMostOncePerRefresh`                                    |
 | a renewal never extends a newer incarnation of its key | `TestARenewalDoesNotExtendANewerIncarnation`, bound to version and expiry       |
