@@ -44,6 +44,7 @@ type Store struct {
 	opened   sync.Mutex
 	counters map[string]openCounters
 	renewals renewals
+	leave    func() // gate.Leave, bound once rather than at every call
 }
 
 // openCounters is how the counters of one name are open in this process:
@@ -86,6 +87,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 		renewals: renewals{waiting: map[renewed]renewal{}},
 	}
 	state.maintenance <- struct{}{}
+	state.leave = state.gate.Leave
 	if err = state.loadRevision(ctx); err == nil {
 		err = store.Attach(state)
 	}
@@ -223,7 +225,7 @@ func (s *Store) admit(ctx context.Context) (release func(), err error) {
 	if err = s.gate.Enter(ctx, errClosed); err != nil {
 		return nil, err
 	}
-	return s.gate.Leave, nil
+	return s.leave, nil
 }
 
 // admitWrite lets a write in and holds one of the write slots until it is

@@ -70,8 +70,8 @@ func newMemory(state *Store, bucket int64, name string) *memory {
 	return m
 }
 
-func (m *memory) shardOf(path string) *shard {
-	return &m.shards[maphash.String(m.seed, path)%memoryShards]
+func (m *memory) shardOf(path []byte) *shard {
+	return &m.shards[maphash.Bytes(m.seed, path)%memoryShards]
 }
 
 // change applies next to the counter at c's path and returns what it holds
@@ -115,22 +115,22 @@ func (m *memory) tryChange(ctx context.Context, c call, created int64, next func
 	m.gate.RLock()
 	defer m.gate.RUnlock()
 
-	path := string(c.path)
-	target := m.shardOf(path)
-	if !target.holds(path) {
-		if !m.takeRoom() {
-			return 0, true, nil
-		}
-		loaded, readErr := m.readFile(ctx, c)
-		if readErr != nil || !target.keep(path, loaded) {
-			m.held.Add(-1)
-		}
-		if readErr != nil {
-			return 0, false, readErr
-		}
+	target := m.shardOf(c.path)
+	if changed, held, changeErr := target.change(c.path, c.now, created, next); held {
+		return changed, false, changeErr
+	}
+	if !m.takeRoom() {
+		return 0, true, nil
+	}
+	loaded, err := m.readFile(ctx, c)
+	if err != nil || !target.keep(c.path, loaded) {
+		m.held.Add(-1)
+	}
+	if err != nil {
+		return 0, false, err
 	}
 
-	value, err = target.change(path, c.now, created, next)
+	value, _, err = target.change(c.path, c.now, created, next)
 	return value, false, err
 }
 
@@ -139,16 +139,14 @@ func (m *memory) tryForget(c call) (full bool) {
 	m.gate.RLock()
 	defer m.gate.RUnlock()
 
-	path := string(c.path)
-	target := m.shardOf(path)
-	if target.holds(path) {
-		target.forget(path)
+	target := m.shardOf(c.path)
+	if target.forget(c.path, false) {
 		return false
 	}
 	if !m.takeRoom() {
 		return true
 	}
-	if !target.forget(path) {
+	if target.forget(c.path, true) {
 		m.held.Add(-1)
 	}
 	return false
@@ -171,69 +169,72 @@ func (m *memory) takeRoom() bool {
 
 // get is what the counter at c's path holds, from memory or else the file
 func (m *memory) get(ctx context.Context, c call) (int64, error) {
-	if held, ok := m.shardOf(string(c.path)).valueAt(string(c.path), c.now); ok {
+	if held, ok := m.shardOf(c.path).valueAt(c.path, c.now); ok {
 		return held, nil
 	}
 	loaded, err := m.readFile(ctx, c)
 	return loaded.valueAt(c.now), err
 }
 
-func (s *shard) holds(path string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.counters[path]
-	return ok
-}
-
 // keep holds what the file had for path, and says whether it did: another
 // change may have kept it first
-func (s *shard) keep(path string, loaded counter) bool {
+func (s *shard) keep(path []byte, loaded counter) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.counters[path]; ok {
+	if _, ok := s.counters[string(path)]; ok {
 		return false
 	}
-	s.counters[path] = &loaded
+	s.counters[string(path)] = &loaded
 	return true
 }
 
-func (s *shard) change(path string, now, created int64, next func(int64) (int64, error)) (int64, error) {
+// change applies next to the counter at path when the shard holds it, and
+// says whether it does
+func (s *shard) change(path []byte, now, created int64, next func(int64) (int64, error)) (
+	value int64, held bool, err error,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	held := s.counters[path]
+	entry, held := s.counters[string(path)]
+	if !held {
+		return 0, false, nil
+	}
 	current, expires := int64(0), created
-	if held.live(now) {
-		current, expires = held.value, held.expires
+	if entry.live(now) {
+		current, expires = entry.value, entry.expires
 	}
-	value, err := next(current)
-	if err != nil {
-		return 0, err
+	if value, err = next(current); err != nil {
+		return 0, true, err
 	}
-	*held = counter{value: value, expires: expires, dirty: true}
-	return value, nil
+	*entry = counter{value: value, expires: expires, dirty: true}
+	return value, true, nil
 }
 
-// forget marks path absent, and says whether it added the counter to do so
-func (s *shard) forget(path string) (added bool) {
+// forget marks the counter at path absent when the shard holds it, or when
+// add says there is room adds it absent; it says whether the shard held it
+func (s *shard) forget(path []byte, add bool) (held bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	held, ok := s.counters[path]
-	if !ok {
-		held = &counter{}
-		s.counters[path] = held
+	entry, held := s.counters[string(path)]
+	switch {
+	case !held && !add:
+		return false
+	case !held:
+		entry = &counter{}
+		s.counters[string(path)] = entry
 	}
-	*held = counter{absent: true, dirty: true}
-	return !ok
+	*entry = counter{absent: true, dirty: true}
+	return held
 }
 
-func (s *shard) valueAt(path string, now int64) (int64, bool) {
+func (s *shard) valueAt(path []byte, now int64) (int64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	held, ok := s.counters[path]
+	entry, ok := s.counters[string(path)]
 	if !ok {
 		return 0, false
 	}
-	return held.valueAt(now), true
+	return entry.valueAt(now), true
 }
 
 const selectCounterRow = `select value, expires from cells
@@ -361,7 +362,7 @@ func (s *shard) takeChanged(batch []flushed, limit int) []flushed {
 // a Clear has come to it since
 func (m *memory) giveBack(batch []flushed) {
 	for _, taken := range batch {
-		target := m.shardOf(taken.path)
+		target := m.shardOf([]byte(taken.path))
 		target.mu.Lock()
 		if target.counters[taken.path] == taken.entry {
 			taken.entry.dirty = true

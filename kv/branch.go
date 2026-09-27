@@ -72,9 +72,12 @@ func (b *branch) begin(key any, options []Option) (call, error) {
 // fail names the bucket and key a call failed on; a cancellation, a closed
 // store and a KeyError already made pass as they are
 func (b *branch) fail(c call, err error) error {
+	if err == nil {
+		return nil
+	}
 	var named *KeyError
 	switch {
-	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, tinystore.ErrClosed), errors.As(err, &named):
 		return err
 	}

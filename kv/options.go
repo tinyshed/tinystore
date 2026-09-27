@@ -163,6 +163,9 @@ func IfVersion(v Version) Option {
 }
 
 func collect(options []Option) (callOptions, error) {
+	if len(options) == 0 {
+		return callOptions{}, nil
+	}
 	var collected callOptions
 	for _, option := range options {
 		option(&collected)
