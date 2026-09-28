@@ -78,11 +78,20 @@ however large, a scrub, and snapshots that link the files
 ([blobs/README.md](blobs/README.md), [docs/blobs.md](docs/blobs.md),
 [the round](docs/reports/blobs-mechanics-2026-09-27.md)).
 
-Designed, not built: self-metrics, and the server
-([docs/server.md](docs/server.md), [docs/wire.md](docs/wire.md)): one
+The server is being built to [docs/server.md](docs/server.md) and
+[docs/wire.md](docs/wire.md), in `server/`, a module of its own: one
 protocol for a sidecar that Bun and Python start and for a remote server,
 MessagePack in twelve-byte frames over any byte stream, and no transaction
-held across the network.
+held across the network. Built: `server/wire` (frames, the profile, the
+handshake, errors and kv's messages, with the vectors every SDK is tested
+against), a session (credit, cancelling, GOAWAY, silence, workers that keep
+their stacks, the first sender writing), Unix sockets, TCP and TLS with
+tokens, Windows named pipes, and kv through `kv.Raw`, jobs with a remote
+Work loop, and blobs. Half built: sql, whose engine part is in sqldb and whose
+handlers and data-client check are not; [docs/server.md](docs/server.md)
+"Building it" says where each slice stands and how the next goes on.
+Designed, not built: records and metrics over the wire, `tinystore serve`
+with `SERVE`, the SDKs, and self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -112,6 +121,8 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
+| `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
+| `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
 | `cmd/tinystore/`     | the one executable, a module of its own: `migrate` and `schema` for sqldb     |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
 | `examples/`          | programs using the public API, built and tested with the module               |
@@ -138,20 +149,24 @@ other.
 
 ## Modules
 
-Four, and the split is the point.
+Five, and the split is the point.
 
 ```text
 root            what a caller links: the engine and nothing else
 tools/          golangci-lint, govulncheck, task
 bench/          corpora, comparison harnesses, whatever a measurement drags in
+server/         the server: requires the root and nothing else; server/wire only the standard library
 cmd/tinystore/  the one executable, go tool tinystore; the standard library alone today
 ```
 
 `cmd/tinystore` is a module of its own, as a service is: what it will link to
 serve, back up and inspect a store stays out of the library's graph, and its
 `migrate` commands only run the application's own test, so the comparison
-comes from the sqldb the application pinned. `task` tests, lints, formats and
-tidies it beside the root.
+comes from the sqldb the application pinned. `server/` is one for the same
+reason, and `TestTheServerRequiresOnlyTheRoot` holds it to the root; a Go
+client links `server/wire` without SQLite, `TestWireImportsOnlyTheStandardLibrary`.
+Until a release it reaches the root through a `replace`. `task` tests, lints,
+formats and tidies both beside the root.
 
 The root module's dependency list is a promise rather than an accident:
 `klauspost/compress` for zstd and `modernc.org/sqlite` for the file. Anything a
@@ -412,7 +427,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
 | one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
 | an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
-| engines never import each other                     | `TestEnginesDoNotImportEachOther`, over every engine package                    |
+| engines never import each other, nor the server     | `TestEnginesDoNotImportEachOther`, over every engine package                    |
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
 | an application's writes share a commit, fail alone  | `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone` |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
@@ -542,6 +557,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a stale claim cannot finish or delete the next         | `TestAStaleClaimCannotFinishOrDeleteTheNext`                                    |
 | a kv Take whose value no longer decodes keeps it       | `TestAFailedTakeKeepsItsValue`, a codec's panic and inside Tx included          |
 | a kv value comes back as it went in                    | `TestAValueComesBackAsItWentIn`, floats by their bits, a named one's NaN that signals too |
+| a `kv.Raw` is what its row holds, for every type       | `TestARawValueIsWhatItsRowHolds`, an empty string as empty bytes and not nothing |
 | an overflowing counter is refused, not rounded         | `TestAnOverflowingCounterIsRefusedRatherThanRounded`                            |
 | `LoseAtMost` loses no more than its interval           | `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing         |
 | counters of one name keep their numbers one way        | `TestCountersOpenAgainOnlyAsTheyWereOpened`                                     |
@@ -618,6 +634,27 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a snapshot links the files, and removal waits for it   | `TestASnapshotLinksFilesAndCopiesTheDatabase`, `TestCollectionWaitsForASnapshot` |
 | a backup restores every object bit for bit             | `TestABackupRestoresEveryObject`; past 4 GiB when `TINYSTORE_LARGE_BACKUP` is set |
 | the blobs engine links no net/http                     | `TestBlobsImportsNoHTTP`                                                        |
+| a frame past its agreed size is refused unread         | `TestAFrameLargerThanAgreedIsRefusedUnread`, `FuzzFrames` in `server/wire`      |
+| a body the profile does not allow is refused           | `FuzzMessages`, a refused vector for each rule                                  |
+| the vectors are the bytes                              | `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`     |
+| a client past its credit is cut off, the reader never waits | `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection` |
+| every stream ends with one final frame                 | `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up |
+| answers queued during a write leave in the next        | `TestQueuedAnswersShareAWrite` in `server/internal/flow`                        |
+| a stream's number is free when its final frame arrives | `TestAStreamNumberIsFreeWhenItsFinalFrameArrives`                               |
+| a closing server lets the streams running finish       | `TestClosingTheServerLetsTheStreamsRunningFinish`, `TestARequestThatCrossesTheGoAwayIsAnsweredUnavailable` |
+| a remote connection needs its token                    | `TestARemoteConnectionNeedsItsToken`                                            |
+| a pipe's name has one owner                            | `TestAPipesNameHasOneOwner`, on Windows                                         |
+| a kv batch is one transaction                          | `TestAKVBatchRollsBackWhenOneOfItsCallsFails`                                   |
+| Go and a wire client read each other's kv buckets      | `TestAWireClientAndAGoProgramReadEachOthersBuckets`                             |
+| a remote worker's outcomes settle its jobs             | `TestARemoteWorkerSettlesByItsOutcomes`, a retry counted                        |
+| a lost connection aborts uploads, fails attempts in hand | `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand`, `TestALostWorkerFailsTheAttemptsInItsHands` |
+| a jobs enqueue of many is one transaction              | `TestAJobsEnqueueIsOneTransaction`                                              |
+| a blobs put that does not commit leaves nothing        | `TestAnUploadThatDoesNotCommitLeavesNothing`                                    |
+| a whole blobs get of a changed object ends corrupt     | `TestAWholeReadOfAChangedObjectEndsCorrupt`                                     |
+| `ApplyNone` and `Migrated` apply nothing               | `TestApplyNoneAndMigratedApplyNothing`, `TestVerifyChecksTheHistoryAndRunsNothing` |
+| sqldb reads rows without a struct                      | `TestQueryReadsRowsAsSQLiteReturnsThem`                                         |
+| the server module requires only the root               | `TestTheServerRequiresOnlyTheRoot`                                              |
+| `server/wire` imports only the standard library        | `TestWireImportsOnlyTheStandardLibrary`                                         |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

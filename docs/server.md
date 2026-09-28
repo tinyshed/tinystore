@@ -1,9 +1,11 @@
 # The server: one runtime for another process
 
-Designed, not built. This page is the contract the server and its SDKs are
-built to: what a connection may do, how a sidecar starts and is found, what a
-lost connection means, and what bounds the server's memory. The bytes are
-[wire.md](wire.md). Its figures are
+Being built, in `server/`: the bytes, a session with its transports, and kv
+are; the other engines, `tinystore serve` with `SERVE` and the SDKs are not,
+and [Building it](#building-it) says which slice is where. This page is the
+contract the server and its SDKs are built to: what a connection may do, how
+a sidecar starts and is found, what a lost connection means, and what bounds
+the server's memory. The bytes are [wire.md](wire.md). Its figures are
 [the round](reports/rpc-mechanics-2026-09-28.md)'s: `spike/rpc_*`, a sidecar
 holding one kv bucket reached from Go, Bun and Python, on Windows and in a
 Linux container; the probe before it, outside the repository, is superseded
@@ -315,7 +317,7 @@ a client     ≤ its streams in flight × the agreed body + the credit it grante
 | a frame's body | 1 MiB and 64 KiB: the largest kv or jobs value and the message around it | `WELCOME`, lowered by `HELLO` |
 | streams in flight on a connection | 256 | `WELCOME` |
 | credit on a connection, client to server | 8 MiB | `WELCOME` |
-| credit on a stream, each way | 1 MiB: a round trip's worth where a round trip is long, and more than blobs moves | `WELCOME`, `HELLO` |
+| credit on a stream, each way | 2 MiB: at least the largest body, which must fit it, and more than the 1 MiB a round trip needs where it is long | `WELCOME`, `HELLO` |
 | calls running at once | as many as the streams in flight, on workers that keep their stacks | the server |
 | the collector's target | above Go's default, since a small live heap and a fast allocation rate collect hundreds of times a second | the server |
 | answers queued to write; a handler past it waits | 4 MiB | the server |
@@ -331,14 +333,14 @@ breaks the protocol and loses its connection.
 The server calls each engine's public API. What it needs and the API lacks is
 added as ordinary API:
 
-- **kv: a value as its row holds it.** `OpenBucket[kv.Raw]` keeps nothing, an
-  int64 or bytes, as the row does, since the server knows no SDK's types. An
-  SDK maps its language's values onto those three as `codecFor` maps Go's:
-  bytes and strings to bytes, integers and bools to an integer, floats to
-  their eight bytes big-endian, anything else to JSON, so a Go program and a
-  Python one read each other's buckets. `OpenBucket[any]` stays JSON. Its
-  shape, a struct saying which of the three it holds, is settled with the kv
-  slice.
+- **kv: a value as its row holds it.** Built: `OpenBucket[kv.Raw]` keeps
+  nothing, an int64 or bytes, as the row does, since the server knows no SDK's
+  types; `kv.Raw{Kind, Int, Bytes}` says which, and an empty string is empty
+  bytes, not nothing. An SDK maps its language's values onto those three as
+  `codecFor` maps Go's: bytes and strings to bytes, integers and bools to an
+  integer, floats to their eight bytes big-endian, anything else to JSON, so a
+  Go program and a Python one read each other's buckets. `OpenBucket[any]`
+  stays JSON.
 - **sqldb: rows without a struct.** Each column as SQLite returned it, NULL,
   an int64, a float64, text or bytes, with the columns' names, for
   `sql.query`.
@@ -372,30 +374,29 @@ a Windows pipe; and the SDKs' own codecs.
 
 ## Gates
 
-Each promise above is a test once its code exists:
+Each promise above is a test once its code exists; those marked built pass:
 
 | promise | gate |
 |---|---|
-| a frame past its agreed size is refused before its body is read | `FuzzFrames`, `TestAFrameLargerThanAgreedIsRefusedUnread` |
-| a body the profile does not allow is refused | `FuzzMessages`, a vector for each rule |
-| the vectors are the bytes | `TestVectors`, the examples of wire.md among them |
-| a client past its credit loses its connection, and the reader never waits | `TestAClientPastItsCreditIsCutOff` |
-| every stream ends with one final frame, a cancelled one too | `TestEveryStreamEndsOnce` |
-| answers queued during a write leave in the next | `TestQueuedAnswersShareAWrite` |
+| a frame past its agreed size is refused before its body is read | built: `FuzzFrames`, `TestAFrameLargerThanAgreedIsRefusedUnread` |
+| a body the profile does not allow is refused | built: `FuzzMessages`, a refused vector for each rule |
+| the vectors are the bytes | built: `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite` |
+| a client past its credit loses its connection, and the reader never waits | built: `TestAClientPastItsCreditIsCutOff` |
+| every stream ends with one final frame, a cancelled one too | built: `TestEveryStreamEndsOnce` |
+| answers queued during a write leave in the next | built: `TestQueuedAnswersShareAWrite` |
 | a data client cannot change a schema | `TestADataClientCannotChangeTheSchema`, over the adversarial round's corpus; `FuzzDataSQL` against both lines |
 | a lost connection aborts uploads and fails the attempts in hand | `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand` |
 | `SERVE` is written whole, only under `LOCK`, for its owner alone | `TestServeIsWrittenWholeUnderTheLock` |
 | a stale `SERVE` starts one sidecar | `TestAStaleServeStartsOneSidecar` |
-| the server module requires only the root | `TestTheServerRequiresOnlyTheRoot` |
-| `server/wire` imports only the standard library | `TestWireImportsOnlyTheStandardLibrary` |
-| engines import neither `server` nor `server/wire` | `TestEnginesDoNotImportEachOther`, extended |
+| the server module requires only the root | built: `TestTheServerRequiresOnlyTheRoot` |
+| `server/wire` imports only the standard library | built: `TestWireImportsOnlyTheStandardLibrary` |
+| engines import neither `server` nor `server/wire` | built: `TestEnginesDoNotImportEachOther`, extended |
 
 ## Not in the first version
 
 - Transactions held open across the network.
 - An HTTP and JSON gateway for browsers and curl: a module of its own over the
   same handlers.
-- Windows named pipes, until the round has measured them.
 - A blob put from a file path when the sidecar shares the disk.
 - Tenants, replication, QUIC, compression.
 - The server's own metrics, which wait for self-metrics.
@@ -460,6 +461,112 @@ In slices, each engine's messages fixed in [wire.md](wire.md) before its
 code: `server/wire`; a session with its transports; kv, with a Go client the
 tests use; jobs; blobs; sql, with the adversarial round of its SQL check;
 records; metrics; `tinystore serve` with `SERVE`; the Bun SDK; the Python SDK.
+Where the slices stand, 28 September 2026:
+
+| slice | state |
+|---|---|
+| `server/wire` | built: frames, profile, handshake, errors; vectors in `server/wire/testdata/vectors.json` |
+| a session with its transports | built: `session.go`, `stream.go`, `workers.go`, `internal/flow`, Unix, TCP, TLS, `internal/pipe` |
+| kv | built: `kv.go`, `kv.Raw` in the engine; the Go client is `server/internal/client`, a test's and a measurement's |
+| jobs | built: `jobs.go`, `jobs_work.go`; the messages on wire.md |
+| blobs | built: `blobs.go`; the messages on wire.md |
+| sql | half: the engine's part is built, `sqldb.Query`, `ExecQuery`, `ApplyNone`, `Migrated`, `ErrPending`; `server/wire/sql.go` holds the messages, drafted and untested, not yet on wire.md; no handler, no SQL check |
+| records, metrics | not begun |
+| `tinystore serve` with `SERVE`, the Bun SDK, the Python SDK | not begun |
+| the measurement against the prototype | not begun: it wants `tinystore serve` |
+
+Every slice built passes `go test`, `-race` in the `golang:1.27` container
+three times shuffled, and golangci-lint for Windows and Linux; nothing of it
+is released, and the gates it brought are in AGENTS.md.
+
+**The sql slice goes on from here**, as designed while it was begun:
+
+- **Handles.** `sql.open` carries the database's name and its migration files
+  as `{name, text}` pairs; the server makes an `fs.FS` of them in memory, the
+  `.sql` files at its root. The first open of a name in the server opens it:
+  an admin connection with `sqldb.Open`, which applies them, a data one with
+  `sqldb.Open(…, sqldb.ApplyNone())`, which applies none and makes no file,
+  a pending migration being `permission`. Every later open of that name,
+  either's, and an open of a database the embedding program passed in
+  `Options`, checks with `db.Migrated`: a pending migration is `permission`
+  for data and `in_use` for admin, since a database applies its migrations
+  when it opens. The first open without migrations is `invalid`; a later one
+  may carry none.
+- **Calls.** `sql.exec` runs `db.Exec` and answers `SQLDone`; `sql.query` runs
+  `sqldb.Query`, or `ExecQuery` when `write` is set, and downloads
+  `SQLColumns`, a `SQLRow` a `DATA`, and `{}`; `sql.batch` runs its
+  statements in `db.Tx`, `Exec` each unless `rows` asks `ExecQuery`, or in
+  `db.View` with `sqldb.Query` when `read` is set, and answers `SQLResults`,
+  which must fit the agreed body. Arguments are positional or named,
+  `sql.Named`, as the messages carry them.
+- **The data client's check, two independent lines, before any statement a
+  data connection sends runs.** The first is a tokenizer of SQLite's own
+  lexemes: whitespace is only space, tab, newline, form feed and carriage
+  return, since SQLite takes every byte past 0x7f as part of a name;
+  comments are `--` to a line's end and `/* */`, which do not nest and run to
+  the end when unclosed; strings are `'…'` with `''` inside; names are
+  `"…"`, `[…]` and `` `…` ``; a blob is `x'…'`. The first word, in any case,
+  must be `SELECT`, `VALUES`, `WITH`, `INSERT`, `REPLACE`, `UPDATE` or
+  `DELETE`, and nothing but whitespace and comments may follow the first `;`
+  outside them; anything unclosed is refused. The second compiles
+  `explain <statement>` through `sqldb.Query` on a reader and refuses a
+  program holding `CreateBtree`, `Destroy`, `DropTable`, `DropIndex`,
+  `DropTrigger`, `ParseSchema`, `SetCookie`, `VCreate`, `VDestroy`, `Vacuum`,
+  `IncrVacuum`, `SqlExec`, `JournalMode`, `LoadAnalysis` or `Expire`; a
+  `Function` or `PureFunc` whose p4 names `sqlite_attach` or `sqlite_detach`;
+  and an `OpenWrite` whose p2 is 1, `sqlite_schema`, or the root page of
+  `_tinystore_migrations`, read once a database from `sqlite_schema`. Both
+  refuse with `permission`. A data client's statement runs under a deadline
+  of its own, 30 seconds proposed, since a recursive query can hold a reader
+  for good.
+- **The adversarial round is the gate**, as [the section on
+  it](#what-a-connection-may-do) asks: a table of attempts in the test,
+  comments, nested and unclosed comments, CTEs, quoted and bracketed names,
+  Unicode whitespace, semicolons in literals, a trigger's side effects,
+  virtual tables, `pragma_` functions, `EXPLAIN`, `ATTACH` inside `WITH`,
+  writes to `_tinystore_migrations` and `sqlite_schema`; and `FuzzDataSQL`,
+  which runs whatever the check lets through as a data client against a
+  scratch database and fails when `sqlite_schema`, the migration history or
+  the attached databases differ afterwards. Name them
+  `TestADataClientCannotChangeTheSchema` and `FuzzDataSQL`, as the gates
+  above do.
+- **After sql**, records (`records.Append` of many, `Drop`, `Read` and
+  `Follow` as downloads, `Lines` as an upload of another program's output)
+  and metrics (`Ingest`, `Read` and `Aggregate` as downloads, a series a
+  message, samples as bin columns), each fixed on wire.md first; then
+  `tinystore serve` in `cmd/tinystore`, which requires `server` through a
+  `replace`, sets the collector's target, GOGC 400 unless the environment
+  says, and writes `SERVE` under `LOCK` in `<dir>/server/`; then the
+  measurement of the round's cases against the built server; then the SDKs,
+  tested against the vectors file.
+- **Checks to run**: `go test` in the root and `go -C server test`, lint with
+  `bin/golangci-lint` in both, and the race suite in the container, as the
+  earlier slices ran it:
+
+  ```sh
+  docker run --rm -v <repo>:/src -v tinystore-race-cache:/go -e GOWORK=off -e CGO_ENABLED=1 \
+    -w /src/server golang:1.27 go test -race -count=3 -shuffle=on ./...
+  ```
+
+What building them settled, beside the proposals above:
+
+- **A body fits the credit it is sent under.** A stream's credit is 2 MiB each
+  way, at least the largest body, 1 MiB and 64 KiB, and a client granting less
+  lowers the largest body the connection agrees.
+- **A handler's frame that cannot be written ends the connection**, whose
+  streams learn it through their context; a protocol error's `GOAWAY` is the
+  connection's last frame, written before the server lingers a second for the
+  client to read it, since closing TCP with bytes unread resets it.
+- **Workers start as calls arrive** and live as long as their connection, as
+  many as its calls running at once and never more than its streams in flight,
+  so that no call waits for another to finish; a connection that never had
+  more than one call running keeps one.
+- **A malformed request fails its stream**, `invalid`, and the connection goes
+  on; only a frame that breaks the protocol ends it.
+- **A Windows named pipe's instance waits for the next client** before the one
+  connected is handed over, its OVERLAPPED on the heap, since a goroutine's
+  stack may move while the kernel holds it; the client dials with
+  `SECURITY_IDENTIFICATION`, so a process that took the name cannot act as it.
 
 - **Read first**: AGENTS.md, this page, [wire.md](wire.md) and
   [the round](reports/rpc-mechanics-2026-09-28.md). The prototype
