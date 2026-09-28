@@ -75,3 +75,20 @@ another database a transaction each and grouped, and Claim and Ack one at a
 time. The measurements need `TINYSTORE_SPIKE=1`; `TINYSTORE_JOBS_DIR`,
 `TINYSTORE_JOBS_SECONDS` and `TINYSTORE_JOBS_COUNT` tune them. See
 `docs/reports/jobs-mechanics-2026-09-27.md`.
+
+`spike/rpc_*` is the round `docs/server.md` asks for before `server/wire` is
+built: a sidecar holding one kv bucket, reached through frames laid out as
+`docs/wire.md` lays them out, from Go and from the Bun and Python clients in
+`testdata/rpc/`; each transport (Unix sockets, TCP, stdio and, on Windows,
+named pipes) at one, 64 and 256 calls in flight; a connection's frames written
+by each sender, by a goroutine of their own or by the first sender to find
+nobody writing; stream credit from one chunk to sixty-four; and what a call
+allocates in the sidecar with a goroutine a call or long-lived workers and
+its GOGC at the default or 400, with a profile of it and of its client; and
+one call in flight alone, for comparing an idle machine with a busy one. The
+test binary is the sidecar too: `TestMain` runs it when
+`TINYSTORE_RPC_SIDECAR` holds its configuration. The measurements need
+`TINYSTORE_SPIKE=1`; `TINYSTORE_RPC_DIR` and `TINYSTORE_RPC_SECONDS` tune
+them, `TINYSTORE_RPC_PROFILES` keeps the profiles, and the Bun and Python
+clients run when `bun` and `python3` or `python` are on the path. See
+`docs/reports/rpc-mechanics-2026-09-28.md`.
