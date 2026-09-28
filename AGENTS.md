@@ -672,6 +672,11 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a metrics ingest over the wire is all or none          | `TestAMetricsIngestIsAllOrNone`, the refused series named by its labels         |
 | an aggregate over the wire counts resets in its bucket | `TestAggregateOverTheWire`                                                      |
 | a series longer than a body comes in pieces            | `TestALongSeriesComesInPieces`                                                  |
+| `SERVE` is written whole, under the lock, for its owner | `TestServeIsWrittenWholeUnderTheLock`, `TestADirectoryIsItsOwnersAlone`        |
+| a `SERVE` left behind goes before its server listens   | `TestAServeLeftBehindGoesBeforeTheServerListens`                                |
+| a client reading `SERVE` delays a change, fails none   | `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
+| a server goes idle only after its last connection     | `TestAServerGoesIdleAfterItsLastConnection`                                     |
+| a long store's socket moves to the user's own directory | `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows                  |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

@@ -74,11 +74,13 @@ type Server struct {
 	sqlOpening sync.Mutex // a database opens once, its migrations applied, while no other engine waits
 	databases  map[string]*sqldb.DB
 
-	mu        sync.Mutex
-	sessions  map[*session]struct{}
-	listeners map[Listener]struct{}
-	closing   bool
-	running   sync.WaitGroup
+	mu         sync.Mutex
+	sessions   map[*session]struct{}
+	listeners  map[Listener]struct{}
+	closing    bool
+	running    sync.WaitGroup
+	quietSince time.Time     // when its last connection ended, or it started without one
+	comings    chan struct{} // a connection came or went, for WaitIdle
 }
 
 // limits bound what a connection holds, docs/server.md's proposals; tests
@@ -121,6 +123,7 @@ func New(store *tinystore.Store, options Options) (*Server, error) {
 		log: options.Logger, kv: options.KV, jobs: options.Jobs, blobs: options.Blobs, records: options.Records,
 		metrics:   options.Metrics,
 		databases: maps.Clone(options.SQL), sessions: map[*session]struct{}{}, listeners: map[Listener]struct{}{},
+		quietSince: time.Now(), comings: make(chan struct{}, 1),
 	}
 	if s.databases == nil {
 		s.databases = map[string]*sqldb.DB{}
@@ -225,6 +228,7 @@ func (s *Server) join(ctx context.Context, conn io.ReadWriteCloser, remote bool)
 	session := newSession(ctx, s, conn, remote)
 	s.sessions[session] = struct{}{}
 	s.running.Add(1)
+	s.cameOrWent()
 	return session, nil
 }
 
@@ -234,7 +238,44 @@ func (s *Server) leave(session *session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, session)
+	if len(s.sessions) == 0 {
+		s.quietSince = time.Now()
+	}
 	s.running.Done()
+	s.cameOrWent()
+}
+
+func (s *Server) cameOrWent() {
+	select {
+	case s.comings <- struct{}{}:
+	default:
+	}
+}
+
+// WaitIdle returns once no connection has been open for idle, as a shared
+// sidecar leaves when its clients have, or with ctx's error when it ends
+// first.
+func (s *Server) WaitIdle(ctx context.Context, idle time.Duration) error {
+	for {
+		s.mu.Lock()
+		open, since := len(s.sessions), s.quietSince
+		s.mu.Unlock()
+		wait := idle
+		if open == 0 {
+			if wait = idle - time.Since(since); wait <= 0 {
+				return nil
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-s.comings:
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
 }
 
 // refuse answers a connection the server does not take: it reads the HELLO,

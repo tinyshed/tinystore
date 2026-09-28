@@ -167,12 +167,18 @@ truth.
  "endpoints": ["unix:///srv/app/data/server/tinystore.sock"]}
 ```
 
-- **Written whole, under the lock, for its owner.** The server writes
-  `SERVE` only while it holds `LOCK` and only once it listens, as a temporary
-  file renamed over the last, and removes it on a clean exit. `server/` is
+- **Written whole, under the lock, for its owner.** The server claims
+  `server/` from its store, which only the store holding `LOCK` can, removes a
+  `SERVE` left behind before it listens, since the endpoint that one names may
+  be another process's by now, and writes its own once it listens, as a
+  temporary file renamed into place; a clean exit removes it. `server/` is
   mode 0700; on Windows, which lets anyone traverse a directory to a file whose
-  path they know, it carries an inherited DACL naming its owner alone, so that
-  every file made in it is the owner's alone.
+  path they know, it carries a protected DACL naming its owner alone, which
+  every file made in it inherits.
+- **A reader does not fail a change.** On Windows a client reading `SERVE`,
+  which Go and Python open without sharing its deletion, refuses a rename or a
+  remove of it while it holds the file, and so may a scanner; each is tried
+  again, eight times from 1 to 64 ms apart.
 - **An instance is sixteen random bytes a start.** `WELCOME` repeats it, so a
   client that reached another process through an endpoint left behind knows.
 - **Find or start.** A client reads `SERVE`, connects and checks the
@@ -184,21 +190,28 @@ truth.
   most.
 - **No pid is trusted.** A pid is reused; a lock is released by the operating
   system when its process dies.
+- **Nor is an endpoint a dead server left.** Its name is anyone's to take once
+  it is gone, a Windows pipe's above all, whose namespace every user shares.
+  So a client checks that the process at the other end runs as its own user,
+  `SO_PEERCRED` or `getpeereid` on a socket and `GetNamedPipeServerProcessId`
+  on a pipe, before its `HELLO` names the instance.
 - **A socket's path fits.** `<dir>/server/tinystore.sock` when that absolute
   path fits `sockaddr_un` (104 bytes on macOS, 108 on Linux and Windows); past
-  it, a directory of the owner's own under the user's runtime directory, named
-  after the store's absolute path.
-- **Windows serves every client through a named pipe**, `pipe:tinystore-`
-  and a hash of the store's absolute path, the fastest there for Go, Bun and
-  Python alike. It is created with a DACL naming its owner alone, refusing
+  it, a directory of the owner's own in `$XDG_RUNTIME_DIR`, or in the
+  temporary directory without one, `tinystore-` and the first eight bytes of
+  the SHA-256 of the store's absolute path in hex: eight, so that a socket
+  under macOS's temporary directory still fits.
+- **Windows serves every client through a named pipe**, `pipe:tinystore-` and
+  the same hash of the store's absolute path, the fastest there for Go, Bun
+  and Python alike. It is created with a DACL naming its owner alone, refusing
   remote clients, and as the first instance of its name, so that no other
   process holds the name before it. Go opens it as an overlapped handle that
   `os.NewFile` gives the runtime's completion port, since a synchronous one
   would hold every write behind a pending read; Bun through `node:net`;
   Python's asyncio through its Proactor loop's `create_pipe_connection`. A
-  Python client without asyncio needs overlapped I/O too, through `_winapi`
-  as `multiprocessing` does, and is built and measured with the Python SDK.
-  No local endpoint takes a token: its permission is the file system's.
+  Python client without asyncio needs overlapped I/O too, through `_winapi` as
+  `multiprocessing` does, and is built and measured with the Python SDK. No
+  local endpoint takes a token: its permission is the file system's.
 
 ## What a connection may do
 
@@ -438,8 +451,12 @@ Each promise above is a test once its code exists; those marked built pass:
 | the check ends a statement where SQLite does | built: `TestSQLiteEndsAStatementWhereTheCheckDoes`, `TestTheCheckReadsSQLitesTokens` |
 | a database opens once, and every later open checks its migrations | built: `TestSQLOpenAppliesOnceAndChecksAfter`, `TestADatabaseTheProgramOpenedIsChecked` |
 | an answer past the agreed body fails its stream, not the connection | built: `TestAnAnswerPastTheBodyIsALimit` |
-| a lost connection aborts uploads and fails the attempts in hand | `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand` |
-| `SERVE` is written whole, only under `LOCK`, for its owner alone | `TestServeIsWrittenWholeUnderTheLock` |
+| a lost connection aborts uploads and fails the attempts in hand | built: `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand` |
+| `SERVE` is written whole, only under `LOCK`, for its owner alone | built: `TestServeIsWrittenWholeUnderTheLock`, `TestADirectoryIsItsOwnersAlone` |
+| a `SERVE` left behind goes before its server listens | built: `TestAServeLeftBehindGoesBeforeTheServerListens` |
+| a client reading `SERVE` delays a change to it and does not fail it | built: `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
+| a server goes idle only after its last connection | built: `TestAServerGoesIdleAfterItsLastConnection` |
+| a socket's path fits, in the user's own directory when the store's is long | built: `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows |
 | a stale `SERVE` starts one sidecar | `TestAStaleServeStartsOneSidecar` |
 | the server module requires only the root | built: `TestTheServerRequiresOnlyTheRoot` |
 | `server/wire` imports only the standard library | built: `TestWireImportsOnlyTheStandardLibrary` |

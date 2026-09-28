@@ -29,6 +29,7 @@ data/
 ├── jobs.db         jobs
 ├── kv.db           kv
 ├── blobs/          blobs: blobs.db, uploads/, objects/
+├── server/         SERVE and the socket, while the directory's sidecar runs
 └── sql/
     └── app.db      databases the application names
 ```
