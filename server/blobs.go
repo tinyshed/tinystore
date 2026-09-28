@@ -233,10 +233,12 @@ func readRange(reader *blobs.Reader, ask wire.BlobsCall) (int64, error) {
 	return length, nil
 }
 
-// sendBytes sends length bytes of r as DATA, the last with END
+// sendBytes sends length bytes of r as DATA, the last with END, each within
+// the body the client agreed to take
 func sendBytes(c *call, r io.Reader, length int64) error {
 	buffer := takeBody(transferChunk)
 	defer giveBody(buffer)
+	buffer = buffer[:min(transferChunk, int(c.session.agreed.maxBody))]
 	for {
 		n := min(int64(len(buffer)), length)
 		if _, err := io.ReadFull(r, buffer[:n]); err != nil {

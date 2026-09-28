@@ -9,6 +9,7 @@ import (
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/server/wire"
+	"github.com/tinyshed/tinystore/sqldb"
 )
 
 // failure is an error as the wire carries it: the code its sentinel means,
@@ -27,6 +28,7 @@ var sentinels = []struct {
 	code wire.Code
 }{
 	{kv.ErrOutcomeUnknown, wire.CodeOutcomeUnknown}, // every engine's, the same error
+	{errDataConnection, wire.CodePermission},
 	{tinystore.ErrInvalid, wire.CodeInvalid},
 	{tinystore.ErrLimit, wire.CodeLimit},
 	{tinystore.ErrClosed, wire.CodeClosed},
@@ -75,5 +77,22 @@ func whatOf(err error) map[string]string {
 	if errors.As(err, &object) {
 		return map[string]string{"bucket": object.Bucket, "key": object.Path}
 	}
+	var constraint *sqldb.ConstraintError
+	if errors.As(err, &constraint) {
+		return constraintOf(constraint)
+	}
 	return nil
+}
+
+// constraintOf names the table and the constraint a write broke, as far as
+// SQLite's message names them
+func constraintOf(broken *sqldb.ConstraintError) map[string]string {
+	what := map[string]string{}
+	if broken.Table != "" {
+		what["table"] = broken.Table
+	}
+	if broken.Constraint != "" {
+		what["constraint"] = broken.Constraint
+	}
+	return what
 }

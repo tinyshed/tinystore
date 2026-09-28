@@ -37,12 +37,21 @@ type testServer struct {
 // local and one as remote, with the test methods beside the engines'
 func startTestServer(t *testing.T, options Options, change ...func(*limits)) *testServer {
 	t.Helper()
-	ctx := context.Background()
 	root := t.TempDir()
-	store, err := tinystore.Open(ctx, root, tinystore.Options{Manual: true})
+	store, err := tinystore.Open(context.Background(), root, tinystore.Options{Manual: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return serveTestStore(t, root, store, options, change...)
+}
+
+// serveTestStore serves a store the test opened, which the server's cleanup
+// closes
+func serveTestStore(t *testing.T, root string, store *tinystore.Store, options Options,
+	change ...func(*limits),
+) *testServer {
+	t.Helper()
+	ctx := context.Background()
 	server, err := New(store, options)
 	if err != nil {
 		t.Fatal(err)

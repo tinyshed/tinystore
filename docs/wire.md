@@ -3,9 +3,9 @@
 The bytes a TinyStore server and its clients exchange over any byte stream, a
 child's stdin and stdout, a Unix socket, a Windows named pipe, TCP or TLS.
 What they mean, who may send them and what bounds them is
-[server.md](server.md). Frames, the profile, the handshake, the errors and kv
-are built in `server/wire`; the other engines' methods are fixed here with
-their slices. Every example on this page is a vector of
+[server.md](server.md). Frames, the profile, the handshake, the errors, kv,
+jobs, blobs and sql are built in `server/wire`; records' and metrics' methods
+are fixed here with their slices. Every example on this page is a vector of
 [server/wire/testdata/vectors.json](../server/wire/testdata/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
@@ -540,3 +540,78 @@ shorter or longer than its size, and a connection lost halfway. A get read
 whole is checked against the object's hash, and one whose bytes changed ends
 with `DATA`·END·ERROR and `corrupt` instead of its last bytes; a range is not
 checked.
+
+### sql
+
+`sql.open` answers a handle on a database by its name, and every other call
+carries it. The first open of a name in the server opens it: an admin
+connection's applies the migrations it carries, and a data connection's finds
+them applied, or is refused with `permission` and makes no file. A database
+opens once a store, so every later open, and an open of a database the
+embedding program passed the server, checks the migrations it carries against
+those the file applied: one the file has not applied is `permission` for a
+data connection and `in_use` for an admin one, since a database applies its
+migrations as it opens, and one changed after it was applied is `invalid`. A
+first open without migrations is `invalid`; a later one may carry none.
+
+| method | | request | answer |
+|---|---|---|---|
+| `0x0401` | open | a database | a handle |
+| `0x0402` | exec | a statement | done: the rows it changed and the rowid of the last it inserted |
+| `0x0403` | query | a statement | a download: the columns, a row a `DATA`, then `{}` |
+| `0x0404` | batch | statements one transaction runs, all or none, or with read, reads from one snapshot | results; a statement that fails fails them all, and `what` names it as `call` |
+
+A database:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | name | str | `[a-z0-9][a-z0-9_-]{0,63}`, its file `sql/<name>.db` |
+| 2 | migrations | array of files | each `{1: name, 2: text}`: a `.sql` file's name, without a directory, and its text |
+
+A statement:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | handle | uint | absent in a batch, whose handle is its own |
+| 2 | sql | str | |
+| 3 | args | array of values | positional |
+| 4 | named | a map of names | each name without the `:`, `@` or `$` the statement spells it with |
+| 5 | write | bool | a query's: run on the writer, for a returning clause |
+| 6 | rows | bool | a batch statement's: answer the rows it returns rather than what it changed |
+
+An argument is nil, an integer, a float, str, bin, or a bool, which SQLite
+keeps as 1 or 0; a NaN is `invalid`, since SQLite would keep NULL. A value
+that comes back is one of SQLite's five, nil, an integer, a float, str or bin,
+bin also carrying TEXT that is not UTF-8. The driver reads TEXT in a column
+declared `DATE`, `DATETIME` or `TIMESTAMP` as a time, so it travels as SQLite
+spells a time, `2006-01-02 15:04:05.999999999-07:00`; `cast(x as text)` reads
+the text as the row keeps it.
+
+Done is `{1: changes, 2: last id}`, the columns `{1: [name…]}` and a row
+`{1: [value…]}`. Statements are `{1: handle, 2: [statement…], 3: read}` and
+their results `{1: [result…]}`, a result being done, or `{3: columns, 4:
+[[value…]…]}` for a statement that returned rows. A message past the agreed
+body is `limit`: a row a query downloads, or a batch's results, which travel in
+one message. A query holds its rows in the server's memory, 64 MiB of them at
+most, before the first leaves.
+
+A data connection's statement, each of a batch's included, runs only once the
+check [server.md](server.md#what-a-connection-may-do) describes lets it, and
+one it refuses is `permission`; it runs 30 seconds at most, past which it is
+`limit`. An admin connection's runs as it is.
+
+`sql.exec` of an insert on handle 1, and its answer:
+
+```text
+31 00 00 00  03  01  02 04  03 00 00 00                                   a body of 49 bytes, REQUEST, END, 0x0402, stream 3
+83                                                                        a map of three
+   01 01                                                                  handle: 1
+   02 d9 24 69 6e 73 65 72 74 20 69 6e 74 6f 20 6e 6f 74 65 73 20 28 74   sql: "insert into notes (title) values (?)"
+      69 74 6c 65 29 20 76 61 6c 75 65 73 20 28 3f 29
+   03 91 a4 6d 69 6c 6b                                                   args: ["milk"]
+
+05 00 00 00  04  01  00 00  03 00 00 00                                   a body of 5 bytes, RESPONSE, END, stream 3
+82                                                                        a map of two
+   01 01                                                                  changes: 1
+   02 07                                                                  last id: 7
+```

@@ -80,7 +80,13 @@
      "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"array": [{"str": "7"}]}], [{"uint": "3"}, {"str": "token"}]]}},
     {"name": "kv.get's entry", "hex": "1900000004010000010000008401c302c40568656c6c6f03c4013104cf000001a0c4506c00",
      "header": {"length": 25, "kind": 4, "flags": 1, "method": 0, "stream": 1},
-     "body": {"map": [[{"uint": "1"}, true], [{"uint": "2"}, {"bin": "68656c6c6f"}], [{"uint": "3"}, {"bin": "31"}], [{"uint": "4"}, {"uint": "1790000000000"}]]}}
+     "body": {"map": [[{"uint": "1"}, true], [{"uint": "2"}, {"bin": "68656c6c6f"}], [{"uint": "3"}, {"bin": "31"}], [{"uint": "4"}, {"uint": "1790000000000"}]]}},
+    {"name": "sql.exec of an insert with one argument, on handle 1", "hex": "31000000030102040300000083010102d924696e7365727420696e746f206e6f74657320287469746c65292076616c75657320283f290391a46d696c6b",
+     "header": {"length": 49, "kind": 3, "flags": 1, "method": 1026, "stream": 3},
+     "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"str": "insert into notes (title) values (?)"}], [{"uint": "3"}, {"array": [{"str": "milk"}]}]]}},
+    {"name": "sql.exec's answer", "hex": "0500000004010000030000008201010207",
+     "header": {"length": 5, "kind": 4, "flags": 1, "method": 0, "stream": 3},
+     "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"uint": "7"}]]}}
   ],
   "refused frames": [
     {"name": "a kind nobody defined", "hex": "000000000b00000000000000"},

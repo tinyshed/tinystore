@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/server/internal/flow"
 	"github.com/tinyshed/tinystore/server/wire"
 )
@@ -167,12 +168,19 @@ type message interface {
 
 // respond ends a call with its answer.
 func respond[M message](c *call, m M) error {
-	return c.final(m.Append(c.header(wire.KindResponse, wire.FlagEnd)))
+	frame := m.Append(c.header(wire.KindResponse, wire.FlagEnd))
+	if err := c.fits(frame); err != nil {
+		return err
+	}
+	return c.final(frame)
 }
 
 // begin answers a download, or a stream both ways, whose items follow as DATA.
 func begin[M message](c *call, m M) error {
 	frame := m.Append(c.header(wire.KindResponse, 0))
+	if err := c.fits(frame); err != nil {
+		return err
+	}
 	wire.SetLength(frame)
 	c.began = true
 	c.openSends()
@@ -181,7 +189,11 @@ func begin[M message](c *call, m M) error {
 
 // item sends one item of a download as DATA, within the client's credit.
 func item[M message](c *call, m M) error {
-	return c.data(m.Append(c.header(wire.KindData, 0)))
+	frame := m.Append(c.header(wire.KindData, 0))
+	if err := c.fits(frame); err != nil {
+		return err
+	}
+	return c.data(frame)
 }
 
 // chunk sends bytes of a download as DATA within the client's credit; last
@@ -201,10 +213,24 @@ func (c *call) chunk(p []byte, last bool) error {
 // begins.
 func trailer[M message](c *call, m M) error {
 	frame := m.Append(c.header(wire.KindData, wire.FlagEnd))
+	if err := c.fits(frame); err != nil {
+		return err
+	}
 	if err := c.take(frame); err != nil {
 		return err
 	}
 	return c.final(frame)
+}
+
+// fits refuses a message past the body the client agreed to take, which it
+// would read as a broken protocol: its stream fails with limit instead
+func (c *call) fits(frame []byte) error {
+	body, most := len(frame)-wire.HeaderSize, int(c.session.agreed.maxBody)
+	if body <= most {
+		return nil
+	}
+	c.frame = frame[:0]
+	return fmt.Errorf("%w: an answer of %d bytes, past the %d a body holds", tinystore.ErrLimit, body, most)
 }
 
 func (c *call) header(kind wire.Kind, flags wire.Flags) []byte {

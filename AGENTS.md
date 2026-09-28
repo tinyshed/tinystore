@@ -87,9 +87,10 @@ handshake, errors and kv's messages, with the vectors every SDK is tested
 against), a session (credit, cancelling, GOAWAY, silence, workers that keep
 their stacks, the first sender writing), Unix sockets, TCP and TLS with
 tokens, Windows named pipes, and kv through `kv.Raw`, jobs with a remote
-Work loop, and blobs. Half built: sql, whose engine part is in sqldb and whose
-handlers and data-client check are not; [docs/server.md](docs/server.md)
-"Building it" says where each slice stands and how the next goes on.
+Work loop, blobs, and sql, whose data connections pass a check of their own
+in two lines, SQLite's tokens and the program it compiles;
+[docs/server.md](docs/server.md) "Building it" says where each slice stands
+and how the next goes on.
 Designed, not built: records and metrics over the wire, `tinystore serve`
 with `SERVE`, the SDKs, and self-metrics.
 
@@ -656,6 +657,12 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | sqldb reads rows without a struct                      | `TestQueryReadsRowsAsSQLiteReturnsThem`                                         |
 | the server module requires only the root               | `TestTheServerRequiresOnlyTheRoot`                                              |
 | `server/wire` imports only the standard library        | `TestWireImportsOnlyTheStandardLibrary`                                         |
+| a data client cannot change a schema                   | `TestADataClientCannotChangeTheSchema`, `TestEachLineOfTheCheckRefusesOnItsOwn`, `FuzzDataSQL` |
+| the check ends a statement where SQLite does           | `TestSQLiteEndsAStatementWhereTheCheckDoes`, `TestTheCheckReadsSQLitesTokens`   |
+| a database opens once, and later opens check it        | `TestSQLOpenAppliesOnceAndChecksAfter`, `TestADatabaseTheProgramOpenedIsChecked` |
+| an sql batch is one transaction, a read one snapshot   | `TestAnSQLBatchIsOneTransaction`                                                |
+| a data connection's statement ends at its deadline     | `TestADataStatementEndsAtItsDeadline`                                           |
+| an answer past the agreed body fails only its stream   | `TestAnAnswerPastTheBodyIsALimit`                                               |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

@@ -8,5 +8,6 @@ func (s *Server) handlers() map[wire.Method]handler {
 	s.kvMethods(methods)
 	s.jobsMethods(methods)
 	s.blobsMethods(methods)
+	s.sqlMethods(methods)
 	return methods
 }

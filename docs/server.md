@@ -1,8 +1,8 @@
 # The server: one runtime for another process
 
-Being built, in `server/`: the bytes, a session with its transports, and kv
-are; the other engines, `tinystore serve` with `SERVE` and the SDKs are not,
-and [Building it](#building-it) says which slice is where. This page is the
+Being built, in `server/`: the bytes, a session with its transports, kv,
+jobs, blobs and sql are; records, metrics, `tinystore serve` with `SERVE` and
+the SDKs are not, and [Building it](#building-it) says which slice is where. This page is the
 contract the server and its SDKs are built to: what a connection may do, how
 a sidecar starts and is found, what a lost connection means, and what bounds
 the server's memory. The bytes are [wire.md](wire.md). Its figures are
@@ -221,20 +221,68 @@ truth.
   `INTO` writes a file wherever the server may), `PRAGMA`, `ANALYZE`,
   `REINDEX` and transaction control are `permission`, and so is a second
   statement in the same string, which the driver would run as well: modernc
-  v1.59.0 runs every statement of a string (`stmt.go`). The driver exposes no
-  SQLite authorizer, as its `driver.go` says, so the check is the server's own:
-  a tokenizer that skips comments, string literals, quoted identifiers and
-  blob literals, and behind it a second, independent line that refuses a
-  statement whose compiled program, as `EXPLAIN` lists it, changes the schema,
-  attaches a file or vacuums. An authorizer replaces both if the driver gains
-  one.
+  v1.59.0 runs every statement of a string (`stmt.go`), a query's too. The
+  driver exposes no SQLite authorizer, as its `driver.go` says, so the check is
+  the server's own, in two lines; an authorizer replaces both if the driver
+  gains one.
+- **The first line is SQLite's own tokens**, `sqltokens.go` following
+  `sqlite3GetToken` rule by rule: whitespace is space, tab, newline, form feed
+  and carriage return, and a byte order mark, while every byte past 0x7f is
+  part of a name, so no Unicode space separates words; `--` runs to a newline
+  and not to a carriage return; `/* */` does not nest; `'…'`, `"…"` and
+  `` `…` `` take their delimiter twice, `[…]` ends at its first `]`; a
+  parameter `$a(…)` runs to its `)` through quotes and semicolons, as Tcl's
+  arrays do. It refuses a NUL, past which SQLite reads nothing, anything
+  unclosed, a first word not of the seven, a token after the first `;`, and a
+  name, bare, quoted or a string, since SQLite takes a string for a name where
+  one may stand, that is `sqlite_dbpage` or a pragma's table: this build has
+  `SQLITE_ENABLE_DBPAGE_VTAB`, whose table writes the file's pages, the
+  schema's included, and `select * from pragma_optimize(0x10002)` analyzes and
+  so makes `sqlite_stat1` and `sqlite_stat4`. The line reads tokens, not where
+  they stand, so a value spelled exactly so, `'pragma_optimize'`, is refused
+  too; an argument carries it.
+- **The second line is the program SQLite compiles**, `EXPLAIN` of the
+  statement on a reader, which runs nothing, with its arguments. It refuses
+  `CreateBtree`, `Destroy`, `DropTable`, `DropIndex`, `DropTrigger`,
+  `ParseSchema`, `SetCookie`, `VCreate`, `VDestroy`, `VRename`, `Vacuum`,
+  `IncrVacuum`, `SqlExec`, `JournalMode`, `LoadAnalysis`, `Expire`,
+  `Checkpoint`, `AutoCommit`, `Savepoint` and `MaxPgcnt`; a `Function` whose
+  p4 is `sqlite_attach` or `sqlite_detach`; an `OpenWrite` of page 1, of a
+  page it computes, or of the migration history's table or index, and a
+  `Clear` of them, which is how `delete` without a `where` empties a table;
+  and any virtual table operation on `sqlite_dbpage` or `pragma_optimize`,
+  known by the pointer `EXPLAIN` shows for each on the same reader. The
+  history's pages come from `sqlite_schema` in the same snapshot.
+- **Where a statement ends is the first line's alone.** `EXPLAIN` prefixes the
+  first statement of a string and runs the rest, and compiling a `PRAGMA`
+  already sets its flag on the connection, `explain pragma foreign_keys = on`
+  included, so the second line only ever sees one statement that begins with
+  one of the seven words. What both lines see, each refuses on its own:
+  `TestEachLineOfTheCheckRefusesOnItsOwn` holds each to its verdicts.
 - **That check is security-critical.** It is the one place where text a
-  client wrote decides what the server may do, so it gets an adversarial round
-  of its own with the sql slice, before a data token exists: comments and
-  nested comments, CTEs, quoted and bracketed identifiers, Unicode whitespace,
-  semicolons inside literals, triggers and their side effects, virtual tables,
-  SQLite's functions, `EXPLAIN` and nested syntax; every attempt that got
-  through is a vector the fuzzer keeps.
+  client wrote decides what the server may do, so it has an adversarial round
+  of its own, `attempts` in `datasql_test.go`, run over the wire through
+  exec, query and batch by `TestADataClientCannotChangeTheSchema`: comments
+  and nested comments, CTEs, quoted and bracketed names, Unicode whitespace
+  and a long s, semicolons inside literals and a Tcl parameter's index,
+  triggers, virtual tables, `pragma_` tables, `sqlite_dbpage`, `EXPLAIN`,
+  `ATTACH` inside `WITH`, and writes to `_tinystore_migrations` and
+  `sqlite_schema`. `FuzzDataSQL` runs whatever the check lets through against
+  a scratch database and fails when the schema, the migration history, the
+  writer's settings and attached databases or the store's files change; its
+  seeds are the round, and five minutes of it on Windows 11, Ryzen 7 7700, Go
+  1.27.1, 14.2 million inputs, found nothing:
+
+  ```sh
+  go -C server test -run '^$' -fuzz '^FuzzDataSQL$' -fuzztime 5m .
+  ```
+
+  A data client's statement ends at a deadline, 30 seconds, since a recursive
+  query can hold a reader or the writer for good.
+- **What the check does not bound is memory.** A data client's
+  `zeroblob(1e9)` makes SQLite allocate its whole length, a gigabyte, before
+  the store's memory sees a row; lowering `SQLITE_LIMIT_LENGTH` for the
+  server's connections is left to sqldb, which does not set it yet.
 - **A token is a line of a file**, `admin <token>` or `data <token>`, 32
   random bytes in base64url, compared in constant time. On TCP there is no
   connection without one.
@@ -319,6 +367,7 @@ a client     ≤ its streams in flight × the agreed body + the credit it grante
 | credit on a connection, client to server | 8 MiB | `WELCOME` |
 | credit on a stream, each way | 2 MiB: at least the largest body, which must fit it, and more than the 1 MiB a round trip needs where it is long | `WELCOME`, `HELLO` |
 | calls running at once | as many as the streams in flight, on workers that keep their stacks | the server |
+| a data connection's SQL statement, its check included | 30 s | the server |
 | the collector's target | above Go's default, since a small live heap and a fast allocation rate collect hundreds of times a second | the server |
 | answers queued to write; a handler past it waits | 4 MiB | the server |
 | connections | 64 local, 1,024 remote | flags |
@@ -384,7 +433,10 @@ Each promise above is a test once its code exists; those marked built pass:
 | a client past its credit loses its connection, and the reader never waits | built: `TestAClientPastItsCreditIsCutOff` |
 | every stream ends with one final frame, a cancelled one too | built: `TestEveryStreamEndsOnce` |
 | answers queued during a write leave in the next | built: `TestQueuedAnswersShareAWrite` |
-| a data client cannot change a schema | `TestADataClientCannotChangeTheSchema`, over the adversarial round's corpus; `FuzzDataSQL` against both lines |
+| a data client cannot change a schema | built: `TestADataClientCannotChangeTheSchema`, over the adversarial round's corpus; `TestEachLineOfTheCheckRefusesOnItsOwn`; `FuzzDataSQL` against both lines |
+| the check ends a statement where SQLite does | built: `TestSQLiteEndsAStatementWhereTheCheckDoes`, `TestTheCheckReadsSQLitesTokens` |
+| a database opens once, and every later open checks its migrations | built: `TestSQLOpenAppliesOnceAndChecksAfter`, `TestADatabaseTheProgramOpenedIsChecked` |
+| an answer past the agreed body fails its stream, not the connection | built: `TestAnAnswerPastTheBodyIsALimit` |
 | a lost connection aborts uploads and fails the attempts in hand | `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand` |
 | `SERVE` is written whole, only under `LOCK`, for its owner alone | `TestServeIsWrittenWholeUnderTheLock` |
 | a stale `SERVE` starts one sidecar | `TestAStaleServeStartsOneSidecar` |
@@ -470,7 +522,7 @@ Where the slices stand, 28 September 2026:
 | kv | built: `kv.go`, `kv.Raw` in the engine; the Go client is `server/internal/client`, a test's and a measurement's |
 | jobs | built: `jobs.go`, `jobs_work.go`; the messages on wire.md |
 | blobs | built: `blobs.go`; the messages on wire.md |
-| sql | half: the engine's part is built, `sqldb.Query`, `ExecQuery`, `ApplyNone`, `Migrated`, `ErrPending`; `server/wire/sql.go` holds the messages, drafted and untested, not yet on wire.md; no handler, no SQL check |
+| sql | built: `sql.go`, the data connection's check in `sqltokens.go` and `datasql.go`; the messages on wire.md |
 | records, metrics | not begun |
 | `tinystore serve` with `SERVE`, the Bun SDK, the Python SDK | not begun |
 | the measurement against the prototype | not begun: it wants `tinystore serve` |
@@ -479,58 +531,32 @@ Every slice built passes `go test`, `-race` in the `golang:1.27` container
 three times shuffled, and golangci-lint for Windows and Linux; nothing of it
 is released, and the gates it brought are in AGENTS.md.
 
-**The sql slice goes on from here**, as designed while it was begun:
+**What building sql settled**, beside the design above:
 
-- **Handles.** `sql.open` carries the database's name and its migration files
-  as `{name, text}` pairs; the server makes an `fs.FS` of them in memory, the
-  `.sql` files at its root. The first open of a name in the server opens it:
-  an admin connection with `sqldb.Open`, which applies them, a data one with
-  `sqldb.Open(…, sqldb.ApplyNone())`, which applies none and makes no file,
-  a pending migration being `permission`. Every later open of that name,
-  either's, and an open of a database the embedding program passed in
-  `Options`, checks with `db.Migrated`: a pending migration is `permission`
-  for data and `in_use` for admin, since a database applies its migrations
-  when it opens. The first open without migrations is `invalid`; a later one
-  may carry none.
-- **Calls.** `sql.exec` runs `db.Exec` and answers `SQLDone`; `sql.query` runs
-  `sqldb.Query`, or `ExecQuery` when `write` is set, and downloads
-  `SQLColumns`, a `SQLRow` a `DATA`, and `{}`; `sql.batch` runs its
-  statements in `db.Tx`, `Exec` each unless `rows` asks `ExecQuery`, or in
-  `db.View` with `sqldb.Query` when `read` is set, and answers `SQLResults`,
-  which must fit the agreed body. Arguments are positional or named,
-  `sql.Named`, as the messages carry them.
-- **The data client's check, two independent lines, before any statement a
-  data connection sends runs.** The first is a tokenizer of SQLite's own
-  lexemes: whitespace is only space, tab, newline, form feed and carriage
-  return, since SQLite takes every byte past 0x7f as part of a name;
-  comments are `--` to a line's end and `/* */`, which do not nest and run to
-  the end when unclosed; strings are `'…'` with `''` inside; names are
-  `"…"`, `[…]` and `` `…` ``; a blob is `x'…'`. The first word, in any case,
-  must be `SELECT`, `VALUES`, `WITH`, `INSERT`, `REPLACE`, `UPDATE` or
-  `DELETE`, and nothing but whitespace and comments may follow the first `;`
-  outside them; anything unclosed is refused. The second compiles
-  `explain <statement>` through `sqldb.Query` on a reader and refuses a
-  program holding `CreateBtree`, `Destroy`, `DropTable`, `DropIndex`,
-  `DropTrigger`, `ParseSchema`, `SetCookie`, `VCreate`, `VDestroy`, `Vacuum`,
-  `IncrVacuum`, `SqlExec`, `JournalMode`, `LoadAnalysis` or `Expire`; a
-  `Function` or `PureFunc` whose p4 names `sqlite_attach` or `sqlite_detach`;
-  and an `OpenWrite` whose p2 is 1, `sqlite_schema`, or the root page of
-  `_tinystore_migrations`, read once a database from `sqlite_schema`. Both
-  refuse with `permission`. A data client's statement runs under a deadline
-  of its own, 30 seconds proposed, since a recursive query can hold a reader
-  for good.
-- **The adversarial round is the gate**, as [the section on
-  it](#what-a-connection-may-do) asks: a table of attempts in the test,
-  comments, nested and unclosed comments, CTEs, quoted and bracketed names,
-  Unicode whitespace, semicolons in literals, a trigger's side effects,
-  virtual tables, `pragma_` functions, `EXPLAIN`, `ATTACH` inside `WITH`,
-  writes to `_tinystore_migrations` and `sqlite_schema`; and `FuzzDataSQL`,
-  which runs whatever the check lets through as a data client against a
-  scratch database and fails when `sqlite_schema`, the migration history or
-  the attached databases differ afterwards. Name them
-  `TestADataClientCannotChangeTheSchema` and `FuzzDataSQL`, as the gates
-  above do.
-- **After sql**, records (`records.Append` of many, `Drop`, `Read` and
+- **A migration history that does not match is `ErrInvalid`**: sqldb's `Open`
+  and `Migrated` say it of a migration changed or renamed after it was
+  applied, of a file that applied more than the migrations given and of
+  another engine's file, as they said it of a pending one, so that a client
+  learns `invalid` rather than `internal`.
+- **A statement SQLite refuses is `ErrInvalid`**: sqldb says it of SQLite's
+  `SQLITE_ERROR`, `SQLITE_RANGE` and `SQLITE_MISMATCH`, a syntax error, a
+  table, column or function it does not have, and of a parameter no argument
+  fills, which the driver reports in no type of its own; `SQLITE_TOOBIG` is
+  `ErrLimit`.
+- **A pending migration keeps its text, not its kind**: a data client's is
+  `permission` and an admin's on an open database `in_use`, whose messages say
+  what was pending.
+- **Every answer is checked against the agreed body** before it leaves, a
+  RESPONSE, a DATA item and a trailer alike, and one past it fails its stream
+  with `limit`; a blob's bytes go in chunks no larger than it, which a client
+  agreeing a body under 64 KiB would otherwise have refused as a broken
+  protocol.
+- **Named arguments are `sql.Named`'s**: the name without its prefix, which
+  the driver matches against `:`, `@` and `$` alike.
+
+**Next, from here:**
+
+- **Records** (`records.Append` of many, `Drop`, `Read` and
   `Follow` as downloads, `Lines` as an upload of another program's output)
   and metrics (`Ingest`, `Read` and `Aggregate` as downloads, a series a
   message, samples as bin columns), each fixed on wire.md first; then

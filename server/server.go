@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/server/wire"
+	"github.com/tinyshed/tinystore/sqldb"
 )
 
 type Options struct {
@@ -39,6 +41,11 @@ type Options struct {
 	JobsOptions  jobs.Options
 	Blobs        *blobs.Store
 	BlobsOptions blobs.Options
+
+	// SQL are the databases the program opened, by name: a client's sql.open
+	// of one checks the migrations it carries against the file's, since a
+	// database opens once a store. The server opens any other with them.
+	SQL map[string]*sqldb.DB
 }
 
 // Server serves one store to other processes, a sidecar's or a remote
@@ -55,6 +62,9 @@ type Server struct {
 	kv      *kv.Store
 	jobs    *jobs.Store
 	blobs   *blobs.Store
+
+	sqlOpening sync.Mutex // a database opens once, its migrations applied, while no other engine waits
+	databases  map[string]*sqldb.DB
 
 	mu        sync.Mutex
 	sessions  map[*session]struct{}
@@ -75,6 +85,7 @@ type limits struct {
 	remoteSessions   int           // connections from a network at once
 	handshake        time.Duration // how long a connection may take to say HELLO
 	silence          time.Duration // quiet before a PING, and again before closing
+	statement        time.Duration // how long a data connection's SQL statement runs
 }
 
 var defaultLimits = limits{
@@ -87,6 +98,7 @@ var defaultLimits = limits{
 	remoteSessions:   1024,
 	handshake:        5 * time.Second,
 	silence:          time.Minute,
+	statement:        30 * time.Second,
 }
 
 // New makes a server of store, which the caller keeps open for as long as it
@@ -99,7 +111,10 @@ func New(store *tinystore.Store, options Options) (*Server, error) {
 	s := &Server{
 		store: store, options: options, instance: instance, limits: defaultLimits,
 		log: options.Logger, kv: options.KV, jobs: options.Jobs, blobs: options.Blobs,
-		sessions: map[*session]struct{}{}, listeners: map[Listener]struct{}{},
+		databases: maps.Clone(options.SQL), sessions: map[*session]struct{}{}, listeners: map[Listener]struct{}{},
+	}
+	if s.databases == nil {
+		s.databases = map[string]*sqldb.DB{}
 	}
 	if s.log == nil {
 		s.log = store.Logger("server")
@@ -340,5 +355,5 @@ func (s *Server) blobsStore(ctx context.Context) (*blobs.Store, error) {
 
 // engines is what WELCOME says this server serves
 func (s *Server) engines() []string {
-	return []string{"kv", "jobs", "blobs"}
+	return []string{"kv", "jobs", "blobs", "sql"}
 }

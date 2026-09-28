@@ -50,6 +50,7 @@ type session struct {
 	jobsHandles  handles[*jobsHandle]
 	claims       handles[heldJob] // jobs a jobs.claim leased, until their settlement
 	blobsHandles handles[*blobsHandle]
+	sqlHandles   handles[*sqlHandle]
 }
 
 // agreed is what a handshake settled for its connection

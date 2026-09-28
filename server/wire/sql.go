@@ -1,8 +1,10 @@
 package wire
 
 import (
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -70,9 +72,10 @@ func (d *SQLDatabase) Decode(body []byte) error {
 }
 
 // SQLStatement is one statement with its arguments: positional, named, or
-// both, each nil, an integer, a float, str, bin or a bool. Write runs a
-// query on the writer, for a write whose returning clause gives rows; Rows
-// asks a batch's statement for the rows it returns.
+// both, each nil, an integer, a float, str, bin or a bool. A name is written
+// without the :, @ or $ the statement spells it with, as sql.Named takes it.
+// Write runs a query on the writer, for a write whose returning clause gives
+// rows; Rows asks a batch's statement for the rows it returns.
 type SQLStatement struct {
 	Handle uint64
 	SQL    string
@@ -166,15 +169,23 @@ func (d *Decoder) SQLValue() any {
 	return nil
 }
 
-// AppendSQLValue writes a value as SQLite returned it: TEXT that is not UTF-8
-// as bin, and a time the driver read from a column declared as one in
-// SQLite's own spelling.
+// sqliteTime is how SQLite's date functions spell a time with its zone, and
+// the first spelling the driver reads a column declared as a time in
+const sqliteTime = "2006-01-02 15:04:05.999999999-07:00"
+
+// AppendSQLValue writes a value as SQLite returned it, or as an argument
+// travels: TEXT that is not UTF-8 as bin, and a time the driver read from a
+// column declared DATE, DATETIME or TIMESTAMP in SQLite's spelling of it:
+//
+//	TEXT '2024-01-02' in a DATETIME column → "2024-01-02 00:00:00+00:00"
 func AppendSQLValue(dst []byte, value any) []byte {
 	switch v := value.(type) {
 	case nil:
 		return AppendNil(dst)
 	case int64:
 		return AppendInt(dst, v)
+	case int:
+		return AppendInt(dst, int64(v))
 	case float64:
 		return AppendFloat(dst, v)
 	case bool:
@@ -187,14 +198,14 @@ func AppendSQLValue(dst []byte, value any) []byte {
 	case []byte:
 		return AppendBin(dst, v)
 	case time.Time:
-		return AppendStr(dst, v.Format("2006-01-02 15:04:05.999999999-07:00"))
+		return AppendStr(dst, v.Format(sqliteTime))
 	}
-	return AppendNil(dst)
+	panic(fmt.Sprintf("wire: a %T is not an SQL value", value))
 }
 
 func appendNamedValues(dst []byte, named map[string]any) []byte {
 	dst = AppendMap(dst, len(named))
-	for _, name := range sortedNames(named) {
+	for _, name := range slices.Sorted(maps.Keys(named)) {
 		dst = AppendSQLValue(AppendStr(dst, name), named[name])
 	}
 	return dst
@@ -236,8 +247,18 @@ type SQLColumns struct {
 func (c SQLColumns) Append(dst []byte) []byte {
 	m := BeginMap(dst)
 	m.Key(1)
-	m.SetBuf(appendStrs(m.Buf(), c.Columns))
+	m.SetBuf(appendColumns(m.Buf(), c.Columns))
 	return m.End()
+}
+
+// appendColumns writes columns' names, which a table a Go program made may
+// hold in bytes that are not UTF-8
+func appendColumns(dst []byte, columns []string) []byte {
+	dst = AppendArray(dst, len(columns))
+	for _, column := range columns {
+		dst = AppendStr(dst, strings.ToValidUTF8(column, "�"))
+	}
+	return dst
 }
 
 func (c *SQLColumns) Decode(body []byte) error {
@@ -258,33 +279,45 @@ type SQLRow struct {
 func (r SQLRow) Append(dst []byte) []byte {
 	m := BeginMap(dst)
 	m.Key(1)
-	buf := AppendArray(m.Buf(), len(r.Values))
-	for _, value := range r.Values {
-		buf = AppendSQLValue(buf, value)
-	}
-	m.SetBuf(buf)
+	m.SetBuf(appendValues(m.Buf(), r.Values))
 	return m.End()
+}
+
+func appendValues(dst []byte, values []any) []byte {
+	dst = AppendArray(dst, len(values))
+	for _, value := range values {
+		dst = AppendSQLValue(dst, value)
+	}
+	return dst
 }
 
 func (r *SQLRow) Decode(body []byte) error {
 	d := NewDecoder(body)
 	for key := range d.Fields() {
-		if key != 1 {
-			continue
-		}
-		for range d.Items() {
-			value := d.SQLValue()
-			if raw, ok := value.([]byte); ok {
-				value = clone(raw)
-			}
-			r.Values = append(r.Values, value)
+		if key == 1 {
+			r.Values = d.sqlValues()
 		}
 	}
 	return d.End()
 }
 
+// sqlValues reads an array of SQL values into values of their own, as a row
+// outlives the body it came in
+func (d *Decoder) sqlValues() []any {
+	values := []any{}
+	for range d.Items() {
+		value := d.SQLValue()
+		if raw, ok := value.([]byte); ok {
+			value = clone(raw)
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
 // SQLStatements is sql.batch's request: statements one transaction runs, all
-// or none, or with Read, reads from one snapshot.
+// or none, or with Read, reads from one snapshot. A statement's handle is the
+// batch's.
 type SQLStatements struct {
 	Handle     uint64
 	Statements []SQLStatement
@@ -327,12 +360,13 @@ func (s *SQLStatements) Decode(body []byte) error {
 	return d.End()
 }
 
-// SQLResults answers a batch: a result a statement, its changes and last
-// rowid, and its columns and rows when it returned rows.
+// SQLResults answers a batch, a result a statement in their order.
 type SQLResults struct {
 	Results []SQLResult
 }
 
+// SQLResult is one statement's result: what a write changed, or, for a
+// statement that returned rows, its columns and rows instead.
 type SQLResult struct {
 	SQLDone
 	Columns []string
@@ -352,27 +386,20 @@ func (r SQLResults) Append(dst []byte) []byte {
 
 func (r SQLResult) append(dst []byte) []byte {
 	m := BeginMap(dst)
-	m.Int(1, r.Changes)
-	m.Int(2, r.LastID)
-	if r.Columns != nil {
-		m.Key(3)
-		m.SetBuf(appendStrs(m.Buf(), r.Columns))
-		m.Key(4)
-		buf := AppendArray(m.Buf(), len(r.Rows))
-		for _, row := range r.Rows {
-			buf = SQLRow{Values: row}.appendValues(buf)
-		}
-		m.SetBuf(buf)
+	if r.Columns == nil {
+		m.Int(1, r.Changes)
+		m.Int(2, r.LastID)
+		return m.End()
 	}
+	m.Key(3)
+	m.SetBuf(appendColumns(m.Buf(), r.Columns))
+	m.Key(4)
+	buf := AppendArray(m.Buf(), len(r.Rows))
+	for _, row := range r.Rows {
+		buf = appendValues(buf, row)
+	}
+	m.SetBuf(buf)
 	return m.End()
-}
-
-func (r SQLRow) appendValues(dst []byte) []byte {
-	dst = AppendArray(dst, len(r.Values))
-	for _, value := range r.Values {
-		dst = AppendSQLValue(dst, value)
-	}
-	return dst
 }
 
 func (r *SQLResults) Decode(body []byte) error {
@@ -398,24 +425,12 @@ func (r *SQLResult) decode(d *Decoder) {
 		case 2:
 			r.LastID = d.Int()
 		case 3:
-			r.Columns = d.Strs()
+			r.Columns = append([]string{}, d.Strs()...)
 		case 4:
 			r.Rows = [][]any{}
 			for range d.Items() {
-				var row []any
-				for range d.Items() {
-					value := d.SQLValue()
-					if raw, ok := value.([]byte); ok {
-						value = clone(raw)
-					}
-					row = append(row, value)
-				}
-				r.Rows = append(r.Rows, row)
+				r.Rows = append(r.Rows, d.sqlValues())
 			}
 		}
 	}
-}
-
-func sortedNames[V any](named map[string]V) []string {
-	return slices.Sorted(maps.Keys(named))
 }

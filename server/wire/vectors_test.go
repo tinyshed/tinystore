@@ -179,6 +179,18 @@ func TestTheExamplesAreWhatTheMessagesWrite(t *testing.T) {
 	if written := wire.AppendFrame(nil, header, entry.Append(nil)); !bytes.Equal(written, frames["kv.get's entry"]) {
 		t.Errorf("kv.get's entry %x", written)
 	}
+
+	exec := wire.SQLStatement{Handle: 1, SQL: "insert into notes (title) values (?)", Args: []any{"milk"}}
+	header = wire.Header{Kind: wire.KindRequest, Flags: wire.FlagEnd, Method: wire.SQLExec, Stream: 3}
+	if written := wire.AppendFrame(nil, header, exec.Append(nil)); !bytes.Equal(written,
+		frames["sql.exec of an insert with one argument, on handle 1"]) {
+		t.Errorf("sql.exec %x", written)
+	}
+	done := wire.SQLDone{Changes: 1, LastID: 7}
+	header = wire.Header{Kind: wire.KindResponse, Flags: wire.FlagEnd, Stream: 3}
+	if written := wire.AppendFrame(nil, header, done.Append(nil)); !bytes.Equal(written, frames["sql.exec's answer"]) {
+		t.Errorf("sql.exec's answer %x", written)
+	}
 }
 
 // every kv message reads back as it was written
