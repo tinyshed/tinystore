@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,7 +19,11 @@ import (
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
+	"github.com/tinyshed/tinystore/sqldb"
 )
+
+//go:embed migrations/*.sql
+var migrations embed.FS
 
 func main() {
 	blocks, err := codec.New()
@@ -67,6 +73,67 @@ func main() {
 	probeKV(ctx, runtime)
 	probeJobs(ctx, runtime)
 	probeBlobs(ctx, runtime)
+	probeSQL(ctx, runtime)
+}
+
+// ProbeNote is a row of the probe's own database, declared as an application
+// declares one
+type ProbeNote struct {
+	ID        int64 `db:",generated"`
+	Title     string
+	Tags      sqldb.JSON[[]string]
+	Due       *sqldb.Date
+	CreatedAt time.Time
+}
+
+var (
+	probeNotes  = sqldb.Table[ProbeNote]("notes", sqldb.PrimaryKey("id"), sqldb.Index("created_at"))
+	probeSchema = sqldb.Schema(probeNotes)
+)
+
+// probeSQL links sqldb the way an application uses it: a schema Open checks
+// the file against, Insert, the typed reads, Each, a transaction, a View and
+// a constraint's error
+func probeSQL(ctx context.Context, runtime *tinystore.Store) {
+	db, err := sqldb.Open(ctx, runtime, "app", migrations, probeSchema)
+	if err != nil {
+		panic(err)
+	}
+	note, err := sqldb.Insert(ctx, db, probeNotes, ProbeNote{Title: "probe", CreatedAt: time.Now()})
+	if err != nil {
+		panic(err)
+	}
+	_, err = db.Exec(ctx, `insert into notes (id, title, tags, created_at) values (?, 'twice', '[]', 0)`, note.ID)
+	if broken, ok := errors.AsType[*sqldb.ConstraintError](err); !ok || broken.Kind != sqldb.PrimaryKeyViolation {
+		panic(err)
+	}
+	read, found, err := sqldb.One[ProbeNote](ctx, db, `select * from notes where id = ?`, note.ID)
+	if err != nil || !found {
+		panic(fmt.Sprint(found, err))
+	}
+	err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+		_, execErr := tx.Exec(ctx, `update notes set title = ? where id = ?`, "edited", note.ID)
+		return execErr
+	})
+	if err == nil {
+		err = db.View(ctx, func(tx *sqldb.Tx) error {
+			_, viewErr := sqldb.All[ProbeNote](ctx, tx, `select * from notes order by created_at`)
+			return viewErr
+		})
+	}
+	if err != nil {
+		panic(err)
+	}
+	for _, eachErr := range sqldb.Each[ProbeNote](ctx, db, `select * from notes`) {
+		if eachErr != nil {
+			panic(eachErr)
+		}
+	}
+	count, err := sqldb.Scalar[int](ctx, db, `select count(*) from notes`)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(read.Title, count)
 }
 
 // probeRecords links the records engine the way an application uses it: its

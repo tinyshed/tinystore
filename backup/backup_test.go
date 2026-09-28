@@ -46,7 +46,7 @@ func openEngines(t *testing.T, dir string) engines {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := sqldb.Open(t.Context(), store, "app", migrations)
+	app, err := sqldb.Open(t.Context(), store, "app", migrations, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

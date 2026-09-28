@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,11 +14,14 @@ import (
 // may or may not be in the file, and its caller reconciles before retrying.
 var ErrOutcomeUnknown = errors.New("commit outcome unknown")
 
-// what one group commits at most, and how long it may hold the writer
+// what one group commits at most, how long it may hold the writer once it
+// holds it, and how long a grouped write waits for the writer before its
+// engine is told
 const (
-	groupWrites = 1024
-	groupBytes  = 8 << 20
-	groupHold   = 10 * time.Second
+	groupWrites    = 1024
+	groupBytes     = 8 << 20
+	groupHold      = 10 * time.Second
+	writerPatience = 10 * time.Second
 )
 
 const (
@@ -41,6 +45,7 @@ type group struct {
 // final once done is closed, and lead closes when its caller leads
 type groupedWrite struct {
 	ctx   context.Context
+	label string
 	bytes int
 	write func(Writer) error
 	state writeState
@@ -61,16 +66,24 @@ const (
 // UpdateGrouped runs write in a savepoint of a transaction it may share with
 // the writes queued beside it, and returns once that transaction committed.
 // A write that fails, and whose savepoint rolls back, fails alone; a caller
-// whose context ends before its write starts writes nothing; a write that has
-// started finishes with its group, whatever its caller's context does. bytes
-// weigh the write against the group's bound, and a heavier one commits alone.
-// A commit that fails is ErrOutcomeUnknown.
+// whose context ends before its write starts writes nothing, whether it waits
+// behind a leader or leads the wait for the writer; a write that has started
+// finishes with its group, whatever its caller's context does. A group holds
+// the writer at most Config.GroupHold, counted from when it holds it, so that
+// a transaction holding the writer longer fails none of the writes behind it.
+// bytes weigh the write against the group's bound, and a heavier one commits
+// alone. A commit that fails is ErrOutcomeUnknown.
 func (f *File) UpdateGrouped(ctx context.Context, bytes int, write func(Writer) error) error {
+	return f.UpdateGroupedAs(ctx, "", bytes, write)
+}
+
+// UpdateGroupedAs is UpdateGrouped with the label Config.Waited is told.
+func (f *File) UpdateGroupedAs(ctx context.Context, label string, bytes int, write func(Writer) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	entry := &groupedWrite{
-		ctx: ctx, bytes: bytes, write: write,
+		ctx: ctx, label: label, bytes: bytes, write: write,
 		lead: make(chan struct{}), done: make(chan struct{}),
 	}
 	if f.writes.enqueue(entry) {
@@ -124,14 +137,54 @@ func (g *group) leave(entry *groupedWrite) bool {
 	return true
 }
 
-// lead commits the batch at the head of the queue, where the leader's own
-// write is, answers every write in it and hands the lead on
+// lead waits for the writer as its own caller, commits the batch at the head
+// of the queue, where that caller's write is, answers every write in it and
+// hands the lead on; a caller who leaves before the writer is free hands the
+// lead on at once
 func (f *File) lead(own *groupedWrite) error {
+	if err := f.waitForWriter(own); err != nil {
+		f.writes.resign(own, err)
+		return err
+	}
 	batch, outcomes := f.commitGroup(own.ctx)
 	f.writes.answer(batch, outcomes)
 	f.writes.handOn()
 	<-own.done
 	return own.err
+}
+
+// waitForWriter takes the writer's slot for the group while the leader's
+// caller still waits, and tells the engine once when the wait passes patience
+func (f *File) waitForWriter(own *groupedWrite) error {
+	select {
+	case f.writeSlots <- struct{}{}:
+		return nil
+	default:
+	}
+	patience := time.NewTimer(f.patience)
+	defer patience.Stop()
+	for {
+		select {
+		case f.writeSlots <- struct{}{}:
+			return nil
+		case <-own.ctx.Done():
+			return own.ctx.Err()
+		case <-patience.C:
+			if f.waited != nil {
+				f.waited(own.label)
+			}
+		}
+	}
+}
+
+// resign takes a leader whose caller left before the writer was free out of
+// the queue, answers it and hands the lead on
+func (g *group) resign(own *groupedWrite, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.queue = slices.DeleteFunc(g.queue, func(queued *groupedWrite) bool { return queued == own })
+	own.settle(err)
+	g.passLead()
 }
 
 // take removes the batch from the head of the queue, at most groupWrites and
@@ -159,10 +212,15 @@ func (g *group) take() []*groupedWrite {
 	return batch
 }
 
-// handOn gives the lead to the first caller still waiting, or frees it
 func (g *group) handOn() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.passLead()
+}
+
+// passLead gives the lead to the first caller still waiting, or frees it; the
+// group's lock is held
+func (g *group) passLead() {
 	if len(g.queue) == 0 {
 		g.leading = false
 		g.queue = nil
@@ -173,17 +231,19 @@ func (g *group) handOn() {
 	close(next.lead)
 }
 
-// commitGroup takes the writer first and the batch then, so that the writes
-// queued while it waited join, and runs each in its savepoint of one
-// transaction, bounded by groupHold rather than by any caller
+// commitGroup holds the writer waitForWriter took, and takes the batch only
+// then, so that the writes queued while it waited join; it runs each in its
+// savepoint of one transaction, bounded by the file's hold from now rather
+// than by any caller
 func (f *File) commitGroup(ctx context.Context) ([]*groupedWrite, []error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), groupHold)
+	defer freeSlot(f.writeSlots)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), f.hold)
 	defer cancel()
 
 	var batch []*groupedWrite
 	var failed []error
 	started, ran := false, false
-	err := f.UpdatePrepared(ctx, func(w Writer) error {
+	err := f.holding(ctx, preparedTransaction(ctx, func(w Writer) error {
 		batch, started = f.writes.take(), true
 		failed = make([]error, len(batch))
 		for i, entry := range batch {
@@ -194,7 +254,7 @@ func (f *File) commitGroup(ctx context.Context) ([]*groupedWrite, []error) {
 		}
 		ran = true
 		return nil
-	})
+	}))
 	if !started {
 		batch = f.writes.take()
 		failed = make([]error, len(batch))
@@ -204,6 +264,14 @@ func (f *File) commitGroup(ctx context.Context) ([]*groupedWrite, []error) {
 		outcomes[i] = outcome(failed[i], err, ran)
 	}
 	return batch, outcomes
+}
+
+// preparedTransaction runs write in one transaction of the writer, whose
+// statements it prepares on the connection and keeps
+func preparedTransaction(ctx context.Context, write func(Writer) error) func(*writeConnection) (bool, error) {
+	return func(connection *writeConnection) (bool, error) {
+		return transactReusable(ctx, connection.conn, func(*sql.Tx) error { return write(connection) })
+	}
 }
 
 // runSavepoint runs one write in a savepoint: a write that fails is rolled back

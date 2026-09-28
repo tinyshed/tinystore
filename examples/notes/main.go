@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"log/slog"
 	"os"
@@ -34,12 +33,19 @@ import (
 //go:embed migrations/*.sql
 var files embed.FS
 
+// Note is a row of the notes table: CreatedAt is created_at, unix milliseconds
 type Note struct {
-	ID        int64
+	ID        int64 `db:",generated"` // the rowid SQLite numbers each note by
 	Title     string
 	Body      string
-	CreatedAt int64 // created_at, by the field's name
+	CreatedAt time.Time
 }
+
+// notes is what migrations/001_notes.sql makes, which Open checks the file against
+var (
+	notes  = sqldb.Table[Note]("notes", sqldb.PrimaryKey("id"), sqldb.Default("body", ""))
+	schema = sqldb.Schema(notes)
+)
 
 func main() {
 	dir := flag.String("dir", "./data", "the store's directory")
@@ -106,12 +112,8 @@ func open(ctx context.Context, dir string, out io.Writer) (*app, error) {
 	return a, nil
 }
 
-func (a *app) openEngines(ctx context.Context, console slog.Handler) error {
-	migrations, err := fs.Sub(files, "migrations")
-	if err != nil {
-		return err
-	}
-	if a.db, err = sqldb.Open(ctx, a.store, "app", migrations); err != nil {
+func (a *app) openEngines(ctx context.Context, console slog.Handler) (err error) {
+	if a.db, err = sqldb.Open(ctx, a.store, "app", files, schema); err != nil {
 		return err
 	}
 	if a.stats, err = metrics.Open(ctx, a.store, metrics.Options{Retention: 90 * 24 * time.Hour}); err != nil {
@@ -160,9 +162,7 @@ func (a *app) openQueues(ctx context.Context) (err error) {
 func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 	var ideas int64
 	for _, title := range []string{"groceries", "ideas"} {
-		note, err := sqldb.ExecOne[Note](ctx, a.db,
-			`insert into notes (title, created_at) values (?, ?) returning id, title, body, created_at`,
-			title, time.Now().UnixMilli())
+		note, err := sqldb.Insert(ctx, a.db, notes, Note{Title: title, CreatedAt: a.store.Now()})
 		if err != nil {
 			return err
 		}
@@ -193,8 +193,8 @@ func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
-	notes, err := sqldb.All[Note](ctx, a.db, `select id, title, body, created_at from notes order by id`)
-	for _, note := range notes {
+	listed, err := sqldb.All[Note](ctx, a.db, `select * from notes order by id`)
+	for _, note := range listed {
 		fmt.Fprintf(out, "note %d: %s — %s\n", note.ID, note.Title, note.Body)
 	}
 	return err

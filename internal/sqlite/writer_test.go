@@ -31,7 +31,7 @@ func TestPreparedWriterUsesOneTransactionAndRetainsPrograms(t *testing.T) {
 	}); !errors.Is(err, failure) {
 		t.Fatalf("rollback: %v", err)
 	}
-	statement := file.writerConn.statements[insert]
+	statement := file.writerConn.kept(insert)
 	if statement == nil {
 		t.Fatal("writer did not retain the prepared insert")
 	}
@@ -50,7 +50,7 @@ func TestPreparedWriterUsesOneTransactionAndRetainsPrograms(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if statement != file.writerConn.statements[insert] {
+	if statement != file.writerConn.kept(insert) {
 		t.Fatal("writer prepared the same insert again")
 	}
 	if err := file.View(t.Context(), func(tx *sql.Tx) error {
@@ -81,13 +81,13 @@ func TestPreparedWriterCacheStaysBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := file.UpdatePrepared(t.Context(), func(writer Writer) error {
-		for i := range 3 * readerStatements {
+		for i := range 3 * keptStatements {
 			query := fmt.Sprintf(`select ? + %d`, i)
 			var value int
 			if err := QueryRow(t.Context(), writer, query, 7).Scan(&value); err != nil {
 				return err
 			}
-			if value != 7+i || len(file.writerConn.statements) > readerStatements {
+			if value != 7+i || len(file.writerConn.statements) > keptStatements {
 				t.Fatalf("writer cache: value %d, statements %d", value, len(file.writerConn.statements))
 			}
 		}

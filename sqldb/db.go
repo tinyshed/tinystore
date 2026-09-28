@@ -2,15 +2,19 @@ package sqldb
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"regexp"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/admission"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -21,37 +25,60 @@ const sqlApplicationID = 0x5453514c
 // be in the file, and its caller reads it back before writing again.
 var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
 
-// errPanicked rolls back the statement whose reading panicked; the panic goes
-// on in its caller's goroutine
-var errPanicked = errors.New("sqldb: a write panicked")
-
-// readers is each database's pool of read connections
-const readers = 4
-
-// a name becomes a file name, so it stays short and plain
-var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-
 type DB struct {
-	name string
-	file *sqlite.File
-	log  *slog.Logger
-
-	mu      sync.Mutex
-	closed  bool
-	running sync.WaitGroup
+	name     string
+	file     *sqlite.File
+	log      *slog.Logger
+	runtime  *tinystore.Store
+	budgeted bool // the store has Options.Memory to reserve from
+	gate     admission.Gate
+	writes   admission.Slots
+	closed   error
+	leave    func() // gate.Leave, bound once rather than at every call
+	holder   atomic.Pointer[holder]
+	snapshot time.Duration // how long an Each or a View holds its snapshot
+	closing  sync.Once
+	closeErr error
 }
 
-// Open opens or creates sql/<name>.db inside the store and applies, in one
-// transaction, every migration it has not applied before:
+// tuning is what a test shortens: how long the writer is held and waited for,
+// and how long a snapshot lasts
+type tuning struct {
+	writer   sqlite.Config
+	snapshot time.Duration
+}
+
+// holder is the transaction that holds the writer: where it began, and when
+type holder struct {
+	site  uintptr
+	since time.Time
+}
+
+// Open opens or creates sql/<name>.db inside the store, applies in one
+// transaction every migration the file has not applied, then checks the file
+// against schema, which may be nil:
 //
 //	001_users.sql   applied on the first run
 //	002_posts.sql   applied the first time a binary carrying it opens the file
 //
-// A migration changed after it was applied, a database newer than the binary's
-// migrations, or another engine's file refuses to open.
-func Open(ctx context.Context, store *tinystore.Store, name string, migrations fs.FS) (*DB, error) {
+// The migrations are the .sql files at the root of migrations or, when it has
+// none, in its one directory, as an embed.FS of migrations/*.sql holds them. A
+// migration changed after it was applied, a file that has applied more of them
+// than the binary knows, another engine's file, or a file that does not match
+// the schema refuses to open.
+func Open(ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef) (*DB, error) {
+	return open(ctx, store, name, migrations, schema, tuning{snapshot: snapshotHold})
+}
+
+func open(
+	ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef, timing tuning,
+) (*DB, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("%w: database name %q", tinystore.ErrInvalid, name)
+	}
+	scripts, err := findMigrations(migrations)
+	if err != nil {
+		return nil, fmt.Errorf("sql %q: %w", name, err)
 	}
 
 	path, release, err := store.Claim(fileName(name))
@@ -59,30 +86,79 @@ func Open(ctx context.Context, store *tinystore.Store, name string, migrations f
 		return nil, err
 	}
 
-	db, err := openFile(ctx, path, name, migrations)
+	d, err := openFile(ctx, store, name, path, scripts, timing)
 	if err != nil {
 		release()
 		return nil, err
 	}
-	db.log = store.Logger("sql").With("database", name)
-	if err = store.Attach(db); err != nil {
+	if schema != nil {
+		err = d.check(ctx, schema)
+	}
+	if err == nil {
+		err = store.Attach(d)
+	}
+	if err != nil {
 		release()
-		return nil, errors.Join(err, db.file.Close())
+		return nil, errors.Join(err, d.file.Close())
 	}
 
-	db.log.Info("opened", "path", path)
-	return db, nil
+	d.log.Info("opened", "path", path)
+	return d, nil
 }
 
-func openFile(ctx context.Context, path, name string, migrations fs.FS) (*DB, error) {
-	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers})
+func openFile(
+	ctx context.Context, store *tinystore.Store, name, path string, scripts fs.FS, timing tuning,
+) (*DB, error) {
+	d := &DB{
+		name: name, runtime: store, log: store.Logger("sql").With("database", name),
+		budgeted: store.Memory().Capacity > 0, writes: admission.NewSlots(writeSlots),
+		closed: fmt.Errorf("%w: sql %q", tinystore.ErrClosed, name), snapshot: timing.snapshot,
+	}
+	d.leave = d.gate.Leave
+
+	config := timing.writer
+	config.Readers, config.Statements, config.Waited = readers, statements, d.waited
+	file, err := sqlite.Open(ctx, path, config)
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)
 	}
-	if err = file.Migrate(ctx, sqlApplicationID, migrations); err != nil {
+	if err = file.Migrate(ctx, sqlApplicationID, scripts); err != nil {
 		return nil, errors.Join(fmt.Errorf("sql %q: %w", name, err), file.Close())
 	}
-	return &DB{name: name, file: file}, nil
+	d.file = file
+	return d, nil
+}
+
+// findMigrations is the directory of migrations holds its .sql files: its
+// root, or, while the root has none, its one directory
+//
+//	embed.FS of migrations/*.sql → migrations/
+func findMigrations(migrations fs.FS) (fs.FS, error) {
+	if migrations == nil {
+		return nil, fmt.Errorf("%w: no migrations", tinystore.ErrInvalid)
+	}
+	for {
+		entries, err := fs.ReadDir(migrations, ".")
+		if err != nil {
+			return nil, fmt.Errorf("read migrations: %w", err)
+		}
+		var directories []string
+		for _, entry := range entries {
+			switch {
+			case !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql"):
+				return migrations, nil
+			case entry.IsDir():
+				directories = append(directories, entry.Name())
+			}
+		}
+		if len(directories) != 1 {
+			return nil, fmt.Errorf("%w: the migrations hold no .sql files, and %d directories; fs.Sub names the one",
+				tinystore.ErrInvalid, len(directories))
+		}
+		if migrations, err = fs.Sub(migrations, directories[0]); err != nil {
+			return nil, err
+		}
+	}
 }
 
 func fileName(name string) string { return "sql/" + name + ".db" }
@@ -96,97 +172,68 @@ func (d *DB) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile
 	return []tinystore.SnapshotFile{{Name: fileName(d.name), Engine: "sql", Schema: schema}}, nil
 }
 
-// Exec runs one statement on the file's one writer. Statements from many
-// goroutines commit together, each in a savepoint of one transaction, with one
-// fsync: one that fails rolls back alone, a caller whose context ends before
-// its statement starts writes nothing, and a group whose commit fails answers
-// ErrOutcomeUnknown.
-func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	var result sql.Result
-	err := d.write(ctx, func(q querier) (err error) {
-		result, err = q.ExecContext(ctx, query, args...)
-		return err
+// Close lets the calls in flight finish and closes the file; cancellation
+// stops waiting, not the cleanup. The store calls it: an application closes
+// the store instead.
+func (d *DB) Close(ctx context.Context) error {
+	drained, _ := d.gate.Close()
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	d.closing.Do(func() {
+		d.closeErr = d.file.Close()
+		d.log.Info("closed")
 	})
-	return result, err
+	return d.closeErr
 }
 
-// Tx runs work in one writer transaction of its own, on the caller's
-// goroutine: nil commits, an error or a panic rolls back. Every call inside it
-// takes tx, not the DB.
-func (d *DB) Tx(ctx context.Context, work func(tx *Tx) error) error {
-	if err := d.enter(); err != nil {
-		return err
+func (d *DB) admit(ctx context.Context) (leave func(), err error) {
+	if err = d.gate.Enter(ctx, d.closed); err != nil {
+		return nil, err
 	}
-	defer d.running.Done()
-	err := d.file.Update(ctx, func(tx *sql.Tx) error { return work(&Tx{q: tx}) })
-	return d.explain(err)
+	return d.leave, nil
 }
 
-// Close waits for the calls in flight and closes the file. The store calls it:
-// an application closes the store instead.
-func (d *DB) Close(context.Context) error {
-	d.mu.Lock()
-	d.closed = true
-	d.mu.Unlock()
-
-	d.running.Wait()
-	err := d.file.Close()
-	d.log.Info("closed")
-	return err
-}
-
-// Tx is one writer transaction, given to the function passed to DB.Tx.
-type Tx struct{ q querier }
-
-func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return t.q.ExecContext(ctx, query, args...)
-}
-
-// querier is what a read or a write runs a statement through: the transaction
-// of a reader, or of the writer
-type querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-func (d *DB) read(ctx context.Context, work func(querier) error) error {
-	if err := d.enter(); err != nil {
-		return err
+// admitWrite lets a write in and holds one of the write slots until it is
+// answered, so that the writes waiting for a group are bounded
+func (d *DB) admitWrite(ctx context.Context) (func(), error) {
+	leave, err := d.admit(ctx)
+	if err != nil {
+		return nil, err
 	}
-	defer d.running.Done()
-	err := d.file.View(ctx, func(tx *sql.Tx) error { return work(tx) })
-	return d.explain(err)
+	free, err := d.writes.Take(ctx)
+	if err != nil {
+		leave()
+		return nil, err
+	}
+	return func() {
+		free()
+		leave()
+	}, nil
 }
 
-// write runs one statement's work grouped with the writes other goroutines
-// are waiting to commit, which may run it on theirs: a panic reading its rows
-// rolls back its savepoint alone and goes on in its caller's goroutine
-func (d *DB) write(ctx context.Context, work func(querier) error) error {
-	if err := d.enter(); err != nil {
-		return err
+// waited logs a write that has waited ten seconds for the writer, and the
+// transaction holding it, when one does: a call on the DB inside its own Tx
+// waits for the Tx, which waits for it
+func (d *DB) waited(query string) {
+	if held := d.holder.Load(); held != nil {
+		d.log.Warn("a write has waited ten seconds behind a transaction", "query", query,
+			"transaction", site(held.site), "held", time.Since(held.since).Round(time.Millisecond))
+		return
 	}
-	defer d.running.Done()
-	var panicked any
-	err := d.file.UpdateGrouped(ctx, 0, func(w sqlite.Writer) (err error) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				panicked, err = recovered, errPanicked
-			}
-		}()
-		return work(w)
-	})
-	if panicked != nil {
-		panic(panicked)
-	}
-	return d.explain(err)
+	d.log.Warn("a write has waited ten seconds for the writer", "query", query)
 }
 
-func (d *DB) enter() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return fmt.Errorf("%w: sql %q", tinystore.ErrClosed, d.name)
-	}
-	d.running.Add(1)
-	return nil
+// caller is where the function calling the one that calls it was called from
+func caller() uintptr {
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:])
+	return pcs[0]
+}
+
+func site(pc uintptr) string {
+	frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
+	return fmt.Sprintf("%s (%s:%d)", frame.Function, filepath.Base(frame.File), frame.Line)
 }

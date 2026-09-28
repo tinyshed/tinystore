@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 )
 
 // Migrate claims a fresh file or checks the existing engine's migration
@@ -27,32 +28,91 @@ func (f *File) Migrate(ctx context.Context, applicationID int, scripts fs.FS) er
 	}
 	sort.Strings(paths)
 
-	return f.Update(ctx, func(tx *sql.Tx) error {
-		if err := claimFile(ctx, tx, applicationID); err != nil {
-			return err
-		}
+	return f.update(ctx, func(connection *writeConnection) (bool, error) {
+		return withoutForeignKeys(ctx, connection.conn, func(tx *sql.Tx) error {
+			return runMigrations(ctx, tx, applicationID, scripts, paths)
+		})
+	})
+}
 
-		applied, err := countApplied(ctx, tx, len(paths))
+// runMigrations checks the scripts the file has run and runs the rest, then
+// refuses a history that leaves a row referring to nothing
+func runMigrations(ctx context.Context, tx *sql.Tx, applicationID int, scripts fs.FS, paths []string) error {
+	if err := claimFile(ctx, tx, applicationID); err != nil {
+		return err
+	}
+
+	applied, err := countApplied(ctx, tx, len(paths))
+	if err != nil {
+		return err
+	}
+
+	for i, path := range paths {
+		script, err := readMigration(scripts, path, i+1)
 		if err != nil {
 			return err
 		}
+		if i < applied {
+			err = script.verify(ctx, tx)
+		} else {
+			err = script.apply(ctx, tx)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if applied == len(paths) {
+		return nil
+	}
+	return checkForeignKeys(ctx, tx)
+}
 
-		for i, path := range paths {
-			script, err := readMigration(scripts, path, i+1)
-			if err != nil {
-				return err
-			}
-			if i < applied {
-				err = script.verify(ctx, tx)
-			} else {
-				err = script.apply(ctx, tx)
-			}
-			if err != nil {
-				return err
-			}
+const (
+	foreignKeysOff  = `pragma foreign_keys = off`
+	foreignKeysOn   = `pragma foreign_keys = on`
+	foreignKeyCheck = `pragma foreign_key_check`
+)
+
+// withoutForeignKeys runs work in a transaction with foreign keys off, as
+// SQLite's procedure for changing a table asks: with them on, dropping a
+// parent to rebuild it deletes its children through their ON DELETE actions.
+// foreign_keys cannot change inside a transaction, so it goes off before BEGIN
+// and on after COMMIT
+func withoutForeignKeys(ctx context.Context, conn *sql.Conn, work func(*sql.Tx) error) (bool, error) {
+	if _, err := conn.ExecContext(ctx, foreignKeysOff); err != nil {
+		return false, fmt.Errorf("turn foreign keys off: %w", err)
+	}
+	reusable, err := transactReusable(ctx, conn, work)
+	if _, onErr := conn.ExecContext(context.WithoutCancel(ctx), foreignKeysOn); onErr != nil {
+		return false, errors.Join(err, fmt.Errorf("turn foreign keys on: %w", onErr))
+	}
+	return reusable, err
+}
+
+// checkForeignKeys refuses migrations that leave a row whose reference finds
+// no parent, naming the first few
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, foreignKeyCheck)
+	if err != nil {
+		return fmt.Errorf("check foreign keys: %w", err)
+	}
+	var named []string
+	broken := 0
+	err = EachRow(rows, "foreign key check", func(rows *sql.Rows) error {
+		var table, parent string
+		var row, key sql.NullInt64
+		if scanErr := rows.Scan(&table, &row, &parent, &key); scanErr != nil {
+			return scanErr
+		}
+		if broken++; len(named) < 3 {
+			named = append(named, fmt.Sprintf("%s row %d refers to no %s", table, row.Int64, parent))
 		}
 		return nil
 	})
+	if err == nil && broken > 0 {
+		err = fmt.Errorf("migrations leave %d rows referring to nothing: %s", broken, strings.Join(named, "; "))
+	}
+	return err
 }
 
 const (

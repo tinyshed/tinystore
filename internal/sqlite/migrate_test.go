@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -76,4 +77,66 @@ func TestMigrateRunsOnlyWhatTheFileHasNotRun(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// a migration that rebuilds a parent keeps its children, since foreign keys
+// are off while it runs; one that leaves a child referring to nothing is
+// refused whole; and foreign keys are on again for the writes after them
+func TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "keys.db"), Config{Readers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	scripts := fstest.MapFS{"0001_schema.sql": {Data: []byte(`
+		create table parents (id integer primary key) strict;
+		create table children (id integer primary key,
+			parent integer not null references parents (id) on delete cascade) strict;
+		insert into parents values (1), (2);
+		insert into children values (10, 1), (20, 2);`)}}
+	if err = file.Migrate(t.Context(), 1234, scripts); err != nil {
+		t.Fatal(err)
+	}
+
+	scripts["0002_rebuild.sql"] = &fstest.MapFile{Data: []byte(`
+		create table parents_new (id integer primary key, name text not null default '') strict;
+		insert into parents_new (id) select id from parents;
+		drop table parents;
+		alter table parents_new rename to parents;`)}
+	if err = file.Migrate(t.Context(), 1234, scripts); err != nil {
+		t.Fatal(err)
+	}
+	if children := countOf(t, file, `select count(*) from children`); children != 2 {
+		t.Fatalf("%d children after their parent was rebuilt, want 2", children)
+	}
+
+	scripts["0003_orphan.sql"] = &fstest.MapFile{Data: []byte(`delete from parents where id = 2;`)}
+	if err = file.Migrate(t.Context(), 1234, scripts); err == nil ||
+		!strings.Contains(err.Error(), "children row 20 refers to no parents") {
+		t.Fatalf("a migration leaving an orphan: %v", err)
+	}
+	if parents := countOf(t, file, `select count(*) from parents`); parents != 2 {
+		t.Fatalf("the refused migration left %d parents, want 2", parents)
+	}
+	err = file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, insertErr := tx.ExecContext(t.Context(), `insert into children values (30, 99)`)
+		return insertErr
+	})
+	if err == nil {
+		t.Fatal("a write after the migrations ignored foreign keys")
+	}
+}
+
+func countOf(t *testing.T, file *File, query string) int {
+	t.Helper()
+	var count int
+	err := file.View(t.Context(), func(tx *sql.Tx) error { return tx.QueryRowContext(t.Context(), query).Scan(&count) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

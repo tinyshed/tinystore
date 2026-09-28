@@ -2,6 +2,7 @@
 package sqlite
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"modernc.org/sqlite"
 )
@@ -27,6 +29,10 @@ type File struct {
 	readersMu   sync.Mutex
 	idleReaders []*readConnection
 	commits     atomic.Uint64
+	statements  int
+	hold        time.Duration
+	patience    time.Duration
+	waited      func(label string)
 }
 
 type WriterCounters struct {
@@ -88,6 +94,15 @@ type Config struct {
 	Readers     int
 	PageSize    int
 	WriterCache int // bytes of the writer's page cache; zero keeps the readers' 1 MiB
+	Statements  int // compiled statements each connection keeps; zero keeps 32
+
+	// Waited is told once when a grouped write has waited Patience for the
+	// writer, with the label UpdateGroupedAs gave the write.
+	Waited func(label string)
+
+	// GroupHold bounds a group's hold on the writer from when it holds it, and
+	// Patience a grouped write's wait before Waited; zero keeps ten seconds.
+	GroupHold, Patience time.Duration
 }
 
 func (c Config) check() error {
@@ -97,8 +112,8 @@ func (c Config) check() error {
 	if c.PageSize != 0 && (c.PageSize < 512 || c.PageSize > 65536 || c.PageSize&(c.PageSize-1) != 0) {
 		return fmt.Errorf("open SQLite: page size %d is not a power of two from 512 to 65536", c.PageSize)
 	}
-	if c.WriterCache < 0 {
-		return fmt.Errorf("open SQLite: a writer's cache of %d bytes", c.WriterCache)
+	if c.WriterCache < 0 || c.Statements < 0 || c.GroupHold < 0 || c.Patience < 0 {
+		return fmt.Errorf("open SQLite: a negative cache, statements, hold or patience in %+v", c)
 	}
 	return nil
 }
@@ -151,7 +166,12 @@ func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	}
 	writer.SetMaxOpenConns(1)
 	writer.SetMaxIdleConns(1)
-	f := &File{writer: writer, writeSlots: make(chan struct{}, 1)}
+	f := &File{
+		writer: writer, writeSlots: make(chan struct{}, 1), waited: config.Waited,
+		statements: cmp.Or(config.Statements, keptStatements),
+		hold:       cmp.Or(config.GroupHold, groupHold),
+		patience:   cmp.Or(config.Patience, writerPatience),
+	}
 
 	var journal string
 	if err = writer.QueryRowContext(ctx, walQuery).Scan(&journal); err != nil || journal != "wal" {
@@ -185,7 +205,7 @@ func (f *File) connectWriter(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	f.writerConn = &writeConnection{conn: connection}
+	f.writerConn = &writeConnection{preparedConnection{conn: connection, limit: f.statements}}
 	return nil
 }
 
@@ -247,7 +267,12 @@ func (f *File) update(ctx context.Context, work func(*writeConnection) (bool, er
 		return err
 	}
 	defer freeSlot(f.writeSlots)
+	return f.holding(ctx, work)
+}
 
+// holding runs work on the writer, whose slot its caller holds, reconnecting
+// it first when the last work left it unfit
+func (f *File) holding(ctx context.Context, work func(*writeConnection) (bool, error)) error {
 	if f.writerConn == nil {
 		if err := f.connectWriter(ctx); err != nil {
 			return fmt.Errorf("reconnect SQLite writer: %w", err)

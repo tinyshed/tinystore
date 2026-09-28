@@ -35,6 +35,7 @@ tasks:
     desc: Run tests (also runs go vet)
     cmds:
       - go test -shuffle=on ./...
+      - go -C cmd/tinystore test -shuffle=on ./...
 
   test:race:
     # needs a c toolchain, which a cgo-free project never otherwise installs
@@ -43,6 +44,7 @@ tasks:
       CGO_ENABLED: 1
     cmds:
       - go test -race -shuffle=on ./...
+      - go -C cmd/tinystore test -race -shuffle=on ./...
 
   test:cover:
     desc: Run tests and write a coverage profile to coverage.out
@@ -75,18 +77,21 @@ tasks:
     deps: [setup]
     cmds:
       - '{{.GOLANGCI}} run ./...'
+      - cd cmd/tinystore && ../../{{.GOLANGCI}} run ./...
 
   fmt:
     desc: Format code (gofumpt + goimports via golangci-lint)
     deps: [setup]
     cmds:
       - '{{.GOLANGCI}} fmt ./...'
+      - cd cmd/tinystore && ../../{{.GOLANGCI}} fmt ./...
 
   fmt:check:
     desc: Verify formatting without writing changes
     deps: [setup]
     cmds:
       - '{{.GOLANGCI}} fmt --diff ./...'
+      - cd cmd/tinystore && ../../{{.GOLANGCI}} fmt --diff ./...
 
   fix:
     desc: Apply Go 1.27 modernizers (go fix)
@@ -98,20 +103,23 @@ tasks:
     deps: [setup]
     cmds:
       - '{{.GOVULNCHECK}} ./...'
+      - '{{.GOVULNCHECK}} -C cmd/tinystore ./...'
 
   tidy:
-    desc: Tidy both module files
+    desc: Tidy every module file CI checks
     cmds:
       - go mod tidy
       - go -C tools mod tidy
+      - go -C cmd/tinystore mod tidy
 
   tidy:check:
     # -diff reports untidiness without writing, so this does not fail merely
     # because the working tree has uncommitted changes
-    desc: Fail when either module file is untidy
+    desc: Fail when a module file is untidy
     cmds:
       - go mod tidy -diff
       - go -C tools mod tidy -diff
+      - go -C cmd/tinystore mod tidy -diff
 
   check:
     desc: Everything CI gates on

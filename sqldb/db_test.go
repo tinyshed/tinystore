@@ -2,7 +2,6 @@ package sqldb
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -31,7 +30,12 @@ type note struct {
 
 func openStore(t *testing.T, dir string) *tinystore.Store {
 	t.Helper()
-	store, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true})
+	return openStoreWith(t, dir, tinystore.Options{Manual: true})
+}
+
+func openStoreWith(t *testing.T, dir string, options tinystore.Options) *tinystore.Store {
+	t.Helper()
+	store, err := tinystore.Open(t.Context(), dir, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +49,7 @@ func openStore(t *testing.T, dir string) *tinystore.Store {
 
 func openNotes(t *testing.T) *DB {
 	t.Helper()
-	db, err := Open(t.Context(), openStore(t, t.TempDir()), "app", notesMigrations)
+	db, err := Open(t.Context(), openStore(t, t.TempDir()), "app", notesMigrations, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,23 +60,23 @@ func TestNotesThroughEveryCall(t *testing.T) {
 	db := openNotes(t)
 	ctx := t.Context()
 
-	created, err := ExecOne[note](ctx, db, `insert into notes (title, body) values (?, ?) returning id, title, body`, "first", "hello")
-	if err != nil || created.ID == 0 || created.Title != "first" {
-		t.Fatalf("create: %+v, %v", created, err)
+	created, found, err := ExecOne[note](ctx, db, `insert into notes (title, body) values (?, ?) returning *`, "first", "hello")
+	if err != nil || !found || created.ID == 0 || created.Title != "first" {
+		t.Fatalf("create: %+v, %t, %v", created, found, err)
 	}
-	got, err := One[note](ctx, db, `select id, title, body from notes where id = ?`, created.ID)
-	if err != nil || got != created {
-		t.Fatalf("get: %+v, %v", got, err)
+	got, found, err := One[note](ctx, db, `select * from notes where id = ?`, created.ID)
+	if err != nil || !found || got != created {
+		t.Fatalf("get: %+v, %t, %v", got, found, err)
 	}
-	renamed, err := ExecOne[note](ctx, db, `update notes set title = ? where id = ? returning id, title, body`, "renamed", created.ID)
-	if err != nil || renamed.Title != "renamed" {
-		t.Fatalf("rename: %+v, %v", renamed, err)
+	renamed, found, err := ExecOne[note](ctx, db, `update notes set title = ? where id = ? returning *`, "renamed", created.ID)
+	if err != nil || !found || renamed.Title != "renamed" {
+		t.Fatalf("rename: %+v, %t, %v", renamed, found, err)
 	}
 	id, err := ExecScalar[int64](ctx, db, `insert into notes (title) values ('second') returning id`)
 	if err != nil || id != created.ID+1 {
 		t.Fatalf("second id: %d, %v", id, err)
 	}
-	listed, err := All[note](ctx, db, `select id, title, body from notes order by id`)
+	listed, err := All[note](ctx, db, `select * from notes order by id`)
 	if err != nil || len(listed) != 2 || listed[0].Title != "renamed" {
 		t.Fatalf("list: %+v, %v", listed, err)
 	}
@@ -83,56 +87,22 @@ func TestNotesThroughEveryCall(t *testing.T) {
 	if err != nil || count != 1 {
 		t.Fatalf("count after delete: %d, %v", count, err)
 	}
-	if _, err = One[note](ctx, db, `select id, title, body from notes where id = ?`, created.ID); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("a deleted note: %v", err)
+	if _, found, err = One[note](ctx, db, `select * from notes where id = ?`, created.ID); found || err != nil {
+		t.Fatalf("a deleted note: found %t, %v", found, err)
 	}
-	if _, err = ExecOne[note](ctx, db, `update notes set title = 'x' where id = 999 returning id, title, body`); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("updating no note: %v", err)
+	if _, found, err = ExecOne[note](ctx, db, `update notes set title = 'x' where id = 999 returning *`); found || err != nil {
+		t.Fatalf("updating no note: found %t, %v", found, err)
 	}
 }
 
 func TestAReadCannotWriteAndSaysWhereToWrite(t *testing.T) {
 	db := openNotes(t)
 	_, err := Scalar[int64](t.Context(), db, `insert into notes (title) values ('sneaky') returning id`)
-	if !errors.Is(err, tinystore.ErrInvalid) {
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "use Exec") {
 		t.Fatalf("a write sent to a read: %v", err)
 	}
 	if count, _ := Scalar[int](t.Context(), db, `select count(*) from notes`); count != 0 {
 		t.Fatalf("the refused write left %d rows", count)
-	}
-}
-
-func TestTxCommitsOnNilAndRollsBackOnErrorOrPanic(t *testing.T) {
-	db := openNotes(t)
-	ctx := t.Context()
-	insertTwo := func(tx *Tx) error {
-		if _, err := tx.Exec(ctx, `insert into notes (title) values ('a')`); err != nil {
-			return err
-		}
-		_, err := ExecScalar[int64](ctx, tx, `insert into notes (title) values ('b') returning id`)
-		return err
-	}
-
-	failed := errors.New("changed my mind")
-	if err := db.Tx(ctx, func(tx *Tx) error { return errors.Join(insertTwo(tx), failed) }); !errors.Is(err, failed) {
-		t.Fatal(err)
-	}
-	func() {
-		defer func() { _ = recover() }()
-		_ = db.Tx(ctx, func(tx *Tx) error {
-			_ = insertTwo(tx)
-			panic("boom")
-		})
-	}()
-	if count, _ := Scalar[int](ctx, db, `select count(*) from notes`); count != 0 {
-		t.Fatalf("rolled back transactions left %d rows", count)
-	}
-
-	if err := db.Tx(ctx, insertTwo); err != nil {
-		t.Fatal(err)
-	}
-	if count, _ := Scalar[int](ctx, db, `select count(*) from notes`); count != 2 {
-		t.Fatalf("committed %d rows, want 2", count)
 	}
 }
 
@@ -173,9 +143,15 @@ func TestExecsShareACommitAndFailAlone(t *testing.T) {
 	}
 }
 
-// throughNil takes its columns through an embedded pointer, which is nil in a
-// new value, so reflection panics reaching them
-type throughNil struct{ *note }
+// explosive panics when a column is scanned into it
+type explosive struct{}
+
+func (*explosive) Scan(any) error { panic("the scan exploded") }
+
+type panicky struct {
+	ID    int64
+	Title explosive
+}
 
 // a panic inside a grouped statement's own work rolls back that statement
 // alone and goes on in its caller's goroutine, whichever goroutine ran it, and
@@ -185,11 +161,11 @@ func TestAPanicInsideAWriteRollsBackItsStatementAlone(t *testing.T) {
 	ctx := t.Context()
 	func() {
 		defer func() {
-			if recovered := fmt.Sprint(recover()); !strings.Contains(recovered, "nil pointer to embedded struct") {
+			if recovered := fmt.Sprint(recover()); recovered != "the scan exploded" {
 				t.Fatalf("the caller recovered %v", recovered)
 			}
 		}()
-		_, _ = ExecOne[throughNil](ctx, db, `insert into notes (id, title) values (7, 'lost') returning id, title`)
+		_, _, _ = ExecOne[panicky](ctx, db, `insert into notes (id, title) values (7, 'lost') returning id, title`)
 	}()
 	if _, err := db.Exec(ctx, `insert into notes (title) values ('after')`); err != nil {
 		t.Fatalf("a write after the panic: %v", err)
@@ -205,7 +181,7 @@ func TestMigrationsApplyOnceAndAChangedOneRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = Open(t.Context(), store, "app", notesMigrations); err != nil {
+	if _, err = Open(t.Context(), store, "app", notesMigrations, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = store.Close(t.Context()); err != nil {
@@ -220,7 +196,7 @@ func TestMigrationsApplyOnceAndAChangedOneRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := Open(t.Context(), store, "app", grown)
+	db, err := Open(t.Context(), store, "app", grown, nil)
 	if err != nil {
 		t.Fatalf("a new migration: %v", err)
 	}
@@ -235,9 +211,27 @@ func TestMigrationsApplyOnceAndAChangedOneRefuses(t *testing.T) {
 		"001_notes.sql": {Data: []byte(`create table notes (id integer primary key) strict;`)},
 		"002_tags.sql":  grown["002_tags.sql"],
 	}
-	_, err = Open(t.Context(), openStore(t, dir), "app", edited)
+	_, err = Open(t.Context(), openStore(t, dir), "app", edited, nil)
 	if err == nil || !strings.Contains(err.Error(), "migration 1 changed after application") {
 		t.Fatalf("a database whose applied migration was edited: %v", err)
+	}
+}
+
+// an embed.FS of migrations/*.sql holds them in its one directory, which Open
+// finds; two directories are a question Open does not answer
+func TestTheMigrationsAreFoundInTheirOneDirectory(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	embedded := fstest.MapFS{"migrations/001_notes.sql": notesMigrations["001_notes.sql"]}
+	db, err := Open(t.Context(), store, "app", embedded, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(t.Context(), `insert into notes (title) values ('found')`); err != nil {
+		t.Fatal(err)
+	}
+	two := fstest.MapFS{"app/001.sql": notesMigrations["001_notes.sql"], "billing/001.sql": notesMigrations["001_notes.sql"]}
+	if _, err = Open(t.Context(), store, "billing", two, nil); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("two directories of migrations: %v", err)
 	}
 }
 
@@ -245,17 +239,17 @@ func TestNamesAreCheckedAndEachIsOpenedOnce(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, dir)
 	for _, name := range []string{"", "App", "../x", "a b", string(make([]byte, 65))} {
-		if _, err := Open(t.Context(), store, name, notesMigrations); !errors.Is(err, tinystore.ErrInvalid) {
+		if _, err := Open(t.Context(), store, name, notesMigrations, nil); !errors.Is(err, tinystore.ErrInvalid) {
 			t.Errorf("name %q: %v", name, err)
 		}
 	}
-	if _, err := Open(t.Context(), store, "app", notesMigrations); err != nil {
+	if _, err := Open(t.Context(), store, "app", notesMigrations, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(t.Context(), store, "app", notesMigrations); !errors.Is(err, tinystore.ErrInUse) {
+	if _, err := Open(t.Context(), store, "app", notesMigrations, nil); !errors.Is(err, tinystore.ErrInUse) {
 		t.Fatalf("app twice: %v", err)
 	}
-	if _, err := Open(t.Context(), store, "audit", notesMigrations); err != nil {
+	if _, err := Open(t.Context(), store, "audit", notesMigrations, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"app", "audit"} {
@@ -267,7 +261,7 @@ func TestNamesAreCheckedAndEachIsOpenedOnce(t *testing.T) {
 
 func TestClosingTheStoreClosesTheDatabase(t *testing.T) {
 	store := openStore(t, t.TempDir())
-	db, err := Open(t.Context(), store, "app", notesMigrations)
+	db, err := Open(t.Context(), store, "app", notesMigrations, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,5 +270,8 @@ func TestClosingTheStoreClosesTheDatabase(t *testing.T) {
 	}
 	if _, err = Scalar[int](t.Context(), db, `select 1`); !errors.Is(err, tinystore.ErrClosed) {
 		t.Fatalf("a read after close: %v", err)
+	}
+	if _, err = db.Exec(t.Context(), `delete from notes`); !errors.Is(err, tinystore.ErrClosed) {
+		t.Fatalf("a write after close: %v", err)
 	}
 }

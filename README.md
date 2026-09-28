@@ -88,31 +88,32 @@ and the command that reproduces each number are in
 
 ## Layout
 
-| Path     | What it is                                                      |
-|----------|-----------------------------------------------------------------|
-| `codec/` | the block codec: what a payload looks like and how to read one  |
-| `metrics/` | the durable metrics engine and its lifecycle tests           |
-| `records/` | logs and events: a head, event-time segments, paged reads    |
-| `kv/`    | the application's current state: typed buckets by key, versions |
-| `sqldb/` | the application's own SQL databases in the store               |
-| `backup/` | every engine's file in one checked zip, and its restore       |
-| `examples/` | programs using the public API, built and tested with it     |
-| `internal/sqlite/` | file handles, transactions and checked migrations      |
-| `internal/admission/` | the gate and slots every engine lets work in through |
-| `spike/` | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
-| `docs/`  | the design, the format, the numbers and what is still unknown   |
-| `bench/` | a module of its own: corpus runners and the engines compared to |
-| `tools/` | a second module pinning developer tools                         |
+| Path                  | What it is                                                      |
+|-----------------------|-----------------------------------------------------------------|
+| `codec/`              | the block codec: what a payload looks like and how to read one  |
+| `metrics/`            | the durable metrics engine and its lifecycle tests              |
+| `records/`            | logs and events: a head, event-time segments, paged reads       |
+| `kv/`                 | the application's current state: typed buckets by key, versions |
+| `sqldb/`              | the application's own SQL databases in the store                |
+| `backup/`             | every engine's file in one checked zip, and its restore         |
+| `examples/`           | programs using the public API, built and tested with it         |
+| `internal/sqlite/`    | file handles, transactions and checked migrations               |
+| `internal/admission/` | the gate and slots every engine lets work in through            |
+| `spike/`              | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
+| `docs/`               | the design, the format, the numbers and what is still unknown   |
+| `bench/`              | a module of its own: corpus runners and the engines compared to |
+| `tools/`              | a second module pinning developer tools                         |
+| `cmd/tinystore/`      | a module of its own: `go tool tinystore`, migrations for sqldb  |
 
 ## Documentation
 
-| | |
-|---|---|
-| [docs/design.md](docs/design.md) | how the store is meant to work, and why that shape |
-| [docs/format.md](docs/format.md) | the bytes: the payload's layout, version by version |
+|                                              |                                                        |
+|----------------------------------------------|--------------------------------------------------------|
+| [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape     |
+| [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version    |
 | [docs/measurements.md](docs/measurements.md) | every number, its environment, and how to reproduce it |
-| [docs/research.md](docs/research.md) | what is not built: the open questions and their gates |
-| [docs/reports/](docs/reports/README.md) | the dated measurement rounds each number came from |
+| [docs/research.md](docs/research.md)         | what is not built: the open questions and their gates  |
+| [docs/reports/](docs/reports/README.md)      | the dated measurement rounds each number came from     |
 
 ## License
 

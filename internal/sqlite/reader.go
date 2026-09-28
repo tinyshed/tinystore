@@ -7,18 +7,31 @@ import (
 	"fmt"
 )
 
-const readerStatements = 32
+// the compiled statements a connection keeps unless Config.Statements says
+const keptStatements = 32
 
 type Reader interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
+// preparedConnection keeps the statements it compiled by their text, the
+// least recently used closed first once it holds limit of them
 type preparedConnection struct {
 	conn       *sql.Conn
-	statements map[string]*sql.Stmt
-	order      []string
+	limit      int
+	statements map[string]*keptStatement
+	newest     *keptStatement
+	oldest     *keptStatement
 	prepares   uint64
 	evictions  uint64
+}
+
+// keptStatement is one compiled statement in its connection's order of use
+type keptStatement struct {
+	query     string
+	statement *sql.Stmt
+	newer     *keptStatement
+	older     *keptStatement
 }
 
 type readConnection struct {
@@ -34,47 +47,75 @@ func (r *preparedConnection) QueryContext(ctx context.Context, query string, arg
 }
 
 func (r *preparedConnection) prepare(ctx context.Context, query string) (*sql.Stmt, error) {
-	if statement := r.statements[query]; statement != nil {
-		for i, text := range r.order {
-			if text == query {
-				copy(r.order[i:], r.order[i+1:])
-				r.order[len(r.order)-1] = query
-				break
-			}
-		}
-		return statement, nil
+	if kept := r.statements[query]; kept != nil {
+		r.unlink(kept)
+		r.pushNewest(kept)
+		return kept.statement, nil
 	}
-	if len(r.order) == readerStatements {
-		oldest := r.order[0]
-		if err := r.statements[oldest].Close(); err != nil {
-			return nil, fmt.Errorf("retire SQLite read: %w", err)
+	if len(r.statements) >= r.limit && r.oldest != nil {
+		if err := r.retireOldest(); err != nil {
+			return nil, err
 		}
-		delete(r.statements, oldest)
-		r.order = r.order[1:]
-		r.evictions++
 	}
 	statement, err := r.conn.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("prepare SQLite read: %w", err)
 	}
 	if r.statements == nil {
-		r.statements = make(map[string]*sql.Stmt)
+		r.statements = make(map[string]*keptStatement, r.limit)
 	}
-	r.statements[query] = statement
-	r.order = append(r.order, query)
+	kept := &keptStatement{query: query, statement: statement}
+	r.statements[query] = kept
+	r.pushNewest(kept)
 	r.prepares++
 	return statement, nil
 }
 
+func (r *preparedConnection) retireOldest() error {
+	oldest := r.oldest
+	r.unlink(oldest)
+	delete(r.statements, oldest.query)
+	r.evictions++
+	if err := oldest.statement.Close(); err != nil {
+		return fmt.Errorf("retire SQLite read: %w", err)
+	}
+	return nil
+}
+
+func (r *preparedConnection) pushNewest(kept *keptStatement) {
+	kept.older, kept.newer = r.newest, nil
+	if r.newest != nil {
+		r.newest.newer = kept
+	}
+	r.newest = kept
+	if r.oldest == nil {
+		r.oldest = kept
+	}
+}
+
+func (r *preparedConnection) unlink(kept *keptStatement) {
+	if kept.newer != nil {
+		kept.newer.older = kept.older
+	} else {
+		r.newest = kept.older
+	}
+	if kept.older != nil {
+		kept.older.newer = kept.newer
+	} else {
+		r.oldest = kept.newer
+	}
+	kept.newer, kept.older = nil, nil
+}
+
 func (r *preparedConnection) close() error {
 	var err error
-	for _, statement := range r.statements {
-		err = errors.Join(err, statement.Close())
+	for _, kept := range r.statements {
+		err = errors.Join(err, kept.statement.Close())
 	}
 	if r.conn != nil {
 		err = errors.Join(err, r.conn.Close())
 	}
-	r.conn, r.statements, r.order = nil, nil, nil
+	r.conn, r.statements, r.newest, r.oldest = nil, nil, nil, nil
 	return err
 }
 
@@ -132,7 +173,7 @@ func (f *File) takeIdleReader() *readConnection {
 	defer f.readersMu.Unlock()
 	last := len(f.idleReaders) - 1
 	if last < 0 {
-		return &readConnection{}
+		return &readConnection{preparedConnection{limit: f.statements}}
 	}
 	connection := f.idleReaders[last]
 	f.idleReaders = f.idleReaders[:last]
@@ -192,4 +233,15 @@ func (r *Row) Scan(dest ...any) error {
 		return err
 	}
 	return r.rows.Close()
+}
+
+// ReaderPrepares is how many statements the idle readers have compiled.
+func (f *File) ReaderPrepares() uint64 {
+	f.readersMu.Lock()
+	defer f.readersMu.Unlock()
+	var prepares uint64
+	for _, connection := range f.idleReaders {
+		prepares += connection.prepares
+	}
+	return prepares
 }

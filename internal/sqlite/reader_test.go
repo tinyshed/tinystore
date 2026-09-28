@@ -26,6 +26,14 @@ func openReaderTestFile(t *testing.T) *File {
 	return file
 }
 
+// kept is the statement a connection keeps for query, nil for none
+func (r *preparedConnection) kept(query string) *sql.Stmt {
+	if kept := r.statements[query]; kept != nil {
+		return kept.statement
+	}
+	return nil
+}
+
 func TestPreparedReadsKeepOneSnapshotAndRefreshTheNext(t *testing.T) {
 	file := openReaderTestFile(t)
 	const query = `select n from example limit cast(? as integer)`
@@ -51,8 +59,8 @@ func TestPreparedReadsKeepOneSnapshotAndRefreshTheNext(t *testing.T) {
 			}
 			connection := reader.(*readConnection)
 			if pass == 0 {
-				original = connection.statements[query]
-			} else if original != connection.statements[query] {
+				original = connection.kept(query)
+			} else if original != connection.kept(query) {
 				t.Fatal("reprepared an unchanged query")
 			}
 			return nil
@@ -71,7 +79,7 @@ func TestPreparedReadsKeepOneSnapshotAndRefreshTheNext(t *testing.T) {
 func TestPreparedReadCacheIsBoundedAndRebindsValues(t *testing.T) {
 	file := openReaderTestFile(t)
 	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
-		for i := range 3 * readerStatements {
+		for i := range 3 * keptStatements {
 			query := fmt.Sprintf(`select ? + %d`, i)
 			for _, argument := range []int{7, 13} {
 				var value int
@@ -82,7 +90,7 @@ func TestPreparedReadCacheIsBoundedAndRebindsValues(t *testing.T) {
 					t.Fatalf("stale binding: got %d, want %d", value, argument+i)
 				}
 			}
-			if len(reader.(*readConnection).statements) > readerStatements {
+			if len(reader.(*readConnection).statements) > keptStatements {
 				t.Fatal("unbounded prepared statements")
 			}
 		}
@@ -105,8 +113,8 @@ func TestPreparedReadCacheKeepsRecentlyUsedProgram(t *testing.T) {
 		if err := QueryRow(t.Context(), reader, hot).Scan(&value); err != nil {
 			return err
 		}
-		original := connection.statements[hot]
-		for i := range readerStatements - 1 {
+		original := connection.kept(hot)
+		for i := range keptStatements - 1 {
 			query := fmt.Sprintf(`select %d`, i)
 			if err := QueryRow(t.Context(), reader, query).Scan(&value); err != nil {
 				return err
@@ -118,7 +126,7 @@ func TestPreparedReadCacheKeepsRecentlyUsedProgram(t *testing.T) {
 		if err := QueryRow(t.Context(), reader, `select 999`).Scan(&value); err != nil {
 			return err
 		}
-		if connection.statements[hot] != original || len(connection.statements) != readerStatements {
+		if connection.kept(hot) != original || len(connection.statements) != keptStatements {
 			t.Fatal("recently used read program was evicted")
 		}
 		return nil
@@ -172,14 +180,14 @@ func TestApplicationErrorKeepsPreparedReader(t *testing.T) {
 		if err := QueryRow(t.Context(), reader, query).Scan(&value); err != nil {
 			return err
 		}
-		statement = first.statements[query]
+		statement = first.kept(query)
 		return callbackError
 	}); !errors.Is(err, callbackError) {
 		t.Fatal(err)
 	}
 	if err := file.ViewPrepared(t.Context(), func(reader Reader) error {
 		connection := reader.(*readConnection)
-		if connection != first || connection.statements[query] != statement {
+		if connection != first || connection.kept(query) != statement {
 			t.Fatal("application error discarded a healthy reader")
 		}
 		var value int
@@ -316,5 +324,42 @@ func TestALookupReadsEachStatementFromItsOwnSnapshot(t *testing.T) {
 	}
 	if err != nil || looked != [2]int{1, 2} || viewed != [2]int{3, 3} {
 		t.Fatalf("a Lookup counted %v and a View %v, %v; want [1 2] and [3 3]", looked, viewed, err)
+	}
+}
+
+// a connection keeps as many statements as its file was opened with, the one
+// used longest ago closed first
+func TestAConnectionKeepsTheStatementsItsFileWasOpenedWith(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "kept.db"), Config{Readers: 1, Statements: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	err = file.Lookup(t.Context(), func(reader Reader) error {
+		connection := reader.(*readConnection)
+		var value int
+		for i := range 129 {
+			if readErr := QueryRow(t.Context(), reader, fmt.Sprintf(`select %d`, i)).Scan(&value); readErr != nil {
+				return readErr
+			}
+			if i == 0 {
+				continue
+			}
+			if readErr := QueryRow(t.Context(), reader, `select 0`).Scan(&value); readErr != nil {
+				return readErr
+			}
+		}
+		if len(connection.statements) != 128 || connection.kept(`select 0`) == nil || connection.kept(`select 1`) != nil {
+			t.Fatalf("%d statements kept; the one used throughout kept %t, the oldest other %t",
+				len(connection.statements), connection.kept(`select 0`) != nil, connection.kept(`select 1`) != nil)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

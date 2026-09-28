@@ -59,7 +59,7 @@ defer store.Close(context.WithoutCancel(ctx)) // every engine, the last opened f
 
 cpu, err := metrics.Open(ctx, store, metrics.Options{Retention: 30 * 24 * time.Hour})
 events, err := records.Open(ctx, store, records.Options{})
-app, err := sqldb.Open(ctx, store, "app", migrations) // data/sql/app.db
+app, err := sqldb.Open(ctx, store, "app", migrations, schema) // data/sql/app.db
 ```
 
 Decided, with the alternatives that lost:
@@ -319,21 +319,24 @@ level, keys and blooms; FTS5, with its ranking and phrases, stays for `sqldb`
 and the application's own text, where the first round measured it costing more
 than the records it indexed.
 
-**sqldb** (built; contract in `sqldb/README.md`). The application writes the schema and the
-SQL; TinyStore owns the file, the connections, the migrations and the
-transaction lifecycle.
+**sqldb** (built; contract in `sqldb/README.md`, design in [sqldb.md](sqldb.md)).
+The application writes the SQL; TinyStore owns the file, the connections, the
+migrations, the values between Go and SQLite and the transactions. A struct
+declares a table's columns, `Table[T]` what a struct cannot say, `Schema(...)`
+prints the `STRICT` DDL, migrations stay `.sql` files that `Open` checks the
+file against, a typed `Insert` writes one row, and queries stay SQL.
 
-What a method's name starts with says where it runs: `Exec…` may write and
-goes to the file's one writer; everything else reads, on the `query_only`
-readers.
+What a call's name starts with says where it runs: `Exec…` and `Insert` may
+write and go to the file's one writer; everything else reads, on eight
+`query_only` readers.
 
 ```go
-user, err := sqldb.One[User](ctx, app, `select id, name from users where id = ?`, id)
-users, err := sqldb.All[User](ctx, app, `select id, name from users order by id limit ?`, 50)
+user, found, err := sqldb.One[User](ctx, app, `select * from users where id = ?`, id)
+users, err := sqldb.All[User](ctx, app, `select * from users order by id limit 50`)
 count, err := sqldb.Scalar[int](ctx, app, `select count(*) from users`)
 
-id, err := sqldb.ExecScalar[int64](ctx, app, `insert into users (name) values (?) returning id`, name)
-user, err = sqldb.ExecOne[User](ctx, app, `update users set name = ? where id = ? returning id, name`, name, id)
+user, err = sqldb.Insert(ctx, app, Users, User{Email: email, CreatedAt: store.Now()})
+user, found, err = sqldb.ExecOne[User](ctx, app, `update users set name = ? where id = ? returning *`, name, id)
 result, err := app.Exec(ctx, `delete from sessions where expires_at < ?`, now)
 
 err = app.Tx(ctx, func(tx *sqldb.Tx) error { … }) // several statements, one writer transaction
@@ -341,21 +344,31 @@ err = app.Tx(ctx, func(tx *sqldb.Tx) error { … }) // several statements, one w
 
 - A write sent to a read fails at once with `SQLITE_READONLY` and writes
   nothing; sqldb returns `ErrInvalid` naming the `Exec…` form to use.
-- `One`: no row is `sql.ErrNoRows`, two rows are `ErrManyRows`; an `ExecOne`
-  whose `returning` found no row is `sql.ErrNoRows` too. `Scalar` reads one
-  column. There is no `Raw()`, so nobody closes the pool under the store.
-- The typed reads are package functions taking `*DB` or `*Tx`, as pgx's and
+- A read is one prepared statement without a transaction, its own snapshot;
+  each connection keeps 128 compiled statements, the least recently used
+  closed first. `One` answers `found`; `All` holds its rows in the store's
+  memory up to 64 MiB; `Each` decodes a row at a time from a snapshot held at
+  most five seconds.
+- Rows decode through a plan found once for a type and its columns; a
+  parameter is written by its Go type, as its column holds it: time as unix
+  milliseconds, a known uuid as text, `JSON[T]` as JSON, `Date` as
+  `YYYY-MM-DD`. A value that does not decode, or one SQLite would change, is
+  `ErrInvalid` naming the column and the field.
+- `Exec`s from many goroutines commit in groups, each in its savepoint; a
+  group's ten seconds count from when it holds the writer, so a long `Tx`
+  fails none of the writes behind it.
+- The typed calls are package functions taking `*DB` or `*Tx`, as pgx's and
   sqlc's are, rather than generic methods, which would raise the Go version
-  every importer needs.
-- A struct takes columns by its `db` tag, or by field name in snake_case
-  (`CreatedAt` → `created_at`); embedded structs' fields count. Mapping uses
-  `reflect` without `MethodByName`.
-- `Tx`: nil commits, an error or a panic rolls back.
+  every importer needs; mapping uses `reflect` without `MethodByName`.
 - Migrations are `*.sql` files applied in name order through
-  `internal/sqlite.Migrate`, the one metrics uses: all pending ones in one
-  transaction, checksums of the applied ones verified on every open. A changed
-  applied migration, another engine's file, or a database newer than the binary
-  refuses to open.
+  `internal/sqlite.Migrate`, the one every engine uses: all pending ones in one
+  transaction with foreign keys off and `foreign_key_check` before the commit,
+  checksums of the applied ones verified on every open. A changed applied
+  migration, another engine's file, a database newer than the binary, or a
+  file that does not match the schema refuses to open.
+- `sqldbtest.CheckSchema` compares the schema with what the migrations make,
+  in the program's own tests, and `go tool tinystore migrate … new …`, of the
+  module `cmd/tinystore`, runs that test to write the next migration.
 
 **kv** (built; contract in `kv/README.md`, design in [kv.md](kv.md)).
 The application's current state in `kv.db`: buckets of one value type with

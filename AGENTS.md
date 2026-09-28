@@ -29,8 +29,16 @@ directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
 `Gauge`, `GaugeFunc`) for an application measuring itself. Every engine takes a
 time only inside its window of the store's clock, and lets work in through the
 gate and slots of `internal/admission`. `sqldb` gives the
-application its own databases in `sql/<name>.db`; [sqldb/README.md](sqldb/README.md)
-states its contract. `records` keeps logs and events in `records.db`: a
+application its own databases in `sql/<name>.db`: the application's SQL,
+tables declared by structs and `Table[T]`, the `STRICT` DDL they print,
+`.sql` migrations that `Open` checks the file against, a typed `Insert`,
+values Go and SQLite agree on, point reads as one prepared statement, `Exec`s
+committed in groups, and `sqldbtest.CheckSchema` with `go tool tinystore`,
+the module `cmd/tinystore`, writing the next migration
+([sqldb/README.md](sqldb/README.md), [docs/sqldb.md](docs/sqldb.md),
+[the round](docs/reports/sqldb-mechanics-2026-09-28.md),
+[the engine's](docs/reports/sqldb-engine-2026-09-28.md)). `records`
+keeps logs and events in `records.db`: a
 durable head, segments of event-time blocks written column by column, a line's
 own time kept apart from its text, a quiet stream's small segments merged
 four of a size, paged reads pruned by time, level, keys and blooms, a follow
@@ -88,7 +96,7 @@ Do not describe unbuilt behaviour as though it works.
 |----------------------|-------------------------------------------------------------------------------|
 | `codec/`             | the block codec and the payload format. Knows samples and bytes, nothing else |
 | `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
-| `sqldb/`             | the application's SQL databases: migrations, typed reads, `Exec…` writes, `Tx` |
+| `sqldb/`             | the application's SQL databases: tables from structs, checked migrations, typed reads and writes |
 | `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
 | `kv/`                | the application's current state: typed buckets, branches, expiry, versions    |
 | `jobs/`              | work that runs at its time: queues ordered by time, leases, retries, repeats  |
@@ -98,6 +106,7 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
+| `cmd/tinystore/`     | the one executable, a module of its own: `migrate` and `schema` for sqldb     |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
@@ -123,13 +132,20 @@ other.
 
 ## Modules
 
-Three, and the split is the point.
+Four, and the split is the point.
 
 ```text
-root     what a caller links: the engine and nothing else
-tools/   golangci-lint, govulncheck, task
-bench/   corpora, comparison harnesses, whatever a measurement drags in
+root            what a caller links: the engine and nothing else
+tools/          golangci-lint, govulncheck, task
+bench/          corpora, comparison harnesses, whatever a measurement drags in
+cmd/tinystore/  the one executable, go tool tinystore; the standard library alone today
 ```
+
+`cmd/tinystore` is a module of its own, as a service is: what it will link to
+serve, back up and inspect a store stays out of the library's graph, and its
+`migrate` commands only run the application's own test, so the comparison
+comes from the sqldb the application pinned. `task` tests, lints, formats and
+tidies it beside the root.
 
 The root module's dependency list is a promise rather than an accident:
 `klauspost/compress` for zstd and `modernc.org/sqlite` for the file. Anything a
@@ -153,7 +169,7 @@ has the reasons and the API; the rules hold for the runtime as it is built.
 engine waits on another's writer, and no write is atomic across two engines.
 
 **The store opens first, engines open against it.** `metrics.Open(ctx, store, …)`,
-`sqldb.Open(ctx, store, "app", migrations)`. The caller keeps the handles; the
+`sqldb.Open(ctx, store, "app", migrations, schema)`. The caller keeps the handles; the
 store has no accessors. One `Close` closes every engine, the last opened first.
 
 **The root package imports no engine.** A program links the engines it opens
@@ -392,6 +408,26 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
 | an application's writes share a commit, fail alone  | `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone` |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
+| a migration rebuilding a parent keeps its children  | `TestARebuiltTableKeepsItsChildren`, `TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit` |
+| a schema is the SQL it prints                       | `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`        |
+| a declaration that cannot be a table fails at start | `TestADeclarationThatCannotBeATableFailsAtStart`                                |
+| an sqldb value comes back as it went in             | `TestEveryValueComesBackAsItWentIn`, `TestArgumentsAreWrittenByTheirGoType`     |
+| sixteen bytes of a type sqldb does not know are bytes | `TestOnlyAKnownUUIDTypeIsText`                                                |
+| a value that does not decode names column and field | `TestAValueThatDoesNotDecodeNamesItsColumnAndField`                             |
+| a value SQLite would change is refused              | `TestAValueSQLiteWouldChangeIsRefused`: NaN, `uint64` past `int64`, a day no calendar has |
+| `Insert` writes every field but the generated ones  | `TestInsertWritesEveryFieldButTheGeneratedOnes`, `TestInsertReturnsWhatTheDatabaseGenerated` |
+| `Open` checks the file and changes nothing          | `TestOpenChecksTheFileAgainstTheSchemaAndChangesNothing`, `TestOpenNamesEachDifferenceOfStructure` |
+| an expression spelled otherwise never refuses a file | `TestOpenDoesNotRefuseAnExpressionSpelledOtherwise`                            |
+| a long transaction fails no grouped write behind it | `TestALongTransactionFailsNoWriteBehindIt`, `TestALongTransactionFailsNoGroupedWriteBehindIt` |
+| a group's leader whose caller left hands the lead on | `TestALeaderWhoseCallerLeavesHandsTheLeadOn`                                   |
+| a call on the DB inside its own Tx ends with its context | `TestACallOnTheDBInsideItsOwnTxEndsWithItsContext`                         |
+| an sqldb snapshot ends at its bound and says so     | `TestEachHoldsOneSnapshotAndOneRow`, `TestASnapshotHeldPastItsBoundSaysSo`      |
+| a constraint says its kind                          | `TestAConstraintSaysItsKind`                                                    |
+| a statement is compiled once a connection           | `TestAStatementIsCompiledOnceAConnection`, `TestAConnectionKeepsTheStatementsItsFileWasOpenedWith` |
+| sqldb holds the store's memory before it decodes    | `TestStoreMemoryBoundsReadsAndWrites`, `TestAllPastItsBoundRefuses`             |
+| a schema check writes a migration only when asked   | `TestCheckSchemaFindsWhatIsMissingAndWritesOnlyWhenAsked`, `TestTwoChecksOfOneNameFail` |
+| an ambiguous change is a draft that does not run    | `TestAnAmbiguousChangeIsADraftThatDoesNotRun`                                   |
+| the tool finds each database by its name            | `TestTheToolFindsEachDatabaseByItsName`, `TestTheToolWritesTheNextMigrationThroughTheCheck` in `cmd/tinystore` |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
 | another program's lines lose no byte                | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`                                 |

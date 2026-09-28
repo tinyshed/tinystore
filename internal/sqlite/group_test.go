@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -12,7 +13,12 @@ import (
 
 func openGroupTestFile(t *testing.T) *File {
 	t.Helper()
-	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "group.db"), Config{Readers: 1})
+	return openGroupTestFileWith(t, Config{Readers: 1})
+}
+
+func openGroupTestFileWith(t *testing.T, config Config) *File {
+	t.Helper()
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "group.db"), config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,5 +186,81 @@ func TestAHeavyGroupedWriteCommitsAlone(t *testing.T) {
 	}
 	if commits := file.commits.Load() - before; commits != 4 {
 		t.Fatalf("%d commits after the held one, want the held one and three: before, alone, after", commits)
+	}
+}
+
+// a transaction holding the writer past a group's hold fails none of the
+// writes queued behind it: the hold counts from when a group holds the writer,
+// and the engine is told once that the leader has waited
+func TestALongTransactionFailsNoGroupedWriteBehindIt(t *testing.T) {
+	var waited []string
+	var mu sync.Mutex
+	file := openGroupTestFileWith(t, Config{
+		Readers: 1, GroupHold: 50 * time.Millisecond, Patience: 20 * time.Millisecond,
+		Waited: func(label string) {
+			mu.Lock()
+			defer mu.Unlock()
+			waited = append(waited, label)
+		},
+	})
+	release := holdWriter(t, file)
+
+	const writers = 8
+	errs := make([]error, writers)
+	var wg sync.WaitGroup
+	for n := range writers {
+		wg.Go(func() {
+			errs[n] = file.UpdateGroupedAs(t.Context(), fmt.Sprint("write ", n), 8, func(w Writer) error {
+				_, err := w.ExecContext(t.Context(), `insert into example values(?)`, n)
+				return err
+			})
+		})
+		waitQueued(t, file, n+1)
+	}
+	time.Sleep(200 * time.Millisecond)
+	release()
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("writes behind a transaction four holds long: %v", err)
+	}
+	if rows := countRows(t, file); rows != writers {
+		t.Fatalf("%d rows, want %d", rows, writers)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(waited) != 1 || waited[0] != "write 0" {
+		t.Fatalf("the engine was told %q, want the leader's label once", waited)
+	}
+}
+
+// a leader whose caller leaves while it waits for the writer writes nothing,
+// and the write behind it leads and commits
+func TestALeaderWhoseCallerLeavesHandsTheLeadOn(t *testing.T) {
+	file := openGroupTestFile(t)
+	release := holdWriter(t, file)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	leader := make(chan error, 1)
+	go func() { leader <- insertGrouped(ctx, file, 1, nil) }()
+	waitQueued(t, file, 1)
+	follower := make(chan error, 1)
+	go func() { follower <- insertGrouped(t.Context(), file, 2, nil) }()
+	waitQueued(t, file, 2)
+
+	cancel()
+	if err := <-leader; !errors.Is(err, context.Canceled) {
+		t.Fatalf("a leader whose caller left: %v", err)
+	}
+	release()
+	if err := <-follower; err != nil {
+		t.Fatalf("the write behind it: %v", err)
+	}
+	var n int
+	err := file.View(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `select group_concat(n) from example`).Scan(&n)
+	})
+	if err != nil || n != 2 {
+		t.Fatalf("the file holds %d, %v; want the follower's 2 alone", n, err)
 	}
 }
