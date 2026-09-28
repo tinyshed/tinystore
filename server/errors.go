@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
+	"github.com/tinyshed/tinystore/records"
 	"github.com/tinyshed/tinystore/server/wire"
 	"github.com/tinyshed/tinystore/sqldb"
 )
@@ -29,6 +31,7 @@ var sentinels = []struct {
 }{
 	{kv.ErrOutcomeUnknown, wire.CodeOutcomeUnknown}, // every engine's, the same error
 	{errDataConnection, wire.CodePermission},
+	{errAdminOnly, wire.CodePermission},
 	{tinystore.ErrInvalid, wire.CodeInvalid},
 	{tinystore.ErrLimit, wire.CodeLimit},
 	{tinystore.ErrClosed, wire.CodeClosed},
@@ -81,7 +84,30 @@ func whatOf(err error) map[string]string {
 	if errors.As(err, &constraint) {
 		return constraintOf(constraint)
 	}
-	return nil
+	return recordsWhat(err)
+}
+
+// recordsWhat names the record an append refused, by its place in the batch,
+// or the damaged row a read or a follow met, as a drop names it
+func recordsWhat(err error) map[string]string {
+	var refused *records.RecordError
+	if errors.As(err, &refused) {
+		return map[string]string{"call": strconv.Itoa(refused.Index), "stream": refused.Stream, "name": refused.Name}
+	}
+	var damaged *records.DamageError
+	if !errors.As(err, &damaged) {
+		return nil
+	}
+	damage := wireDamage(damaged.Damage)
+	what := map[string]string{"stream": damage.Stream, "reason": damage.Reason}
+	for name, n := range map[string]int64{
+		"segment": damage.Segment, "head row": damage.HeadRow, "from": damage.From, "to": damage.To,
+	} {
+		if n != 0 {
+			what[name] = strconv.FormatInt(n, 10)
+		}
+	}
+	return what
 }
 
 // constraintOf names the table and the constraint a write broke, as far as

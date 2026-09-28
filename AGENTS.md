@@ -87,12 +87,12 @@ handshake, errors and kv's messages, with the vectors every SDK is tested
 against), a session (credit, cancelling, GOAWAY, silence, workers that keep
 their stacks, the first sender writing), Unix sockets, TCP and TLS with
 tokens, Windows named pipes, and kv through `kv.Raw`, jobs with a remote
-Work loop, blobs, and sql, whose data connections pass a check of their own
-in two lines, SQLite's tokens and the program it compiles;
-[docs/server.md](docs/server.md) "Building it" says where each slice stands
-and how the next goes on.
-Designed, not built: records and metrics over the wire, `tinystore serve`
-with `SERVE`, the SDKs, and self-metrics.
+Work loop, blobs, sql, whose data connections pass a check of their own in
+two lines, SQLite's tokens and the program it compiles, and records, another
+program's lines included; [docs/server.md](docs/server.md) "Building it" says
+where each slice stands and how the next goes on.
+Designed, not built: metrics over the wire, `tinystore serve` with `SERVE`,
+the SDKs, and self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -663,6 +663,11 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an sql batch is one transaction, a read one snapshot   | `TestAnSQLBatchIsOneTransaction`                                                |
 | a data connection's statement ends at its deadline     | `TestADataStatementEndsAtItsDeadline`                                           |
 | an answer past the agreed body fails only its stream   | `TestAnAnswerPastTheBodyIsALimit`                                               |
+| a record over the wire comes back as it went in        | `TestRecordsOverTheWire`, times to the nanosecond, bytes that are not UTF-8     |
+| an append over the wire names the record it refused    | `TestARefusedRecordNamesItsPlace`, all or none                                  |
+| a follower over the wire comes back where it stopped   | `TestFollowOverTheWire`                                                         |
+| another program's lines over the wire become records   | `TestLinesOverTheWire`, `TestLinesHandOverWhatTheyHoldWhenTheUploadEnds`        |
+| a records drop is an admin's repair                    | `TestADropIsAnAdminsRepair`, `TestADamagedRowIsNamedAsADropNamesIt`             |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

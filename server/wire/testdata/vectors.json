@@ -86,7 +86,10 @@
      "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"str": "insert into notes (title) values (?)"}], [{"uint": "3"}, {"array": [{"str": "milk"}]}]]}},
     {"name": "sql.exec's answer", "hex": "0500000004010000030000008201010207",
      "header": {"length": 5, "kind": 4, "flags": 1, "method": 0, "stream": 3},
-     "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"uint": "7"}]]}}
+     "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"uint": "7"}]]}},
+    {"name": "records.append of one click", "hex": "2a00000003010105050000008101918401cf18d75b842b4ecd1502a377656203a5636c69636b0992a7656c656d656e74a52262757922",
+     "header": {"length": 42, "kind": 3, "flags": 1, "method": 1281, "stream": 5},
+     "body": {"map": [[{"uint": "1"}, {"array": [{"map": [[{"uint": "1"}, {"uint": "1790000000123456789"}], [{"uint": "2"}, {"str": "web"}], [{"uint": "3"}, {"str": "click"}], [{"uint": "9"}, {"array": [{"str": "element"}, {"str": "\"buy\""}]}]]}]}]]}}
   ],
   "refused frames": [
     {"name": "a kind nobody defined", "hex": "000000000b00000000000000"},

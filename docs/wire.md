@@ -4,8 +4,8 @@ The bytes a TinyStore server and its clients exchange over any byte stream, a
 child's stdin and stdout, a Unix socket, a Windows named pipe, TCP or TLS.
 What they mean, who may send them and what bounds them is
 [server.md](server.md). Frames, the profile, the handshake, the errors, kv,
-jobs, blobs and sql are built in `server/wire`; records' and metrics' methods
-are fixed here with their slices. Every example on this page is a vector of
+jobs, blobs, sql and records are built in `server/wire`; metrics' methods are
+fixed here with its slice. Every example on this page is a vector of
 [server/wire/testdata/vectors.json](../server/wire/testdata/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
@@ -614,4 +614,93 @@ one it refuses is `permission`; it runs 30 seconds at most, past which it is
 82                                                                        a map of two
    01 01                                                                  changes: 1
    02 07                                                                  last id: 7
+```
+
+### records
+
+Records are one log of the store's, and each call names the streams it is
+about, so none opens a handle.
+
+| method | | request | answer |
+|---|---|---|---|
+| `0x0501` | append | records, one transaction writes all or none | `{}`; `what` names a refused record as `call`, with its stream and name |
+| `0x0502` | read | a query | a download: `{}`, a record a `DATA`, then a page |
+| `0x0503` | follow | a cursor | a download: `{}`, a record a `DATA`, then the cursor after them |
+| `0x0504` | lines | a stream | an upload: another program's output as `DATA`, cut anywhere; `{}` |
+| `0x0505` | damaged | `{}` | the damage: `{1: [damage…]}` |
+| `0x0506` | drop | a damage | `{}`; an admin connection's alone, since it is a repair |
+
+A record:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | at | int | unix nanoseconds, past what a JavaScript number holds |
+| 2 | stream | str | a namespace the application names |
+| 3 | name | str | the event: `log` for a log line |
+| 4 | level | int | slog's: -4 debug, 0 info, 4 warn, 8 error; absent for none |
+| 5 | body | str | absent for none, which an empty body is not |
+| 6 | trace id | bin | 16 bytes; absent for none |
+| 7 | span id | bin | 8 bytes; absent for none |
+| 8 | context | array | who produced it: a key, then its value's JSON, and so on |
+| 9 | attrs | array | what happened, as context |
+
+`["user", "42", "tags", "[\"a\"]"]` is two fields, `user` and `tags`, whose
+values are JSON spelled as they were given, `1.2300`, `-0` and a big integer
+coming back byte for byte; keys keep their order and may repeat. A text,
+a stream, a name, a body, a key or a value, whose bytes are not UTF-8, as
+another program's output may be, travels as bin and comes back byte for byte.
+
+A query:
+
+| key | field | type | |
+|---|---|---|---|
+| 1, 2 | from, to | int | unix nanoseconds, to excluded; absent for an open end |
+| 3 | streams | array of str | absent or empty for every stream |
+| 4 | names | array of str | absent or empty for every name |
+| 5 | min level | int | a record without a level does not match |
+| 6 | trace id | bin | 16 bytes |
+| 7, 8 | attrs, context | array | fields as a record's, each one a record must hold |
+| 9 | newest | bool | newest first; oldest first when absent |
+| 10 | limit | uint | the records a page holds: 1000 when absent, at most 10000 |
+| 11, 12, 13 | budget | uint, uint, uint | the blocks, bytes and records one read may open, fetch and decode; each narrows the server's |
+
+A page, a read's trailer, is `{1: more, 2: from, 3: to}`: more says the limit
+or the budget ended the page before the range did, and from and to are the
+range the next page reads, the query's own with one end moved past this page.
+A page never splits a timestamp; more records at one time than a page holds
+is `limit`.
+
+A cursor is `{1: segment, 2: row, 3: limit, 4: expired}`: follow's request
+names the place the records it asks for begin at, `{}` being the oldest
+segment kept, and the records it takes at most; its trailer the place the
+next follow begins at, and the segments retention or a drop removed before
+the cursor reached them. A record reaches follow once its head is sealed, a
+segment's worth or the server's seal age, an hour unless it says otherwise,
+after it arrived; read sees it at once.
+
+`records.lines` is `{1: stream}`, then the program's output in `DATA` frames:
+each line becomes a record of the stream as Go's `Lines` makes it, a stack
+trace's lines joined, a JSON or logfmt line's fields kept, its level found
+where its program writes it. The upload's end hands over the record the
+writer holds, a line cut short included, and its answer follows; a line
+longer than a record holds is dropped and counted in the engine's stats.
+
+A damage is `{1: stream, 2: segment, 3: head row, 4: from, 5: to, 6:
+reason}`: a sealed segment, dropped whole, or a head row, the other absent;
+the times it held, unix nanoseconds; the invariant its bytes broke. A read or
+a follow that meets one ends with `corrupt`, its `what` naming it by the same
+names, `segment` or `head row`, `stream`, `from`, `to` and `reason`, and a
+drop of one that still reads is `conflict`.
+
+`records.append` of one click on stream 5:
+
+```text
+2a 00 00 00  03  01  01 05  05 00 00 00                                   a body of 42 bytes, REQUEST, END, 0x0501, stream 5
+81                                                                        a map of one
+   01 91                                                                  records: an array of one
+      84                                                                  a map of four
+         01 cf 18 d7 5b 84 2b 4e cd 15                                    at: 1,790,000,000,123,456,789 ns
+         02 a3 77 65 62                                                   stream: "web"
+         03 a5 63 6c 69 63 6b                                             name: "click"
+         09 92 a7 65 6c 65 6d 65 6e 74 a5 22 62 75 79 22                  attrs: ["element", "\"buy\""]
 ```

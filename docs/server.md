@@ -1,7 +1,7 @@
 # The server: one runtime for another process
 
 Being built, in `server/`: the bytes, a session with its transports, kv,
-jobs, blobs and sql are; records, metrics, `tinystore serve` with `SERVE` and
+jobs, blobs, sql and records are; metrics, `tinystore serve` with `SERVE` and
 the SDKs are not, and [Building it](#building-it) says which slice is where. This page is the
 contract the server and its SDKs are built to: what a connection may do, how
 a sidecar starts and is found, what a lost connection means, and what bounds
@@ -523,7 +523,8 @@ Where the slices stand, 28 September 2026:
 | jobs | built: `jobs.go`, `jobs_work.go`; the messages on wire.md |
 | blobs | built: `blobs.go`; the messages on wire.md |
 | sql | built: `sql.go`, the data connection's check in `sqltokens.go` and `datasql.go`; the messages on wire.md |
-| records, metrics | not begun |
+| records | built: `records.go`; the messages on wire.md |
+| metrics | not begun |
 | `tinystore serve` with `SERVE`, the Bun SDK, the Python SDK | not begun |
 | the measurement against the prototype | not begun: it wants `tinystore serve` |
 
@@ -554,12 +555,28 @@ is released, and the gates it brought are in AGENTS.md.
 - **Named arguments are `sql.Named`'s**: the name without its prefix, which
   the driver matches against `:`, `@` and `$` alike.
 
+**What building records settled:**
+
+- **Records open no handle.** They are one log of the store's, whose calls
+  name their streams, and the server's options are the engine's; the engine
+  opens the first time a client asks, as the others do.
+- **Fields travel as one array of keys and values**, so that keys keep their
+  order and repeat, and every text whose bytes are not UTF-8, a program's
+  output's, travels as bin.
+- **A drop is a repair**, so it is an admin connection's alone; the damaged
+  rows are anyone's to list, and a read or a follow that meets one names it
+  in `what` as a drop names it.
+- **An upload of lines keeps what reached the writer.** Its end, however it
+  ends, closes the writer, which hands over the record it holds; a cancel or a
+  lost connection drops the `DATA` still waiting for the handler, as an
+  upload's inbox gives its error before the bodies it holds.
+- **No streams or names in a query is every one**, an empty list as much as
+  none, where Go's `Query` takes an empty `Streams` for none.
+
 **Next, from here:**
 
-- **Records** (`records.Append` of many, `Drop`, `Read` and
-  `Follow` as downloads, `Lines` as an upload of another program's output)
-  and metrics (`Ingest`, `Read` and `Aggregate` as downloads, a series a
-  message, samples as bin columns), each fixed on wire.md first; then
+- **Metrics** (`Ingest`, `Read` and `Aggregate` as downloads, a series a
+  message, samples as bin columns), fixed on wire.md first; then
   `tinystore serve` in `cmd/tinystore`, which requires `server` through a
   `replace`, sets the collector's target, GOGC 400 unless the environment
   says, and writes `SERVE` under `LOCK` in `<dir>/server/`; then the

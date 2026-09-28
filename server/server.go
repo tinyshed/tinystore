@@ -16,6 +16,7 @@ import (
 	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
+	"github.com/tinyshed/tinystore/records"
 	"github.com/tinyshed/tinystore/server/wire"
 	"github.com/tinyshed/tinystore/sqldb"
 )
@@ -35,12 +36,14 @@ type Options struct {
 	// KV is the kv engine the program opened; nil opens it with KVOptions the
 	// first time a client asks, since an engine opens once a store. So for
 	// every engine.
-	KV           *kv.Store
-	KVOptions    kv.Options
-	Jobs         *jobs.Store
-	JobsOptions  jobs.Options
-	Blobs        *blobs.Store
-	BlobsOptions blobs.Options
+	KV             *kv.Store
+	KVOptions      kv.Options
+	Jobs           *jobs.Store
+	JobsOptions    jobs.Options
+	Blobs          *blobs.Store
+	BlobsOptions   blobs.Options
+	Records        *records.Store
+	RecordsOptions records.Options
 
 	// SQL are the databases the program opened, by name: a client's sql.open
 	// of one checks the migrations it carries against the file's, since a
@@ -62,6 +65,7 @@ type Server struct {
 	kv      *kv.Store
 	jobs    *jobs.Store
 	blobs   *blobs.Store
+	records *records.Store
 
 	sqlOpening sync.Mutex // a database opens once, its migrations applied, while no other engine waits
 	databases  map[string]*sqldb.DB
@@ -110,7 +114,7 @@ func New(store *tinystore.Store, options Options) (*Server, error) {
 	}
 	s := &Server{
 		store: store, options: options, instance: instance, limits: defaultLimits,
-		log: options.Logger, kv: options.KV, jobs: options.Jobs, blobs: options.Blobs,
+		log: options.Logger, kv: options.KV, jobs: options.Jobs, blobs: options.Blobs, records: options.Records,
 		databases: maps.Clone(options.SQL), sessions: map[*session]struct{}{}, listeners: map[Listener]struct{}{},
 	}
 	if s.databases == nil {
@@ -353,7 +357,22 @@ func (s *Server) blobsStore(ctx context.Context) (*blobs.Store, error) {
 	return s.blobs, nil
 }
 
+// recordsStore is the records engine, opened the first time a client asks for
+// it
+func (s *Server) recordsStore(ctx context.Context) (*records.Store, error) {
+	s.opening.Lock()
+	defer s.opening.Unlock()
+	if s.records == nil {
+		opened, err := records.Open(ctx, s.store, s.options.RecordsOptions)
+		if err != nil {
+			return nil, err
+		}
+		s.records = opened
+	}
+	return s.records, nil
+}
+
 // engines is what WELCOME says this server serves
 func (s *Server) engines() []string {
-	return []string{"kv", "jobs", "blobs", "sql"}
+	return []string{"kv", "jobs", "blobs", "sql", "records"}
 }

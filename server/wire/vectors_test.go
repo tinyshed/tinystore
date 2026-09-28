@@ -191,6 +191,16 @@ func TestTheExamplesAreWhatTheMessagesWrite(t *testing.T) {
 	if written := wire.AppendFrame(nil, header, done.Append(nil)); !bytes.Equal(written, frames["sql.exec's answer"]) {
 		t.Errorf("sql.exec's answer %x", written)
 	}
+
+	click := wire.RecordsBatch{Records: []wire.Record{{
+		At: 1_790_000_000_123_456_789, Stream: "web", Name: "click",
+		Attrs: []wire.RecordField{{Key: "element", Value: `"buy"`}},
+	}}}
+	header = wire.Header{Kind: wire.KindRequest, Flags: wire.FlagEnd, Method: wire.RecordsAppend, Stream: 5}
+	if written := wire.AppendFrame(nil, header, click.Append(nil)); !bytes.Equal(written,
+		frames["records.append of one click"]) {
+		t.Errorf("records.append %x", written)
+	}
 }
 
 // every kv message reads back as it was written
