@@ -82,6 +82,76 @@ func ExecScalar[T any](ctx context.Context, h Handle, query string, args ...any)
 	return scalar[T](ctx, h, &call{query: query, args: args, write: true})
 }
 
+// Rows is what a query returns without a struct to take it: the columns'
+// names, and each row's values as SQLite returned them, a column each: nil,
+// an int64, a float64, a string or a []byte.
+type Rows struct {
+	Columns []string
+	Values  [][]any
+}
+
+// Query reads every row query returns as SQLite returns it, for a program
+// that has no struct for them, as the server has none for its clients; the
+// rows are held in the store's memory as All holds them.
+func Query(ctx context.Context, h Handle, query string, args ...any) (Rows, error) {
+	return rowsOf(ctx, h, &call{query: query, args: args, bound: allBound})
+}
+
+// ExecQuery runs a write on the writer and reads the rows its returning
+// clause gives, as Query reads a query's; a write that returns none answers
+// its columns alone, or none.
+func ExecQuery(ctx context.Context, h Handle, query string, args ...any) (Rows, error) {
+	return rowsOf(ctx, h, &call{query: query, args: args, write: true, bound: allBound})
+}
+
+func rowsOf(ctx context.Context, h Handle, c *call) (Rows, error) {
+	answer := Rows{Values: [][]any{}}
+	c.rows = func(rows *sql.Rows, held *held) error {
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		answer.Columns = columns
+		for rows.Next() {
+			values, weight, err := scanValues(rows, len(columns))
+			if err == nil {
+				err = held.take(weight)
+			}
+			if err != nil {
+				return err
+			}
+			answer.Values = append(answer.Values, values)
+		}
+		return rows.Err()
+	}
+	if err := h.run(ctx, c); err != nil {
+		return Rows{}, err
+	}
+	return answer, nil
+}
+
+// scanValues is a row's values as the driver gives them, and what they weigh
+func scanValues(rows *sql.Rows, columns int) ([]any, int64, error) {
+	values := make([]any, columns)
+	into := make([]any, columns)
+	for i := range values {
+		into[i] = &values[i]
+	}
+	if err := rows.Scan(into...); err != nil {
+		return nil, 0, err
+	}
+	weight := int64(24 * columns)
+	for _, value := range values {
+		switch held := value.(type) {
+		case string:
+			weight += int64(len(held))
+		case []byte:
+			weight += int64(len(held))
+		}
+	}
+	return values, weight, nil
+}
+
 func one[T any](ctx context.Context, h Handle, c *call) (T, bool, error) {
 	var value T
 	found := false

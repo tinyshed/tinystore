@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,6 +25,10 @@ const sqlApplicationID = 0x5453514c
 // ErrOutcomeUnknown is a write whose group's commit failed: it may or may not
 // be in the file, and its caller reads it back before writing again.
 var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
+
+// ErrPending is a migration the file has not applied, which ApplyNone and
+// Migrated find and apply none of; it comes with tinystore.ErrInvalid.
+var ErrPending = sqlite.ErrPending
 
 type DB struct {
 	name     string
@@ -44,8 +49,9 @@ type DB struct {
 // tuning is what a test shortens: how long the writer is held and waited for,
 // and how long a snapshot lasts
 type tuning struct {
-	writer   sqlite.Config
-	snapshot time.Duration
+	writer    sqlite.Config
+	snapshot  time.Duration
+	applyNone bool // ApplyNone's: the file must have applied every migration
 }
 
 // holder is the transaction that holds the writer: where it began, and when
@@ -66,8 +72,25 @@ type holder struct {
 // migration changed after it was applied, a file that has applied more of them
 // than the binary knows, another engine's file, or a file that does not match
 // the schema refuses to open.
-func Open(ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef) (*DB, error) {
-	return open(ctx, store, name, migrations, schema, tuning{snapshot: snapshotHold})
+func Open(ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef,
+	options ...OpenOption,
+) (*DB, error) {
+	timing := tuning{snapshot: snapshotHold}
+	for _, option := range options {
+		option(&timing)
+	}
+	return open(ctx, store, name, migrations, schema, timing)
+}
+
+// OpenOption changes how Open treats the file.
+type OpenOption func(*tuning)
+
+// ApplyNone opens a file only if it has applied every migration given, and
+// applies none, as a program that may change rows and not the schema opens
+// one: a migration the file has not applied is ErrPending, and a file that is
+// not there is not made.
+func ApplyNone() OpenOption {
+	return func(t *tuning) { t.applyNone = true }
 }
 
 func open(
@@ -84,6 +107,10 @@ func open(
 	path, release, err := store.Claim(fileName(name))
 	if err != nil {
 		return nil, err
+	}
+	if err = mayOpen(path, timing); err != nil {
+		release()
+		return nil, migrationError(name, err)
 	}
 
 	d, err := openFile(ctx, store, name, path, scripts, timing)
@@ -122,11 +149,57 @@ func openFile(
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)
 	}
-	if err = file.Migrate(ctx, sqlApplicationID, scripts); err != nil {
-		return nil, errors.Join(fmt.Errorf("sql %q: %w", name, err), file.Close())
+	if timing.applyNone {
+		err = file.Verify(ctx, sqlApplicationID, scripts)
+	} else {
+		err = file.Migrate(ctx, sqlApplicationID, scripts)
+	}
+	if err != nil {
+		return nil, errors.Join(migrationError(name, err), file.Close())
 	}
 	d.file = file
 	return d, nil
+}
+
+// mayOpen refuses to make a file that ApplyNone opens: none there has applied
+// anything
+func mayOpen(path string, timing tuning) error {
+	if !timing.applyNone {
+		return nil
+	}
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: the file is not there", ErrPending)
+	}
+	return nil
+}
+
+// migrationError names the database, and says ErrInvalid of a pending
+// migration too
+func migrationError(name string, err error) error {
+	if errors.Is(err, ErrPending) {
+		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, name, err)
+	}
+	return fmt.Errorf("sql %q: %w", name, err)
+}
+
+// Migrated checks migrations against those the file applied, applying none:
+// one it has not applied is ErrPending, and one changed after it was applied,
+// or missing, is refused as Open refuses it. A database opens once in a store,
+// so a program that opens it again checks with Migrated instead.
+func (d *DB) Migrated(ctx context.Context, migrations fs.FS) error {
+	scripts, err := findMigrations(migrations)
+	if err != nil {
+		return fmt.Errorf("sql %q: %w", d.name, err)
+	}
+	leave, err := d.admit(ctx)
+	if err != nil {
+		return err
+	}
+	defer leave()
+	if err = d.file.Verify(ctx, sqlApplicationID, scripts); err != nil {
+		return migrationError(d.name, err)
+	}
+	return nil
 }
 
 // findMigrations is the directory of migrations holds its .sql files: its

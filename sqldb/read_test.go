@@ -1,6 +1,7 @@
 package sqldb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -172,5 +173,41 @@ func TestAStatementIsCompiledOnceAConnection(t *testing.T) {
 	}
 	if compiled := writes.Prepared - reads.Prepared; compiled != 0 {
 		t.Fatalf("50 writes compiled %d statements more", compiled)
+	}
+}
+
+// Query reads rows without a struct: each column as SQLite returned it, and
+// the columns' names even when no row comes
+func TestQueryReadsRowsAsSQLiteReturnsThem(t *testing.T) {
+	db := openNotes(t)
+	ctx := t.Context()
+	if _, err := db.Exec(ctx, `insert into notes (title, body) values ('first', 'hello')`); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := Query(ctx, db, `select id, title, 1.5 as half, x'00ff' as raw, null as missing from notes`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(rows.Columns, ",") != "id,title,half,raw,missing" || len(rows.Values) != 1 {
+		t.Fatalf("columns %v, %d rows", rows.Columns, len(rows.Values))
+	}
+	row := rows.Values[0]
+	if row[0] != int64(1) || row[1] != "first" || row[2] != 1.5 || !bytes.Equal(row[3].([]byte), []byte{0, 0xff}) ||
+		row[4] != nil {
+		t.Fatalf("a row read as %#v", row)
+	}
+
+	empty, err := Query(ctx, db, `select title from notes where id = ?`, 99)
+	if err != nil || strings.Join(empty.Columns, ",") != "title" || len(empty.Values) != 0 {
+		t.Fatalf("no row: %+v, %v", empty, err)
+	}
+
+	returned, err := ExecQuery(ctx, db, `insert into notes (title) values (?) returning id, title`, "second")
+	if err != nil || len(returned.Values) != 1 || returned.Values[0][1] != "second" {
+		t.Fatalf("a write's returning: %+v, %v", returned, err)
+	}
+	if _, err := Query(ctx, db, `delete from notes`); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a write through Query: %v", err)
 	}
 }

@@ -35,6 +35,64 @@ func (f *File) Migrate(ctx context.Context, applicationID int, scripts fs.FS) er
 	})
 }
 
+// ErrPending is a script the file has not run, found by Verify, which runs
+// none.
+var ErrPending = errors.New("migrations the file has not applied")
+
+// Verify checks the scripts against the history the file ran, in a snapshot,
+// and runs none: a script changed or renamed after the file ran it, or a
+// history longer than the scripts, is refused as Migrate refuses it, and a
+// script the file has not run, or a file no engine has claimed, is ErrPending.
+//
+//	history   0001_schema.sql
+//	scripts   0001_schema.sql   0002_labels.sql
+//	          checked           ErrPending
+func (f *File) Verify(ctx context.Context, applicationID int, scripts fs.FS) error {
+	paths, err := fs.Glob(scripts, "*.sql")
+	if err != nil {
+		return fmt.Errorf("list migrations: %w", err)
+	}
+	if len(paths) == 0 || applicationID <= 0 {
+		return errors.New("verify SQLite: missing scripts or application id")
+	}
+	sort.Strings(paths)
+
+	return f.View(ctx, func(tx *sql.Tx) error {
+		return verifyMigrations(ctx, tx, applicationID, scripts, paths)
+	})
+}
+
+func verifyMigrations(ctx context.Context, tx *sql.Tx, applicationID int, scripts fs.FS, paths []string) error {
+	var owner int
+	if err := tx.QueryRowContext(ctx, applicationIDQuery).Scan(&owner); err != nil {
+		return fmt.Errorf("read application id: %w", err)
+	}
+	switch {
+	case owner == 0:
+		return fmt.Errorf("%w: %d, and the file none", ErrPending, len(paths))
+	case owner != applicationID:
+		return fmt.Errorf("SQLite file belongs to application %d", owner)
+	}
+
+	applied, err := countApplied(ctx, tx, len(paths))
+	if err != nil {
+		return err
+	}
+	for i, path := range paths[:applied] {
+		script, err := readMigration(scripts, path, i+1)
+		if err == nil {
+			err = script.verify(ctx, tx)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if applied < len(paths) {
+		return fmt.Errorf("%w: %s and %d after it", ErrPending, paths[applied], len(paths)-applied-1)
+	}
+	return nil
+}
+
 // runMigrations checks the scripts the file has run and runs the rest, then
 // refuses a history that leaves a row referring to nothing
 func runMigrations(ctx context.Context, tx *sql.Tx, applicationID int, scripts fs.FS, paths []string) error {

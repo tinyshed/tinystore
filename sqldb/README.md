@@ -151,6 +151,16 @@ wrote internal/data/migrations/002_add_description.sql:
   children. Each is kept by its checksum: an edited, renamed or missing one, a
   file that has applied more than the binary knows, or another engine's file
   refuses to open.
+- **`ApplyNone` and `Migrated` apply nothing.** `Open(…, sqldb.ApplyNone())`
+  opens only a file that applied every migration given, and makes none that
+  is not there; `db.Migrated(ctx, migrations)` checks an open file the same
+  way, since a database opens once a store. A migration the file has not
+  applied is `sqldb.ErrPending` with `ErrInvalid`; an edited one refuses as
+  `Open` refuses it. The server opens a data client's database so.
+- **`Query` and `ExecQuery` read rows without a struct**: the columns' names,
+  even of no row, and each value as SQLite returned it, nil, an int64, a
+  float64, a string or a []byte, held in the store's memory as `All` holds
+  rows; `ExecQuery` runs on the writer, for a returning clause.
 - **`Open` checks the file and never changes it.** With a schema, it compares
   what SQLite describes of each declared table, its columns' storage,
   nullability and defaults that are values, its key, references and indexes,

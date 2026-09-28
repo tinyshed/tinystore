@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -139,4 +140,47 @@ func countOf(t *testing.T, file *File, query string) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// Verify checks a history and runs nothing: a script the file has not run is
+// ErrPending, an edited one is refused, and a fresh file has run none
+func TestVerifyChecksTheHistoryAndRunsNothing(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "verified.db"), Config{Readers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	schema := &fstest.MapFile{Data: []byte(`create table series(n integer) strict;`)}
+	labels := &fstest.MapFile{Data: []byte(`create table labels(n integer) strict;`)}
+	if err := file.Verify(t.Context(), 1234, fstest.MapFS{"0001_schema.sql": schema}); !errors.Is(err, ErrPending) {
+		t.Fatalf("a fresh file: %v", err)
+	}
+	if err := file.Migrate(t.Context(), 1234, fstest.MapFS{"0001_schema.sql": schema}); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Verify(t.Context(), 1234, fstest.MapFS{"0001_schema.sql": schema}); err != nil {
+		t.Fatalf("the history as it is: %v", err)
+	}
+	both := fstest.MapFS{"0001_schema.sql": schema, "0002_labels.sql": labels}
+	if err := file.Verify(t.Context(), 1234, both); !errors.Is(err, ErrPending) ||
+		!strings.Contains(err.Error(), "0002_labels.sql") {
+		t.Fatalf("a script the file has not run: %v", err)
+	}
+	if err := file.Verify(t.Context(), 1234, testMigrations(`create table other(n integer);`)); err == nil ||
+		errors.Is(err, ErrPending) {
+		t.Fatalf("an edited script: %v", err)
+	}
+	if err := file.Verify(t.Context(), 4321, both); err == nil || errors.Is(err, ErrPending) {
+		t.Fatalf("another engine's file: %v", err)
+	}
+	if err := file.View(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `select n from labels`)
+		return err
+	}); err == nil {
+		t.Fatal("Verify ran a script")
+	}
 }

@@ -275,3 +275,51 @@ func TestClosingTheStoreClosesTheDatabase(t *testing.T) {
 		t.Fatalf("a write after close: %v", err)
 	}
 }
+
+// ApplyNone opens only a file that applied every migration given, and makes
+// none; Migrated checks an open file the same way
+func TestApplyNoneAndMigratedApplyNothing(t *testing.T) {
+	dir := t.TempDir()
+	store := openStore(t, dir)
+	_, err := Open(t.Context(), store, "app", notesMigrations, nil, ApplyNone())
+	if !errors.Is(err, ErrPending) || !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a file no migration made: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "sql", "app.db")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("ApplyNone made the file: %v", statErr)
+	}
+
+	db, err := Open(t.Context(), store, "app", notesMigrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrated(t.Context(), notesMigrations); err != nil {
+		t.Fatalf("the migrations it applied: %v", err)
+	}
+	more := fstest.MapFS{
+		"001_notes.sql": notesMigrations["001_notes.sql"],
+		"002_tags.sql":  {Data: []byte(`create table tags (name text primary key) strict;`)},
+	}
+	if err := db.Migrated(t.Context(), more); !errors.Is(err, ErrPending) {
+		t.Fatalf("a migration it has not applied: %v", err)
+	}
+	if _, err := Scalar[int](t.Context(), db, `select count(*) from tags`); err == nil {
+		t.Fatal("Migrated applied a migration")
+	}
+	changed := fstest.MapFS{"001_notes.sql": {Data: []byte(`create table notes (id integer primary key) strict;`)}}
+	if err := db.Migrated(t.Context(), changed); err == nil || errors.Is(err, ErrPending) {
+		t.Fatalf("a changed migration: %v", err)
+	}
+
+	if err := store.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	again := openStore(t, dir)
+	if _, err := Open(t.Context(), again, "app", more, nil, ApplyNone()); !errors.Is(err, ErrPending) {
+		t.Fatalf("a file short of a migration: %v", err)
+	}
+	if _, err := Open(t.Context(), again, "app", notesMigrations, nil, ApplyNone()); err != nil {
+		t.Fatalf("a file that applied every migration: %v", err)
+	}
+}
