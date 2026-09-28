@@ -652,6 +652,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a blobs put that does not commit leaves nothing        | `TestAnUploadThatDoesNotCommitLeavesNothing`                                    |
 | a whole blobs get of a changed object ends corrupt     | `TestAWholeReadOfAChangedObjectEndsCorrupt`                                     |
 | `ApplyNone` and `Migrated` apply nothing               | `TestApplyNoneAndMigratedApplyNothing`, `TestVerifyChecksTheHistoryAndRunsNothing` |
+| a statement SQLite refuses is `ErrInvalid`             | `TestAStatementSQLiteRefusesIsInvalid`, a missing argument included             |
 | sqldb reads rows without a struct                      | `TestQueryReadsRowsAsSQLiteReturnsThem`                                         |
 | the server module requires only the root               | `TestTheServerRequiresOnlyTheRoot`                                              |
 | `server/wire` imports only the standard library        | `TestWireImportsOnlyTheStandardLibrary`                                         |

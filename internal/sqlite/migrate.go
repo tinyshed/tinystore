@@ -39,6 +39,11 @@ func (f *File) Migrate(ctx context.Context, applicationID int, scripts fs.FS) er
 // none.
 var ErrPending = errors.New("migrations the file has not applied")
 
+// ErrMismatch is a history the scripts given do not match: a script changed
+// or renamed after the file ran it, fewer scripts than the file ran, or
+// another engine's file.
+var ErrMismatch = errors.New("migrations that do not match the file")
+
 // Verify checks the scripts against the history the file ran, in a snapshot,
 // and runs none: a script changed or renamed after the file ran it, or a
 // history longer than the scripts, is refused as Migrate refuses it, and a
@@ -71,7 +76,7 @@ func verifyMigrations(ctx context.Context, tx *sql.Tx, applicationID int, script
 	case owner == 0:
 		return fmt.Errorf("%w: %d, and the file none", ErrPending, len(paths))
 	case owner != applicationID:
-		return fmt.Errorf("SQLite file belongs to application %d", owner)
+		return fmt.Errorf("%w: SQLite file belongs to application %d", ErrMismatch, owner)
 	}
 
 	applied, err := countApplied(ctx, tx, len(paths))
@@ -191,7 +196,7 @@ func claimFile(ctx context.Context, tx *sql.Tx, applicationID int) error {
 		return fmt.Errorf("read application id: %w", err)
 	}
 	if owner != 0 && owner != applicationID {
-		return fmt.Errorf("SQLite file belongs to application %d", owner)
+		return fmt.Errorf("%w: SQLite file belongs to application %d", ErrMismatch, owner)
 	}
 	if owner != 0 {
 		return nil
@@ -222,7 +227,7 @@ func countApplied(ctx context.Context, tx *sql.Tx, known int) (int, error) {
 		return 0, fmt.Errorf("read migration history: %w", err)
 	}
 	if applied > known {
-		return 0, errors.New("SQLite schema is newer than this reader")
+		return 0, fmt.Errorf("%w: SQLite schema is newer than this reader", ErrMismatch)
 	}
 	return applied, nil
 }
@@ -253,7 +258,7 @@ func (m migration) verify(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("read migration %d: %w", m.version, err)
 	}
 	if name != m.path || !bytes.Equal(stored, m.checksum[:]) {
-		return fmt.Errorf("migration %d changed after application", m.version)
+		return fmt.Errorf("%w: migration %d changed after application", ErrMismatch, m.version)
 	}
 	return nil
 }

@@ -150,7 +150,7 @@ wrote internal/data/migrations/002_add_description.sql:
   before the commit, since rebuilding a parent with them on deletes its
   children. Each is kept by its checksum: an edited, renamed or missing one, a
   file that has applied more than the binary knows, or another engine's file
-  refuses to open.
+  refuses to open, `ErrInvalid`.
 - **`ApplyNone` and `Migrated` apply nothing.** `Open(…, sqldb.ApplyNone())`
   opens only a file that applied every migration given, and makes none that
   is not there; `db.Migrated(ctx, migrations)` checks an open file the same
@@ -160,7 +160,13 @@ wrote internal/data/migrations/002_add_description.sql:
 - **`Query` and `ExecQuery` read rows without a struct**: the columns' names,
   even of no row, and each value as SQLite returned it, nil, an int64, a
   float64, a string or a []byte, held in the store's memory as `All` holds
-  rows; `ExecQuery` runs on the writer, for a returning clause.
+  rows; `ExecQuery` runs on the writer, for a returning clause. The driver
+  reads TEXT in a column declared `DATE`, `DATETIME` or `TIMESTAMP` as a
+  `time.Time` when it parses, which no `STRICT` table declares;
+  `cast(x as text)` reads its text.
+- **A statement SQLite refuses is `ErrInvalid`**: a syntax error, a table,
+  column or function the file does not have, a parameter out of range or one
+  no argument fills; a value past SQLite's length is `ErrLimit`.
 - **`Open` checks the file and never changes it.** With a schema, it compares
   what SQLite describes of each declared table, its columns' storage,
   nullability and defaults that are values, its key, references and indexes,

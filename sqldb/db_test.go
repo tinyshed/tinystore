@@ -212,7 +212,7 @@ func TestMigrationsApplyOnceAndAChangedOneRefuses(t *testing.T) {
 		"002_tags.sql":  grown["002_tags.sql"],
 	}
 	_, err = Open(t.Context(), openStore(t, dir), "app", edited, nil)
-	if err == nil || !strings.Contains(err.Error(), "migration 1 changed after application") {
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "migration 1 changed after application") {
 		t.Fatalf("a database whose applied migration was edited: %v", err)
 	}
 }

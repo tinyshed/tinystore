@@ -112,8 +112,9 @@ func columnsOf(named string) (table, columns string) {
 }
 
 // explain names the database an error is about, says which call a write sent
-// to a reader belongs to, and gives a constraint its kind; a context's error
-// and a closed store's are kept as they came
+// to a reader belongs to, gives a constraint its kind, and says ErrInvalid of
+// a statement SQLite cannot run as it is written and ErrLimit of a value past
+// its length; a context's error and a closed store's are kept as they came
 func (d *DB) explain(err error) error {
 	switch {
 	case err == nil:
@@ -123,7 +124,11 @@ func (d *DB) explain(err error) error {
 		return err
 	}
 	var failure *sqlite3.Error
-	if !errors.As(err, &failure) {
+	switch {
+	case errors.As(err, &failure):
+	case missingArgument(err):
+		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
+	default:
 		return fmt.Errorf("sql %q: %w", d.name, err)
 	}
 	switch failure.Code() & 0xff {
@@ -137,8 +142,21 @@ func (d *DB) explain(err error) error {
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
 	case sqlitelib.SQLITE_CORRUPT, sqlitelib.SQLITE_NOTADB:
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrCorrupt, d.name, err)
+	case sqlitelib.SQLITE_ERROR, sqlitelib.SQLITE_RANGE, sqlitelib.SQLITE_MISMATCH:
+		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
+	case sqlitelib.SQLITE_TOOBIG:
+		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrLimit, d.name, err)
 	}
 	return fmt.Errorf("sql %q: %w", d.name, err)
+}
+
+// missingArgument is the driver's error for a parameter no argument fills,
+// which it gives no type of its own
+//
+//	missing argument with index 2    missing named argument "id"
+func missingArgument(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "missing argument with index ") || strings.Contains(text, "missing named argument ")
 }
 
 // heldTooLong says that a snapshot ended by its own bound, not its caller's:

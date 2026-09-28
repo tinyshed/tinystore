@@ -173,10 +173,10 @@ func mayOpen(path string, timing tuning) error {
 	return nil
 }
 
-// migrationError names the database, and says ErrInvalid of a pending
-// migration too
+// migrationError names the database, and says ErrInvalid of migrations the
+// file has not applied or whose history they do not match
 func migrationError(name string, err error) error {
-	if errors.Is(err, ErrPending) {
+	if errors.Is(err, ErrPending) || errors.Is(err, sqlite.ErrMismatch) {
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, name, err)
 	}
 	return fmt.Errorf("sql %q: %w", name, err)

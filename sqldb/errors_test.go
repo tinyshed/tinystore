@@ -69,3 +69,48 @@ func TestAConstraintSaysItsKind(t *testing.T) {
 		}
 	}
 }
+
+// a statement SQLite cannot run as it is written is invalid, whichever call
+// sends it, and a value past SQLite's length is a limit
+func TestAStatementSQLiteRefusesIsInvalid(t *testing.T) {
+	db := openNotes(t)
+	ctx := t.Context()
+	for _, c := range []struct {
+		name     string
+		run      func() error
+		sentinel error
+	}{
+		{"a syntax error", func() error {
+			_, err := db.Exec(ctx, `insert notes values`)
+			return err
+		}, tinystore.ErrInvalid},
+		{"a table it does not have", func() error {
+			_, err := Query(ctx, db, `select * from nothing`)
+			return err
+		}, tinystore.ErrInvalid},
+		{"a column it does not have", func() error {
+			_, err := All[note](ctx, db, `select nothing from notes`)
+			return err
+		}, tinystore.ErrInvalid},
+		{"a function it does not have", func() error {
+			return db.Tx(ctx, func(tx *Tx) error {
+				_, err := tx.Exec(ctx, `select nothing()`)
+				return err
+			})
+		}, tinystore.ErrInvalid},
+		{"a value past its length", func() error {
+			_, err := Scalar[[]byte](ctx, db, `select zeroblob(1000000001)`)
+			return err
+		}, tinystore.ErrLimit},
+	} {
+		if err := c.run(); !errors.Is(err, c.sentinel) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if _, err := db.Exec(ctx, `insert into notes (title) values (?)`); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Errorf("a missing argument: %v", err)
+	}
+	if _, err := Query(ctx, db, `select :id`); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Errorf("a missing named argument: %v", err)
+	}
+}
