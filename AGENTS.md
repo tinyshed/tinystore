@@ -78,7 +78,11 @@ however large, a scrub, and snapshots that link the files
 ([blobs/README.md](blobs/README.md), [docs/blobs.md](docs/blobs.md),
 [the round](docs/reports/blobs-mechanics-2026-09-27.md)).
 
-Designed, not built: self-metrics.
+Designed, not built: self-metrics, and the server
+([docs/server.md](docs/server.md), [docs/wire.md](docs/wire.md)): one
+protocol for a sidecar that Bun and Python start and for a remote server,
+MessagePack in twelve-byte frames over any byte stream, and no transaction
+held across the network.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -377,6 +381,8 @@ changing something, not to look something up.
 | [docs/aggregate-contract.md](docs/aggregate-contract.md) | exact aggregate arithmetic, resets, boundaries        |
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
 | [docs/reports/implementation-2026-09-21.md](docs/reports/implementation-2026-09-21.md) | the first slice and its measured limits |
+| [docs/server.md](docs/server.md)             | the server and sidecar: modes, discovery, capabilities, limits   |
+| [docs/wire.md](docs/wire.md)                 | the wire protocol's bytes: frames, credit, MessagePack, errors   |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
 | [docs/measurements.md](docs/measurements.md) | every number, its environment and how to reproduce it            |
 | [docs/research.md](docs/research.md)         | what is not built: the open questions and their acceptance gates |

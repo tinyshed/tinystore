@@ -1,0 +1,1161 @@
+######## environment
+16
+MemTotal:       15910552 kB
+6.18.33.2-microsoft-standard-WSL2
+1.4.2
+Python 3.13.5
+go version go1.27.1 linux/amd64
+######## rpc-linux-Embedded-1.txt
+pass 1 Embedded started 13:20:07 UTC
+=== RUN   TestRPCEmbedded
+    rpc_spike_test.go:143: go embedded    -      -         get      1      159793 ops/s  mean       6.3 µs
+    rpc_spike_test.go:143: go embedded    -      -         get     64      451822 ops/s  mean     141.6 µs
+    rpc_spike_test.go:143: go embedded    -      -         get    256      324336 ops/s  mean     789.3 µs
+    rpc_spike_test.go:143: go embedded    -      -         set      1         361 ops/s  mean    2767.6 µs
+    rpc_spike_test.go:143: go embedded    -      -         set     64        9412 ops/s  mean    6799.8 µs
+    rpc_spike_test.go:143: go embedded    -      -         set    256       22612 ops/s  mean   11321.3 µs
+--- PASS: TestRPCEmbedded (13.12s)
+PASS
+ended 13:20:20 UTC
+######## rpc-linux-Writers-1.txt
+pass 1 Writers started 13:20:20 UTC
+=== RUN   TestRPCWriters
+    rpc_spike_test.go:165: go             unix   naive     echo     1        6956 ops/s  mean     143.8 µs
+    rpc_spike_test.go:165: go             unix   naive     echo    64      450131 ops/s  mean     142.2 µs
+    rpc_spike_test.go:165: go             unix   naive     echo   256      486153 ops/s  mean     526.6 µs
+    rpc_spike_test.go:165: go             unix   naive     get      1        5639 ops/s  mean     177.3 µs
+    rpc_spike_test.go:165: go             unix   naive     get     64      214916 ops/s  mean     297.8 µs
+    rpc_spike_test.go:165: go             unix   naive     get    256      217379 ops/s  mean    1177.7 µs
+    rpc_spike_test.go:165: go             unix   goroutine echo     1        6905 ops/s  mean     144.8 µs
+    rpc_spike_test.go:165: go             unix   goroutine echo    64      375238 ops/s  mean     170.6 µs
+    rpc_spike_test.go:165: go             unix   goroutine echo   256     1102254 ops/s  mean     232.3 µs
+    rpc_spike_test.go:165: go             unix   goroutine get      1        5095 ops/s  mean     196.3 µs
+    rpc_spike_test.go:165: go             unix   goroutine get     64      205795 ops/s  mean     311.0 µs
+    rpc_spike_test.go:165: go             unix   goroutine get    256      212735 ops/s  mean    1203.4 µs
+    rpc_spike_test.go:165: go             unix   leader    echo     1        6863 ops/s  mean     145.7 µs
+    rpc_spike_test.go:165: go             unix   leader    echo    64      374991 ops/s  mean     170.7 µs
+    rpc_spike_test.go:165: go             unix   leader    echo   256     1116378 ops/s  mean     229.3 µs
+    rpc_spike_test.go:165: go             unix   leader    get      1        5569 ops/s  mean     179.6 µs
+    rpc_spike_test.go:165: go             unix   leader    get     64      211334 ops/s  mean     302.8 µs
+    rpc_spike_test.go:165: go             unix   leader    get    256      216506 ops/s  mean    1182.4 µs
+    rpc_spike_test.go:165: go             tcp    naive     echo     1        7617 ops/s  mean     131.3 µs
+    rpc_spike_test.go:165: go             tcp    naive     echo    64       23808 ops/s  mean    2688.2 µs
+    rpc_spike_test.go:165: go             tcp    naive     echo   256       24351 ops/s  mean   10512.9 µs
+    rpc_spike_test.go:165: go             tcp    naive     get      1        5833 ops/s  mean     171.4 µs
+    rpc_spike_test.go:165: go             tcp    naive     get     64       24369 ops/s  mean    2626.3 µs
+    rpc_spike_test.go:165: go             tcp    naive     get    256       25818 ops/s  mean    9915.6 µs
+    rpc_spike_test.go:165: go             tcp    goroutine echo     1        7221 ops/s  mean     138.5 µs
+    rpc_spike_test.go:165: go             tcp    goroutine echo    64      327319 ops/s  mean     195.5 µs
+    rpc_spike_test.go:165: go             tcp    goroutine echo   256      650685 ops/s  mean     393.4 µs
+    rpc_spike_test.go:165: go             tcp    goroutine get      1        5391 ops/s  mean     185.5 µs
+    rpc_spike_test.go:165: go             tcp    goroutine get     64      125690 ops/s  mean     509.2 µs
+    rpc_spike_test.go:165: go             tcp    goroutine get    256      187133 ops/s  mean    1368.0 µs
+    rpc_spike_test.go:165: go             tcp    leader    echo     1        7373 ops/s  mean     135.6 µs
+    rpc_spike_test.go:165: go             tcp    leader    echo    64      326137 ops/s  mean     196.2 µs
+    rpc_spike_test.go:165: go             tcp    leader    echo   256      652393 ops/s  mean     392.4 µs
+    rpc_spike_test.go:165: go             tcp    leader    get      1        5817 ops/s  mean     171.9 µs
+    rpc_spike_test.go:165: go             tcp    leader    get     64      126955 ops/s  mean     504.1 µs
+    rpc_spike_test.go:165: go             tcp    leader    get    256      195821 ops/s  mean    1307.3 µs
+--- PASS: TestRPCWriters (78.67s)
+PASS
+ended 13:21:40 UTC
+######## rpc-linux-Transports-1.txt
+pass 1 Transports started 13:21:40 UTC
+=== RUN   TestRPCTransports
+    rpc_spike_test.go:189: go             unix   leader    echo     1        6831 ops/s  mean     146.4 µs
+    rpc_spike_test.go:189: go             unix   leader    echo    64      372932 ops/s  mean     171.6 µs
+    rpc_spike_test.go:189: go             unix   leader    echo   256     1151410 ops/s  mean     222.3 µs
+    rpc_spike_test.go:189: go             unix   leader    get      1        5502 ops/s  mean     181.8 µs
+    rpc_spike_test.go:189: go             unix   leader    get     64      205521 ops/s  mean     311.4 µs
+    rpc_spike_test.go:189: go             unix   leader    get    256      219116 ops/s  mean    1168.3 µs
+    rpc_spike_test.go:189: go             unix   leader    set      1         331 ops/s  mean    3018.4 µs
+    rpc_spike_test.go:189: go             unix   leader    set     64        8874 ops/s  mean    7212.0 µs
+    rpc_spike_test.go:189: go             unix   leader    set    256       23334 ops/s  mean   10971.3 µs
+    rpc_spike_test.go:196: bun            unix   leader    echo     1       12125 ops/s  mean      82.5 µs
+    rpc_spike_test.go:196: bun            unix   leader    echo    64      342784 ops/s  mean     186.7 µs
+    rpc_spike_test.go:196: bun            unix   leader    echo   256      635973 ops/s  mean     402.5 µs
+    rpc_spike_test.go:196: bun            unix   leader    get      1        9192 ops/s  mean     108.8 µs
+    rpc_spike_test.go:196: bun            unix   leader    get     64      204914 ops/s  mean     312.3 µs
+    rpc_spike_test.go:196: bun            unix   leader    get    256      210300 ops/s  mean    1217.3 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    echo     1        6517 ops/s  mean     153.4 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    echo    64      239370 ops/s  mean     267.4 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    echo   256      458111 ops/s  mean     558.8 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    get      1        6524 ops/s  mean     153.3 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    get     64      201335 ops/s  mean     317.9 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    get    256      221186 ops/s  mean    1157.4 µs
+    rpc_spike_test.go:196: python threads unix   leader    echo     1        6769 ops/s  mean     147.7 µs
+    rpc_spike_test.go:196: python threads unix   leader    echo    64        9483 ops/s  mean    6748.9 µs
+    rpc_spike_test.go:196: python threads unix   leader    echo   256        8987 ops/s  mean   28485.7 µs
+    rpc_spike_test.go:196: python threads unix   leader    get      1        5271 ops/s  mean     189.7 µs
+    rpc_spike_test.go:196: python threads unix   leader    get     64        9053 ops/s  mean    7069.8 µs
+    rpc_spike_test.go:196: python threads unix   leader    get    256        8510 ops/s  mean   30081.1 µs
+    rpc_spike_test.go:189: go             tcp    leader    echo     1        7298 ops/s  mean     137.0 µs
+    rpc_spike_test.go:189: go             tcp    leader    echo    64      328137 ops/s  mean     195.0 µs
+    rpc_spike_test.go:189: go             tcp    leader    echo   256      648591 ops/s  mean     394.7 µs
+    rpc_spike_test.go:189: go             tcp    leader    get      1        5846 ops/s  mean     171.1 µs
+    rpc_spike_test.go:189: go             tcp    leader    get     64      125055 ops/s  mean     511.8 µs
+    rpc_spike_test.go:189: go             tcp    leader    get    256      194534 ops/s  mean    1316.0 µs
+    rpc_spike_test.go:189: go             tcp    leader    set      1         356 ops/s  mean    2807.0 µs
+    rpc_spike_test.go:189: go             tcp    leader    set     64        9309 ops/s  mean    6874.9 µs
+    rpc_spike_test.go:189: go             tcp    leader    set    256       22988 ops/s  mean   11136.4 µs
+    rpc_spike_test.go:196: bun            tcp    leader    echo     1       10657 ops/s  mean      93.8 µs
+    rpc_spike_test.go:196: bun            tcp    leader    echo    64      304419 ops/s  mean     210.2 µs
+    rpc_spike_test.go:196: bun            tcp    leader    echo   256      616742 ops/s  mean     415.1 µs
+    rpc_spike_test.go:196: bun            tcp    leader    get      1        7448 ops/s  mean     134.3 µs
+    rpc_spike_test.go:196: bun            tcp    leader    get     64      145468 ops/s  mean     440.0 µs
+    rpc_spike_test.go:196: bun            tcp    leader    get    256      199304 ops/s  mean    1284.5 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    echo     1        6450 ops/s  mean     155.0 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    echo    64      239025 ops/s  mean     267.8 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    echo   256      494244 ops/s  mean     518.0 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    get      1        5757 ops/s  mean     173.7 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    get     64      134474 ops/s  mean     475.9 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    get    256      207155 ops/s  mean    1235.8 µs
+    rpc_spike_test.go:196: python threads tcp    leader    echo     1        7437 ops/s  mean     134.5 µs
+    rpc_spike_test.go:196: python threads tcp    leader    echo    64        8524 ops/s  mean    7508.0 µs
+    rpc_spike_test.go:196: python threads tcp    leader    echo   256        8172 ops/s  mean   31326.4 µs
+    rpc_spike_test.go:196: python threads tcp    leader    get      1        5875 ops/s  mean     170.2 µs
+    rpc_spike_test.go:196: python threads tcp    leader    get     64        8261 ops/s  mean    7747.6 µs
+    rpc_spike_test.go:196: python threads tcp    leader    get    256        7933 ops/s  mean   32271.7 µs
+    rpc_spike_test.go:189: go             stdio  leader    echo     1        8281 ops/s  mean     120.8 µs
+    rpc_spike_test.go:189: go             stdio  leader    echo    64      466853 ops/s  mean     137.1 µs
+    rpc_spike_test.go:189: go             stdio  leader    echo   256     1149441 ops/s  mean     222.7 µs
+    rpc_spike_test.go:189: go             stdio  leader    get      1        6419 ops/s  mean     155.8 µs
+    rpc_spike_test.go:189: go             stdio  leader    get     64      213035 ops/s  mean     300.4 µs
+    rpc_spike_test.go:189: go             stdio  leader    get    256      212224 ops/s  mean    1206.3 µs
+    rpc_spike_test.go:189: go             stdio  leader    set      1         353 ops/s  mean    2834.1 µs
+    rpc_spike_test.go:189: go             stdio  leader    set     64        8896 ops/s  mean    7193.9 µs
+    rpc_spike_test.go:189: go             stdio  leader    set    256       23184 ops/s  mean   11041.9 µs
+    rpc_spike_test.go:196: bun            stdio  leader    echo     1        9735 ops/s  mean     102.7 µs
+    rpc_spike_test.go:196: bun            stdio  leader    echo    64      343023 ops/s  mean     186.6 µs
+    rpc_spike_test.go:196: bun            stdio  leader    echo   256      631294 ops/s  mean     405.5 µs
+    rpc_spike_test.go:196: bun            stdio  leader    get      1        7584 ops/s  mean     131.9 µs
+    rpc_spike_test.go:196: bun            stdio  leader    get     64      187499 ops/s  mean     341.3 µs
+    rpc_spike_test.go:196: bun            stdio  leader    get    256      217855 ops/s  mean    1175.1 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    echo     1        7234 ops/s  mean     138.2 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    echo    64      256906 ops/s  mean     249.1 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    echo   256      479859 ops/s  mean     533.5 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    get      1        6381 ops/s  mean     156.7 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    get     64      169324 ops/s  mean     378.0 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    get    256      214891 ops/s  mean    1191.3 µs
+    rpc_spike_test.go:196: python threads stdio  leader    echo     1        8155 ops/s  mean     122.6 µs
+    rpc_spike_test.go:196: python threads stdio  leader    echo    64        8764 ops/s  mean    7302.9 µs
+    rpc_spike_test.go:196: python threads stdio  leader    echo   256        8462 ops/s  mean   30254.0 µs
+    rpc_spike_test.go:196: python threads stdio  leader    get      1        6571 ops/s  mean     152.2 µs
+    rpc_spike_test.go:196: python threads stdio  leader    get     64        8707 ops/s  mean    7350.7 µs
+    rpc_spike_test.go:196: python threads stdio  leader    get    256        8325 ops/s  mean   30750.7 µs
+--- PASS: TestRPCTransports (169.60s)
+PASS
+ended 13:24:30 UTC
+######## rpc-linux-Credit-1.txt
+pass 1 Credit started 13:24:30 UTC
+=== RUN   TestRPCCredit
+    rpc_spike_test.go:306: go unix   leader      upload                 window    64 KiB      347 MiB/s
+    rpc_spike_test.go:306: go unix   leader      upload                 window   256 KiB     1257 MiB/s
+    rpc_spike_test.go:306: go unix   leader      upload                 window  1024 KiB     1962 MiB/s
+    rpc_spike_test.go:306: go unix   leader      upload                 window  4096 KiB     2194 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window    64 KiB      413 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window   256 KiB     1545 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window  1024 KiB     2719 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window  4096 KiB     3687 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window    64 KiB      348 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window   256 KiB     1280 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window  1024 KiB     2258 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window  4096 KiB     2947 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window    64 KiB      394 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window   256 KiB     1226 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window  1024 KiB     1895 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window  4096 KiB     2610 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window    64 KiB      450 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window   256 KiB     1460 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window  1024 KiB     1956 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window  4096 KiB     2301 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window    64 KiB      393 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window   256 KiB     1212 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window  1024 KiB     1816 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window  4096 KiB     2087 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window    64 KiB      346 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window   256 KiB      955 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window  1024 KiB     1439 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window  4096 KiB     1565 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window    64 KiB      408 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window   256 KiB     1111 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window  1024 KiB     1004 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window  4096 KiB      994 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window    64 KiB      371 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window   256 KiB      868 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window  1024 KiB     1001 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window  4096 KiB      982 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window    64 KiB      384 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window   256 KiB     1247 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window  1024 KiB     1969 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window  4096 KiB     2616 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window    64 KiB      434 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window   256 KiB     1432 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window  1024 KiB     1958 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window  4096 KiB     2230 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window    64 KiB      390 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window   256 KiB     1243 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window  1024 KiB     1805 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window  4096 KiB     2126 MiB/s
+--- PASS: TestRPCCredit (102.00s)
+PASS
+ended 13:26:13 UTC
+######## rpc-linux-Embedded-2.txt
+pass 2 Embedded started 13:26:28 UTC
+=== RUN   TestRPCEmbedded
+    rpc_spike_test.go:143: go embedded    -      -         get      1      161275 ops/s  mean       6.2 µs
+    rpc_spike_test.go:143: go embedded    -      -         get     64      443603 ops/s  mean     144.3 µs
+    rpc_spike_test.go:143: go embedded    -      -         get    256      341819 ops/s  mean     748.9 µs
+    rpc_spike_test.go:143: go embedded    -      -         set      1         370 ops/s  mean    2699.2 µs
+    rpc_spike_test.go:143: go embedded    -      -         set     64        9503 ops/s  mean    6735.1 µs
+    rpc_spike_test.go:143: go embedded    -      -         set    256       23271 ops/s  mean   11000.6 µs
+--- PASS: TestRPCEmbedded (13.09s)
+PASS
+ended 13:26:41 UTC
+######## rpc-linux-Writers-2.txt
+pass 2 Writers started 13:26:41 UTC
+=== RUN   TestRPCWriters
+    rpc_spike_test.go:165: go             unix   naive     echo     1        7084 ops/s  mean     141.2 µs
+    rpc_spike_test.go:165: go             unix   naive     echo    64      444971 ops/s  mean     143.8 µs
+    rpc_spike_test.go:165: go             unix   naive     echo   256      481021 ops/s  mean     532.2 µs
+    rpc_spike_test.go:165: go             unix   naive     get      1        5563 ops/s  mean     179.7 µs
+    rpc_spike_test.go:165: go             unix   naive     get     64      201007 ops/s  mean     318.4 µs
+    rpc_spike_test.go:165: go             unix   naive     get    256      211509 ops/s  mean    1210.3 µs
+    rpc_spike_test.go:165: go             unix   goroutine echo     1        6840 ops/s  mean     146.2 µs
+    rpc_spike_test.go:165: go             unix   goroutine echo    64      394063 ops/s  mean     162.4 µs
+    rpc_spike_test.go:165: go             unix   goroutine echo   256     1082822 ops/s  mean     236.4 µs
+    rpc_spike_test.go:165: go             unix   goroutine get      1        5101 ops/s  mean     196.1 µs
+    rpc_spike_test.go:165: go             unix   goroutine get     64      205871 ops/s  mean     310.9 µs
+    rpc_spike_test.go:165: go             unix   goroutine get    256      212605 ops/s  mean    1204.1 µs
+    rpc_spike_test.go:165: go             unix   leader    echo     1        6856 ops/s  mean     145.8 µs
+    rpc_spike_test.go:165: go             unix   leader    echo    64      374328 ops/s  mean     171.0 µs
+    rpc_spike_test.go:165: go             unix   leader    echo   256     1107763 ops/s  mean     231.1 µs
+    rpc_spike_test.go:165: go             unix   leader    get      1        5610 ops/s  mean     178.3 µs
+    rpc_spike_test.go:165: go             unix   leader    get     64      214320 ops/s  mean     298.6 µs
+    rpc_spike_test.go:165: go             unix   leader    get    256      213819 ops/s  mean    1197.3 µs
+    rpc_spike_test.go:165: go             tcp    naive     echo     1        7534 ops/s  mean     132.7 µs
+    rpc_spike_test.go:165: go             tcp    naive     echo    64       24010 ops/s  mean    2665.6 µs
+    rpc_spike_test.go:165: go             tcp    naive     echo   256       24851 ops/s  mean   10301.4 µs
+    rpc_spike_test.go:165: go             tcp    naive     get      1        5799 ops/s  mean     172.5 µs
+    rpc_spike_test.go:165: go             tcp    naive     get     64       24462 ops/s  mean    2616.3 µs
+    rpc_spike_test.go:165: go             tcp    naive     get    256       24721 ops/s  mean   10355.4 µs
+    rpc_spike_test.go:165: go             tcp    goroutine echo     1        7359 ops/s  mean     135.9 µs
+    rpc_spike_test.go:165: go             tcp    goroutine echo    64      326967 ops/s  mean     195.7 µs
+    rpc_spike_test.go:165: go             tcp    goroutine echo   256      642278 ops/s  mean     398.6 µs
+    rpc_spike_test.go:165: go             tcp    goroutine get      1        5408 ops/s  mean     184.9 µs
+    rpc_spike_test.go:165: go             tcp    goroutine get     64      124312 ops/s  mean     514.8 µs
+    rpc_spike_test.go:165: go             tcp    goroutine get    256      191220 ops/s  mean    1338.8 µs
+    rpc_spike_test.go:165: go             tcp    leader    echo     1        7398 ops/s  mean     135.2 µs
+    rpc_spike_test.go:165: go             tcp    leader    echo    64      327309 ops/s  mean     195.5 µs
+    rpc_spike_test.go:165: go             tcp    leader    echo   256      647345 ops/s  mean     395.5 µs
+    rpc_spike_test.go:165: go             tcp    leader    get      1        5697 ops/s  mean     175.5 µs
+    rpc_spike_test.go:165: go             tcp    leader    get     64      126439 ops/s  mean     506.2 µs
+    rpc_spike_test.go:165: go             tcp    leader    get    256      192525 ops/s  mean    1329.7 µs
+--- PASS: TestRPCWriters (78.71s)
+PASS
+ended 13:28:01 UTC
+######## rpc-linux-Transports-2.txt
+pass 2 Transports started 13:28:01 UTC
+=== RUN   TestRPCTransports
+    rpc_spike_test.go:189: go             unix   leader    echo     1        6840 ops/s  mean     146.2 µs
+    rpc_spike_test.go:189: go             unix   leader    echo    64      366601 ops/s  mean     174.6 µs
+    rpc_spike_test.go:189: go             unix   leader    echo   256     1139323 ops/s  mean     224.7 µs
+    rpc_spike_test.go:189: go             unix   leader    get      1        5569 ops/s  mean     179.6 µs
+    rpc_spike_test.go:189: go             unix   leader    get     64      210062 ops/s  mean     304.7 µs
+    rpc_spike_test.go:189: go             unix   leader    get    256      214911 ops/s  mean    1191.2 µs
+    rpc_spike_test.go:189: go             unix   leader    set      1         340 ops/s  mean    2943.0 µs
+    rpc_spike_test.go:189: go             unix   leader    set     64        8615 ops/s  mean    7429.0 µs
+    rpc_spike_test.go:189: go             unix   leader    set    256       22346 ops/s  mean   11456.1 µs
+    rpc_spike_test.go:196: bun            unix   leader    echo     1       12102 ops/s  mean      82.6 µs
+    rpc_spike_test.go:196: bun            unix   leader    echo    64      340175 ops/s  mean     188.1 µs
+    rpc_spike_test.go:196: bun            unix   leader    echo   256      625648 ops/s  mean     409.2 µs
+    rpc_spike_test.go:196: bun            unix   leader    get      1        8961 ops/s  mean     111.6 µs
+    rpc_spike_test.go:196: bun            unix   leader    get     64      204074 ops/s  mean     313.6 µs
+    rpc_spike_test.go:196: bun            unix   leader    get    256      212015 ops/s  mean    1207.5 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    echo     1        6491 ops/s  mean     154.1 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    echo    64      238218 ops/s  mean     268.7 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    echo   256      456856 ops/s  mean     560.4 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    get      1        6375 ops/s  mean     156.9 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    get     64      204717 ops/s  mean     312.6 µs
+    rpc_spike_test.go:196: python asyncio unix   leader    get    256      219422 ops/s  mean    1166.7 µs
+    rpc_spike_test.go:196: python threads unix   leader    echo     1        6651 ops/s  mean     150.3 µs
+    rpc_spike_test.go:196: python threads unix   leader    echo    64        9175 ops/s  mean    6975.5 µs
+    rpc_spike_test.go:196: python threads unix   leader    echo   256        8651 ops/s  mean   29592.9 µs
+    rpc_spike_test.go:196: python threads unix   leader    get      1        5284 ops/s  mean     189.2 µs
+    rpc_spike_test.go:196: python threads unix   leader    get     64        8769 ops/s  mean    7298.3 µs
+    rpc_spike_test.go:196: python threads unix   leader    get    256        8161 ops/s  mean   31370.0 µs
+    rpc_spike_test.go:189: go             tcp    leader    echo     1        7366 ops/s  mean     135.8 µs
+    rpc_spike_test.go:189: go             tcp    leader    echo    64      323068 ops/s  mean     198.1 µs
+    rpc_spike_test.go:189: go             tcp    leader    echo   256      645128 ops/s  mean     396.8 µs
+    rpc_spike_test.go:189: go             tcp    leader    get      1        5755 ops/s  mean     173.8 µs
+    rpc_spike_test.go:189: go             tcp    leader    get     64      126203 ops/s  mean     507.1 µs
+    rpc_spike_test.go:189: go             tcp    leader    get    256      197987 ops/s  mean    1293.0 µs
+    rpc_spike_test.go:189: go             tcp    leader    set      1         344 ops/s  mean    2911.1 µs
+    rpc_spike_test.go:189: go             tcp    leader    set     64        8614 ops/s  mean    7429.3 µs
+    rpc_spike_test.go:189: go             tcp    leader    set    256       22930 ops/s  mean   11164.2 µs
+    rpc_spike_test.go:196: bun            tcp    leader    echo     1       10602 ops/s  mean      94.3 µs
+    rpc_spike_test.go:196: bun            tcp    leader    echo    64      305090 ops/s  mean     209.8 µs
+    rpc_spike_test.go:196: bun            tcp    leader    echo   256      610732 ops/s  mean     419.2 µs
+    rpc_spike_test.go:196: bun            tcp    leader    get      1        7309 ops/s  mean     136.8 µs
+    rpc_spike_test.go:196: bun            tcp    leader    get     64      141592 ops/s  mean     452.0 µs
+    rpc_spike_test.go:196: bun            tcp    leader    get    256      201605 ops/s  mean    1269.8 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    echo     1        6588 ops/s  mean     151.8 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    echo    64      238476 ops/s  mean     268.4 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    echo   256      496606 ops/s  mean     515.5 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    get      1        6319 ops/s  mean     158.3 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    get     64      148827 ops/s  mean     430.0 µs
+    rpc_spike_test.go:196: python asyncio tcp    leader    get    256      212167 ops/s  mean    1206.6 µs
+    rpc_spike_test.go:196: python threads tcp    leader    echo     1        7330 ops/s  mean     136.4 µs
+    rpc_spike_test.go:196: python threads tcp    leader    echo    64        8392 ops/s  mean    7626.5 µs
+    rpc_spike_test.go:196: python threads tcp    leader    echo   256        8058 ops/s  mean   31767.9 µs
+    rpc_spike_test.go:196: python threads tcp    leader    get      1        5679 ops/s  mean     176.1 µs
+    rpc_spike_test.go:196: python threads tcp    leader    get     64        8152 ops/s  mean    7850.4 µs
+    rpc_spike_test.go:196: python threads tcp    leader    get    256        7792 ops/s  mean   32856.0 µs
+    rpc_spike_test.go:189: go             stdio  leader    echo     1        8103 ops/s  mean     123.4 µs
+    rpc_spike_test.go:189: go             stdio  leader    echo    64      480790 ops/s  mean     133.1 µs
+    rpc_spike_test.go:189: go             stdio  leader    echo   256     1155096 ops/s  mean     221.6 µs
+    rpc_spike_test.go:189: go             stdio  leader    get      1        6363 ops/s  mean     157.2 µs
+    rpc_spike_test.go:189: go             stdio  leader    get     64      211094 ops/s  mean     303.2 µs
+    rpc_spike_test.go:189: go             stdio  leader    get    256      214325 ops/s  mean    1194.4 µs
+    rpc_spike_test.go:189: go             stdio  leader    set      1         345 ops/s  mean    2899.4 µs
+    rpc_spike_test.go:189: go             stdio  leader    set     64        8799 ops/s  mean    7273.7 µs
+    rpc_spike_test.go:189: go             stdio  leader    set    256       21720 ops/s  mean   11786.5 µs
+    rpc_spike_test.go:196: bun            stdio  leader    echo     1        9480 ops/s  mean     105.5 µs
+    rpc_spike_test.go:196: bun            stdio  leader    echo    64      349307 ops/s  mean     183.2 µs
+    rpc_spike_test.go:196: bun            stdio  leader    echo   256      650922 ops/s  mean     393.3 µs
+    rpc_spike_test.go:196: bun            stdio  leader    get      1        7092 ops/s  mean     141.0 µs
+    rpc_spike_test.go:196: bun            stdio  leader    get     64      191380 ops/s  mean     334.4 µs
+    rpc_spike_test.go:196: bun            stdio  leader    get    256      216423 ops/s  mean    1182.9 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    echo     1        7312 ops/s  mean     136.8 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    echo    64      258810 ops/s  mean     247.3 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    echo   256      497674 ops/s  mean     514.4 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    get      1        6294 ops/s  mean     158.9 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    get     64      167869 ops/s  mean     381.2 µs
+    rpc_spike_test.go:196: python asyncio stdio  leader    get    256      222202 ops/s  mean    1152.1 µs
+    rpc_spike_test.go:196: python threads stdio  leader    echo     1        8099 ops/s  mean     123.5 µs
+    rpc_spike_test.go:196: python threads stdio  leader    echo    64        8697 ops/s  mean    7358.6 µs
+    rpc_spike_test.go:196: python threads stdio  leader    echo   256        8322 ops/s  mean   30762.8 µs
+    rpc_spike_test.go:196: python threads stdio  leader    get      1        6590 ops/s  mean     151.8 µs
+    rpc_spike_test.go:196: python threads stdio  leader    get     64        8362 ops/s  mean    7654.0 µs
+    rpc_spike_test.go:196: python threads stdio  leader    get    256        8151 ops/s  mean   31406.6 µs
+--- PASS: TestRPCTransports (169.54s)
+PASS
+ended 13:30:51 UTC
+######## rpc-linux-Credit-2.txt
+pass 2 Credit started 13:30:51 UTC
+=== RUN   TestRPCCredit
+    rpc_spike_test.go:306: go unix   leader      upload                 window    64 KiB      349 MiB/s
+    rpc_spike_test.go:306: go unix   leader      upload                 window   256 KiB     1233 MiB/s
+    rpc_spike_test.go:306: go unix   leader      upload                 window  1024 KiB     2022 MiB/s
+    rpc_spike_test.go:306: go unix   leader      upload                 window  4096 KiB     2176 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window    64 KiB      413 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window   256 KiB     1554 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window  1024 KiB     2777 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download               window  4096 KiB     3562 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window    64 KiB      351 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window   256 KiB     1305 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window  1024 KiB     2265 MiB/s
+    rpc_spike_test.go:306: go unix   leader      download, credit aside window  4096 KiB     2951 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window    64 KiB      392 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window   256 KiB     1253 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window  1024 KiB     1965 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      upload                 window  4096 KiB     2673 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window    64 KiB      454 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window   256 KiB     1446 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window  1024 KiB     1961 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download               window  4096 KiB     2203 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window    64 KiB      385 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window   256 KiB     1232 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window  1024 KiB     1812 MiB/s
+    rpc_spike_test.go:306: go tcp    leader      download, credit aside window  4096 KiB     2032 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window    64 KiB      343 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window   256 KiB      927 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window  1024 KiB     1335 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      upload                 window  4096 KiB     1533 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window    64 KiB      387 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window   256 KiB     1116 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window  1024 KiB     1036 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download               window  4096 KiB     1020 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window    64 KiB      374 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window   256 KiB      958 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window  1024 KiB      884 MiB/s
+    rpc_spike_test.go:306: go stdio  leader      download, credit aside window  4096 KiB      993 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window    64 KiB      392 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window   256 KiB     1253 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window  1024 KiB     1964 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k upload                 window  4096 KiB     2692 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window    64 KiB      449 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window   256 KiB     1449 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window  1024 KiB     1889 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download               window  4096 KiB     2174 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window    64 KiB      390 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window   256 KiB     1223 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window  1024 KiB     1803 MiB/s
+    rpc_spike_test.go:306: go tcp    leader-256k download, credit aside window  4096 KiB     2075 MiB/s
+--- PASS: TestRPCCredit (102.25s)
+PASS
+ended 13:32:34 UTC
+######## rpc-linux-Cost-1.txt
+=== RUN   TestRPCServerCost
+    rpc_spike_test.go:371: pooled false workers   0 gogc   0 at 256:  212834 gets/s,   23239 sets/s; a get 50.02 allocations and   2021 bytes, 553 GCs
+    rpc_spike_test.go:376: profiled get at 256: 238677 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:04 UTC
+        Duration: 2s, Total samples = 13.38s (668.06%)
+        Showing nodes accounting for 8.09s, 60.46% of 13.38s total
+        Dropped 333 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 269
+              flat  flat%   sum%        cum   cum%
+             1.88s 14.05% 14.05%      1.88s 14.05%  internal/runtime/syscall/linux.Syscall6
+             0.75s  5.61% 19.66%      1.90s 14.20%  runtime.pcvalue
+             0.67s  5.01% 24.66%      0.83s  6.20%  runtime.step
+             0.59s  4.41% 29.07%      0.59s  4.41%  runtime.futex
+             0.42s  3.14% 32.21%      0.42s  3.14%  runtime.procyieldAsm
+             0.39s  2.91% 35.13%      4.06s 30.34%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.30s  2.24% 37.37%      0.96s  7.17%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.22s  1.64% 39.01%      0.22s  1.64%  runtime.(*moduledata).textAddr
+             0.22s  1.64% 40.66%      1.37s 10.24%  runtime.(*unwinder).resolveInternal
+             0.22s  1.64% 42.30%      1.49s 11.14%  runtime.adjustframe
+             0.21s  1.57% 43.87%      0.52s  3.89%  modernc.org/libc.Xpthread_mutex_lock
+             0.21s  1.57% 45.44%      1.08s  8.07%  runtime.(*stkframe).getStackMap
+             0.20s  1.49% 46.94%      0.20s  1.49%  runtime.adjustpointers
+             0.17s  1.27% 48.21%      0.20s  1.49%  runtime.findfunc
+             0.16s  1.20% 49.40%      0.16s  1.20%  runtime.readvarint (inline)
+             0.16s  1.20% 50.60%      0.16s  1.20%  runtime.usleep
+             0.13s  0.97% 51.57%      0.13s  0.97%  runtime.memclrNoHeapPointers
+             0.12s   0.9% 52.47%      0.12s   0.9%  runtime.memmove
+             0.09s  0.67% 53.14%      0.12s   0.9%  runtime.tryDeferToSpanScan
+             0.08s   0.6% 53.74%      0.16s  1.20%  runtime.scanblock
+             0.07s  0.52% 54.26%      9.52s 71.15%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.[]uint8]).GetEntry
+             0.07s  0.52% 54.78%      0.53s  3.96%  internal/sync.(*Mutex).Lock (inline)
+             0.07s  0.52% 55.31%      0.07s  0.52%  internal/sync.(*Mutex).Unlock (inline)
+             0.07s  0.52% 55.83%      0.14s  1.05%  modernc.org/libc.Xpthread_mutex_unlock
+             0.07s  0.52% 56.35%      0.11s  0.82%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.07s  0.52% 56.88%      1.57s 11.73%  runtime.(*unwinder).next
+             0.06s  0.45% 57.32%      0.14s  1.05%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.06s  0.45% 57.77%      0.07s  0.52%  modernc.org/sqlite/lib._releaseMemArray
+             0.06s  0.45% 58.22%      4.12s 30.79%  modernc.org/sqlite/lib._sqlite3Step
+             0.05s  0.37% 58.59%      1.28s  9.57%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.05s  0.37% 58.97%      0.46s  3.44%  internal/sync.(*Mutex).lockSlow
+             0.05s  0.37% 59.34%      0.32s  2.39%  modernc.org/sqlite.(*conn).bind
+             0.05s  0.37% 59.72%      2.32s 17.34%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+             0.05s  0.37% 60.09%      0.78s  5.83%  runtime.mallocgc
+             0.05s  0.37% 60.46%      0.10s  0.75%  runtime.mallocgcSmallScanNoHeaderSC3
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:04 UTC
+        Duration: 2s, Total samples = 13.38s (668.06%)
+        Showing nodes accounting for 13.38s, 100% of 13.38s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.07s   100% |   runtime.lock2
+                 0     0%     0%      0.07s  0.52%                | runtime.semasleep
+                                                     0.07s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:04 UTC
+        Duration: 2s, Total samples = 3.19s (159.40%)
+        Showing nodes accounting for 2.73s, 85.58% of 3.19s total
+        Dropped 68 nodes (cum <= 0.02s)
+        Showing top 35 nodes out of 119
+              flat  flat%   sum%        cum   cum%
+             1.32s 41.38% 41.38%      1.32s 41.38%  internal/runtime/syscall/linux.Syscall6
+             0.63s 19.75% 61.13%      0.63s 19.75%  runtime.futex
+             0.05s  1.57% 62.70%      0.05s  1.57%  runtime.(*waitq).dequeue
+             0.05s  1.57% 64.26%      0.13s  4.08%  runtime.stealWork
+             0.04s  1.25% 65.52%      0.68s 21.32%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.04s  1.25% 66.77%      0.43s 13.48%  runtime.findRunnable
+             0.04s  1.25% 68.03%      0.04s  1.25%  runtime.mallocgcSmallNoScanSC4
+             0.04s  1.25% 69.28%      0.09s  2.82%  runtime.selectgo
+             0.03s  0.94% 70.22%      0.05s  1.57%  fmt.(*fmt).fmtInteger
+             0.03s  0.94% 71.16%      0.91s 28.53%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.03s  0.94% 72.10%      0.03s  0.94%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.03s  0.94% 73.04%      0.03s  0.94%  math/rand/v2.(*PCG).Uint64
+             0.03s  0.94% 73.98%      0.03s  0.94%  runtime.casgstatus
+             0.03s  0.94% 74.92%      0.03s  0.94%  runtime.memmove
+             0.03s  0.94% 75.86%      0.04s  1.25%  runtime.runqgrab
+             0.02s  0.63% 76.49%      0.03s  0.94%  fmt.newPrinter
+             0.02s  0.63% 77.12%      0.04s  1.25%  internal/runtime/maps.(*Map).Delete
+             0.02s  0.63% 77.74%      0.05s  1.57%  math/rand/v2.(*Rand).Uint64 (inline)
+             0.02s  0.63% 78.37%      0.02s  0.63%  runtime.(*mLockProfile).store (inline)
+             0.02s  0.63% 79.00%      0.02s  0.63%  runtime.exitsyscall
+             0.02s  0.63% 79.62%      0.03s  0.94%  runtime.lock2
+             0.02s  0.63% 80.25%      0.02s  0.63%  runtime.scanblock
+             0.02s  0.63% 80.88%      0.90s 28.21%  runtime.schedule
+             0.02s  0.63% 81.50%      0.02s  0.63%  runtime.step
+             0.02s  0.63% 82.13%      0.02s  0.63%  runtime.traceEnabled (inline)
+             0.02s  0.63% 82.76%      0.02s  0.63%  runtime.tryDeferToSpanScan
+             0.01s  0.31% 83.07%      0.08s  2.51%  fmt.(*pp).doPrintf
+             0.01s  0.31% 83.39%      0.06s  1.88%  fmt.(*pp).printArg
+             0.01s  0.31% 83.70%      0.03s  0.94%  github.com/tinyshed/tinystore/spike.(*rpcClient).open
+             0.01s  0.31% 84.01%      0.62s 19.44%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).write
+             0.01s  0.31% 84.33%      0.74s 23.20%  github.com/tinyshed/tinystore/spike.(*rpcReader).next
+             0.01s  0.31% 84.64%      1.12s 35.11%  github.com/tinyshed/tinystore/spike.rpcGetOp.func1
+             0.01s  0.31% 84.95%      0.70s 21.94%  internal/poll.(*FD).Read
+             0.01s  0.31% 85.27%      0.02s  0.63%  internal/runtime/maps.(*table).Delete
+             0.01s  0.31% 85.58%      0.71s 22.26%  net.(*conn).Read
+    rpc_spike_test.go:376: pprof /perf/rpc/rpc-2180569249/client.pprof: exit status 2
+    rpc_spike_test.go:376: client.pprof -peek:
+        no matches found for regexp: runtime\.cgocall$|runtime\.semasleep$
+    rpc_spike_test.go:371: pooled true  workers   0 gogc   0 at 256:  235924 gets/s,   23574 sets/s; a get 47.11 allocations and   1985 bytes, 461 GCs
+    rpc_spike_test.go:371: pooled false workers  64 gogc   0 at 256:  312875 gets/s,    9331 sets/s; a get 47.98 allocations and   1911 bytes, 628 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc   0 at 256:  228496 gets/s,   22291 sets/s; a get 47.98 allocations and   1912 bytes, 652 GCs
+    rpc_spike_test.go:371: pooled false workers   0 gogc 400 at 256:  294001 gets/s,   23150 sets/s; a get 49.99 allocations and   2017 bytes, 87 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc 400 at 256:  416474 gets/s,   24463 sets/s; a get 47.98 allocations and   1911 bytes, 117 GCs
+    rpc_spike_test.go:376: profiled get at 256: 419698 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:42 UTC
+        Duration: 2s, Total samples = 13.89s (693.61%)
+        Showing nodes accounting for 7.73s, 55.65% of 13.89s total
+        Dropped 335 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 268
+              flat  flat%   sum%        cum   cum%
+             2.21s 15.91% 15.91%      2.21s 15.91%  internal/runtime/syscall/linux.Syscall6
+             0.85s  6.12% 22.03%      0.85s  6.12%  runtime.procyieldAsm
+             0.52s  3.74% 25.77%      3.68s 26.49%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.50s  3.60% 29.37%      0.50s  3.60%  runtime.futex
+             0.44s  3.17% 32.54%      1.76s 12.67%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.23s  1.66% 34.20%      0.99s  7.13%  modernc.org/libc.Xpthread_mutex_lock
+             0.21s  1.51% 35.71%      0.21s  1.51%  runtime.memmove
+             0.17s  1.22% 36.93%      0.17s  1.22%  runtime.usleep
+             0.15s  1.08% 38.01%      0.15s  1.08%  modernc.org/sqlite/lib._out2Prerelease
+             0.15s  1.08% 39.09%      0.27s  1.94%  runtime.mallocgcTinySC2
+             0.13s  0.94% 40.03%      0.20s  1.44%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.12s  0.86% 40.89%      1.14s  8.21%  internal/sync.(*Mutex).Lock (inline)
+             0.12s  0.86% 41.76%      0.22s  1.58%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.12s  0.86% 42.62%      0.12s  0.86%  modernc.org/sqlite/lib._releaseMemArray
+             0.11s  0.79% 43.41%      1.02s  7.34%  internal/sync.(*Mutex).lockSlow
+             0.11s  0.79% 44.20%      0.57s  4.10%  modernc.org/sqlite.(*conn).bind
+             0.10s  0.72% 44.92%      0.22s  1.58%  database/sql.convertAssignRows
+             0.10s  0.72% 45.64%      0.10s  0.72%  modernc.org/libc.(*TLS).Alloc
+             0.10s  0.72% 46.36%      0.31s  2.23%  runtime.chanrecv
+             0.10s  0.72% 47.08%      1.16s  8.35%  runtime.mallocgc
+             0.10s  0.72% 47.80%      0.10s  0.72%  runtime.nextFreeFast (inline)
+             0.09s  0.65% 48.45%      0.09s  0.65%  cmpbody
+             0.09s  0.65% 49.10%      0.17s  1.22%  database/sql.driverArgsConnLocked
+             0.09s  0.65% 49.75%      0.20s  1.44%  modernc.org/libc.Xpthread_mutex_unlock
+             0.09s  0.65% 50.40%      0.09s  0.65%  modernc.org/sqlite/lib._pcache1PinPage (inline)
+             0.08s  0.58% 50.97%      5.90s 42.48%  database/sql.(*Stmt).QueryContext.func1
+             0.08s  0.58% 51.55%      0.94s  6.77%  modernc.org/sqlite/lib._btreeBeginTrans
+             0.08s  0.58% 52.12%      0.29s  2.09%  runtime.growslice
+             0.08s  0.58% 52.70%      0.15s  1.08%  runtime.pcvalue
+             0.07s   0.5% 53.20%      6.02s 43.34%  database/sql.(*Stmt).QueryContext
+             0.07s   0.5% 53.71%      0.13s  0.94%  internal/sync.(*Mutex).Unlock (inline)
+             0.07s   0.5% 54.21%      0.16s  1.15%  runtime.lock2
+             0.07s   0.5% 54.72%      0.14s  1.01%  runtime.mapaccess2
+             0.07s   0.5% 55.22%      0.07s   0.5%  runtime.memclrNoHeapPointers
+             0.06s  0.43% 55.65%      9.38s 67.53%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:42 UTC
+        Duration: 2s, Total samples = 13.89s (693.61%)
+        Showing nodes accounting for 13.89s, 100% of 13.89s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.01s   100% |   runtime.lock2
+                 0     0%     0%      0.01s 0.072%                | runtime.semasleep
+                                                     0.01s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:42 UTC
+        Duration: 2s, Total samples = 3.91s (195.41%)
+        Showing nodes accounting for 3.29s, 84.14% of 3.91s total
+        Dropped 78 nodes (cum <= 0.02s)
+        Showing top 35 nodes out of 148
+              flat  flat%   sum%        cum   cum%
+             1.65s 42.20% 42.20%      1.65s 42.20%  internal/runtime/syscall/linux.Syscall6
+             0.62s 15.86% 58.06%      0.62s 15.86%  runtime.futex
+             0.09s  2.30% 60.36%      0.09s  2.30%  runtime.memmove
+             0.09s  2.30% 62.66%      0.24s  6.14%  runtime.selectgo
+             0.06s  1.53% 64.19%      0.08s  2.05%  runtime.sellock
+             0.05s  1.28% 65.47%      0.05s  1.28%  internal/runtime/maps.h1 (inline)
+             0.05s  1.28% 66.75%      0.14s  3.58%  runtime.stealWork
+             0.04s  1.02% 67.77%      0.10s  2.56%  runtime.mapassign_fast32
+             0.04s  1.02% 68.80%      0.04s  1.02%  runtime.usleep
+             0.03s  0.77% 69.57%      1.43s 36.57%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.03s  0.77% 70.33%      0.03s  0.77%  math/rand/v2.(*PCG).Uint64
+             0.03s  0.77% 71.10%      0.03s  0.77%  runtime.(*waitq).enqueue (inline)
+             0.03s  0.77% 71.87%      1.06s 27.11%  runtime.mcall
+             0.03s  0.77% 72.63%      0.03s  0.77%  runtime.memclrNoHeapPointers
+             0.03s  0.77% 73.40%      0.03s  0.77%  runtime.nanotime (inline)
+             0.03s  0.77% 74.17%      0.17s  4.35%  runtime.netpoll
+             0.03s  0.77% 74.94%      1.01s 25.83%  runtime.schedule
+             0.02s  0.51% 75.45%      0.03s  0.77%  fmt.(*fmt).fmtInteger
+             0.02s  0.51% 75.96%      0.02s  0.51%  internal/poll.(*FD).writeLock (inline)
+             0.02s  0.51% 76.47%      0.02s  0.51%  internal/runtime/atomic.(*Bool).Load (inline)
+             0.02s  0.51% 76.98%      0.02s  0.51%  internal/runtime/atomic.(*Uint32).Load (inline)
+             0.02s  0.51% 77.49%      0.02s  0.51%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.02s  0.51% 78.01%      0.05s  1.28%  math/rand/v2.(*Rand).Uint64
+             0.02s  0.51% 78.52%      0.02s  0.51%  runtime.(*m).clearAllpSnapshot
+             0.02s  0.51% 79.03%      0.02s  0.51%  runtime.(*mcache).prepareForSweep
+             0.02s  0.51% 79.54%      0.02s  0.51%  runtime.(*waitq).dequeue
+             0.02s  0.51% 80.05%      0.02s  0.51%  runtime.casgstatus
+             0.02s  0.51% 80.56%      0.62s 15.86%  runtime.findRunnable
+             0.02s  0.51% 81.07%      0.02s  0.51%  runtime.getempty
+             0.02s  0.51% 81.59%      0.03s  0.77%  runtime.mallocgcTinySC2
+             0.02s  0.51% 82.10%      0.06s  1.53%  runtime.runqgrab
+             0.02s  0.51% 82.61%      0.02s  0.51%  runtime.runqput
+             0.02s  0.51% 83.12%      0.03s  0.77%  runtime.selunlock
+             0.02s  0.51% 83.63%      0.22s  5.63%  runtime.systemstack
+             0.02s  0.51% 84.14%      0.02s  0.51%  runtime.typedmemclr
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:40:42 UTC
+        Duration: 2s, Total samples = 3.91s (195.41%)
+        Showing nodes accounting for 3.91s, 100% of 3.91s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.02s   100% |   runtime.lock2
+                 0     0%     0%      0.02s  0.51%                | runtime.semasleep
+                                                     0.02s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestRPCServerCost (46.81s)
+PASS
+######## rpc-linux-Cost-2.txt
+=== RUN   TestRPCServerCost
+    rpc_spike_test.go:371: pooled false workers   0 gogc   0 at 256:  220617 gets/s,   21698 sets/s; a get 50.02 allocations and   2021 bytes, 582 GCs
+    rpc_spike_test.go:376: profiled get at 256: 233852 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:05 UTC
+        Duration: 2s, Total samples = 13.35s (666.22%)
+        Showing nodes accounting for 7.60s, 56.93% of 13.35s total
+        Dropped 356 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 280
+              flat  flat%   sum%        cum   cum%
+             1.53s 11.46% 11.46%      1.53s 11.46%  internal/runtime/syscall/linux.Syscall6
+             0.63s  4.72% 16.18%      1.59s 11.91%  runtime.pcvalue
+             0.54s  4.04% 20.22%      0.62s  4.64%  runtime.step
+             0.48s  3.60% 23.82%      0.48s  3.60%  runtime.procyieldAsm
+             0.46s  3.45% 27.27%      0.46s  3.45%  runtime.futex
+             0.35s  2.62% 29.89%      0.38s  2.85%  runtime.findfunc
+             0.34s  2.55% 32.43%      4.21s 31.54%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.33s  2.47% 34.91%      0.97s  7.27%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.27s  2.02% 36.93%      1.06s  7.94%  runtime.(*unwinder).resolveInternal
+             0.22s  1.65% 38.58%      1.23s  9.21%  runtime.(*stkframe).getStackMap
+             0.21s  1.57% 40.15%      0.21s  1.57%  runtime.(*moduledata).textAddr
+             0.20s  1.50% 41.65%      0.20s  1.50%  runtime.usleep
+             0.17s  1.27% 42.92%      0.17s  1.27%  runtime.memmove
+             0.15s  1.12% 44.04%      1.55s 11.61%  runtime.adjustframe
+             0.13s  0.97% 45.02%      0.13s  0.97%  runtime.adjustpointers
+             0.11s  0.82% 45.84%      0.53s  3.97%  modernc.org/libc.Xpthread_mutex_lock
+             0.11s  0.82% 46.67%      0.11s  0.82%  modernc.org/sqlite/lib._releaseMemArray
+             0.11s  0.82% 47.49%      0.14s  1.05%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.10s  0.75% 48.24%      0.29s  2.17%  runtime.lock2
+             0.09s  0.67% 48.91%      2.66s 19.93%  modernc.org/sqlite/lib._btreeBeginTrans
+             0.09s  0.67% 49.59%      0.30s  2.25%  runtime.funcInfo.entry (inline)
+             0.09s  0.67% 50.26%      0.09s  0.67%  runtime.memclrNoHeapPointers
+             0.08s   0.6% 50.86%      0.86s  6.44%  runtime.findRunnable
+             0.08s   0.6% 51.46%      0.08s   0.6%  runtime.readvarint (inline)
+             0.07s  0.52% 51.99%      2.12s 15.88%  modernc.org/libc.(*TLS).Alloc
+             0.07s  0.52% 52.51%      0.16s  1.20%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.07s  0.52% 53.03%      0.07s  0.52%  modernc.org/sqlite/lib._pcache1PinPage (inline)
+             0.07s  0.52% 53.56%      0.16s  1.20%  runtime.funcMaxSPDelta
+             0.07s  0.52% 54.08%      0.07s  0.52%  runtime.funcdata (inline)
+             0.07s  0.52% 54.61%      0.07s  0.52%  runtime.madvise
+             0.07s  0.52% 55.13%      0.12s   0.9%  runtime.mapaccess2
+             0.06s  0.45% 55.58%      0.51s  3.82%  internal/sync.(*Mutex).Lock (inline)
+             0.06s  0.45% 56.03%      0.08s   0.6%  internal/sync.(*Mutex).Unlock (inline)
+             0.06s  0.45% 56.48%      0.09s  0.67%  runtime.casgstatus
+             0.06s  0.45% 56.93%      0.15s  1.12%  runtime.mallocgcSmallScanNoHeaderSC7
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:05 UTC
+        Duration: 2s, Total samples = 13.35s (666.22%)
+        Showing nodes accounting for 13.35s, 100% of 13.35s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.03s   100% |   runtime.lock2
+                 0     0%     0%      0.03s  0.22%                | runtime.semasleep
+                                                     0.03s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:05 UTC
+        Duration: 2s, Total samples = 3.10s (154.84%)
+        Showing nodes accounting for 2.62s, 84.52% of 3.10s total
+        Dropped 76 nodes (cum <= 0.02s)
+        Showing top 35 nodes out of 120
+              flat  flat%   sum%        cum   cum%
+             1.18s 38.06% 38.06%      1.18s 38.06%  internal/runtime/syscall/linux.Syscall6
+             0.61s 19.68% 57.74%      0.61s 19.68%  runtime.futex
+             0.06s  1.94% 59.68%      0.10s  3.23%  runtime.selectgo
+             0.05s  1.61% 61.29%      0.07s  2.26%  fmt.(*pp).doPrintf
+             0.05s  1.61% 62.90%      0.05s  1.61%  runtime.casgstatus
+             0.05s  1.61% 64.52%      0.54s 17.42%  runtime.findRunnable
+             0.04s  1.29% 65.81%      0.90s 29.03%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.04s  1.29% 67.10%      0.04s  1.29%  runtime.(*spanInlineMarkBits).init
+             0.04s  1.29% 68.39%      0.08s  2.58%  runtime.mallocgcTinySC2
+             0.04s  1.29% 69.68%      0.04s  1.29%  runtime.memmove
+             0.04s  1.29% 70.97%      0.12s  3.87%  runtime.stealWork
+             0.03s  0.97% 71.94%      0.19s  6.13%  runtime.netpoll
+             0.03s  0.97% 72.90%      0.92s 29.68%  runtime.schedule
+             0.03s  0.97% 73.87%      0.03s  0.97%  runtime.usleep
+             0.02s  0.65% 74.52%      0.63s 20.32%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.02s  0.65% 75.16%      1.11s 35.81%  github.com/tinyshed/tinystore/spike.rpcGetOp.func1
+             0.02s  0.65% 75.81%      0.02s  0.65%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.02s  0.65% 76.45%      0.02s  0.65%  math/rand/v2.(*PCG).Uint64
+             0.02s  0.65% 77.10%      0.02s  0.65%  net.wrapSyscallError (inline)
+             0.02s  0.65% 77.74%      0.02s  0.65%  runtime.(*waitq).dequeue (inline)
+             0.02s  0.65% 78.39%      0.08s  2.58%  runtime.growslice
+             0.02s  0.65% 79.03%      0.04s  1.29%  runtime.mallocgcSmallNoScanSC4
+             0.02s  0.65% 79.68%      0.05s  1.61%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.02s  0.65% 80.32%      0.02s  0.65%  runtime.nanotime (inline)
+             0.02s  0.65% 80.97%      0.05s  1.61%  runtime.runqgrab
+             0.02s  0.65% 81.61%      0.04s  1.29%  runtime.unlock2
+             0.01s  0.32% 81.94%      0.58s 18.71%  bufio.(*Reader).Read
+             0.01s  0.32% 82.26%      0.95s 30.65%  github.com/tinyshed/tinystore/spike.(*rpcClient).receive
+             0.01s  0.32% 82.58%      0.61s 19.68%  github.com/tinyshed/tinystore/spike.(*rpcReader).next
+             0.01s  0.32% 82.90%      0.54s 17.42%  internal/poll.(*FD).Read
+             0.01s  0.32% 83.23%      0.03s  0.97%  internal/runtime/maps.(*Map).Delete
+             0.01s  0.32% 83.55%      0.02s  0.65%  internal/runtime/maps.typedmemclr
+             0.01s  0.32% 83.87%      0.03s  0.97%  internal/sync.(*Mutex).Lock (inline)
+             0.01s  0.32% 84.19%      0.02s  0.65%  runtime.(*timers).check
+             0.01s  0.32% 84.52%      0.26s  8.39%  runtime.chansend
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:05 UTC
+        Duration: 2s, Total samples = 3.10s (154.84%)
+        Showing nodes accounting for 3.10s, 100% of 3.10s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.01s   100% |   runtime.lock2
+                 0     0%     0%      0.01s  0.32%                | runtime.semasleep
+                                                     0.01s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:371: pooled true  workers   0 gogc   0 at 256:  231403 gets/s,   22637 sets/s; a get 47.11 allocations and   1987 bytes, 459 GCs
+    rpc_spike_test.go:371: pooled false workers  64 gogc   0 at 256:  318224 gets/s,    8989 sets/s; a get 47.98 allocations and   1911 bytes, 630 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc   0 at 256:  231180 gets/s,   22021 sets/s; a get 47.98 allocations and   1912 bytes, 640 GCs
+    rpc_spike_test.go:371: pooled false workers   0 gogc 400 at 256:  294329 gets/s,   22961 sets/s; a get 49.99 allocations and   2017 bytes, 88 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc 400 at 256:  414741 gets/s,   22456 sets/s; a get 47.98 allocations and   1911 bytes, 116 GCs
+    rpc_spike_test.go:376: profiled get at 256: 417552 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:43 UTC
+        Duration: 2s, Total samples = 13.73s (685.42%)
+        Showing nodes accounting for 7.73s, 56.30% of 13.73s total
+        Dropped 340 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 263
+              flat  flat%   sum%        cum   cum%
+             1.95s 14.20% 14.20%      1.95s 14.20%  internal/runtime/syscall/linux.Syscall6
+             0.92s  6.70% 20.90%      0.92s  6.70%  runtime.procyieldAsm
+             0.58s  4.22% 25.13%      3.84s 27.97%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.50s  3.64% 28.77%      1.80s 13.11%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.47s  3.42% 32.19%      0.47s  3.42%  runtime.futex
+             0.30s  2.18% 34.38%      1.08s  7.87%  modernc.org/libc.Xpthread_mutex_lock
+             0.23s  1.68% 36.05%      0.23s  1.68%  runtime.memmove
+             0.22s  1.60% 37.65%      0.22s  1.60%  runtime.usleep
+             0.16s  1.17% 38.82%      0.32s  2.33%  runtime.mallocgcTinySC2
+             0.14s  1.02% 39.84%      0.14s  1.02%  modernc.org/libc.(*TLS).Alloc
+             0.14s  1.02% 40.86%      0.26s  1.89%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.14s  1.02% 41.88%      0.19s  1.38%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.13s  0.95% 42.83%      1.11s  8.08%  internal/sync.(*Mutex).lockSlow
+             0.11s   0.8% 43.63%      0.11s   0.8%  modernc.org/sqlite/lib._out2Prerelease
+             0.11s   0.8% 44.43%      0.11s   0.8%  modernc.org/sqlite/lib._pcache1PinPage (inline)
+             0.11s   0.8% 45.23%      0.12s  0.87%  modernc.org/sqlite/lib._releaseMemArray
+             0.11s   0.8% 46.03%      0.16s  1.17%  runtime.mapaccess2
+             0.10s  0.73% 46.76%      0.25s  1.82%  runtime.lock2
+             0.10s  0.73% 47.49%      0.15s  1.09%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.09s  0.66% 48.14%      0.14s  1.02%  database/sql.driverArgsConnLocked
+             0.09s  0.66% 48.80%      0.13s  0.95%  internal/sync.(*Mutex).Unlock (inline)
+             0.09s  0.66% 49.45%      0.16s  1.17%  modernc.org/sqlite/lib._allocateCursor
+             0.09s  0.66% 50.11%      0.09s  0.66%  runtime.nanotime (inline)
+             0.08s  0.58% 50.69%      0.61s  4.44%  modernc.org/sqlite.(*conn).bind
+             0.08s  0.58% 51.27%      0.08s  0.58%  runtime.(*waitq).dequeue (inline)
+             0.08s  0.58% 51.86%      0.18s  1.31%  runtime.selectgo
+             0.07s  0.51% 52.37%      0.07s  0.51%  cmpbody
+             0.07s  0.51% 52.88%      0.24s  1.75%  database/sql.convertAssignRows
+             0.07s  0.51% 53.39%      1.18s  8.59%  internal/sync.(*Mutex).Lock (inline)
+             0.07s  0.51% 53.90%      0.15s  1.09%  modernc.org/libc.Xpthread_mutex_unlock
+             0.07s  0.51% 54.41%      0.07s  0.51%  modernc.org/sqlite/lib._sqlite3DbMallocRawNN
+             0.07s  0.51% 54.92%      0.29s  2.11%  modernc.org/sqlite/lib._vdbeRecordCompareInt
+             0.07s  0.51% 55.43%      0.08s  0.58%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.06s  0.44% 55.86%      9.92s 72.25%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.[]uint8]).GetEntry
+             0.06s  0.44% 56.30%      0.10s  0.73%  github.com/tinyshed/tinystore/kv.(*branch).begin
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:43 UTC
+        Duration: 2s, Total samples = 13.73s (685.42%)
+        Showing nodes accounting for 13.73s, 100% of 13.73s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.05s   100% |   runtime.lock2
+                 0     0%     0%      0.05s  0.36%                | runtime.semasleep
+                                                     0.05s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:43 UTC
+        Duration: 2s, Total samples = 3.97s (198.43%)
+        Showing nodes accounting for 3.26s, 82.12% of 3.97s total
+        Dropped 88 nodes (cum <= 0.02s)
+        Showing top 35 nodes out of 132
+              flat  flat%   sum%        cum   cum%
+             1.55s 39.04% 39.04%      1.55s 39.04%  internal/runtime/syscall/linux.Syscall6
+             0.62s 15.62% 54.66%      0.62s 15.62%  runtime.futex
+             0.10s  2.52% 57.18%      0.31s  7.81%  runtime.selectgo
+             0.07s  1.76% 58.94%      0.14s  3.53%  runtime.stealWork
+             0.06s  1.51% 60.45%      0.06s  1.51%  runtime.(*waitq).dequeue (inline)
+             0.06s  1.51% 61.96%      0.06s  1.51%  runtime.memmove
+             0.06s  1.51% 63.48%      0.12s  3.02%  runtime.sellock
+             0.05s  1.26% 64.74%      0.73s 18.39%  bufio.(*Reader).Read
+             0.05s  1.26% 65.99%      1.50s 37.78%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.04s  1.01% 67.00%      0.99s 24.94%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.04s  1.01% 68.01%      0.09s  2.27%  runtime.lock2
+             0.04s  1.01% 69.02%      0.15s  3.78%  runtime.mallocgc
+             0.04s  1.01% 70.03%      0.07s  1.76%  runtime.unlock2
+             0.03s  0.76% 70.78%      0.03s  0.76%  runtime.gopark
+             0.03s  0.76% 71.54%      0.03s  0.76%  runtime.memclrNoHeapPointers
+             0.03s  0.76% 72.29%      0.03s  0.76%  runtime.procyieldAsm
+             0.03s  0.76% 73.05%      0.04s  1.01%  sync.(*Pool).Put
+             0.02s   0.5% 73.55%      0.04s  1.01%  fmt.(*fmt).fmtInteger
+             0.02s   0.5% 74.06%      0.85s 21.41%  github.com/tinyshed/tinystore/spike.(*rpcReader).next
+             0.02s   0.5% 74.56%      0.75s 18.89%  io.ReadAtLeast
+             0.02s   0.5% 75.06%      0.65s 16.37%  net.(*conn).Read
+             0.02s   0.5% 75.57%      0.02s   0.5%  runtime.(*randomEnum).next (inline)
+             0.02s   0.5% 76.07%      0.02s   0.5%  runtime.(*spanInlineMarkBits).init
+             0.02s   0.5% 76.57%      0.02s   0.5%  runtime.(*waitq).enqueue (inline)
+             0.02s   0.5% 77.08%      0.02s   0.5%  runtime.execute
+             0.02s   0.5% 77.58%      0.51s 12.85%  runtime.findRunnable
+             0.02s   0.5% 78.09%      0.06s  1.51%  runtime.gcDrain
+             0.02s   0.5% 78.59%      0.02s   0.5%  runtime.getcallerfp
+             0.02s   0.5% 79.09%      0.05s  1.26%  runtime.mallocgcSmallNoscan
+             0.02s   0.5% 79.60%      0.07s  1.76%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.02s   0.5% 80.10%      0.04s  1.01%  runtime.mapaccess2_fast32
+             0.02s   0.5% 80.60%      0.02s   0.5%  runtime.runqput
+             0.02s   0.5% 81.11%      0.02s   0.5%  runtime.save
+             0.02s   0.5% 81.61%      0.04s  1.01%  runtime.scanObject
+             0.02s   0.5% 82.12%      0.95s 23.93%  runtime.schedule
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:43:43 UTC
+        Duration: 2s, Total samples = 3.97s (198.43%)
+        Showing nodes accounting for 3.97s, 100% of 3.97s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.01s   100% |   runtime.lock2
+                 0     0%     0%      0.01s  0.25%                | runtime.semasleep
+                                                     0.01s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestRPCServerCost (46.63s)
+PASS
+######## rpc-linux-One-idle-1.txt
+=== RUN   TestRPCOneInFlight
+    rpc_spike_test.go:397: go             unix   leader    echo     1        6865 ops/s  mean     145.7 µs
+    rpc_spike_test.go:397: go             unix   leader    get      1        5599 ops/s  mean     178.6 µs
+    rpc_spike_test.go:397: go             tcp    leader    echo     1        7438 ops/s  mean     134.4 µs
+    rpc_spike_test.go:397: go             tcp    leader    get      1        5789 ops/s  mean     172.7 µs
+    rpc_spike_test.go:397: go             stdio  leader    echo     1        8380 ops/s  mean     119.3 µs
+    rpc_spike_test.go:397: go             stdio  leader    get      1        6478 ops/s  mean     154.4 µs
+--- PASS: TestRPCOneInFlight (15.33s)
+PASS
+######## rpc-linux-One-idle-2.txt
+=== RUN   TestRPCOneInFlight
+    rpc_spike_test.go:397: go             unix   leader    echo     1        6805 ops/s  mean     146.9 µs
+    rpc_spike_test.go:397: go             unix   leader    get      1        5525 ops/s  mean     181.0 µs
+    rpc_spike_test.go:397: go             tcp    leader    echo     1        7398 ops/s  mean     135.2 µs
+    rpc_spike_test.go:397: go             tcp    leader    get      1        5774 ops/s  mean     173.2 µs
+    rpc_spike_test.go:397: go             stdio  leader    echo     1        8094 ops/s  mean     123.5 µs
+    rpc_spike_test.go:397: go             stdio  leader    get      1        6295 ops/s  mean     158.9 µs
+--- PASS: TestRPCOneInFlight (15.26s)
+PASS
+######## rpc-linux-One-busy-1.txt
+=== RUN   TestRPCOneInFlight
+    rpc_spike_test.go:397: go             unix   leader    echo     1       17216 ops/s  mean      58.1 µs
+    rpc_spike_test.go:397: go             unix   leader    get      1        8719 ops/s  mean     114.7 µs
+    rpc_spike_test.go:397: go             tcp    leader    echo     1       22485 ops/s  mean      44.5 µs
+    rpc_spike_test.go:397: go             tcp    leader    get      1       11819 ops/s  mean      84.6 µs
+    rpc_spike_test.go:397: go             stdio  leader    echo     1       13258 ops/s  mean      75.4 µs
+    rpc_spike_test.go:397: go             stdio  leader    get      1        7964 ops/s  mean     125.6 µs
+--- PASS: TestRPCOneInFlight (16.18s)
+PASS
+sh: 1: kill: Usage: kill [-s sigspec | -signum | -sigspec] [pid | job]... or
+kill -l [exitstatus]
+######## rpc-linux-One-busy-2.txt
+=== RUN   TestRPCOneInFlight
+    rpc_spike_test.go:397: go             unix   leader    echo     1       19716 ops/s  mean      50.7 µs
+    rpc_spike_test.go:397: go             unix   leader    get      1       10025 ops/s  mean      99.7 µs
+    rpc_spike_test.go:397: go             tcp    leader    echo     1       21785 ops/s  mean      45.9 µs
+    rpc_spike_test.go:397: go             tcp    leader    get      1       11994 ops/s  mean      83.4 µs
+    rpc_spike_test.go:397: go             stdio  leader    echo     1       13431 ops/s  mean      74.5 µs
+    rpc_spike_test.go:397: go             stdio  leader    get      1        7397 ops/s  mean     135.2 µs
+--- PASS: TestRPCOneInFlight (16.54s)
+PASS
+######## rpc-linux-Cost-noshrink.txt
+=== RUN   TestRPCServerCost
+    rpc_spike_test.go:371: pooled false workers   0 gogc   0 at 256:  209886 gets/s,   21585 sets/s; a get 50.02 allocations and   2020 bytes, 542 GCs
+    rpc_spike_test.go:376: profiled get at 256: 230600 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:45:59 UTC
+        Duration: 2s, Total samples = 13.53s (675.54%)
+        Showing nodes accounting for 7.96s, 58.83% of 13.53s total
+        Dropped 357 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 269
+              flat  flat%   sum%        cum   cum%
+             1.69s 12.49% 12.49%      1.69s 12.49%  internal/runtime/syscall/linux.Syscall6
+             0.72s  5.32% 17.81%      1.80s 13.30%  runtime.pcvalue
+             0.65s  4.80% 22.62%      0.81s  5.99%  runtime.step
+             0.52s  3.84% 26.46%      0.52s  3.84%  runtime.futex
+             0.39s  2.88% 29.34%      0.39s  2.88%  runtime.procyieldAsm
+             0.31s  2.29% 31.63%      4.33s 32.00%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.26s  1.92% 33.56%      1.31s  9.68%  runtime.(*unwinder).resolveInternal
+             0.25s  1.85% 35.40%      1.04s  7.69%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.25s  1.85% 37.25%      0.25s  1.85%  runtime.adjustpointers
+             0.22s  1.63% 38.88%      0.22s  1.63%  runtime.(*moduledata).textAddr
+             0.22s  1.63% 40.50%      1.54s 11.38%  runtime.adjustframe
+             0.20s  1.48% 41.98%      1.03s  7.61%  runtime.(*stkframe).getStackMap
+             0.20s  1.48% 43.46%      0.22s  1.63%  runtime.findfunc
+             0.20s  1.48% 44.94%      0.20s  1.48%  runtime.memmove
+             0.16s  1.18% 46.12%      0.16s  1.18%  runtime.readvarint (inline)
+             0.16s  1.18% 47.30%      0.16s  1.18%  runtime.usleep
+             0.11s  0.81% 48.12%      0.43s  3.18%  modernc.org/libc.Xpthread_mutex_lock
+             0.11s  0.81% 48.93%      0.17s  1.26%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.11s  0.81% 49.74%      0.18s  1.33%  runtime.tryDeferToSpanScan
+             0.10s  0.74% 50.48%      2.13s 15.74%  modernc.org/libc.(*TLS).Alloc
+             0.10s  0.74% 51.22%      0.10s  0.74%  modernc.org/sqlite/lib._pcache1PinPage (inline)
+             0.09s  0.67% 51.88%      0.09s  0.67%  modernc.org/sqlite/lib._out2Prerelease
+             0.09s  0.67% 52.55%      0.31s  2.29%  runtime.funcInfo.entry (inline)
+             0.09s  0.67% 53.22%      0.09s  0.67%  runtime.osyield
+             0.08s  0.59% 53.81%      0.20s  1.48%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.08s  0.59% 54.40%      0.08s  0.59%  modernc.org/sqlite/lib._releaseMemArray
+             0.07s  0.52% 54.92%      0.09s  0.67%  internal/sync.(*Mutex).Unlock (inline)
+             0.07s  0.52% 55.43%      0.36s  2.66%  modernc.org/sqlite.(*conn).bind
+             0.07s  0.52% 55.95%      0.07s  0.52%  modernc.org/sqlite/lib._sqlite3DbMallocRawNN
+             0.07s  0.52% 56.47%      0.07s  0.52%  runtime.adjustpointer (inline)
+             0.07s  0.52% 56.98%      0.12s  0.89%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.07s  0.52% 57.50%      0.07s  0.52%  runtime.nextFreeFast (inline)
+             0.06s  0.44% 57.95%      0.17s  1.26%  database/sql.convertAssignRows
+             0.06s  0.44% 58.39%      9.65s 71.32%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.[]uint8]).GetEntry
+             0.06s  0.44% 58.83%      0.32s  2.37%  runtime.mallocgcTinySC2
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:45:59 UTC
+        Duration: 2s, Total samples = 13.53s (675.54%)
+        Showing nodes accounting for 13.52s, 99.93% of 13.53s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.05s   100% |   runtime.lock2
+                 0     0%     0%      0.05s  0.37%                | runtime.semasleep
+                                                     0.05s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:45:59 UTC
+        Duration: 2s, Total samples = 3.15s (157.41%)
+        Showing nodes accounting for 2.54s, 80.63% of 3.15s total
+        Dropped 71 nodes (cum <= 0.02s)
+        Showing top 35 nodes out of 125
+              flat  flat%   sum%        cum   cum%
+             1.05s 33.33% 33.33%      1.05s 33.33%  internal/runtime/syscall/linux.Syscall6
+             0.62s 19.68% 53.02%      0.62s 19.68%  runtime.futex
+             0.09s  2.86% 55.87%      0.20s  6.35%  runtime.selectgo
+             0.04s  1.27% 57.14%      0.04s  1.27%  runtime.gopark
+             0.04s  1.27% 58.41%      0.04s  1.27%  runtime.nanotime (inline)
+             0.04s  1.27% 59.68%      0.09s  2.86%  runtime.stealWork
+             0.04s  1.27% 60.95%      0.04s  1.27%  runtime.usleep
+             0.03s  0.95% 61.90%      0.03s  0.95%  runtime.(*waitq).dequeue (inline)
+             0.03s  0.95% 62.86%      0.03s  0.95%  runtime.acquireSudog
+             0.03s  0.95% 63.81%      0.04s  1.27%  runtime.casgstatus
+             0.03s  0.95% 64.76%      0.03s  0.95%  runtime.lock2
+             0.03s  0.95% 65.71%      0.04s  1.27%  runtime.mallocgcSmallNoScanSC4
+             0.03s  0.95% 66.67%      0.03s  0.95%  runtime.memmove
+             0.03s  0.95% 67.62%      0.03s  0.95%  runtime.nextFreeFast (inline)
+             0.03s  0.95% 68.57%      0.87s 27.62%  runtime.schedule
+             0.02s  0.63% 69.21%      0.59s 18.73%  bufio.(*Reader).Read
+             0.02s  0.63% 69.84%      1.05s 33.33%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.02s  0.63% 70.48%      0.98s 31.11%  github.com/tinyshed/tinystore/spike.(*rpcClient).receive
+             0.02s  0.63% 71.11%      0.02s  0.63%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.02s  0.63% 71.75%      0.02s  0.63%  internal/runtime/maps.h1 (inline)
+             0.02s  0.63% 72.38%      0.03s  0.95%  internal/sync.(*Mutex).Lock (inline)
+             0.02s  0.63% 73.02%      0.02s  0.63%  net.wrapSyscallError (inline)
+             0.02s  0.63% 73.65%      0.25s  7.94%  runtime.chansend
+             0.02s  0.63% 74.29%      0.06s  1.90%  runtime.execute
+             0.02s  0.63% 74.92%      0.42s 13.33%  runtime.findRunnable
+             0.02s  0.63% 75.56%      0.02s  0.63%  runtime.getcallerfp
+             0.02s  0.63% 76.19%      0.02s  0.63%  runtime.gogo
+             0.02s  0.63% 76.83%      0.09s  2.86%  runtime.growslice
+             0.02s  0.63% 77.46%      0.06s  1.90%  runtime.mallocgcSmallNoscan
+             0.02s  0.63% 78.10%      0.02s  0.63%  runtime.memclrNoHeapPointers
+             0.02s  0.63% 78.73%      0.07s  2.22%  runtime.reentersyscall
+             0.02s  0.63% 79.37%      0.04s  1.27%  runtime.sellock
+             0.02s  0.63% 80.00%      0.02s  0.63%  runtime.write1
+             0.01s  0.32% 80.32%      0.04s  1.27%  fmt.(*fmt).fmtInteger
+             0.01s  0.32% 80.63%      0.03s  0.95%  fmt.(*fmt).pad
+    rpc_spike_test.go:376: pprof /perf/rpc/rpc-56689340/client.pprof: exit status 2
+    rpc_spike_test.go:376: client.pprof -peek:
+        no matches found for regexp: runtime\.cgocall$|runtime\.semasleep$
+    rpc_spike_test.go:371: pooled true  workers   0 gogc   0 at 256:  219602 gets/s,   22150 sets/s; a get 47.11 allocations and   1984 bytes, 425 GCs
+    rpc_spike_test.go:371: pooled false workers  64 gogc   0 at 256:  335793 gets/s,    9385 sets/s; a get 47.98 allocations and   1911 bytes, 659 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc   0 at 256:  321596 gets/s,   21702 sets/s; a get 47.98 allocations and   1911 bytes, 688 GCs
+    rpc_spike_test.go:371: pooled false workers   0 gogc 400 at 256:  294946 gets/s,   23470 sets/s; a get 49.99 allocations and   2017 bytes, 88 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc 400 at 256:  433958 gets/s,   23509 sets/s; a get 47.98 allocations and   1911 bytes, 121 GCs
+    rpc_spike_test.go:376: profiled get at 256: 433966 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:46:37 UTC
+        Duration: 2s, Total samples = 13.79s (688.31%)
+        Showing nodes accounting for 7.87s, 57.07% of 13.79s total
+        Dropped 347 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 256
+              flat  flat%   sum%        cum   cum%
+             2.20s 15.95% 15.95%      2.20s 15.95%  internal/runtime/syscall/linux.Syscall6
+             0.85s  6.16% 22.12%      0.85s  6.16%  runtime.procyieldAsm
+             0.68s  4.93% 27.05%      3.60s 26.11%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.34s  2.47% 29.51%      1.66s 12.04%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.30s  2.18% 31.69%      0.30s  2.18%  runtime.futex
+             0.28s  2.03% 33.72%      0.99s  7.18%  modernc.org/libc.Xpthread_mutex_lock
+             0.21s  1.52% 35.24%      0.21s  1.52%  runtime.memmove
+             0.20s  1.45% 36.69%      0.34s  2.47%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.19s  1.38% 38.07%      0.25s  1.81%  runtime.mallocgcTinySC2
+             0.17s  1.23% 39.30%      0.98s  7.11%  internal/sync.(*Mutex).lockSlow
+             0.16s  1.16% 40.46%      1.28s  9.28%  runtime.mallocgc
+             0.14s  1.02% 41.48%      0.22s  1.60%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.13s  0.94% 42.42%      9.48s 68.75%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.12s  0.87% 43.29%      0.16s  1.16%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.11s   0.8% 44.09%      0.26s  1.89%  database/sql.driverArgsConnLocked
+             0.11s   0.8% 44.89%      0.18s  1.31%  internal/sync.(*Mutex).Unlock (inline)
+             0.11s   0.8% 45.69%      0.11s   0.8%  modernc.org/libc.(*TLS).Alloc
+             0.10s  0.73% 46.41%      1.08s  7.83%  internal/sync.(*Mutex).Lock (inline)
+             0.10s  0.73% 47.14%      0.11s   0.8%  modernc.org/sqlite/lib._releaseMemArray
+             0.10s  0.73% 47.86%      0.10s  0.73%  runtime.memclrNoHeapPointers
+             0.10s  0.73% 48.59%      0.10s  0.73%  runtime.nextFreeFast (inline)
+             0.10s  0.73% 49.31%      0.10s  0.73%  runtime.usleep
+             0.09s  0.65% 49.96%      0.09s  0.65%  cmpbody
+             0.09s  0.65% 50.62%      8.72s 63.23%  github.com/tinyshed/tinystore/kv.readLive
+             0.09s  0.65% 51.27%      0.09s  0.65%  modernc.org/sqlite/lib._out2Prerelease
+             0.09s  0.65% 51.92%      0.09s  0.65%  modernc.org/sqlite/lib._pcache1PinPage (inline)
+             0.09s  0.65% 52.57%      0.30s  2.18%  runtime.growslice
+             0.09s  0.65% 53.23%      0.34s  2.47%  runtime.selectgo
+             0.08s  0.58% 53.81%      0.10s  0.73%  database/sql.(*closingMutex).RUnlock
+             0.08s  0.58% 54.39%      9.90s 71.79%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.[]uint8]).GetEntry
+             0.08s  0.58% 54.97%      0.49s  3.55%  modernc.org/sqlite.(*conn).bind
+             0.08s  0.58% 55.55%      0.41s  2.97%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+             0.07s  0.51% 56.06%      0.07s  0.51%  indexbytebody
+             0.07s  0.51% 56.56%      0.07s  0.51%  runtime.(*mspan).writeHeapBitsSmall
+             0.07s  0.51% 57.07%      0.14s  1.02%  runtime.mallocgcSmallScanNoHeaderSC7
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:46:37 UTC
+        Duration: 2s, Total samples = 13.79s (688.31%)
+        Showing nodes accounting for 13.79s, 100% of 13.79s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.02s   100% |   runtime.lock2
+                 0     0%     0%      0.02s  0.15%                | runtime.semasleep
+                                                     0.02s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:46:37 UTC
+        Duration: 2s, Total samples = 4.07s (203.32%)
+        Showing nodes accounting for 3.23s, 79.36% of 4.07s total
+        Dropped 131 nodes (cum <= 0.02s)
+        Showing top 35 nodes out of 118
+              flat  flat%   sum%        cum   cum%
+             1.65s 40.54% 40.54%      1.65s 40.54%  internal/runtime/syscall/linux.Syscall6
+             0.59s 14.50% 55.04%      0.59s 14.50%  runtime.futex
+             0.10s  2.46% 57.49%      0.31s  7.62%  runtime.selectgo
+             0.07s  1.72% 59.21%      0.07s  1.72%  runtime.(*waitq).dequeue
+             0.07s  1.72% 60.93%      0.07s  1.72%  runtime.procyieldAsm
+             0.06s  1.47% 62.41%      0.11s  2.70%  runtime.unlock2
+             0.05s  1.23% 63.64%      1.63s 40.05%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.04s  0.98% 64.62%      0.04s  0.98%  runtime.execute
+             0.04s  0.98% 65.60%      0.53s 13.02%  runtime.findRunnable
+             0.04s  0.98% 66.58%      0.04s  0.98%  runtime.gopark
+             0.04s  0.98% 67.57%      0.11s  2.70%  runtime.growslice
+             0.04s  0.98% 68.55%      0.09s  2.21%  runtime.sellock
+             0.03s  0.74% 69.29%      0.75s 18.43%  bufio.(*Reader).Read
+             0.03s  0.74% 70.02%      0.98s 24.08%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.03s  0.74% 70.76%      1.88s 46.19%  github.com/tinyshed/tinystore/spike.rpcRun.func1
+             0.03s  0.74% 71.50%      0.03s  0.74%  runtime.getMCache (inline)
+             0.03s  0.74% 72.24%      0.06s  1.47%  runtime.runqgrab
+             0.03s  0.74% 72.97%      0.03s  0.74%  runtime.usleep
+             0.02s  0.49% 73.46%      0.07s  1.72%  fmt.(*fmt).fmtInteger
+             0.02s  0.49% 73.96%      0.05s  1.23%  fmt.(*fmt).pad
+             0.02s  0.49% 74.45%      0.10s  2.46%  fmt.(*pp).printArg
+             0.02s  0.49% 74.94%      0.93s 22.85%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).write
+             0.02s  0.49% 75.43%      0.03s  0.74%  runtime.acquirepNoTrace
+             0.02s  0.49% 75.92%      0.07s  1.72%  runtime.lock2
+             0.02s  0.49% 76.41%      0.06s  1.47%  runtime.makeslice
+             0.02s  0.49% 76.90%      0.06s  1.47%  runtime.mapassign_fast32
+             0.02s  0.49% 77.40%      0.09s  2.21%  runtime.stealWork
+             0.01s  0.25% 77.64%      0.12s  2.95%  fmt.(*pp).doPrintf
+             0.01s  0.25% 77.89%      0.08s  1.97%  fmt.(*pp).fmtInteger
+             0.01s  0.25% 78.13%      0.83s 20.39%  github.com/tinyshed/tinystore/spike.(*rpcReader).next
+             0.01s  0.25% 78.38%      0.12s  2.95%  github.com/tinyshed/tinystore/spike.rpcAppendFrame (inline)
+             0.01s  0.25% 78.62%      0.03s  0.74%  internal/poll.runtime_pollReset
+             0.01s  0.25% 78.87%      0.05s  1.23%  internal/sync.(*Mutex).Lock (inline)
+             0.01s  0.25% 79.12%      0.05s  1.23%  internal/sync.(*Mutex).Unlock (inline)
+             0.01s  0.25% 79.36%      0.76s 18.67%  io.ReadAtLeast
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: rpc-spike.test
+        Build ID: 003ced7cb12076bf8c43403f47dc8933e6d41808
+        Type: cpu
+        Time: 2026-09-28 13:46:37 UTC
+        Duration: 2s, Total samples = 4.07s (203.32%)
+        Showing nodes accounting for 4.07s, 100% of 4.07s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.01s   100% |   runtime.lock2
+                 0     0%     0%      0.01s  0.25%                | runtime.semasleep
+                                                     0.01s   100% |   runtime.futexsleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestRPCServerCost (46.78s)
+PASS

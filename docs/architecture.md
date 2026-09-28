@@ -12,8 +12,9 @@ rewrite of one metrics path. A section that describes something unbuilt says so.
 
 An embedded data runtime for one Go program: exact metrics, structured records
 (logs and events), SQL databases the application owns, KV, blobs and jobs, in
-one directory, with bounded memory, no daemon and no cgo. A network service, if
-one comes, wraps the same runtime from a module of its own.
+one directory, with bounded memory, no daemon and no cgo. A network service
+wraps the same runtime from a module of its own; it is designed, not built, in
+[server.md](server.md), and its bytes in [wire.md](wire.md).
 
 Each engine keeps its own semantics. The exactness rules in `AGENTS.md` are the
 metrics engine's contract, not every engine's; an engine's contract lives in
