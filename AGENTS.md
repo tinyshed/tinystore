@@ -127,11 +127,13 @@ Do not describe unbuilt behaviour as though it works.
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
+| `server/spike/`      | the server measured through `tinystore serve`, skipped unless `TINYSTORE_SPIKE=1` |
 | `cmd/tinystore/`     | the one executable, a module of its own: `serve`, and `migrate` and `schema` for sqldb |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
 | `.github/workflows/` | the authoritative clean builds                                                |
+| `.agents/skills/`    | how the recurring work is done; `.claude/skills/` points to it                |
 
 The first engine keeps its implementation in one package; split it only when
 a dependency boundary needs a package, not to mirror the execution steps:
@@ -416,6 +418,11 @@ changing something, not to look something up.
 A reference a contributor returns to belongs in `docs/`, and a dated measurement
 round belongs in `docs/reports/` with the environment and command that reproduce
 it. A rule they are about to violate belongs here.
+
+How to do the recurring work is a skill in `.agents/skills/`, which
+`.claude/skills/` points to: `sdk`, `wire-change`, `measure`, `verify` and
+`platform-traps`. Read the one that fits before you start, and fix it where it
+is wrong, as you would this file.
 
 ## Rules that are gates
 
