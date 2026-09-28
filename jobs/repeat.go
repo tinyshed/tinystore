@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"fmt"
+	"math"
 	"math/bits"
 	"strconv"
 	"strings"
@@ -43,12 +44,18 @@ func (r Repeat) enqueueOption(s *enqueueSettings) {
 // without a name, time.Local, is ErrInvalid, since a schedule kept by it would
 // change meaning on a host in another zone.
 func Cron(expr string, zone *time.Location) Repeat {
+	if len(expr) > maxRepeat {
+		return Repeat{err: fmt.Errorf("%w: jobs: repeat exceeds %d bytes", tinystore.ErrLimit, maxRepeat)}
+	}
 	fields, err := parseCron(expr)
 	if err == nil {
 		err = checkZone(zone)
 	}
 	if err != nil {
 		return Repeat{err: fmt.Errorf("%w: jobs: repeat %q: %w", tinystore.ErrInvalid, expr, err)}
+	}
+	if len(fields.spelling)+1+len(zone.String()) > maxRepeat {
+		return Repeat{err: fmt.Errorf("%w: jobs: repeat exceeds %d bytes", tinystore.ErrLimit, maxRepeat)}
 	}
 	fields.zone = zone
 	if _, runs := fields.next(time.Unix(0, 0)); !runs {
@@ -90,12 +97,19 @@ func (r Repeat) next(after time.Time) time.Time {
 
 // parseRepeat reads a repeat as jobs.db keeps it
 func parseRepeat(text string) (Repeat, error) {
+	if len(text) > maxRepeat {
+		return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat exceeds %d bytes", tinystore.ErrCorrupt, maxRepeat)
+	}
 	if interval, found := strings.CutPrefix(text, "@every "); found {
 		d, err := parseInterval(interval)
 		if err != nil {
 			return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q: %w", tinystore.ErrCorrupt, text, err)
 		}
-		return Every(d), nil
+		repeat := Every(d)
+		if repeat.err != nil {
+			return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q: %w", tinystore.ErrCorrupt, text, repeat.err)
+		}
+		return repeat, nil
 	}
 	cut := strings.LastIndexByte(text, ' ')
 	if cut < 0 {
@@ -112,6 +126,9 @@ func parseRepeat(text string) (Repeat, error) {
 func checkZone(zone *time.Location) error {
 	if zone == nil || zone.String() == "Local" || zone.String() == "" {
 		return fmt.Errorf("a zone needs a name, such as time.UTC or time.LoadLocation(\"Europe/Moscow\")")
+	}
+	if _, err := time.LoadLocation(zone.String()); err != nil {
+		return fmt.Errorf("zone %q cannot be loaded again by name: %w", zone.String(), err)
 	}
 	return nil
 }
@@ -139,6 +156,9 @@ func parseInterval(text string) (time.Duration, error) {
 			n, err := strconv.ParseInt(number, 10, 64)
 			if err != nil || n < 1 {
 				return 0, fmt.Errorf("an interval of %q", text)
+			}
+			if n > math.MaxInt64/int64(unit.size) {
+				return 0, fmt.Errorf("an interval of %q exceeds time.Duration", text)
 			}
 			return time.Duration(n) * unit.size, nil
 		}
@@ -219,8 +239,12 @@ func parseField(field string, low, high int, names []string) (uint64, error) {
 		if stepped && first == last && span != "*" {
 			last = high
 		}
-		for value := first; value <= last; value += step {
+		for value := first; value <= last; {
 			set |= 1 << value
+			if step > last-value {
+				break
+			}
+			value += step
 		}
 	}
 	return set, nil

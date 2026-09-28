@@ -8,7 +8,30 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
+
+func TestARolledBackExtensionDoesNotMoveTheLeaseInMemory(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, queues, "extension")
+	mustEnqueue(t, queue, 1)
+	job := mustClaim(t, queue)
+	previous := job.lease.until
+	rollback := errors.New("roll back the extension")
+	err := queues.file.UpdatePrepared(t.Context(), func(w sqlite.Writer) error {
+		_, writeErr := (settlement{
+			lease: job.lease, how: extended,
+			timing: settleSettings{after: time.Hour},
+		}).write(t.Context(), w, queues.Store.clock())
+		if writeErr != nil {
+			return writeErr
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) || job.lease.until != previous {
+		t.Fatalf("rollback left memory at %d, previously %d: %v", job.lease.until, previous, err)
+	}
+}
 
 // a job whose lease ended without a settlement is claimed again, its
 // vanished attempt counted

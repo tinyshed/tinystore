@@ -5,7 +5,8 @@
 create table queues (
     id   integer primary key,
     name text    not null unique,
-    kind text    not null
+    kind text    not null,
+    waiting integer not null default 0 check (waiting >= 0)
 ) strict;
 
 -- a job that waits or runs, ordered by when it is due, so that the jobs due
@@ -28,6 +29,15 @@ create table jobs (
     spill   integer,
     primary key (queue, next, id)
 ) strict, without rowid;
+
+-- the writer keeps MaxWaiting's count in one row, including every statement
+-- of a grouped write and every call in a Tx before it commits
+create trigger jobs_count_insert after insert on jobs begin
+    update queues set waiting = waiting + 1 where id = new.queue;
+end;
+create trigger jobs_count_delete after delete on jobs begin
+    update queues set waiting = waiting - 1 where id = old.queue;
+end;
 
 -- a job's key and where its row lies: a job that moves takes its key along,
 -- and one that leaves the queue leaves its key behind, naming no row, until

@@ -14,10 +14,11 @@ type Options struct{}
 
 // the engine's own bounds and schedule
 const (
-	pageSize       = 4 << 10          // a job's row is a few hundred bytes; the round measured 4 KiB pages
+	pageSize       = 4 << 10          // 4 KiB pages measured for short rows
 	readers        = 4                // reader connections: lookups, scans and the alarm's reads
-	writeSlots     = 2048             // writes at once: a group of 1024 gathering while one commits
+	writeSlots     = 2048             // bounds writes queued for grouping
 	maxKey         = 1 << 10          // a key's bytes
+	maxRepeat      = 1 << 10          // a persisted cron expression and zone
 	maxValue       = 1 << 20          // a value's bytes; larger ones are the blobs engine's
 	inlineValue    = 512              // a value past it lives in a row of spilled
 	idBlock        = 1000             // job ids reserved in one write of meta
@@ -25,11 +26,11 @@ const (
 	maxScanLimit   = 1000             // jobs a page may return
 	scanBytes      = 4 << 20          // value bytes a page may hold
 	claimBatch     = 1000             // jobs one Work write claims at most
-	claimAhead     = 2                // jobs a Work loop holds a worker: the one it runs and the next
-	maintainEvery  = time.Minute      // how often maintenance removes what the queues keep no longer
+	claimAhead     = 2                // one running and one queued per worker
+	maintainEvery  = time.Minute      // periodic cleanup
 	maintainBatch  = 10_000           // rows one maintenance transaction removes
 	quietFailures  = 10 * time.Minute // a repeated failure is logged once in this long
-	longestAlarm   = time.Minute      // the longest a waiting Work sleeps without reading the file
+	longestAlarm   = time.Minute      // max idle wait before a clock recheck
 	defaultLease   = 30 * time.Second
 	defaultTimeout = time.Minute
 	defaultRetries = 10
@@ -38,6 +39,10 @@ const (
 	defaultFailed  = 7 * 24 * time.Hour
 	defaultWaiting = 10_000_000
 )
+
+// what one claimed row holds before its worker takes it: an inline value, its
+// key and repeat, and what scanning them costs
+const claimRowMemory = maxKey + maxRepeat + inlineValue + 512
 
 // a queue's name, as a file's is: short and plain
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)

@@ -558,6 +558,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a kv page ends before the value that passes its bytes  | `TestAPageEndsBeforeTheValueThatPassesItsBytes`                                 |
 | an Enqueue that returned survives an abrupt exit       | `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once           |
 | a job runs at its time and not before                  | `TestAJobRunsAtItsTimeAndNotBefore`                                             |
+| a write during a Work loop's read is not lost, nor keeps it awake | `TestAWriteDuringAnAlarmReadCannotBeLost`, `TestALaterWriteDuringAnAlarmReadLetsTheLoopSleep` |
+| a jobs Scan finds exactly the keys under its prefix    | `TestScanFindsOnlyTheKeysUnderAPrefixNoRuneEnds`                                |
 | a key names one job, and enqueuing it only brings it forward | `TestAKeyNamesOneJobAndARepeatOnlyBringsItForward`                        |
 | an enqueue while its job runs asks for one run more    | `TestAnEnqueueWhileItsJobRunsAsksForOneRunMore`                                 |
 | `KeepDone` makes a key run once                        | `TestKeepDoneMakesAKeyRunOnce`                                                  |
@@ -577,6 +579,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a job value comes back as the JSON it went in          | `TestAValueComesBackAsTheJSONItWentIn`                                          |
 | a value that no longer reads fails its job, not its queue | `TestAValueThatNoLongerReadsFailsItsJob`, through Claim and Work             |
 | a queue past `MaxWaiting` refuses the next job         | `TestAQueuePastMaxWaitingRefusesTheNextJob`                                     |
+| concurrent enqueues cannot pass `MaxWaiting`           | `TestConcurrentEnqueuesCannotPassMaxWaiting`                                   |
 | a failed job is kept, then removed                     | `TestAFailedJobIsKeptThenRemoved`                                               |
 | a jobs Scan page holds at most its jobs and bytes      | `TestAScanPageHoldsAtMostItsBytes`, spilled values counted                      |
 | a job's key left behind names nothing, then is dropped | `TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt`                           |

@@ -95,7 +95,6 @@ type lease struct {
 	lost    bool // another claim, or a Cancel, took the job after the lease ended
 }
 
-// how a lease is settled
 type outcome int
 
 const (
@@ -107,7 +106,6 @@ const (
 	extended
 )
 
-// settlement is one outcome for one lease, with the error and time it names
 type settlement struct {
 	lease  *lease
 	how    outcome
@@ -143,6 +141,7 @@ func (l *lease) settleNow(ctx context.Context, s settlement) error {
 	if s.how != extended {
 		l.markSettled()
 	}
+	done.applyLease(l)
 	done.apply(l.queue)
 	return nil
 }
@@ -175,7 +174,17 @@ type settled struct {
 	gone   bool  // the job left the queue's rows
 	due    int64 // when it is due again, zero when it is not
 	failed string
-	lost   bool // the lease was no longer the settlement's: nothing was written
+	lost   bool  // the lease was no longer the settlement's: nothing was written
+	until  int64 // a committed lease extension
+}
+
+func (d settled) applyLease(l *lease) {
+	if d.until == 0 {
+		return
+	}
+	l.mu.Lock()
+	l.until = d.until
+	l.mu.Unlock()
 }
 
 func (d settled) apply(q *queueState) {
@@ -217,7 +226,8 @@ const (
 func (s settlement) write(ctx context.Context, w sqlite.Writer, now int64) (settled, error) {
 	l := s.lease
 	if s.how == extended {
-		return settled{}, l.extend(ctx, w, now+s.timing.after.Milliseconds())
+		until := now + s.timing.after.Milliseconds()
+		return settled{until: until}, l.extend(ctx, w, until)
 	}
 	if err := l.drop(ctx, w); err != nil {
 		return settled{}, err
@@ -254,11 +264,6 @@ func (l *lease) extend(ctx context.Context, w sqlite.Writer, until int64) error 
 	result, err := w.ExecContext(ctx, extendLease, l.id, l.attempt, until)
 	if err == nil {
 		err = changedOne(result)
-	}
-	if err == nil {
-		l.mu.Lock()
-		l.until = until
-		l.mu.Unlock()
 	}
 	return err
 }
@@ -463,8 +468,6 @@ type claimedRow struct {
 	until                 int64 // the lease's end
 }
 
-// claiming is one claim's facts: its queue, its time, its lease's end, how
-// many jobs it takes and how many attempts a job has
 type claiming struct {
 	queue, now, until  int64
 	limit, maxAttempts int
@@ -587,7 +590,7 @@ func (q *Queue[V]) claimOne(ctx context.Context, lease time.Duration) (claimedRo
 		c := q.claiming(1, lease)
 		var claimed []claimedRow
 		abandoned := 0
-		err := q.write(ctx, 0, func(w sqlite.Writer) (writeErr error) {
+		err := q.write(ctx, claimRowMemory, func(w sqlite.Writer) (writeErr error) {
 			claimed, abandoned, writeErr = claimRows(ctx, w, c)
 			return writeErr
 		})
@@ -644,7 +647,6 @@ func (q *Queue[V]) jobOf(c claimedRow) Job[V] {
 	}
 }
 
-// claiming is a claim of up to limit jobs now, leased for lease
 func (q *Queue[V]) claiming(limit int, lease time.Duration) claiming {
 	now := q.store.clock()
 	return claiming{

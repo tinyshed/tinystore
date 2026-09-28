@@ -26,9 +26,6 @@ var (
 func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOption) error {
 	e, err := q.prepare(options)
 	if err == nil {
-		err = q.checkRoom()
-	}
-	if err == nil {
 		e.id, err = q.newID(ctx)
 	}
 	if err != nil {
@@ -41,6 +38,7 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 		return writeErr
 	})
 	if err != nil {
+		q.reportLimit(err)
 		return q.fail(e.key.String, err)
 	}
 
@@ -73,6 +71,7 @@ func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...E
 		return writeErr
 	})
 	if err != nil {
+		q.reportLimit(err)
 		return q.fail(key, err)
 	}
 
@@ -111,6 +110,7 @@ func (q *Queue[V]) Cancel(ctx context.Context, key string) (bool, error) {
 // the writer, and its value once the write holds room for it
 type enqueued struct {
 	queue, id   int64
+	maxWaiting  int64
 	at, now     int64
 	timed       bool
 	key, repeat sql.NullString
@@ -121,7 +121,8 @@ type enqueued struct {
 func (q *Queue[V]) prepare(options []EnqueueOption) (enqueued, error) {
 	s, err := collectEnqueue(options)
 	e := enqueued{
-		queue: q.state.id, now: q.store.clock(), timed: s.timed, keepDone: q.state.policy.keepDone > 0,
+		queue: q.state.id, maxWaiting: q.state.policy.maxWaiting, now: q.store.clock(),
+		timed: s.timed, keepDone: q.state.policy.keepDone > 0,
 		key: sql.NullString{String: s.key, Valid: s.keyed},
 	}
 	switch {
@@ -140,18 +141,34 @@ func (q *Queue[V]) prepare(options []EnqueueOption) (enqueued, error) {
 	return e, nil
 }
 
-// checkRoom refuses a job past the queue's MaxWaiting and logs it once a quiet
-// period
-func (q *Queue[V]) checkRoom() error {
-	limit := q.state.policy.maxWaiting
-	if q.state.waiting.Load() < limit {
-		return nil
-	}
-	q.state.limits.observe(q.store.now(), fmt.Sprintf("%d jobs", limit))
-	return fmt.Errorf("%w: jobs: queue %q holds %d jobs, its MaxWaiting", tinystore.ErrLimit, q.state.name, limit)
+type waitingLimit struct{ limit int64 }
+
+func (e waitingLimit) Error() string {
+	return fmt.Sprintf("jobs: queue holds %d jobs, its MaxWaiting", e.limit)
 }
 
-// row is a job's row as a call finds it
+func (waitingLimit) Unwrap() error { return tinystore.ErrLimit }
+
+// checkRoom refuses a job past the queue's MaxWaiting; the count is the
+// queue's row, which triggers keep, so that a Tx sees its own enqueues
+func checkRoom(ctx context.Context, w sqlite.Writer, e enqueued) error {
+	var waiting int64
+	if err := sqlite.QueryRow(ctx, w, countWaiting, e.queue).Scan(&waiting); err != nil {
+		return err
+	}
+	if waiting >= e.maxWaiting {
+		return waitingLimit{limit: e.maxWaiting}
+	}
+	return nil
+}
+
+func (q *Queue[V]) reportLimit(err error) {
+	var full waitingLimit
+	if errors.As(err, &full) {
+		q.state.limits.observe(q.store.now(), fmt.Sprintf("%d jobs", full.limit))
+	}
+}
+
 type row struct {
 	next, id, at, attempt int64
 	again                 sql.NullInt64
@@ -211,6 +228,9 @@ func moveKeyTo(ctx context.Context, w sqlite.Writer, queue int64, key string, ne
 
 func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err error) {
 	if !e.key.Valid {
+		if roomErr := checkRoom(ctx, w, e); roomErr != nil {
+			return false, roomErr
+		}
 		return true, insertRow(ctx, w, e)
 	}
 	there, found, err := findByKey(ctx, w, e.queue, e.key.String)
@@ -227,6 +247,9 @@ func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err 
 		}
 	}
 	if _, err = dropFailedJob(ctx, w, e.queue, e.key.String); err != nil {
+		return false, err
+	}
+	if err = checkRoom(ctx, w, e); err != nil {
 		return false, err
 	}
 	return true, insertRow(ctx, w, e)
@@ -296,6 +319,9 @@ func requeue(ctx context.Context, w sqlite.Writer, e enqueued) (int64, bool, err
 		return 0, false, err
 	case !failed:
 		return 0, false, errNoLongerWaits
+	}
+	if err := checkRoom(ctx, w, e); err != nil {
+		return 0, false, err
 	}
 	return e.at, true, insertRow(ctx, w, e)
 }

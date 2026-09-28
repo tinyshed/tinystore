@@ -424,8 +424,10 @@ of milliseconds at most. Priority within a queue is a second queue.
 **What the calls hold is the store's memory.** With `Options.Memory`, an
 `Enqueue` takes the memory its value may hold before it encodes it, and holds
 the value while it waits for the writer; a `Get` holds 1 MiB and a `Scan` 4.5
-MiB while they read, and a worker of `Work` a job's value from before it reads
-it until its handler returns: a claim reads no spilled value inside the writer,
+MiB while they read. `Work` reserves room for the inline rows and keys of a
+claim batch before the writer reads them, releasing each row's room when a
+worker takes it; the worker holds its value from before it reads it until its
+handler returns. A claim reads no spilled value inside the writer,
 where waiting for memory would hold the writer too. A call inside `Tx` holds
 the writer, so it takes only the memory that is free and is `ErrLimit` past
 it.
@@ -472,7 +474,7 @@ its own, 4 KiB pages, values past 512 bytes spilled; and by
 their own.
 
 ```text
-queues    id | name | kind                          a queue or a schedule
+queues    id | name | kind | waiting                a queue or a schedule; its exact job count
 jobs      queue | next | id | key | at | attempt | again | repeat | error | value | spill
           without rowid, primary key (queue, next, id)
 keys      queue | key | next | id                   where a keyed job lies; left behind when it leaves
@@ -597,7 +599,7 @@ What [the round](reports/jobs-mechanics-2026-09-27.md) left, for the next:
 |---|---|
 | the engine against a table an application polls by hand, on the five cases | what the engine buys over the way it replaces |
 | the page cache of the writer in a burst over a large file | every burst ran with 1 MiB a connection |
-| a queue's count at open | `OpenQueue` counts the queue's rows for `MaxWaiting`, which reads every page of a large queue |
+| a queue's count at open | `OpenQueue` reads the durable `queues.waiting` counter; jobs table triggers keep it exact inside a write |
 
 Settled since, in [the engine's round](reports/jobs-engine-2026-09-27.md): a
 Work loop holds two jobs a worker, sqldb's `Exec` commits grouped, and keys

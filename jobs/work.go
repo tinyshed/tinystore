@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -64,8 +65,18 @@ type workLoop[V any] struct {
 
 // handed is a claimed job on its way to a worker, which reads its value
 type handed[V any] struct {
-	job Job[V]
-	row claimedRow
+	job    Job[V]
+	row    claimedRow
+	memory *claimMemory
+}
+
+type claimMemory struct {
+	reserved *tinystore.Reservation
+	left     atomic.Int64
+}
+
+func (m *claimMemory) releaseRow() {
+	m.reserved.Shrink(m.left.Add(-1) * claimRowMemory)
 }
 
 func newWorkLoop[V any](q *Queue[V], handle func(context.Context, Job[V]) error, settings workSettings,
@@ -115,17 +126,18 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 		now := l.q.store.clock()
 		l.extendDue(now)
 		want := 0
-		if free := l.hold - len(l.holding) + l.finishing(); free > 0 && l.q.state.alarm.rung(now) {
-			want = min(free, claimBatch)
+		var read *alarmRead
+		if free := l.hold - len(l.holding) + l.finishing(); free > 0 {
+			if read = l.q.state.alarm.rung(now); read != nil {
+				want = min(free, claimBatch)
+			}
 		}
 		result, err := l.write(ctx, now, want)
+		l.answer(read, result, err)
 		if err != nil {
 			return err
 		}
-		l.dispatch(result.claimed)
-		if want > 0 && !result.full {
-			l.q.state.alarm.set(result.next)
-		}
+		l.dispatch(result)
 		if l.settings.untilIdle && l.idle(now) {
 			return nil
 		}
@@ -133,6 +145,18 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 			continue
 		}
 		l.wait(ctx, now)
+	}
+}
+
+// answer ends the alarm read a claim made: a claim that found fewer jobs than
+// it wanted knows when the queue is next due, a full or failed one does not
+func (l *workLoop[V]) answer(read *alarmRead, result claimResult, err error) {
+	switch {
+	case read == nil:
+	case err != nil || result.full:
+		l.q.state.alarm.forget(read)
+	default:
+		l.q.state.alarm.set(read, result.next)
 	}
 }
 
@@ -168,6 +192,7 @@ func (l *workLoop[V]) stopped(ctx context.Context) error {
 // the handler on it and says how to settle it; the room is given back when the
 // handler returns
 func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settlement {
+	claimed.memory.releaseRow()
 	job := claimed.job
 	if handlers.Err() != nil {
 		return settlement{lease: job.lease, how: givenBack}
@@ -270,6 +295,7 @@ type claimResult struct {
 	claimed []claimedRow
 	full    bool
 	next    int64
+	memory  *claimMemory
 }
 
 // write settles what is pending and claims up to want jobs in one grouped
@@ -279,6 +305,15 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 	if len(l.pending) == 0 && want == 0 {
 		return claimResult{}, nil
 	}
+	if capacity := l.q.store.runtime.Memory().Capacity; capacity > 0 && want > 0 {
+		if capacity < claimRowMemory {
+			return claimResult{}, fmt.Errorf("%w: jobs: a claim needs %d bytes of store memory", tinystore.ErrLimit,
+				claimRowMemory)
+		}
+		if rows := capacity / claimRowMemory; rows < int64(want) {
+			want = int(rows)
+		}
+	}
 	c := claiming{
 		queue: l.q.state.id, now: now, until: now + l.q.state.policy.lease.Milliseconds(), limit: want,
 		maxAttempts: l.q.state.policy.maxAttempts,
@@ -286,6 +321,14 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 	var result claimResult
 	var done []settled
 	abandoned := 0
+	var reserved *tinystore.Reservation
+	if want > 0 {
+		var reserveErr error
+		reserved, reserveErr = l.q.store.reserve(ctx, want*claimRowMemory)
+		if reserveErr != nil {
+			return claimResult{}, reserveErr
+		}
+	}
 	err := l.q.store.file.UpdateGrouped(ctx, 0, func(w sqlite.Writer) error {
 		var err error
 		result, abandoned = claimResult{}, 0
@@ -301,7 +344,17 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 		return err
 	})
 	if err != nil {
+		if reserved != nil {
+			reserved.Release()
+		}
 		return claimResult{}, err
+	}
+	if reserved != nil {
+		reserved.Shrink(int64(len(result.claimed)) * claimRowMemory)
+		if len(result.claimed) > 0 {
+			result.memory = &claimMemory{reserved: reserved}
+			result.memory.left.Store(int64(len(result.claimed)))
+		}
 	}
 	l.settled(done)
 	l.q.state.abandoned(abandoned)
@@ -332,6 +385,7 @@ func settleAll(ctx context.Context, w sqlite.Writer, pending []settlement, now i
 func (l *workLoop[V]) settled(done []settled) {
 	for i, s := range l.pending {
 		done[i].apply(l.q.state)
+		done[i].applyLease(s.lease)
 		switch {
 		case s.how != extended:
 			s.lease.markSettled()
@@ -344,11 +398,11 @@ func (l *workLoop[V]) settled(done []settled) {
 }
 
 // dispatch hands claimed jobs to the workers, which read their values
-func (l *workLoop[V]) dispatch(claimed []claimedRow) {
-	for _, row := range claimed {
+func (l *workLoop[V]) dispatch(result claimResult) {
+	for _, row := range result.claimed {
 		job := l.q.jobOf(row)
 		l.holding[job.lease] = struct{}{}
-		l.hand <- handed[V]{job: job, row: row}
+		l.hand <- handed[V]{job: job, row: row, memory: result.memory}
 	}
 }
 
@@ -396,6 +450,7 @@ func (l *workLoop[V]) giveBackUnstarted() {
 	for {
 		select {
 		case claimed := <-l.hand:
+			claimed.memory.releaseRow()
 			l.pending = append(l.pending, settlement{lease: claimed.job.lease, how: givenBack})
 		default:
 			return

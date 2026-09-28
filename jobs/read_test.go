@@ -8,7 +8,54 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tinyshed/tinystore"
 )
+
+func TestScanChecksStateAtTheDefaultLimitAndKeepsMaximumRuneKeys(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, queues, "runes")
+	if _, err := queue.Scan(t.Context(), Query{State: State(99)}); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("invalid state at default limit: %v", err)
+	}
+	key := "\U0010FFFF\U0010FFFF\U0010FFFF\U0010FFFFx"
+	mustEnqueue(t, queue, 7, Key(key))
+	page, err := queue.Scan(t.Context(), Query{Prefix: "\U0010FFFF\U0010FFFF\U0010FFFF\U0010FFFF"})
+	if err != nil || len(page.Entries) != 1 || page.Entries[0].Key != key {
+		t.Fatalf("maximum rune prefix found %+v: %v", page, err)
+	}
+}
+
+func TestPrefixEndIsTheNextTextInByteOrder(t *testing.T) {
+	for prefix, want := range map[string]string{
+		"aé":    "aê",
+		"a\xff": "b",
+		"a퟿":    "a\xed\x9f\xc0",
+	} {
+		if got, bounded := prefixEnd(prefix); got != want || !bounded {
+			t.Fatalf("prefixEnd(%q) = %q, %v, want %q", prefix, got, bounded, want)
+		}
+	}
+	if _, bounded := prefixEnd("\xff\xff"); bounded {
+		t.Fatal("a prefix of bytes that cannot grow has a bound")
+	}
+}
+
+// a prefix ending where UTF-8 cannot count up, or in a byte no rune spells,
+// finds exactly the keys that start with it
+func TestScanFindsOnlyTheKeysUnderAPrefixNoRuneEnds(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, queues, "edges")
+	for _, key := range []string{"a퟿z", "a", "a\xffz", "b"} {
+		mustEnqueue(t, queue, 1, Key(key))
+	}
+	for prefix, want := range map[string]string{"a퟿": "a퟿z", "a\xff": "a\xffz"} {
+		page, err := queue.Scan(t.Context(), Query{Prefix: prefix})
+		if err != nil || len(page.Entries) != 1 || page.Entries[0].Key != want {
+			t.Fatalf("prefix %q found %+v: %v", prefix, page.Entries, err)
+		}
+	}
+}
 
 // Scan walks the keys under a prefix in the byte order of their text, a page
 // at a time, waiting, leased and failed jobs alike, and All meets each once

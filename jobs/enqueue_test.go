@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,6 +235,88 @@ func TestAQueuePastMaxWaitingRefusesTheNextJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustEnqueue(t, queue, 3)
+}
+
+func TestAnExistingKeyDoesNotConsumeMaxWaiting(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, queues, "bounded_key", MaxWaiting(1))
+	mustEnqueue(t, queue, 1, Key("same"))
+	if err := queue.Enqueue(t.Context(), 2, Key("same")); err != nil {
+		t.Fatalf("existing key at capacity: %v", err)
+	}
+	if err := queues.Tx(t.Context(), func(tx *Tx) error {
+		inside := queue.WithTx(tx)
+		if err := inside.Enqueue(t.Context(), 3, Key("same")); err != nil {
+			return err
+		}
+		return inside.Enqueue(t.Context(), 4, Key("another"))
+	}); !errors.Is(err, tinystore.ErrLimit) {
+		t.Fatalf("new key past capacity inside Tx: %v", err)
+	}
+}
+
+func TestAQueueCannotUseAnotherStoresTransaction(t *testing.T) {
+	first := openTestQueues(t, t.TempDir())
+	second := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, first, "own")
+	if err := second.Tx(t.Context(), func(tx *Tx) error {
+		return queue.WithTx(tx).Enqueue(t.Context(), 1)
+	}); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("foreign transaction: %v", err)
+	}
+	if waiting := queue.state.waiting.Load(); waiting != 0 {
+		t.Fatalf("foreign transaction enqueued %d jobs", waiting)
+	}
+}
+
+func TestConcurrentEnqueuesCannotPassMaxWaiting(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, queues, "concurrent_bound", MaxWaiting(3))
+	const callers = 32
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	for i := range callers {
+		wg.Go(func() { errs[i] = queue.Enqueue(t.Context(), i) })
+	}
+	wg.Wait()
+	accepted := 0
+	for _, err := range errs {
+		if err == nil {
+			accepted++
+		} else if !errors.Is(err, tinystore.ErrLimit) {
+			t.Fatalf("unexpected enqueue failure: %v", err)
+		}
+	}
+	if accepted != 3 {
+		t.Fatalf("%d jobs accepted past MaxWaiting(3)", accepted)
+	}
+}
+
+func TestTheDurableWaitingCountFollowsMovesAndRemovals(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[int](t, queues, "counted", MaxWaiting(2))
+	mustEnqueue(t, queue, 1, Key("first"))
+	mustEnqueue(t, queue, 2, Key("second"))
+	count := func() int64 {
+		t.Helper()
+		var waiting int64
+		err := queues.file.Lookup(t.Context(), func(r sqlite.Reader) error {
+			return sqlite.QueryRow(t.Context(), r, countWaiting, queue.state.id).Scan(&waiting)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return waiting
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("two inserts counted as %d", got)
+	}
+	if err := mustClaim(t, queue).Snooze(t.Context(), After(time.Hour)); err != nil || count() != 2 {
+		t.Fatalf("moving a row changed the count to %d: %v", count(), err)
+	}
+	if cancelled, err := queue.Cancel(t.Context(), "second"); err != nil || !cancelled || count() != 1 {
+		t.Fatalf("cancel left %d waiting: %v", count(), err)
+	}
 }
 
 // a repeat without a key could never be stopped, and a zone without a name

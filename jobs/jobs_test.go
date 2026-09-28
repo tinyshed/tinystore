@@ -287,6 +287,25 @@ func TestStoreMemoryBoundsEnqueuesReadsAndHandlers(t *testing.T) {
 	}
 }
 
+func TestWorkCapsClaimBatchesToTheStoresMemory(t *testing.T) {
+	const capacity = 16 << 10
+	queues := openTestQueuesWith(t, t.TempDir(), tinystore.Options{Memory: capacity})
+	queue := openTestQueue[[]byte](t, queues, "small_claims")
+	for i := range 20 {
+		mustEnqueue(t, queue, []byte("value"), Key(fmt.Sprintf("job-%02d", i)))
+	}
+	var ran atomic.Int64
+	if err := queue.Work(t.Context(), func(context.Context, Job[[]byte]) error {
+		ran.Add(1)
+		return nil
+	}, Workers(20), UntilIdle()); err != nil {
+		t.Fatal(err)
+	}
+	if usage := queues.runtime.Memory(); ran.Load() != 20 || usage.Used != 0 || usage.Peak > capacity {
+		t.Fatalf("ran %d jobs, memory %+v", ran.Load(), usage)
+	}
+}
+
 // counted is a job's value that counts how often it is written as JSON
 type counted struct {
 	N      int

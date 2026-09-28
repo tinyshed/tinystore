@@ -86,7 +86,6 @@ func (e *JobError) Unwrap() error { return e.Err }
 // be in the file, and its caller reads it back before writing again.
 var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
 
-// found is a row a read found, of a waiting or leased job or a failed one
 type found struct {
 	key      sql.NullString
 	time, id int64 // next or, for a failed job, when it failed
@@ -148,10 +147,11 @@ func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) 
 // or the failed jobs by when they failed, the last first
 const (
 	scanKeys = `select * from (
-			select ` + keyedColumns + ` where k.queue = ?1 and k.key > ?2 and k.key >= ?3 and k.key < ?4
+			select ` + keyedColumns + ` where k.queue = ?1 and k.key > ?2 and k.key >= ?3 and (?4 is null or k.key < ?4)
 				and (?5 = 0 or (?5 = 1 and l.attempt is null) or (?5 = 2 and l.attempt is not null))
 			union all
-			select ` + failedColumns + ` where f.queue = ?1 and f.key > ?2 and f.key >= ?3 and f.key < ?4
+			select ` + failedColumns + ` where f.queue = ?1 and f.key > ?2 and f.key >= ?3
+				and (?4 is null or f.key < ?4)
 				and (?5 = 0 or ?5 = 3)
 		) order by 1 limit cast(?6 as integer)`
 	scanFailed = `select ` + failedColumns + ` where f.queue = ?1 and (f.failed, f.id) < (?7, ?8)
@@ -211,7 +211,8 @@ func checkQuery(query Query) (int, error) {
 		limit = scanLimit
 	case limit < 0 || limit > maxScanLimit:
 		return 0, fmt.Errorf("%w: jobs: a page of %d jobs, not 1 to 1000", tinystore.ErrInvalid, limit)
-	case query.State < 0 || query.State > Failed:
+	}
+	if query.State < 0 || query.State > Failed {
 		return 0, fmt.Errorf("%w: jobs: a state of %d", tinystore.ErrInvalid, query.State)
 	}
 	return limit, nil
@@ -231,10 +232,11 @@ func (q *Queue[V]) scanRows(ctx context.Context, r sqlite.Reader, query Query, l
 		return scanFound(rows)
 	}
 	upper, bounded := prefixEnd(query.Prefix)
+	var end any = upper
 	if !bounded {
-		upper = "\U0010FFFF\U0010FFFF\U0010FFFF\U0010FFFF"
+		end = nil
 	}
-	rows, err := r.QueryContext(ctx, scanKeys, q.state.id, query.After, query.Prefix, upper, int(query.State), limit,
+	rows, err := r.QueryContext(ctx, scanKeys, q.state.id, query.After, query.Prefix, end, int(query.State), limit,
 		nil, nil, now)
 	if err != nil {
 		return nil, err
@@ -287,8 +289,12 @@ func failedCursor(after string) (int64, int64, error) {
 	return failed, id, nil
 }
 
-// prefixEnd is the first text after every text starting with prefix, or none
-// when the prefix is empty or only bytes that cannot grow
+// prefixEnd is the first text after every text starting with prefix, in the
+// byte order SQLite compares keys by, or none when the prefix is empty or
+// only bytes that cannot grow; the bound need not be UTF-8
+//
+//	"aé"  c3 a9  → "aê"  c3 aa
+//	"a\xff"    ff     → "b"
 func prefixEnd(prefix string) (string, bool) {
 	end := []byte(prefix)
 	for i := len(end) - 1; i >= 0; i-- {
@@ -314,7 +320,6 @@ func scanFound(rows *sql.Rows) ([]found, error) {
 	return jobs, err
 }
 
-// entryOf decodes a row a read found, with its spilled value
 func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Entry[V], error) {
 	entry := Entry[V]{
 		Key: job.key.String, At: time.UnixMilli(job.at), Attempt: int(job.attempt), State: Waiting,
@@ -347,6 +352,9 @@ func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Ent
 // free, and past that it is ErrLimit.
 func (q *Queue[V]) read(ctx context.Context, bytes int, work func(sqlite.Reader) error) error {
 	if q.tx != nil {
+		if err := q.checkTx(); err != nil {
+			return err
+		}
 		reserved, err := q.store.reserveNow(bytes)
 		if err != nil {
 			return err

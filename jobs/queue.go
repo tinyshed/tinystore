@@ -11,7 +11,6 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// what a queue's name holds, and a name opened as the other kind is refused
 const (
 	kindQueue    = "queue"
 	kindSchedule = "schedule"
@@ -83,7 +82,7 @@ func OpenSchedule(ctx context.Context, store *Store, name string, repeat Repeat,
 const (
 	registerQueue = `insert into queues (name, kind) values (?1, ?2) on conflict (name) do nothing`
 	queueNamed    = `select id, kind from queues where name = ?1`
-	countWaiting  = `select count(*) from jobs where queue = ?1`
+	countWaiting  = `select waiting from queues where id = ?1`
 )
 
 // openQueue finds or registers a queue, and, the first time this process
@@ -192,6 +191,9 @@ func (q *Queue[V]) writeValue(ctx context.Context, value V, e *enqueued, work fu
 // what is free
 func (q *Queue[V]) enter(ctx context.Context, bytes int) (*tinystore.Reservation, func(), error) {
 	if q.tx != nil {
+		if err := q.checkTx(); err != nil {
+			return nil, nil, err
+		}
 		reserved, err := q.store.reserveNow(bytes)
 		if err != nil {
 			return nil, nil, err
@@ -217,6 +219,9 @@ func (q *Queue[V]) enter(ctx context.Context, bytes int) (*tinystore.Reservation
 // a group that shares one commit with the writes beside it
 func (q *Queue[V]) commit(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
 	if q.tx != nil {
+		if err := q.checkTx(); err != nil {
+			return err
+		}
 		return q.tx.run(work)
 	}
 	return q.store.file.UpdateGrouped(ctx, bytes, work)
@@ -235,9 +240,20 @@ func (q *Queue[V]) committed(effect func()) {
 // newID is the next job id: the store's, or the transaction's own block
 func (q *Queue[V]) newID(ctx context.Context) (int64, error) {
 	if q.tx != nil {
+		if err := q.checkTx(); err != nil {
+			return 0, err
+		}
 		return q.tx.nextID(ctx)
 	}
 	return q.store.nextID(ctx)
+}
+
+func (q *Queue[V]) checkTx() error {
+	if q.tx.store != q.store {
+		return fmt.Errorf("%w: jobs: queue %q belongs to another store than its transaction",
+			tinystore.ErrInvalid, q.state.name)
+	}
+	return nil
 }
 
 // fail names the queue and key a call failed on; a cancellation, a closed
@@ -274,7 +290,7 @@ func (q *Queue[V]) keepRepeat(ctx context.Context, repeat Repeat) error {
 	err = q.write(ctx, len(encoded), func(w sqlite.Writer) error {
 		return setSchedule(ctx, w, scheduled{
 			queue: q.state.id, id: id, key: name, next: next, now: now,
-			repeat: repeat.text, value: encoded,
+			repeat: repeat.text, value: encoded, maxWaiting: q.state.policy.maxWaiting,
 		})
 	})
 	if err == nil {
@@ -284,9 +300,9 @@ func (q *Queue[V]) keepRepeat(ctx context.Context, repeat Repeat) error {
 	return q.fail(name, err)
 }
 
-// scheduled is a schedule's job as the program opens it
 type scheduled struct {
 	queue, id, next, now int64
+	maxWaiting           int64
 	key, repeat          string
 	value                []byte
 }
@@ -308,6 +324,9 @@ func setSchedule(ctx context.Context, w sqlite.Writer, s scheduled) error {
 	var there row
 	err := sqlite.QueryRow(ctx, w, scheduleNamed, s.queue, s.key).Scan(&there.next, &there.id, &there.repeat)
 	if errors.Is(err, sql.ErrNoRows) {
+		if err = checkRoom(ctx, w, enqueued{queue: s.queue, maxWaiting: s.maxWaiting}); err != nil {
+			return err
+		}
 		if _, err = w.ExecContext(ctx, addSchedule, s.queue, s.next, s.id, s.key, s.repeat, s.value); err != nil {
 			return err
 		}

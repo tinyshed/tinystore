@@ -114,9 +114,11 @@ func remind(ctx context.Context, job jobs.Job[Reminder]) error {
   before it encodes it, a `[]byte` its length and JSON the largest value until
   it is written, and holds the value while it waits for the writer; a `Get`
   holds 1 MiB and a `Scan` 4.5 MiB while they read, and a `Work` worker a job's
-  value from before it reads it until its handler returns. A call inside a `Tx`
-  waits for no memory, since it holds the writer that the writes holding
-  memory wait for: it takes what is free, and past that it is `ErrLimit`.
+  value from before it reads it until its handler returns. `Work` also reserves
+  the inline rows and keys of a claim batch until their workers take them. A
+  call inside a `Tx` waits for no memory, since it holds the writer that the
+  writes holding memory wait for: it takes what is free, and past that it is
+  `ErrLimit`.
 - **Several enqueues, one commit.** `Store.Tx` runs work in one writer
   transaction, nil committing, an error or a panic rolling back; a queue works
   in it through `WithTx`, which is `ErrClosed` after the callback. `Work`

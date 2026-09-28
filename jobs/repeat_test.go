@@ -2,12 +2,33 @@ package jobs
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 	_ "time/tzdata" // the zones of the tests, whatever the host has
 
 	"github.com/tinyshed/tinystore"
 )
+
+func TestMalformedKeptIntervalsAndLargeCronStepsFail(t *testing.T) {
+	for _, text := range []string{"@every 1ms", "@every 9223372036854775807h"} {
+		if _, err := parseRepeat(text); !errors.Is(err, tinystore.ErrCorrupt) {
+			t.Errorf("kept repeat %q: %v", text, err)
+		}
+	}
+	step := strconv.FormatInt(int64(^uint(0)>>1), 10)
+	repeat := Cron("1/"+step+" * * * *", time.UTC)
+	if repeat.err != nil {
+		t.Fatalf("a large step: %v", repeat.err)
+	}
+	if invalid := Cron("* * * * *", time.FixedZone("unloadable-zone", 3600)); !errors.Is(invalid.err, tinystore.ErrInvalid) {
+		t.Fatalf("an unreopenable zone: %v", invalid.err)
+	}
+	if oversized := Cron(strings.Repeat("1,", maxRepeat)+"* * * * *", time.UTC); !errors.Is(oversized.err, tinystore.ErrLimit) {
+		t.Fatalf("an unbounded cron: %v", oversized.err)
+	}
+}
 
 func mustZone(t *testing.T, name string) *time.Location {
 	t.Helper()

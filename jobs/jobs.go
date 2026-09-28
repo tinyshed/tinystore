@@ -18,7 +18,6 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// the file this engine claims inside the store's directory
 const fileName = "jobs.db"
 
 // jobsApplicationID is "TJOB", the SQLite application id that claims a file for this engine
@@ -180,7 +179,6 @@ func (s *Store) admitWrite(ctx context.Context) (release func(), err error) {
 	}, nil
 }
 
-// nothingReserved is what a call that holds no bytes reserves
 var nothingReserved tinystore.Reservation
 
 // reserve holds a call's bytes in the store's memory before it materialises
@@ -210,7 +208,6 @@ func (s *Store) reserveNow(bytes int) (*tinystore.Reservation, error) {
 	return reserved, nil
 }
 
-// clock is the store's time in unix milliseconds, read once a call
 func (s *Store) clock() int64 {
 	return s.now().UnixMilli()
 }
