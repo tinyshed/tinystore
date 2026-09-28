@@ -18,6 +18,9 @@ func Schema(tables ...AnyTable) *SchemaDef {
 	schema := &SchemaDef{}
 	named := map[string]bool{}
 	for _, declared := range tables {
+		if declared == nil {
+			panic("sqldb: schema: a nil table")
+		}
 		t := declared.declared()
 		if t == nil {
 			panic("sqldb: schema: a table not declared yet")
@@ -48,7 +51,6 @@ func (s *SchemaDef) SQL() string {
 	return s.sql
 }
 
-// model is the Go type that declares a table, for the errors that name it
 func (s *SchemaDef) model(table string) string {
 	for _, t := range s.tables {
 		if strings.EqualFold(t.name, table) {

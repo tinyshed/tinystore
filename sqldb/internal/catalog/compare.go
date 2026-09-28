@@ -272,7 +272,7 @@ func (t *Table) shaped(want *Index, claimed map[*Index]bool) *Index {
 }
 
 func sameShape(a, b *Index) bool {
-	return a.Unique == b.Unique && sameNames(a.Columns, b.Columns)
+	return a.Unique == b.Unique && a.Partial == b.Partial && sameNames(a.Columns, b.Columns)
 }
 
 func shapeOf(ix *Index) string {
@@ -280,7 +280,11 @@ func shapeOf(ix *Index) string {
 	if ix.Unique {
 		unique = "UNIQUE "
 	}
-	return fmt.Sprintf("%s(%s)", unique, strings.Join(ix.Columns, ", "))
+	shape := fmt.Sprintf("%s(%s)", unique, strings.Join(ix.Columns, ", "))
+	if ix.Partial {
+		shape += " WHERE …"
+	}
+	return shape
 }
 
 // indexText is how a file made an index: its CREATE INDEX, or the constraint

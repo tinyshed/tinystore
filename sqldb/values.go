@@ -34,7 +34,6 @@ const (
 	kindCustom // a type with its own Scan and Value
 )
 
-// kindNames are the logical types a schema speaks of
 var kindNames = [...]string{
 	kindText: "text", kindBytes: "bytes", kindBool: "bool", kindInteger: "integer", kindReal: "real",
 	kindTime: "time", kindDuration: "duration", kindUUID: "uuid", kindArray: "bytes", kindDate: "date",
@@ -94,7 +93,6 @@ var uuidPackages = map[string]bool{
 	"github.com/gofrs/uuid/v5": true,
 }
 
-// classified caches classify by reflect.Type
 var classified sync.Map
 
 type classification struct {
@@ -102,7 +100,6 @@ type classification struct {
 	err   error
 }
 
-// classify says how sqldb stores a Go type, or why it cannot
 func classify(t reflect.Type) (valueType, error) {
 	if cached, ok := classified.Load(t); ok {
 		if found, isKnown := cached.(classification); isKnown {
@@ -126,7 +123,6 @@ func classifyType(t reflect.Type) (valueType, error) {
 	return valueType{kind: k, wrap: wrap, inner: inner, length: length}, nil
 }
 
-// unwrap takes a pointer or a sql.Null off t
 func unwrap(t reflect.Type) (wrapping, reflect.Type) {
 	if t.Kind() == reflect.Pointer {
 		return pointer, t.Elem()
@@ -190,7 +186,6 @@ func knownUUID(t reflect.Type) bool {
 		t.Name() == "UUID" && uuidPackages[t.PkgPath()]
 }
 
-// what a value read back may fail on, before its column and field are named
 var (
 	errMismatch = errors.New("")
 	errNull     = errors.New("")
@@ -313,14 +308,20 @@ func setInteger(v reflect.Value, raw any) error {
 }
 
 func setReal(v reflect.Value, raw any) error {
+	var value float64
 	switch n := raw.(type) {
 	case float64:
-		v.SetFloat(n)
+		value = n
 	case int64:
-		v.SetFloat(float64(n))
+		value = float64(n)
 	default:
 		return errMismatch
 	}
+	if v.Kind() == reflect.Float32 && !math.IsInf(value, 0) &&
+		(value > math.MaxFloat32 || value < -math.MaxFloat32) {
+		return fmt.Errorf("past %s's range", v.Type())
+	}
+	v.SetFloat(value)
 	return nil
 }
 
@@ -422,7 +423,6 @@ func setDate(v reflect.Value, raw any) error {
 	return nil
 }
 
-// what a value SQLite would change fails on
 var (
 	errNaN       = errors.New("a NaN, which a REAL column stores as NULL")
 	errBeyond    = errors.New("past the int64 an INTEGER column holds")
@@ -489,7 +489,6 @@ func (vt valueType) encodeInner(v reflect.Value, asBytes bool) (any, error) {
 	return nil, errNotStored
 }
 
-// encodeTyped writes the kinds that are one Go type each, or one's JSON
 func encodeTyped(value any) (any, error) {
 	switch typed := value.(type) {
 	case time.Time:
@@ -604,7 +603,6 @@ func encodeByType(arg any) (any, bool, error) {
 	return value, true, err
 }
 
-// describe is a value SQLite returned, as an error shows it
 func describe(raw any) string {
 	switch value := raw.(type) {
 	case nil:

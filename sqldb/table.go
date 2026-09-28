@@ -1,6 +1,8 @@
 package sqldb
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -163,6 +165,14 @@ func columnOf(f *field) (*column, error) {
 	if f.valueErr != nil {
 		return nil, fmt.Errorf("column %s: %s: %w", f.column, f.name, f.valueErr)
 	}
+	if f.value.kind == kindCustom {
+		inner := f.value.inner
+		ptr := reflect.PointerTo(inner)
+		if !ptr.Implements(reflect.TypeFor[sql.Scanner]()) ||
+			!inner.Implements(reflect.TypeFor[driver.Valuer]()) && !ptr.Implements(reflect.TypeFor[driver.Valuer]()) {
+			return nil, fmt.Errorf("column %s: %s must implement both sql.Scanner and driver.Valuer", f.column, inner)
+		}
+	}
 	c := &column{
 		name: f.column, logical: f.value.kind, storage: f.value.kind.storage(),
 		nullable: f.value.wrap != bare, generated: f.generated, field: f,
@@ -173,7 +183,6 @@ func columnOf(f *field) (*column, error) {
 	return c, nil
 }
 
-// finish checks what only the whole declaration shows
 func (t *table) finish() error {
 	for _, c := range t.columns {
 		switch {
@@ -228,6 +237,7 @@ func (t *table) knows(columns []string) error {
 // PrimaryKey is the table's key; a single INTEGER column is the rowid SQLite
 // numbers new rows by.
 func PrimaryKey(columns ...string) TableOption {
+	columns = slices.Clone(columns)
 	return func(t *table) error {
 		if len(t.primaryKey) > 0 {
 			return errors.New("two primary keys")
@@ -258,14 +268,16 @@ func NamedIndex(name string, columns ...string) TableOption {
 }
 
 func indexOn(name string, columns []string, unique bool) TableOption {
+	columns = slices.Clone(columns)
 	return func(t *table) error {
 		if err := t.knows(columns); err != nil {
 			return err
 		}
-		if name == "" {
-			name = t.name + "_" + strings.Join(columns, "_")
+		indexName := name
+		if indexName == "" {
+			indexName = t.name + "_" + strings.Join(columns, "_")
 		}
-		t.indexes = append(t.indexes, &index{name: name, columns: slices.Clone(columns), unique: unique})
+		t.indexes = append(t.indexes, &index{name: indexName, columns: slices.Clone(columns), unique: unique})
 		return nil
 	}
 }
@@ -273,6 +285,7 @@ func indexOn(name string, columns []string, unique bool) TableOption {
 // References points column at the primary key of parent, which must be one
 // column of the same storage; the action, when given, is ON DELETE's.
 func References(column string, parent AnyTable, action ...Action) TableOption {
+	action = slices.Clone(action)
 	return func(t *table) error {
 		child, err := t.column(column)
 		if err != nil {
@@ -300,6 +313,8 @@ func (c *column) refer(key *column, table string, action []Action) error {
 		return fmt.Errorf("%s references twice", c.name)
 	case len(action) > 1:
 		return fmt.Errorf("%s: one action on delete, not %d", c.name, len(action))
+	case len(action) == 1 && action[0] != Cascade && action[0] != SetNull:
+		return fmt.Errorf("%s: unknown action on delete %d", c.name, action[0])
 	case key.storage != c.storage:
 		return fmt.Errorf("%s is %s and %s.%s %s", c.name, c.storage, table, key.name, key.storage)
 	}

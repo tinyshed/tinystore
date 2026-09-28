@@ -1,6 +1,7 @@
 package sqldb
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"strings"
@@ -34,6 +35,9 @@ type (
 	oddTag struct {
 		ID int64 `db:",autoincrement"`
 	}
+	generatedEmbed struct {
+		Inner `db:",generated"`
+	}
 	shadowed struct {
 		Inner
 		Other Inner `db:"-"`
@@ -47,6 +51,42 @@ type (
 		B string `db:"name"`
 	}
 )
+
+type scanOnly int64
+
+func (*scanOnly) Scan(any) error { return nil }
+
+type valueOnly int64
+
+func (valueOnly) Value() (driver.Value, error) { return int64(0), nil }
+
+func TestDeclarationsRequireBothCustomConversions(t *testing.T) {
+	for _, declare := range []func(){
+		func() { Table[struct{ Value scanOnly }]("scan_only", Storage("value", Integer)) },
+		func() { Table[struct{ Value valueOnly }]("value_only", Storage("value", Integer)) },
+	} {
+		if got := panicOf(declare); !strings.Contains(got, "both sql.Scanner and driver.Valuer") {
+			t.Errorf("incomplete custom type: %s", got)
+		}
+	}
+}
+
+func TestAnIndexOptionCanBeUsedForSeveralTables(t *testing.T) {
+	option := Index("a")
+	first := Table[keyedTwice]("first", option)
+	second := Table[keyedTwice]("second", option)
+	if first.table.indexes[0].name != "first_a" || second.table.indexes[0].name != "second_a" {
+		t.Fatalf("index names: %s, %s", first.table.indexes[0].name, second.table.indexes[0].name)
+	}
+}
+
+func TestAnUnknownDeleteActionFailsAtDeclaration(t *testing.T) {
+	parent := Table[User]("parents", PrimaryKey("id"))
+	got := panicOf(func() { Table[child]("children", References("parent_a", parent, Action(99))) })
+	if !strings.Contains(got, "unknown action on delete 99") {
+		t.Fatalf("unknown action: %s", got)
+	}
+}
 
 // a declaration that cannot be a table panics when the program starts, naming
 // the table and what cannot be
@@ -77,6 +117,7 @@ func TestADeclarationThatCannotBeATableFailsAtStart(t *testing.T) {
 			Table[keyedTwice]("pairs", NamedIndex("pairs_x", "a"), NamedIndex("pairs_x", "b"))
 		},
 		`the db tag ",autoincrement" has an option sqldb does not know`: func() { Table[oddTag]("odd") },
+		"generated applies to a column, not an embedded struct":         func() { Table[generatedEmbed]("embedded") },
 		"done is a bool, which sqldb stores as INTEGER; Storage is for a type it does not know, or a uuid": func() {
 			Table[Note]("notes", Storage("done", Text))
 		},

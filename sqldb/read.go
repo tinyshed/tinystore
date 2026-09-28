@@ -10,7 +10,6 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// the errors a query's rows give their reader
 var (
 	errTwoRows  = fmt.Errorf("%w: two rows, and One reads one; All reads several", tinystore.ErrInvalid)
 	errNoScalar = fmt.Errorf("%w: no row, and Scalar reads one; a query that may find nothing asks One",

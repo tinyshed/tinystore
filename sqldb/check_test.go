@@ -97,6 +97,17 @@ func TestOpenDoesNotRefuseAnExpressionSpelledOtherwise(t *testing.T) {
 	}
 }
 
+func TestOpenRefusesAPartialIndexWithTheDeclaredName(t *testing.T) {
+	migrations := fstest.MapFS{"001_notes.sql": {Data: []byte(`
+		CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL) STRICT;
+		CREATE INDEX notes_title ON notes (title) WHERE body <> '';`)}}
+	schema := Schema(Table[note]("notes", PrimaryKey("id"), Index("title")))
+	_, err := Open(t.Context(), openStore(t, t.TempDir()), "app", migrations, schema)
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "the index notes_title") {
+		t.Fatalf("partial index accepted as a whole-table index: %v", err)
+	}
+}
+
 // each difference of structure is one line naming it
 func TestOpenNamesEachDifferenceOfStructure(t *testing.T) {
 	d := declareDesign(t)

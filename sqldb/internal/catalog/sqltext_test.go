@@ -1,11 +1,35 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestRebuildRestoresTriggers(t *testing.T) {
+	ctx := context.Background()
+	oldSQL := `CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL) STRICT;
+		CREATE INDEX notes_lower_title ON notes (lower(title));
+		CREATE TRIGGER notes_audit AFTER UPDATE ON notes BEGIN SELECT new.id; END;`
+	have, err := Declare(ctx, oldSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := Declare(ctx, `CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT) STRICT;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, _ := Draft(want, have, Compare(want, have))
+	if !strings.Contains(draft, "CREATE TRIGGER notes_audit AFTER UPDATE ON notes BEGIN SELECT new.id; END;") {
+		t.Fatalf("rebuild dropped the trigger:\n%s", draft)
+	}
+	rebuilt, err := Declare(ctx, oldSQL+draft)
+	if err != nil || len(rebuilt.Table("notes").Triggers) != 1 || rebuilt.Table("notes").index("notes_lower_title") == nil {
+		t.Fatalf("a rebuilt table lost an application index or trigger: %v, %+v", err, rebuilt)
+	}
+}
 
 // two spellings of one rule fold to one string, and a quoted text keeps its
 // case and its spaces

@@ -243,7 +243,6 @@ func (c *comparison) writeNext(what string) (path, text string, unfinished bool,
 	return path, text, unfinished, nil
 }
 
-// numbered is a migration's number, what its name starts with
 var numbered = regexp.MustCompile(`^[0-9]+`)
 
 // nextName numbers a migration one past the last, as wide as the others are

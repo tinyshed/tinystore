@@ -529,7 +529,8 @@ CREATE TABLE users ( … ) STRICT;
 - **A change the tool cannot decide is a draft to finish.** A column gone and
   another new may be a rename; a new type rebuilds the table and needs every
   row's conversion. The draft says so and does not run until a person writes
-  it:
+  it. A rebuild also recreates the file's triggers and its partial or
+  expression indexes; review their SQL if the columns they use changed:
 
 ```sql
 -- migrations/003_notes_status.sql, written by migrate new

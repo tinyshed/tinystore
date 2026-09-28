@@ -22,7 +22,6 @@ type plan struct {
 	into    string    // T, as errors name it
 }
 
-// the column lists a type keeps plans for, the newest first
 const plansKept = 16
 
 // plans holds, for each type, its recent plans, replaced whole so that a
@@ -62,7 +61,6 @@ func makePlan(t reflect.Type, columns []string) (*plan, error) {
 	return made, made.planFields(modelOf(t))
 }
 
-// planWhole reads the one column a query returns into a T that is one value
 func (p *plan) planWhole(t reflect.Type) error {
 	if len(p.columns) != 1 {
 		return fmt.Errorf("%w: %d columns into one %s", tinystore.ErrInvalid, len(p.columns), t)
@@ -125,7 +123,6 @@ func newRowReader[T any](rows *sql.Rows) (*rowReader[T], error) {
 	return reader, nil
 }
 
-// scan takes the row's values from SQLite and says how many bytes they hold
 func (r *rowReader[T]) scan(rows *sql.Rows) (int64, error) {
 	if err := rows.Scan(r.dest...); err != nil {
 		return 0, err
@@ -149,7 +146,6 @@ func sizeOf(t reflect.Type) int64 {
 	return int64(t.Size()) //nolint:gosec // no Go type is 2^63 bytes
 }
 
-// decode puts the values scan took into value
 func (r *rowReader[T]) decode(value *T) error {
 	root := reflect.ValueOf(value).Elem()
 	if r.plan.fields == nil {

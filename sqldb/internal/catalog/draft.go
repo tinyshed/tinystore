@@ -203,6 +203,14 @@ func rebuild(want, have *Table, differences []Difference) (string, bool) {
 			out.WriteString(ix.SQL + ";\n")
 		}
 	}
+	for _, ix := range have.Indexes {
+		if ix.SQL != "" && !ix.Plain() && want.index(ix.Name) == nil {
+			out.WriteString(ix.SQL + ";\n")
+		}
+	}
+	for _, trigger := range have.Triggers {
+		out.WriteString(trigger + ";\n")
+	}
 	return out.String(), todo
 }
 

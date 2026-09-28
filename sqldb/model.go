@@ -28,7 +28,6 @@ type field struct {
 	generated bool
 }
 
-// models caches modelOf by reflect.Type
 var models sync.Map
 
 // modelOf is a struct's columns: CreatedAt is created_at, a db tag names a
@@ -57,7 +56,6 @@ func modelOf(t reflect.Type) *model {
 	return built
 }
 
-// candidate is a field that may be a column, at the depth it was embedded
 type candidate struct {
 	field
 	depth int
@@ -75,6 +73,9 @@ func collectFields(t reflect.Type, owner string, index []int, depth int, found *
 		case column == "-":
 			continue
 		case promotes(declared, column):
+			if generated {
+				return fmt.Errorf("%s.%s: generated applies to a column, not an embedded struct", owner, declared.Name)
+			}
 			embedded := declared.Type
 			if embedded.Kind() == reflect.Pointer {
 				embedded = embedded.Elem()

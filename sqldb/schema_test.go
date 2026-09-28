@@ -127,3 +127,9 @@ func TestANameSQLWouldMisreadIsQuoted(t *testing.T) {
 		t.Fatalf("inserts with %s", table.insert)
 	}
 }
+
+func TestSchemaNamesANilTable(t *testing.T) {
+	if got := panicOf(func() { Schema(nil) }); !strings.Contains(got, "a nil table") {
+		t.Fatalf("a nil table panicked with %q", got)
+	}
+}

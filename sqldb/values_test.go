@@ -198,6 +198,9 @@ func TestAValueThatDoesNotDecodeNamesItsColumnAndField(t *testing.T) {
 		`column 128: INTEGER 128 does not decode into int8: past int8's range`) {
 		t.Errorf("an integer past its field: %v", err)
 	}
+	if _, err := Scalar[float32](ctx, db, `select 1e300`); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Errorf("a REAL past float32's range: %v", err)
+	}
 }
 
 // a value SQLite would store otherwise is refused before it is written: a NaN,

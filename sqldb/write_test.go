@@ -54,6 +54,36 @@ type ticket struct {
 	OpenedAt *time.Time
 }
 
+type embeddedTicket struct {
+	*TicketMeta
+	Title string
+}
+
+type TicketMeta struct {
+	ID       int64  `db:",generated"`
+	Code     string `db:",generated"`
+	OpenedAt *time.Time
+}
+
+func TestInsertDoesNotChangeAPromotedPointerInTheCaller(t *testing.T) {
+	table := Table[embeddedTicket]("embedded_tickets", PrimaryKey("id"), DefaultSQL("code", "'made'"))
+	db := openSchema(t, Schema(table))
+	opened := time.Date(2026, 9, 28, 12, 0, 0, 123_456_789, time.FixedZone("here", 3*3600))
+	meta := &TicketMeta{ID: 99, Code: "caller", OpenedAt: &opened}
+	row := embeddedTicket{TicketMeta: meta, Title: "title"}
+	inserted, err := Insert(t.Context(), db, table, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ID != 99 || meta.Code != "caller" || meta.OpenedAt != &opened || opened.Nanosecond() != 123_456_789 {
+		t.Fatalf("Insert changed the caller's embedded value: %+v", meta)
+	}
+	if inserted.TicketMeta == meta || inserted.ID != 1 || inserted.Code != "made" ||
+		inserted.OpenedAt.Nanosecond() != 123_000_000 {
+		t.Fatalf("Insert returned %+v", inserted)
+	}
+}
+
 // a generated column a default fills comes back through RETURNING, and a time
 // comes back as the file keeps it, the caller's own value untouched
 func TestInsertReturnsWhatTheDatabaseGenerated(t *testing.T) {

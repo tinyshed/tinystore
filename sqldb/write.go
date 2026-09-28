@@ -85,6 +85,13 @@ func (d *TableDef[T]) number(inserted *T, result sql.Result) error {
 // caller's value stays as it was
 func (d *TableDef[T]) asStored(row T) (T, error) {
 	root := reflect.ValueOf(&row).Elem()
+	for _, c := range d.table.columns {
+		if c.generated || c.logical == kindTime || c.logical == kindDuration {
+			if err := detachEmbedded(root, c.field.index); err != nil {
+				return row, err
+			}
+		}
+	}
 	for _, c := range d.written {
 		if c.logical != kindTime && c.logical != kindDuration {
 			continue
@@ -105,6 +112,28 @@ func (d *TableDef[T]) asStored(row T) (T, error) {
 		}
 	}
 	return row, nil
+}
+
+// detachEmbedded copies the embedded structs a row reaches through pointers,
+// so that filling a time or a generated column does not write the caller's
+func detachEmbedded(root reflect.Value, index []int) error {
+	v := root
+	for i, step := range index {
+		if i > 0 && v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return nil
+			}
+			if !v.CanSet() {
+				return fmt.Errorf("%w: sqldb cannot copy the embedded %s", tinystore.ErrInvalid, v.Type())
+			}
+			copy := reflect.New(v.Type().Elem())
+			copy.Elem().Set(v.Elem())
+			v.Set(copy)
+			v = v.Elem()
+		}
+		v = v.Field(step)
+	}
+	return nil
 }
 
 // arguments are row's fields as their columns hold them, in the order of the

@@ -140,11 +140,15 @@ func ask(ctx context.Context, root string, c check, asked command) (answer, erro
 	test := exec.CommandContext(ctx, "go", args...) //nolint:gosec // running the module's own test is the tool's job
 	test.Dir, test.Env = root, append(os.Environ(), requestVariable+"="+string(request))
 	output, testErr := test.CombinedOutput()
+	if testErr != nil {
+		return answer{}, fmt.Errorf("go test ./%s for %q failed: %w\n%s", filepath.ToSlash(pkg), c.database,
+			testErr, output)
+	}
 
 	given, err := readAnswer(answers, c.database)
 	if err != nil {
 		return answer{}, fmt.Errorf("go test ./%s answered nothing for %q: %w\n%s", filepath.ToSlash(pkg), c.database,
-			errors.Join(err, testErr), output)
+			err, output)
 	}
 	return given, nil
 }

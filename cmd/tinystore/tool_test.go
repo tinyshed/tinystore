@@ -2,11 +2,36 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestTheToolDoesNotTrustAnAnswerFromAFailedTest(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, map[string]string{
+		"go.mod": "module example.com/failing\n\ngo 1.27.0\n",
+		"fixture/schema_test.go": `package fixture
+import (
+    "encoding/json"
+    "os"
+    "testing"
+)
+func TestSchema(t *testing.T) {
+    var request struct { Answer string ` + "`json:\"answer\"`" + ` }
+    if err := json.Unmarshal([]byte(os.Getenv("TINYSTORE_SQLDB")), &request); err != nil { t.Fatal(err) }
+    if err := os.WriteFile(request.Answer, []byte("{\"database\":\"app\"}\n"), 0600); err != nil { t.Fatal(err) }
+    t.Fatal("another check failed")
+}`,
+	})
+	_, err := ask(context.Background(), root,
+		check{database: "app", test: "TestSchema", dir: filepath.Join(root, "fixture")}, command{verb: "schema"})
+	if err == nil || !strings.Contains(err.Error(), "another check failed") {
+		t.Fatalf("the tool accepted a failed test's answer: %v", err)
+	}
+}
 
 func write(t *testing.T, root string, files map[string]string) {
 	t.Helper()
