@@ -1,8 +1,9 @@
 # The server: one runtime for another process
 
-Being built, in `server/`: the bytes, a session with its transports, kv,
-jobs, blobs, sql and records are; metrics, `tinystore serve` with `SERVE` and
-the SDKs are not, and [Building it](#building-it) says which slice is where. This page is the
+Being built, in `server/`: the bytes, a session with its transports and
+every engine, kv, jobs, blobs, sql, records and metrics, are; `tinystore serve`
+with `SERVE` and the SDKs are not, and [Building it](#building-it) says which
+slice is where. This page is the
 contract the server and its SDKs are built to: what a connection may do, how
 a sidecar starts and is found, what a lost connection means, and what bounds
 the server's memory. The bytes are [wire.md](wire.md). Its figures are
@@ -524,7 +525,7 @@ Where the slices stand, 28 September 2026:
 | blobs | built: `blobs.go`; the messages on wire.md |
 | sql | built: `sql.go`, the data connection's check in `sqltokens.go` and `datasql.go`; the messages on wire.md |
 | records | built: `records.go`; the messages on wire.md |
-| metrics | not begun |
+| metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE`, the Bun SDK, the Python SDK | not begun |
 | the measurement against the prototype | not begun: it wants `tinystore serve` |
 
@@ -573,11 +574,29 @@ is released, and the gates it brought are in AGENTS.md.
 - **No streams or names in a query is every one**, an empty list as much as
   none, where Go's `Query` takes an empty `Streams` for none.
 
+**What building metrics settled:**
+
+- **A series may come in pieces.** A read's series of a hundred thousand
+  samples is 1.6 MB of columns, past a body, so a series comes in `DATA` of
+  half a body's samples at most, each with its labels, and a client joins
+  them; so do an aggregate's buckets.
+- **A read is whole before it is sent.** The server calls `Read` and
+  `Aggregate`, not `Stream`, since a callback that waits for a client's credit
+  would hold one of the engine's two read slots for as long as the client
+  takes; the answer, bounded by the query's limits, waits in the handler
+  instead.
+- **Drop is a write, not a repair**, so a data connection may drop a series,
+  as it may delete a kv key; the records drop, which removes only what no
+  longer reads, is an admin's.
+- **What a download holds between the engine's answer and its last `DATA` is
+  not the store's memory**: sql's rows, records' page and metrics' series are
+  counted while the engine reads them and released when it returns, and the
+  handler holds them until the client has taken them. Bounding that belongs
+  with the server's own memory bound.
+
 **Next, from here:**
 
-- **Metrics** (`Ingest`, `Read` and `Aggregate` as downloads, a series a
-  message, samples as bin columns), fixed on wire.md first; then
-  `tinystore serve` in `cmd/tinystore`, which requires `server` through a
+- **`tinystore serve`** in `cmd/tinystore`, which requires `server` through a
   `replace`, sets the collector's target, GOGC 400 unless the environment
   says, and writes `SERVE` under `LOCK` in `<dir>/server/`; then the
   measurement of the round's cases against the built server; then the SDKs,

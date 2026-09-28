@@ -16,6 +16,7 @@ import (
 	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
+	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
 	"github.com/tinyshed/tinystore/server/wire"
 	"github.com/tinyshed/tinystore/sqldb"
@@ -44,6 +45,8 @@ type Options struct {
 	BlobsOptions   blobs.Options
 	Records        *records.Store
 	RecordsOptions records.Options
+	Metrics        *metrics.Store
+	MetricsOptions metrics.Options
 
 	// SQL are the databases the program opened, by name: a client's sql.open
 	// of one checks the migrations it carries against the file's, since a
@@ -66,6 +69,7 @@ type Server struct {
 	jobs    *jobs.Store
 	blobs   *blobs.Store
 	records *records.Store
+	metrics *metrics.Store
 
 	sqlOpening sync.Mutex // a database opens once, its migrations applied, while no other engine waits
 	databases  map[string]*sqldb.DB
@@ -115,6 +119,7 @@ func New(store *tinystore.Store, options Options) (*Server, error) {
 	s := &Server{
 		store: store, options: options, instance: instance, limits: defaultLimits,
 		log: options.Logger, kv: options.KV, jobs: options.Jobs, blobs: options.Blobs, records: options.Records,
+		metrics:   options.Metrics,
 		databases: maps.Clone(options.SQL), sessions: map[*session]struct{}{}, listeners: map[Listener]struct{}{},
 	}
 	if s.databases == nil {
@@ -372,7 +377,22 @@ func (s *Server) recordsStore(ctx context.Context) (*records.Store, error) {
 	return s.records, nil
 }
 
+// metricsStore is the metrics engine, opened the first time a client asks for
+// it
+func (s *Server) metricsStore(ctx context.Context) (*metrics.Store, error) {
+	s.opening.Lock()
+	defer s.opening.Unlock()
+	if s.metrics == nil {
+		opened, err := metrics.Open(ctx, s.store, s.options.MetricsOptions)
+		if err != nil {
+			return nil, err
+		}
+		s.metrics = opened
+	}
+	return s.metrics, nil
+}
+
 // engines is what WELCOME says this server serves
 func (s *Server) engines() []string {
-	return []string{"kv", "jobs", "blobs", "sql", "records"}
+	return []string{"kv", "jobs", "blobs", "sql", "records", "metrics"}
 }

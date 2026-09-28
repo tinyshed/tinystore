@@ -1,0 +1,246 @@
+package server
+
+import (
+	"math"
+	"reflect"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/tinyshed/tinystore/server/internal/client"
+	"github.com/tinyshed/tinystore/server/wire"
+)
+
+func ingest(t *testing.T, conn *client.Conn, series ...wire.MetricsSeries) error {
+	t.Helper()
+	_, err := conn.Call(t.Context(), wire.MetricsIngest, wire.MetricsBatch{Series: series})
+	return err
+}
+
+// metricsDownload reads a read's or an aggregate's items, each decoded by read
+func metricsDownload(t *testing.T, conn *client.Conn, method wire.Method, ask wire.MetricsRange,
+	read func(body []byte) error,
+) error {
+	t.Helper()
+	st, err := conn.Open(t.Context(), method, ask, true)
+	if err != nil {
+		return err
+	}
+	if _, err = st.Response(t.Context()); err != nil {
+		return err
+	}
+	for {
+		body, last, err := st.Next(t.Context())
+		if err != nil || last {
+			return err
+		}
+		if err = read(body); err != nil {
+			return err
+		}
+	}
+}
+
+// readSeries reads a range, joining the pieces a series came in
+func readSeries(t *testing.T, conn *client.Conn, ask wire.MetricsRange) ([]wire.MetricsSeries, int, error) {
+	t.Helper()
+	var found []wire.MetricsSeries
+	pieces := 0
+	err := metricsDownload(t, conn, wire.MetricsRead, ask, func(body []byte) error {
+		var piece wire.MetricsSeries
+		if err := piece.Decode(body); err != nil {
+			return err
+		}
+		pieces++
+		if n := len(found); n > 0 && reflect.DeepEqual(found[n-1].Labels, piece.Labels) {
+			found[n-1].Times = append(found[n-1].Times, piece.Times...)
+			found[n-1].Values = append(found[n-1].Values, piece.Values...)
+			return nil
+		}
+		found = append(found, piece)
+		return nil
+	})
+	return found, pieces, err
+}
+
+func sameBits(a, b []float64) bool {
+	return slices.EqualFunc(a, b, func(x, y float64) bool { return math.Float64bits(x) == math.Float64bits(y) })
+}
+
+// a sample comes back bit for bit, -0 and a NaN's payload included, with its
+// series' labels and kind
+func TestMetricsOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	if !slices.Contains(conn.Welcome.Engines, "metrics") {
+		t.Fatalf("WELCOME serves %v", conn.Welcome.Engines)
+	}
+	now := time.Now().UnixMilli()
+	cpu := wire.MetricsSeries{
+		Labels: map[string]string{"__name__": "cpu", "host": "web-1"}, Kind: "gauge",
+		Times:  []int64{now - 3000, now - 2000, now - 1000},
+		Values: []float64{math.Copysign(0, -1), math.Float64frombits(0x7ff8000000000001), 0.1},
+	}
+	requests := wire.MetricsSeries{
+		Labels: map[string]string{"__name__": "requests", "host": "web-1"},
+		Kind:   "counter", Times: []int64{now - 1000}, Values: []float64{7},
+	}
+	if err := ingest(t, conn, cpu, requests); err != nil {
+		t.Fatal(err)
+	}
+
+	found, _, err := readSeries(t, conn, wire.MetricsRange{
+		Matchers: map[string]string{"__name__": "cpu"},
+		From:     now - time.Hour.Milliseconds(), To: now + 1,
+	})
+	if err != nil || len(found) != 1 || !reflect.DeepEqual(found[0].Labels, cpu.Labels) || found[0].Kind != "gauge" ||
+		!slices.Equal(found[0].Times, cpu.Times) || !sameBits(found[0].Values, cpu.Values) {
+		t.Fatalf("cpu over the wire: %+v, %v", found, err)
+	}
+	found, _, err = readSeries(t, conn, wire.MetricsRange{
+		Matchers: map[string]string{"host": "web-1"},
+		From:     now - time.Hour.Milliseconds(), To: now + 1,
+	})
+	if err != nil || len(found) != 2 {
+		t.Fatalf("both series of a host: %+v, %v", found, err)
+	}
+}
+
+// an ingest stores every series or none, and a refused one is named by its
+// labels
+func TestAMetricsIngestIsAllOrNone(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	now := time.Now().UnixMilli()
+	good := wire.MetricsSeries{
+		Labels: map[string]string{"__name__": "cpu"}, Kind: "gauge", Times: []int64{now},
+		Values: []float64{1},
+	}
+	for _, c := range []struct {
+		name   string
+		series wire.MetricsSeries
+		code   wire.Code
+	}{
+		{"a kind nobody knows", wire.MetricsSeries{
+			Labels: map[string]string{"__name__": "odd"}, Kind: "histogram",
+			Times: []int64{now}, Values: []float64{1},
+		}, wire.CodeInvalid},
+		{"an hour ahead of the clock", wire.MetricsSeries{
+			Labels: map[string]string{"__name__": "ahead"}, Kind: "gauge",
+			Times: []int64{now + time.Hour.Milliseconds()}, Values: []float64{1},
+		}, wire.CodeTooNew},
+	} {
+		failure := failureOf(ingest(t, conn, good, c.series))
+		if failure.Code != c.code || !reflect.DeepEqual(failure.What, c.series.Labels) {
+			t.Errorf("%s: %+v", c.name, failure)
+		}
+	}
+	if _, err := conn.Call(t.Context(), wire.MetricsIngest, wire.MetricsBatch{Series: []wire.MetricsSeries{
+		{Labels: map[string]string{"host": "nameless"}, Kind: "gauge", Times: []int64{now}, Values: []float64{1}},
+	}}); failureOf(err).Code != wire.CodeInvalid {
+		t.Errorf("a series without __name__: %v", err)
+	}
+	found, _, err := readSeries(t, conn, wire.MetricsRange{
+		Matchers: map[string]string{"__name__": "cpu"},
+		From:     now - 1, To: now + 1,
+	})
+	if err != nil || len(found) != 0 {
+		t.Fatalf("a refused ingest stored %+v, %v", found, err)
+	}
+}
+
+// a counter's increase counts a reset inside its bucket, and not the step from
+// one bucket to the next
+func TestAggregateOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	start := time.Now().Add(-time.Minute).Truncate(time.Second).UnixMilli()
+	requests := wire.MetricsSeries{
+		Labels: map[string]string{"__name__": "requests"}, Kind: "counter",
+		Times: []int64{start, start + 1000, start + 2000, start + 3000}, Values: []float64{100, 110, 5, 20},
+	}
+	if err := ingest(t, conn, requests); err != nil {
+		t.Fatal(err)
+	}
+	ask := wire.MetricsRange{Matchers: requests.Labels, From: start, To: start + 4000, Op: "increase"}
+	for _, c := range []struct {
+		width int64
+		want  []wire.MetricsBucket
+	}{
+		{4000, []wire.MetricsBucket{{From: start, To: start + 4000, Count: 4, Resets: 1, Value: 30}}},
+		{2000, []wire.MetricsBucket{
+			{From: start, To: start + 2000, Count: 2, Value: 10},
+			{From: start + 2000, To: start + 4000, Count: 2, Value: 15},
+		}},
+	} {
+		ask.Width = c.width
+		if buckets, err := aggregate(t, conn, ask); err != nil || !reflect.DeepEqual(buckets, c.want) {
+			t.Errorf("increase in buckets %d ms wide: %+v, %v", c.width, buckets, err)
+		}
+	}
+	ask.Op = "median"
+	if _, err := aggregate(t, conn, ask); failureOf(err).Code != wire.CodeInvalid {
+		t.Errorf("an operation nobody knows: %v", err)
+	}
+}
+
+func aggregate(t *testing.T, conn *client.Conn, ask wire.MetricsRange) ([]wire.MetricsBucket, error) {
+	t.Helper()
+	var buckets []wire.MetricsBucket
+	err := metricsDownload(t, conn, wire.MetricsAggregate, ask, func(body []byte) error {
+		var piece wire.MetricsBuckets
+		err := piece.Decode(body)
+		buckets = append(buckets, piece.Buckets...)
+		return err
+	})
+	return buckets, err
+}
+
+// a series longer than a body holds comes in pieces, each with its labels,
+// which join into what went in
+func TestALongSeriesComesInPieces(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{MaxBody: 4 << 10})
+	start := time.Now().Add(-time.Hour).UnixMilli()
+	series := wire.MetricsSeries{Labels: map[string]string{"__name__": "temperature"}, Kind: "gauge"}
+	for i := range 1000 {
+		series.Times = append(series.Times, start+int64(i))
+		series.Values = append(series.Values, float64(i)/7)
+	}
+	for from := 0; from < len(series.Times); from += 200 {
+		piece := series
+		piece.Times, piece.Values = series.Times[from:from+200], series.Values[from:from+200]
+		if err := ingest(t, conn, piece); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found, pieces, err := readSeries(t, conn, wire.MetricsRange{Matchers: series.Labels, From: start, To: start + 1000})
+	if err != nil || len(found) != 1 || !slices.Equal(found[0].Times, series.Times) ||
+		!sameBits(found[0].Values, series.Values) || pieces < 8 {
+		t.Fatalf("a long series in %d pieces: %d series, %v", pieces, len(found), err)
+	}
+}
+
+// a dropped series is gone, and a second drop finds nothing
+func TestDropSeriesOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	now := time.Now().UnixMilli()
+	cpu := wire.MetricsSeries{
+		Labels: map[string]string{"__name__": "cpu"}, Kind: "gauge", Times: []int64{now},
+		Values: []float64{1},
+	}
+	if err := ingest(t, conn, cpu); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []bool{true, false} {
+		body, err := conn.Call(t.Context(), wire.MetricsDrop, wire.MetricsLabels{Labels: cpu.Labels})
+		var dropped wire.MetricsDropped
+		if err != nil || dropped.Decode(body) != nil || dropped.Found != want {
+			t.Fatalf("a drop: %+v, %v, want found %v", dropped, err, want)
+		}
+	}
+	if found, _, err := readSeries(t, conn, wire.MetricsRange{Matchers: cpu.Labels, From: now - 1, To: now + 1}); err !=
+		nil || len(found) != 0 {
+		t.Fatalf("a dropped series read as %+v, %v", found, err)
+	}
+}

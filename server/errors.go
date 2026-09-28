@@ -9,6 +9,7 @@ import (
 	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
+	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
 	"github.com/tinyshed/tinystore/server/wire"
 	"github.com/tinyshed/tinystore/sqldb"
@@ -83,6 +84,10 @@ func whatOf(err error) map[string]string {
 	var constraint *sqldb.ConstraintError
 	if errors.As(err, &constraint) {
 		return constraintOf(constraint)
+	}
+	var series *metrics.SeriesError
+	if errors.As(err, &series) {
+		return labelMapOf(series.Labels)
 	}
 	return recordsWhat(err)
 }

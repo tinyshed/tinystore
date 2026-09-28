@@ -89,7 +89,10 @@
      "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"uint": "7"}]]}},
     {"name": "records.append of one click", "hex": "2a00000003010105050000008101918401cf18d75b842b4ecd1502a377656203a5636c69636b0992a7656c656d656e74a52262757922",
      "header": {"length": 42, "kind": 3, "flags": 1, "method": 1281, "stream": 5},
-     "body": {"map": [[{"uint": "1"}, {"array": [{"map": [[{"uint": "1"}, {"uint": "1790000000123456789"}], [{"uint": "2"}, {"str": "web"}], [{"uint": "3"}, {"str": "click"}], [{"uint": "9"}, {"array": [{"str": "element"}, {"str": "\"buy\""}]}]]}]}]]}}
+     "body": {"map": [[{"uint": "1"}, {"array": [{"map": [[{"uint": "1"}, {"uint": "1790000000123456789"}], [{"uint": "2"}, {"str": "web"}], [{"uint": "3"}, {"str": "click"}], [{"uint": "9"}, {"array": [{"str": "element"}, {"str": "\"buy\""}]}]]}]}]]}},
+    {"name": "metrics.ingest of one sample", "hex": "3b0000000301010609000000810191840182a85f5f6e616d655f5fa3637075a4686f7374a57765622d3102a5676175676503c408006c50c4a001000004c408000000000000e03f",
+     "header": {"length": 59, "kind": 3, "flags": 1, "method": 1537, "stream": 9},
+     "body": {"map": [[{"uint": "1"}, {"array": [{"map": [[{"uint": "1"}, {"map": [[{"str": "__name__"}, {"str": "cpu"}], [{"str": "host"}, {"str": "web-1"}]]}], [{"uint": "2"}, {"str": "gauge"}], [{"uint": "3"}, {"bin": "006c50c4a0010000"}], [{"uint": "4"}, {"bin": "000000000000e03f"}]]}]}]]}}
   ],
   "refused frames": [
     {"name": "a kind nobody defined", "hex": "000000000b00000000000000"},

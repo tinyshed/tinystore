@@ -10,5 +10,6 @@ func (s *Server) handlers() map[wire.Method]handler {
 	s.blobsMethods(methods)
 	s.sqlMethods(methods)
 	s.recordsMethods(methods)
+	s.metricsMethods(methods)
 	return methods
 }

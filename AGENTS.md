@@ -88,11 +88,11 @@ against), a session (credit, cancelling, GOAWAY, silence, workers that keep
 their stacks, the first sender writing), Unix sockets, TCP and TLS with
 tokens, Windows named pipes, and kv through `kv.Raw`, jobs with a remote
 Work loop, blobs, sql, whose data connections pass a check of their own in
-two lines, SQLite's tokens and the program it compiles, and records, another
-program's lines included; [docs/server.md](docs/server.md) "Building it" says
-where each slice stands and how the next goes on.
-Designed, not built: metrics over the wire, `tinystore serve` with `SERVE`,
-the SDKs, and self-metrics.
+two lines, SQLite's tokens and the program it compiles, records, another
+program's lines included, and metrics; [docs/server.md](docs/server.md)
+"Building it" says where each slice stands and how the next goes on.
+Designed, not built: `tinystore serve` with `SERVE`, the SDKs, and
+self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -668,6 +668,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a follower over the wire comes back where it stopped   | `TestFollowOverTheWire`                                                         |
 | another program's lines over the wire become records   | `TestLinesOverTheWire`, `TestLinesHandOverWhatTheyHoldWhenTheUploadEnds`        |
 | a records drop is an admin's repair                    | `TestADropIsAnAdminsRepair`, `TestADamagedRowIsNamedAsADropNamesIt`             |
+| a sample over the wire comes back bit for bit          | `TestMetricsOverTheWire`, -0 and a NaN's payload included                      |
+| a metrics ingest over the wire is all or none          | `TestAMetricsIngestIsAllOrNone`, the refused series named by its labels         |
+| an aggregate over the wire counts resets in its bucket | `TestAggregateOverTheWire`                                                      |
+| a series longer than a body comes in pieces            | `TestALongSeriesComesInPieces`                                                  |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

@@ -201,6 +201,16 @@ func TestTheExamplesAreWhatTheMessagesWrite(t *testing.T) {
 		frames["records.append of one click"]) {
 		t.Errorf("records.append %x", written)
 	}
+
+	cpu := wire.MetricsBatch{Series: []wire.MetricsSeries{{
+		Labels: map[string]string{"__name__": "cpu", "host": "web-1"}, Kind: "gauge",
+		Times: []int64{1_790_000_000_000}, Values: []float64{0.5},
+	}}}
+	header = wire.Header{Kind: wire.KindRequest, Flags: wire.FlagEnd, Method: wire.MetricsIngest, Stream: 9}
+	if written := wire.AppendFrame(nil, header, cpu.Append(nil)); !bytes.Equal(written,
+		frames["metrics.ingest of one sample"]) {
+		t.Errorf("metrics.ingest %x", written)
+	}
 }
 
 // every kv message reads back as it was written

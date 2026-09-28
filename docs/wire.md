@@ -3,9 +3,9 @@
 The bytes a TinyStore server and its clients exchange over any byte stream, a
 child's stdin and stdout, a Unix socket, a Windows named pipe, TCP or TLS.
 What they mean, who may send them and what bounds them is
-[server.md](server.md). Frames, the profile, the handshake, the errors, kv,
-jobs, blobs, sql and records are built in `server/wire`; metrics' methods are
-fixed here with its slice. Every example on this page is a vector of
+[server.md](server.md). Frames, the profile, the handshake, the errors and
+every engine's methods, kv, jobs, blobs, sql, records and metrics, are built
+in `server/wire`. Every example on this page is a vector of
 [server/wire/testdata/vectors.json](../server/wire/testdata/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
@@ -304,8 +304,8 @@ carry:
 | records | append of many, drop | calls |
 | | read, follow | a download, records a message at a time |
 | | lines | an upload of another program's output |
-| metrics | ingest | a call |
-| | read, aggregate | a download, a series a message; an error may end it after some series, as `Stream`'s does |
+| metrics | ingest, drop | calls |
+| | read, aggregate | a download, a series a message, or several for a series longer than a body holds |
 
 The values they carry:
 
@@ -703,4 +703,71 @@ drop of one that still reads is `conflict`.
          02 a3 77 65 62                                                   stream: "web"
          03 a5 63 6c 69 63 6b                                             name: "click"
          09 92 a7 65 6c 65 6d 65 6e 74 a5 22 62 75 79 22                  attrs: ["element", "\"buy\""]
+```
+
+### metrics
+
+Metrics are one store of series, each named by its labels, so none opens a
+handle.
+
+| method | | request | answer |
+|---|---|---|---|
+| `0x0601` | ingest | series and their samples, stored all or none | `{}`; `what` is a refused series' labels |
+| `0x0602` | read | a range | a download: `{}`, a series a `DATA`, then `{}` |
+| `0x0603` | aggregate | a range with a width and an operation | a download: `{}`, a series' buckets a `DATA`, then `{}` |
+| `0x0604` | drop | labels | `{1: found, 2: unreadable groups}` |
+
+A series:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | labels | a map of names | `__name__` among them, required on ingest; names unique, every text UTF-8 |
+| 2 | kind | str | `gauge` or `counter` |
+| 3 | times | bin | unix milliseconds, a little-endian int64 each |
+| 4 | values | bin | a little-endian float64 each, its bits the data: -0 and a NaN's payload come back as they went |
+
+The two columns hold as many values each. A series longer than half a body
+holds comes in several `DATA`, one after another, each with its labels and
+kind, its samples going on in time order; a client joins them. Ingest keeps
+the value given last for a time repeated.
+
+A range:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | matchers | a map of names | the labels a series has, exactly; one at least |
+| 2, 3 | from, to | int | unix milliseconds, to excluded; both required, 2^63−1 the open end |
+| 4 to 8 | limits | uint each | the series it matches, the blocks it decodes, the bytes it fetches, the samples it decodes and the samples or buckets it answers; each narrows the server's |
+| 9 | width | uint | aggregate's: milliseconds, the buckets starting at from |
+| 10 | op | str | aggregate's: `count`, `sum`, `min`, `max` or `increase`, a counter's alone |
+
+The server reads a range whole, within its limits, before the first series
+leaves, so that a slow client holds none of the engine's readers; a read or an
+aggregate that fails sends no series.
+
+An aggregate's item is a series, keys 1 and 2, and its buckets as columns: 3
+their starts and 4 their ends, 5 the samples each counted and 6 the resets
+among them, all int64; 7 each value, a float64 computed exactly and rounded
+once; 8 a byte each, 1 when the value overflowed to an infinity and 2 when
+retention cut the bucket, which counted only its samples from the cutoff on.
+An increase counts a reset inside its bucket and not the step from one bucket
+to the next; only a bucket holding samples is answered.
+
+Drop removes one series and everything it holds, whether it still reads or
+not, the labels naming it exactly; unreadable groups counts the groups removed
+without the payload rows their directory no longer names.
+
+`metrics.ingest` of one sample of `cpu{host="web-1"}` on stream 9:
+
+```text
+3b 00 00 00  03  01  01 06  09 00 00 00                                   a body of 59 bytes, REQUEST, END, 0x0601, stream 9
+81                                                                        a map of one
+   01 91                                                                  series: an array of one
+      84                                                                  a map of four
+         01 82                                                            labels: a map of two names
+            a8 5f 5f 6e 61 6d 65 5f 5f a3 63 70 75                        __name__: "cpu"
+            a4 68 6f 73 74 a5 77 65 62 2d 31                              host: "web-1"
+         02 a5 67 61 75 67 65                                             kind: "gauge"
+         03 c4 08 00 6c 50 c4 a0 01 00 00                                 times: [1,790,000,000,000]
+         04 c4 08 00 00 00 00 00 00 e0 3f                                 values: [0.5]
 ```
