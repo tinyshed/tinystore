@@ -89,9 +89,11 @@ their stacks, the first sender writing), Unix sockets, TCP and TLS with
 tokens, Windows named pipes, and kv through `kv.Raw`, jobs with a remote
 Work loop, blobs, sql, whose data connections pass a check of their own in
 two lines, SQLite's tokens and the program it compiles, records, another
-program's lines included, and metrics; [docs/server.md](docs/server.md)
-"Building it" says where each slice stands and how the next goes on.
-Designed, not built: `tinystore serve` with `SERVE`, the SDKs, and
+program's lines included, and metrics; and `tinystore serve`, a private child
+on stdin and stdout, the directory's sidecar published in `server/SERVE`
+under the store's lock and gone once idle, or a remote server with TLS and
+tokens; [docs/server.md](docs/server.md) "Building it" says where each slice
+stands and how the next goes on. Designed, not built: the SDKs, and
 self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
@@ -124,7 +126,7 @@ Do not describe unbuilt behaviour as though it works.
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
-| `cmd/tinystore/`     | the one executable, a module of its own: `migrate` and `schema` for sqldb     |
+| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, and `migrate` and `schema` for sqldb |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
@@ -157,17 +159,20 @@ root            what a caller links: the engine and nothing else
 tools/          golangci-lint, govulncheck, task
 bench/          corpora, comparison harnesses, whatever a measurement drags in
 server/         the server: requires the root and nothing else; server/wire only the standard library
-cmd/tinystore/  the one executable, go tool tinystore; the standard library alone today
+cmd/tinystore/  the one executable, go tool tinystore: requires the root and server/, nothing else
 ```
 
-`cmd/tinystore` is a module of its own, as a service is: what it will link to
-serve, back up and inspect a store stays out of the library's graph, and its
-`migrate` commands only run the application's own test, so the comparison
-comes from the sqldb the application pinned. `server/` is one for the same
-reason, and `TestTheServerRequiresOnlyTheRoot` holds it to the root; a Go
-client links `server/wire` without SQLite, `TestWireImportsOnlyTheStandardLibrary`.
-Until a release it reaches the root through a `replace`. `task` tests, lints,
-formats and tidies both beside the root.
+`cmd/tinystore` is a module of its own, as a service is: what it links to
+serve, and later to back up and inspect a store, stays out of the library's
+graph. `TestTheToolRequiresOnlyTheStoreAndTheServer` holds it to the root and
+`server/`, so an application's `go tool` directive selects a root at least as
+new as its tool's, and its `migrate` commands only run the application's own
+test, so the comparison comes from the sqldb the application's graph selects.
+`server/` is one for the same reason, and `TestTheServerRequiresOnlyTheRoot`
+holds it to the root; a Go client links `server/wire` without SQLite,
+`TestWireImportsOnlyTheStandardLibrary`. Until a release both reach what they
+require through a `replace`. `task` tests, lints, formats and tidies both
+beside the root.
 
 The root module's dependency list is a promise rather than an accident:
 `klauspost/compress` for zstd and `modernc.org/sqlite` for the file. Anything a
@@ -677,6 +682,11 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a client reading `SERVE` delays a change, fails none   | `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
 | a server goes idle only after its last connection     | `TestAServerGoesIdleAfterItsLastConnection`                                     |
 | a long store's socket moves to the user's own directory | `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows                  |
+| of two sidecars started at once, one exits held        | `TestAStaleServeStartsOneSidecar`, `TestASecondServeOfADirectoryExitsHeld`      |
+| a sidecar leaves once idle, with its `SERVE` and lock  | `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle`                            |
+| a private child leaves when told, though its parent stays | `TestAPrivateChildLeavesWhenToldThoughItsParentStays`, `TestAPrivateChildServesItsParent` |
+| what serve cannot serve opens nothing                  | `TestServeRefusesWhatItCannotServe`, a file it cannot read included             |
+| the tool requires only the store and the server        | `TestTheToolRequiresOnlyTheStoreAndTheServer`                                   |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

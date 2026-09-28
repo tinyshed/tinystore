@@ -13,8 +13,9 @@ rewrite of one metrics path. A section that describes something unbuilt says so.
 An embedded data runtime for one Go program: exact metrics, structured records
 (logs and events), SQL databases the application owns, KV, blobs and jobs, in
 one directory, with bounded memory, no daemon and no cgo. A network service
-wraps the same runtime from a module of its own; it is designed, not built, in
-[server.md](server.md), and its bytes in [wire.md](wire.md).
+wraps the same runtime from a module of its own, and `tinystore serve` runs
+it; its SDKs are designed, not built. [server.md](server.md) is its contract
+and [wire.md](wire.md) its bytes.
 
 Each engine keeps its own semantics. The exactness rules in `AGENTS.md` are the
 metrics engine's contract, not every engine's; an engine's contract lives in

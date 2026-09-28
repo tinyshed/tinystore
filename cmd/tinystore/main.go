@@ -1,8 +1,10 @@
-// Command tinystore is TinyStore's one executable. Its commands today serve
-// sqldb: each finds the test that checks a database, runs it, and prints what
-// it answered, so that the comparison and the migration it writes come from
-// the sqldb the application pinned, never from this tool's own.
+// Command tinystore is TinyStore's one executable. It serves a store to other
+// processes, and its sqldb commands each find the test that checks a
+// database, run it, and print what it answered, so that the comparison and the
+// migration it writes come from the sqldb the application pinned, never from
+// this tool's own.
 //
+//	tinystore serve --dir <dir> --stdio | --local | --listen <endpoint>
 //	go tool tinystore migrate [name]               what differs; writes nothing
 //	go tool tinystore migrate [name] new <what>    write the next migration from the difference
 //	go tool tinystore schema [name]                the schema's SQL
@@ -15,27 +17,49 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // the environment variable sqldbtest.CheckSchema reads a request from
 const requestVariable = "TINYSTORE_SQLDB"
 
 const usage = `usage:
+  tinystore serve --dir <dir> ...        serve the store in dir to other processes; tinystore serve -h says how
   tinystore migrate [name]               what differs between a schema and its migrations; writes nothing
   tinystore migrate [name] new <what>    write the next migration from the difference
   tinystore schema [name]                print the schema's SQL`
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "tinystore:", err)
-		os.Exit(1)
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err := serve(ctx, os.Args[2:], console{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
+		stop()
+		exit(err)
 	}
+	exit(run(context.Background(), os.Args[1:], os.Stdout))
+}
+
+// exit ends the process as err says: a directory held by another store with a
+// code of its own, which a client starting a sidecar reads as another having
+// won
+func exit(err error) {
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+		os.Exit(0)
+	case errors.Is(err, errHeld):
+		fmt.Fprintln(os.Stderr, "tinystore:", err)
+		os.Exit(exitHeld)
+	}
+	fmt.Fprintln(os.Stderr, "tinystore:", err)
+	os.Exit(1)
 }
 
 // command is what the arguments ask of sqldbtest: migrate, new or schema

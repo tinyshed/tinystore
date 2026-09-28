@@ -1,9 +1,9 @@
 # The server: one runtime for another process
 
-Being built, in `server/`: the bytes, a session with its transports and
-every engine, kv, jobs, blobs, sql, records and metrics, are; `tinystore serve`
-with `SERVE` and the SDKs are not, and [Building it](#building-it) says which
-slice is where. This page is the
+Being built, in `server/` and `cmd/tinystore`: the bytes, a session with its
+transports, every engine, kv, jobs, blobs, sql, records and metrics, and
+`tinystore serve` with `SERVE` are; the SDKs are not, and
+[Building it](#building-it) says which slice is where. This page is the
 contract the server and its SDKs are built to: what a connection may do, how
 a sidecar starts and is found, what a lost connection means, and what bounds
 the server's memory. The bytes are [wire.md](wire.md). Its figures are
@@ -138,19 +138,29 @@ const there = await connect("tls://db.internal:7443", { token })
 
 - **Shared, the default.** One sidecar a directory, found through `SERVE` or
   started by whoever needs it first, and gone after `--idle` without a
-  connection. Four uvicorn workers and a cron script share one.
+  connection, 30 seconds unless told, 0 for never. Four uvicorn workers and a
+  cron script share one.
 - **Private.** The SDK starts `tinystore serve --stdio` with pipes: frames on
   stdin and stdout, the server's logs on stderr, which the SDK reads to its
   end, since a pipe nobody drains stops the server when it fills. No socket,
   no file, no port. The end of stdin is the parent's end: the server drains
-  and exits. Tests, scripts and a single Bun process want this.
+  and exits. A signal ends it too, though the parent keeps stdin open: stdin
+  is read on a goroutine of its own and never closed, since closing a blocking
+  stdin ends no read waiting on it. Tests, scripts and a single Bun process
+  want this.
 - **External.** Something else runs it: systemd, a container, another
   machine. The SDK is given an endpoint and, off the machine, a token.
 - **The binary travels in the SDK's package**: per-platform optional
   dependencies on npm, per-platform wheels on PyPI. It is pure Go built with
   `CGO_ENABLED=0`, so every target builds from one machine.
 - **Engine options are the server's**, from its flags: retention, clock
-  skew, memory. A client's `open` carries only a handle's options.
+  skew, memory. A client's `open` carries only a handle's options. Built:
+  `--memory`, which is `Options.Memory`; the engines' own options wait for
+  their flags.
+- **What serve cannot do opens nothing.** Its flags, a tokens file and a
+  certificate are read before the store opens, so a mistake leaves no `LOCK`
+  and no file behind; a `tls://` listener takes `--tls-cert` and `--tls-key`
+  and nothing else does, and `--listen` takes `--tokens`.
 - **The server opens an engine the first time a client asks for it**, with
   the server's options, so a sidecar for an application that keeps only kv
   makes no `jobs.db`. A Go program that embeds the server passes the handles
@@ -184,10 +194,12 @@ truth.
 - **Find or start.** A client reads `SERVE`, connects and checks the
   instance. Any failure (no file, a refused connection, another instance)
   starts `tinystore serve --dir <dir> --local`. That child either takes
-  `LOCK`, which means the old server is gone, removes the socket it left and
-  replaces `SERVE`; or finds `LOCK` held and exits with a code of its own, and
-  the client reads `SERVE` again until the winner answers, five seconds at
-  most.
+  `LOCK`, which means the old server is gone, removes the socket and the
+  `SERVE` it left and writes its own; or finds `LOCK` held and exits with code
+  3, and the client reads `SERVE` again until the winner answers, five seconds
+  at most, and starts one again when none does: a sidecar leaving for
+  idleness removes its `SERVE` first and holds `LOCK` until its store has
+  closed.
 - **No pid is trusted.** A pid is reused; a lock is released by the operating
   system when its process dies.
 - **Nor is an endpoint a dead server left.** Its name is anyone's to take once
@@ -382,7 +394,7 @@ a client     ≤ its streams in flight × the agreed body + the credit it grante
 | credit on a stream, each way | 2 MiB: at least the largest body, which must fit it, and more than the 1 MiB a round trip needs where it is long | `WELCOME`, `HELLO` |
 | calls running at once | as many as the streams in flight, on workers that keep their stacks | the server |
 | a data connection's SQL statement, its check included | 30 s | the server |
-| the collector's target | above Go's default, since a small live heap and a fast allocation rate collect hundreds of times a second | the server |
+| the collector's target | `GOGC` 400 unless the environment sets it, since a small live heap and a fast allocation rate collect hundreds of times a second at Go's default | `tinystore serve` |
 | answers queued to write; a handler past it waits | 4 MiB | the server |
 | connections | 64 local, 1,024 remote | flags |
 | the handshake | 5 s | the server |
@@ -457,7 +469,11 @@ Each promise above is a test once its code exists; those marked built pass:
 | a client reading `SERVE` delays a change to it and does not fail it | built: `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
 | a server goes idle only after its last connection | built: `TestAServerGoesIdleAfterItsLastConnection` |
 | a socket's path fits, in the user's own directory when the store's is long | built: `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows |
-| a stale `SERVE` starts one sidecar | `TestAStaleServeStartsOneSidecar` |
+| a stale `SERVE` starts one sidecar, and the other exits held | built: `TestAStaleServeStartsOneSidecar`, `TestASecondServeOfADirectoryExitsHeld` |
+| the sidecar found through `SERVE` leaves once idle, with `SERVE` and `LOCK` | built: `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle` |
+| a private child leaves when its parent does, or when told though the parent stays | built: `TestAPrivateChildServesItsParent`, `TestAPrivateChildLeavesWhenToldThoughItsParentStays` |
+| what serve cannot serve opens nothing | built: `TestServeRefusesWhatItCannotServe` |
+| the tool requires only the store and the server | built: `TestTheToolRequiresOnlyTheStoreAndTheServer` |
 | the server module requires only the root | built: `TestTheServerRequiresOnlyTheRoot` |
 | `server/wire` imports only the standard library | built: `TestWireImportsOnlyTheStandardLibrary` |
 | engines import neither `server` nor `server/wire` | built: `TestEnginesDoNotImportEachOther`, extended |
@@ -531,7 +547,7 @@ In slices, each engine's messages fixed in [wire.md](wire.md) before its
 code: `server/wire`; a session with its transports; kv, with a Go client the
 tests use; jobs; blobs; sql, with the adversarial round of its SQL check;
 records; metrics; `tinystore serve` with `SERVE`; the Bun SDK; the Python SDK.
-Where the slices stand, 28 September 2026:
+Where the slices stand, 29 September 2026:
 
 | slice | state |
 |---|---|
@@ -543,8 +559,9 @@ Where the slices stand, 28 September 2026:
 | sql | built: `sql.go`, the data connection's check in `sqltokens.go` and `datasql.go`; the messages on wire.md |
 | records | built: `records.go`; the messages on wire.md |
 | metrics | built: `metrics.go`; the messages on wire.md |
-| `tinystore serve` with `SERVE`, the Bun SDK, the Python SDK | not begun |
-| the measurement against the prototype | not begun: it wants `tinystore serve` |
+| `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
+| the Bun SDK, the Python SDK | not begun |
+| the measurement against the prototype | not begun |
 
 Every slice built passes `go test`, `-race` in the `golang:1.27` container
 three times shuffled, and golangci-lint for Windows and Linux; nothing of it
@@ -611,16 +628,31 @@ is released, and the gates it brought are in AGENTS.md.
   handler holds them until the client has taken them. Bounding that belongs
   with the server's own memory bound.
 
+**What building `tinystore serve` settled:**
+
+- **A directory held is exit code 3**, `ErrInUse` from the store's `Open`;
+  any other failure is 1, and a server that left as asked, idle, told by a
+  signal or its parent gone, is 0.
+- **Leaving goes in order**: `SERVE` and the socket first, so that no client
+  finds a server on its way out; then `Server.Close`, which gives the streams
+  running ten seconds; then the store.
+- **Idle counts connections, not calls.** `WaitIdle` returns once no
+  connection has been open for `--idle`, counted from the last one's end, or
+  from the server's start when none came.
+- **The tool links the server.** `cmd/tinystore` requires the root and
+  `server`, so an application's `go tool` directive selects a root at least as
+  new as its tool's; the migrate commands still run the application's own
+  test, whose sqldb is the one its module graph selects.
+
 **Next, from here:**
 
-- **`tinystore serve`** in `cmd/tinystore`, which requires `server` through a
-  `replace`, sets the collector's target, GOGC 400 unless the environment
-  says, and writes `SERVE` under `LOCK` in `<dir>/server/`; then the
-  measurement of the round's cases against the built server; then the SDKs,
-  tested against the vectors file.
-- **Checks to run**: `go test` in the root and `go -C server test`, lint with
-  `bin/golangci-lint` in both, and the race suite in the container, as the
-  earlier slices ran it:
+- **The measurement** of the round's cases against the built server, through
+  `tinystore serve`, beside the prototype's figures on the same machine; then
+  the SDKs, tested against the vectors file.
+- **Checks to run**: `go test` in the root, `go -C server test` and
+  `go -C cmd/tinystore test`; lint with `bin/golangci-lint` in all three, for
+  Windows and with `GOOS=linux`; and the race suite in the container, as the
+  earlier slices ran it, in `server` and again in `cmd/tinystore`:
 
   ```sh
   docker run --rm -v <repo>:/src -v tinystore-race-cache:/go -e GOWORK=off -e CGO_ENABLED=1 \

@@ -753,7 +753,8 @@ Each waits for a workload that needs it and a measurement that pays for it.
   tinystore` finds the test functions calling `CheckSchema` by reading the
   module's test files, runs the one that checks the database named with
   `TINYSTORE_SQLDB` set to a request in JSON, and reads the check's answer from
-  the file the request names. `cmd/tinystore` needs the standard library alone.
+  the file the request names. The migrate commands need the standard library
+  alone; `cmd/tinystore` requires the root and the server for `serve`.
 - **A write that has waited ten seconds is logged from the writer's wait**:
   `internal/sqlite` tells its engine, through `Config.Waited`, the label of the
   grouped write leading the wait, which in sqldb is its query, and sqldb adds
