@@ -40,6 +40,29 @@ func weighFixed[V any](V) int { return 8 }
 // a value only its encoding measures weighs the largest until it is encoded
 func weighLargest[V any](V) int { return maxValue }
 
+// Raw is a value as its row keeps it: nothing, an integer or bytes. A bucket
+// of Raw reads what a bucket of any type wrote, and what it writes a bucket of
+// a type kept the same way reads, so that a program without the types, the
+// server for its clients, reads and writes every bucket:
+//
+//	Raw{}                                    nothing, as a struct{} of a set
+//	Raw{Kind: RawInt, Int: 42}               an integer, as a bool or an int64
+//	Raw{Kind: RawBytes, Bytes: []byte("x")}  bytes, as a string, a []byte, a float's bits or JSON
+type Raw struct {
+	Kind  RawKind
+	Int   int64
+	Bytes []byte
+}
+
+// RawKind is which of the three a Raw holds.
+type RawKind uint8
+
+const (
+	RawNothing RawKind = iota
+	RawInt
+	RawBytes
+)
+
 // codecFor chooses a value's representation by its type, named types by what
 // they are named for:
 //
@@ -48,10 +71,13 @@ func weighLargest[V any](V) int { return maxValue }
 //	uint, uint64                      eight bytes, big-endian
 //	float32, float64                  their bits, big-endian
 //	struct{}                          nothing: a bucket of them is a set
+//	Raw                               what the row holds
 //	anything else                     JSON
 func codecFor[V any]() codec[V] {
 	t := reflect.TypeFor[V]()
 	switch kind := t.Kind(); {
+	case t == reflect.TypeFor[Raw]():
+		return rawCodec[V]()
 	case kind == reflect.String, kind == reflect.Slice && t.Elem().Kind() == reflect.Uint8:
 		return bytesCodec[V](t)
 	case kind == reflect.Bool, isSigned(kind), isNarrowUnsigned(kind):
@@ -200,6 +226,48 @@ func nothingCodec[V any]() codec[V] {
 			}
 			var zero V
 			return zero, nil
+		},
+	}
+}
+
+// rawCodec keeps a Raw as the row's own value: NULL, an INTEGER or a BLOB, an
+// empty one included, which the driver reads back as a nil slice
+func rawCodec[V any]() codec[V] {
+	return codec[V]{
+		weigh: func(value V) int {
+			if raw, ok := any(value).(Raw); ok && raw.Kind == RawBytes {
+				return len(raw.Bytes)
+			}
+			return 8
+		},
+		encode: func(value V) (any, error) {
+			raw, ok := any(value).(Raw)
+			if !ok {
+				return nil, fmt.Errorf("%w: a %T in a bucket of Raw", tinystore.ErrInvalid, value)
+			}
+			switch raw.Kind {
+			case RawNothing:
+				return nil, nil
+			case RawInt:
+				return raw.Int, nil
+			case RawBytes:
+				return append([]byte{}, raw.Bytes...), nil
+			default:
+				return nil, fmt.Errorf("%w: a Raw of kind %d", tinystore.ErrInvalid, raw.Kind)
+			}
+		},
+		decode: func(stored any) (V, error) {
+			var raw Raw
+			switch held := stored.(type) {
+			case nil:
+			case int64:
+				raw = Raw{Kind: RawInt, Int: held}
+			case []byte:
+				raw = Raw{Kind: RawBytes, Bytes: append([]byte{}, held...)}
+			default:
+				return zeroAnd[V](corrupt("nothing, an integer or bytes", stored))
+			}
+			return as[V](reflect.ValueOf(raw))
 		},
 	}
 }

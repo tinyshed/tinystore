@@ -140,6 +140,83 @@ func TestAValueJSONCannotWriteIsRefused(t *testing.T) {
 	}
 }
 
+// a bucket of Raw reads what a bucket of each type wrote as its row holds it,
+// an empty string as empty bytes and not as nothing, and what it writes reads
+// in the bucket of the type it came from
+func TestARawValueIsWhatItsRowHolds(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	raw := openTestBucket[Raw](t, state, "shared")
+	float := math.Float64frombits(0x7ff0_0000_0000_0001)
+
+	written := []struct {
+		key  string
+		set  func() error
+		want Raw
+	}{
+		{
+			"text", func() error { return openTestBucket[string](t, state, "shared").Set(t.Context(), "text", "héllo") },
+			Raw{Kind: RawBytes, Bytes: []byte("héllo")},
+		},
+		{
+			"empty", func() error { return openTestBucket[string](t, state, "shared").Set(t.Context(), "empty", "") },
+			Raw{Kind: RawBytes, Bytes: []byte{}},
+		},
+		{
+			"int", func() error { return openTestBucket[int64](t, state, "shared").Set(t.Context(), "int", -5) },
+			Raw{Kind: RawInt, Int: -5},
+		},
+		{
+			"bool", func() error { return openTestBucket[bool](t, state, "shared").Set(t.Context(), "bool", true) },
+			Raw{Kind: RawInt, Int: 1},
+		},
+		{
+			"float", func() error { return openTestBucket[float64](t, state, "shared").Set(t.Context(), "float", float) },
+			Raw{Kind: RawBytes, Bytes: []byte{0x7f, 0xf0, 0, 0, 0, 0, 0, 1}},
+		},
+		{
+			"member", func() error {
+				return openTestBucket[struct{}](t, state, "shared").Set(t.Context(), "member", struct{}{})
+			},
+			Raw{},
+		},
+		{"json", func() error {
+			return openTestBucket[session](t, state, "shared").Set(t.Context(), "json", session{UserID: 7})
+		}, Raw{Kind: RawBytes, Bytes: []byte(`{"UserID":7,"Device":"","Tags":null}`)}},
+	}
+	for _, w := range written {
+		if err := w.set(); err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := raw.Get(t.Context(), w.key)
+		if err != nil || !found || got.Kind != w.want.Kind || got.Int != w.want.Int || !bytes.Equal(got.Bytes, w.want.Bytes) ||
+			(got.Kind == RawBytes) != (got.Bytes != nil) {
+			t.Errorf("%s read as %+v, %v, %v; want %+v", w.key, got, found, err, w.want)
+		}
+	}
+
+	if err := raw.Set(t.Context(), "seven", Raw{Kind: RawInt, Int: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := openTestBucket[int64](t, state, "shared").Get(t.Context(), "seven"); n != 7 || err != nil {
+		t.Errorf("an integer Raw read as %d, %v", n, err)
+	}
+	if err := raw.Set(t.Context(), "nothing", Raw{}); err != nil {
+		t.Fatal(err)
+	}
+	if typed := state.valueType(t, "shared", "nothing"); typed != "null" {
+		t.Errorf("nothing is kept as %s", typed)
+	}
+	if err := raw.Set(t.Context(), "none", Raw{Kind: RawBytes}); err != nil {
+		t.Fatal(err)
+	}
+	if typed := state.valueType(t, "shared", "none"); typed != "blob" {
+		t.Errorf("empty bytes are kept as %s", typed)
+	}
+	if err := raw.Set(t.Context(), "odd", Raw{Kind: 9}); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Errorf("a Raw of no kind: %v", err)
+	}
+}
+
 // bigEndian is a codec that writes an int64 as eight bytes, big-endian
 type bigEndian struct{}
 

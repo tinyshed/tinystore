@@ -45,6 +45,11 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   and a value JSON cannot write is `ErrInvalid` at `Set`. `WithCodec` replaces
   the choice. A value over 512 bytes lives in a row of its own; one over 1 MiB
   is `ErrLimit`.
+- **`kv.Raw` is a value as its row keeps it**: nothing, an integer or bytes,
+  an empty string as empty bytes. A bucket of `Raw` reads what a bucket of any
+  type wrote under its name, and what it writes a bucket of a type kept the
+  same way reads, so that a program without the types reads and writes every
+  bucket; the server does, for its clients in other languages.
 - **A counter is an int64 a key.** `OpenCounters` opens them: `Add` returns
   the new value, `Max` keeps the larger, and an absent or expired counter is
   0. An expired counter starts again from zero with the counters'
