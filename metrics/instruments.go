@@ -27,7 +27,17 @@ func (c CounterInstrument) Add(n float64) {
 		c.warnOnce(fmt.Errorf("%w: counter increment %v", ErrInvalid, n))
 		return
 	}
-	c.add(n)
+	for {
+		old := c.value.Load()
+		next := math.Float64frombits(old) + n
+		if math.IsInf(next, 0) {
+			c.warnOnce(fmt.Errorf("%w: counter total overflow", ErrInvalid))
+			return
+		}
+		if c.value.CompareAndSwap(old, math.Float64bits(next)) {
+			return
+		}
+	}
 }
 
 // With is the counter of the same name with more labels, given as name, value
@@ -55,7 +65,11 @@ func (s *Store) Gauge(name string) GaugeInstrument {
 // sample and is logged, once while it stays the same.
 func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, error)) {
 	gauge := s.instruments.register(named(Gauge, name))
-	gauge.read = read
+	if read == nil {
+		gauge.warnOnce(fmt.Errorf("%w: nil gauge callback", ErrInvalid))
+		return
+	}
+	gauge.read.Store(&gaugeReader{call: read})
 }
 
 func named(kind Kind, name string) Series {
@@ -66,11 +80,15 @@ type instrument struct {
 	set    *instruments
 	series Series
 	value  atomic.Uint64 // float64 bits
-	read   func(context.Context) (float64, error)
+	read   atomic.Pointer[gaugeReader]
 
 	warned   atomic.Bool
 	refused  atomic.Bool
 	lastRead string
+}
+
+type gaugeReader struct {
+	call func(context.Context) (float64, error)
 }
 
 func (i *instrument) add(delta float64) {
@@ -87,11 +105,13 @@ func (i *instrument) child(pairs []string) *instrument {
 	for index := 0; index+1 < len(pairs); index += 2 {
 		labels = append(labels, Label{Name: pairs[index], Value: pairs[index+1]})
 	}
-	child := i.set.register(Series{Kind: i.series.Kind, Labels: labels})
 	if len(pairs)%2 != 0 {
+		child := &instrument{set: i.set, series: Series{Kind: i.series.Kind, Labels: labels}}
+		child.refused.Store(true)
 		child.warnOnce(fmt.Errorf("%w: label %q has no value", ErrInvalid, pairs[len(pairs)-1]))
+		return child
 	}
-	return child
+	return i.set.register(Series{Kind: i.series.Kind, Labels: labels})
 }
 
 func (i *instrument) warnOnce(err error) {
@@ -102,26 +122,45 @@ func (i *instrument) warnOnce(err error) {
 
 // instruments is every counter and gauge instrument of one engine, by label set
 type instruments struct {
-	store *Store
-	mu    sync.Mutex
-	all   map[string]*instrument
+	store     *Store
+	mu        sync.Mutex
+	all       map[string]*instrument
+	conflicts map[conflictKey]*instrument
+}
+
+type conflictKey struct {
+	labels string
+	kind   Kind
 }
 
 func (set *instruments) register(series Series) *instrument {
 	key := labelKey(series.Labels)
 	set.mu.Lock()
-	defer set.mu.Unlock()
 	if existing, ok := set.all[key]; ok {
-		if existing.series.Kind != series.Kind {
-			existing.warnOnce(fmt.Errorf("%w: registered as both counter and gauge", ErrConflict))
+		if existing.series.Kind == series.Kind {
+			set.mu.Unlock()
+			return existing
 		}
-		return existing
+		conflict := conflictKey{labels: key, kind: series.Kind}
+		refused := set.conflicts[conflict]
+		if refused == nil {
+			refused = &instrument{set: set, series: series}
+			refused.refused.Store(true)
+			if set.conflicts == nil {
+				set.conflicts = make(map[conflictKey]*instrument)
+			}
+			set.conflicts[conflict] = refused
+		}
+		set.mu.Unlock()
+		refused.warnOnce(fmt.Errorf("%w: registered as both counter and gauge", ErrConflict))
+		return refused
 	}
 	if set.all == nil {
 		set.all = map[string]*instrument{}
 	}
 	created := &instrument{set: set, series: series}
 	set.all[key] = created
+	set.mu.Unlock()
 	return created
 }
 
@@ -182,10 +221,11 @@ func (s *Store) instrumentBatches(ctx context.Context, at int64) []Batch {
 }
 
 func (i *instrument) current(ctx context.Context) (float64, bool) {
-	if i.read == nil {
+	reader := i.read.Load()
+	if reader == nil {
 		return math.Float64frombits(i.value.Load()), true
 	}
-	value, err := i.read(ctx)
+	value, err := reader.call(ctx)
 	if err != nil {
 		if err.Error() != i.lastRead {
 			i.set.store.log.Warn("gauge read failed", "series", formatLabels(i.series.Labels), "error", err)

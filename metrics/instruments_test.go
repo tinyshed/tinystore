@@ -5,12 +5,75 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tinyshed/tinystore"
 )
+
+func TestAConflictingInstrumentCannotChangeTheRegisteredKind(t *testing.T) {
+	s, _ := openTestStore(t, Options{})
+	var output bytes.Buffer
+	s.log = slog.New(slog.NewTextHandler(&output, nil))
+	gauge := s.Gauge("shared")
+	gauge.Set(5)
+	for range 2 {
+		s.Counter("shared").Add(3)
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	value, kind := lastValue(t, s, Label{Name: "__name__", Value: "shared"})
+	if value != 5 || kind != Gauge || strings.Count(output.String(), "registered as both counter and gauge") != 1 {
+		t.Fatalf("conflicting handle changed %s to %v; logs: %s", kind, value, output.String())
+	}
+}
+
+func TestCounterDropsAnIncrementThatOverflowsItsTotal(t *testing.T) {
+	s, _ := openTestStore(t, Options{})
+	counter := s.Counter("large_total")
+	counter.Add(math.MaxFloat64)
+	counter.Add(math.MaxFloat64)
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if value, kind := lastValue(t, s, Label{Name: "__name__", Value: "large_total"}); value != math.MaxFloat64 || kind != Counter {
+		t.Fatalf("overflow changed counter to %v as %s", value, kind)
+	}
+}
+
+func TestAnUnpairedInstrumentLabelDoesNotIncrementItsValidPrefix(t *testing.T) {
+	s, _ := openTestStore(t, Options{})
+	counter := s.Counter("requests_total")
+	counter.With("route", "/notes").Inc()
+	counter.With("route", "/notes", "method").Inc()
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := lastValue(t, s, Label{Name: "route", Value: "/notes"}); value != 1 {
+		t.Fatalf("unpaired label incremented a different instrument to %v", value)
+	}
+}
+
+func TestGaugeFuncCanBeUpdatedWhileFlushing(t *testing.T) {
+	s, _ := openTestStore(t, Options{})
+	s.GaugeFunc("changing", func(context.Context) (float64, error) { return 1, nil })
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		for range 100 {
+			s.GaugeFunc("changing", func(context.Context) (float64, error) { return 2, nil })
+		}
+	})
+	for range 10 {
+		if err := s.Flush(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workers.Wait()
+}
 
 func lastValue(t *testing.T, s *Store, labels ...Label) (float64, Kind) {
 	t.Helper()
