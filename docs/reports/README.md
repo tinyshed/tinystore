@@ -156,3 +156,9 @@ fetch and normalise them.
 | | |
 |---|---|
 | [kv-review-fixes-2026-09-27.md](kv-review-fixes-2026-09-27.md) | the review's seven defects fixed, each under a test the reviewed code fails; a hot counter 1.5 to 2.8 times faster through an atomic gate and fewer allocations; a read beside a thousand Clear marks from 146.9 µs to 10.8 through lookups of its own branches, their prefix lengths packed in one parameter; the writer's page cache at 1 to 16 MiB left to decide |
+
+## 29 September 2026 — the server
+
+| | |
+|---|---|
+| [rpc-server-2026-09-29.md](rpc-server-2026-09-29.md) | the built server through `tinystore serve` beside the prototype, in the same session, on Windows and in the container: at depth 267 to 331 thousand gets a second from Go and Bun on Windows where the prototype as its round ran it served 150 to 268, and 68 to 78 % of its best sidecar, at up to twice its CPU a get; one call in flight the round trip's; sets the group's; a point read whose context can end 27 to 35 % slower embedded, the goroutine `database/sql` starts to watch it |

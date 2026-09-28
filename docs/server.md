@@ -581,7 +581,7 @@ Where the slices stand, 29 September 2026:
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
 | the Bun SDK, the Python SDK | not begun |
-| the measurement against the prototype | not begun |
+| the measurement against the prototype | done: [rpc-server-2026-09-29](reports/rpc-server-2026-09-29.md); at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context |
 
 Every slice built passes `go test`, `-race` in the `golang:1.27` container
 three times shuffled, and golangci-lint for Windows and Linux; nothing of it
@@ -666,9 +666,10 @@ is released, and the gates it brought are in AGENTS.md.
 
 **Next, from here:**
 
-- **The measurement** of the round's cases against the built server, through
-  `tinystore serve`, beside the prototype's figures on the same machine; then
-  the SDKs, tested against the vectors file.
+- **A point read without a goroutine**: `internal/sqlite`'s `QueryRow` runs
+  its statement with `context.WithoutCancel` once the context is checked, as
+  [the measurement](reports/rpc-server-2026-09-29.md#what-follows) proposes,
+  measured again beside it; then the SDKs, tested against the vectors file.
 - **Checks to run**: `go test` in the root, `go -C server test` and
   `go -C cmd/tinystore test`; lint with `bin/golangci-lint` in all three, for
   Windows and with `GOOS=linux`; and the race suite in the container, as the
