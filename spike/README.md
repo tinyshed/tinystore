@@ -48,6 +48,23 @@ and `TINYSTORE_KV_LARGE=1` tune them, and `TINYSTORE_KV_DOCKER` points the rates
 at a corpus `bench/fetch-docker-logs.sh` collected, of which only aggregates
 are printed. See `docs/reports/kv-mechanics-2026-09-26.md`.
 
+`spike/sqldb_*` is the round `docs/sqldb.md` asks for before sqldb's first full
+version is built: a point read through a transaction that compiles its
+statement, a transaction around a prepared one and the prepared statement
+alone, over four readers and eight; a page's `limit` as a literal, a bound
+parameter and a cast one, before and after `analyze`; a connection's cache of
+statements against the texts an application runs, what a statement holds and
+what compiling and closing one cost; a row decoded into a struct and a struct
+encoded into arguments; uuid keys as text and as bytes, of version 4 and 7; a
+parent table rebuilt under its children with foreign keys on, deferred and
+off; and the text SQLite keeps of checks and defaults through `ALTER TABLE`.
+The measurements need `TINYSTORE_SPIKE=1`; `TINYSTORE_SQLDB_DIR` and
+`TINYSTORE_SQLDB_SECONDS` tune them. See `docs/reports/sqldb-mechanics-2026-09-28.md`.
+`TestSQLDBCacheThatDoesNotChurn` measures, for the engine's round, a door that
+keeps a text in a connection's cache only when it is read more often than the
+text it would evict, against the plain cache and against none; see
+`docs/reports/sqldb-engine-2026-09-28.md`.
+
 `spike/jobs_*` is the round `docs/jobs.md` asks for before the jobs engine
 exists: a million jobs due within one minute drained in batches from a table
 in the order jobs arrived with an index by time, and from tables ordered by
