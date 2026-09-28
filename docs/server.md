@@ -148,6 +148,10 @@ const there = await connect("tls://db.internal:7443", { token })
   `CGO_ENABLED=0`, so every target builds from one machine.
 - **Engine options are the server's**, from its flags: retention, clock
   skew, memory. A client's `open` carries only a handle's options.
+- **The server opens an engine the first time a client asks for it**, with
+  the server's options, so a sidecar for an application that keeps only kv
+  makes no `jobs.db`. A Go program that embeds the server passes the handles
+  it opened instead, since an engine opens once a store.
 
 ### SERVE: finding the directory's sidecar
 
@@ -396,9 +400,78 @@ Each promise above is a test once its code exists:
 - Tenants, replication, QUIC, compression.
 - The server's own metrics, which wait for self-metrics.
 
+## SDKs
+
+Designed with the server and built after it, in `sdk/bun` and `sdk/python`:
+
+```ts
+const store = await open("./data")
+const sessions = store.kv.bucket<Session>("sessions", { sliding: "30d" })
+const s = await sessions.of(userId).get(token)                        // undefined when absent
+await sessions.of(userId).set(token, s, { ttl: "1h" })
+
+const reminders = store.jobs.queue<Reminder>("reminders")
+await reminders.enqueue({ user: 42, text: "call mom" }, { at: evening })
+await reminders.work(async (job) => remind(job.value), { workers: 8 })  // returning acknowledges, throwing retries
+
+const { object, body } = await store.blobs.bucket("avatars").of(user.id).get("original") // body: a ReadableStream
+const notes = await (await store.sql("app", { migrations: "./migrations" })).all<Note>(
+  "select * from notes where author_id = ?", [user])
+```
+
+```python
+store = await tinystore.open("./data")
+sessions = store.kv.bucket("sessions", Session, sliding=timedelta(days=30))
+s = await sessions.of(user_id).get(token)
+await reminders.work(remind, workers=8)
+
+store = tinystore.open_sync("./data")  # a program without asyncio: one call at a time
+```
+
+- **The Go API's vocabulary.** A type is given once, when a bucket or queue
+  opens; the daily calls are plain verbs; what the engine chooses goes into
+  open's options and never into a call. A plain verb returns the least and
+  its entry twin the version, as kv's `Get` and `GetEntry` do.
+- **Every call is a stream, and a turn's frames leave in one write**: those
+  asked for in one microtask in JavaScript, in one loop turn in asyncio. Calls
+  return promises; a batch goes where the engine commits once, an enqueue or
+  an append of many.
+- **Values as [wire.md](wire.md#methods) carries them.** A kv bucket's values
+  map onto nothing, an integer or bytes as `codecFor` maps Go's; a job's value
+  is JSON; a 64-bit integer past 2^53 is a `BigInt` in JavaScript; a float
+  whose bits are the data travels as bytes.
+- **An error is its code's class**, `ConflictError`, `LimitError` and the
+  rest, carrying what it names.
+- **A lost connection** rejects the writes in flight with `outcome_unknown`,
+  while a read may be sent again; the SDK connects again, opens its handles
+  again, and a work loop resumes.
+- **Logs and instruments stay in the SDK**, as the Go engines keep them: a
+  logging handler, Python's `logging.Handler` or a Bun logger, appends its
+  records once a second without waiting, dropping and counting what does not
+  fit; counters and gauges live in the SDK and are ingested every flush.
+- **Python**: asyncio for concurrency, the MessagePack C extension,
+  `unpackb(..., strict_map_key=False)`; a client without asyncio makes one call
+  at a time, since threads add none. **Bun**: `Bun.connect` for sockets,
+  `node:net` for Windows pipes, `Bun.spawn` for a private child.
+
 ## Building it
 
 In slices, each engine's messages fixed in [wire.md](wire.md) before its
 code: `server/wire`; a session with its transports; kv, with a Go client the
-tests use; jobs; blobs; sql; records; metrics; `tinystore serve` with `SERVE`;
-the Bun SDK; the Python SDK.
+tests use; jobs; blobs; sql, with the adversarial round of its SQL check;
+records; metrics; `tinystore serve` with `SERVE`; the Bun SDK; the Python SDK.
+
+- **Read first**: AGENTS.md, this page, [wire.md](wire.md) and
+  [the round](reports/rpc-mechanics-2026-09-28.md). The prototype
+  `spike/rpc_*` is prior art to read, not code to import: production code
+  calls no helper of the spike.
+- **A slice is done** when its messages and vectors are on wire.md, its gates
+  in the table above pass, and what its engine gained is in that engine's
+  README and tests.
+- **The first slice changes AGENTS.md**: Modules gains `server/`, and later
+  `sdk/` with its empty `go.mod`; Shape its paths; Status what is built; the
+  gates table each gate as it lands. The Taskfile and CI test, lint and tidy
+  the new module as they do `cmd/tinystore`.
+- **The built server is measured against the prototype**: the round's cases,
+  on the same machine, beside its figures; a rate the server does not reach is
+  a finding for the report, not a footnote.

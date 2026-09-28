@@ -90,7 +90,9 @@ density figures are not engine guarantees. `spike/` preserves the experiments
 behind the decisions.
 
 Nothing is released: there is no tag, and no database written by an earlier
-revision has to be read. Readers for earlier formats are deleted, not kept.
+revision has to be read. Readers for earlier formats are deleted, not kept,
+and an engine's schema changes inside its `0001` migration: a second one is
+added only after a release.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -660,6 +662,10 @@ would be charging to somebody else's binary.
   transforms data — an encoding, a boundary, a merge — show one input and its
   output in a small aligned block (`12.02 → 1202 → +2`). Every such example
   is also a test case, so it cannot drift.
+- **A public API speaks a small, familiar vocabulary**, in Go and in every
+  SDK: a type is given once, where a bucket or queue opens; the daily calls
+  are plain verbs; what the engine chooses goes into open's options, never into
+  a call. A proposal shows the call site first.
 - **A public method reads as a list of steps**: blank lines between them, each
   a call named with a verb, the details in the functions it calls. A function
   over 40 lines needs a reason and over 60 is split; no line passes 120
