@@ -28,6 +28,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            server/go.sum
             tools/go.sum
 
       # a cgo dependency must fail on the pull request that introduces it
@@ -36,6 +37,7 @@ jobs:
           CGO_ENABLED: 0
         run: |
           go build ./...
+          go -C server build ./...
           go -C cmd/tinystore build ./...
 
       # the race detector needs cgo, which the windows runner cannot provide
@@ -43,6 +45,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           go test -shuffle=on ./...
+          go -C server test -shuffle=on ./...
           go -C cmd/tinystore test -shuffle=on ./...
 
       - name: Test (race)
@@ -51,6 +54,7 @@ jobs:
           CGO_ENABLED: 1
         run: |
           go test -race -shuffle=on ./...
+          go -C server test -race -shuffle=on ./...
           go -C cmd/tinystore test -race -shuffle=on ./...
 
   quality:
@@ -64,6 +68,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            server/go.sum
             tools/go.sum
 
       - uses: arduino/setup-task@v3
@@ -99,10 +104,12 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
+            server/go.sum
             tools/go.sum
 
       - name: Verify the module files are tidy
         run: |
           go mod tidy -diff
           go -C tools mod tidy -diff
+          go -C server mod tidy -diff
           go -C cmd/tinystore mod tidy -diff

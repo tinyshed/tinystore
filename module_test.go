@@ -118,7 +118,8 @@ func TestTheRootImportsNoEngine(t *testing.T) {
 	}
 }
 
-// engines never import each other, so a program links only the engines it opens
+// engines never import each other, nor the server that serves them, so a
+// program links only the engines it opens
 func TestEnginesDoNotImportEachOther(t *testing.T) {
 	engines := []string{"backup", "blobs", "jobs", "kv", "metrics", "records", "sqldb"}
 	for _, engine := range engines {
@@ -143,6 +144,10 @@ func TestEnginesDoNotImportEachOther(t *testing.T) {
 					if other != engine && path == "github.com/tinyshed/tinystore/"+other {
 						t.Errorf("%s imports the %s engine", file, other)
 					}
+				}
+				if path == "github.com/tinyshed/tinystore/server" ||
+					strings.HasPrefix(path, "github.com/tinyshed/tinystore/server/") {
+					t.Errorf("%s imports %s; the server imports engines, never the reverse", file, path)
 				}
 			}
 		}

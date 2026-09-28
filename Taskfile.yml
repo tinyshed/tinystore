@@ -35,6 +35,7 @@ tasks:
     desc: Run tests (also runs go vet)
     cmds:
       - go test -shuffle=on ./...
+      - go -C server test -shuffle=on ./...
       - go -C cmd/tinystore test -shuffle=on ./...
 
   test:race:
@@ -44,6 +45,7 @@ tasks:
       CGO_ENABLED: 1
     cmds:
       - go test -race -shuffle=on ./...
+      - go -C server test -race -shuffle=on ./...
       - go -C cmd/tinystore test -race -shuffle=on ./...
 
   test:cover:
@@ -77,6 +79,7 @@ tasks:
     deps: [setup]
     cmds:
       - '{{.GOLANGCI}} run ./...'
+      - cd server && ../{{.GOLANGCI}} run ./...
       - cd cmd/tinystore && ../../{{.GOLANGCI}} run ./...
 
   fmt:
@@ -84,6 +87,7 @@ tasks:
     deps: [setup]
     cmds:
       - '{{.GOLANGCI}} fmt ./...'
+      - cd server && ../{{.GOLANGCI}} fmt ./...
       - cd cmd/tinystore && ../../{{.GOLANGCI}} fmt ./...
 
   fmt:check:
@@ -91,6 +95,7 @@ tasks:
     deps: [setup]
     cmds:
       - '{{.GOLANGCI}} fmt --diff ./...'
+      - cd server && ../{{.GOLANGCI}} fmt --diff ./...
       - cd cmd/tinystore && ../../{{.GOLANGCI}} fmt --diff ./...
 
   fix:
@@ -103,6 +108,7 @@ tasks:
     deps: [setup]
     cmds:
       - '{{.GOVULNCHECK}} ./...'
+      - '{{.GOVULNCHECK}} -C server ./...'
       - '{{.GOVULNCHECK}} -C cmd/tinystore ./...'
 
   tidy:
@@ -110,6 +116,7 @@ tasks:
     cmds:
       - go mod tidy
       - go -C tools mod tidy
+      - go -C server mod tidy
       - go -C cmd/tinystore mod tidy
 
   tidy:check:
@@ -119,6 +126,7 @@ tasks:
     cmds:
       - go mod tidy -diff
       - go -C tools mod tidy -diff
+      - go -C server mod tidy -diff
       - go -C cmd/tinystore mod tidy -diff
 
   check:
