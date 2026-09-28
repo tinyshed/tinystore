@@ -142,6 +142,13 @@ fetch and normalise them.
 | [logging-2026-09-27.md](logging-2026-09-27.md) | background engine identity and records self-log routing, committed metrics quarantine events, per-engine Debug maintenance summaries, KV error phase and bucket, records drop reasons, and failed Close outcome |
 | [modernize-2026-09-27.md](modernize-2026-09-27.md) | Go 1.27 modernizers across the root and selected bench modules, useful `AsType` without disabling errcheck, one fixed example race, a dead constant, and triage of GoLand warnings |
 
+## 28 September 2026 — sqldb
+
+| | |
+|---|---|
+| [sqldb-mechanics-2026-09-28.md](sqldb-mechanics-2026-09-28.md) | what sqldb's mechanics cost before its first full version, on Windows and in the container: a point read as a prepared statement without a transaction 38 to 73 % above today's path; `limit ?` compiled every call, 11 to 14 µs a page; a cache holding the texts in use worth half again, one smaller than them worse than none; a plan per type decoding as fast as by hand; uuids as text 1.64 times the bytes, version 7 five to six times faster to insert; a parent rebuilt with foreign keys on deleting all its children |
+| [sqldb-engine-2026-09-28.md](sqldb-engine-2026-09-28.md) | the built sqldb: `One[Note]` at 86 to 95 % of a statement scanned by hand, 23 to 111 % above the transaction path it replaced; against `database/sql` as a program opens it, 24 to 206 % more reads and 32 to 116 times the writes from 64 and 512 goroutines, which failed with `database is locked` there; `Insert` returning only what the database generated; a cache door not built |
+
 ## 27 September 2026 — kv after its review
 
 | | |

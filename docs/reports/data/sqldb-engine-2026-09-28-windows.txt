@@ -1,0 +1,161 @@
+=== pass 1 Mon Sep 28 00:16:07 UTC 2026
+    load_test.go:63:   1 goroutines  a Tx each  inserts       698/s  p50   1532.4 µs  p99   5904.1 µs  worst   11524.2 µs
+    load_test.go:63:   1 goroutines  Exec       inserts       709/s  p50   1526.3 µs  p99   4719.2 µs  worst    9373.9 µs
+    load_test.go:63:   8 goroutines  a Tx each  inserts       706/s  p50  11077.2 µs  p99  19490.0 µs  worst   21139.6 µs
+    load_test.go:63:   8 goroutines  Exec       inserts      4941/s  p50   1526.5 µs  p99   6788.3 µs  worst   11092.5 µs
+    load_test.go:63:  64 goroutines  a Tx each  inserts       706/s  p50  90092.2 µs  p99  99992.1 µs  worst  107504.9 µs
+    load_test.go:63:  64 goroutines  Exec       inserts     27089/s  p50   2064.5 µs  p99   9458.9 µs  worst   13243.3 µs
+    load_test.go:63: 512 goroutines  a Tx each  inserts       706/s  p50 721986.0 µs  p99 739952.1 µs  worst  745515.6 µs
+    load_test.go:63: 512 goroutines  Exec       inserts    113888/s  p50   4561.4 µs  p99  12827.3 µs  worst   20982.2 µs
+--- PASS: TestExecsMeasured (25.03s)
+    load_test.go:254: 1000000 notes written in 45s
+    load_test.go:289: sqldb.One[Note]                   1 goroutines  reads     58688/s  p50      0.0 µs  p99    519.8 µs  worst    9395.6 µs
+    load_test.go:289: sqldb.One[Note]                   8 goroutines  reads    123961/s  p50      0.0 µs  p99    999.6 µs  worst   10022.5 µs
+    load_test.go:289: sqldb.One[Note]                  64 goroutines  reads    111726/s  p50    514.6 µs  p99   6276.2 µs  worst   10595.1 µs
+    load_test.go:289: statement, scanned by hand        1 goroutines  reads     67930/s  p50      0.0 µs  p99    517.8 µs  worst    9941.5 µs
+    load_test.go:289: statement, scanned by hand        8 goroutines  reads    134778/s  p50      0.0 µs  p99   1006.7 µs  worst   10020.4 µs
+    load_test.go:289: statement, scanned by hand       64 goroutines  reads    126658/s  p50      0.0 µs  p99   8199.6 µs  worst   10705.8 µs
+    load_test.go:289: transaction, compiled each call   1 goroutines  reads     41019/s  p50      0.0 µs  p99    518.5 µs  worst   10139.1 µs
+    load_test.go:289: transaction, compiled each call   8 goroutines  reads     93040/s  p50      0.0 µs  p99   1502.9 µs  worst   10293.3 µs
+    load_test.go:289: transaction, compiled each call  64 goroutines  reads     91166/s  p50    519.1 µs  p99   5455.3 µs  worst   10757.2 µs
+--- PASS: TestPointReadsMeasured (72.17s)
+    load_test.go:348: All[Note]    1343 ns a row   12.7 allocations a row
+    load_test.go:348: Each[Note]   1230 ns a row   12.7 allocations a row
+    load_test.go:348: by hand      1271 ns a row   17.7 allocations a row
+    load_test.go:348: All[Note]    1301 ns a row   12.7 allocations a row
+    load_test.go:348: Each[Note]   1231 ns a row   12.7 allocations a row
+    load_test.go:348: by hand      1248 ns a row   17.7 allocations a row
+--- PASS: TestDecodingMeasured (6.53s)
+    load_test.go:400:   1 goroutines  Insert                inserts       671/s  p50   1532.7 µs  p99   5474.3 µs  worst   29407.6 µs
+    load_test.go:400:   1 goroutines  ExecOne, returning *  inserts       674/s  p50   1523.7 µs  p99   6374.9 µs  worst    9345.3 µs
+    load_test.go:400:   1 goroutines  Exec, returning *     inserts       684/s  p50   1524.2 µs  p99   5474.2 µs  worst   13015.5 µs
+    load_test.go:400:   1 goroutines  Exec, encoded         inserts       671/s  p50   1544.1 µs  p99   5837.0 µs  worst   10168.7 µs
+    load_test.go:400:   8 goroutines  Insert                inserts      4208/s  p50   1531.1 µs  p99   9966.6 µs  worst   12469.8 µs
+    load_test.go:400:   8 goroutines  ExecOne, returning *  inserts      4483/s  p50   1552.6 µs  p99   8571.3 µs  worst   14205.4 µs
+    load_test.go:400:   8 goroutines  Exec, returning *     inserts      4590/s  p50   1534.9 µs  p99   7722.6 µs  worst   13477.8 µs
+    load_test.go:400:   8 goroutines  Exec, encoded         inserts      4692/s  p50   1548.1 µs  p99   8659.9 µs  worst   12393.9 µs
+    load_test.go:400:  64 goroutines  Insert                inserts     15451/s  p50   3619.1 µs  p99  16790.8 µs  worst   20862.0 µs
+    load_test.go:400:  64 goroutines  ExecOne, returning *  inserts     15504/s  p50   3415.0 µs  p99  16786.5 µs  worst   24709.8 µs
+    load_test.go:400:  64 goroutines  Exec, returning *     inserts     16690/s  p50   3064.1 µs  p99  15936.2 µs  worst   22347.8 µs
+    load_test.go:400:  64 goroutines  Exec, encoded         inserts     17204/s  p50   2825.0 µs  p99  15950.6 µs  worst   26078.2 µs
+    load_test.go:400: 512 goroutines  Insert                inserts     31293/s  p50  13224.1 µs  p99  41203.6 µs  worst   50253.8 µs
+    load_test.go:400: 512 goroutines  ExecOne, returning *  inserts     28798/s  p50  14827.7 µs  p99  42007.9 µs  worst   47313.2 µs
+    load_test.go:400: 512 goroutines  Exec, returning *     inserts     30968/s  p50  12927.6 µs  p99  39056.6 µs  worst   45968.4 µs
+    load_test.go:400: 512 goroutines  Exec, encoded         inserts     32981/s  p50  11993.3 µs  p99  40930.5 µs  worst   44813.6 µs
+--- PASS: TestInsertsMeasured (48.57s)
+    load_test.go:428: Open without a schema   median   4.62 ms, slowest  17.62 ms
+    load_test.go:428: Open checked against it median   5.42 ms, slowest  10.62 ms
+--- PASS: TestOpenCheckMeasured (0.23s)
+PASS
+    sqldb_cache_spike_test.go:125: 16 texts, uniform    compiled each call   compiled 100.0%  reads      45540/s  p50       0.0 µs  p99     518.5 µs  worst   10364.3 µs
+    sqldb_cache_spike_test.go:125: 16 texts, uniform    least recently used  compiled   0.0%  reads      70253/s  p50       0.0 µs  p99     511.8 µs  worst   11556.5 µs
+    sqldb_cache_spike_test.go:125: 16 texts, uniform    with a door          compiled   0.0%  reads      68720/s  p50       0.0 µs  p99     511.4 µs  worst   10446.4 µs
+    sqldb_cache_spike_test.go:125: 128 texts, uniform   compiled each call   compiled 100.0%  reads      46031/s  p50       0.0 µs  p99     516.6 µs  worst   10458.8 µs
+    sqldb_cache_spike_test.go:125: 128 texts, uniform   least recently used  compiled   0.1%  reads      67104/s  p50       0.0 µs  p99     515.8 µs  worst   10261.8 µs
+    sqldb_cache_spike_test.go:125: 128 texts, uniform   with a door          compiled   0.1%  reads      67427/s  p50       0.0 µs  p99     514.8 µs  worst   10326.9 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, uniform  compiled each call   compiled 100.0%  reads      45322/s  p50       0.0 µs  p99     518.1 µs  worst   10216.0 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, uniform  least recently used  compiled  87.5%  reads      39719/s  p50       0.0 µs  p99     518.8 µs  worst   10211.2 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, uniform  with a door          compiled  87.5%  reads      41679/s  p50       0.0 µs  p99     518.3 µs  worst   10375.2 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, 64 hot   compiled each call   compiled 100.0%  reads      44936/s  p50       0.0 µs  p99     518.0 µs  worst    9692.1 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, 64 hot   least recently used  compiled   9.3%  reads      61379/s  p50       0.0 µs  p99     514.0 µs  worst   10465.4 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, 64 hot   with a door          compiled   9.3%  reads      63160/s  p50       0.0 µs  p99     513.8 µs  worst   10536.4 µs
+--- PASS: TestSQLDBCacheThatDoesNotChurn (37.49s)
+PASS
+=== pass 2 Mon Sep 28 00:19:17 UTC 2026
+    load_test.go:63:   1 goroutines  a Tx each  inserts       715/s  p50   1517.4 µs  p99   5470.0 µs  worst   10741.0 µs
+    load_test.go:63:   1 goroutines  Exec       inserts       706/s  p50   1520.2 µs  p99   4022.3 µs  worst   10943.8 µs
+    load_test.go:63:   8 goroutines  a Tx each  inserts       698/s  p50  11086.9 µs  p99  20541.5 µs  worst   66520.8 µs
+    load_test.go:63:   8 goroutines  Exec       inserts      4977/s  p50   1524.8 µs  p99   6377.4 µs  worst   11862.6 µs
+    load_test.go:63:  64 goroutines  a Tx each  inserts       703/s  p50  90607.9 µs  p99  99588.1 µs  worst  103495.9 µs
+    load_test.go:63:  64 goroutines  Exec       inserts     27374/s  p50   2040.5 µs  p99  10462.3 µs  worst   13329.8 µs
+    load_test.go:63: 512 goroutines  a Tx each  inserts       706/s  p50 723793.1 µs  p99 738909.6 µs  worst  741415.8 µs
+    load_test.go:63: 512 goroutines  Exec       inserts    114140/s  p50   4587.2 µs  p99  11841.3 µs  worst   18814.2 µs
+--- PASS: TestExecsMeasured (25.03s)
+    load_test.go:254: 1000000 notes written in 45s
+    load_test.go:289: sqldb.One[Note]                   1 goroutines  reads     60234/s  p50      0.0 µs  p99    518.3 µs  worst   10417.6 µs
+    load_test.go:289: sqldb.One[Note]                   8 goroutines  reads    126540/s  p50      0.0 µs  p99    655.5 µs  worst   13342.5 µs
+    load_test.go:289: sqldb.One[Note]                  64 goroutines  reads    118809/s  p50      0.0 µs  p99   9724.0 µs  worst   11105.3 µs
+    load_test.go:289: statement, scanned by hand        1 goroutines  reads     68343/s  p50      0.0 µs  p99    517.3 µs  worst   10476.4 µs
+    load_test.go:289: statement, scanned by hand        8 goroutines  reads    132929/s  p50      0.0 µs  p99   1000.2 µs  worst   12199.7 µs
+    load_test.go:289: statement, scanned by hand       64 goroutines  reads    124876/s  p50      0.0 µs  p99   8386.1 µs  worst   12430.2 µs
+    load_test.go:289: transaction, compiled each call   1 goroutines  reads     28597/s  p50      0.0 µs  p99    522.9 µs  worst   10309.4 µs
+    load_test.go:289: transaction, compiled each call   8 goroutines  reads     95906/s  p50      0.0 µs  p99   1079.5 µs  worst   10481.9 µs
+    load_test.go:289: transaction, compiled each call  64 goroutines  reads     92555/s  p50      0.0 µs  p99   8834.1 µs  worst   10904.8 µs
+--- PASS: TestPointReadsMeasured (72.54s)
+    load_test.go:348: All[Note]    1294 ns a row   12.7 allocations a row
+    load_test.go:348: Each[Note]   1184 ns a row   12.7 allocations a row
+    load_test.go:348: by hand      1350 ns a row   17.7 allocations a row
+    load_test.go:348: All[Note]    1277 ns a row   12.7 allocations a row
+    load_test.go:348: Each[Note]   1250 ns a row   12.7 allocations a row
+    load_test.go:348: by hand      1319 ns a row   17.7 allocations a row
+--- PASS: TestDecodingMeasured (6.46s)
+    load_test.go:400:   1 goroutines  Insert                inserts       690/s  p50   1522.4 µs  p99   5577.9 µs  worst   10584.7 µs
+    load_test.go:400:   1 goroutines  ExecOne, returning *  inserts       663/s  p50   1528.8 µs  p99   4124.8 µs  worst    6598.6 µs
+    load_test.go:400:   1 goroutines  Exec, returning *     inserts       665/s  p50   1530.2 µs  p99   3048.2 µs  worst   29902.0 µs
+    load_test.go:400:   1 goroutines  Exec, encoded         inserts       686/s  p50   1524.4 µs  p99   2786.5 µs  worst    6746.8 µs
+    load_test.go:400:   8 goroutines  Insert                inserts      4461/s  p50   1554.1 µs  p99   5572.1 µs  worst   11118.8 µs
+    load_test.go:400:   8 goroutines  ExecOne, returning *  inserts      4628/s  p50   1545.1 µs  p99   6252.8 µs  worst   10291.2 µs
+    load_test.go:400:   8 goroutines  Exec, returning *     inserts      4753/s  p50   1536.6 µs  p99   6142.0 µs  worst   11766.9 µs
+    load_test.go:400:   8 goroutines  Exec, encoded         inserts      4813/s  p50   1539.5 µs  p99   5667.7 µs  worst   15460.5 µs
+    load_test.go:400:  64 goroutines  Insert                inserts     15779/s  p50   3615.7 µs  p99  15102.5 µs  worst   28930.1 µs
+    load_test.go:400:  64 goroutines  ExecOne, returning *  inserts     16001/s  p50   3198.6 µs  p99  14984.2 µs  worst   24175.6 µs
+    load_test.go:400:  64 goroutines  Exec, returning *     inserts     17004/s  p50   3089.0 µs  p99  14848.5 µs  worst   21322.2 µs
+    load_test.go:400:  64 goroutines  Exec, encoded         inserts     17525/s  p50   2999.4 µs  p99  15337.9 µs  worst   25618.3 µs
+    load_test.go:400: 512 goroutines  Insert                inserts     31989/s  p50  12546.9 µs  p99  31405.7 µs  worst   34382.7 µs
+    load_test.go:400: 512 goroutines  ExecOne, returning *  inserts     28649/s  p50  15087.9 µs  p99  39706.1 µs  worst   46206.5 µs
+    load_test.go:400: 512 goroutines  Exec, returning *     inserts     31349/s  p50  13111.8 µs  p99  37059.9 µs  worst   53988.9 µs
+    load_test.go:400: 512 goroutines  Exec, encoded         inserts     33602/s  p50  11784.4 µs  p99  36035.1 µs  worst   39257.7 µs
+--- PASS: TestInsertsMeasured (48.58s)
+    load_test.go:428: Open without a schema   median   3.68 ms, slowest  17.67 ms
+    load_test.go:428: Open checked against it median   5.16 ms, slowest   8.72 ms
+--- PASS: TestOpenCheckMeasured (0.21s)
+PASS
+    sqldb_cache_spike_test.go:125: 16 texts, uniform    compiled each call   compiled 100.0%  reads      47376/s  p50       0.0 µs  p99     535.1 µs  worst   10026.0 µs
+    sqldb_cache_spike_test.go:125: 16 texts, uniform    least recently used  compiled   0.0%  reads      73075/s  p50       0.0 µs  p99     517.2 µs  worst    7085.0 µs
+    sqldb_cache_spike_test.go:125: 16 texts, uniform    with a door          compiled   0.0%  reads      73734/s  p50       0.0 µs  p99     517.2 µs  worst    1956.7 µs
+    sqldb_cache_spike_test.go:125: 128 texts, uniform   compiled each call   compiled 100.0%  reads      47978/s  p50       0.0 µs  p99     555.9 µs  worst    6595.9 µs
+    sqldb_cache_spike_test.go:125: 128 texts, uniform   least recently used  compiled   0.1%  reads      72039/s  p50       0.0 µs  p99     517.0 µs  worst    1952.2 µs
+    sqldb_cache_spike_test.go:125: 128 texts, uniform   with a door          compiled   0.1%  reads      72201/s  p50       0.0 µs  p99     515.7 µs  worst   10271.5 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, uniform  compiled each call   compiled 100.0%  reads      47458/s  p50       0.0 µs  p99     999.4 µs  worst   10064.7 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, uniform  least recently used  compiled  87.5%  reads      41636/s  p50       0.0 µs  p99     999.4 µs  worst   10280.1 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, uniform  with a door          compiled  87.4%  reads      44209/s  p50       0.0 µs  p99     999.3 µs  worst    7616.7 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, 64 hot   compiled each call   compiled 100.0%  reads      47703/s  p50       0.0 µs  p99     999.3 µs  worst    1963.2 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, 64 hot   least recently used  compiled   9.3%  reads      65355/s  p50       0.0 µs  p99     517.4 µs  worst    1981.7 µs
+    sqldb_cache_spike_test.go:125: 1024 texts, 64 hot   with a door          compiled   9.3%  reads      63785/s  p50       0.0 µs  p99     519.4 µs  worst   10311.5 µs
+--- PASS: TestSQLDBCacheThatDoesNotChurn (37.64s)
+PASS
+=== done Mon Sep 28 00:22:28 UTC 2026
+=== pass 1
+    load_test.go:446: sqldb.One[Note]                        1 goroutines  reads       80591/s  p50      0.0 µs  p99    518.0 µs  worst    1872.8 µs
+    load_test.go:446: database/sql, as a program opens it    1 goroutines  reads       64589/s  p50      0.0 µs  p99    518.2 µs  worst   10314.2 µs
+    load_test.go:446: sqldb.One[Note]                        8 goroutines  reads      207521/s  p50      0.0 µs  p99   1000.2 µs  worst   10274.2 µs
+    load_test.go:446: database/sql, as a program opens it    8 goroutines  reads      111387/s  p50      0.0 µs  p99   1057.1 µs  worst   10409.9 µs
+    load_test.go:446: sqldb.One[Note]                       64 goroutines  reads      190389/s  p50      0.0 µs  p99   1230.5 µs  worst   10926.0 µs
+    load_test.go:446: database/sql, as a program opens it   64 goroutines  reads       74012/s  p50      0.0 µs  p99   8152.6 µs  worst   22702.9 µs
+    load_test.go:472: sqldb Exec, grouped                    1 goroutines  inserts       670/s  p50   1527.8 µs  p99   2815.2 µs  worst   10471.1 µs
+    load_test.go:472: database/sql, as a program opens it    1 goroutines  inserts       671/s  p50   1524.4 µs  p99   2759.3 µs  worst   10192.8 µs
+    load_test.go:472: sqldb Exec, grouped                    8 goroutines  inserts      3953/s  p50   1570.5 µs  p99  15246.1 µs  worst   22908.4 µs
+    load_test.go:472: database/sql, as a program opens it    8 goroutines  inserts       646/s  p50   1529.6 µs  p99  10919.0 µs  worst 3057982.6 µs
+    load_test.go:472: sqldb Exec, grouped                   64 goroutines  inserts     13162/s  p50   3527.4 µs  p99  23130.0 µs  worst   29480.4 µs
+    load_test.go:472: database/sql, as a program opens it   64 goroutines  inserts       389/s  p50   1542.5 µs  p99 4103272.8 µs  worst 5078483.6 µs  8 failed, first: database is locked (5) (SQLITE_BUSY)
+    load_test.go:472: sqldb Exec, grouped                  512 goroutines  inserts     18054/s  p50  26542.3 µs  p99  55268.9 µs  worst   68703.8 µs
+    load_test.go:472: database/sql, as a program opens it  512 goroutines  inserts       388/s  p50   5715.2 µs  p99 5132385.7 µs  worst 5169361.5 µs  217 failed, first: database is locked (5) (SQLITE_BUSY)
+--- PASS: TestAsAProgramOpensItMeasured (48.34s)
+PASS
+=== pass 2
+    load_test.go:446: sqldb.One[Note]                        1 goroutines  reads       80329/s  p50      0.0 µs  p99    517.1 µs  worst    1783.3 µs
+    load_test.go:446: database/sql, as a program opens it    1 goroutines  reads       64747/s  p50      0.0 µs  p99    519.1 µs  worst   10151.5 µs
+    load_test.go:446: sqldb.One[Note]                        8 goroutines  reads      206160/s  p50      0.0 µs  p99   1000.8 µs  worst    2670.8 µs
+    load_test.go:446: database/sql, as a program opens it    8 goroutines  reads      112094/s  p50      0.0 µs  p99   1073.0 µs  worst   10993.3 µs
+    load_test.go:446: sqldb.One[Note]                       64 goroutines  reads      189461/s  p50      0.0 µs  p99   1503.4 µs  worst    2213.6 µs
+    load_test.go:446: database/sql, as a program opens it   64 goroutines  reads       73913/s  p50      0.0 µs  p99   8379.4 µs  worst   24049.5 µs
+    load_test.go:472: sqldb Exec, grouped                    1 goroutines  inserts       684/s  p50   1524.8 µs  p99   2945.6 µs  worst   10822.3 µs
+    load_test.go:472: database/sql, as a program opens it    1 goroutines  inserts       665/s  p50   1531.9 µs  p99   2842.2 µs  worst   10325.1 µs
+    load_test.go:472: sqldb Exec, grouped                    8 goroutines  inserts      4288/s  p50   1542.3 µs  p99  15089.1 µs  worst   22286.1 µs
+    load_test.go:472: database/sql, as a program opens it    8 goroutines  inserts       637/s  p50   1534.0 µs  p99   9966.5 µs  worst 3058952.9 µs
+    load_test.go:472: sqldb Exec, grouped                   64 goroutines  inserts     12815/s  p50   3223.0 µs  p99  23019.4 µs  worst   25825.3 µs
+    load_test.go:472: database/sql, as a program opens it   64 goroutines  inserts       404/s  p50   1545.0 µs  p99 3786320.2 µs  worst 5032756.7 µs
+    load_test.go:472: sqldb Exec, grouped                  512 goroutines  inserts     18538/s  p50  21280.0 µs  p99  55234.9 µs  worst   60287.5 µs
+    load_test.go:472: database/sql, as a program opens it  512 goroutines  inserts       393/s  p50   4603.6 µs  p99 5119905.0 µs  worst 5147195.4 µs  292 failed, first: database is locked (5) (SQLITE_BUSY)
+--- PASS: TestAsAProgramOpensItMeasured (48.49s)
+PASS
