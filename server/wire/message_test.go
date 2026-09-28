@@ -11,7 +11,7 @@ import (
 func TestMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	hello := wire.Hello{
 		Protocol: 1, Client: "tinystore-python/0.1", Token: "t0k3n", MaxBody: 64 << 10,
-		StreamCredit: 256 << 10, Instance: []byte("0123456789abcdef"),
+		StreamCredit: 256 << 10, Challenge: []byte("0123456789abcdef"),
 	}
 	var helloRead wire.Hello
 	if err := helloRead.Decode(hello.Append(nil)); err != nil || !reflect.DeepEqual(helloRead, hello) {
@@ -22,6 +22,7 @@ func TestMessagesReadBackAsTheyWereWritten(t *testing.T) {
 		Protocol: 1, Server: "0.4.0", Instance: []byte("0123456789abcdef"),
 		Capability: wire.Admin, MaxBody: 1 << 20, InFlight: 256, ConnectionCredit: 8 << 20,
 		StreamCredit: 1 << 20, Engines: []string{"kv", "jobs"}, Now: 1_790_000_000_123,
+		Proof: []byte("an hmac-sha256 of thirty-two by"),
 	}
 	var welcomeRead wire.Welcome
 	if err := welcomeRead.Decode(welcome.Append(nil)); err != nil || !reflect.DeepEqual(welcomeRead, welcome) {

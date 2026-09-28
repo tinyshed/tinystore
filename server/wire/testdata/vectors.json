@@ -68,6 +68,9 @@
     {"name": "a HELLO from Bun", "hex": "16000000010000000000000082010102b174696e7973746f72652d62756e2f302e31",
      "header": {"length": 22, "kind": 1, "flags": 0, "method": 0, "stream": 0},
      "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"str": "tinystore-bun/0.1"}]]}},
+    {"name": "a HELLO from Bun that found the server through SERVE", "hex": "29000000010000000000000083010102b174696e7973746f72652d62756e2f302e3106c410000102030405060708090a0b0c0d0e0f",
+     "header": {"length": 41, "kind": 1, "flags": 0, "method": 0, "stream": 0},
+     "body": {"map": [[{"uint": "1"}, {"uint": "1"}], [{"uint": "2"}, {"str": "tinystore-bun/0.1"}], [{"uint": "6"}, {"bin": "000102030405060708090a0b0c0d0e0f"}]]}},
     {"name": "64 KiB of credit on stream 5", "hex": "04000000070000000500000000000100",
      "header": {"length": 4, "kind": 7, "flags": 0, "method": 0, "stream": 5},
      "raw": "00000100", "credit": 65536},
@@ -107,5 +110,11 @@
     {"name": "a PING of seven bytes", "hex": "070000000800000000000000"},
     {"name": "a CANCEL with a body", "hex": "010000000600000001000000"},
     {"name": "a body past the agreed maximum", "hex": "110000000301010101000000", "max body": 16}
+  ],
+  "proofs": [
+    {"name": "the challenge 00 to 0f under the secret 00 to 1f",
+     "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+     "challenge": "000102030405060708090a0b0c0d0e0f",
+     "proof": "d8b99f2709a3ca74172cbe93824c1f29b23a0c1e9c21bd851ff2d2c39dbef14e"}
   ]
 }

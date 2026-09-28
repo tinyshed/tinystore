@@ -88,7 +88,7 @@ A `HELLO` from Bun:
 | 3 | token | str | required on TCP |
 | 4 | max body | uint | the largest body the client takes; the server's when absent |
 | 5 | stream credit | uint | the `DATA` the server may send on a stream before the client grants more; 2 MiB when absent |
-| 6 | instance | bin | the instance `SERVE` named, when the client found the server there |
+| 6 | challenge | bin | 16 random bytes, when the client found the server through `SERVE` |
 
 A body must fit the credit it is sent under, so the max body both sides agree
 is the smallest of the server's, the client's and the client's stream
@@ -108,12 +108,21 @@ credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
 | 8 | stream credit | uint | the bytes of `DATA` a client may send on a stream before credit comes back |
 | 9 | engines | array of str | what this server serves |
 | 10 | now | int | the store's clock, unix milliseconds |
+| 11 | proof | bin | on a local connection whose `HELLO` carried a challenge: the HMAC-SHA256 of the challenge, keyed with the 32 bytes of `SERVE`'s secret |
 
-A server whose instance is not the one `HELLO` names still answers with its
-own: the client found a stale `SERVE`, and decides. A server that does not
-take the connection at all, past its connections or closing, still reads the
-`HELLO` and answers `GOAWAY` where the `WELCOME` belongs, with `limit` or
-`unavailable`.
+A client that found the server through `SERVE` sends no `REQUEST` before the
+proof checks, compared in constant time: only the store directory's owner can
+read `SERVE`, so a process that took the endpoint of a server gone cannot
+answer, and a client whose proof fails reads `SERVE` again, as a stale one.
+`HELLO` carries nothing a stranger could use, since a local connection takes
+no token. A challenge of another length is a `HELLO` the server cannot take;
+a remote connection's challenge gets no proof, its server being the one its
+TLS certificate names. The vectors hold a proof, `proofs`, and a `HELLO` with
+a challenge.
+
+A server that does not take the connection at all, past its connections or
+closing, still reads the `HELLO` and answers `GOAWAY` where the `WELCOME`
+belongs, with `limit` or `unavailable`.
 
 `GOAWAY`:
 

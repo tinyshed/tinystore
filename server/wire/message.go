@@ -4,10 +4,7 @@ package wire
 const Protocol = 1
 
 // the bounds a client assumes until its WELCOME states the server's
-const (
-	DefaultStreamCredit = 1 << 20
-	InstanceSize        = 16
-)
+const DefaultStreamCredit = 1 << 20
 
 // Hello is a client's first frame.
 type Hello struct {
@@ -19,8 +16,9 @@ type Hello struct {
 	// StreamCredit is the DATA the server may send on a stream before the
 	// client grants more; zero is DefaultStreamCredit.
 	StreamCredit uint32
-	// Instance is the instance SERVE named, when the client found the server there.
-	Instance []byte
+	// Challenge is ChallengeSize random bytes from a client that found the
+	// server through SERVE, which the WELCOME's Proof answers.
+	Challenge []byte
 }
 
 func (h Hello) Append(dst []byte) []byte {
@@ -36,8 +34,8 @@ func (h Hello) Append(dst []byte) []byte {
 	if h.StreamCredit != 0 {
 		m.Uint(5, uint64(h.StreamCredit))
 	}
-	if h.Instance != nil {
-		m.Bin(6, h.Instance)
+	if h.Challenge != nil {
+		m.Bin(6, h.Challenge)
 	}
 	return m.End()
 }
@@ -57,7 +55,7 @@ func (h *Hello) Decode(body []byte) error {
 		case 5:
 			h.StreamCredit = d.Uint32()
 		case 6:
-			h.Instance = clone(d.Bin())
+			h.Challenge = clone(d.Bin())
 		}
 	}
 	return d.End()
@@ -81,6 +79,9 @@ type Welcome struct {
 	StreamCredit uint32
 	Engines      []string
 	Now          int64 // the store's clock, unix milliseconds
+	// Proof answers a local HELLO's challenge, Prove of it with the secret
+	// SERVE names; nil when the HELLO carried none.
+	Proof []byte
 }
 
 // Capability is what a connection may do.
@@ -110,6 +111,9 @@ func (w Welcome) Append(dst []byte) []byte {
 	}
 	m.SetBuf(buf)
 	m.Int(10, w.Now)
+	if w.Proof != nil {
+		m.Bin(11, w.Proof)
+	}
 	return m.End()
 }
 
@@ -137,6 +141,8 @@ func (w *Welcome) Decode(body []byte) error {
 			w.Engines = d.Strs()
 		case 10:
 			w.Now = d.Int()
+		case 11:
+			w.Proof = clone(d.Bin())
 		}
 	}
 	return d.End()

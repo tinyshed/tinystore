@@ -5,10 +5,14 @@ package client
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -48,6 +52,39 @@ func Dial(ctx context.Context, endpoint string, hello wire.Hello) (*Conn, error)
 		return nil, err
 	}
 	return New(conn, hello)
+}
+
+// ErrNotTheServer is an endpoint whose WELCOME does not prove it read SERVE:
+// the server that wrote SERVE is gone, and another process holds its endpoint.
+var ErrNotTheServer = errors.New("client: the endpoint SERVE names cannot prove it read SERVE")
+
+// Found reaches the sidecar that SERVE in <dir>/server/ names, as an SDK
+// does: its HELLO carries a fresh challenge, and no call goes before the
+// WELCOME's proof checks.
+func Found(ctx context.Context, dir string, hello wire.Hello) (*Conn, error) {
+	text, err := os.ReadFile(filepath.Join(dir, "server", "SERVE")) //nolint:gosec // the store the caller names
+	if err != nil {
+		return nil, err
+	}
+	var published wire.Published
+	if err = json.Unmarshal(text, &published); err != nil {
+		return nil, fmt.Errorf("client: SERVE: %w", err)
+	}
+	if len(published.Endpoints) == 0 {
+		return nil, errors.New("client: SERVE names no endpoint")
+	}
+	hello.Challenge = make([]byte, wire.ChallengeSize)
+	if _, err = rand.Read(hello.Challenge); err != nil {
+		return nil, err
+	}
+	conn, err := Dial(ctx, published.Endpoints[0], hello)
+	if err != nil {
+		return nil, err
+	}
+	if !published.Proves(hello.Challenge, conn.Welcome.Proof) {
+		return nil, errors.Join(ErrNotTheServer, conn.Close())
+	}
+	return conn, nil
 }
 
 func dial(ctx context.Context, endpoint string) (io.ReadWriteCloser, error) {

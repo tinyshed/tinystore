@@ -682,6 +682,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a client reading `SERVE` delays a change, fails none   | `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
 | a server goes idle only after its last connection     | `TestAServerGoesIdleAfterItsLastConnection`                                     |
 | a long store's socket moves to the user's own directory | `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows                  |
+| a server proves it read `SERVE` to a local challenge only | `TestAServerProvesItselfOnlyToALocalChallenge`, `TestProofVectors`          |
+| an endpoint taken after its server left cannot prove itself | `TestAnEndpointTakenAfterItsServerLeftCannotProveItself`                    |
 | of two sidecars started at once, one exits held        | `TestAStaleServeStartsOneSidecar`, `TestASecondServeOfADirectoryExitsHeld`      |
 | a sidecar leaves once idle, with its `SERVE` and lock  | `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle`                            |
 | a private child leaves when told, though its parent stays | `TestAPrivateChildLeavesWhenToldThoughItsParentStays`, `TestAPrivateChildServesItsParent` |

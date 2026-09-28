@@ -22,7 +22,7 @@ import (
 
 // SERVE is written whole, only by the server whose store holds the
 // directory's lock, in a directory its owner alone may enter, and names the
-// endpoint and the instance a client finds the server by
+// endpoint a client finds the server by and the secret it proves itself with
 func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 	ts := startTestServer(t, Options{Version: "0.4.0"})
 	l, unpublish, err := ts.server.Publish(t.Context())
@@ -48,19 +48,17 @@ func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 
 	published := readServe(t, dir)
 	instance := base64.RawURLEncoding.EncodeToString(ts.server.Instance())
+	secret := base64.RawURLEncoding.EncodeToString(ts.server.secret)
 	if published.Protocol != wire.Protocol || published.Server != "0.4.0" || published.PID != os.Getpid() ||
-		published.Instance != instance || !slices.Equal(published.Endpoints, []string{l.Addr()}) {
+		published.Instance != instance || published.Secret != secret ||
+		!slices.Equal(published.Endpoints, []string{l.Addr()}) {
 		t.Fatalf("SERVE says %+v", published)
 	}
-	sent, err := base64.RawURLEncoding.DecodeString(published.Instance)
+	conn, err := client.Found(t.Context(), ts.root, wire.Hello{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := client.Dial(t.Context(), published.Endpoints[0], wire.Hello{Instance: sent})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(conn.Welcome.Instance) != string(sent) || conn.Welcome.Capability != wire.Admin {
+	if string(conn.Welcome.Instance) != string(ts.server.Instance()) || conn.Welcome.Capability != wire.Admin {
 		t.Fatalf("the server found through SERVE welcomes as %+v", conn.Welcome)
 	}
 	if err = conn.Close(); err != nil {
@@ -81,6 +79,74 @@ func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 	}
 }
 
+// a local HELLO's challenge is answered with the proof SERVE's secret makes;
+// a remote one, whose server TLS proves, and one without a challenge get none
+func TestAServerProvesItselfOnlyToALocalChallenge(t *testing.T) {
+	token := newToken(t)
+	tokens, err := ParseTokens([]byte("admin " + token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := startTestServer(t, Options{Tokens: tokens})
+	challenge := slices.Repeat([]byte{7}, wire.ChallengeSize)
+	published := wire.Published{Secret: base64.RawURLEncoding.EncodeToString(ts.server.secret)}
+
+	if local := ts.dial(t, wire.Hello{Challenge: challenge}); !published.Proves(challenge, local.Welcome.Proof) {
+		t.Errorf("a local challenge answered with %x", local.Welcome.Proof)
+	}
+	if remote := ts.dialAt(t, ts.remote, wire.Hello{Token: token, Challenge: challenge}); remote.Welcome.Proof != nil {
+		t.Errorf("a remote challenge answered with %x", remote.Welcome.Proof)
+	}
+	if plain := ts.dial(t, wire.Hello{}); plain.Welcome.Proof != nil {
+		t.Errorf("a HELLO without a challenge answered with %x", plain.Welcome.Proof)
+	}
+	if goAway := ts.hello(t, ts.endpoint, wire.Hello{Challenge: challenge[1:]}); goAway.Code != wire.CodeProtocol {
+		t.Errorf("a challenge of %d bytes: %+v", wire.ChallengeSize-1, goAway)
+	}
+}
+
+// a process that took the endpoint of a server gone cannot prove it read the
+// SERVE that server left, so a client finds it out before its first call
+func TestAnEndpointTakenAfterItsServerLeftCannotProveItself(t *testing.T) {
+	gone := startTestServer(t, Options{})
+	l, unpublish, err := gone.server.Publish(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(gone.root, "server")
+	left, err := os.ReadFile(filepath.Join(dir, "SERVE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(l.Close(), unpublish()); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "SERVE"), left, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	taker := startTestServer(t, Options{})
+	taken, err := Listen(t.Context(), readServe(t, dir).Endpoints[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if served := taker.server.Serve(context.Background(), taken); served != nil {
+			t.Errorf("serve: %v", served)
+		}
+	}()
+	if conn, err := client.Found(t.Context(), gone.root, wire.Hello{}); !errors.Is(err, client.ErrNotTheServer) {
+		t.Fatalf("a client reached the endpoint's taker: %v", errors.Join(err, closeIfAny(conn)))
+	}
+}
+
+func closeIfAny(conn *client.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
+}
+
 func entriesOf(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -94,13 +160,13 @@ func entriesOf(t *testing.T, dir string) []string {
 	return names
 }
 
-func readServe(t *testing.T, dir string) Published {
+func readServe(t *testing.T, dir string) wire.Published {
 	t.Helper()
 	text, err := os.ReadFile(filepath.Join(dir, "SERVE"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var published Published
+	var published wire.Published
 	if err = json.Unmarshal(text, &published); err != nil {
 		t.Fatal(err)
 	}

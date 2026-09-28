@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
-	"github.com/tinyshed/tinystore/server"
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
@@ -71,12 +71,12 @@ func ended(t *testing.T, done <-chan error) error {
 
 // waitServe waits for a SERVE whose instance is not the one given, written by
 // the server serving, which is not to return first
-func waitServe(t *testing.T, dir, not string, serving <-chan error) server.Published {
+func waitServe(t *testing.T, dir, not string, serving <-chan error) wire.Published {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		text, err := os.ReadFile(filepath.Join(dir, "server", "SERVE"))
-		var published server.Published
+		var published wire.Published
 		if err == nil && json.Unmarshal(text, &published) == nil && published.Instance != not {
 			return published
 		}
@@ -87,26 +87,30 @@ func waitServe(t *testing.T, dir, not string, serving <-chan error) server.Publi
 		}
 	}
 	t.Fatal("no SERVE was written")
-	return server.Published{}
+	return wire.Published{}
 }
 
 // handshake reaches the endpoint SERVE names as an SDK does, a HELLO carrying
-// the instance it read, and returns the WELCOME that answers
-func handshake(t *testing.T, published server.Published) wire.Welcome {
+// a challenge, and returns the WELCOME that answers it with the proof SERVE's
+// secret makes
+func handshake(t *testing.T, published wire.Published) wire.Welcome {
 	t.Helper()
-	instance, err := base64.RawURLEncoding.DecodeString(published.Instance)
-	if err != nil {
+	challenge := make([]byte, wire.ChallengeSize)
+	if _, err := rand.Read(challenge); err != nil {
 		t.Fatal(err)
 	}
 	conn := dialEndpoint(t, published.Endpoints[0])
 	defer conn.Close()
-	hello := wire.Hello{Protocol: wire.Protocol, Client: "tinystore-cmd-test", Instance: instance}
-	if _, err = conn.Write(wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil))); err != nil {
+	hello := wire.Hello{Protocol: wire.Protocol, Client: "tinystore-cmd-test", Challenge: challenge}
+	if _, err := conn.Write(wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil))); err != nil {
 		t.Fatal(err)
 	}
 	welcome := readWelcome(t, conn)
-	if string(welcome.Instance) != string(instance) {
-		t.Fatalf("SERVE names instance %x, and its server welcomes as %x", instance, welcome.Instance)
+	if !published.Proves(challenge, welcome.Proof) {
+		t.Fatalf("the server SERVE names answers its challenge with %x", welcome.Proof)
+	}
+	if base64.RawURLEncoding.EncodeToString(welcome.Instance) != published.Instance {
+		t.Fatalf("SERVE names instance %s, and its server welcomes as %x", published.Instance, welcome.Instance)
 	}
 	return welcome
 }
@@ -197,7 +201,7 @@ func TestASecondServeOfADirectoryExitsHeld(t *testing.T) {
 // at once, one takes the lock and replaces SERVE, and the other exits held
 func TestAStaleServeStartsOneSidecar(t *testing.T) {
 	dir := t.TempDir()
-	stale := server.Published{
+	stale := wire.Published{
 		Protocol: wire.Protocol, Server: "dead", PID: 1, Instance: "AAAAAAAAAAAAAAAAAAAAAA",
 		Endpoints: []string{"unix:///nowhere/tinystore.sock"},
 	}

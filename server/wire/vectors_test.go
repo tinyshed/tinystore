@@ -3,6 +3,7 @@ package wire_test
 import (
 	"bytes"
 	"cmp"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,9 @@ type vectors struct {
 		Name, Hex string
 		MaxBody   uint32 `json:"max body"`
 	} `json:"refused frames"`
+	Proofs []struct {
+		Name, Secret, Challenge, Proof string
+	}
 }
 
 func readVectors(t testing.TB) vectors {
@@ -85,6 +89,29 @@ func TestVectors(t *testing.T) {
 				t.Fatalf("taken: %v", err)
 			}
 		})
+	}
+}
+
+// a WELCOME's proof is the HMAC-SHA256 of the challenge under SERVE's secret,
+// and nothing else proves
+func TestProofVectors(t *testing.T) {
+	for _, vector := range readVectors(t).Proofs {
+		secret, challenge, proof := unhex(t, vector.Secret), unhex(t, vector.Challenge), unhex(t, vector.Proof)
+		if got := wire.Prove(secret, challenge); !bytes.Equal(got, proof) {
+			t.Errorf("%s: %x, want %x", vector.Name, got, proof)
+		}
+		published := wire.Published{Secret: base64.RawURLEncoding.EncodeToString(secret)}
+		if !published.Proves(challenge, proof) {
+			t.Errorf("%s: SERVE's secret does not take its own proof", vector.Name)
+		}
+		for _, wrong := range []wire.Published{{Secret: ""}, {Secret: published.Secret[1:]}, {Secret: "!"}} {
+			if wrong.Proves(challenge, proof) {
+				t.Errorf("%s: SERVE with the secret %q takes it", vector.Name, wrong.Secret)
+			}
+		}
+		if published.Proves(challenge[1:], proof) || published.Proves(challenge, proof[1:]) {
+			t.Errorf("%s: a short challenge or proof taken", vector.Name)
+		}
 	}
 }
 
@@ -146,6 +173,11 @@ func TestTheExamplesAreWhatTheMessagesWrite(t *testing.T) {
 	if written := wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil)); !bytes.Equal(written,
 		frames["a HELLO from Bun"]) {
 		t.Errorf("HELLO %x", written)
+	}
+	hello.Challenge = unhex(t, "000102030405060708090a0b0c0d0e0f")
+	if written := wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil)); !bytes.Equal(written,
+		frames["a HELLO from Bun that found the server through SERVE"]) {
+		t.Errorf("HELLO with a challenge %x", written)
 	}
 
 	credit := wire.AppendCredit(nil, 5, 64<<10)

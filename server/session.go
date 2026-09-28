@@ -123,12 +123,16 @@ func (s *session) handshake() error {
 		return s.refuse(wire.CodeProtocol, fmt.Errorf("%w: this server speaks protocol %d, not %d", wire.ErrProtocol,
 			wire.Protocol, hello.Protocol))
 	}
+	if hello.Challenge != nil && len(hello.Challenge) != wire.ChallengeSize {
+		return s.refuse(wire.CodeProtocol, fmt.Errorf("%w: a challenge of %d bytes, not %d", wire.ErrProtocol,
+			len(hello.Challenge), wire.ChallengeSize))
+	}
 	if !s.admit(hello) {
 		return s.refuse(wire.CodeUnauthenticated, errUnauthenticated)
 	}
 
 	s.agree(hello)
-	return s.writer.Send(wire.AppendFrame(nil, wire.Header{Kind: wire.KindWelcome}, s.welcome().Append(nil)))
+	return s.writer.Send(wire.AppendFrame(nil, wire.Header{Kind: wire.KindWelcome}, s.welcome(hello).Append(nil)))
 }
 
 // admit gives a local connection admin, and a remote one what its token says
@@ -161,13 +165,19 @@ func (s *session) agree(hello wire.Hello) {
 	s.reader.SetMaxBody(most)
 }
 
-func (s *session) welcome() wire.Welcome {
-	return wire.Welcome{
+// welcome answers a HELLO; a local one's challenge gets its proof, which a
+// remote client, whose server TLS proves, has no SERVE to check
+func (s *session) welcome(hello wire.Hello) wire.Welcome {
+	welcome := wire.Welcome{
 		Protocol: wire.Protocol, Server: s.server.options.Version, Instance: s.server.instance,
 		Capability: s.capability, MaxBody: s.agreed.maxBody, InFlight: s.agreed.inFlight,
 		ConnectionCredit: s.server.limits.connectionCredit, StreamCredit: s.agreed.streamCredit,
 		Engines: s.server.engines(), Now: s.server.store.Now().UnixMilli(),
 	}
+	if hello.Challenge != nil && !s.remote {
+		welcome.Proof = wire.Prove(s.server.secret, hello.Challenge)
+	}
+	return welcome
 }
 
 // refuse ends a connection whose HELLO it cannot take with a GOAWAY

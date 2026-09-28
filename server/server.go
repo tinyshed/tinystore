@@ -61,6 +61,7 @@ type Server struct {
 	options  Options
 	log      *slog.Logger
 	instance []byte
+	secret   []byte // SERVE names it, and a local WELCOME proves the server holds it
 	limits   limits
 	methods  map[wire.Method]handler
 
@@ -114,12 +115,15 @@ var defaultLimits = limits{
 // New makes a server of store, which the caller keeps open for as long as it
 // serves and closes after it.
 func New(store *tinystore.Store, options Options) (*Server, error) {
-	instance := make([]byte, wire.InstanceSize)
+	instance, secret := make([]byte, wire.InstanceSize), make([]byte, wire.SecretSize)
 	if _, err := rand.Read(instance); err != nil {
 		return nil, fmt.Errorf("server: an instance: %w", err)
 	}
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("server: a secret: %w", err)
+	}
 	s := &Server{
-		store: store, options: options, instance: instance, limits: defaultLimits,
+		store: store, options: options, instance: instance, secret: secret, limits: defaultLimits,
 		log: options.Logger, kv: options.KV, jobs: options.Jobs, blobs: options.Blobs, records: options.Records,
 		metrics:   options.Metrics,
 		databases: maps.Clone(options.SQL), sessions: map[*session]struct{}{}, listeners: map[Listener]struct{}{},

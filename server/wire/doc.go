@@ -7,5 +7,6 @@
 //	frame.go     a frame's twelve-byte header, its rules, and a Reader of frames
 //	msgpack.go   the profile: Append functions that write canonically, a Decoder that checks
 //	message.go   HELLO, WELCOME and GOAWAY
+//	serve.go     SERVE, and the proof a WELCOME answers a HELLO's challenge with
 //	errors.go    the codes, and Error, a stream's failure
 package wire

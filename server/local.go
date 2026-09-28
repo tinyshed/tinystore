@@ -27,17 +27,6 @@ const (
 	socketName   = "tinystore.sock"
 )
 
-// Published is SERVE: where the directory's sidecar listens, and the instance
-// its WELCOME repeats, so that a client that reached another process through
-// an endpoint left behind knows.
-type Published struct {
-	Protocol  int      `json:"protocol"`
-	Server    string   `json:"server"`
-	PID       int      `json:"pid"`
-	Instance  string   `json:"instance"` // sixteen bytes, base64url without padding
-	Endpoints []string `json:"endpoints"`
-}
-
 // Publish listens where the directory's shared sidecar is found, a Unix socket
 // in <dir>/server/ or, on Windows, a named pipe named after the directory, and
 // writes SERVE beside it, whole. The store holds the directory's lock, so
@@ -81,9 +70,10 @@ func (s *Server) Publish(ctx context.Context) (l Listener, unpublish func() erro
 // writeServe writes SERVE as a file of its own and renames it into place, so
 // that a client reads the whole of it or nothing
 func (s *Server) writeServe(dir string, endpoints ...string) error {
-	text, err := json.Marshal(Published{
+	text, err := json.Marshal(wire.Published{
 		Protocol: wire.Protocol, Server: s.options.Version, PID: os.Getpid(),
-		Instance: base64.RawURLEncoding.EncodeToString(s.instance), Endpoints: endpoints,
+		Instance: base64.RawURLEncoding.EncodeToString(s.instance),
+		Secret:   base64.RawURLEncoding.EncodeToString(s.secret), Endpoints: endpoints,
 	})
 	if err != nil {
 		return err

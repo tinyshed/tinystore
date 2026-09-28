@@ -174,6 +174,7 @@ truth.
 
 ```json
 {"protocol": 1, "server": "0.4.0", "pid": 4212, "instance": "q1q0l3yZ3JvYw8g7oM2sYA",
+ "secret": "Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE",
  "endpoints": ["unix:///srv/app/data/server/tinystore.sock"]}
 ```
 
@@ -189,10 +190,10 @@ truth.
   which Go and Python open without sharing its deletion, refuses a rename or a
   remove of it while it holds the file, and so may a scanner; each is tried
   again, eight times from 1 to 64 ms apart.
-- **An instance is sixteen random bytes a start.** `WELCOME` repeats it, so a
-  client that reached another process through an endpoint left behind knows.
-- **Find or start.** A client reads `SERVE`, connects and checks the
-  instance. Any failure (no file, a refused connection, another instance)
+- **An instance and a secret are random a start**: sixteen bytes `WELCOME`
+  repeats, and thirty-two that key the proof below; `SERVE` names both.
+- **Find or start.** A client reads `SERVE`, connects and checks the proof.
+  Any failure (no file, a refused connection, a proof that does not check)
   starts `tinystore serve --dir <dir> --local`. That child either takes
   `LOCK`, which means the old server is gone, removes the socket and the
   `SERVE` it left and writes its own; or finds `LOCK` held and exits with code
@@ -203,10 +204,24 @@ truth.
 - **No pid is trusted.** A pid is reused; a lock is released by the operating
   system when its process dies.
 - **Nor is an endpoint a dead server left.** Its name is anyone's to take once
-  it is gone, a Windows pipe's above all, whose namespace every user shares.
-  So a client checks that the process at the other end runs as its own user,
-  `SO_PEERCRED` or `getpeereid` on a socket and `GetNamedPipeServerProcessId`
-  on a pipe, before its `HELLO` names the instance.
+  the server is gone, a Windows pipe's above all, whose namespace every user
+  shares, and a client that reached another process would hand it the
+  application's data and take its answers. So a client knows its server
+  before its first `REQUEST`, and how depends on the transport:
+
+  | transport | how the client knows its server |
+  |---|---|
+  | stdio | it started the server itself |
+  | a Unix socket or a named pipe found through `SERVE` | the proof: its `HELLO` carries a challenge of 16 random bytes, and `WELCOME` answers with their HMAC-SHA256 keyed with `SERVE`'s secret, which only the directory's owner can read |
+  | TCP with TLS | the certificate, before its token leaves |
+  | TCP | not at all: a token travels in the clear, on a network its operator trusts |
+
+  The proof asks nothing of the operating system, so every SDK checks it the
+  same way: a peer's user, `SO_PEERCRED` on a socket or
+  `GetNamedPipeServerProcessId` on a pipe, is out of reach of a Bun client,
+  whose `node:net` shows neither. `HELLO` carries nothing a stranger could
+  use, since a local connection takes no token, and no local endpoint is TCP:
+  Windows serves its sidecar through a named pipe.
 - **A socket's path fits.** `<dir>/server/tinystore.sock` when that absolute
   path fits `sockaddr_un` (104 bytes on macOS, 108 on Linux and Windows); past
   it, a directory of the owner's own in `$XDG_RUNTIME_DIR`, or in the
@@ -469,6 +484,8 @@ Each promise above is a test once its code exists; those marked built pass:
 | a client reading `SERVE` delays a change to it and does not fail it | built: `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
 | a server goes idle only after its last connection | built: `TestAServerGoesIdleAfterItsLastConnection` |
 | a socket's path fits, in the user's own directory when the store's is long | built: `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows |
+| a server proves it read `SERVE` to a local challenge, and to no other | built: `TestAServerProvesItselfOnlyToALocalChallenge`, `TestProofVectors` |
+| an endpoint taken after its server left cannot prove itself | built: `TestAnEndpointTakenAfterItsServerLeftCannotProveItself` |
 | a stale `SERVE` starts one sidecar, and the other exits held | built: `TestAStaleServeStartsOneSidecar`, `TestASecondServeOfADirectoryExitsHeld` |
 | the sidecar found through `SERVE` leaves once idle, with `SERVE` and `LOCK` | built: `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle` |
 | a private child leaves when its parent does, or when told though the parent stays | built: `TestAPrivateChildServesItsParent`, `TestAPrivateChildLeavesWhenToldThoughItsParentStays` |
@@ -519,6 +536,9 @@ store = tinystore.open_sync("./data")  # a program without asyncio: one call at 
   opens; the daily calls are plain verbs; what the engine chooses goes into
   open's options and never into a call. A plain verb returns the least and
   its entry twin the version, as kv's `Get` and `GetEntry` do.
+- **A sidecar found through `SERVE` proves itself before the first call**:
+  the client's `HELLO` carries a fresh challenge, and no `REQUEST` leaves
+  until `WELCOME`'s proof checks; `proofs` in the vectors is one to test by.
 - **Every call is a stream, and a turn's frames leave in one write**: those
   asked for in one microtask in JavaScript, in one loop turn in asyncio. Calls
   return promises; a batch goes where the engine commits once, an enqueue or
