@@ -2,13 +2,45 @@ package records
 
 import (
 	"database/sql"
+	"fmt"
 	"math"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tinyshed/tinystore"
 )
+
+func TestConcurrentFirstAppendsShareOneStreamAndHeadWatermark(t *testing.T) {
+	s := openRecords(t)
+	const writers = 32
+	var group sync.WaitGroup
+	errs := make([]error, writers)
+	start := make(chan struct{})
+	for i := range writers {
+		group.Go(func() {
+			<-start
+			errs[i] = s.Append(t.Context(), Record{At: testNow, Stream: "new", Name: fmt.Sprint(i)})
+		})
+	}
+	close(start)
+	group.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var streams, records int
+	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `select (select count(*) from streams where name='new'),
+			(select coalesce(sum(count), 0) from heads where stream=(select id from streams where name='new'))`).
+			Scan(&streams, &records)
+	})
+	if err != nil || streams != 1 || records != writers || s.waiting.newestOf("new") != testNow.UnixNano() {
+		t.Fatalf("first appends made %d streams and %d records: %v", streams, records, err)
+	}
+}
 
 // the examples in the comment on routeToHeads
 func TestARecordTenSecondsBehindItsStreamsNewestIsLate(t *testing.T) {

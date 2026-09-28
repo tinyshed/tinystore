@@ -132,6 +132,98 @@ func TestDropRemovesADamagedSegmentAndFollowPassesIt(t *testing.T) {
 	}
 }
 
+func TestAMissingSegmentBlockIsDamageFollowCanPassAfterDrop(t *testing.T) {
+	for _, test := range []struct {
+		name, at string
+		count    int
+	}{
+		{"first", "first", 3000},
+		{"middle", "middle", 3000},
+		{"only", "only", 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := openRecords(t)
+			s.append(t, frontendRecords(test.count)...)
+			s.clock.advance(time.Hour)
+			s.maintain(t)
+			segment := s.ids(t, `select id from segments order by id`)[0]
+			blocks := s.ids(t, `select id from blocks where segment = ? order by id`, segment)
+			at := 0
+			if test.at == "middle" {
+				at = len(blocks) / 2
+			}
+			if test.at == "only" && len(blocks) != 1 || test.at == "middle" && len(blocks) < 3 {
+				t.Fatalf("test has %d blocks", len(blocks))
+			}
+			err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
+				_, deleteErr := tx.ExecContext(t.Context(), `delete from blocks where id = ?`, blocks[at])
+				return deleteErr
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.Follow(t.Context(), Cursor{}, 100)
+			broken, ok := errors.AsType[*DamageError](err)
+			if !ok || broken.Damage.Segment != segment {
+				t.Fatalf("missing block: %v", err)
+			}
+			if err = s.Drop(t.Context(), broken.Damage); err != nil {
+				t.Fatalf("Drop missing block: %v", err)
+			}
+			batch, err := s.Follow(t.Context(), Cursor{Segment: segment}, 100)
+			if err != nil || batch.Expired != 1 {
+				t.Fatalf("after Drop: %+v, %v", batch, err)
+			}
+		})
+	}
+}
+
+func TestChangedIndexCountsAndSizesAreDamage(t *testing.T) {
+	t.Run("head", func(t *testing.T) {
+		s := openRecords(t)
+		s.append(t, frontendRecords(2)...)
+		id := s.ids(t, `select id from heads`)[0]
+		err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
+			_, updateErr := tx.ExecContext(t.Context(), `update heads set count = count + 1, size = -1 where id = ?`, id)
+			return updateErr
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Read(t.Context(), Query{})
+		broken, ok := errors.AsType[*DamageError](err)
+		if !ok || broken.Damage.HeadRow != id {
+			t.Fatalf("changed head index: %v", err)
+		}
+		if err = s.Drop(t.Context(), broken.Damage); err != nil {
+			t.Fatal(err)
+		}
+		s.headStateMatchesItsRows(t)
+	})
+	t.Run("block", func(t *testing.T) {
+		s := openRecords(t)
+		s.append(t, frontendRecords(1000)...)
+		s.clock.advance(time.Hour)
+		s.maintain(t)
+		id := s.ids(t, `select id from blocks`)[0]
+		err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
+			_, updateErr := tx.ExecContext(t.Context(), `update blocks set count = count - 1, size = -1 where id = ?`, id)
+			return updateErr
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Follow(t.Context(), Cursor{}, 100)
+		broken, ok := errors.AsType[*DamageError](err)
+		if !ok || broken.Damage.Segment == 0 {
+			t.Fatalf("changed block index: %v", err)
+		}
+		if err = s.Drop(t.Context(), broken.Damage); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 // Drop removes only what is lost already: a row that reads is refused
 func TestDropRefusesWhatStillReads(t *testing.T) {
 	s := openRecords(t)

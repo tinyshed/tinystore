@@ -14,6 +14,8 @@ import (
 // the head or in the segment, never in both and never in neither
 func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segment encodedSegment) error {
 	s.spans.note(segment.blocks)
+	s.appendMu.Lock()
+	defer s.appendMu.Unlock()
 	emptied := false
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		owner, err := insertSegmentRow(ctx, tx, head.stream, &segment)

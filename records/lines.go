@@ -23,11 +23,18 @@ import (
 // or logfmt pairs, which spell its line again. Its level is taken from where
 // pino, logfmt, glog, Redis, log4j and their kin write it, in colour or not,
 // and its time is when its first line arrived. A record still growing waits a
-// flush or two for a line that joins it; Close hands it over.
+// flush or two for a line that joins it; Close hands it over. A line larger
+// than one record's bound is dropped and counted.
 func (s *Store) Lines(stream string) io.WriteCloser {
 	w := newLineWriter(stream, s.now, s.enqueue)
 	w.release = func() { s.lines.remove(w) }
-	s.lines.add(w)
+	w.drop = func() {
+		s.dropped.Add(1)
+		s.droppedInvalid.Add(1)
+	}
+	if !s.lines.add(w) {
+		w.closed = true
+	}
 	return w
 }
 
@@ -44,20 +51,22 @@ const maxJoinedLines = 1000
 var errLinesClosed = fmt.Errorf("records: lines: %w", tinystore.ErrClosed)
 
 type lineWriter struct {
-	stream  string
-	now     func() time.Time
-	enqueue func(Record) // where a record goes once its lines are joined
-	release func()       // what Close lets go of
-	room    int          // the most text a record of the stream can keep
-	mu      sync.Mutex
-	partial []byte // a line not yet ended
-	pending *pendingRecord
-	closed  bool
+	stream     string
+	now        func() time.Time
+	enqueue    func(Record) // where a record goes once its lines are joined
+	release    func()       // what Close lets go of
+	drop       func()       // a line too large for one record
+	room       int          // the most text a record of the stream can keep
+	mu         sync.Mutex
+	partial    []byte // a line not yet ended
+	discarding bool   // this line cannot fit a record; wait for its newline
+	pending    *pendingRecord
+	closed     bool
 }
 
 func newLineWriter(stream string, now func() time.Time, enqueue func(Record)) *lineWriter {
 	room := maxBlockInput - inputSize(&Record{Stream: stream, Name: textLine})
-	return &lineWriter{stream: stream, now: now, enqueue: enqueue, release: func() {}, room: room}
+	return &lineWriter{stream: stream, now: now, enqueue: enqueue, release: func() {}, drop: func() {}, room: room}
 }
 
 // pendingRecord is one record's lines so far
@@ -76,21 +85,36 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	if w.closed {
 		return 0, errLinesClosed
 	}
-	w.partial = append(w.partial, p...)
-	for {
-		end := bytes.IndexByte(w.partial, '\n')
+	written := len(p)
+	for len(p) > 0 {
+		end := bytes.IndexByte(p, '\n')
 		if end < 0 {
+			w.appendLine(p)
 			break
 		}
-		w.feed(w.partial[:end])
-		w.partial = w.partial[end+1:]
-	}
-	if len(w.partial) >= maxBlockInput {
-		w.feed(w.partial)
+		w.appendLine(p[:end])
+		if !w.discarding {
+			w.feed(w.partial)
+		}
 		w.partial = w.partial[:0]
+		w.discarding = false
+		p = p[end+1:]
 	}
-	w.partial = append([]byte(nil), w.partial...)
-	return len(p), nil
+	return written, nil
+}
+
+func (w *lineWriter) appendLine(part []byte) {
+	if w.discarding {
+		return
+	}
+	if len(part) > w.room-len(w.partial) {
+		w.partial = nil
+		w.discarding = true
+		w.handOverPending()
+		w.drop()
+		return
+	}
+	w.partial = append(w.partial, part...)
 }
 
 // Close hands over the record it holds, and a last line no newline ended
@@ -110,14 +134,20 @@ func (w *lineWriter) Close() error {
 func (w *lineWriter) handOverAll() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
 	w.handOverAllLocked()
+	w.closed = true
+	w.release()
 }
 
 func (w *lineWriter) handOverAllLocked() {
-	if len(w.partial) > 0 {
+	if len(w.partial) > 0 && !w.discarding {
 		w.feed(w.partial)
 		w.partial = nil
 	}
+	w.discarding = false
 	w.handOverPending()
 }
 
@@ -334,15 +364,26 @@ func objectFields(text string) ([]Field, error) {
 type lineWriters struct {
 	mu      sync.Mutex
 	writers map[*lineWriter]struct{}
+	closed  bool
 }
 
-func (l *lineWriters) add(w *lineWriter) {
+func (l *lineWriters) add(w *lineWriter) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.closed {
+		return false
+	}
 	if l.writers == nil {
 		l.writers = map[*lineWriter]struct{}{}
 	}
 	l.writers[w] = struct{}{}
+	return true
+}
+
+func (l *lineWriters) stop() {
+	l.mu.Lock()
+	l.closed = true
+	l.mu.Unlock()
 }
 
 func (l *lineWriters) remove(w *lineWriter) {

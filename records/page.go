@@ -64,6 +64,10 @@ func (s *Store) sourceRecords(d *decoder, q *checkedQuery, src *source, segments
 			found := Damage{Stream: stream, HeadRow: src.id, From: timeOf(src.first), To: timeOf(src.last)}
 			return nil, damageOf(found, err)
 		}
+		if !headIndexMatches(records, src.first, src.last, src.count, src.size, src.body) {
+			found := Damage{Stream: stream, HeadRow: src.id, From: timeOf(src.first), To: timeOf(src.last)}
+			return nil, damageOf(found, corrupt("head index differs from body"))
+		}
 		return slices.DeleteFunc(records, func(r Record) bool { return !q.matches(&r) }), nil
 	}
 	records, err := d.blockMatches(q, src, segments)
@@ -75,6 +79,18 @@ func (s *Store) sourceRecords(d *decoder, q *checkedQuery, src *source, segments
 	return records, nil
 }
 
+func headIndexMatches(records []Record, first, last int64, count, size int, body []byte) bool {
+	if len(records) == 0 || len(records) != count || len(body) != size {
+		return false
+	}
+	oldest, newest := records[0].At.UnixNano(), records[0].At.UnixNano()
+	for _, record := range records[1:] {
+		oldest = min(oldest, record.At.UnixNano())
+		newest = max(newest, record.At.UnixNano())
+	}
+	return first == oldest && last == newest
+}
+
 func (d *decoder) blockMatches(q *checkedQuery, src *source, segments *parsedSegments) ([]Record, error) {
 	s, err := segments.schema(d, src.segment)
 	if err != nil {
@@ -83,6 +99,10 @@ func (d *decoder) blockMatches(q *checkedQuery, src *source, segments *parsedSeg
 	block, err := d.openBlock(s, src.body)
 	if err != nil {
 		return nil, err
+	}
+	if block.count != src.count || len(block.times) != block.count ||
+		block.times[0] != src.first || block.times[len(block.times)-1] != src.last {
+		return nil, corrupt("block index differs from body")
 	}
 	keep, err := d.keepRows(block, q)
 	if err != nil || !slices.Contains(keep, true) {

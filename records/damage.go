@@ -139,30 +139,35 @@ func (s *Store) dropDamaged(ctx context.Context, damage Damage) error {
 	return fmt.Errorf("%w: a damage names one segment or one head row, not %+v", tinystore.ErrInvalid, damage)
 }
 
-const selectHeadRowToDrop = `select stream, late, count, input, body from heads where id = ?`
+const selectHeadRowToDrop = `select stream, late, first_at, last_at, count, input, size, body from heads where id = ?`
 
 // dropHeadRow removes a head row that no longer reads and settles its head
 func (s *Store) dropHeadRow(ctx context.Context, id int64) error {
+	s.appendMu.Lock()
+	defer s.appendMu.Unlock()
 	var head headKey
 	emptied := false
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		var left headWeight
+		var count, input int
+		var first, last int64
+		var size int
 		var body []byte
-		err := sqlite.QueryRow(ctx, tx, selectHeadRowToDrop, id).Scan(&head.stream, &head.late, &left.count,
-			&left.input, &body)
+		err := sqlite.QueryRow(ctx, tx, selectHeadRowToDrop, id).Scan(&head.stream, &head.late, &first, &last,
+			&count, &input, &size, &body)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if _, err = newDecoder(s.unpack).parseHeadRow(s.streams.name(head.stream), body); err == nil {
+		records, parseErr := newDecoder(s.unpack).parseHeadRow(s.streams.name(head.stream), body)
+		if parseErr == nil && headIndexMatches(records, first, last, count, size, body) {
 			return fmt.Errorf("%w: head row %d reads", tinystore.ErrConflict, id)
 		}
 		if _, err = tx.ExecContext(ctx, deleteHeadRow, id); err != nil {
 			return err
 		}
-		emptied, err = settleHead(ctx, tx, head, left)
+		emptied, err = rebuildHeadState(ctx, tx, head)
 		return err
 	})
 	if err == nil && emptied && !head.late {
@@ -171,12 +176,33 @@ func (s *Store) dropHeadRow(ctx context.Context, id int64) error {
 	return err
 }
 
+const remainingHeadState = `select count(*), coalesce(sum(count), 0), coalesce(sum(input), 0), min(written_at)
+	from heads where stream = ? and late = ?`
+const replaceHeadState = `update head_state set count = ?, input = ?, since = ? where stream = ? and late = ?`
+
+// rebuildHeadState counts the head from the rows left, as the dropped row's
+// own counts are what may be damaged
+func rebuildHeadState(ctx context.Context, tx sqlite.Writer, head headKey) (bool, error) {
+	var rows, count, input int
+	var since sql.NullInt64
+	if err := sqlite.QueryRow(ctx, tx, remainingHeadState, head.stream, head.late).
+		Scan(&rows, &count, &input, &since); err != nil {
+		return false, err
+	}
+	if rows == 0 {
+		_, err := tx.ExecContext(ctx, deleteHeadState, head.stream, head.late)
+		return err == nil, err
+	}
+	_, err := tx.ExecContext(ctx, replaceHeadState, count, input, since.Int64, head.stream, head.late)
+	return false, err
+}
+
 // a segment is dropped by its id, so that a block whose segment row is gone
 // goes too, and a place merged into another is dropped with the one holding it
 const (
 	selectHolderToDrop   = `select coalesce(holder, id) from segments where id = ?`
-	selectSegmentToDrop  = `select body from segments where id = ?`
-	selectBlocksToDrop   = `select body from blocks where segment = ? order by id`
+	selectSegmentToDrop  = `select first_block, last_block, held, body from segments where id = ?`
+	selectBlocksToDrop   = `select id, first_at, last_at, count, size, body from blocks where segment = ? order by id`
 	deleteSegmentFilters = `delete from block_filters where block in (select id from blocks where segment = ?)`
 	deleteSegmentTraces  = `delete from block_traces where block in (select id from blocks where segment = ?)`
 	deleteSegmentBlocks  = `delete from blocks where segment = ?`
@@ -214,7 +240,9 @@ func (s *Store) dropSegment(ctx context.Context, id int64) error {
 // segmentReads decodes a segment's row and every one of its blocks whole
 func (s *Store) segmentReads(ctx context.Context, tx sqlite.Writer, id int64) (found, reads bool, err error) {
 	var row []byte
-	err = sqlite.QueryRow(ctx, tx, selectSegmentToDrop, id).Scan(&row)
+	var first, last int64
+	var held int
+	err = sqlite.QueryRow(ctx, tx, selectSegmentToDrop, id).Scan(&first, &last, &held, &row)
 	missing := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !missing {
 		return false, false, err
@@ -223,29 +251,34 @@ func (s *Store) segmentReads(ctx context.Context, tx sqlite.Writer, id int64) (f
 	if err != nil || missing {
 		return len(blocks) > 0, false, err
 	}
+	if err = checkBlockCoverage(first, last, held, blocks); err != nil {
+		return true, false, nil //nolint:nilerr // incomplete block coverage is damage Drop removes
+	}
 	d := newDecoder(s.unpack)
 	schema, err := d.parseSchema(row)
 	if err != nil {
 		return true, false, nil //nolint:nilerr // a segment row that does not read is what Drop removes
 	}
-	for _, body := range blocks {
-		if _, err = d.blockRecords(schema, body); err != nil {
+	for _, block := range blocks {
+		records, decodeErr := d.blockRecords(schema, block.body)
+		if decodeErr != nil || len(records) != block.count || len(block.body) != block.size ||
+			records[0].At.UnixNano() != block.first || records[len(records)-1].At.UnixNano() != block.last {
 			return true, false, nil //nolint:nilerr // a block that does not read is what Drop removes
 		}
 	}
 	return true, true, nil
 }
 
-func segmentBlocks(ctx context.Context, tx sqlite.Writer, id int64) ([][]byte, error) {
-	var blocks [][]byte
+func segmentBlocks(ctx context.Context, tx sqlite.Writer, id int64) ([]followedBlock, error) {
+	var blocks []followedBlock
 	rows, err := tx.QueryContext(ctx, selectBlocksToDrop, id) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
 		return nil, err
 	}
 	err = sqlite.EachRow(rows, "blocks to drop", func(rows *sql.Rows) error {
-		var body []byte
-		scanErr := rows.Scan(&body)
-		blocks = append(blocks, body)
+		var block followedBlock
+		scanErr := rows.Scan(&block.id, &block.first, &block.last, &block.count, &block.size, &block.body)
+		blocks = append(blocks, block)
 		return scanErr
 	})
 	return blocks, err

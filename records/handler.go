@@ -50,6 +50,13 @@ func (s *Store) enqueue(record Record) {
 		s.droppedInvalid.Add(1)
 		return
 	}
+	s.enqueueMu.RLock()
+	defer s.enqueueMu.RUnlock()
+	if s.stopping {
+		s.dropped.Add(1)
+		s.droppedWrite.Add(1)
+		return
+	}
 	select {
 	case s.queue <- record:
 	default:
@@ -185,9 +192,28 @@ func (s *Store) flushInBackground(ctx context.Context) error {
 // flush takes what the queue holds, then has the writers of Lines hand over
 // into the queue it emptied, and writes both
 func (s *Store) flush(ctx context.Context, handOver func(*lineWriter)) error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	queued := s.drain()
 	s.lines.each(handOver)
-	pieces := appendsOf(append(queued, s.drain()...))
+	return s.appendQueued(ctx, append(queued, s.drain()...))
+}
+
+func (s *Store) flushFinal(ctx context.Context) error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	s.lines.stop()
+	queued := s.drain()
+	s.lines.each((*lineWriter).handOverAll)
+	s.enqueueMu.Lock()
+	s.stopping = true
+	queued = append(queued, s.drain()...)
+	s.enqueueMu.Unlock()
+	return s.appendQueued(ctx, queued)
+}
+
+func (s *Store) appendQueued(ctx context.Context, queued []Record) error {
+	pieces := appendsOf(queued)
 	for i, piece := range pieces {
 		if err := s.appendChecked(ctx, piece); err != nil {
 			for _, lost := range pieces[i:] {

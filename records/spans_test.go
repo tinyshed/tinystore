@@ -28,14 +28,23 @@ func TestABlockIsFiledByItsWidth(t *testing.T) {
 	if end := latestEnd(10, math.MaxInt64-5); end != math.MaxInt64 {
 		t.Errorf("a span past the end of time ends at %d", end)
 	}
+	if start := earliestStart(10, 5_000); start != 5_000-1023 {
+		t.Errorf("a span of 1024 nanoseconds starts at %d", start)
+	}
+	if start := earliestStart(63, 0); start != math.MinInt64 {
+		t.Errorf("the widest span starts at %d", start)
+	}
+	if start := earliestStart(10, math.MinInt64+5); start != math.MinInt64 {
+		t.Errorf("a span before the start of time starts at %d", start)
+	}
 }
 
 // the time index is walked within one span at a time, between a read's start
 // and its end moved on by the span's width, never to the end of the index
 func TestTheTimeIndexIsWalkedWithinEachSpan(t *testing.T) {
 	s := openRecords(t)
-	plan := s.queryPlan(t, selectBlockCandidates, 1, 2, 3, 4, 5, 6)
-	if want := "blocks_by_time (span=? AND last_at>? AND last_at<?)"; !strings.Contains(plan, want) {
+	plan := s.queryPlan(t, blockCandidatesBase+oldestCandidates, 1, 2, 3, 2, 4, 5, 6, 2, 0, 10)
+	if want := "blocks_by_first (span=? AND first_at>? AND first_at<?)"; !strings.Contains(plan, want) {
 		t.Fatalf("plan %q, want %q", plan, want)
 	}
 }

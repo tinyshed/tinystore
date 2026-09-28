@@ -87,15 +87,16 @@ type heldSegment struct {
 	id, stream            int64
 	first, last           int64
 	firstBlock, lastBlock int64
+	held                  int
 	row                   []byte
 	listed                []followedBlock
 	schema                *schema
 }
 
 type followedBlock struct {
-	id    int64
-	count int
-	body  []byte
+	id, first, last int64
+	count, size     int
+	body            []byte
 }
 
 const (
@@ -105,7 +106,7 @@ const (
 		order by id
 		limit cast(? as integer)`
 	selectHolder = `
-		select stream, first_at, last_at, first_block, last_block from segments
+		select stream, first_at, last_at, first_block, last_block, held from segments
 		where id = ? and holder is null`
 	selectHolderRow       = `select body from segments where id = ?`
 	selectFollowedBlocks  = `select id, count from blocks where id between ? and ? order by id`
@@ -209,7 +210,7 @@ func (r *followRead) holderOf(ctx context.Context, place *followedPlace) (*heldS
 	}
 	holder := &heldSegment{id: place.holderID}
 	err := sqlite.QueryRow(ctx, r.tx, selectHolder, holder.id).Scan(&holder.stream, &holder.first, &holder.last,
-		&holder.firstBlock, &holder.lastBlock)
+		&holder.firstBlock, &holder.lastBlock, &holder.held)
 	if errors.Is(err, sql.ErrNoRows) {
 		found := Damage{Stream: r.names.name(place.stream), Segment: place.id}
 		gone := corrupt(fmt.Sprintf("place %d names segment %d, which is gone", place.id, holder.id))
@@ -222,8 +223,15 @@ func (r *followRead) holderOf(ctx context.Context, place *followedPlace) (*heldS
 		return nil, err
 	}
 	r.spent += len(holder.row)
+	if err = r.listBlocks(ctx, holder); err != nil {
+		found := Damage{
+			Stream: r.names.name(holder.stream), Segment: holder.id,
+			From: timeOf(holder.first), To: timeOf(holder.last),
+		}
+		return nil, damageOf(found, err)
+	}
 	r.holders[holder.id] = holder
-	return holder, r.listBlocks(ctx, holder)
+	return holder, nil
 }
 
 // fetch is a block's or a segment row's bytes, from the cache or else from
@@ -247,12 +255,34 @@ func (r *followRead) listBlocks(ctx context.Context, holder *heldSegment) error 
 	if err != nil {
 		return err
 	}
-	return sqlite.EachRow(rows, "followed blocks", func(rows *sql.Rows) error {
+	err = sqlite.EachRow(rows, "followed blocks", func(rows *sql.Rows) error {
 		var block followedBlock
 		scanErr := rows.Scan(&block.id, &block.count)
 		holder.listed = append(holder.listed, block)
 		return scanErr
 	})
+	if err != nil {
+		return err
+	}
+	return checkBlockCoverage(holder.firstBlock, holder.lastBlock, holder.held, holder.listed)
+}
+
+func checkBlockCoverage(first, last int64, held int, blocks []followedBlock) error {
+	if first < 1 || last < first || held < 1 || held > maxSegmentRecords || len(blocks) != int(last-first+1) {
+		return corrupt("segment block coverage")
+	}
+	count := 0
+	for i, block := range blocks {
+		if block.id != first+int64(i) || block.count < 1 || block.count > maxBlockRecords ||
+			block.count > held-count {
+			return corrupt("segment block coverage")
+		}
+		count += block.count
+	}
+	if count != held {
+		return corrupt("segment record count")
+	}
+	return nil
 }
 
 // placeBlocks fetches the holder's blocks that hold the place's rows past the

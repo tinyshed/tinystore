@@ -71,7 +71,10 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   that a query finds them by `Attrs`. The level is found where pino, logfmt,
   glog, Redis, log4j, zerolog and Postgres write it, in colour or not. A
   record that may still grow is written once a flush passes without a line
-  joining it, and on `Close`.
+  joining it, and on `Close`. A line longer than one record holds, 256 KiB
+  less the record's own stream and name, is dropped whole and counted as invalid in `Stats`,
+  so that a writer never holds more than one record's bytes; every other line
+  keeps each of its bytes.
 - A record's order is its time. A segment stores one stream's records in time
   order, equal times in the order they arrived; nothing else of the arrival
   order is kept. A record more than ten seconds behind the newest record its

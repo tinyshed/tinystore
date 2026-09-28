@@ -1,0 +1,232 @@
+=== pass 1 old
+=== RUN   TestReadCandidatesMeasured
+    read_round_test.go:19: broad oldest snapshot 5000 head rows, four-block budget: p50 3.44428ms p95 3.851277ms allocated 3078322 bytes/call
+    read_round_test.go:19: broad oldest read 5000 head rows, four-block budget: p50 3.450031ms p95 4.344079ms allocated 3085429 bytes/call
+    read_round_test.go:19: broad newest snapshot 5000 head rows, four-block budget: p50 3.456368ms p95 4.303529ms allocated 3078321 bytes/call
+    read_round_test.go:19: broad newest read 5000 head rows, four-block budget: p50 3.437378ms p95 4.10665ms allocated 3085454 bytes/call
+    read_round_test.go:19: narrow oldest snapshot 5000 head rows, four-block budget: p50 249.05µs p95 301.775µs allocated 14620 bytes/call
+    read_round_test.go:19: narrow oldest read 5000 head rows, four-block budget: p50 227.718µs p95 299.344µs allocated 21736 bytes/call
+    read_round_test.go:112: logical file: 1093632 bytes (1068 pages of 1024, 0 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 1024 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 1024 bytes
+    read_round_test.go:124: dbstat head_state: 117760 bytes
+    read_round_test.go:124: dbstat heads: 471040 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 82944 bytes
+    read_round_test.go:124: dbstat heads_by_time: 184320 bytes
+    read_round_test.go:124: dbstat segment_keys: 1024 bytes
+    read_round_test.go:124: dbstat segments: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_end: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 1024 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 117760 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 103424 bytes
+--- PASS: TestReadCandidatesMeasured (0.49s)
+=== RUN   TestReadSealedCandidatesMeasured
+    read_round_test.go:23: broad oldest snapshot 1000 sealed rows, four-block budget: p50 833.059µs p95 1.400204ms allocated 620950 bytes/call
+    read_round_test.go:23: broad oldest read 1000 sealed rows, four-block budget: p50 865.39µs p95 1.382202ms allocated 631809 bytes/call
+    read_round_test.go:23: broad newest snapshot 1000 sealed rows, four-block budget: p50 827.758µs p95 1.665245ms allocated 621052 bytes/call
+    read_round_test.go:23: broad newest read 1000 sealed rows, four-block budget: p50 832.347µs p95 1.412724ms allocated 631880 bytes/call
+    read_round_test.go:23: narrow oldest snapshot 1000 sealed rows, four-block budget: p50 44.303µs p95 78.016µs allocated 29274 bytes/call
+    read_round_test.go:23: narrow oldest read 1000 sealed rows, four-block budget: p50 50.814µs p95 141.962µs allocated 40115 bytes/call
+    read_round_test.go:112: logical file: 318464 bytes (311 pages of 1024, 1 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 94208 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 41984 bytes
+    read_round_test.go:124: dbstat head_state: 1024 bytes
+    read_round_test.go:124: dbstat heads: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_time: 1024 bytes
+    read_round_test.go:124: dbstat segment_keys: 15360 bytes
+    read_round_test.go:124: dbstat segments: 73728 bytes
+    read_round_test.go:124: dbstat segments_by_end: 19456 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 13312 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 23552 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 21504 bytes
+--- PASS: TestReadSealedCandidatesMeasured (3.04s)
+PASS
+=== pass 1 new
+=== RUN   TestReadCandidatesMeasured
+    read_round_test.go:19: broad oldest snapshot 5000 head rows, four-block budget: p50 22.142µs p95 66.076µs allocated 12680 bytes/call
+    read_round_test.go:19: broad oldest read 5000 head rows, four-block budget: p50 30.482µs p95 105.568µs allocated 19831 bytes/call
+    read_round_test.go:19: broad newest snapshot 5000 head rows, four-block budget: p50 27.973µs p95 83.217µs allocated 13048 bytes/call
+    read_round_test.go:19: broad newest read 5000 head rows, four-block budget: p50 28.483µs p95 118.53µs allocated 20182 bytes/call
+    read_round_test.go:19: narrow oldest snapshot 5000 head rows, four-block budget: p50 53.364µs p95 87.927µs allocated 12816 bytes/call
+    read_round_test.go:19: narrow oldest read 5000 head rows, four-block budget: p50 55.714µs p95 88.957µs allocated 19958 bytes/call
+    read_round_test.go:112: logical file: 1293312 bytes (1263 pages of 1024, 0 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 1024 bytes
+    read_round_test.go:124: dbstat blocks_by_first: 1024 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 1024 bytes
+    read_round_test.go:124: dbstat head_state: 117760 bytes
+    read_round_test.go:124: dbstat heads: 471040 bytes
+    read_round_test.go:124: dbstat heads_by_first: 198656 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 82944 bytes
+    read_round_test.go:124: dbstat heads_by_time: 184320 bytes
+    read_round_test.go:124: dbstat segment_keys: 1024 bytes
+    read_round_test.go:124: dbstat segments: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_end: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 1024 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 117760 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 103424 bytes
+--- PASS: TestReadCandidatesMeasured (0.20s)
+=== RUN   TestReadSealedCandidatesMeasured
+    read_round_test.go:23: broad oldest snapshot 1000 sealed rows, four-block budget: p50 52.774µs p95 92.527µs allocated 27657 bytes/call
+    read_round_test.go:23: broad oldest read 1000 sealed rows, four-block budget: p50 48.354µs p95 107.688µs allocated 38531 bytes/call
+    read_round_test.go:23: broad newest snapshot 1000 sealed rows, four-block budget: p50 47.783µs p95 94.428µs allocated 28418 bytes/call
+    read_round_test.go:23: broad newest read 1000 sealed rows, four-block budget: p50 58.534µs p95 95.888µs allocated 39241 bytes/call
+    read_round_test.go:23: narrow oldest snapshot 1000 sealed rows, four-block budget: p50 42.794µs p95 79.836µs allocated 27876 bytes/call
+    read_round_test.go:23: narrow oldest read 1000 sealed rows, four-block budget: p50 47.744µs p95 84.617µs allocated 38778 bytes/call
+    read_round_test.go:112: logical file: 364544 bytes (356 pages of 1024, 1 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 94208 bytes
+    read_round_test.go:124: dbstat blocks_by_first: 45056 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 41984 bytes
+    read_round_test.go:124: dbstat head_state: 1024 bytes
+    read_round_test.go:124: dbstat heads: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_first: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_time: 1024 bytes
+    read_round_test.go:124: dbstat segment_keys: 15360 bytes
+    read_round_test.go:124: dbstat segments: 73728 bytes
+    read_round_test.go:124: dbstat segments_by_end: 19456 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 13312 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 23552 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 21504 bytes
+--- PASS: TestReadSealedCandidatesMeasured (3.12s)
+PASS
+=== pass 2 old
+=== RUN   TestReadCandidatesMeasured
+    read_round_test.go:19: broad oldest snapshot 5000 head rows, four-block budget: p50 3.592684ms p95 4.194739ms allocated 3078637 bytes/call
+    read_round_test.go:19: broad oldest read 5000 head rows, four-block budget: p50 3.373233ms p95 3.821899ms allocated 3085443 bytes/call
+    read_round_test.go:19: broad newest snapshot 5000 head rows, four-block budget: p50 3.516078ms p95 3.907677ms allocated 3078360 bytes/call
+    read_round_test.go:19: broad newest read 5000 head rows, four-block budget: p50 3.410256ms p95 4.461189ms allocated 3085492 bytes/call
+    read_round_test.go:19: narrow oldest snapshot 5000 head rows, four-block budget: p50 215.677µs p95 255.59µs allocated 15361 bytes/call
+    read_round_test.go:19: narrow oldest read 5000 head rows, four-block budget: p50 224.298µs p95 252.93µs allocated 21739 bytes/call
+    read_round_test.go:112: logical file: 1093632 bytes (1068 pages of 1024, 0 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 1024 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 1024 bytes
+    read_round_test.go:124: dbstat head_state: 117760 bytes
+    read_round_test.go:124: dbstat heads: 471040 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 82944 bytes
+    read_round_test.go:124: dbstat heads_by_time: 184320 bytes
+    read_round_test.go:124: dbstat segment_keys: 1024 bytes
+    read_round_test.go:124: dbstat segments: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_end: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 1024 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 117760 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 103424 bytes
+--- PASS: TestReadCandidatesMeasured (0.50s)
+=== RUN   TestReadSealedCandidatesMeasured
+    read_round_test.go:23: broad oldest snapshot 1000 sealed rows, four-block budget: p50 854.589µs p95 1.447698ms allocated 620952 bytes/call
+    read_round_test.go:23: broad oldest read 1000 sealed rows, four-block budget: p50 862.439µs p95 1.2353ms allocated 632092 bytes/call
+    read_round_test.go:23: broad newest snapshot 1000 sealed rows, four-block budget: p50 841.198µs p95 1.287122ms allocated 621485 bytes/call
+    read_round_test.go:23: broad newest read 1000 sealed rows, four-block budget: p50 804.727µs p95 1.418842ms allocated 631880 bytes/call
+    read_round_test.go:23: narrow oldest snapshot 1000 sealed rows, four-block budget: p50 47.824µs p95 424.964µs allocated 29338 bytes/call
+    read_round_test.go:23: narrow oldest read 1000 sealed rows, four-block budget: p50 49.114µs p95 121.8µs allocated 40116 bytes/call
+    read_round_test.go:112: logical file: 318464 bytes (311 pages of 1024, 1 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 94208 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 41984 bytes
+    read_round_test.go:124: dbstat head_state: 1024 bytes
+    read_round_test.go:124: dbstat heads: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_time: 1024 bytes
+    read_round_test.go:124: dbstat segment_keys: 15360 bytes
+    read_round_test.go:124: dbstat segments: 73728 bytes
+    read_round_test.go:124: dbstat segments_by_end: 19456 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 13312 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 23552 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 21504 bytes
+--- PASS: TestReadSealedCandidatesMeasured (3.16s)
+PASS
+=== pass 2 new
+=== RUN   TestReadCandidatesMeasured
+    read_round_test.go:19: broad oldest snapshot 5000 head rows, four-block budget: p50 20.582µs p95 53.605µs allocated 12693 bytes/call
+    read_round_test.go:19: broad oldest read 5000 head rows, four-block budget: p50 35.723µs p95 115.219µs allocated 20640 bytes/call
+    read_round_test.go:19: broad newest snapshot 5000 head rows, four-block budget: p50 23.712µs p95 137.266µs allocated 13796 bytes/call
+    read_round_test.go:19: broad newest read 5000 head rows, four-block budget: p50 44.223µs p95 83.417µs allocated 20185 bytes/call
+    read_round_test.go:19: narrow oldest snapshot 5000 head rows, four-block budget: p50 51.164µs p95 90.447µs allocated 12807 bytes/call
+    read_round_test.go:19: narrow oldest read 5000 head rows, four-block budget: p50 52.535µs p95 87.847µs allocated 19972 bytes/call
+    read_round_test.go:112: logical file: 1293312 bytes (1263 pages of 1024, 0 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 1024 bytes
+    read_round_test.go:124: dbstat blocks_by_first: 1024 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 1024 bytes
+    read_round_test.go:124: dbstat head_state: 117760 bytes
+    read_round_test.go:124: dbstat heads: 471040 bytes
+    read_round_test.go:124: dbstat heads_by_first: 198656 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 82944 bytes
+    read_round_test.go:124: dbstat heads_by_time: 184320 bytes
+    read_round_test.go:124: dbstat segment_keys: 1024 bytes
+    read_round_test.go:124: dbstat segments: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_end: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 1024 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 117760 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 103424 bytes
+--- PASS: TestReadCandidatesMeasured (0.19s)
+=== RUN   TestReadSealedCandidatesMeasured
+    read_round_test.go:23: broad oldest snapshot 1000 sealed rows, four-block budget: p50 43.153µs p95 80.197µs allocated 27670 bytes/call
+    read_round_test.go:23: broad oldest read 1000 sealed rows, four-block budget: p50 49.854µs p95 89.187µs allocated 38523 bytes/call
+    read_round_test.go:23: broad newest snapshot 1000 sealed rows, four-block budget: p50 47.274µs p95 87.837µs allocated 28423 bytes/call
+    read_round_test.go:23: broad newest read 1000 sealed rows, four-block budget: p50 55.235µs p95 102.108µs allocated 39244 bytes/call
+    read_round_test.go:23: narrow oldest snapshot 1000 sealed rows, four-block budget: p50 42.683µs p95 92.368µs allocated 27864 bytes/call
+    read_round_test.go:23: narrow oldest read 1000 sealed rows, four-block budget: p50 47.643µs p95 85.157µs allocated 38748 bytes/call
+    read_round_test.go:112: logical file: 364544 bytes (356 pages of 1024, 1 free)
+    read_round_test.go:124: dbstat _tinystore_migrations: 1024 bytes
+    read_round_test.go:124: dbstat block_filters: 1024 bytes
+    read_round_test.go:124: dbstat block_traces: 1024 bytes
+    read_round_test.go:124: dbstat blocks: 94208 bytes
+    read_round_test.go:124: dbstat blocks_by_first: 45056 bytes
+    read_round_test.go:124: dbstat blocks_by_time: 41984 bytes
+    read_round_test.go:124: dbstat head_state: 1024 bytes
+    read_round_test.go:124: dbstat heads: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_first: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_stream: 1024 bytes
+    read_round_test.go:124: dbstat heads_by_time: 1024 bytes
+    read_round_test.go:124: dbstat segment_keys: 15360 bytes
+    read_round_test.go:124: dbstat segments: 73728 bytes
+    read_round_test.go:124: dbstat segments_by_end: 19456 bytes
+    read_round_test.go:124: dbstat segments_by_holder: 1024 bytes
+    read_round_test.go:124: dbstat segments_by_size: 13312 bytes
+    read_round_test.go:124: dbstat sqlite_autoindex_streams_1: 23552 bytes
+    read_round_test.go:124: dbstat sqlite_schema: 5120 bytes
+    read_round_test.go:124: dbstat sqlite_sequence: 1024 bytes
+    read_round_test.go:124: dbstat streams: 21504 bytes
+--- PASS: TestReadSealedCandidatesMeasured (3.11s)
+PASS

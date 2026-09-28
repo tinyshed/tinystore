@@ -33,6 +33,19 @@ func latestEnd(span int, last int64) int64 {
 	return last + width
 }
 
+// earliestStart is the earliest a block of a span may begin and still end by
+// first
+func earliestStart(span int, first int64) int64 {
+	if span >= 63 {
+		return math.MinInt64
+	}
+	width := int64(1)<<span - 1
+	if first < math.MinInt64+width {
+		return math.MinInt64
+	}
+	return first - width
+}
+
 // blockSpans holds a bit for every span a block of the file has had: a read
 // asks the time index once for each. It only grows, and a span enters it
 // before the transaction writing its block commits, so a read that loads it

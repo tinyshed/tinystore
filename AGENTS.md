@@ -430,7 +430,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the tool finds each database by its name            | `TestTheToolFindsEachDatabaseByItsName`, `TestTheToolWritesTheNextMigrationThroughTheCheck` in `cmd/tinystore` |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
-| another program's lines lose no byte                | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`                                 |
+| a line one record holds loses no byte; a longer one is dropped and counted | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`, `TestALargeLineWriteKeepsOnlyOneBoundedPartial` |
 | a writer of lines never waits, and closes with the store | `TestLinesNeverWaitAndCloseWithTheStore`                                   |
 | a stack trace's lines make one record               | `TestLinesJoinWhatBelongsTogether`, `TestAStackTraceGoesOn`                     |
 | a line's level is found where its program writes it | `TestLinesFindTheLevelWhereProgramsWriteIt`                                     |

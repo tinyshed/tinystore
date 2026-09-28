@@ -46,6 +46,10 @@ type Store struct {
 	damaged     damaged
 	lines       lineWriters
 	queue       chan Record
+	appendMu    sync.Mutex   // routing, its commit and what the cache learns move together
+	enqueueMu   sync.RWMutex // handlers share it; the last flush takes it to shut them out
+	stopping    bool
+	flushMu     sync.Mutex
 	gate        admission.Gate
 	reads       admission.Slots
 	appends     admission.Slots
@@ -188,7 +192,7 @@ func (s *Store) Stats() Stats {
 // store calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
 	var flushErr error
-	s.finalFlush.Do(func() { flushErr = s.flush(ctx, (*lineWriter).handOverAll) })
+	s.finalFlush.Do(func() { flushErr = s.flushFinal(ctx) })
 
 	drained, _ := s.gate.Close()
 	select {

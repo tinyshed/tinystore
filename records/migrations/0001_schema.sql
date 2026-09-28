@@ -26,6 +26,7 @@ create table heads (
 
 create index heads_by_stream on heads (stream, late, id);
 create index heads_by_time on heads (last_at, first_at, levels, stream, count, size);
+create index heads_by_first on heads (first_at, id, last_at, levels, stream, count, size);
 
 -- a row per head, so that finding what is ready to seal reads one row a head;
 -- since: when its oldest waiting row was written
@@ -95,6 +96,7 @@ create table blocks (
 
 -- covers every column a query picks its blocks by, so candidates cost no row reads
 create index blocks_by_time on blocks (span, last_at, first_at, levels, stream, segment, count, size);
+create index blocks_by_first on blocks (span, first_at, id, last_at, levels, stream, segment, count, size);
 
 create table block_traces (
     block integer primary key,

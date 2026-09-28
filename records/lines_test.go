@@ -1,6 +1,7 @@
 package records
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,26 @@ import (
 
 	"github.com/tinyshed/tinystore"
 )
+
+func TestALargeLineWriteKeepsOnlyOneBoundedPartial(t *testing.T) {
+	var got []string
+	dropped := 0
+	w := newLineWriter("large", func() time.Time { return testNow }, func(record Record) {
+		got = append(got, lineOf(&record))
+	})
+	w.drop = func() { dropped++ }
+	input := strings.Repeat("x", 4*maxBlockInput) + "\nsmall\n"
+	if n, err := io.WriteString(w, input); err != nil || n != len(input) {
+		t.Fatalf("large write accepted %d bytes: %v", n, err)
+	}
+	capacity := cap(w.partial)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if dropped != 1 || capacity > w.room || strings.Join(got, ",") != "small" {
+		t.Fatalf("large line dropped %d times, capacity %d bytes, records %q", dropped, capacity, got)
+	}
+}
 
 // linesOf writes text to a writer of Lines, closes it, and reads back what it wrote
 func (s *testStore) linesOf(t *testing.T, stream, text string) []Record {
@@ -167,19 +188,39 @@ func TestLinesNeverWaitAndCloseWithTheStore(t *testing.T) {
 	if stats := s.Stats(); stats.Appended != 5 {
 		t.Fatalf("closing the store appended %d, want the four queued and the one held", stats.Appended)
 	}
+	if _, err := io.WriteString(w, "after close\n"); !errors.Is(err, tinystore.ErrClosed) {
+		t.Fatalf("an old writer after Close: %v", err)
+	}
+	if _, err := io.WriteString(s.Lines("new"), "after close\n"); !errors.Is(err, tinystore.ErrClosed) {
+		t.Fatalf("a new writer after Close: %v", err)
+	}
+	before := s.Stats().Dropped
+	if err := s.Handler("new").Handle(t.Context(), slog.NewRecord(testNow, slog.LevelInfo, "after close", 0)); err != nil || s.Stats().Dropped != before+1 {
+		t.Fatalf("a handler after Close queued data: %v, %+v", err, s.Stats())
+	}
 }
 
-// a writer of Lines loses no byte: its records, one after another with a
-// newline between them, are what it was given, however it was cut
+// a writer of Lines loses no byte of a line one record holds: its records,
+// one after another with a newline between them, are what it was given,
+// however it was cut, less each longer line, which is dropped and counted
 func FuzzLinesLoseNoByte(f *testing.F) {
 	f.Add("2026-09-26 12:00:01,500 ERROR failed\n  at frame\nnext\n{\n\"a\": [1,\n2]}\n", uint8(3))
 	f.Add(`{"level":30,"msg":"ok"}`+"\nplain\r\n\n", uint8(1))
 	f.Add(`level=info msg="slow \"request\"" ms=1200 ok=true`+"\nlevel=warn  msg=x\na= b=\n", uint8(2))
+	f.Add("before\n  at frame\n"+strings.Repeat("x", maxBlockInput)+"\n  at frame\nafter", uint8(255))
 	f.Fuzz(func(t *testing.T, text string, cut uint8) {
 		var got []string
+		dropped := 0
 		w := newLineWriter("fuzz", func() time.Time { return testNow }, func(record Record) {
 			got = append(got, lineOf(&record))
 		})
+		w.drop = func() { dropped++ }
+		var kept []string
+		for line := range strings.SplitSeq(strings.TrimSuffix(text, "\n"), "\n") {
+			if len(line) <= w.room {
+				kept = append(kept, line)
+			}
+		}
 		step := int(cut) + 1
 		for i := 0; i < len(text); i += step {
 			if _, err := io.WriteString(w, text[i:min(i+step, len(text))]); err != nil {
@@ -189,9 +230,9 @@ func FuzzLinesLoseNoByte(f *testing.F) {
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
-		want := strings.TrimSuffix(text, "\n")
-		if spelled := strings.Join(got, "\n"); spelled != want {
-			t.Fatalf("records spell %q, want %q", spelled, want)
+		longer := strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1 - len(kept)
+		if spelled, want := strings.Join(got, "\n"), strings.Join(kept, "\n"); spelled != want || dropped != longer {
+			t.Fatalf("records spell %q with %d dropped, want %q with %d", spelled, dropped, want, longer)
 		}
 	})
 }

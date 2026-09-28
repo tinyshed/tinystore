@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -73,12 +74,16 @@ type snapshotRead struct {
 }
 
 const (
-	selectBlockCandidates = `
+	blockCandidatesBase = `
 		select id, segment, stream, first_at, last_at, count, size from blocks
-		where span = ? and last_at between ? and ? and first_at <= ? and (? = 0 or levels & ? != 0)`
-	selectHeadCandidates = `
+		where span = ? and last_at between ? and ? and first_at between ? and ?
+			and (? = 0 or levels & ? != 0)`
+	headCandidatesBase = `
 		select id, 0, stream, first_at, last_at, count, size from heads
 		where last_at >= ? and first_at <= ? and (? = 0 or levels & ? != 0)`
+	oldestCandidates = ` and (first_at, id) > (?, ?) order by first_at, id limit cast(? as integer)`
+	newestCandidates = ` and (last_at, id) < (?, ?) order by last_at desc, id desc limit cast(? as integer)`
+	candidateChunk   = 256
 )
 
 // candidates are the blocks and head rows the time index and level masks
@@ -101,7 +106,8 @@ func (r *snapshotRead) candidates(ctx context.Context) ([]source, error) {
 
 func (r *snapshotRead) headCandidates(ctx context.Context) ([]source, error) {
 	q := r.query
-	return r.indexed(ctx, false, selectHeadCandidates, q.first, q.last, q.levels, q.levels)
+	return r.pagedCandidates(ctx, false, headCandidatesBase,
+		[]any{q.first, q.last, q.levels, q.levels})
 }
 
 // blockCandidates asks the time index once for each span a block has had
@@ -110,19 +116,71 @@ func (r *snapshotRead) blockCandidates(ctx context.Context) ([]source, error) {
 	var blocks []source
 	for span := range r.spans.each() {
 		lastEnd := latestEnd(span, q.last)
-		found, err := r.indexed(ctx, true, selectBlockCandidates, span, q.first, lastEnd, q.last, q.levels, q.levels)
+		found, err := r.pagedCandidates(ctx, true, blockCandidatesBase,
+			[]any{span, q.first, lastEnd, earliestStart(span, q.first), q.last, q.levels, q.levels})
 		if err != nil {
 			return nil, err
 		}
 		blocks = append(blocks, found...)
 	}
-	return r.withoutExcluded(ctx, blocks)
+	return blocks, nil
 }
 
-// indexed runs one candidate query, a block's or a head row's, and keeps the
-// candidates of the streams asked for
+// pagedCandidates walks one index in the order a page takes candidates, and
+// stops one past the block budget: a page takes no more from any walk, so
+// the walks of other spans cannot push a candidate further in
+func (r *snapshotRead) pagedCandidates(ctx context.Context, block bool, base string, args []any) ([]source, error) {
+	most := r.query.budget.Blocks + 1
+	query := base + oldestCandidates
+	position, id := int64(math.MinInt64), int64(0)
+	if r.query.asked.Newest {
+		query = base + newestCandidates
+		position, id = math.MaxInt64, math.MaxInt64
+	}
+	var selected []source
+	for len(selected) < most {
+		limit := min(candidateChunk, most-len(selected))
+		batch, err := r.indexed(ctx, block, query, append(slices.Clone(args), position, id, limit)...)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		position, id = r.positionOf(batch[len(batch)-1]), batch[len(batch)-1].id
+		walked := len(batch)
+		if batch, err = r.asked(ctx, block, batch); err != nil {
+			return nil, err
+		}
+		selected = append(selected, batch...)
+		if walked < limit {
+			break
+		}
+	}
+	return selected[:min(len(selected), most)], nil
+}
+
+// positionOf is where a walk continues after a candidate
+func (r *snapshotRead) positionOf(candidate source) int64 {
+	if r.query.asked.Newest {
+		return candidate.last
+	}
+	return candidate.first
+}
+
+// asked keeps the candidates of the streams asked for, less the blocks their
+// segment's keys or blooms rule out
+func (r *snapshotRead) asked(ctx context.Context, block bool, batch []source) ([]source, error) {
+	if block {
+		return r.withoutExcluded(ctx, batch)
+	}
+	if r.query.streams != nil {
+		batch = slices.DeleteFunc(batch, func(src source) bool { return !r.query.streams[src.stream] })
+	}
+	return batch, nil
+}
+
 func (r *snapshotRead) indexed(ctx context.Context, block bool, query string, arguments ...any) ([]source, error) {
-	q := r.query
 	rows, err := r.tx.QueryContext(ctx, query, arguments...) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
 		return nil, err
@@ -132,12 +190,27 @@ func (r *snapshotRead) indexed(ctx context.Context, block bool, query string, ar
 		candidate := source{block: block}
 		scanErr := rows.Scan(&candidate.id, &candidate.segment, &candidate.stream, &candidate.first,
 			&candidate.last, &candidate.count, &candidate.size)
-		if q.streams == nil || q.streams[candidate.stream] {
-			found = append(found, candidate)
+		if scanErr != nil {
+			return scanErr
 		}
-		return scanErr
+		if candidate.count < 1 || candidate.count > maxBlockRecords || candidate.size < 1 ||
+			candidate.size > maxSegmentInput || candidate.first > candidate.last {
+			return r.damagedCandidate(candidate, "indexed count, size or time")
+		}
+		found = append(found, candidate)
+		return nil
 	})
 	return found, err
+}
+
+func (r *snapshotRead) damagedCandidate(candidate source, reason string) error {
+	damage := Damage{Stream: r.names.name(candidate.stream), From: timeOf(candidate.first), To: timeOf(candidate.last)}
+	if candidate.block {
+		damage.Segment = candidate.segment
+	} else {
+		damage.HeadRow = candidate.id
+	}
+	return damageOf(damage, corrupt(reason))
 }
 
 // sortSources puts candidates in the order a page takes them: by first time,
@@ -155,6 +228,9 @@ func (r *snapshotRead) withoutExcluded(ctx context.Context, blocks []source) ([]
 	segments := map[int64]bool{}
 	kept := blocks[:0]
 	for _, block := range blocks {
+		if r.query.streams != nil && !r.query.streams[block.stream] {
+			continue
+		}
 		keep, known := segments[block.segment]
 		var err error
 		if !known {
@@ -271,7 +347,7 @@ func (r *snapshotRead) withinBudget(ctx context.Context, candidates []source) (f
 			out.cut, out.edge = true, r.edgeOf(candidate)
 			break
 		}
-		if err = r.fetch(ctx, &candidate, out.segments); err != nil {
+		if err = r.fetch(ctx, &candidate, segmentSize, out.segments); err != nil {
 			return out, err
 		}
 		spent.Blocks, spent.Decoded = spent.Blocks+1, spent.Decoded+candidate.count
@@ -344,9 +420,17 @@ func (r *snapshotRead) edgeOf(candidate source) int64 {
 	return candidate.first
 }
 
-func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segments map[int64]segmentRow) error {
+func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segmentSize int,
+	segments map[int64]segmentRow,
+) error {
 	if !candidate.block {
-		return sqlite.QueryRow(ctx, r.tx, selectHeadBody, candidate.id).Scan(&candidate.body)
+		if err := sqlite.QueryRow(ctx, r.tx, selectHeadBody, candidate.id).Scan(&candidate.body); err != nil {
+			return err
+		}
+		if len(candidate.body) != candidate.size {
+			return r.damagedCandidate(*candidate, "head body size differs from index")
+		}
+		return nil
 	}
 	if _, fetched := segments[candidate.segment]; !fetched {
 		var row segmentRow
@@ -354,7 +438,16 @@ func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segments ma
 		if err != nil {
 			return err
 		}
+		if len(row.body) != segmentSize {
+			return r.damagedCandidate(*candidate, "segment body size differs from index")
+		}
 		segments[candidate.segment] = row
 	}
-	return sqlite.QueryRow(ctx, r.tx, selectBlockBody, candidate.id).Scan(&candidate.body)
+	if err := sqlite.QueryRow(ctx, r.tx, selectBlockBody, candidate.id).Scan(&candidate.body); err != nil {
+		return err
+	}
+	if len(candidate.body) != candidate.size {
+		return r.damagedCandidate(*candidate, "block body size differs from index")
+	}
+	return nil
 }
