@@ -122,6 +122,7 @@ Do not describe unbuilt behaviour as though it works.
 | `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
+| `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
 | `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
@@ -141,6 +142,7 @@ metrics/            public API and private implementation files
 records/ sqldb/ …   one package per engine, each arriving with its first working code
 internal/sqlite/    mechanics shared by every engine; no engine vocabulary
 internal/admission/ the gate and the slots every engine lets work in through
+internal/dirlock/   the LOCK that makes one store a directory, per platform
 bench/              a module of its own: corpora, and other engines to measure against
 ```
 

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tinyshed/tinystore/internal/dirlock"
 )
 
 func openTestStore(t *testing.T, dir string, options Options) *Store {
@@ -24,7 +26,7 @@ func openTestStore(t *testing.T, dir string, options Options) *Store {
 }
 
 func TestASecondStoreOnTheSameDirectoryIsRefused(t *testing.T) {
-	if !directoryLocking {
+	if !dirlock.Supported {
 		t.Skip("no directory lock on this platform")
 	}
 	dir := t.TempDir()

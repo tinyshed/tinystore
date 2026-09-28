@@ -21,5 +21,4 @@
 //	every.go       background work, and how its failures are logged
 //	memory.go      Reserve: one memory budget for every engine's work
 //	snapshot.go    Snapshot: every engine's file copied while it keeps working
-//	lock_*.go      one store per directory, per platform
 package tinystore

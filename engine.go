@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tinyshed/tinystore/internal/dirlock"
 )
 
 // Engine is what the store needs from an opened engine.
@@ -26,7 +28,7 @@ type Engine interface {
 func (s *Store) Claim(name string) (filePath string, release func(), err error) {
 	directory := strings.HasSuffix(name, "/")
 	name = path.Clean(name)
-	if name == "." || name == lockName || !filepath.IsLocal(filepath.FromSlash(name)) {
+	if name == "." || name == dirlock.Name || !filepath.IsLocal(filepath.FromSlash(name)) {
 		return "", nil, fmt.Errorf("%w: %q is not a name inside the store", ErrInvalid, name)
 	}
 

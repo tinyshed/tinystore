@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/tinyshed/tinystore/internal/dirlock"
 )
 
 type Options struct {
@@ -61,12 +63,15 @@ func Open(ctx context.Context, dir string, options Options) (*Store, error) {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
 	}
 
-	lock, err := lockDirectory(dir)
+	held, err := dirlock.Hold(dir)
+	if errors.Is(err, dirlock.ErrHeld) {
+		return nil, fmt.Errorf("%w: %s is open in another store", ErrInUse, dir)
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("lock %s: %w", dir, err)
 	}
 
-	store := newStore(ctx, dir, options, lock)
+	store := newStore(ctx, dir, options, held)
 	store.logOpened()
 	return store, nil
 }
@@ -91,7 +96,7 @@ func newStore(ctx context.Context, dir string, options Options, lock io.Closer) 
 
 func (s *Store) logOpened() {
 	s.logger.Info("store opened", "dir", s.dir)
-	if !directoryLocking {
+	if !dirlock.Supported {
 		s.logger.Warn("directory lock unavailable on this platform; open one store per directory", "dir", s.dir)
 	}
 }
