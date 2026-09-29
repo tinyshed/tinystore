@@ -581,7 +581,7 @@ A file is renamed once, into `objects/` before any row names it, and never
 after; it is never written after its commit and never given a name it had
 before, so a reader that opened one reads exactly the object it looked up. The open file is the reader's lease: removing its name leaves the
 bytes to the handles that have them, and the disk takes them back when the
-last handle closes. [The earlier direction](storage-runtime-direction.md)
+last handle closes. [The earlier direction](https://github.com/tinyshed/research/blob/main/tinystore/storage-runtime-direction.md)
 asked for leases that collection respects; a name that is never used twice
 turns the race between a lookup and its open into a second lookup rather than
 a wrong byte:

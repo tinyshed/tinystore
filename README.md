@@ -1,115 +1,72 @@
 # TinyStore
 
-An experimental embedded time-series store for Go, on SQLite. Every sample is
-kept bit for bit and every range is answered exactly. It is written for one
-machine watching tens of thousands of series, not for a cluster, and it was
-built in the first place to give [Dashbin](https://github.com/tinyshed/dashbin)
-somewhere to put telemetry that does not cost more memory than the thing it is
-watching.
+An embedded data runtime for Go, on SQLite: metrics, records, SQL databases,
+key-value state, files and jobs in one directory, a file per engine, with
+bounded memory, no daemon and no cgo. Bun and Python reach the same directory
+through `tinystore serve`.
 
-**Experimental and unreleased: the API moves without notice.** The metrics
-engine works: atomic ingestion, label matching, exact range reads and streams,
-exact aggregates over raw samples, bounded maintenance with per-series
-quarantine, and reopen. See [the walkthrough](metrics/README.md) and its
-[runnable example](metrics/example_test.go). Around it the store holds the
-application's own SQL databases ([sqldb](sqldb/README.md)), its logs and events
-([records](records/README.md)), its current state ([kv](kv/README.md)), work
-that runs at its time ([jobs](jobs/README.md)), its files
-([blobs](blobs/README.md)) and backups; self-metrics are designed in
-[docs/architecture.md](docs/architecture.md) and not built yet.
+**Unreleased: the API moves without notice**, and no file written by an
+earlier revision has to be read.
 
-## Where a sample goes
+```go
+store, err := tinystore.Open(ctx, "./data", tinystore.Options{})
+if err != nil {
+	return err
+}
+defer store.Close()
 
-```text
-                 samples arrive
-                       │
-                       ▼
-          ┌─────────────────────────┐
-          │  recent and changeable  │   a late sample may still land here
-          │          tail           │
-          └────────────┬────────────┘
-                       │  old enough that nothing may change it any more
-                       ▼
-          ┌─────────────────────────┐
-          │          codec          │   240 samples, one compact byte string
-          └────────────┬────────────┘
-                       ▼
-          ┌─────────────────────────┐
-          │    immutable segment    │   written once, deleted whole
-          └────────────┬────────────┘
-                       ▼
-                    SQLite
+state, err := kv.Open(ctx, store, kv.Options{})
+if err != nil {
+	return err
+}
+drafts, err := kv.OpenBucket[string](ctx, state, "drafts")
+if err != nil {
+	return err
+}
+if err = drafts.Set(ctx, "note/1", "hello"); err != nil {
+	return err
+}
+text, found, err := drafts.Get(ctx, "note/1")
 ```
 
-The durable head is a bounded packed tail per series. Sealing writes groups
-of independent microblocks with shared clocks, constant/change/grid value
-representations and inline or separate payloads. Reads combine head and groups
-from one snapshot. Maintenance is called by the embedding application.
+[examples/notes](examples/notes/main.go) is a program using every engine.
 
-## What the codec does
+## Engines
 
-It reads the samples before choosing how to write them, and keeps the smallest
-result:
+| Package | What it keeps | File |
+|---|---|---|
+| [metrics](metrics/README.md) | samples, bit for bit, answered exactly | `metrics.db` |
+| [records](records/README.md) | logs and events, read by time, level and keys | `records.db` |
+| [sqldb](sqldb/README.md) | the application's own SQL, tables from structs, checked migrations | `sql/<name>.db` |
+| [kv](kv/README.md) | current state: typed buckets, counters, expiry, versions | `kv.db` |
+| [jobs](jobs/README.md) | work that runs at its time: retries, leases, repeats | `jobs.db` |
+| [blobs](blobs/README.md) | files by path, checked when read whole | `blobs/` |
+| [backup](backup/) | every engine's files in one checked zip | |
 
-```text
-   240 samples
-        │
-        ├── timestamps ──┬── every step equal      →  start, step, count
-        │                ├── nearly equal          →  delta of delta
-        │                └── arbitrary             →  delta
-        │
-        └── values ──────┬── all the same          →  nothing at all
-                         ├── exact integers        →  delta, zigzag, simple8b
-                         ├── written as decimals   →  a scale, then the same
-                         ├── float, moving smoothly →  xor against the last
-                         └── anything else         →  raw, eight bytes each
-                                   │
-                                   ▼
-                        zstd, kept only when smaller
-```
+## Other languages
 
-Nothing is rounded, scaled or approximated on the way in. `-0`, NaN payloads
-and infinities come back as the bits that went in.
-
-| 240 samples of         | bytes a sample |
-|------------------------|----------------|
-| one repeated value     | 0.033          |
-| tenths of a degree     | 0.254          |
-| whole numbers, walking | 0.456          |
-| a counter              | 0.507          |
-| a smooth float         | 7.838          |
-| random IEEE-754 bits   | 8.000          |
-
-Payload only. A whole SQLite file holding those blocks costs 0.72 bytes a
-sample for the whole numbers and 0.52 for the decimals, with the summaries,
-the indexes and the pages they sit in counted. The environment, the fixtures
-and the command that reproduces each number are in
-[tinyshed/research](https://github.com/tinyshed/research/blob/main/tinystore/measurements.md).
+`tinystore serve` in [cmd/tinystore](cmd/tinystore/) serves a directory over
+one protocol, [docs/wire.md](docs/wire.md), as a sidecar the SDKs start, a
+private child, or a remote server with TLS and tokens. The clients are
+[sdk/js](sdk/js/) for Bun and [sdk/python](sdk/python/README.md).
 
 ## Layout
 
-| Path                  | What it is                                                      |
-|-----------------------|-----------------------------------------------------------------|
-| `codec/`              | the block codec: what a payload looks like and how to read one  |
-| `metrics/`            | the durable metrics engine and its lifecycle tests              |
-| `records/`            | logs and events: a head, event-time segments, paged reads       |
-| `kv/`                 | the application's current state: typed buckets by key, versions |
-| `sqldb/`              | the application's own SQL databases in the store                |
-| `backup/`             | every engine's file in one checked zip, and its restore         |
-| `examples/`           | programs using the public API, built and tested with it         |
-| `internal/sqlite/`    | file handles, transactions and checked migrations               |
-| `internal/admission/` | the gate and slots every engine lets work in through            |
-| `docs/`               | the design, the format, the engines and the wire                |
-| `tools/`              | a second module pinning developer tools                         |
-| `cmd/tinystore/`      | a module of its own: `go tool tinystore`, migrations for sqldb  |
+| Path | What it is |
+|---|---|
+| `codec/` | the metrics block codec |
+| `metrics/`, `records/`, `sqldb/`, `kv/`, `jobs/`, `blobs/` | one package per engine |
+| `backup/` | a store's snapshot as one zip, and its restore |
+| `internal/` | SQLite files and transactions, admission, the directory lock |
+| `server/` | a module of its own: the store served to other processes |
+| `cmd/tinystore/` | a module of its own: `serve`, and `migrate` and `schema` for sqldb |
+| `sdk/` | the Bun and Python clients |
+| `examples/` | programs using the public API, built and tested with it |
+| `docs/` | the design, the formats and the wire protocol |
+| `tools/` | a module pinning developer tools |
 
-## Documentation
-
-|                                              |                                                        |
-|----------------------------------------------|--------------------------------------------------------|
-| [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape     |
-| [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version    |
-| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | every number, the rounds it came from, the open questions |
+The measurements and prototypes behind the design are in
+[tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore).
 
 ## License
 

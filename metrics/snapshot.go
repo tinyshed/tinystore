@@ -33,7 +33,8 @@ type snapshotRead struct {
 	deferPayloads bool
 }
 
-// smaller matches keep one query per series; see reports/batched-head-reads-2026-09-23.md
+// smaller matches keep one query per series, as tinyshed/research's
+// tinystore/reports/batched-head-reads-2026-09-23.md measured
 const batchedSeries = 16
 
 // fetchSnapshot copies everything a query needs out of one read transaction,

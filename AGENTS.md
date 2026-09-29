@@ -15,93 +15,35 @@ The measurements, prototypes and dated reports behind the decisions are in
 
 ## Status
 
-Built: `codec/` (1..240 ordered samples to a checked body, every IEEE-754 bit
-preserved, a fuzzed decoder that refuses corruption), `internal/sqlite/` (files,
-one pinned writer with bounded prepared programs, bounded readers, checked
-migrations) and `metrics/` (registry and postings with exact counts, a packed
-durable head, atomic bounded ingestion, `Read`, `Stream` and a raw-decoding exact
-`Aggregate` from one snapshot, version-checked sealing into merged groups,
-batched publication, per-series quarantine, retention with series reclamation,
-reopen). [metrics/README.md](metrics/README.md) states each of those contracts
-and its limits; this file does not repeat them. The `tinystore` root holds a
-directory and its lifecycle: `Open` with the directory lock, `Close`, `Claim`,
-`Attach`, `Logger`, `Now`, `Every` and the memory budget (`Options.Memory`,
-`Reserve`), and metrics opens through it, with instruments (`Counter`,
-`Gauge`, `GaugeFunc`) for an application measuring itself. Every engine takes a
-time only inside its window of the store's clock, and lets work in through the
-gate and slots of `internal/admission`. `sqldb` gives the
-application its own databases in `sql/<name>.db`: the application's SQL,
-tables declared by structs and `Table[T]`, the `STRICT` DDL they print,
-`.sql` migrations that `Open` checks the file against, a typed `Insert`,
-values Go and SQLite agree on, point reads as one prepared statement, `Exec`s
-committed in groups, and `sqldbtest.CheckSchema` with `go tool tinystore`,
-the module `cmd/tinystore`, writing the next migration
-([sqldb/README.md](sqldb/README.md), [docs/sqldb.md](docs/sqldb.md),
-[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-mechanics-2026-09-28.md),
-[the engine's](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-engine-2026-09-28.md)). `records`
-keeps logs and events in `records.db`: a
-durable head, segments of event-time blocks written column by column, a line's
-own time kept apart from its text, a quiet stream's small segments merged
-four of a size, paged reads pruned by time, level, keys and blooms, a follow
-cursor that a merge leaves in its place, a writer for another program's lines
-that joins their stack traces, keeps JSON and logfmt lines as fields and finds
-their levels, and rows that no longer read reported once and removed by `Drop`
-([records/README.md](records/README.md)). `kv` keeps the application's
-current state in `kv.db`: buckets of one value type and counters, keys in
-branches, expiry by the store's clock, sliding or fixed, versions that never
-repeat, writes committed in groups, point reads without a transaction,
-counters kept in memory between flushes when a crash may lose a second of
-them, and a branch cleared at once however large ([kv/README.md](kv/README.md)).
-`Store.Snapshot` copies every engine's files while it works, blobs' linked
-rather than copied, and `backup` writes those copies as one zip and restores
-it before `Open`.
+Built, each to its README, which states its contracts and limits, and its
+design document:
 
-`records` is built to [docs/records.md](docs/records.md), except the
-per-segment text sample, which one zstd frame a segment bounds at 0.48 bytes a
-record on the production corpus, and text templates beyond a line's own time,
-which cost more than zstd there; its format is version one and reads no
-earlier prototype.
-[examples/notes](examples/notes/main.go) is a program using all of it.
+| | What it is | Contract | Design |
+|---|---|---|---|
+| root | the directory and its lifecycle: `Open` under the lock, `Close`, `Claim`, `Attach`, `Logger`, `Now`, `Every`, the memory budget, `Snapshot` | [doc.go](doc.go) | [architecture.md](docs/architecture.md) |
+| `codec/` | 1..240 ordered samples to a checked body, every bit kept | [format.md](docs/format.md) | [design.md](docs/design.md) |
+| `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [design.md](docs/design.md) |
+| `records/` | logs and events, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
+| `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
+| `kv/` | buckets, counters, branches, expiry, versions | [README](kv/README.md) | [kv.md](docs/kv.md) |
+| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
+| `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
+| `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
+| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
+| `sdk/js`, `sdk/python` | the Bun and Python clients, tested against every vector and a real `tinystore serve` (`task sdk`) | | [server.md](docs/server.md) |
 
-`jobs` keeps work that runs at its time in `jobs.db`: typed queues ordered by
-time, leases and keys in tables of their own, retries, repeats kept as cron
-text, and a Work loop that holds two jobs a worker and claims and settles in
-one write ([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
-[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-mechanics-2026-09-27.md),
-[the engine's](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-engine-2026-09-27.md)).
+Where the building differs from the design:
 
-`blobs` keeps the application's files in `blobs/`: objects under keys that
-are paths, their rows in `blobs.db` with the bytes up to 16 KiB, and above it
-a file each, written in `uploads/` and renamed into `objects/` before the row
-that names it commits; readers that keep what they opened, whole reads
-checked by their SHA-256, `Copy` and `Move` that share the bytes, a `Clear`
-however large, a scrub, and snapshots that link the files
-([blobs/README.md](blobs/README.md), [docs/blobs.md](docs/blobs.md),
-[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md)).
+- `records` has no per-segment text sample, since one zstd frame a segment
+  bounds the text at 0.48 bytes a record on the production corpus, and no text
+  templates beyond a line's own time, which cost more than zstd there.
+- In metrics the versioned exact summary shortcut for aggregates and
+  steady-state performance are unfinished, with the gaps listed in research's
+  `rewrite.md`. Prototype density figures are not engine guarantees.
 
-The server is being built to [docs/server.md](docs/server.md) and
-[docs/wire.md](docs/wire.md), in `server/`, a module of its own: one
-protocol for a sidecar that Bun and Python start and for a remote server,
-MessagePack in twelve-byte frames over any byte stream, and no transaction
-held across the network. Built: `server/wire` (frames, the profile, the
-handshake, errors and kv's messages, with the vectors every SDK is tested
-against), a session (credit, cancelling, GOAWAY, silence, workers that keep
-their stacks, the first sender writing), Unix sockets, TCP and TLS with
-tokens, Windows named pipes, and kv through `kv.Raw`, jobs with a remote
-Work loop, blobs, sql, whose data connections pass a check of their own in
-two lines, SQLite's tokens and the program it compiles, records, another
-program's lines included, and metrics; and `tinystore serve`, a private child
-on stdin and stdout, the directory's sidecar published in `server/SERVE`
-under the store's lock and gone once idle, or a remote server with TLS and
-tokens; [docs/server.md](docs/server.md) "Building it" says where each slice
-stands and how the next goes on. The SDKs are built, in `sdk/js` (Bun) and
-`sdk/python`, each tested against every vector and every engine through a
-real `tinystore serve` (`task sdk`); their READMEs, examples and packages are
-not. Designed, not built: self-metrics.
-
-Unfinished in metrics: the versioned exact summary shortcut for aggregates,
-steady-state performance, and the gaps listed in research's `rewrite.md`.
-Prototype density figures are not engine guarantees.
+Not built: self-metrics; the SDKs' READMEs, examples and packages; a release.
+[docs/server.md](docs/server.md) "Building it" says where each server slice
+stands.
 
 Nothing is released: there is no tag, and no database written by an earlier
 revision has to be read. Readers for earlier formats are deleted, not kept,
