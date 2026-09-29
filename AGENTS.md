@@ -355,6 +355,16 @@ them again. Bound read limits use `LIMIT CAST(? AS INTEGER)` because a bare
 `step`; every caller supplies a checked integer. Keep both protections when
 changing the read path.
 
+**A statement by key runs to its end; one that walks a range keeps its
+context.** `database/sql` and the driver each start a goroutine to watch a
+context that can end, which cost a point read at depth 27 to 35 % of its rate.
+`sqlite.QueryRowByKey` checks the context and runs without its cancel; a count
+or a sum over a range goes through `sqlite.QueryRow`, which the context
+interrupts. A grouped write's statements run without their caller's context
+at all, since SQLite rolls back the whole transaction of a write statement it
+interrupts, every write of the group with it: only the application's SQL,
+through `sqlite.UntilDeadline`, ends at its caller's deadline.
+
 **Nothing scans every series.** Postings are in the first version rather than
 in an optimisation after it, and finding due work is an index over one value
 per series rather than one per sample. A million active series without a
@@ -563,9 +573,17 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |
 | writes queued for the writer share a commit, fail alone | `TestGroupedWritesShareACommitAndFailAlone`                                    |
 | a write whose caller left before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing`                             |
+| a grouped write that has started finishes with its group | `TestAWriteThatHasStartedFinishesWithItsGroup`, cancelled or past its deadline mid-statement |
+| the application's grouped SQL ends at its deadline     | `TestAStatementUntilItsDeadlineEndsThere`, `TestADataStatementEndsAtItsDeadline` |
+| a statement by key starts no goroutine, nor runs once its context ended | `TestAStatementByKeyStartsNoGoroutine`, `TestAStatementByKeyWhoseContextEndedDoesNotRun` |
+| a statement that walks a range ends at its deadline    | `TestARangeReadEndsAtItsDeadline`                                               |
+| a value SQLite would make past the store's memory is refused | `TestAValueSQLiteWouldMakePastTheStoresMemoryIsRefused`                   |
+| a download holds the store's memory until its last DATA | `TestADownloadHoldsTheStoresMemoryUntilItsLastData`                           |
+| a remote server is bounded unless told otherwise       | `TestARemoteServerIsBoundedUnlessToldOtherwise` in `cmd/tinystore`: 1 GiB with `--listen` |
 | a point read is its statement's own snapshot           | `TestALookupReadsEachStatementFromItsOwnSnapshot`                               |
 | a kv write that returned survives an abrupt exit       | `TestAWriteThatReturnedSurvivesAnAbruptExit`, from many goroutines at once      |
 | an expired key is absent to every operation            | `TestAnExpiredKeyIsAbsentToEveryOperation`                                      |
+| expiry past one pass's bound is taken in ten seconds   | `TestAMaintainPastItsBoundIsFollowedSoon`, expired and cleared rows             |
 | a default TTL is given once, at creation               | `TestADefaultTTLIsGivenOnceAtCreation`                                          |
 | an integer key is its decimal text                     | `TestAnIntegerKeyIsItsDecimalText`                                              |
 | a kv version never repeats                             | `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen`                             |
@@ -615,6 +633,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | jobs due together are claimed in batches               | `TestJobsDueTogetherAreClaimedInBatches`                                        |
 | a Work loop lets go of a lease another claim took      | `TestWorkLetsGoOfALeaseAnotherClaimTook`, without writing again at once         |
 | a handler stopped by `Close` gives its job back uncounted | `TestCloseGivesRunningJobsBackUncounted`                                     |
+| a handler that returns as `Work` ends settles as it returned | `TestAHandlerThatReturnsAsWorkEndsSettlesAsItReturned`, done, failed, stopped |
 | a job value comes back as the JSON it went in          | `TestAValueComesBackAsTheJSONItWentIn`                                          |
 | a value that no longer reads fails its job, not its queue | `TestAValueThatNoLongerReadsFailsItsJob`, through Claim and Work             |
 | a queue past `MaxWaiting` refuses the next job         | `TestAQueuePastMaxWaitingRefusesTheNextJob`                                     |

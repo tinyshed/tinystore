@@ -155,8 +155,9 @@ const there = await connect("tls://db.internal:7443", { token })
   `CGO_ENABLED=0`, so every target builds from one machine.
 - **Engine options are the server's**, from its flags: retention, clock
   skew, memory. A client's `open` carries only a handle's options. Built:
-  `--memory`, which is `Options.Memory`; the engines' own options wait for
-  their flags.
+  `--memory`, which is `Options.Memory`: 1 GiB for a server with `--listen`
+  unless it says, 0 for no bound, and no bound for a local one, whose clients
+  are its user's own; the engines' own options wait for their flags.
 - **What serve cannot do opens nothing.** Its flags, a tokens file and a
   certificate are read before the store opens, so a mistake leaves no `LOCK`
   and no file behind; a `tls://` listener takes `--tls-cert` and `--tls-key`
@@ -319,11 +320,15 @@ truth.
   ```
 
   A data client's statement ends at a deadline, 30 seconds, since a recursive
-  query can hold a reader or the writer for good.
-- **What the check does not bound is memory.** A data client's
-  `zeroblob(1e9)` makes SQLite allocate its whole length, a gigabyte, before
-  the store's memory sees a row; lowering `SQLITE_LIMIT_LENGTH` for the
-  server's connections is left to sqldb, which does not set it yet.
+  query can hold a reader or the writer for good. A write that deadline ends
+  takes its group with it, since SQLite rolls back the whole transaction of a
+  write statement it interrupts; a client's cancel lets it finish.
+- **What the check does not bound is memory; `--memory` does.** A data
+  client's `zeroblob(1e9)` makes SQLite allocate its whole length, a gigabyte,
+  before the store's memory sees a row, so sqldb sets `SQLITE_LIMIT_LENGTH` to
+  the store's memory and such a statement is `limit` before it allocates
+  anything. A remote server holds 1 GiB unless `--memory` says; a local one
+  run without it keeps SQLite's gigabyte.
 - **A token is a line of a file**, `admin <token>` or `data <token>`, 32
   random bytes in base64url, compared in constant time. On TCP there is no
   connection without one.
@@ -642,11 +647,12 @@ is released, and the gates it brought are in AGENTS.md.
 - **Drop is a write, not a repair**, so a data connection may drop a series,
   as it may delete a kv key; the records drop, which removes only what no
   longer reads, is an admin's.
-- **What a download holds between the engine's answer and its last `DATA` is
-  not the store's memory**: sql's rows, records' page and metrics' series are
-  counted while the engine reads them and released when it returns, and the
-  handler holds them until the client has taken them. Bounding that belongs
-  with the server's own memory bound.
+- **What a download holds until its last `DATA` is the store's memory.** An
+  engine counts its answer while it reads it and lets go when it returns; the
+  handler then holds it until the client has taken it, so the handler reserves
+  its weight, strings and bytes and two words a value, before its first
+  `DATA` and releases it when it returns: sql's rows, records' page and follow,
+  metrics' series and buckets, and the pages of kv, blobs and jobs scans.
 
 **What building `tinystore serve` settled:**
 
@@ -666,10 +672,13 @@ is released, and the gates it brought are in AGENTS.md.
 
 **Next, from here:**
 
-- **A point read without a goroutine**: `internal/sqlite`'s `QueryRow` runs
-  its statement with `context.WithoutCancel` once the context is checked, as
-  [the measurement](reports/rpc-server-2026-09-29.md#what-follows) proposes,
-  measured again beside it; then the SDKs, tested against the vectors file.
+- **A point read without a goroutine**, built: `internal/sqlite`'s
+  `QueryRowByKey` checks the context and runs a statement that finds its row
+  by a key with `context.WithoutCancel`, as
+  [the measurement](reports/rpc-server-2026-09-29.md#what-follows) proposed; a
+  count or a sum over a range stays on `QueryRow`, which the context
+  interrupts. To be measured again beside that report's figures; then the
+  SDKs, tested against the vectors file.
 - **Checks to run**: `go test` in the root, `go -C server test` and
   `go -C cmd/tinystore test`; lint with `bin/golangci-lint` in all three, for
   Windows and with `GOOS=linux`; and the race suite in the container, as the

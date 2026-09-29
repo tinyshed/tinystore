@@ -55,8 +55,17 @@ Each line cost a debugging session once. The fix named is the one in the code.
 ## Go and its libraries
 
 - **`database/sql` starts a goroutine for every query whose context can end**
-  (`Rows.initContextClose`): a point read with a request's context was 27 to
-  35 % slower at depth than with `context.Background`.
+  (`Rows.initContextClose`), **and modernc another** (`interruptOnDone`, for
+  every query and exec): a point read with a request's context was 27 to 35 %
+  slower at depth than with `context.Background`. A statement by key goes
+  through `sqlite.QueryRowByKey`, which checks the context and runs without its
+  cancel; `TestAStatementByKeyStartsNoGoroutine` counts them with
+  `/sched/goroutines-created:goroutines`.
+- **SQLite rolls back the whole transaction of a write statement it
+  interrupts**, not only its savepoint: a caller cancelling mid-statement
+  failed every write of its group. Grouped statements run without their
+  caller's context; `sqlite.UntilDeadline` is the one way back, for the
+  application's SQL.
 - **A goroutine started for each call grows its stack into SQLite every
   time**, and Go's default GC target collects hundreds of times a second: the
   server keeps workers and sets GOGC 400.
