@@ -586,7 +586,7 @@ Where the slices stand, 29 September 2026:
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
 | the Bun SDK, the Python SDK | not begun |
-| the measurement against the prototype | done: [rpc-server-2026-09-29](reports/rpc-server-2026-09-29.md); at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context |
+| the measurement against the prototype | done: [rpc-server-2026-09-29](reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
 
 Every slice built passes `go test`, `-race` in the `golang:1.27` container
 three times shuffled, and golangci-lint for Windows and Linux; nothing of it
@@ -677,8 +677,12 @@ is released, and the gates it brought are in AGENTS.md.
   by a key with `context.WithoutCancel`, as
   [the measurement](reports/rpc-server-2026-09-29.md#what-follows) proposed; a
   count or a sum over a range stays on `QueryRow`, which the context
-  interrupts. To be measured again beside that report's figures; then the
-  SDKs, tested against the vectors file.
+  interrupts. Measured in
+  [rpc-contexts-2026-09-29](reports/rpc-contexts-2026-09-29.md) with a
+  grouped write's statements run without their contexts too: 6 to 18 % more
+  gets from Go at depth, 18 to 35 % more sets at 256, on Windows; the
+  container, and the race suite, once Docker runs. Then the SDKs, tested
+  against the vectors file.
 - **Checks to run**: `go test` in the root, `go -C server test` and
   `go -C cmd/tinystore test`; lint with `bin/golangci-lint` in all three, for
   Windows and with `GOOS=linux`; and the race suite in the container, as the

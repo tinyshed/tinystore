@@ -230,6 +230,10 @@ of every query whose context can end from a goroutine of its own
   and its wait for a reader slot still honours the context. A scan and a
   query an application writes keep theirs, since those are what a deadline
   interrupts. Measured again beside this report's figures once built.
+  Built as `sqlite.QueryRowByKey`, with a grouped write's statements run
+  without their caller's context too, and measured in
+  [rpc-contexts-2026-09-29](rpc-contexts-2026-09-29.md): the server at 84 to
+  87 % of the prototype's best in that session.
 - **The server's own allocations** are what remains between it and the
   prototype's best, about a third of a `Get`'s CPU in the container: each
   stream's context, the entry's version and the answer's frame are where a

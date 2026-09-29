@@ -162,6 +162,7 @@ fetch and normalise them.
 | | |
 |---|---|
 | [rpc-server-2026-09-29.md](rpc-server-2026-09-29.md) | the built server through `tinystore serve` beside the prototype, in the same session, on Windows and in the container: at depth 267 to 331 thousand gets a second from Go and Bun on Windows where the prototype as its round ran it served 150 to 268, and 68 to 78 % of its best sidecar, at up to twice its CPU a get; one call in flight the round trip's; sets the group's; a point read whose context can end 27 to 35 % slower embedded, the goroutine `database/sql` starts to watch it |
+| [rpc-contexts-2026-09-29.md](rpc-contexts-2026-09-29.md) | the server with point reads and grouped writes whose statements start no goroutine for their contexts, against the server before, on Windows in one session: embedded, a call's own context free at one in flight and 10 to 18 % at depth where it cost 28 to 39; through the server 6 to 18 % more gets from Go, 18 to 35 % more sets at 256; 84 to 87 % of the prototype's best sidecar at 24 to 26 µs of CPU a get against its 18; the container waits for Docker |
 
 ## 29 September 2026 — comments
 

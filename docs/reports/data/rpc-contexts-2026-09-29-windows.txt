@@ -1,0 +1,1510 @@
+# order of the runs, UTC
+=== TestGetsWithAContextThatCanEnd pass 1 base start 10:13:10
+=== TestGetsWithAContextThatCanEnd pass 1 base end 10:13:23 exit 0
+=== TestGetsWithAContextThatCanEnd pass 1 candidate start 10:13:23
+=== TestGetsWithAContextThatCanEnd pass 1 candidate end 10:13:35 exit 0
+=== TestGetsWithAContextThatCanEnd pass 2 base start 10:13:35
+=== TestGetsWithAContextThatCanEnd pass 2 base end 10:13:48 exit 0
+=== TestGetsWithAContextThatCanEnd pass 2 candidate start 10:13:48
+=== TestGetsWithAContextThatCanEnd pass 2 candidate end 10:14:00 exit 0
+=== TestServeTransports pass 1 base start 10:14:01
+=== TestServeTransports pass 1 base end 10:15:26 exit 0
+=== TestServeTransports pass 1 candidate start 10:15:26
+=== TestServeTransports pass 1 candidate end 10:16:42 exit 0
+=== TestServeTransports pass 2 base start 10:16:42
+=== TestServeTransports pass 2 base end 10:17:58 exit 0
+=== TestServeTransports pass 2 candidate start 10:17:58
+=== TestServeTransports pass 2 candidate end 10:19:13 exit 0
+=== TestServeProfile pass 1 base start 10:19:13
+=== TestServeProfile pass 1 base end 10:19:18 exit 0
+=== TestServeProfile pass 1 candidate start 10:19:18
+=== TestServeProfile pass 1 candidate end 10:19:23 exit 0
+=== TestServeProfile pass 2 base start 10:19:23
+=== TestServeProfile pass 2 base end 10:19:27 exit 0
+=== TestServeProfile pass 2 candidate start 10:19:27
+=== TestServeProfile pass 2 candidate end 10:19:32 exit 0
+=== done 10:19:32
+=== prototype pass 1 start 10:20:49
+=== prototype pass 1 end 10:21:29 exit 0
+=== server profile pass 1 start 10:21:29
+=== server profile pass 1 end 10:21:33
+=== prototype pass 2 start 10:21:33
+=== prototype pass 2 end 10:22:13 exit 0
+=== server profile pass 2 start 10:22:13
+=== server profile pass 2 end 10:22:17
+
+######## TestGetsWithAContextThatCanEnd pass 1, base 2003e1c
+=== RUN   TestGetsWithAContextThatCanEnd
+    context_spike_test.go:53: context.Background     get    1      128260 ops/s  mean       7.8 µs
+    context_spike_test.go:53: context.Background     get   64      354179 ops/s  mean     180.7 µs
+    context_spike_test.go:53: context.Background     get  256      312872 ops/s  mean     818.2 µs
+    context_spike_test.go:53: a call's own, can end  get    1       62301 ops/s  mean      16.1 µs
+    context_spike_test.go:53: a call's own, can end  get   64      252878 ops/s  mean     253.1 µs
+    context_spike_test.go:53: a call's own, can end  get  256      190354 ops/s  mean    1344.9 µs
+--- PASS: TestGetsWithAContextThatCanEnd (12.51s)
+PASS
+
+######## TestGetsWithAContextThatCanEnd pass 1, candidate fccf0ed
+=== RUN   TestGetsWithAContextThatCanEnd
+    context_spike_test.go:53: context.Background     get    1      119982 ops/s  mean       8.3 µs
+    context_spike_test.go:53: context.Background     get   64      411883 ops/s  mean     155.4 µs
+    context_spike_test.go:53: context.Background     get  256      347644 ops/s  mean     736.4 µs
+    context_spike_test.go:53: a call's own, can end  get    1      131293 ops/s  mean       7.6 µs
+    context_spike_test.go:53: a call's own, can end  get   64      369923 ops/s  mean     173.0 µs
+    context_spike_test.go:53: a call's own, can end  get  256      283609 ops/s  mean     902.7 µs
+--- PASS: TestGetsWithAContextThatCanEnd (12.49s)
+PASS
+
+######## TestGetsWithAContextThatCanEnd pass 2, base 2003e1c
+=== RUN   TestGetsWithAContextThatCanEnd
+    context_spike_test.go:53: context.Background     get    1      127414 ops/s  mean       7.8 µs
+    context_spike_test.go:53: context.Background     get   64      353505 ops/s  mean     181.0 µs
+    context_spike_test.go:53: context.Background     get  256      312286 ops/s  mean     819.8 µs
+    context_spike_test.go:53: a call's own, can end  get    1       62957 ops/s  mean      15.9 µs
+    context_spike_test.go:53: a call's own, can end  get   64      250984 ops/s  mean     255.0 µs
+    context_spike_test.go:53: a call's own, can end  get  256      204168 ops/s  mean    1253.9 µs
+--- PASS: TestGetsWithAContextThatCanEnd (12.51s)
+PASS
+
+######## TestGetsWithAContextThatCanEnd pass 2, candidate fccf0ed
+=== RUN   TestGetsWithAContextThatCanEnd
+    context_spike_test.go:53: context.Background     get    1      127269 ops/s  mean       7.9 µs
+    context_spike_test.go:53: context.Background     get   64      382870 ops/s  mean     167.2 µs
+    context_spike_test.go:53: context.Background     get  256      298568 ops/s  mean     857.4 µs
+    context_spike_test.go:53: a call's own, can end  get    1      120165 ops/s  mean       8.3 µs
+    context_spike_test.go:53: a call's own, can end  get   64      320264 ops/s  mean     199.8 µs
+    context_spike_test.go:53: a call's own, can end  get  256      264587 ops/s  mean     967.5 µs
+--- PASS: TestGetsWithAContextThatCanEnd (12.50s)
+PASS
+
+######## TestServeTransports pass 1, base 2003e1c
+=== RUN   TestServeTransports
+    serve_spike_test.go:421: go             pipe   server    get      1       22314 ops/s  mean      44.8 µs
+    serve_spike_test.go:421: go             pipe   server    get     64      292888 ops/s  mean     218.5 µs
+    serve_spike_test.go:421: go             pipe   server    get    256      305782 ops/s  mean     837.2 µs
+    serve_spike_test.go:421: go             pipe   server    set      1         638 ops/s  mean    1568.5 µs
+    serve_spike_test.go:421: go             pipe   server    set     64       13857 ops/s  mean    4618.6 µs
+    serve_spike_test.go:421: go             pipe   server    set    256       27250 ops/s  mean    9394.7 µs
+    serve_spike_test.go:430: bun            pipe   server    get      1       21989 ops/s  mean      45.5 µs
+    serve_spike_test.go:430: bun            pipe   server    get     64      320735 ops/s  mean     199.5 µs
+    serve_spike_test.go:430: bun            pipe   server    get    256      325978 ops/s  mean     785.3 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get      1       14787 ops/s  mean      67.6 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get     64      193458 ops/s  mean     330.8 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get    256      213436 ops/s  mean    1199.4 µs
+    serve_spike_test.go:421: go             stdio  server    get      1       20967 ops/s  mean      47.7 µs
+    serve_spike_test.go:421: go             stdio  server    get     64      302711 ops/s  mean     211.4 µs
+    serve_spike_test.go:421: go             stdio  server    get    256      325378 ops/s  mean     786.8 µs
+    serve_spike_test.go:421: go             stdio  server    set      1         633 ops/s  mean    1580.1 µs
+    serve_spike_test.go:421: go             stdio  server    set     64       13800 ops/s  mean    4637.6 µs
+    serve_spike_test.go:421: go             stdio  server    set    256       26241 ops/s  mean    9755.8 µs
+    serve_spike_test.go:430: bun            stdio  server    get      1       22876 ops/s  mean      43.7 µs
+    serve_spike_test.go:430: bun            stdio  server    get     64      290983 ops/s  mean     219.9 µs
+    serve_spike_test.go:430: bun            stdio  server    get    256      305338 ops/s  mean     838.4 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get      1       13352 ops/s  mean      74.9 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get     64      167328 ops/s  mean     382.5 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get    256      199621 ops/s  mean    1282.4 µs
+    serve_spike_test.go:421: go             tcp    server    get      1       13130 ops/s  mean      76.2 µs
+    serve_spike_test.go:421: go             tcp    server    get     64      295759 ops/s  mean     216.4 µs
+    serve_spike_test.go:421: go             tcp    server    get    256      313986 ops/s  mean     815.3 µs
+    serve_spike_test.go:421: go             tcp    server    set      1         648 ops/s  mean    1542.1 µs
+    serve_spike_test.go:421: go             tcp    server    set     64       14020 ops/s  mean    4564.8 µs
+    serve_spike_test.go:421: go             tcp    server    set    256       28346 ops/s  mean    9031.3 µs
+    serve_spike_test.go:430: bun            tcp    server    get      1       14381 ops/s  mean      69.5 µs
+    serve_spike_test.go:430: bun            tcp    server    get     64      280649 ops/s  mean     228.0 µs
+    serve_spike_test.go:430: bun            tcp    server    get    256      328941 ops/s  mean     778.3 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get      1       10997 ops/s  mean      90.9 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get     64      160302 ops/s  mean     399.2 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get    256      209202 ops/s  mean    1223.7 µs
+--- PASS: TestServeTransports (84.94s)
+PASS
+
+######## TestServeTransports pass 1, candidate fccf0ed
+=== RUN   TestServeTransports
+    serve_spike_test.go:421: go             pipe   server    get      1       23980 ops/s  mean      41.7 µs
+    serve_spike_test.go:421: go             pipe   server    get     64      334898 ops/s  mean     191.1 µs
+    serve_spike_test.go:421: go             pipe   server    get    256      341248 ops/s  mean     750.2 µs
+    serve_spike_test.go:421: go             pipe   server    set      1         654 ops/s  mean    1529.7 µs
+    serve_spike_test.go:421: go             pipe   server    set     64       15204 ops/s  mean    4209.5 µs
+    serve_spike_test.go:421: go             pipe   server    set    256       33816 ops/s  mean    7570.5 µs
+    serve_spike_test.go:430: bun            pipe   server    get      1       29440 ops/s  mean      34.0 µs
+    serve_spike_test.go:430: bun            pipe   server    get     64      343940 ops/s  mean     186.1 µs
+    serve_spike_test.go:430: bun            pipe   server    get    256      358577 ops/s  mean     713.9 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get      1       21448 ops/s  mean      46.6 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get     64      201129 ops/s  mean     318.2 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get    256      228436 ops/s  mean    1120.7 µs
+    serve_spike_test.go:421: go             stdio  server    get      1       22108 ops/s  mean      45.2 µs
+    serve_spike_test.go:421: go             stdio  server    get     64      336656 ops/s  mean     190.1 µs
+    serve_spike_test.go:421: go             stdio  server    get    256      361871 ops/s  mean     707.4 µs
+    serve_spike_test.go:421: go             stdio  server    set      1         646 ops/s  mean    1548.4 µs
+    serve_spike_test.go:421: go             stdio  server    set     64       15696 ops/s  mean    4077.4 µs
+    serve_spike_test.go:421: go             stdio  server    set    256       33699 ops/s  mean    7596.7 µs
+    serve_spike_test.go:430: bun            stdio  server    get      1       25310 ops/s  mean      39.5 µs
+    serve_spike_test.go:430: bun            stdio  server    get     64      311920 ops/s  mean     205.2 µs
+    serve_spike_test.go:430: bun            stdio  server    get    256      332998 ops/s  mean     768.8 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get      1       16359 ops/s  mean      61.1 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get     64      176342 ops/s  mean     362.9 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get    256      206618 ops/s  mean    1239.0 µs
+    serve_spike_test.go:421: go             tcp    server    get      1       15304 ops/s  mean      65.3 µs
+    serve_spike_test.go:421: go             tcp    server    get     64      340160 ops/s  mean     188.1 µs
+    serve_spike_test.go:421: go             tcp    server    get    256      367834 ops/s  mean     696.0 µs
+    serve_spike_test.go:421: go             tcp    server    set      1         621 ops/s  mean    1609.9 µs
+    serve_spike_test.go:421: go             tcp    server    set     64       15319 ops/s  mean    4177.9 µs
+    serve_spike_test.go:421: go             tcp    server    set    256       34664 ops/s  mean    7385.1 µs
+    serve_spike_test.go:430: bun            tcp    server    get      1       15952 ops/s  mean      62.7 µs
+    serve_spike_test.go:430: bun            tcp    server    get     64      296134 ops/s  mean     216.1 µs
+    serve_spike_test.go:430: bun            tcp    server    get    256      364815 ops/s  mean     701.7 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get      1       11674 ops/s  mean      85.7 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get     64      179104 ops/s  mean     357.3 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get    256      216432 ops/s  mean    1182.8 µs
+--- PASS: TestServeTransports (76.54s)
+PASS
+
+######## TestServeTransports pass 2, base 2003e1c
+=== RUN   TestServeTransports
+    serve_spike_test.go:421: go             pipe   server    get      1       22480 ops/s  mean      44.5 µs
+    serve_spike_test.go:421: go             pipe   server    get     64      295560 ops/s  mean     216.5 µs
+    serve_spike_test.go:421: go             pipe   server    get    256      303983 ops/s  mean     842.2 µs
+    serve_spike_test.go:421: go             pipe   server    set      1         615 ops/s  mean    1625.6 µs
+    serve_spike_test.go:421: go             pipe   server    set     64       13695 ops/s  mean    4673.3 µs
+    serve_spike_test.go:421: go             pipe   server    set    256       26362 ops/s  mean    9711.0 µs
+    serve_spike_test.go:430: bun            pipe   server    get      1       19993 ops/s  mean      50.0 µs
+    serve_spike_test.go:430: bun            pipe   server    get     64      300627 ops/s  mean     212.9 µs
+    serve_spike_test.go:430: bun            pipe   server    get    256      316647 ops/s  mean     808.5 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get      1       16326 ops/s  mean      61.3 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get     64      201704 ops/s  mean     317.3 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get    256      226568 ops/s  mean    1129.9 µs
+    serve_spike_test.go:421: go             stdio  server    get      1       24292 ops/s  mean      41.2 µs
+    serve_spike_test.go:421: go             stdio  server    get     64      317286 ops/s  mean     201.7 µs
+    serve_spike_test.go:421: go             stdio  server    get    256      317200 ops/s  mean     807.1 µs
+    serve_spike_test.go:421: go             stdio  server    set      1         645 ops/s  mean    1550.1 µs
+    serve_spike_test.go:421: go             stdio  server    set     64       13902 ops/s  mean    4603.8 µs
+    serve_spike_test.go:421: go             stdio  server    set    256       26629 ops/s  mean    9613.6 µs
+    serve_spike_test.go:430: bun            stdio  server    get      1       24118 ops/s  mean      41.5 µs
+    serve_spike_test.go:430: bun            stdio  server    get     64      290050 ops/s  mean     220.7 µs
+    serve_spike_test.go:430: bun            stdio  server    get    256      299152 ops/s  mean     855.8 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get      1       12647 ops/s  mean      79.1 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get     64      163396 ops/s  mean     391.7 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get    256      202288 ops/s  mean    1265.5 µs
+    serve_spike_test.go:421: go             tcp    server    get      1       14029 ops/s  mean      71.3 µs
+    serve_spike_test.go:421: go             tcp    server    get     64      296220 ops/s  mean     216.1 µs
+    serve_spike_test.go:421: go             tcp    server    get    256      312351 ops/s  mean     819.6 µs
+    serve_spike_test.go:421: go             tcp    server    set      1         612 ops/s  mean    1632.7 µs
+    serve_spike_test.go:421: go             tcp    server    set     64       13493 ops/s  mean    4743.0 µs
+    serve_spike_test.go:421: go             tcp    server    set    256       26273 ops/s  mean    9743.7 µs
+    serve_spike_test.go:430: bun            tcp    server    get      1       13394 ops/s  mean      74.7 µs
+    serve_spike_test.go:430: bun            tcp    server    get     64      275493 ops/s  mean     232.3 µs
+    serve_spike_test.go:430: bun            tcp    server    get    256      325337 ops/s  mean     786.9 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get      1       11300 ops/s  mean      88.5 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get     64      168706 ops/s  mean     379.4 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get    256      207613 ops/s  mean    1233.1 µs
+--- PASS: TestServeTransports (75.49s)
+PASS
+
+######## TestServeTransports pass 2, candidate fccf0ed
+=== RUN   TestServeTransports
+    serve_spike_test.go:421: go             pipe   server    get      1       25868 ops/s  mean      38.7 µs
+    serve_spike_test.go:421: go             pipe   server    get     64      338673 ops/s  mean     189.0 µs
+    serve_spike_test.go:421: go             pipe   server    get    256      349866 ops/s  mean     731.7 µs
+    serve_spike_test.go:421: go             pipe   server    set      1         627 ops/s  mean    1594.2 µs
+    serve_spike_test.go:421: go             pipe   server    set     64       15236 ops/s  mean    4200.6 µs
+    serve_spike_test.go:421: go             pipe   server    set    256       35529 ops/s  mean    7205.4 µs
+    serve_spike_test.go:430: bun            pipe   server    get      1       26335 ops/s  mean      38.0 µs
+    serve_spike_test.go:430: bun            pipe   server    get     64      344691 ops/s  mean     185.7 µs
+    serve_spike_test.go:430: bun            pipe   server    get    256      354582 ops/s  mean     722.0 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get      1       19529 ops/s  mean      51.2 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get     64      217517 ops/s  mean     294.2 µs
+    serve_spike_test.go:430: python asyncio pipe   server    get    256      226793 ops/s  mean    1128.8 µs
+    serve_spike_test.go:421: go             stdio  server    get      1       24657 ops/s  mean      40.6 µs
+    serve_spike_test.go:421: go             stdio  server    get     64      354573 ops/s  mean     180.5 µs
+    serve_spike_test.go:421: go             stdio  server    get    256      352681 ops/s  mean     725.9 µs
+    serve_spike_test.go:421: go             stdio  server    set      1         657 ops/s  mean    1523.1 µs
+    serve_spike_test.go:421: go             stdio  server    set     64       15488 ops/s  mean    4132.3 µs
+    serve_spike_test.go:421: go             stdio  server    set    256       34565 ops/s  mean    7406.4 µs
+    serve_spike_test.go:430: bun            stdio  server    get      1       27028 ops/s  mean      37.0 µs
+    serve_spike_test.go:430: bun            stdio  server    get     64      319728 ops/s  mean     200.2 µs
+    serve_spike_test.go:430: bun            stdio  server    get    256      324671 ops/s  mean     788.5 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get      1       17251 ops/s  mean      58.0 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get     64      166618 ops/s  mean     384.1 µs
+    serve_spike_test.go:430: python asyncio stdio  server    get    256      199353 ops/s  mean    1284.2 µs
+    serve_spike_test.go:421: go             tcp    server    get      1       13635 ops/s  mean      73.3 µs
+    serve_spike_test.go:421: go             tcp    server    get     64      339426 ops/s  mean     188.6 µs
+    serve_spike_test.go:421: go             tcp    server    get    256      366943 ops/s  mean     697.7 µs
+    serve_spike_test.go:421: go             tcp    server    set      1         639 ops/s  mean    1564.6 µs
+    serve_spike_test.go:421: go             tcp    server    set     64       14980 ops/s  mean    4272.3 µs
+    serve_spike_test.go:421: go             tcp    server    set    256       33541 ops/s  mean    7632.5 µs
+    serve_spike_test.go:430: bun            tcp    server    get      1       14239 ops/s  mean      70.2 µs
+    serve_spike_test.go:430: bun            tcp    server    get     64      278697 ops/s  mean     229.6 µs
+    serve_spike_test.go:430: bun            tcp    server    get    256      338297 ops/s  mean     756.7 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get      1       11594 ops/s  mean      86.3 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get     64      174029 ops/s  mean     367.8 µs
+    serve_spike_test.go:430: python asyncio tcp    server    get    256      214494 ops/s  mean    1193.5 µs
+--- PASS: TestServeTransports (75.27s)
+PASS
+
+######## TestServeProfile pass 1, base 2003e1c
+=== RUN   TestServeProfile
+    profile_spike_test.go:189: server at 256:  321283 gets/s; a get 68.19 allocations and   3340 bytes, 95 GCs, on 16 processors
+    profile_spike_test.go:191: server.pprof -top -nodecount=35:
+        File: base.test.exe
+        Build ID: <tmp>\measure\base.test.exe2026-09-29 13:13:07.8578315 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:15 MSK
+        Duration: 2s, Total samples = 22.18s (1109.18%)
+        Showing nodes accounting for 15.44s, 69.61% of 22.18s total
+        Dropped 500 nodes (cum <= 0.11s)
+        Showing top 35 nodes out of 234
+              flat  flat%   sum%        cum   cum%
+             6.95s 31.33% 31.33%      7.04s 31.74%  runtime.cgocall
+             3.42s 15.42% 46.75%      3.42s 15.42%  runtime.osyield.func1
+             0.80s  3.61% 50.36%      0.80s  3.61%  runtime.semasleep
+             0.52s  2.34% 52.71%      4.71s 21.24%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.39s  1.76% 54.46%      1.47s  6.63%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.30s  1.35% 55.82%      0.30s  1.35%  runtime.procyieldAsm
+             0.26s  1.17% 56.99%      4.06s 18.30%  runtime.stealWork
+             0.23s  1.04% 58.03%      0.25s  1.13%  runtime.netpoll
+             0.21s  0.95% 58.97%      3.59s 16.19%  runtime.runqgrab
+             0.18s  0.81% 59.78%      0.47s  2.12%  modernc.org/sqlite/lib.mutexEnter
+             0.17s  0.77% 60.55%      0.24s  1.08%  runtime.mallocgcSmallScanNoHeaderSC7
+             0.15s  0.68% 61.23%      0.15s  0.68%  runtime.semawakeup
+             0.14s  0.63% 61.86%      1.01s  4.55%  runtime.lock2
+             0.13s  0.59% 62.44%      0.13s  0.59%  modernc.org/libc.Xmemcmp (inline)
+             0.12s  0.54% 62.98%      0.13s  0.59%  runtime.mallocgcTinySC2
+             0.12s  0.54% 63.53%      0.64s  2.89%  runtime.selectgo
+             0.11s   0.5% 64.02%      4.78s 21.55%  runtime.findRunnable
+             0.10s  0.45% 64.47%      0.29s  1.31%  context.(*cancelCtx).Done
+             0.10s  0.45% 64.92%      0.20s   0.9%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.10s  0.45% 65.37%      0.17s  0.77%  runtime.unlock2
+             0.09s  0.41% 65.78%     10.73s 48.38%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.09s  0.41% 66.19%      0.19s  0.86%  internal/sync.(*Mutex).Unlock (inline)
+             0.08s  0.36% 66.55%      0.12s  0.54%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.07s  0.32% 66.86%      0.35s  1.58%  runtime.sellock
+             0.06s  0.27% 67.13%      0.33s  1.49%  database/sql.(*Rows).nextLocked
+             0.06s  0.27% 67.40%      0.16s  0.72%  internal/runtime/maps.(*table).Delete
+             0.06s  0.27% 67.67%      0.43s  1.94%  internal/sync.(*Mutex).Lock (inline)
+             0.06s  0.27% 67.94%      0.30s  1.35%  modernc.org/sqlite.(*conn).bind
+             0.06s  0.27% 68.21%      0.19s  0.86%  runtime.(*mcache).refill
+             0.06s  0.27% 68.49%      0.91s  4.10%  runtime.mallocgc
+             0.06s  0.27% 68.76%      0.18s  0.81%  runtime.mapassign
+             0.05s  0.23% 68.98%      0.13s  0.59%  database/sql.convertAssignRows
+             0.05s  0.23% 69.21%      0.17s  0.77%  modernc.org/sqlite.interruptOnDone.func1
+             0.05s  0.23% 69.43%      0.24s  1.08%  sync.(*Mutex).Unlock (partial-inline)
+             0.04s  0.18% 69.61%      0.15s  0.68%  context.(*cancelCtx).propagateCancel
+    profile_spike_test.go:191: server.pprof -top -cum -nodecount=45:
+        File: base.test.exe
+        Build ID: <tmp>\measure\base.test.exe2026-09-29 13:13:07.8578315 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:15 MSK
+        Duration: 2s, Total samples = 22.18s (1109.18%)
+        Showing nodes accounting for 12.18s, 54.91% of 22.18s total
+        Dropped 500 nodes (cum <= 0.11s)
+        Showing top 45 nodes out of 234
+              flat  flat%   sum%        cum   cum%
+             0.01s 0.045% 0.045%     13.22s 59.60%  github.com/tinyshed/tinystore/server.(*session).work
+                 0     0% 0.045%     13.22s 59.60%  github.com/tinyshed/tinystore/server.(*workers).run.func1
+                 0     0% 0.045%     13.22s 59.60%  sync.(*WaitGroup).Go.func1
+             0.03s  0.14%  0.18%     13.02s 58.70%  github.com/tinyshed/tinystore/server.(*session).handle
+             0.02s  0.09%  0.27%     12.66s 57.08%  github.com/tinyshed/tinystore/server.(*Server).kvMethods.func1
+             0.03s  0.14%  0.41%     12.64s 56.99%  github.com/tinyshed/tinystore/server.kvOne
+             0.03s  0.14%  0.54%     11.23s 50.63%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+                 0     0%  0.54%     11.11s 50.09%  github.com/tinyshed/tinystore/server.runValues
+             0.02s  0.09%  0.63%     11.03s 49.73%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+                 0     0%  0.63%     10.74s 48.42%  github.com/tinyshed/tinystore/kv.(*branch).read
+                 0     0%  0.63%     10.73s 48.38%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup (inline)
+             0.09s  0.41%  1.04%     10.73s 48.38%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+                 0     0%  1.04%      9.93s 44.77%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup.func1
+             0.01s 0.045%  1.08%      9.93s 44.77%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry.func1
+             0.01s 0.045%  1.13%      9.92s 44.72%  github.com/tinyshed/tinystore/kv.readLive
+             0.01s 0.045%  1.17%      7.08s 31.92%  syscall.SyscallN
+             0.03s  0.14%  1.31%      7.07s 31.88%  syscall.syscalln
+             6.95s 31.33% 32.64%      7.04s 31.74%  runtime.cgocall
+                 0     0% 32.64%      6.97s 31.42%  github.com/tinyshed/tinystore/internal/sqlite.QueryRow (inline)
+             0.02s  0.09% 32.73%      6.96s 31.38%  github.com/tinyshed/tinystore/internal/sqlite.(*preparedConnection).QueryContext
+             0.02s  0.09% 32.82%      6.88s 31.02%  database/sql.(*Stmt).QueryContext
+                 0     0% 32.82%      6.82s 30.75%  database/sql.(*DB).retry
+             0.04s  0.18% 33.00%      6.82s 30.75%  database/sql.(*Stmt).QueryContext.func1
+             0.04s  0.18% 33.18%      6.16s 27.77%  database/sql.rowsiFromStatement
+             0.03s  0.14% 33.32%         6s 27.05%  database/sql.ctxDriverStmtQuery
+             0.02s  0.09% 33.41%      5.97s 26.92%  modernc.org/sqlite.(*stmt).QueryContext
+             0.01s 0.045% 33.45%      5.95s 26.83%  modernc.org/sqlite.(*stmt).query
+             0.01s 0.045% 33.50%      5.09s 22.95%  runtime.mcall
+             0.04s  0.18% 33.68%      5.01s 22.59%  runtime.schedule
+             0.01s 0.045% 33.72%      4.78s 21.55%  modernc.org/sqlite.(*conn).step
+             0.11s   0.5% 34.22%      4.78s 21.55%  runtime.findRunnable
+             0.03s  0.14% 34.36%      4.77s 21.51%  modernc.org/sqlite/lib.Xsqlite3_step
+             0.03s  0.14% 34.49%      4.74s 21.37%  modernc.org/sqlite/lib._sqlite3Step
+             0.52s  2.34% 36.83%      4.71s 21.24%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.26s  1.17% 38.01%      4.06s 18.30%  runtime.stealWork
+                 0     0% 38.01%      3.84s 17.31%  golang.org/x/sys/windows.(*LazyProc).Call
+             0.02s  0.09% 38.10%      3.83s 17.27%  golang.org/x/sys/windows.(*Proc).Call
+             0.04s  0.18% 38.28%      3.63s 16.37%  runtime.runqsteal
+             0.21s  0.95% 39.22%      3.59s 16.19%  runtime.runqgrab
+             0.02s  0.09% 39.31%      3.43s 15.46%  internal/poll.(*FD).execIO
+             3.42s 15.42% 54.73%      3.42s 15.42%  runtime.osyield.func1
+                 0     0% 54.73%      3.37s 15.19%  runtime.osyield (inline)
+             0.01s 0.045% 54.78%      3.14s 14.16%  runtime.park_m
+             0.02s  0.09% 54.87%      2.79s 12.58%  github.com/tinyshed/tinystore/internal/sqlite.(*Row).Scan
+             0.01s 0.045% 54.91%      2.55s 11.50%  modernc.org/sqlite/lib._sqlite3OsShmLock (inline)
+    profile_spike_test.go:191: server.pprof -peek runtime\.cgocall$|runtime\.semasleep$|runtime\.futex$:
+        File: base.test.exe
+        Build ID: <tmp>\measure\base.test.exe2026-09-29 13:13:07.8578315 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:15 MSK
+        Duration: 2s, Total samples = 22.18s (1109.18%)
+        Showing nodes accounting for 22.15s, 99.86% of 22.18s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     7.04s   100% |   syscall.syscalln
+             6.95s 31.33% 31.33%      7.04s 31.74%                | runtime.cgocall
+                                                     0.07s  0.99% |   runtime.osPreemptExtEnter
+                                                     0.02s  0.28% |   runtime.entersyscall
+        ----------------------------------------------------------+-------------
+                                                     0.80s   100% |   runtime.lock2
+             0.80s  3.61% 34.94%      0.80s  3.61%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestServeProfile (5.27s)
+PASS
+
+######## TestServeProfile pass 1, candidate fccf0ed
+=== RUN   TestServeProfile
+    profile_spike_test.go:189: server at 256:  357387 gets/s; a get 59.18 allocations and   2631 bytes, 87 GCs, on 16 processors
+    profile_spike_test.go:191: server.pprof -top -nodecount=35:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:20 MSK
+        Duration: 2s, Total samples = 17.55s (877.29%)
+        Showing nodes accounting for 12.14s, 69.17% of 17.55s total
+        Dropped 418 nodes (cum <= 0.09s)
+        Showing top 35 nodes out of 235
+              flat  flat%   sum%        cum   cum%
+             7.02s 40.00% 40.00%      7.07s 40.28%  runtime.cgocall
+             0.84s  4.79% 44.79%      0.84s  4.79%  runtime.semasleep
+             0.60s  3.42% 48.21%      0.60s  3.42%  runtime.osyield.func1
+             0.60s  3.42% 51.62%      0.60s  3.42%  runtime.procyieldAsm
+             0.35s  1.99% 53.62%      1.64s  9.34%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.35s  1.99% 55.61%      5.02s 28.60%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.16s  0.91% 56.52%      0.56s  3.19%  modernc.org/sqlite/lib.mutexEnter
+             0.15s  0.85% 57.38%      0.25s  1.42%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.14s   0.8% 58.18%      0.14s   0.8%  runtime.semawakeup
+             0.13s  0.74% 58.92%      0.26s  1.48%  database/sql.convertAssignRows
+             0.13s  0.74% 59.66%      0.13s  0.74%  modernc.org/libc.Xmemcmp (inline)
+             0.10s  0.57% 60.23%      0.10s  0.57%  runtime.memmove
+             0.09s  0.51% 60.74%      0.38s  2.17%  database/sql.(*DB).addDep
+             0.09s  0.51% 61.25%      0.09s  0.51%  runtime.nextFreeFast (inline)
+             0.09s  0.51% 61.77%      0.79s  4.50%  runtime.stealWork
+             0.08s  0.46% 62.22%      0.65s  3.70%  internal/sync.(*Mutex).lockSlow
+             0.08s  0.46% 62.68%      0.14s   0.8%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.08s  0.46% 63.13%      0.09s  0.51%  modernc.org/sqlite/lib._releaseMemArray
+             0.08s  0.46% 63.59%      5.10s 29.06%  modernc.org/sqlite/lib._sqlite3Step
+             0.08s  0.46% 64.05%      0.57s  3.25%  runtime.chanrecv
+             0.08s  0.46% 64.50%      0.09s  0.51%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.07s   0.4% 64.90%      0.72s  4.10%  internal/sync.(*Mutex).Lock (inline)
+             0.07s   0.4% 65.30%      0.69s  3.93%  runtime.mallocgc
+             0.07s   0.4% 65.70%      0.65s  3.70%  runtime.runqgrab
+             0.07s   0.4% 66.10%      0.39s  2.22%  runtime.selectgo
+             0.07s   0.4% 66.50%      0.15s  0.85%  sync.(*Mutex).Unlock (inline)
+             0.06s  0.34% 66.84%      5.99s 34.13%  modernc.org/sqlite.(*stmt).query
+             0.06s  0.34% 67.18%      0.98s  5.58%  runtime.lock2
+             0.06s  0.34% 67.52%      0.13s  0.74%  runtime.mapaccess2_faststr
+             0.05s  0.28% 67.81%      6.68s 38.06%  database/sql.(*Stmt).QueryContext.func1
+             0.05s  0.28% 68.09%      0.16s  0.91%  modernc.org/sqlite/lib.mutexLeave
+             0.05s  0.28% 68.38%      1.25s  7.12%  runtime.findRunnable
+             0.05s  0.28% 68.66%      0.13s  0.74%  runtime.mallocgcTinySC2
+             0.05s  0.28% 68.95%      0.11s  0.63%  runtime.netpoll
+             0.04s  0.23% 69.17%      0.30s  1.71%  database/sql.(*Rows).scanLocked
+    profile_spike_test.go:191: server.pprof -top -cum -nodecount=45:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:20 MSK
+        Duration: 2s, Total samples = 17.55s (877.29%)
+        Showing nodes accounting for 8.10s, 46.15% of 17.55s total
+        Dropped 418 nodes (cum <= 0.09s)
+        Showing top 45 nodes out of 235
+              flat  flat%   sum%        cum   cum%
+                 0     0%     0%     13.09s 74.59%  github.com/tinyshed/tinystore/server.(*session).work
+                 0     0%     0%     13.09s 74.59%  github.com/tinyshed/tinystore/server.(*workers).run.func1
+                 0     0%     0%     13.09s 74.59%  sync.(*WaitGroup).Go.func1
+             0.02s  0.11%  0.11%     12.87s 73.33%  github.com/tinyshed/tinystore/server.(*session).handle
+             0.01s 0.057%  0.17%     12.62s 71.91%  github.com/tinyshed/tinystore/server.(*Server).kvMethods.func1
+             0.01s 0.057%  0.23%     12.61s 71.85%  github.com/tinyshed/tinystore/server.kvOne
+             0.03s  0.17%   0.4%     11.25s 64.10%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.02s  0.11%  0.51%     11.15s 63.53%  github.com/tinyshed/tinystore/server.runValues
+             0.04s  0.23%  0.74%     11.10s 63.25%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+                 0     0%  0.74%     10.88s 61.99%  github.com/tinyshed/tinystore/kv.(*branch).read
+                 0     0%  0.74%     10.86s 61.88%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup (inline)
+             0.02s  0.11%  0.85%     10.86s 61.88%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+                 0     0%  0.85%      9.85s 56.13%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup.func1
+             0.04s  0.23%  1.08%      9.85s 56.13%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry.func1
+             0.01s 0.057%  1.14%      9.81s 55.90%  github.com/tinyshed/tinystore/kv.readLive
+             0.01s 0.057%  1.20%      7.10s 40.46%  syscall.SyscallN
+             0.02s  0.11%  1.31%      7.09s 40.40%  syscall.syscalln
+             7.02s 40.00% 41.31%      7.07s 40.28%  runtime.cgocall
+             0.02s  0.11% 41.42%         7s 39.89%  github.com/tinyshed/tinystore/internal/sqlite.QueryRowByKey
+             0.03s  0.17% 41.60%      6.97s 39.72%  github.com/tinyshed/tinystore/internal/sqlite.QueryRow (inline)
+             0.01s 0.057% 41.65%      6.90s 39.32%  github.com/tinyshed/tinystore/internal/sqlite.(*preparedConnection).QueryContext
+             0.02s  0.11% 41.77%      6.74s 38.40%  database/sql.(*Stmt).QueryContext
+             0.01s 0.057% 41.82%      6.69s 38.12%  database/sql.(*DB).retry
+             0.05s  0.28% 42.11%      6.68s 38.06%  database/sql.(*Stmt).QueryContext.func1
+             0.02s  0.11% 42.22%      6.14s 34.99%  database/sql.rowsiFromStatement
+             0.02s  0.11% 42.34%      6.02s 34.30%  database/sql.ctxDriverStmtQuery
+             0.01s 0.057% 42.39%         6s 34.19%  modernc.org/sqlite.(*stmt).QueryContext
+             0.06s  0.34% 42.74%      5.99s 34.13%  modernc.org/sqlite.(*stmt).query
+                 0     0% 42.74%      5.13s 29.23%  modernc.org/sqlite.(*conn).step
+             0.01s 0.057% 42.79%      5.13s 29.23%  modernc.org/sqlite/lib.Xsqlite3_step
+             0.08s  0.46% 43.25%      5.10s 29.06%  modernc.org/sqlite/lib._sqlite3Step
+             0.35s  1.99% 45.24%      5.02s 28.60%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.02s  0.11% 45.36%      4.09s 23.30%  golang.org/x/sys/windows.(*LazyProc).Call
+             0.02s  0.11% 45.47%      4.07s 23.19%  golang.org/x/sys/windows.(*Proc).Call
+                 0     0% 45.47%      3.10s 17.66%  internal/poll.(*FD).execIO
+             0.01s 0.057% 45.53%      2.78s 15.84%  modernc.org/sqlite/lib._btreeBeginTrans
+                 0     0% 45.53%      2.78s 15.84%  modernc.org/sqlite/lib._sqlite3BtreeBeginTrans
+                 0     0% 45.53%      2.77s 15.78%  modernc.org/sqlite/lib._lockBtree
+             0.03s  0.17% 45.70%      2.74s 15.61%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+                 0     0% 45.70%      2.72s 15.50%  modernc.org/sqlite/lib._sqlite3OsShmLock (inline)
+             0.04s  0.23% 45.93%      2.72s 15.50%  modernc.org/sqlite/lib._winShmLock
+             0.02s  0.11% 46.04%      2.64s 15.04%  github.com/tinyshed/tinystore/internal/sqlite.(*Row).Scan
+             0.02s  0.11% 46.15%      2.28s 12.99%  os.(*File).Read
+                 0     0% 46.15%      2.26s 12.88%  internal/poll.(*FD).Read
+                 0     0% 46.15%      2.26s 12.88%  os.(*File).read (inline)
+    profile_spike_test.go:191: server.pprof -peek runtime\.cgocall$|runtime\.semasleep$|runtime\.futex$:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:20 MSK
+        Duration: 2s, Total samples = 17.55s (877.29%)
+        Showing nodes accounting for 17.55s, 100% of 17.55s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     7.07s   100% |   syscall.syscalln
+             7.02s 40.00% 40.00%      7.07s 40.28%                | runtime.cgocall
+                                                     0.04s  0.57% |   runtime.entersyscall
+                                                     0.01s  0.14% |   runtime.osPreemptExtEnter
+        ----------------------------------------------------------+-------------
+                                                     0.84s   100% |   runtime.lock2
+             0.84s  4.79% 44.79%      0.84s  4.79%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestServeProfile (4.42s)
+PASS
+
+######## TestServeProfile pass 2, base 2003e1c
+=== RUN   TestServeProfile
+    profile_spike_test.go:189: server at 256:  321424 gets/s; a get 68.20 allocations and   3341 bytes, 95 GCs, on 16 processors
+    profile_spike_test.go:191: server.pprof -top -nodecount=35:
+        File: base.test.exe
+        Build ID: <tmp>\measure\base.test.exe2026-09-29 13:13:07.8578315 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:24 MSK
+        Duration: 2s, Total samples = 21.64s (1082.00%)
+        Showing nodes accounting for 15.26s, 70.52% of 21.64s total
+        Dropped 452 nodes (cum <= 0.11s)
+        Showing top 35 nodes out of 236
+              flat  flat%   sum%        cum   cum%
+             7.34s 33.92% 33.92%      7.46s 34.47%  runtime.cgocall
+             2.84s 13.12% 47.04%      2.84s 13.12%  runtime.osyield.func1
+             0.79s  3.65% 50.69%      0.79s  3.65%  runtime.semasleep
+             0.38s  1.76% 52.45%      1.58s  7.30%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.36s  1.66% 54.11%      3.19s 14.74%  runtime.runqgrab
+             0.33s  1.52% 55.64%      5.18s 23.94%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.29s  1.34% 56.98%      3.77s 17.42%  runtime.stealWork
+             0.25s  1.16% 58.13%      0.31s  1.43%  runtime.netpoll
+             0.25s  1.16% 59.29%      0.25s  1.16%  runtime.procyieldAsm
+             0.18s  0.83% 60.12%      0.78s  3.60%  runtime.selectgo
+             0.15s  0.69% 60.81%      0.20s  0.92%  runtime.mallocgcTinySC2
+             0.14s  0.65% 61.46%      0.39s  1.80%  modernc.org/sqlite/lib.mutexEnter
+             0.14s  0.65% 62.11%      0.14s  0.65%  runtime.semawakeup
+             0.12s  0.55% 62.66%      0.25s  1.16%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.11s  0.51% 63.17%      0.11s  0.51%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.11s  0.51% 63.68%      0.18s  0.83%  internal/sync.(*Mutex).Unlock (inline)
+             0.11s  0.51% 64.19%      0.11s  0.51%  modernc.org/libc.Xmemcmp (inline)
+             0.11s  0.51% 64.70%      0.11s  0.51%  runtime.nextFreeFast (inline)
+             0.10s  0.46% 65.16%      0.12s  0.55%  modernc.org/sqlite/lib._releaseMemArray
+             0.09s  0.42% 65.57%      3.28s 15.16%  runtime.runqsteal
+             0.09s  0.42% 65.99%      0.43s  1.99%  runtime.sellock
+             0.08s  0.37% 66.36%      0.23s  1.06%  database/sql.convertAssignRows
+             0.08s  0.37% 66.73%      0.12s  0.55%  internal/runtime/maps.(*table).Delete
+             0.08s  0.37% 67.10%      0.11s  0.51%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.08s  0.37% 67.47%      0.12s  0.55%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.08s  0.37% 67.84%      0.11s  0.51%  runtime.mallocgcSmallScanNoHeaderSC5
+             0.07s  0.32% 68.16%     11.53s 53.28%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.07s  0.32% 68.48%      2.80s 12.94%  modernc.org/sqlite/lib._winShmLock
+             0.07s  0.32% 68.81%      4.40s 20.33%  runtime.findRunnable
+             0.07s  0.32% 69.13%      0.94s  4.34%  runtime.lock2
+             0.07s  0.32% 69.45%      0.16s  0.74%  runtime.mapaccess2
+             0.07s  0.32% 69.78%      0.13s   0.6%  runtime.unlock2
+             0.06s  0.28% 70.06%      0.15s  0.69%  context.(*cancelCtx).Done
+             0.05s  0.23% 70.29%      0.15s  0.69%  database/sql.driverArgsConnLocked
+             0.05s  0.23% 70.52%     10.94s 50.55%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+    profile_spike_test.go:191: server.pprof -top -cum -nodecount=45:
+        File: base.test.exe
+        Build ID: <tmp>\measure\base.test.exe2026-09-29 13:13:07.8578315 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:24 MSK
+        Duration: 2s, Total samples = 21.64s (1082.00%)
+        Showing nodes accounting for 9.10s, 42.05% of 21.64s total
+        Dropped 452 nodes (cum <= 0.11s)
+        Showing top 45 nodes out of 236
+              flat  flat%   sum%        cum   cum%
+                 0     0%     0%     13.46s 62.20%  github.com/tinyshed/tinystore/server.(*session).work
+                 0     0%     0%     13.46s 62.20%  github.com/tinyshed/tinystore/server.(*workers).run.func1
+                 0     0%     0%     13.46s 62.20%  sync.(*WaitGroup).Go.func1
+             0.03s  0.14%  0.14%     13.37s 61.78%  github.com/tinyshed/tinystore/server.(*session).handle
+             0.01s 0.046%  0.18%     13.10s 60.54%  github.com/tinyshed/tinystore/server.(*Server).kvMethods.func1
+                 0     0%  0.18%     13.09s 60.49%  github.com/tinyshed/tinystore/server.kvOne
+             0.07s  0.32%  0.51%     11.53s 53.28%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.03s  0.14%  0.65%     11.41s 52.73%  github.com/tinyshed/tinystore/server.runValues
+             0.05s  0.23%  0.88%     11.27s 52.08%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+                 0     0%  0.88%     10.96s 50.65%  github.com/tinyshed/tinystore/kv.(*branch).read
+                 0     0%  0.88%     10.94s 50.55%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup (inline)
+             0.05s  0.23%  1.11%     10.94s 50.55%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.01s 0.046%  1.16%     10.07s 46.53%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup.func1
+             0.03s  0.14%  1.29%     10.06s 46.49%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry.func1
+             0.01s 0.046%  1.34%     10.03s 46.35%  github.com/tinyshed/tinystore/kv.readLive
+             7.34s 33.92% 35.26%      7.46s 34.47%  runtime.cgocall
+                 0     0% 35.26%      7.46s 34.47%  syscall.SyscallN
+                 0     0% 35.26%      7.46s 34.47%  syscall.syscalln
+             0.01s 0.046% 35.30%      7.19s 33.23%  github.com/tinyshed/tinystore/internal/sqlite.QueryRow (inline)
+             0.01s 0.046% 35.35%      7.17s 33.13%  github.com/tinyshed/tinystore/internal/sqlite.(*preparedConnection).QueryContext
+             0.03s  0.14% 35.49%      7.05s 32.58%  database/sql.(*Stmt).QueryContext
+                 0     0% 35.49%      7.02s 32.44%  database/sql.(*DB).retry
+             0.03s  0.14% 35.63%      7.02s 32.44%  database/sql.(*Stmt).QueryContext.func1
+             0.01s 0.046% 35.67%      6.35s 29.34%  database/sql.rowsiFromStatement
+             0.01s 0.046% 35.72%      6.19s 28.60%  database/sql.ctxDriverStmtQuery
+                 0     0% 35.72%      6.18s 28.56%  modernc.org/sqlite.(*stmt).QueryContext
+                 0     0% 35.72%      6.18s 28.56%  modernc.org/sqlite.(*stmt).query
+                 0     0% 35.72%      5.24s 24.21%  modernc.org/sqlite.(*conn).step
+             0.01s 0.046% 35.77%      5.24s 24.21%  modernc.org/sqlite/lib.Xsqlite3_step
+             0.04s  0.18% 35.95%      5.22s 24.12%  modernc.org/sqlite/lib._sqlite3Step
+             0.33s  1.52% 37.48%      5.18s 23.94%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.03s  0.14% 37.62%      4.77s 22.04%  runtime.mcall
+             0.03s  0.14% 37.75%      4.65s 21.49%  runtime.schedule
+             0.07s  0.32% 38.08%      4.40s 20.33%  runtime.findRunnable
+             0.01s 0.046% 38.12%      4.16s 19.22%  golang.org/x/sys/windows.(*LazyProc).Call
+             0.01s 0.046% 38.17%      4.15s 19.18%  golang.org/x/sys/windows.(*Proc).Call
+             0.29s  1.34% 39.51%      3.77s 17.42%  runtime.stealWork
+             0.01s 0.046% 39.56%      3.38s 15.62%  internal/poll.(*FD).execIO
+             0.09s  0.42% 39.97%      3.28s 15.16%  runtime.runqsteal
+             0.36s  1.66% 41.64%      3.19s 14.74%  runtime.runqgrab
+             0.01s 0.046% 41.68%      2.99s 13.82%  modernc.org/sqlite/lib._sqlite3BtreeBeginTrans
+             0.05s  0.23% 41.91%      2.98s 13.77%  modernc.org/sqlite/lib._btreeBeginTrans
+                 0     0% 41.91%      2.98s 13.77%  runtime.park_m
+             0.01s 0.046% 41.96%      2.93s 13.54%  modernc.org/sqlite/lib._lockBtree
+             0.02s 0.092% 42.05%      2.88s 13.31%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+    profile_spike_test.go:191: server.pprof -peek runtime\.cgocall$|runtime\.semasleep$|runtime\.futex$:
+        File: base.test.exe
+        Build ID: <tmp>\measure\base.test.exe2026-09-29 13:13:07.8578315 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:24 MSK
+        Duration: 2s, Total samples = 21.64s (1082.00%)
+        Showing nodes accounting for 21.63s, 100% of 21.64s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     7.46s   100% |   syscall.syscalln
+             7.34s 33.92% 33.92%      7.46s 34.47%                | runtime.cgocall
+                                                     0.06s   0.8% |   runtime.entersyscall
+                                                     0.06s   0.8% |   runtime.osPreemptExtEnter
+        ----------------------------------------------------------+-------------
+                                                     0.79s   100% |   runtime.lock2
+             0.79s  3.65% 37.57%      0.79s  3.65%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestServeProfile (4.48s)
+PASS
+
+######## TestServeProfile pass 2, candidate fccf0ed
+=== RUN   TestServeProfile
+    profile_spike_test.go:189: server at 256:  353448 gets/s; a get 59.20 allocations and   2631 bytes, 85 GCs, on 16 processors
+    profile_spike_test.go:191: server.pprof -top -nodecount=35:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:29 MSK
+        Duration: 2s, Total samples = 18.32s (915.70%)
+        Showing nodes accounting for 12.85s, 70.14% of 18.32s total
+        Dropped 415 nodes (cum <= 0.09s)
+        Showing top 35 nodes out of 232
+              flat  flat%   sum%        cum   cum%
+             7.52s 41.05% 41.05%      7.55s 41.21%  runtime.cgocall
+             0.70s  3.82% 44.87%      0.70s  3.82%  runtime.semasleep
+             0.59s  3.22% 48.09%      0.59s  3.22%  runtime.osyield.func1
+             0.51s  2.78% 50.87%      1.93s 10.53%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.48s  2.62% 53.49%      0.48s  2.62%  runtime.procyieldAsm
+             0.29s  1.58% 55.08%      5.46s 29.80%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.24s  1.31% 56.39%      0.59s  3.22%  modernc.org/sqlite/lib.mutexEnter
+             0.20s  1.09% 57.48%      0.20s  1.09%  modernc.org/sqlite/lib._releaseMemArray
+             0.20s  1.09% 58.57%      0.27s  1.47%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.17s  0.93% 59.50%      0.17s  0.93%  runtime.semawakeup
+             0.15s  0.82% 60.32%      0.16s  0.87%  internal/sync.(*Mutex).Unlock (inline)
+             0.13s  0.71% 61.03%      0.22s  1.20%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.13s  0.71% 61.74%      0.13s  0.71%  runtime.memmove
+             0.11s   0.6% 62.34%      0.93s  5.08%  runtime.mallocgc
+             0.11s   0.6% 62.94%      0.13s  0.71%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.11s   0.6% 63.54%      0.14s  0.76%  runtime.mallocgcSmallScanNoHeaderSC7
+             0.10s  0.55% 64.08%      0.11s   0.6%  github.com/tinyshed/tinystore/server.(*call).header
+             0.09s  0.49% 64.57%      0.65s  3.55%  runtime.runqgrab
+             0.09s  0.49% 65.07%      0.81s  4.42%  runtime.stealWork
+             0.08s  0.44% 65.50%      0.61s  3.33%  internal/sync.(*Mutex).Lock (inline)
+             0.08s  0.44% 65.94%      0.84s  4.59%  runtime.lock2
+             0.07s  0.38% 66.32%      0.18s  0.98%  database/sql.driverArgsConnLocked
+             0.07s  0.38% 66.70%      0.27s  1.47%  runtime.mallocgcSmallScanNoHeader
+             0.07s  0.38% 67.09%      0.11s   0.6%  runtime.mallocgcTinySC2
+             0.06s  0.33% 67.41%      0.13s  0.71%  modernc.org/sqlite/lib._columnName
+             0.06s  0.33% 67.74%      0.27s  1.47%  runtime.selectgo
+             0.05s  0.27% 68.01%      0.33s  1.80%  database/sql.(*Rows).nextLocked
+             0.05s  0.27% 68.29%      7.17s 39.14%  database/sql.(*Stmt).QueryContext.func1
+             0.05s  0.27% 68.56%      0.13s  0.71%  database/sql.convertAssignRows
+             0.05s  0.27% 68.83%     10.99s 59.99%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.05s  0.27% 69.10%     11.54s 62.99%  github.com/tinyshed/tinystore/server.runValues
+             0.05s  0.27% 69.38%      2.96s 16.16%  modernc.org/sqlite/lib._btreeBeginTrans
+             0.05s  0.27% 69.65%      0.17s  0.93%  runtime.growslice
+             0.05s  0.27% 69.92%      1.38s  7.53%  runtime.schedule
+             0.04s  0.22% 70.14%     11.40s 62.23%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+    profile_spike_test.go:191: server.pprof -top -cum -nodecount=45:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:29 MSK
+        Duration: 2s, Total samples = 18.32s (915.70%)
+        Showing nodes accounting for 8.36s, 45.63% of 18.32s total
+        Dropped 415 nodes (cum <= 0.09s)
+        Showing top 45 nodes out of 232
+              flat  flat%   sum%        cum   cum%
+                 0     0%     0%     13.64s 74.45%  github.com/tinyshed/tinystore/server.(*session).work
+                 0     0%     0%     13.64s 74.45%  github.com/tinyshed/tinystore/server.(*workers).run.func1
+                 0     0%     0%     13.64s 74.45%  sync.(*WaitGroup).Go.func1
+                 0     0%     0%     13.47s 73.53%  github.com/tinyshed/tinystore/server.(*session).handle
+                 0     0%     0%     13.36s 72.93%  github.com/tinyshed/tinystore/server.(*Server).kvMethods.func1
+             0.01s 0.055% 0.055%     13.36s 72.93%  github.com/tinyshed/tinystore/server.kvOne
+             0.01s 0.055%  0.11%     11.64s 63.54%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.05s  0.27%  0.38%     11.54s 62.99%  github.com/tinyshed/tinystore/server.runValues
+             0.04s  0.22%   0.6%     11.40s 62.23%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+             0.02s  0.11%  0.71%     11.04s 60.26%  github.com/tinyshed/tinystore/kv.(*branch).read
+                 0     0%  0.71%     10.99s 59.99%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup (inline)
+             0.05s  0.27%  0.98%     10.99s 59.99%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+                 0     0%  0.98%     10.24s 55.90%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup.func1
+             0.04s  0.22%  1.20%     10.24s 55.90%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry.func1
+             0.04s  0.22%  1.42%     10.20s 55.68%  github.com/tinyshed/tinystore/kv.readLive
+                 0     0%  1.42%      7.57s 41.32%  syscall.SyscallN
+             0.02s  0.11%  1.53%      7.57s 41.32%  syscall.syscalln
+             7.52s 41.05% 42.58%      7.55s 41.21%  runtime.cgocall
+             0.02s  0.11% 42.69%      7.31s 39.90%  github.com/tinyshed/tinystore/internal/sqlite.QueryRowByKey
+                 0     0% 42.69%      7.22s 39.41%  github.com/tinyshed/tinystore/internal/sqlite.QueryRow (inline)
+                 0     0% 42.69%      7.19s 39.25%  github.com/tinyshed/tinystore/internal/sqlite.(*preparedConnection).QueryContext
+                 0     0% 42.69%      7.17s 39.14%  database/sql.(*DB).retry
+                 0     0% 42.69%      7.17s 39.14%  database/sql.(*Stmt).QueryContext
+             0.05s  0.27% 42.96%      7.17s 39.14%  database/sql.(*Stmt).QueryContext.func1
+                 0     0% 42.96%      6.77s 36.95%  database/sql.rowsiFromStatement
+             0.02s  0.11% 43.07%      6.58s 35.92%  database/sql.ctxDriverStmtQuery
+             0.01s 0.055% 43.12%      6.56s 35.81%  modernc.org/sqlite.(*stmt).QueryContext
+             0.04s  0.22% 43.34%      6.55s 35.75%  modernc.org/sqlite.(*stmt).query
+                 0     0% 43.34%      5.50s 30.02%  modernc.org/sqlite.(*conn).step
+                 0     0% 43.34%      5.50s 30.02%  modernc.org/sqlite/lib.Xsqlite3_step
+                 0     0% 43.34%      5.46s 29.80%  modernc.org/sqlite/lib._sqlite3Step
+             0.29s  1.58% 44.92%      5.46s 29.80%  modernc.org/sqlite/lib._sqlite3VdbeExec
+                 0     0% 44.92%      4.16s 22.71%  golang.org/x/sys/windows.(*LazyProc).Call
+                 0     0% 44.92%      4.16s 22.71%  golang.org/x/sys/windows.(*Proc).Call
+             0.02s  0.11% 45.03%      3.53s 19.27%  internal/poll.(*FD).execIO
+             0.05s  0.27% 45.31%      2.96s 16.16%  modernc.org/sqlite/lib._btreeBeginTrans
+                 0     0% 45.31%      2.96s 16.16%  modernc.org/sqlite/lib._sqlite3BtreeBeginTrans
+                 0     0% 45.31%      2.89s 15.78%  modernc.org/sqlite/lib._lockBtree
+                 0     0% 45.31%      2.87s 15.67%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+                 0     0% 45.31%      2.71s 14.79%  modernc.org/sqlite/lib._sqlite3OsShmLock (inline)
+             0.03s  0.16% 45.47%      2.71s 14.79%  modernc.org/sqlite/lib._winShmLock
+             0.03s  0.16% 45.63%      2.67s 14.57%  github.com/tinyshed/tinystore/internal/sqlite.(*Row).Scan
+                 0     0% 45.63%      2.41s 13.16%  internal/poll.(*FD).Read
+                 0     0% 45.63%      2.41s 13.16%  os.(*File).Read
+                 0     0% 45.63%      2.41s 13.16%  os.(*File).read (inline)
+    profile_spike_test.go:191: server.pprof -peek runtime\.cgocall$|runtime\.semasleep$|runtime\.futex$:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:19:29 MSK
+        Duration: 2s, Total samples = 18.32s (915.70%)
+        Showing nodes accounting for 18.32s, 100% of 18.32s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     7.55s   100% |   syscall.syscalln
+             7.52s 41.05% 41.05%      7.55s 41.21%                | runtime.cgocall
+                                                     0.02s  0.26% |   runtime.entersyscall
+                                                     0.01s  0.13% |   runtime.osPreemptExtEnter
+        ----------------------------------------------------------+-------------
+                                                     0.70s   100% |   runtime.lock2
+             0.70s  3.82% 44.87%      0.70s  3.82%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestServeProfile (4.42s)
+PASS
+
+######## TestRPCServerCost (the prototype, the candidate's engines) pass 1
+=== RUN   TestRPCServerCost
+    rpc_spike_test.go:371: pooled false workers   0 gogc   0 at 256:  242903 gets/s,   33613 sets/s; a get 54.20 allocations and   2171 bytes, 895 GCs
+    rpc_spike_test.go:376: profiled get at 256: 288146 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:20:55 MSK
+        Duration: 2.01s, Total samples = 15.12s (753.78%)
+        Showing nodes accounting for 10.58s, 69.97% of 15.12s total
+        Dropped 344 nodes (cum <= 0.08s)
+        Showing top 35 nodes out of 241
+              flat  flat%   sum%        cum   cum%
+             3.86s 25.53% 25.53%      3.95s 26.12%  runtime.cgocall
+             2.16s 14.29% 39.81%      2.16s 14.29%  runtime.semasleep
+             0.43s  2.84% 42.66%      3.96s 26.19%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.35s  2.31% 44.97%      1.62s 10.71%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.35s  2.31% 47.29%      0.37s  2.45%  runtime.step
+             0.34s  2.25% 49.54%      0.34s  2.25%  runtime.procyieldAsm
+             0.26s  1.72% 51.26%      0.26s  1.72%  runtime.osyield.func1
+             0.23s  1.52% 52.78%      0.31s  2.05%  runtime.netpoll
+             0.23s  1.52% 54.30%      0.26s  1.72%  runtime.preemptM
+             0.18s  1.19% 55.49%      0.45s  2.98%  modernc.org/sqlite/lib.mutexEnter
+             0.17s  1.12% 56.61%      0.24s  1.59%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.17s  1.12% 57.74%      0.64s  4.23%  runtime.pcvalue
+             0.17s  1.12% 58.86%      0.17s  1.12%  runtime.semawakeup
+             0.13s  0.86% 59.72%      0.13s  0.86%  modernc.org/libc.Xmemcmp (inline)
+             0.11s  0.73% 60.45%      0.11s  0.73%  internal/sync.(*Mutex).Unlock (inline)
+             0.11s  0.73% 61.18%      0.13s  0.86%  runtime.findfunc
+             0.11s  0.73% 61.90%      0.11s  0.73%  runtime.memmove
+             0.10s  0.66% 62.57%      0.41s  2.71%  runtime.(*unwinder).resolveInternal
+             0.10s  0.66% 63.23%      0.63s  4.17%  runtime.adjustframe
+             0.08s  0.53% 63.76%      0.08s  0.53%  runtime.memclrNoHeapPointers
+             0.08s  0.53% 64.29%      0.08s  0.53%  runtime.netpollQueueTimer
+             0.08s  0.53% 64.81%      0.08s  0.53%  runtime.sysUnusedOS
+             0.07s  0.46% 65.28%      0.11s  0.73%  database/sql.convertAssignRows
+             0.07s  0.46% 65.74%      0.67s  4.43%  runtime.mallocgc
+             0.07s  0.46% 66.20%      0.18s  1.19%  runtime.mallocgcTinySC2
+             0.07s  0.46% 66.67%      0.26s  1.72%  runtime.runqgrab
+             0.07s  0.46% 67.13%      0.21s  1.39%  runtime.selectgo
+             0.07s  0.46% 67.59%      0.18s  1.19%  sync.(*Mutex).Unlock (inline)
+             0.06s   0.4% 67.99%      0.10s  0.66%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.05s  0.33% 68.32%      0.13s  0.86%  database/sql.driverArgsConnLocked
+             0.05s  0.33% 68.65%      0.35s  2.31%  internal/sync.(*Mutex).lockSlow
+             0.05s  0.33% 68.98%      0.08s  0.53%  modernc.org/sqlite/lib._vdbeUnbind
+             0.05s  0.33% 69.31%      0.44s  2.91%  runtime.(*stkframe).getStackMap
+             0.05s  0.33% 69.64%      0.34s  2.25%  runtime.stealWork
+             0.05s  0.33% 69.97%      0.08s  0.53%  runtime.tryDeferToSpanScan
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:20:55 MSK
+        Duration: 2.01s, Total samples = 15.12s (753.78%)
+        Showing nodes accounting for 15.11s, 99.93% of 15.12s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     3.95s   100% |   syscall.syscalln
+             3.86s 25.53% 25.53%      3.95s 26.12%                | runtime.cgocall
+                                                     0.06s  1.52% |   runtime.entersyscall
+                                                     0.02s  0.51% |   runtime.osPreemptExtEnter
+                                                     0.01s  0.25% |   runtime.exitsyscall
+        ----------------------------------------------------------+-------------
+                                                     2.16s   100% |   runtime.lock2
+             2.16s 14.29% 39.81%      2.16s 14.29%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:20:55 MSK
+        Duration: 2s, Total samples = 1.96s (97.94%)
+        Showing nodes accounting for 1.76s, 89.80% of 1.96s total
+        Showing top 35 nodes out of 155
+              flat  flat%   sum%        cum   cum%
+             0.93s 47.45% 47.45%      0.93s 47.45%  runtime.cgocall
+             0.10s  5.10% 52.55%      0.10s  5.10%  runtime.semasleep
+             0.09s  4.59% 57.14%      0.09s  4.59%  runtime.semawakeup
+             0.08s  4.08% 61.22%      0.13s  6.63%  runtime.netpoll
+             0.05s  2.55% 63.78%      0.05s  2.55%  runtime.netpollQueueTimer
+             0.05s  2.55% 66.33%      0.05s  2.55%  runtime.osyield.func1
+             0.04s  2.04% 68.37%      0.04s  2.04%  runtime.mapaccess2_fast32
+             0.04s  2.04% 70.41%      0.12s  6.12%  runtime.stealWork
+             0.03s  1.53% 71.94%      0.03s  1.53%  runtime.memclrNoHeapPointers
+             0.03s  1.53% 73.47%      0.12s  6.12%  runtime.selectgo
+             0.02s  1.02% 74.49%      0.49s 25.00%  net.(*netFD).Write
+             0.02s  1.02% 75.51%      0.13s  6.63%  runtime.lock2
+             0.02s  1.02% 76.53%      0.08s  4.08%  runtime.mallocgc
+             0.02s  1.02% 77.55%      0.03s  1.53%  runtime.mapassign_fast32
+             0.02s  1.02% 78.57%      0.02s  1.02%  runtime.pinnerGetPtr
+             0.02s  1.02% 79.59%      0.06s  3.06%  runtime.runqgrab
+             0.02s  1.02% 80.61%      0.02s  1.02%  runtime.sysUnusedOS
+             0.01s  0.51% 81.12%      0.52s 26.53%  bufio.(*Reader).Read
+             0.01s  0.51% 81.63%      0.01s  0.51%  fmt.(*fmt).fmtInteger
+             0.01s  0.51% 82.14%      0.76s 38.78%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.01s  0.51% 82.65%      0.50s 25.51%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.01s  0.51% 83.16%      0.02s  1.02%  github.com/tinyshed/tinystore/spike.rpcKey
+             0.01s  0.51% 83.67%      0.97s 49.49%  internal/poll.(*FD).execIO
+             0.01s  0.51% 84.18%      0.01s  0.51%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.01s  0.51% 84.69%      0.02s  1.02%  internal/sync.(*Mutex).Lock (inline)
+             0.01s  0.51% 85.20%      0.01s  0.51%  internal/sync.(*Mutex).Unlock (inline)
+             0.01s  0.51% 85.71%      0.01s  0.51%  internal/sync.runtime_SemacquireMutex
+             0.01s  0.51% 86.22%      0.02s  1.02%  math/rand/v2.(*Rand).IntN
+             0.01s  0.51% 86.73%      0.01s  0.51%  math/rand/v2.(*Rand).Uint64 (inline)
+             0.01s  0.51% 87.24%      0.01s  0.51%  net.(*UnixConn).Read
+             0.01s  0.51% 87.76%      0.04s  2.04%  runtime.(*Pinner).Pin
+             0.01s  0.51% 88.27%      0.01s  0.51%  runtime.(*listHeadManual).push
+             0.01s  0.51% 88.78%      0.01s  0.51%  runtime.(*m).clearAllpSnapshot
+             0.01s  0.51% 89.29%      0.01s  0.51%  runtime.(*mcentral).cacheSpan
+             0.01s  0.51% 89.80%      0.01s  0.51%  runtime.(*mspan).divideByElemSize (inline)
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:20:55 MSK
+        Duration: 2s, Total samples = 1.96s (97.94%)
+        Showing nodes accounting for 1.96s, 100% of 1.96s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.93s   100% |   syscall.syscalln
+             0.93s 47.45% 47.45%      0.93s 47.45%                | runtime.cgocall
+        ----------------------------------------------------------+-------------
+                                                     0.10s   100% |   runtime.lock2
+             0.10s  5.10% 52.55%      0.10s  5.10%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:371: pooled true  workers   0 gogc   0 at 256:  307671 gets/s,   35152 sets/s; a get 51.24 allocations and   2129 bytes, 638 GCs
+    rpc_spike_test.go:371: pooled false workers  64 gogc   0 at 256:  335616 gets/s,   19038 sets/s; a get 52.15 allocations and   2060 bytes, 886 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc   0 at 256:  256759 gets/s,   33573 sets/s; a get 52.17 allocations and   2063 bytes, 922 GCs
+    rpc_spike_test.go:371: pooled false workers   0 gogc 400 at 256:  380341 gets/s,   34360 sets/s; a get 54.11 allocations and   2159 bytes, 127 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc 400 at 256:  435930 gets/s,   35649 sets/s; a get 52.07 allocations and   2053 bytes, 153 GCs
+    rpc_spike_test.go:376: profiled get at 256: 410621 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:26 MSK
+        Duration: 2s, Total samples = 14.84s (740.37%)
+        Showing nodes accounting for 10.45s, 70.42% of 14.84s total
+        Dropped 311 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 235
+              flat  flat%   sum%        cum   cum%
+                5s 33.69% 33.69%      5.11s 34.43%  runtime.cgocall
+             0.74s  4.99% 38.68%      0.74s  4.99%  runtime.procyieldAsm
+             0.65s  4.38% 43.06%      0.65s  4.38%  runtime.semasleep
+             0.49s  3.30% 46.36%      4.94s 33.29%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.39s  2.63% 48.99%      2.14s 14.42%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.30s  2.02% 51.01%      0.92s  6.20%  modernc.org/sqlite/lib.mutexEnter
+             0.19s  1.28% 52.29%      0.23s  1.55%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.19s  1.28% 53.57%      0.19s  1.28%  runtime.osyield.func1
+             0.19s  1.28% 54.85%      0.19s  1.28%  runtime.semawakeup
+             0.14s  0.94% 55.80%      0.22s  1.48%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.14s  0.94% 56.74%      0.26s  1.75%  runtime.netpoll
+             0.13s  0.88% 57.61%      0.14s  0.94%  internal/sync.(*Mutex).Unlock (inline)
+             0.13s  0.88% 58.49%      0.13s  0.88%  modernc.org/libc.(*TLS).Alloc
+             0.13s  0.88% 59.37%      0.13s  0.88%  modernc.org/libc.Xmemcmp (inline)
+             0.13s  0.88% 60.24%      0.13s  0.88%  runtime.memmove
+             0.12s  0.81% 61.05%      0.12s  0.81%  runtime.netpollQueueTimer
+             0.11s  0.74% 61.79%      0.15s  1.01%  database/sql.driverArgsConnLocked
+             0.10s  0.67% 62.47%      0.98s  6.60%  runtime.mallocgc
+             0.10s  0.67% 63.14%      0.17s  1.15%  runtime.mallocgcTinySC2
+             0.09s  0.61% 63.75%      0.09s  0.61%  runtime.memclrNoHeapPointers
+             0.08s  0.54% 64.29%      0.28s  1.89%  database/sql.convertAssignRows
+             0.08s  0.54% 64.82%      0.92s  6.20%  internal/sync.(*Mutex).Lock (inline)
+             0.08s  0.54% 65.36%      0.08s  0.54%  modernc.org/sqlite/lib._sqlite3DbMallocRawNN
+             0.08s  0.54% 65.90%      0.15s  1.01%  runtime.mallocgcSmallScanNoHeaderSC7
+             0.08s  0.54% 66.44%      0.22s  1.48%  sync.(*Mutex).Unlock (inline)
+             0.07s  0.47% 66.91%      0.84s  5.66%  internal/sync.(*Mutex).lockSlow
+             0.07s  0.47% 67.39%      0.09s  0.61%  modernc.org/sqlite/lib._releaseMemArray
+             0.06s   0.4% 67.79%      0.74s  4.99%  runtime.lock2
+             0.06s   0.4% 68.19%      0.08s  0.54%  runtime.reentersyscall
+             0.06s   0.4% 68.60%      0.25s  1.68%  runtime.runqgrab
+             0.06s   0.4% 69.00%      0.26s  1.75%  runtime.selectgo
+             0.06s   0.4% 69.41%      0.34s  2.29%  runtime.stealWork
+             0.05s  0.34% 69.74%      0.35s  2.36%  database/sql.(*DB).addDep
+             0.05s  0.34% 70.08%      2.60s 17.52%  database/sql.(*Rows).close
+             0.05s  0.34% 70.42%     10.56s 71.16%  github.com/tinyshed/tinystore/kv.readLive
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:26 MSK
+        Duration: 2s, Total samples = 14.84s (740.37%)
+        Showing nodes accounting for 14.84s, 100% of 14.84s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     5.11s   100% |   syscall.syscalln
+                5s 33.69% 33.69%      5.11s 34.43%                | runtime.cgocall
+                                                     0.08s  1.57% |   runtime.entersyscall
+                                                     0.03s  0.59% |   runtime.osPreemptExtEnter
+        ----------------------------------------------------------+-------------
+                                                     0.65s   100% |   runtime.lock2
+             0.65s  4.38% 38.07%      0.65s  4.38%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:26 MSK
+        Duration: 2s, Total samples = 2.38s (118.91%)
+        Showing nodes accounting for 2.03s, 85.29% of 2.38s total
+        Dropped 84 nodes (cum <= 0.01s)
+        Showing top 35 nodes out of 106
+              flat  flat%   sum%        cum   cum%
+             1.10s 46.22% 46.22%      1.13s 47.48%  runtime.cgocall
+             0.13s  5.46% 51.68%      0.13s  5.46%  runtime.semasleep
+             0.10s  4.20% 55.88%      0.10s  4.20%  runtime.semawakeup
+             0.06s  2.52% 58.40%      0.06s  2.52%  runtime.netpollQueueTimer
+             0.06s  2.52% 60.92%      0.06s  2.52%  runtime.osyield.func1
+             0.05s  2.10% 63.03%      0.05s  2.10%  runtime.(*waitq).dequeue (inline)
+             0.04s  1.68% 64.71%      0.19s  7.98%  runtime.lock2
+             0.04s  1.68% 66.39%      0.17s  7.14%  runtime.selectgo
+             0.03s  1.26% 67.65%      0.04s  1.68%  fmt.(*fmt).fmtInteger
+             0.03s  1.26% 68.91%      0.14s  5.88%  runtime.chansend
+             0.03s  1.26% 70.17%      0.27s 11.34%  runtime.findRunnable
+             0.03s  1.26% 71.43%      0.03s  1.26%  runtime.memmove
+             0.03s  1.26% 72.69%      0.03s  1.26%  runtime.spanClass.sizeclass (inline)
+             0.02s  0.84% 73.53%      0.07s  2.94%  fmt.(*pp).doPrintf
+             0.02s  0.84% 74.37%      1.04s 43.70%  github.com/tinyshed/tinystore/spike.rpcRun.func1
+             0.02s  0.84% 75.21%      0.02s  0.84%  internal/runtime/maps.h1 (inline)
+             0.02s  0.84% 76.05%      0.09s  3.78%  runtime.mallocgcTinySC2
+             0.02s  0.84% 76.89%      0.02s  0.84%  runtime.procyieldAsm
+             0.02s  0.84% 77.73%      0.08s  3.36%  runtime.runqgrab
+             0.02s  0.84% 78.57%      0.05s  2.10%  sync.(*Pool).Get
+             0.02s  0.84% 79.41%      0.02s  0.84%  sync.(*Pool).pin
+             0.01s  0.42% 79.83%      0.84s 35.29%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.01s  0.42% 80.25%      0.70s 29.41%  github.com/tinyshed/tinystore/spike.(*rpcReader).next
+             0.01s  0.42% 80.67%      1.18s 49.58%  internal/poll.(*FD).execIO
+             0.01s  0.42% 81.09%      0.57s 23.95%  net.(*conn).Write
+             0.01s  0.42% 81.51%      0.64s 26.89%  net.(*netFD).Read
+             0.01s  0.42% 81.93%      0.02s  0.84%  runtime.entersyscall
+             0.01s  0.42% 82.35%      0.07s  2.94%  runtime.gcAssistAlloc
+             0.01s  0.42% 82.77%      0.07s  2.94%  runtime.netpoll
+             0.01s  0.42% 83.19%      0.11s  4.62%  runtime.ready
+             0.01s  0.42% 83.61%      0.02s  0.84%  runtime.runqput
+             0.01s  0.42% 84.03%      0.04s  1.68%  runtime.scanObject
+             0.01s  0.42% 84.45%      0.30s 12.61%  runtime.schedule
+             0.01s  0.42% 84.87%      0.10s  4.20%  runtime.stealWork
+             0.01s  0.42% 85.29%      0.21s  8.82%  runtime.systemstack
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:26 MSK
+        Duration: 2s, Total samples = 2.38s (118.91%)
+        Showing nodes accounting for 2.38s, 100% of 2.38s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     1.13s   100% |   syscall.syscalln
+             1.10s 46.22% 46.22%      1.13s 47.48%                | runtime.cgocall
+                                                     0.02s  1.77% |   runtime.entersyscall
+                                                     0.01s  0.88% |   runtime.exitsyscall
+        ----------------------------------------------------------+-------------
+                                                     0.13s   100% |   runtime.lock2
+             0.13s  5.46% 51.68%      0.13s  5.46%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestRPCServerCost (39.38s)
+PASS
+
+######## TestServeProfile again, candidate fccf0ed, pass 1
+=== RUN   TestServeProfile
+    profile_spike_test.go:189: server at 256:  364930 gets/s; a get 59.20 allocations and   2632 bytes, 92 GCs, on 16 processors
+    profile_spike_test.go:191: server.pprof -top -nodecount=35:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:31 MSK
+        Duration: 2s, Total samples = 18.91s (945.98%)
+        Showing nodes accounting for 13.04s, 68.96% of 18.91s total
+        Dropped 401 nodes (cum <= 0.09s)
+        Showing top 35 nodes out of 249
+              flat  flat%   sum%        cum   cum%
+             7.92s 41.88% 41.88%      7.99s 42.25%  runtime.cgocall
+             0.61s  3.23% 45.11%      0.61s  3.23%  runtime.semasleep
+             0.54s  2.86% 47.96%      0.54s  2.86%  runtime.procyieldAsm
+             0.49s  2.59% 50.56%      0.49s  2.59%  runtime.osyield.func1
+             0.36s  1.90% 52.46%      1.75s  9.25%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.36s  1.90% 54.36%      5.76s 30.46%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.21s  1.11% 55.47%      0.21s  1.11%  runtime.semawakeup
+             0.18s  0.95% 56.43%      0.21s  1.11%  modernc.org/sqlite/lib._releaseMemArray
+             0.17s   0.9% 57.32%      0.53s  2.80%  modernc.org/sqlite/lib.mutexEnter
+             0.14s  0.74% 58.06%      0.14s  0.74%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.14s  0.74% 58.80%      0.22s  1.16%  internal/sync.(*Mutex).Unlock (inline)
+             0.14s  0.74% 59.55%      0.20s  1.06%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.14s  0.74% 60.29%      0.14s  0.74%  runtime.memmove
+             0.12s  0.63% 60.92%      0.17s   0.9%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.11s  0.58% 61.50%      0.67s  3.54%  internal/sync.(*Mutex).Lock (inline)
+             0.11s  0.58% 62.08%      0.58s  3.07%  runtime.runqgrab
+             0.10s  0.53% 62.61%      0.85s  4.49%  runtime.lock2
+             0.09s  0.48% 63.09%      0.44s  2.33%  modernc.org/sqlite.(*conn).bind
+             0.09s  0.48% 63.56%      0.12s  0.63%  runtime.mallocgcSmallScanNoHeaderSC7
+             0.08s  0.42% 63.99%      0.84s  4.44%  runtime.mallocgc
+             0.08s  0.42% 64.41%      0.10s  0.53%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.08s  0.42% 64.83%      0.12s  0.63%  runtime.mallocgcTinySC2
+             0.07s  0.37% 65.20%      0.21s  1.11%  database/sql.convertAssignRows
+             0.07s  0.37% 65.57%      0.10s  0.53%  runtime.mallocgcSmallScanNoHeaderSC5
+             0.07s  0.37% 65.94%      0.45s  2.38%  runtime.selectgo
+             0.07s  0.37% 66.31%      0.73s  3.86%  runtime.stealWork
+             0.06s  0.32% 66.63%      0.56s  2.96%  internal/sync.(*Mutex).lockSlow
+             0.06s  0.32% 66.95%      6.97s 36.86%  modernc.org/sqlite.(*stmt).query
+             0.06s  0.32% 67.27%      0.11s  0.58%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.06s  0.32% 67.58%      0.42s  2.22%  runtime.chanrecv
+             0.06s  0.32% 67.90%      0.27s  1.43%  runtime.mallocgcSmallScanNoHeader
+             0.05s  0.26% 68.16%     11.84s 62.61%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.05s  0.26% 68.43%     10.86s 57.43%  github.com/tinyshed/tinystore/kv.readLive
+             0.05s  0.26% 68.69%     12.48s 66.00%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.05s  0.26% 68.96%      0.13s  0.69%  modernc.org/libc.strlenIndexByte
+    profile_spike_test.go:191: server.pprof -top -cum -nodecount=45:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:31 MSK
+        Duration: 2s, Total samples = 18.91s (945.98%)
+        Showing nodes accounting for 9.01s, 47.65% of 18.91s total
+        Dropped 401 nodes (cum <= 0.09s)
+        Showing top 45 nodes out of 249
+              flat  flat%   sum%        cum   cum%
+                 0     0%     0%     14.30s 75.62%  github.com/tinyshed/tinystore/server.(*session).work
+                 0     0%     0%     14.30s 75.62%  github.com/tinyshed/tinystore/server.(*workers).run.func1
+                 0     0%     0%     14.30s 75.62%  sync.(*WaitGroup).Go.func1
+             0.02s  0.11%  0.11%     14.19s 75.04%  github.com/tinyshed/tinystore/server.(*session).handle
+                 0     0%  0.11%     13.81s 73.03%  github.com/tinyshed/tinystore/server.(*Server).kvMethods.func1
+                 0     0%  0.11%     13.81s 73.03%  github.com/tinyshed/tinystore/server.kvOne
+             0.05s  0.26%  0.37%     12.48s 66.00%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.02s  0.11%  0.48%     12.35s 65.31%  github.com/tinyshed/tinystore/server.runValues
+             0.02s  0.11%  0.58%     12.22s 64.62%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+             0.01s 0.053%  0.63%     11.88s 62.82%  github.com/tinyshed/tinystore/kv.(*branch).read
+                 0     0%  0.63%     11.84s 62.61%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup (inline)
+             0.05s  0.26%   0.9%     11.84s 62.61%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+                 0     0%   0.9%     10.87s 57.48%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup.func1
+             0.01s 0.053%  0.95%     10.87s 57.48%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry.func1
+             0.05s  0.26%  1.22%     10.86s 57.43%  github.com/tinyshed/tinystore/kv.readLive
+                 0     0%  1.22%      8.02s 42.41%  syscall.SyscallN
+             0.03s  0.16%  1.37%      8.02s 42.41%  syscall.syscalln
+                 0     0%  1.37%      7.99s 42.25%  github.com/tinyshed/tinystore/internal/sqlite.QueryRowByKey
+             7.92s 41.88% 43.26%      7.99s 42.25%  runtime.cgocall
+                 0     0% 43.26%      7.96s 42.09%  github.com/tinyshed/tinystore/internal/sqlite.QueryRow (inline)
+             0.04s  0.21% 43.47%      7.95s 42.04%  github.com/tinyshed/tinystore/internal/sqlite.(*preparedConnection).QueryContext
+             0.04s  0.21% 43.68%      7.78s 41.14%  database/sql.(*Stmt).QueryContext
+             0.01s 0.053% 43.73%      7.69s 40.67%  database/sql.(*DB).retry
+             0.02s  0.11% 43.84%      7.68s 40.61%  database/sql.(*Stmt).QueryContext.func1
+             0.03s  0.16% 44.00%      7.14s 37.76%  database/sql.rowsiFromStatement
+             0.03s  0.16% 44.16%      7.01s 37.07%  database/sql.ctxDriverStmtQuery
+             0.01s 0.053% 44.21%      6.98s 36.91%  modernc.org/sqlite.(*stmt).QueryContext
+             0.06s  0.32% 44.53%      6.97s 36.86%  modernc.org/sqlite.(*stmt).query
+                 0     0% 44.53%      5.83s 30.83%  modernc.org/sqlite.(*conn).step
+             0.01s 0.053% 44.58%      5.83s 30.83%  modernc.org/sqlite/lib.Xsqlite3_step
+             0.05s  0.26% 44.84%      5.81s 30.72%  modernc.org/sqlite/lib._sqlite3Step
+             0.36s  1.90% 46.75%      5.76s 30.46%  modernc.org/sqlite/lib._sqlite3VdbeExec
+                 0     0% 46.75%      4.83s 25.54%  golang.org/x/sys/windows.(*LazyProc).Call
+             0.01s 0.053% 46.80%      4.82s 25.49%  golang.org/x/sys/windows.(*Proc).Call
+             0.03s  0.16% 46.96%      3.43s 18.14%  modernc.org/sqlite/lib._sqlite3BtreeBeginTrans
+             0.04s  0.21% 47.17%      3.40s 17.98%  modernc.org/sqlite/lib._btreeBeginTrans
+                 0     0% 47.17%      3.36s 17.77%  modernc.org/sqlite/lib._lockBtree
+             0.02s  0.11% 47.28%      3.33s 17.61%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+             0.01s 0.053% 47.33%      3.29s 17.40%  internal/poll.(*FD).execIO
+                 0     0% 47.33%      3.16s 16.71%  modernc.org/sqlite/lib._sqlite3OsShmLock (inline)
+             0.05s  0.26% 47.59%      3.16s 16.71%  modernc.org/sqlite/lib._winShmLock
+             0.01s 0.053% 47.65%      2.67s 14.12%  github.com/tinyshed/tinystore/internal/sqlite.(*Row).Scan
+                 0     0% 47.65%      2.35s 12.43%  internal/poll.(*FD).Read
+                 0     0% 47.65%      2.35s 12.43%  os.(*File).Read
+                 0     0% 47.65%      2.35s 12.43%  os.(*File).read (inline)
+    profile_spike_test.go:191: server.pprof -peek runtime\.cgocall$|runtime\.semasleep$|runtime\.futex$:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:31 MSK
+        Duration: 2s, Total samples = 18.91s (945.98%)
+        Showing nodes accounting for 18.91s, 100% of 18.91s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     7.99s   100% |   syscall.syscalln
+             7.92s 41.88% 41.88%      7.99s 42.25%                | runtime.cgocall
+                                                     0.05s  0.63% |   runtime.entersyscall
+                                                     0.02s  0.25% |   runtime.osPreemptExtEnter
+        ----------------------------------------------------------+-------------
+                                                     0.61s   100% |   runtime.lock2
+             0.61s  3.23% 45.11%      0.61s  3.23%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestServeProfile (4.46s)
+PASS
+
+######## TestRPCServerCost (the prototype, the candidate's engines) pass 2
+=== RUN   TestRPCServerCost
+    rpc_spike_test.go:371: pooled false workers   0 gogc   0 at 256:  247542 gets/s,   33668 sets/s; a get 54.21 allocations and   2171 bytes, 929 GCs
+    rpc_spike_test.go:376: profiled get at 256: 285770 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:39 MSK
+        Duration: 2.01s, Total samples = 15.17s (756.16%)
+        Showing nodes accounting for 10.75s, 70.86% of 15.17s total
+        Dropped 341 nodes (cum <= 0.08s)
+        Showing top 35 nodes out of 248
+              flat  flat%   sum%        cum   cum%
+             4.02s 26.50% 26.50%      4.07s 26.83%  runtime.cgocall
+             2.26s 14.90% 41.40%      2.26s 14.90%  runtime.semasleep
+             0.45s  2.97% 44.36%      0.45s  2.97%  runtime.procyieldAsm
+             0.36s  2.37% 46.74%      3.91s 25.77%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.31s  2.04% 48.78%      1.68s 11.07%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.26s  1.71% 50.49%      0.57s  3.76%  runtime.pcvalue
+             0.23s  1.52% 52.01%      0.23s  1.52%  runtime.osyield.func1
+             0.21s  1.38% 53.39%      0.26s  1.71%  runtime.preemptM
+             0.20s  1.32% 54.71%      0.20s  1.32%  runtime.semawakeup
+             0.19s  1.25% 55.97%      0.21s  1.38%  runtime.netpoll
+             0.18s  1.19% 57.15%      0.21s  1.38%  runtime.step
+             0.17s  1.12% 58.27%      0.23s  1.52%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.13s  0.86% 59.13%      0.13s  0.86%  runtime.memmove
+             0.11s  0.73% 59.85%      0.11s  0.73%  modernc.org/libc.Xmemcmp (inline)
+             0.11s  0.73% 60.58%      0.46s  3.03%  modernc.org/sqlite/lib.mutexEnter
+             0.11s  0.73% 61.31%      0.63s  4.15%  runtime.adjustframe
+             0.11s  0.73% 62.03%      0.11s  0.73%  runtime.adjustpointers
+             0.11s  0.73% 62.76%      0.78s  5.14%  runtime.mallocgc
+             0.09s  0.59% 63.35%      0.09s  0.59%  modernc.org/libc.(*TLS).Alloc
+             0.09s  0.59% 63.94%      0.11s  0.73%  runtime.findfunc
+             0.08s  0.53% 64.47%      0.08s  0.53%  internal/sync.(*Mutex).Unlock (inline)
+             0.08s  0.53% 65.00%      0.08s  0.53%  runtime.(*moduledata).textAddr
+             0.08s  0.53% 65.52%      0.39s  2.57%  runtime.(*unwinder).resolveInternal
+             0.08s  0.53% 66.05%      0.08s  0.53%  runtime.memclrNoHeapPointers
+             0.08s  0.53% 66.58%      0.21s  1.38%  runtime.runqgrab
+             0.08s  0.53% 67.11%      0.38s  2.50%  runtime.stealWork
+             0.08s  0.53% 67.63%      0.08s  0.53%  runtime.sysUnusedOS
+             0.07s  0.46% 68.09%      0.30s  1.98%  modernc.org/sqlite.(*conn).bind
+             0.07s  0.46% 68.56%      0.14s  0.92%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.07s  0.46% 69.02%      0.40s  2.64%  runtime.(*stkframe).getStackMap
+             0.07s  0.46% 69.48%      0.10s  0.66%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.06s   0.4% 69.87%      0.50s  3.30%  internal/sync.(*Mutex).lockSlow
+             0.05s  0.33% 70.20%      0.11s  0.73%  database/sql.driverArgsConnLocked
+             0.05s  0.33% 70.53%      9.04s 59.59%  github.com/tinyshed/tinystore/kv.readLive
+             0.05s  0.33% 70.86%      0.13s  0.86%  sync.(*Mutex).Unlock (partial-inline)
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:39 MSK
+        Duration: 2.01s, Total samples = 15.17s (756.16%)
+        Showing nodes accounting for 15.17s, 100% of 15.17s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     4.07s   100% |   syscall.syscalln
+             4.02s 26.50% 26.50%      4.07s 26.83%                | runtime.cgocall
+                                                     0.05s  1.23% |   runtime.entersyscall
+        ----------------------------------------------------------+-------------
+                                                     2.26s   100% |   runtime.lock2
+             2.26s 14.90% 41.40%      2.26s 14.90%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:39 MSK
+        Duration: 2s, Total samples = 2.17s (108.36%)
+        Showing nodes accounting for 1.87s, 86.18% of 2.17s total
+        Dropped 68 nodes (cum <= 0.01s)
+        Showing top 35 nodes out of 128
+              flat  flat%   sum%        cum   cum%
+             0.83s 38.25% 38.25%      0.84s 38.71%  runtime.cgocall
+             0.30s 13.82% 52.07%      0.30s 13.82%  runtime.semasleep
+             0.11s  5.07% 57.14%      0.11s  5.07%  runtime.semawakeup
+             0.06s  2.76% 59.91%      0.06s  2.76%  runtime.netpollQueueTimer
+             0.06s  2.76% 62.67%      0.06s  2.76%  runtime.osyield.func1
+             0.04s  1.84% 64.52%      0.05s  2.30%  runtime.unlock2
+             0.03s  1.38% 65.90%      0.09s  4.15%  runtime.netpoll
+             0.03s  1.38% 67.28%      0.08s  3.69%  runtime.stealWork
+             0.02s  0.92% 68.20%      0.06s  2.76%  fmt.(*pp).doPrintf
+             0.02s  0.92% 69.12%      0.03s  1.38%  internal/runtime/maps.(*table).Delete
+             0.02s  0.92% 70.05%      0.02s  0.92%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.02s  0.92% 70.97%      0.02s  0.92%  math/rand/v2.(*Rand).Uint64 (inline)
+             0.02s  0.92% 71.89%      0.02s  0.92%  runtime.(*waitq).dequeue (inline)
+             0.02s  0.92% 72.81%      0.02s  0.92%  runtime.gopark
+             0.02s  0.92% 73.73%      0.36s 16.59%  runtime.lock2
+             0.02s  0.92% 74.65%      0.02s  0.92%  runtime.mapaccess2_fast32
+             0.02s  0.92% 75.58%      0.02s  0.92%  runtime.memmove
+             0.02s  0.92% 76.50%      0.02s  0.92%  runtime.pMask.read (inline)
+             0.02s  0.92% 77.42%      0.02s  0.92%  runtime.procyieldAsm
+             0.02s  0.92% 78.34%      0.02s  0.92%  runtime.runqput
+             0.02s  0.92% 79.26%      0.02s  0.92%  runtime.scanblock
+             0.02s  0.92% 80.18%      0.31s 14.29%  runtime.selectgo
+             0.01s  0.46% 80.65%      0.02s  0.92%  fmt.(*fmt).fmtInteger
+             0.01s  0.46% 81.11%      0.03s  1.38%  fmt.(*pp).fmtInteger
+             0.01s  0.46% 81.57%      0.04s  1.84%  fmt.(*pp).printArg
+             0.01s  0.46% 82.03%      0.87s 40.09%  github.com/tinyshed/tinystore/spike.(*rpcClient).call
+             0.01s  0.46% 82.49%      0.63s 29.03%  github.com/tinyshed/tinystore/spike.(*rpcClient).receive
+             0.01s  0.46% 82.95%      1.05s 48.39%  github.com/tinyshed/tinystore/spike.rpcRun.func1
+             0.01s  0.46% 83.41%      0.90s 41.47%  internal/poll.(*FD).execIO
+             0.01s  0.46% 83.87%      0.02s  0.92%  runtime.(*Pinner).Unpin
+             0.01s  0.46% 84.33%      0.02s  0.92%  runtime.execute
+             0.01s  0.46% 84.79%      0.21s  9.68%  runtime.findRunnable
+             0.01s  0.46% 85.25%      0.04s  1.84%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.01s  0.46% 85.71%      0.04s  1.84%  runtime.mallocgcTinySC2
+             0.01s  0.46% 86.18%      0.05s  2.30%  runtime.mapassign_fast32
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:21:39 MSK
+        Duration: 2s, Total samples = 2.17s (108.36%)
+        Showing nodes accounting for 2.17s, 100% of 2.17s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     0.84s   100% |   syscall.syscalln
+             0.83s 38.25% 38.25%      0.84s 38.71%                | runtime.cgocall
+                                                     0.01s  1.19% |   runtime.exitsyscall
+        ----------------------------------------------------------+-------------
+                                                     0.30s   100% |   runtime.lock2
+             0.30s 13.82% 52.07%      0.30s 13.82%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:371: pooled true  workers   0 gogc   0 at 256:  299770 gets/s,   34358 sets/s; a get 51.25 allocations and   2131 bytes, 633 GCs
+    rpc_spike_test.go:371: pooled false workers  64 gogc   0 at 256:  322101 gets/s,   18806 sets/s; a get 52.16 allocations and   2061 bytes, 880 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc   0 at 256:  259556 gets/s,   32161 sets/s; a get 52.17 allocations and   2063 bytes, 915 GCs
+    rpc_spike_test.go:371: pooled false workers   0 gogc 400 at 256:  375282 gets/s,   35391 sets/s; a get 54.12 allocations and   2160 bytes, 126 GCs
+    rpc_spike_test.go:371: pooled false workers 256 gogc 400 at 256:  421049 gets/s,   34984 sets/s; a get 52.04 allocations and   2051 bytes, 141 GCs
+    rpc_spike_test.go:376: profiled get at 256: 410847 ops/s on 16 processors
+    rpc_spike_test.go:376: sidecar.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:10 MSK
+        Duration: 2s, Total samples = 14.87s (742.15%)
+        Showing nodes accounting for 10.43s, 70.14% of 14.87s total
+        Dropped 320 nodes (cum <= 0.07s)
+        Showing top 35 nodes out of 230
+              flat  flat%   sum%        cum   cum%
+             5.01s 33.69% 33.69%      5.05s 33.96%  runtime.cgocall
+             0.71s  4.77% 38.47%      0.71s  4.77%  runtime.procyieldAsm
+             0.69s  4.64% 43.11%      0.69s  4.64%  runtime.semasleep
+             0.49s  3.30% 46.40%      2.01s 13.52%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.42s  2.82% 49.23%      4.71s 31.67%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.25s  1.68% 50.91%      0.25s  1.68%  runtime.semawakeup
+             0.24s  1.61% 52.52%      0.75s  5.04%  modernc.org/sqlite/lib.mutexEnter
+             0.23s  1.55% 54.07%      0.23s  1.55%  runtime.osyield.func1
+             0.18s  1.21% 55.28%      0.30s  2.02%  runtime.netpoll
+             0.17s  1.14% 56.42%      0.17s  1.14%  modernc.org/libc.Xmemcmp (inline)
+             0.16s  1.08% 57.50%      0.20s  1.34%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.14s  0.94% 58.44%      0.30s  2.02%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.13s  0.87% 59.31%      0.13s  0.87%  internal/sync.(*Mutex).Unlock (inline)
+             0.13s  0.87% 60.19%      0.19s  1.28%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.12s  0.81% 61.00%      0.18s  1.21%  runtime.mallocgcTinySC2
+             0.12s  0.81% 61.80%      0.12s  0.81%  runtime.netpollQueueTimer
+             0.10s  0.67% 62.47%      0.86s  5.78%  runtime.lock2
+             0.09s  0.61% 63.08%      0.88s  5.92%  runtime.mallocgc
+             0.09s  0.61% 63.69%      0.11s  0.74%  runtime.mallocgcSmallScanNoHeaderSC2
+             0.09s  0.61% 64.29%      0.41s  2.76%  runtime.stealWork
+             0.08s  0.54% 64.83%     10.96s 73.71%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.[]uint8]).GetEntry
+             0.08s  0.54% 65.37%      0.08s  0.54%  modernc.org/sqlite/lib._releaseMemArray
+             0.07s  0.47% 65.84%      6.63s 44.59%  database/sql.(*Stmt).QueryContext
+             0.07s  0.47% 66.31%      0.13s  0.87%  runtime.mapaccess2_faststr
+             0.06s   0.4% 66.71%      0.08s  0.54%  runtime.casgstatus
+             0.06s   0.4% 67.11%      0.18s  1.21%  runtime.growslice
+             0.06s   0.4% 67.52%      0.09s  0.61%  runtime.mallocgcSmallScanNoHeaderSC7
+             0.06s   0.4% 67.92%      0.19s  1.28%  sync.(*Mutex).Unlock (inline)
+             0.05s  0.34% 68.26%      0.19s  1.28%  database/sql.convertAssignRows
+             0.05s  0.34% 68.59%      0.71s  4.77%  internal/sync.(*Mutex).lockSlow
+             0.05s  0.34% 68.93%      5.90s 39.68%  modernc.org/sqlite.(*stmt).query
+             0.05s  0.34% 69.27%      0.59s  3.97%  modernc.org/sqlite.newRows
+             0.05s  0.34% 69.60%      0.20s  1.34%  modernc.org/sqlite/lib.mutexLeave
+             0.04s  0.27% 69.87%      0.31s  2.08%  database/sql.(*DB).addDep
+             0.04s  0.27% 70.14%      6.47s 43.51%  database/sql.(*Stmt).QueryContext.func1
+    rpc_spike_test.go:376: sidecar.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:10 MSK
+        Duration: 2s, Total samples = 14.87s (742.15%)
+        Showing nodes accounting for 14.87s, 100% of 14.87s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     5.05s   100% |   syscall.syscalln
+             5.01s 33.69% 33.69%      5.05s 33.96%                | runtime.cgocall
+                                                     0.04s  0.79% |   runtime.entersyscall
+        ----------------------------------------------------------+-------------
+                                                     0.69s   100% |   runtime.lock2
+             0.69s  4.64% 38.33%      0.69s  4.64%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+    rpc_spike_test.go:376: client.pprof -top:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:10 MSK
+        Duration: 2s, Total samples = 2.72s (135.93%)
+        Showing nodes accounting for 2.29s, 84.19% of 2.72s total
+        Dropped 77 nodes (cum <= 0.01s)
+        Showing top 35 nodes out of 125
+              flat  flat%   sum%        cum   cum%
+             1.23s 45.22% 45.22%      1.24s 45.59%  runtime.cgocall
+             0.22s  8.09% 53.31%      0.22s  8.09%  runtime.semasleep
+             0.09s  3.31% 56.62%      0.09s  3.31%  runtime.netpollQueueTimer
+             0.08s  2.94% 59.56%      0.08s  2.94%  runtime.osyield.func1
+             0.06s  2.21% 61.76%      0.06s  2.21%  runtime.sysUnusedOS
+             0.05s  1.84% 63.60%      0.05s  1.84%  runtime.memmove
+             0.05s  1.84% 65.44%      0.05s  1.84%  runtime.semawakeup
+             0.04s  1.47% 66.91%      0.18s  6.62%  runtime.stealWork
+             0.03s  1.10% 68.01%      0.26s  9.56%  runtime.lock2
+             0.03s  1.10% 69.12%      0.12s  4.41%  runtime.netpoll
+             0.02s  0.74% 69.85%      0.02s  0.74%  fmt.(*fmt).writePadding
+             0.02s  0.74% 70.59%      1.32s 48.53%  github.com/tinyshed/tinystore/spike.rpcRun.func1
+             0.02s  0.74% 71.32%      0.02s  0.74%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.02s  0.74% 72.06%      0.02s  0.74%  internal/runtime/maps.h1 (inline)
+             0.02s  0.74% 72.79%      0.02s  0.74%  internal/runtime/maps.memHash32AES
+             0.02s  0.74% 73.53%      0.03s  1.10%  internal/syscall/windows.WSAGetOverlappedResult
+             0.02s  0.74% 74.26%      0.02s  0.74%  runtime.(*randomEnum).done (inline)
+             0.02s  0.74% 75.00%      0.02s  0.74%  runtime.(*waitq).dequeue
+             0.02s  0.74% 75.74%      0.15s  5.51%  runtime.mallocgc
+             0.02s  0.74% 76.47%      0.03s  1.10%  runtime.mallocgcSmallNoScanSC2
+             0.02s  0.74% 77.21%      0.02s  0.74%  runtime.pMask.read
+             0.02s  0.74% 77.94%      0.02s  0.74%  runtime.procyieldAsm
+             0.02s  0.74% 78.68%      0.14s  5.15%  runtime.sellock
+             0.02s  0.74% 79.41%      0.02s  0.74%  runtime.typePointers.next
+             0.02s  0.74% 80.15%      0.03s  1.10%  runtime.unlock2
+             0.02s  0.74% 80.88%      0.72s 26.47%  syscall.WSASend
+             0.01s  0.37% 81.25%      0.03s  1.10%  fmt.(*fmt).fmtInteger
+             0.01s  0.37% 81.62%      0.06s  2.21%  fmt.(*pp).doPrintf
+             0.01s  0.37% 81.99%      0.04s  1.47%  fmt.(*pp).printArg
+             0.01s  0.37% 82.35%      0.78s 28.68%  github.com/tinyshed/tinystore/spike.(*rpcLeaderWriter).send
+             0.01s  0.37% 82.72%      1.27s 46.69%  github.com/tinyshed/tinystore/spike.rpcGetOp.func1
+             0.01s  0.37% 83.09%      1.34s 49.26%  internal/poll.(*FD).execIO
+             0.01s  0.37% 83.46%      0.02s  0.74%  internal/sync.(*Mutex).lockSlow
+             0.01s  0.37% 83.82%      0.02s  0.74%  math/rand/v2.(*Rand).IntN
+             0.01s  0.37% 84.19%      0.02s  0.74%  runtime.(*timers).check
+    rpc_spike_test.go:376: client.pprof -peek:
+        File: proto.test.exe
+        Build ID: <tmp>\measure\proto.test.exe2026-09-29 13:20:49.9375375 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:10 MSK
+        Duration: 2s, Total samples = 2.72s (135.93%)
+        Showing nodes accounting for 2.72s, 100% of 2.72s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     1.24s   100% |   syscall.syscalln
+             1.23s 45.22% 45.22%      1.24s 45.59%                | runtime.cgocall
+                                                     0.01s  0.81% |   runtime.entersyscall
+        ----------------------------------------------------------+-------------
+                                                     0.22s   100% |   runtime.lock2
+             0.22s  8.09% 53.31%      0.22s  8.09%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestRPCServerCost (39.39s)
+PASS
+
+######## TestServeProfile again, candidate fccf0ed, pass 2
+=== RUN   TestServeProfile
+    profile_spike_test.go:189: server at 256:  365792 gets/s; a get 59.18 allocations and   2630 bytes, 91 GCs, on 16 processors
+    profile_spike_test.go:191: server.pprof -top -nodecount=35:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:14 MSK
+        Duration: 2s, Total samples = 17.55s (877.45%)
+        Showing nodes accounting for 12.43s, 70.83% of 17.55s total
+        Dropped 368 nodes (cum <= 0.09s)
+        Showing top 35 nodes out of 239
+              flat  flat%   sum%        cum   cum%
+             7.57s 43.13% 43.13%      7.65s 43.59%  runtime.cgocall
+             0.54s  3.08% 46.21%      0.54s  3.08%  runtime.semasleep
+             0.53s  3.02% 49.23%      0.53s  3.02%  runtime.osyield.func1
+             0.51s  2.91% 52.14%      0.51s  2.91%  runtime.procyieldAsm
+             0.40s  2.28% 54.42%      5.11s 29.12%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.33s  1.88% 56.30%      1.62s  9.23%  modernc.org/sqlite/lib._sqlite3BtreeIndexMoveto
+             0.19s  1.08% 57.38%      0.19s  1.08%  runtime.semawakeup
+             0.14s   0.8% 58.18%      0.50s  2.85%  modernc.org/sqlite/lib.mutexEnter
+             0.14s   0.8% 58.97%      0.14s   0.8%  runtime.memmove
+             0.13s  0.74% 59.72%      0.14s   0.8%  internal/sync.(*Mutex).Unlock (inline)
+             0.13s  0.74% 60.46%      0.28s  1.60%  modernc.org/sqlite/lib._sqlite3VdbeRecordCompareWithSkip
+             0.12s  0.68% 61.14%      0.12s  0.68%  modernc.org/libc.Xmemcmp (inline)
+             0.12s  0.68% 61.82%      0.20s  1.14%  runtime.netpoll
+             0.12s  0.68% 62.51%      0.73s  4.16%  runtime.stealWork
+             0.11s  0.63% 63.13%      0.11s  0.63%  indexbytebody
+             0.11s  0.63% 63.76%      0.11s  0.63%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+             0.11s  0.63% 64.39%      0.14s   0.8%  runtime.mallocgcSmallScanNoHeaderSC3
+             0.10s  0.57% 64.96%      0.11s  0.63%  modernc.org/sqlite/lib._releaseMemArray
+             0.10s  0.57% 65.53%      0.12s  0.68%  runtime.mallocgcTinySC2
+             0.09s  0.51% 66.04%      0.18s  1.03%  modernc.org/sqlite/lib._pcache1FetchNoMutex
+             0.09s  0.51% 66.55%      0.77s  4.39%  runtime.mallocgc
+             0.07s   0.4% 66.95%        10s 56.98%  github.com/tinyshed/tinystore/kv.readLive
+             0.07s   0.4% 67.35%      0.55s  3.13%  internal/sync.(*Mutex).lockSlow
+             0.07s   0.4% 67.75%      0.40s  2.28%  modernc.org/sqlite.(*conn).bind
+             0.06s  0.34% 68.09%      0.41s  2.34%  database/sql.(*DB).addDep
+             0.06s  0.34% 68.43%     10.93s 62.28%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.06s  0.34% 68.77%      0.13s  0.74%  modernc.org/sqlite/lib.mutexLeave
+             0.05s  0.28% 69.06%      0.19s  1.08%  database/sql.convertAssignRows
+             0.05s  0.28% 69.34%     11.31s 64.44%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+             0.05s  0.28% 69.63%      0.09s  0.51%  runtime.mapaccess2
+             0.05s  0.28% 69.91%      0.57s  3.25%  runtime.runqgrab
+             0.04s  0.23% 70.14%      0.15s  0.85%  context.(*cancelCtx).Done
+             0.04s  0.23% 70.37%      6.89s 39.26%  database/sql.(*Stmt).QueryContext
+             0.04s  0.23% 70.60%      0.13s  0.74%  database/sql.driverArgsConnLocked
+             0.04s  0.23% 70.83%      6.30s 35.90%  database/sql.rowsiFromStatement
+    profile_spike_test.go:191: server.pprof -top -cum -nodecount=45:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:14 MSK
+        Duration: 2s, Total samples = 17.55s (877.45%)
+        Showing nodes accounting for 8.63s, 49.17% of 17.55s total
+        Dropped 368 nodes (cum <= 0.09s)
+        Showing top 45 nodes out of 239
+              flat  flat%   sum%        cum   cum%
+                 0     0%     0%     13.24s 75.44%  github.com/tinyshed/tinystore/server.(*session).work
+                 0     0%     0%     13.24s 75.44%  github.com/tinyshed/tinystore/server.(*workers).run.func1
+                 0     0%     0%     13.24s 75.44%  sync.(*WaitGroup).Go.func1
+             0.03s  0.17%  0.17%     13.11s 74.70%  github.com/tinyshed/tinystore/server.(*session).handle
+             0.02s  0.11%  0.28%     12.86s 73.28%  github.com/tinyshed/tinystore/server.(*Server).kvMethods.func1
+             0.04s  0.23%  0.51%     12.84s 73.16%  github.com/tinyshed/tinystore/server.kvOne
+             0.03s  0.17%  0.68%     11.54s 65.75%  github.com/tinyshed/tinystore/server.(*kvHandle).run
+             0.02s  0.11%   0.8%     11.42s 65.07%  github.com/tinyshed/tinystore/server.runValues
+             0.05s  0.28%  1.08%     11.31s 64.44%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry
+                 0     0%  1.08%     10.94s 62.34%  github.com/tinyshed/tinystore/kv.(*branch).read
+                 0     0%  1.08%     10.93s 62.28%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup (inline)
+             0.06s  0.34%  1.42%     10.93s 62.28%  github.com/tinyshed/tinystore/internal/sqlite.(*File).withReader
+             0.01s 0.057%  1.48%     10.04s 57.21%  github.com/tinyshed/tinystore/internal/sqlite.(*File).Lookup.func1
+             0.03s  0.17%  1.65%     10.03s 57.15%  github.com/tinyshed/tinystore/kv.(*Bucket[go.shape.struct { Kind github.com/tinyshed/tinystore/kv.RawKind; Int int64; Bytes []uint8 }]).GetEntry.func1
+             0.07s   0.4%  2.05%        10s 56.98%  github.com/tinyshed/tinystore/kv.readLive
+             7.57s 43.13% 45.19%      7.65s 43.59%  runtime.cgocall
+                 0     0% 45.19%      7.65s 43.59%  syscall.SyscallN
+                 0     0% 45.19%      7.65s 43.59%  syscall.syscalln
+                 0     0% 45.19%      6.99s 39.83%  github.com/tinyshed/tinystore/internal/sqlite.QueryRowByKey
+             0.01s 0.057% 45.24%      6.96s 39.66%  github.com/tinyshed/tinystore/internal/sqlite.QueryRow (inline)
+                 0     0% 45.24%      6.94s 39.54%  github.com/tinyshed/tinystore/internal/sqlite.(*preparedConnection).QueryContext
+             0.04s  0.23% 45.47%      6.89s 39.26%  database/sql.(*Stmt).QueryContext
+                 0     0% 45.47%      6.85s 39.03%  database/sql.(*DB).retry
+             0.01s 0.057% 45.53%      6.85s 39.03%  database/sql.(*Stmt).QueryContext.func1
+             0.04s  0.23% 45.75%      6.30s 35.90%  database/sql.rowsiFromStatement
+             0.02s  0.11% 45.87%      6.12s 34.87%  database/sql.ctxDriverStmtQuery
+                 0     0% 45.87%      6.10s 34.76%  modernc.org/sqlite.(*stmt).QueryContext
+             0.04s  0.23% 46.10%      6.10s 34.76%  modernc.org/sqlite.(*stmt).query
+                 0     0% 46.10%      5.17s 29.46%  modernc.org/sqlite.(*conn).step
+                 0     0% 46.10%      5.17s 29.46%  modernc.org/sqlite/lib.Xsqlite3_step
+             0.03s  0.17% 46.27%      5.14s 29.29%  modernc.org/sqlite/lib._sqlite3Step
+             0.40s  2.28% 48.55%      5.11s 29.12%  modernc.org/sqlite/lib._sqlite3VdbeExec
+             0.01s 0.057% 48.60%      4.54s 25.87%  golang.org/x/sys/windows.(*LazyProc).Call
+                 0     0% 48.60%      4.50s 25.64%  golang.org/x/sys/windows.(*Proc).Call
+                 0     0% 48.60%      3.17s 18.06%  internal/poll.(*FD).execIO
+             0.01s 0.057% 48.66%      2.93s 16.70%  modernc.org/sqlite/lib._sqlite3OsShmLock (inline)
+             0.01s 0.057% 48.72%      2.92s 16.64%  modernc.org/sqlite/lib._winShmLock
+             0.01s 0.057% 48.77%      2.87s 16.35%  modernc.org/sqlite/lib._sqlite3BtreeBeginTrans
+             0.01s 0.057% 48.83%      2.86s 16.30%  modernc.org/sqlite/lib._btreeBeginTrans
+                 0     0% 48.83%      2.85s 16.24%  modernc.org/sqlite/lib._lockBtree
+             0.01s 0.057% 48.89%      2.82s 16.07%  modernc.org/sqlite/lib._sqlite3PagerSharedLock
+             0.02s  0.11% 49.00%      2.80s 15.95%  github.com/tinyshed/tinystore/internal/sqlite.(*Row).Scan
+                 0     0% 49.00%      2.31s 13.16%  database/sql.(*Rows).Close
+             0.03s  0.17% 49.17%      2.31s 13.16%  database/sql.(*Rows).close
+                 0     0% 49.17%      2.24s 12.76%  internal/poll.(*FD).Read
+    profile_spike_test.go:191: server.pprof -peek runtime\.cgocall$|runtime\.semasleep$|runtime\.futex$:
+        File: candidate.test.exe
+        Build ID: <tmp>\measure\candidate.test.exe2026-09-29 13:13:10.5812536 +0300 MSK
+        Type: cpu
+        Time: 2026-09-29 13:22:14 MSK
+        Duration: 2s, Total samples = 17.55s (877.45%)
+        Showing nodes accounting for 17.55s, 100% of 17.55s total
+        ----------------------------------------------------------+-------------
+              flat  flat%   sum%        cum   cum%   calls calls% + context 	 	 
+        ----------------------------------------------------------+-------------
+                                                     7.65s   100% |   syscall.syscalln
+             7.57s 43.13% 43.13%      7.65s 43.59%                | runtime.cgocall
+                                                     0.04s  0.52% |   runtime.entersyscall
+                                                     0.04s  0.52% |   runtime.osPreemptExtEnter
+        ----------------------------------------------------------+-------------
+                                                     0.54s   100% |   runtime.lock2
+             0.54s  3.08% 46.21%      0.54s  3.08%                | runtime.semasleep
+        ----------------------------------------------------------+-------------
+--- PASS: TestServeProfile (4.39s)
+PASS
