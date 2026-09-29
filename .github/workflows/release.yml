@@ -1,0 +1,185 @@
+name: Release
+
+# A release is pushed as the last of its tags, cmd/tinystore/vX.Y.Z, whose
+# checkout stamps the binaries' version; the release skill has the order. Run
+# by hand, it builds a snapshot of what a release would publish and publishes
+# nothing.
+on:
+  push:
+    tags: ['cmd/tinystore/v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version the SDKs' manifests say, such as v0.1.0
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/tinystore/go.mod
+          cache-dependency-path: |
+            go.sum
+            server/go.sum
+            cmd/tinystore/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - uses: arduino/setup-task@v3
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test
+        env:
+          GOWORK: 'off'
+        run: |
+          go test -shuffle=on ./...
+          go -C server test -shuffle=on ./...
+          go -C cmd/tinystore test -shuffle=on ./...
+
+      - name: Test the SDKs
+        run: task sdk
+
+  build:
+    name: build
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      # every tag, so that go build finds the one it stamps
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/tinystore/go.mod
+          cache-dependency-path: cmd/tinystore/go.sum
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Version
+        id: version
+        env:
+          ASKED: ${{ inputs.version }}
+        run: |
+          version="${ASKED:-${GITHUB_REF_NAME#cmd/tinystore/}}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          GOWORK: 'off'
+          SNAPSHOT: ${{ github.event_name == 'workflow_dispatch' && '-snapshot' || '' }}
+        run: go run ./internal/release -version "${{ steps.version.outputs.version }}" $SNAPSHOT
+
+      - uses: actions/attest-build-provenance@v4
+        if: github.event_name == 'push'
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/npm/*.tgz
+            dist/pypi/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/npm/
+            dist/pypi/
+          if-no-files-found: error
+
+  github:
+    name: GitHub release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      # the release hangs on the root's tag, the one go get names
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease == 'true' && '--prerelease' || '' }}
+        run: |
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$VERSION" \
+            --generate-notes $PRERELEASE dist/*.tar.gz dist/*.zip dist/SHA256SUMS
+
+  npm:
+    name: npm
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # the platforms first, so that tinystore never names a package not there
+      # yet; a token only until trusted publishing is set up for each package
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ needs.build.outputs.prerelease == 'true' && 'next' || 'latest' }}
+        run: |
+          npm install -g npm@12
+          for package in dist/npm/tinyshed-tinystore-*.tgz dist/npm/tinystore-*.tgz; do
+            npm publish "$package" --access public --provenance --tag "$DIST_TAG"
+          done
+
+  pypi:
+    name: PyPI
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/pypi/

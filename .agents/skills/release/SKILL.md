@@ -67,8 +67,31 @@ registries keep what they saw. A mistake is the next patch version.
 
 ## Publishing
 
-Tagging and publishing are outward-facing: ask before each. npm packages
-publish from their tarballs, the six platforms before `tinystore`, a
-pre-release under `--tag next`; PyPI takes the wheels and the sdist. Both
-publish through trusted publishing from the release workflow once it exists,
-never with a token kept on a machine.
+Tagging and publishing are outward-facing: ask before each.
+
+`.github/workflows/release.yml` runs on the push of `cmd/tinystore/vX.Y.Z`,
+the last tag: it tests the modules and both SDKs, builds `dist/` with
+`internal/release`, attests every artifact's provenance, and then, each
+alone, makes the GitHub release on the root's tag `vX.Y.Z` with the archives
+and `SHA256SUMS`, publishes to npm and publishes to PyPI. A version with a
+hyphen is a pre-release: `--prerelease` on GitHub, `--tag next` on npm, and
+PyPI's own spelling (`0.1.0rc1`) is already in the wheels.
+
+Run by hand (`gh workflow run release.yml -f version=v0.1.0`) it builds a
+snapshot and uploads it as the run's artifact, publishing nothing: the way to
+try the workflow before a tag.
+
+- **PyPI** publishes by trusted publishing: the project `tinyshed-tinystore`
+  trusts `tinyshed/tinystore`, `release.yml`, environment `pypi`.
+- **npm** can trust a workflow only for a package that exists, so the first
+  release publishes with the `NPM_TOKEN` secret of the `npm` environment.
+  Then set each of the seven packages to trust `release.yml` on npmjs.com and
+  delete the secret; `npm publish` uses the workflow's identity once no token
+  is given.
+- The environments `npm` and `pypi` take deployments from tags matching
+  `cmd/tinystore/v*` only.
+
+A failed publish is run again from its job: the registries refuse a version
+twice, so a job that got halfway publishes the rest and fails on the first
+it already has; publish those by hand from the run's artifact, never a
+rebuilt one.
