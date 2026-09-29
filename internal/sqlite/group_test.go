@@ -299,7 +299,9 @@ func writeBesideAHeavyOne(t *testing.T, endSoon func(context.Context) (context.C
 	ended bool, errs []error,
 ) {
 	t.Helper()
-	file := openGroupTestFile(t)
+	// Under the race detector the million rows outlast the ten seconds a group
+	// may hold the writer, which would roll them back for another reason.
+	file := openGroupTestFileWith(t, Config{Readers: 1, GroupHold: time.Minute})
 	release := holdWriter(t, file)
 	const heavy = `insert into example
 		with recursive n(i) as (select 1 union all select i + 1 from n where i < 1000000) select i from n`
