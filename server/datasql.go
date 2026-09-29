@@ -14,8 +14,8 @@ import (
 // connection's capability does not allow
 var errDataConnection = errors.New("a data connection changes rows, not the schema")
 
-// errAdminOnly is a repair, which only an admin connection makes
-var errAdminOnly = errors.New("an admin connection's to make")
+// errAdminOnly refuses a repair to a connection that is not an admin's.
+var errAdminOnly = errors.New("only an admin connection can make this repair")
 
 func refused(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{errDataConnection}, args...)...)
