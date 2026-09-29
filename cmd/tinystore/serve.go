@@ -311,7 +311,9 @@ func waitShared(ctx context.Context, srv *server.Server, asked serveFlags, faile
 	}
 }
 
-// version is this binary's module version, as WELCOME and SERVE state it
+// version is this binary's module version, as WELCOME and SERVE state it: the
+// tag a release is built from, as go build stamps it from the checkout, and a
+// pseudo-version or (devel) otherwise.
 func version() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		return info.Main.Version

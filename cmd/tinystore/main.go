@@ -5,6 +5,7 @@
 // this tool's own.
 //
 //	tinystore serve --dir <dir> --stdio | --local | --listen <endpoint>
+//	tinystore version                              the release, the Go it was built with, the platform
 //	go tool tinystore migrate [name]               what differs; writes nothing
 //	go tool tinystore migrate [name] new <what>    write the next migration from the difference
 //	go tool tinystore schema [name]                the schema's SQL
@@ -24,6 +25,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 )
@@ -35,7 +37,8 @@ const usage = `usage:
   tinystore serve --dir <dir> ...        serve the store in dir to other processes; tinystore serve -h says how
   tinystore migrate [name]               what differs between a schema and its migrations; writes nothing
   tinystore migrate [name] new <what>    write the next migration from the difference
-  tinystore schema [name]                print the schema's SQL`
+  tinystore schema [name]                print the schema's SQL
+  tinystore version                      print the release, the Go it was built with and the platform`
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
@@ -43,6 +46,10 @@ func main() {
 		err := serve(ctx, os.Args[2:], console{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
 		stop()
 		exit(err)
+	}
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		fmt.Printf("tinystore %s (%s %s/%s)\n", version(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		os.Exit(0)
 	}
 	exit(run(context.Background(), os.Args[1:], os.Stdout))
 }
