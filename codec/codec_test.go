@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"math"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -431,4 +432,43 @@ func FuzzDecodeValues(f *testing.F) {
 			t.Fatalf("decoded %d of %d values", len(values), count)
 		}
 	})
+}
+
+// A whole decode of a block allocates no more than the body's ceiling,
+// whatever its values: 2336 bytes for 240 random floats, 288 for a constant.
+func TestADecodeStaysWithinTheBodysCeiling(t *testing.T) {
+	c := testCodec(t)
+	r := rand.New(rand.NewPCG(1, 2))
+	for name, value := range map[string]func(i int) float64{
+		"random bits": func(int) float64 { return math.Float64frombits(r.Uint64()) },
+		"sine":        func(i int) float64 { return math.Sin(float64(i) / 10) },
+		"integers":    func(i int) float64 { return float64(i * 7) },
+		"decimals":    func(i int) float64 { return float64(i%97) / 100 },
+		"constant":    func(int) float64 { return 17 },
+	} {
+		samples := make([]Sample, MaxSamples)
+		for i := range samples {
+			samples[i] = Sample{At: int64(i) * 15000, Value: value(i)}
+		}
+		head, payload := assertRoundTrip(t, c, samples)
+		if perDecode := allocatedPerDecode(c, head, payload); perDecode > maxBody {
+			t.Errorf("%s: a decode allocated %d bytes, past the %d-byte ceiling", name, perDecode, maxBody)
+		}
+	}
+}
+
+func allocatedPerDecode(c *Codec, head Head, payload []byte) uint64 {
+	const runs = 200
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		it, err := c.Decode(head, payload)
+		if err != nil {
+			panic(err)
+		}
+		for it.Next() {
+		}
+	}
+	runtime.ReadMemStats(&after)
+	return (after.TotalAlloc - before.TotalAlloc) / runs
 }
