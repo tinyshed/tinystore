@@ -169,6 +169,14 @@ func jobsEnqueue(c *call) error {
 	if err != nil {
 		return err
 	}
+	if len(ask.Jobs) == 1 {
+		// One job shares a commit with the writes beside it, as Enqueue does in
+		// Go; a transaction of its own would pay a sync and hold the writer.
+		if err = enqueueOne(c.ctx, queue, ask.Jobs[0]); err != nil {
+			return opFailed(0, err)
+		}
+		return respond(c, wire.Empty{})
+	}
 	err = handle.store.Tx(c.ctx, func(tx *jobs.Tx) error {
 		inside := queue.WithTx(tx)
 		for i, job := range ask.Jobs {
