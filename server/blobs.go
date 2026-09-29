@@ -269,6 +269,11 @@ func blobsScan(c *call) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighObjects(page.Objects) })
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err = begin(c, wire.Empty{}); err != nil {
 		return err
 	}

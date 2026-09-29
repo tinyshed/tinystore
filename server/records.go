@@ -62,6 +62,11 @@ func recordsRead(c *call) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighRecords(page.Records) })
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err = sendRecords(c, page.Records); err != nil {
 		return err
@@ -85,6 +90,11 @@ func recordsFollow(c *call) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighRecords(batch.Records) })
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err = sendRecords(c, batch.Records); err != nil {
 		return err

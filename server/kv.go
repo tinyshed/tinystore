@@ -251,6 +251,11 @@ func kvScan(c *call) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighEntries(page.Entries) })
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err = begin(c, wire.Empty{}); err != nil {
 		return err

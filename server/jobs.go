@@ -430,6 +430,11 @@ func scanJobs[V any](c *call, queue *jobs.Queue[V], query jobs.Query) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighJobs(page.Entries) })
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err = begin(c, wire.Empty{}); err != nil {
 		return err
 	}

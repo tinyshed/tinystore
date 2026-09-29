@@ -166,6 +166,11 @@ func sqlQuery(c *call) error {
 	if err != nil {
 		return tookTooLong(ctx, err)
 	}
+	release, err := c.holdAnswer(func() int64 { return weighRows(rows) })
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err = begin(c, wire.SQLColumns{Columns: rows.Columns}); err != nil {
 		return err

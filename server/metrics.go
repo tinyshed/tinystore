@@ -61,6 +61,11 @@ func metricsRead(c *call) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighSeries(results) })
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err = begin(c, wire.Empty{}); err != nil {
 		return err
@@ -106,6 +111,11 @@ func metricsAggregate(c *call) error {
 	if err != nil {
 		return err
 	}
+	release, err := c.holdAnswer(func() int64 { return weighBuckets(results) })
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	if err = begin(c, wire.Empty{}); err != nil {
 		return err
