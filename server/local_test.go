@@ -38,8 +38,10 @@ func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 	if err = private.Check(dir); err != nil {
 		t.Fatal(err)
 	}
+	// the socket is in server/ when its path fits there, which under macOS's
+	// temporary directory it does not
 	want := []string{"SERVE"}
-	if runtime.GOOS != "windows" {
+	if strings.HasPrefix(l.Addr(), "unix://"+dir) {
 		want = append(want, "tinystore.sock")
 	}
 	if names := entriesOf(t, dir); !slices.Equal(names, want) {
@@ -203,6 +205,10 @@ func takeTheEndpoint(t *testing.T, dir string) {
 		if err = os.MkdirAll(filepath.Join(strings.TrimPrefix(endpoint, "unix://"), "taken"), 0o700); err != nil {
 			t.Fatal(err)
 		}
+		// the socket may have moved out of dir, which still holds SERVE
+		if err = os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 		return
 	}
 	var taken *pipe.Listener
@@ -275,8 +281,9 @@ func TestALongSocketPathMovesToTheUsersOwnDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows serves a named pipe, which has no such path")
 	}
-	// a runtime directory as short as a user's, which t.TempDir is not on macOS
-	runtimeDir, err := os.MkdirTemp("", "xdg")
+	// a runtime directory as short as a user's, which neither t.TempDir nor
+	// $TMPDIR is on macOS
+	runtimeDir, err := os.MkdirTemp("/tmp", "xdg")
 	if err != nil {
 		t.Fatal(err)
 	}
