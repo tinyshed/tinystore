@@ -65,6 +65,9 @@ func workOptions(ask wire.JobsWorkers, most uint32) ([]jobs.WorkOption, error) {
 	if ask.Timeout > 0 {
 		options = append(options, jobs.Timeout(durationOf(ask.Timeout)))
 	}
+	if ask.UntilIdle {
+		options = append(options, jobs.UntilIdle())
+	}
 	return options, nil
 }
 

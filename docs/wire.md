@@ -9,7 +9,12 @@ in `server/wire`. Every example on this page is a vector of
 [server/wire/testdata/vectors.json](../server/wire/testdata/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
-the rule it breaks.
+the rule it breaks. Every message is also a vector of
+[messages.json](../server/wire/testdata/messages.json), its bytes and its
+fields by the names the tables below give them, with the methods' numbers and
+the errors' codes, so that an SDK checks each field of each message in one
+loop; the Go types write it, through a schema of each message's keys that
+`TestMessageVectors` holds.
 
 ## Frames
 
@@ -242,9 +247,10 @@ value: a map from small unsigned integer keys to values, under these rules.
   shortest form of every integer, length and count, keys in ascending order,
   every float in eight bytes, so that a vector compares byte for byte; a
   decoder takes any valid form in any order.
-- **An SDK's library** writes plain maps with no extension and reads 64-bit
-  integers without rounding. Python's `msgpack.unpackb` needs
-  `strict_map_key=False` for integer keys.
+- **An SDK's codec is its own**: a general library writes plain maps and
+  reads 64-bit integers without rounding when told, but takes a float 32, an
+  extension, a key twice or a value nested nine deep, which this profile
+  refuses. The SDKs' codecs refuse every `refused` vector.
 
 ## Errors
 
@@ -433,7 +439,8 @@ A queue:
 | 1 | name | str | `[a-z0-9][a-z0-9_-]{0,63}` |
 | 2 | lease | uint | milliseconds; 30 seconds when absent |
 | 3 | max attempts | uint | 10 when absent |
-| 4, 5 | backoff | uint, uint | milliseconds, the first and the longest wait; one second and an hour |
+| 4 | backoff first | uint | milliseconds, the first wait after a failure; a second when absent |
+| 5 | backoff most | uint | milliseconds, the longest; an hour when absent |
 | 6 | max waiting | uint | ten million when absent |
 | 7 | keep failed | uint | milliseconds; seven days when absent |
 | 8 | keep done | uint | milliseconds; absent forgets a key when its job is done |
@@ -481,10 +488,11 @@ Outcomes are `{1: [outcome…]}` and settled `{1: [nil or error…]}`. A query
 is `{1: handle, 2: prefix, 3: state, 4: after, 5: limit}` and a page `{1:
 more, 2: after}`, as `jobs.Query` and `jobs.Page` are.
 
-Workers are `{1: handle, 2: workers, 3: timeout}`: the queue's own Work loop
-runs for the stream, `workers` at once, 1 when absent and at most the streams
-in flight, each job `timeout` milliseconds in the client's hands, a minute
-when absent. Each job it hands a handler goes out as a held job; the client
+Workers are `{1: handle, 2: workers, 3: timeout, 4: until idle}`: the
+queue's own Work loop runs for the stream, `workers` at once, 1 when absent
+and at most the streams in flight, each job `timeout` milliseconds in the
+client's hands, a minute when absent, and with `until idle` only until no job
+is due and none runs, as a test wants it. Each job it hands a handler goes out as a held job; the client
 settles it by sending its outcome as `DATA` on the same stream, and ends its
 side with `DATA`·END once it takes no more. When that side ends, or the
 client cancels or leaves, the jobs in its hands fail that attempt, as a
@@ -671,7 +679,9 @@ A query:
 | 7, 8 | attrs, context | array | fields as a record's, each one a record must hold |
 | 9 | newest | bool | newest first; oldest first when absent |
 | 10 | limit | uint | the records a page holds: 1000 when absent, at most 10000 |
-| 11, 12, 13 | budget | uint, uint, uint | the blocks, bytes and records one read may open, fetch and decode; each narrows the server's |
+| 11 | budget blocks | uint | the blocks one read may open; each budget narrows the server's |
+| 12 | budget bytes | uint | the bytes it may fetch |
+| 13 | budget records | uint | the records it may decode |
 
 A page, a read's trailer, is `{1: more, 2: from, 3: to}`: more says the limit
 or the budget ended the page before the range did, and from and to are the
@@ -746,7 +756,11 @@ A range:
 |---|---|---|---|
 | 1 | matchers | a map of names | the labels a series has, exactly; one at least |
 | 2, 3 | from, to | int | unix milliseconds, to excluded; both required, 2^63−1 the open end |
-| 4 to 8 | limits | uint each | the series it matches, the blocks it decodes, the bytes it fetches, the samples it decodes and the samples or buckets it answers; each narrows the server's |
+| 4 | limit series | uint | the series it matches; each limit narrows the server's |
+| 5 | limit blocks | uint | the blocks it decodes |
+| 6 | limit bytes | uint | the bytes it fetches |
+| 7 | limit decoded | uint | the samples it decodes |
+| 8 | limit answered | uint | the samples or buckets it answers |
 | 9 | width | uint | aggregate's: milliseconds, the buckets starting at from |
 | 10 | op | str | aggregate's: `count`, `sum`, `min`, `max` or `increase`, a counter's alone |
 
@@ -754,11 +768,18 @@ The server reads a range whole, within its limits, before the first series
 leaves, so that a slow client holds none of the engine's readers; a read or an
 aggregate that fails sends no series.
 
-An aggregate's item is a series, keys 1 and 2, and its buckets as columns: 3
-their starts and 4 their ends, 5 the samples each counted and 6 the resets
-among them, all int64; 7 each value, a float64 computed exactly and rounded
-once; 8 a byte each, 1 when the value overflowed to an infinity and 2 when
-retention cut the bucket, which counted only its samples from the cutoff on.
+An aggregate's item is a series, keys 1 and 2, and its buckets as columns, as
+many values each:
+
+| key | field | type | |
+|---|---|---|---|
+| 3 | from | bin | each bucket's start, unix milliseconds, a little-endian int64 each |
+| 4 | to | bin | its end, excluded |
+| 5 | count | bin | the samples it counted, an int64 each |
+| 6 | resets | bin | the resets among them, an int64 each |
+| 7 | values | bin | its value, a float64 computed exactly and rounded once |
+| 8 | flags | bin | a byte each: 1 when the value overflowed to an infinity, 2 when retention cut the bucket, which counted only its samples from the cutoff on |
+
 An increase counts a reset inside its bucket and not the step from one bucket
 to the next; only a bucket holding samples is answered.
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -22,7 +23,8 @@ const serveUsage = `usage:
   tinystore serve --dir <dir> --local [--idle 30s]    the directory's shared sidecar, published in <dir>/server/SERVE
   tinystore serve --dir <dir> --listen tls://<host:port> --tls-cert <file> --tls-key <file> --tokens <file>
 flags:
-  --memory <bytes>   the most every engine's work holds at once; 1 GiB with --listen, 0 for no bound`
+  --memory <bytes>   the most every engine's work holds at once; 1 GiB with --listen, 0 for no bound
+  --log <file>       append the log to file, owner-only, rather than to stderr, the error serve ends with included`
 
 // errHeld is a directory another store holds: the sidecar a client asked for
 // is running already, and SERVE says where
@@ -46,10 +48,10 @@ type console struct {
 }
 
 type serveFlags struct {
-	dir, listen, tlsCert, tlsKey, tokens string
-	stdio, local                         bool
-	idle                                 time.Duration
-	memory                               int64
+	dir, listen, tlsCert, tlsKey, tokens, log string
+	stdio, local                              bool
+	idle                                      time.Duration
+	memory                                    int64
 }
 
 func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
@@ -66,6 +68,7 @@ func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
 	flags.StringVar(&asked.tlsKey, "tls-key", "", "")
 	flags.StringVar(&asked.tokens, "tokens", "", "")
 	flags.Int64Var(&asked.memory, "memory", 0, "")
+	flags.StringVar(&asked.log, "log", "", "")
 	if err := flags.Parse(args); err != nil {
 		return serveFlags{}, err
 	}
@@ -134,6 +137,39 @@ func serve(ctx context.Context, args []string, streams console) error {
 	if err != nil {
 		return err
 	}
+	logs, closeLogs, err := openLog(asked.log, streams.stderr)
+	if err != nil {
+		return err
+	}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	err = serveLogged(ctx, asked, streams, logger)
+	if err != nil && asked.log != "" {
+		logger.Error("serve ended", "err", err)
+	}
+	return errors.Join(err, closeLogs())
+}
+
+// openLog is where serve's log goes: stderr, or the file --log names, made
+// owner-only in directories made so, since a log names keys and paths.
+//
+// A sidecar a client starts in the background has no stderr anyone reads, so
+// the file is opened first and keeps every line, the one saying why serve
+// ended included. Nothing rotates it.
+func openLog(path string, stderr io.Writer) (io.Writer, func() error, error) {
+	if path == "" {
+		return stderr, func() error { return nil }, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, nil, fmt.Errorf("serve --log: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // the file asked for
+	if err != nil {
+		return nil, nil, fmt.Errorf("serve --log: %w", err)
+	}
+	return file, file.Close, nil
+}
+
+func serveLogged(ctx context.Context, asked serveFlags, streams console, logger *slog.Logger) error {
 	read, err := readServing(asked)
 	if err != nil {
 		return err
@@ -141,7 +177,6 @@ func serve(ctx context.Context, args []string, streams console) error {
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(400)
 	}
-	logger := slog.New(slog.NewTextHandler(streams.stderr, nil))
 	store, err := tinystore.Open(ctx, asked.dir, tinystore.Options{Logger: logger, Memory: asked.memory})
 	if errors.Is(err, tinystore.ErrInUse) {
 		return fmt.Errorf("%w: %w", errHeld, err)

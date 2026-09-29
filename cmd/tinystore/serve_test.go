@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -195,6 +196,34 @@ func TestASecondServeOfADirectoryExitsHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustRelease(t, dir)
+}
+
+// with --log, serve's lines go to the file, and so does the error it ends
+// with, so that whoever started it in the background can read why
+func TestServeLogsToTheFileItIsGivenWhyItEnded(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "server", "serve.log")
+	ctx, cancel := context.WithCancel(t.Context())
+	first := start(ctx, t, "--dir", dir, "--local", "--idle", "0", "--log", log)
+	waitServe(t, dir, "", first)
+	if err := ended(t, start(ctx, t, "--dir", dir, "--local", "--log", log)); !errors.Is(err, errHeld) {
+		t.Fatalf("a second server of one directory: %v", err)
+	}
+	cancel()
+	if err := ended(t, first); err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(text), "msg=serving") || !strings.Contains(string(text), errHeld.Error()) {
+		t.Fatalf("the log:\n%s", text)
+	}
+	if found, err := os.Stat(log); err != nil || runtime.GOOS != "windows" && found.Mode().Perm() != 0o600 {
+		t.Fatalf("the log's mode: %v %v", found.Mode(), err)
+	}
 }
 
 // a SERVE left by a server that died does not stop a new one: of two started

@@ -191,6 +191,37 @@ func TestARemoteWorkerSettlesByItsOutcomes(t *testing.T) {
 	}
 }
 
+// a work stream asked to end when idle ends once no job is due and none runs,
+// as Work does with UntilIdle, and leaves a job due later waiting
+func TestAWorkStreamUntilIdleEndsOnceNoJobIsDue(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	sends := openQueue(t, conn, wire.JobsQueue{Name: "sends"})
+	if err := enqueueJobs(t, conn, sends, wire.JobsJob{Value: `1`, Key: "now"},
+		wire.JobsJob{Value: `2`, Key: "later", After: time.Hour.Milliseconds()}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := conn.Open(t.Context(), wire.JobsWork, wire.JobsWorkers{Handle: sends, UntilIdle: true}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Response(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held := nextHeld(t, st)
+	if held.Key != "now" {
+		t.Fatalf("the job handed over: %+v", held)
+	}
+	sendOutcome(t, st, wire.JobsOutcome{Job: held.Job, How: wire.JobAck}, false)
+	if _, last, err := st.Next(t.Context()); err != nil || !last {
+		t.Fatalf("the work stream's end once idle: %v %v", last, err)
+	}
+	if later := fetchJob(t, conn, sends, "later"); later.State != uint64(jobs.Waiting) || later.Attempt != 0 {
+		t.Fatalf("the job due later: %+v", later)
+	}
+}
+
 func nextHeld(t *testing.T, st *client.Stream) wire.JobsHeld {
 	t.Helper()
 	body, last, err := st.Next(t.Context())

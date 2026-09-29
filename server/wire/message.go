@@ -3,8 +3,10 @@ package wire
 // Protocol is the version of this protocol a HELLO and a WELCOME name.
 const Protocol = 1
 
-// the bounds a client assumes until its WELCOME states the server's
-const DefaultStreamCredit = 1 << 20
+// DefaultStreamCredit is the DATA a server sends on a stream before its client
+// grants more, when the client's HELLO does not say: at least the largest body,
+// which must fit the credit it is sent under.
+const DefaultStreamCredit = 2 << 20
 
 // Hello is a client's first frame.
 type Hello struct {

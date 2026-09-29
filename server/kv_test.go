@@ -96,6 +96,22 @@ func TestKVOverTheWire(t *testing.T) {
 	}
 }
 
+// the largest value a bucket keeps, 1 MiB, travels both ways in one body
+func TestTheLargestValueTravelsInOneBody(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	large := openKV(t, conn, wire.KVBucket{Name: "large"})
+	value := wire.KVValue{Kind: wire.KVBytes, Bytes: bytes.Repeat([]byte{7}, 1<<20)}
+
+	if _, err := kvDo(t, conn, wire.KVSet, wire.KVCall{Handle: large, Key: "k", Value: value}); err != nil {
+		t.Fatalf("set 1 MiB: %v", err)
+	}
+	got, err := kvDo(t, conn, wire.KVGet, wire.KVCall{Handle: large, Key: "k"})
+	if err != nil || !bytes.Equal(got.Value.Bytes, value.Bytes) {
+		t.Fatalf("read back %d bytes of %d: %v", len(got.Value.Bytes), len(value.Bytes), err)
+	}
+}
+
 func asError(err error, target **wire.Error) bool {
 	failure, ok := err.(*wire.Error) //nolint:errorlint // the client returns it as it is
 	*target = failure

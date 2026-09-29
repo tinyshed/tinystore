@@ -101,10 +101,10 @@ type limits struct {
 }
 
 var defaultLimits = limits{
-	maxBody:          1 << 20,
+	maxBody:          1<<20 + 64<<10, // the largest kv or jobs value and the message around it
 	inFlight:         256,
 	connectionCredit: 8 << 20,
-	streamCredit:     1 << 20,
+	streamCredit:     2 << 20,
 	queuedAnswers:    4 << 20,
 	localSessions:    64,
 	remoteSessions:   1024,

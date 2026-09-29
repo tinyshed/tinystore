@@ -674,6 +674,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a client past its credit is cut off, the reader never waits | `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection` |
 | every stream ends with one final frame                 | `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up |
 | answers queued during a write leave in the next        | `TestQueuedAnswersShareAWrite` in `server/internal/flow`                        |
+| every message is a vector, every field by its name     | `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one |
+| the largest kv or jobs value travels in one body       | `TestTheLargestValueTravelsInOneBody`                                           |
+| a work stream asked to end when idle ends              | `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`                                    |
+| a sidecar started in the background says why it ended | `TestServeLogsToTheFileItIsGivenWhyItEnded` in `cmd/tinystore`                  |
 | a stream's number is free when its final frame arrives | `TestAStreamNumberIsFreeWhenItsFinalFrameArrives`                               |
 | a closing server lets the streams running finish       | `TestClosingTheServerLetsTheStreamsRunningFinish`, `TestARequestThatCrossesTheGoAwayIsAnsweredUnavailable` |
 | a remote connection needs its token                    | `TestARemoteConnectionNeedsItsToken`                                            |

@@ -582,6 +582,9 @@ type JobsWorkers struct {
 	Handle  uint64
 	Workers uint64
 	Timeout int64
+	// UntilIdle ends the loop once no job is due and none runs, as a test
+	// wants it.
+	UntilIdle bool
 }
 
 func (w JobsWorkers) Append(dst []byte) []byte {
@@ -589,6 +592,9 @@ func (w JobsWorkers) Append(dst []byte) []byte {
 	m.Uint(1, w.Handle)
 	optionalUint(&m, 2, w.Workers)
 	optionalInt(&m, 3, w.Timeout)
+	if w.UntilIdle {
+		m.Bool(4, true)
+	}
 	return m.End()
 }
 
@@ -602,6 +608,8 @@ func (w *JobsWorkers) Decode(body []byte) error {
 			w.Workers = d.Uint()
 		case 3:
 			w.Timeout = d.Duration()
+		case 4:
+			w.UntilIdle = d.Bool()
 		}
 	}
 	return d.End()

@@ -16,10 +16,13 @@ done when every side of it changed together.
 - `server/internal/client`, when the Go client the tests use needs it.
 - `docs/wire.md`: the message's table, the text around it, and an example of
   its bytes when it is a new kind of message.
-- `server/wire/testdata/vectors.json` and `server/wire/vectors_test.go`.
+- `server/wire/testdata/vectors.json` and `server/wire/vectors_test.go`; and
+  for a message or a field, the schema and an example in
+  `server/wire/messages_test.go`, then `TINYSTORE_WRITE_VECTORS=1 go -C server
+  test -run TestMessageVectors ./wire` to write `messages.json` anew.
 - The seeds of `FuzzMessages` (`msgpack_test.go`) and `FuzzFrames`
   (`frame_test.go`) when a new rule refuses something.
-- `sdk/bun` and `sdk/python`, once they exist.
+- `sdk/js` and `sdk/python`: their message codecs, which read `messages.json`.
 - The AGENTS.md gates table, for each promise the change makes.
 
 Nothing is released yet, so a field may still be repurposed, as `HELLO`'s field
