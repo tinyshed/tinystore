@@ -8,6 +8,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"modernc.org/sqlite"
+	sqlitelib "modernc.org/sqlite/lib"
 )
 
 type File struct {
@@ -30,6 +32,7 @@ type File struct {
 	idleReaders []*readConnection
 	commits     atomic.Uint64
 	statements  int
+	maxLength   int
 	hold        time.Duration
 	patience    time.Duration
 	waited      func(label string)
@@ -96,6 +99,11 @@ type Config struct {
 	WriterCache int // bytes of the writer's page cache; zero keeps the readers' 1 MiB
 	Statements  int // compiled statements each connection keeps; zero keeps 32
 
+	// MaxLength is the longest string, blob or row a statement may make, since
+	// SQLite allocates one whole before a budget can count it. Zero keeps
+	// SQLite's default.
+	MaxLength int
+
 	// Waited is told once when a grouped write has waited Patience for the
 	// writer, with the label UpdateGroupedAs gave the write.
 	Waited func(label string)
@@ -112,8 +120,8 @@ func (c Config) check() error {
 	if c.PageSize != 0 && (c.PageSize < 512 || c.PageSize > 65536 || c.PageSize&(c.PageSize-1) != 0) {
 		return fmt.Errorf("open SQLite: page size %d is not a power of two from 512 to 65536", c.PageSize)
 	}
-	if c.WriterCache < 0 || c.Statements < 0 || c.GroupHold < 0 || c.Patience < 0 {
-		return fmt.Errorf("open SQLite: a negative cache, statements, hold or patience in %+v", c)
+	if c.WriterCache < 0 || c.Statements < 0 || c.MaxLength < 0 || c.GroupHold < 0 || c.Patience < 0 {
+		return fmt.Errorf("open SQLite: a negative cache, statements, length, hold or patience in %+v", c)
 	}
 	return nil
 }
@@ -169,6 +177,7 @@ func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	f := &File{
 		writer: writer, writeSlots: make(chan struct{}, 1), waited: config.Waited,
 		statements: cmp.Or(config.Statements, keptStatements),
+		maxLength:  config.MaxLength,
 		hold:       cmp.Or(config.GroupHold, groupHold),
 		patience:   cmp.Or(config.Patience, writerPatience),
 	}
@@ -205,7 +214,22 @@ func (f *File) connectWriter(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err = f.limitLength(connection); err != nil {
+		return errors.Join(err, connection.Close())
+	}
 	f.writerConn = &writeConnection{preparedConnection{conn: connection, limit: f.statements}}
+	return nil
+}
+
+// limitLength gives a connection the file's MaxLength, which SQLite keeps per
+// connection
+func (f *File) limitLength(connection *sql.Conn) error {
+	if f.maxLength == 0 {
+		return nil
+	}
+	if _, err := sqlite.Limit(connection, sqlitelib.SQLITE_LIMIT_LENGTH, min(f.maxLength, math.MaxInt32)); err != nil {
+		return fmt.Errorf("limit SQLite lengths: %w", err)
+	}
 	return nil
 }
 

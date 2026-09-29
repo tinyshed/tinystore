@@ -157,6 +157,9 @@ func (f *File) withReader(ctx context.Context, work func(*readConnection) (reusa
 		if connection.conn, err = f.reader.Conn(ctx); err != nil {
 			return fmt.Errorf("acquire SQLite reader: %w", err)
 		}
+		if err = f.limitLength(connection.conn); err != nil {
+			return errors.Join(err, connection.close())
+		}
 	}
 
 	reusable, err := work(connection)

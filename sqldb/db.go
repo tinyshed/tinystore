@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -145,6 +146,7 @@ func openFile(
 
 	config := timing.writer
 	config.Readers, config.Statements, config.Waited = readers, statements, d.waited
+	config.MaxLength = int(min(store.Memory().Capacity, math.MaxInt32))
 	file, err := sqlite.Open(ctx, path, config)
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)

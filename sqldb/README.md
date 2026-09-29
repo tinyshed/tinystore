@@ -185,7 +185,10 @@ wrote internal/data/migrations/002_add_description.sql:
   KiB and its arguments before it waits for a connection, and takes more only
   while it is free once it holds one, which it may otherwise wait for itself:
   a result past the free memory is `ErrLimit`. Inside `Tx` or `View` a call
-  waits for no memory.
+  waits for no memory. No statement makes a string, blob or row longer than
+  the whole budget: SQLite would allocate it before a call could count it, so
+  it is `ErrLimit` at once, a `length(printf(…))` whose answer is one number
+  included.
 - **An error names its database**, `sql "app"`, and a context's error is kept
   as it came. A name is `[a-z0-9][a-z0-9_-]{0,63}`; a second `Open` of a name
   in one store is `tinystore.ErrInUse`; after the store closes, every call is

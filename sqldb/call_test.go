@@ -53,3 +53,26 @@ func TestStoreMemoryBoundsReadsAndWrites(t *testing.T) {
 		t.Fatalf("after the calls the store holds %+v", usage)
 	}
 }
+
+// a value SQLite would make longer than the store's memory is refused before
+// SQLite allocates it, though the answer is one number; a shorter one is made
+func TestAValueSQLiteWouldMakePastTheStoresMemoryIsRefused(t *testing.T) {
+	store := openStoreWith(t, t.TempDir(), tinystore.Options{Manual: true, Memory: 1 << 20})
+	db, err := Open(t.Context(), store, "app", notesMigrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+
+	const measured = `select length(printf('%.*c', ?, 'x'))`
+	if _, err = Scalar[int64](ctx, db, measured, 2<<20); !errors.Is(err, tinystore.ErrLimit) {
+		t.Errorf("a text longer than the store's memory, measured: %v", err)
+	}
+	_, err = db.Exec(ctx, `insert into notes (title) values (printf('%.*c', ?, 'x'))`, 2<<20)
+	if !errors.Is(err, tinystore.ErrLimit) {
+		t.Errorf("a text longer than the store's memory, written: %v", err)
+	}
+	if length, err := Scalar[int64](ctx, db, measured, 300<<10); err != nil || length != 300<<10 {
+		t.Errorf("a text within the store's memory, measured: %d, %v", length, err)
+	}
+}
