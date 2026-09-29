@@ -677,6 +677,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | every message is a vector, every field by its name     | `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one |
 | the largest kv or jobs value travels in one body       | `TestTheLargestValueTravelsInOneBody`                                           |
 | a work stream asked to end when idle ends              | `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`                                    |
+| an extend on a work stream is refused, not an ack     | `TestAnExtendOnAWorkStreamIsRefused`                                            |
 | a sidecar started in the background says why it ended | `TestServeLogsToTheFileItIsGivenWhyItEnded` in `cmd/tinystore`                  |
 | a client past its credit is cut off, the reader never waits | `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection` |
 | every stream ends with one final frame                 | `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up |

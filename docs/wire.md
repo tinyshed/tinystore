@@ -492,9 +492,11 @@ Workers are `{1: handle, 2: workers, 3: timeout, 4: until idle}`: the
 queue's own Work loop runs for the stream, `workers` at once, 1 when absent
 and at most the streams in flight, each job `timeout` milliseconds in the
 client's hands, a minute when absent, and with `until idle` only until no job
-is due and none runs, as a test wants it. Each job it hands a handler goes out as a held job; the client
-settles it by sending its outcome as `DATA` on the same stream, and ends its
-side with `DATA`·END once it takes no more. When that side ends, or the
+is due and none runs, as a test wants it. Each job it hands a handler goes
+out as a held job; the client settles it by sending its outcome as `DATA` on
+the same stream, and ends its side with `DATA`·END once it takes no more. An
+extend is not one of those outcomes: the loop extends its leases itself, and
+ends the stream `invalid` on one rather than take it as an ack. When that side ends, or the
 client cancels or leaves, the jobs in its hands fail that attempt, as a
 worker whose process died fails it, and only after their handlers return
 does the loop stop, so that the jobs it claimed ahead and never handed over

@@ -48,6 +48,9 @@ func jobsWork(c *call) error {
 	if err != nil {
 		return err
 	}
+	if err = remote.refusal(); err != nil {
+		return err
+	}
 	return trailer(c, wire.Empty{})
 }
 
@@ -118,6 +121,7 @@ type remoteWork struct {
 	waiting map[uint64]chan wire.JobsOutcome
 	gone    error
 	goneNow chan struct{}
+	refused error // an outcome the client sent that no job can take, which ends the stream
 
 	listening sync.WaitGroup
 }
@@ -153,8 +157,13 @@ func (w *remoteWork) readOutcomes() error {
 			err = outcome.Decode(body)
 		}
 		w.call.consumed(body)
+		if err == nil && outcome.How == wire.JobExtend {
+			err = fmt.Errorf("%w: jobs: a work stream extends its jobs' leases itself; "+
+				"only a claimed job is extended", tinystore.ErrInvalid)
+		}
 		switch {
 		case err != nil:
+			w.refuse(err)
 			return err
 		case len(body) > 0:
 			w.deliver(outcome)
@@ -233,6 +242,18 @@ func (w *remoteWork) leave(cause error) {
 		w.inHand.Wait()
 		w.stop()
 	})
+}
+
+func (w *remoteWork) refuse(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.refused = err
+}
+
+func (w *remoteWork) refusal() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.refused
 }
 
 func (w *remoteWork) why() error {

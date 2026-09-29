@@ -222,6 +222,41 @@ func TestAWorkStreamUntilIdleEndsOnceNoJobIsDue(t *testing.T) {
 	}
 }
 
+// A work stream's loop extends its jobs' leases itself, so an extend sent on
+// it is refused: the stream ends invalid rather than taking it as an ack, and
+// the job in the client's hands fails that attempt.
+func TestAnExtendOnAWorkStreamIsRefused(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	sends := openQueue(t, conn, wire.JobsQueue{Name: "sends"})
+	if err := enqueueJobs(t, conn, sends, wire.JobsJob{Value: `1`, Key: "long"}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := conn.Open(t.Context(), wire.JobsWork, wire.JobsWorkers{Handle: sends}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Response(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held := nextHeld(t, st)
+	sendOutcome(t, st, wire.JobsOutcome{Job: held.Job, How: wire.JobExtend, After: 60_000}, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // taken as an ack, the stream never ends
+	defer cancel()
+	_, _, err = st.Next(ctx)
+	var failure *wire.Error
+	if !asError(err, &failure) || failure.Code != wire.CodeInvalid {
+		t.Fatalf("the work stream's end after an extend: %v", err)
+	}
+	waitFor(t, "the attempt in the worker's hands to fail", func() bool {
+		return fetchJob(t, conn, sends, "long").Err != ""
+	})
+	if long := fetchJob(t, conn, sends, "long"); !long.Found || long.Attempt != 1 {
+		t.Fatalf("the job whose extend was refused: %+v", long)
+	}
+}
+
 func nextHeld(t *testing.T, st *client.Stream) wire.JobsHeld {
 	t.Helper()
 	body, last, err := st.Next(t.Context())
