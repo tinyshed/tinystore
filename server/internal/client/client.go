@@ -163,15 +163,9 @@ func (c *Conn) CloseWrite() error {
 	return errors.New("client: this connection does not close one way")
 }
 
-// Done is closed once the connection ends; Err says why.
+// Done is closed once the connection ends.
 func (c *Conn) Done() <-chan struct{} {
 	return c.read
-}
-
-func (c *Conn) Err() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ended
 }
 
 func (c *Conn) GoAway() *wire.GoAway {
