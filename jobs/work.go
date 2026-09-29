@@ -189,8 +189,14 @@ func (l *workLoop[V]) stopped(ctx context.Context) error {
 }
 
 // runOne reads a job's value once the store's memory holds room for it, runs
-// the handler on it and says how to settle it; the room is given back when the
-// handler returns
+// the handler on it and says how to settle it. The room is given back when the
+// handler returns.
+//
+// What the handler returned decides, not whether the loop has stopped since:
+// the loop may stop between the handler's return and this check, and a handler
+// that finished its work, or failed on its own, must not be taken for one the
+// loop stopped. Only a handler that returns the cancel of a stopping loop gives
+// its job back uncounted.
 func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settlement {
 	claimed.memory.releaseRow()
 	job := claimed.job
@@ -212,10 +218,10 @@ func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settle
 	switch {
 	case job.lease.isSettled():
 		return settlement{lease: job.lease}
-	case handlers.Err() != nil:
-		return settlement{lease: job.lease, how: givenBack}
 	case err == nil:
 		return settlement{lease: job.lease, how: acked}
+	case handlers.Err() != nil && errors.Is(err, context.Canceled):
+		return settlement{lease: job.lease, how: givenBack}
 	}
 	return settlement{lease: job.lease, how: retried, cause: err}
 }

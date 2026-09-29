@@ -180,3 +180,42 @@ func commits(t *testing.T, queues *testQueues) uint64 {
 	}
 	return counters.Commits
 }
+
+// A handler that returns while Work ends settles as it returned: done is done,
+// its own failure costs the attempt, and only the cancel of the stopping loop
+// gives the job back uncounted. The loop may stop between the handler's return
+// and its settlement.
+func TestAHandlerThatReturnsAsWorkEndsSettlesAsItReturned(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	queue := openTestQueue[string](t, queues, "ending")
+	for _, key := range []string{"done", "failed", "stopped"} {
+		mustEnqueue(t, queue, key, Key(key))
+		ctx, stop := context.WithCancel(t.Context())
+		err := queue.Work(ctx, func(handler context.Context, job Job[string]) error {
+			stop()
+			<-handler.Done()
+			switch job.Value {
+			case "done":
+				return nil
+			case "failed":
+				return errors.New("the provider is down")
+			}
+			return handler.Err()
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Work over %q ended with %v", key, err)
+		}
+	}
+
+	if _, found, err := queue.Get(t.Context(), "done"); err != nil || found {
+		t.Fatalf("the job done as Work ended is still there: %v, %v", found, err)
+	}
+	failed, _, err := queue.Get(t.Context(), "failed")
+	if err != nil || failed.Attempt != 1 || !strings.Contains(failed.Err, "the provider is down") {
+		t.Fatalf("the job that failed as Work ended is %+v: %v", failed, err)
+	}
+	stopped, _, err := queue.Get(t.Context(), "stopped")
+	if err != nil || stopped.State != Waiting || stopped.Attempt != 0 || stopped.Err != "" {
+		t.Fatalf("the job Work's end stopped is %+v: %v", stopped, err)
+	}
+}

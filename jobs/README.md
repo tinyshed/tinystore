@@ -90,8 +90,10 @@ func remind(ctx context.Context, job jobs.Job[Reminder]) error {
   `Timeout(d)`, a minute unless it says, is the deadline of the handler's
   context. A lease lost while its handler runs, because a stall let it end
   and another claim took the job, is let go and logged once a quiet period.
-  A handler stopped by `Work`'s context or by `Close` gives its job back
-  without counting the attempt. `Work` starts its workers inside the call and
+  A handler stopped by `Work`'s context or by `Close`, returning that
+  cancellation, gives its job back without counting the attempt; one that
+  returns nil or an error of its own settles as it returned, though `Work`
+  ended meanwhile. `Work` starts its workers inside the call and
   waits for them before it returns; `UntilIdle` returns once no job is due and
   none runs.
 - **`Claim` does not wait**: it leases the next due job, or says there is

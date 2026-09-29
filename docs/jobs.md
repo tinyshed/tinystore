@@ -396,7 +396,12 @@ if found {
   waits for a commit to start its next. A job claimed ahead is leased:
   `Update` and `Cancel` find it too late, and a crash counts its attempt.
 - **A handler stopped by its caller's context or by `Close`** gives its job
-  back, and that attempt is not counted.
+  back, and that attempt is not counted, when it returns that cancellation.
+  What a handler returned decides, not whether `Work` has ended since: the
+  loop may end between the handler's return and its settlement, and a handler
+  that finished, or failed on its own, is settled as it returned. Deciding by
+  the loop lost an ack now and then, the job running again, and failed the
+  server's attempts a lost worker held as given back.
 - **`Work` starts its workers inside the call** and waits for them before it
   returns, so nothing it starts outlives it, and the store starts no goroutine
   for jobs.
