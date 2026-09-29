@@ -3,7 +3,7 @@
 The design of the kv engine, built: `kv/` holds everything below but what
 [Not in the first version](#not-in-the-first-version) leaves, and its contract
 is [kv/README.md](../kv/README.md). What lies under [Storage](#storage) was
-measured by [the mechanics round](reports/kv-mechanics-2026-09-26.md) on one
+measured by [the mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md) on one
 development machine and on a production host.
 
 ## What it is for
@@ -475,10 +475,10 @@ Each waits for a workload that needs it and a measurement that pays for it.
 
 ## What was measured
 
-The prototype `spike/kv_*` on one AMD Ryzen 7 7700 with an NVMe disk, in a
+The prototype `spike/kv_*` in tinyshed/research on one AMD Ryzen 7 7700 with an NVMe disk, in a
 `golang:1.27` container and on Windows 11, and on a production host with two
 vCPUs while its services ran;
-[the round](reports/kv-mechanics-2026-09-26.md) has the environment, the
+[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md) has the environment, the
 commands and every figure.
 
 | | Container | Windows | Production host |

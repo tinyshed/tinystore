@@ -13,7 +13,7 @@ import (
 
 // the largest value kept in its row: past it a row costs more than a spilled
 // value and slows the lookups beside it,
-// docs/reports/kv-mechanics-2026-09-26.md
+// tinyshed/research tinystore/reports/kv-mechanics-2026-09-26.md
 const inlineLimit = 512
 
 // the largest value: larger bytes are the blobs engine's

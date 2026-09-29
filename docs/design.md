@@ -7,8 +7,8 @@ states implemented behavior. This document preserves the design and experiments,
 including proposed features and older layouts; it is not an API reference.
 The numbers are quoted here where they decided something and recorded in full,
 with their environment and their reproduction, in
-[measurements.md](measurements.md). What is still open is in
-[research.md](research.md), and the bytes are in [format.md](format.md).
+[measurements.md](https://github.com/tinyshed/research/blob/main/tinystore/measurements.md). What is still open is in
+[research.md](https://github.com/tinyshed/research/blob/main/tinystore/open-questions.md), and the bytes are in [format.md](format.md).
 
 ## What it is, and what it refuses to be
 
@@ -80,7 +80,7 @@ integers: whole numbers went from 1.266 to 0.671 bytes a sample on identical
 input, a counter from 1.424 to 0.808. On a noisy float it is still nearly the
 same number, which is the honest half of the result — the entropy is in the
 value and no lossless encoding makes it go away. [format.md](format.md) says
-what the codec writes; [measurements.md](measurements.md) has every workload.
+what the codec writes; [measurements.md](https://github.com/tinyshed/research/blob/main/tinystore/measurements.md) has every workload.
 
 ## SQLite is the substrate
 
@@ -520,7 +520,7 @@ The codec is a more useful RAM target: the default encoder/decoder pair retained
 and 1.338 MiB with an 8 KiB window and lower encoder memory. Both tested payload
 sizes stayed unchanged. Use shared bounded codecs; do not allocate one per
 series or let CPU count choose the embedded memory budget. This is codec heap,
-not the total process footprint. `measurements.md` records the full measurements.
+not the total process footprint. Research's `measurements.md` records the full measurements.
 
 ### Retention reaches a physical plateau
 
@@ -591,7 +591,7 @@ ingest        how many samples a second arrive
 A million rarely-updated series and a million scraped every fifteen seconds are
 not the same workload — the second is 66 000 samples a second, which is a
 different product. The numbers behind the first are in
-[measurements.md](measurements.md); the second is measured when the block builder
+[measurements.md](https://github.com/tinyshed/research/blob/main/tinystore/measurements.md); the second is measured when the block builder
 exists.
 
 What follows from the target is a rule rather than an aspiration: **nothing

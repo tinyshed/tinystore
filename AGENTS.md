@@ -9,8 +9,9 @@ it. `tinyshed/dashbin` is the first caller and not the owner.
 This file is the contract for anyone — human or agent — changing the repository.
 Keep it short and factual, and update it when a decision moves. Nothing here
 should be a fact a ten-second grep would answer. The runtime and every engine
-beyond metrics are specified in [docs/architecture.md](docs/architecture.md);
-the rewrite of the metrics code for people follows [docs/rewrite.md](docs/rewrite.md).
+beyond metrics are specified in [docs/architecture.md](docs/architecture.md).
+The measurements, prototypes and dated reports behind the decisions are in
+[tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore).
 
 ## Status
 
@@ -36,8 +37,8 @@ values Go and SQLite agree on, point reads as one prepared statement, `Exec`s
 committed in groups, and `sqldbtest.CheckSchema` with `go tool tinystore`,
 the module `cmd/tinystore`, writing the next migration
 ([sqldb/README.md](sqldb/README.md), [docs/sqldb.md](docs/sqldb.md),
-[the round](docs/reports/sqldb-mechanics-2026-09-28.md),
-[the engine's](docs/reports/sqldb-engine-2026-09-28.md)). `records`
+[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-mechanics-2026-09-28.md),
+[the engine's](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-engine-2026-09-28.md)). `records`
 keeps logs and events in `records.db`: a
 durable head, segments of event-time blocks written column by column, a line's
 own time kept apart from its text, a quiet stream's small segments merged
@@ -66,8 +67,8 @@ earlier prototype.
 time, leases and keys in tables of their own, retries, repeats kept as cron
 text, and a Work loop that holds two jobs a worker and claims and settles in
 one write ([jobs/README.md](jobs/README.md), [docs/jobs.md](docs/jobs.md),
-[the round](docs/reports/jobs-mechanics-2026-09-27.md),
-[the engine's](docs/reports/jobs-engine-2026-09-27.md)).
+[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-mechanics-2026-09-27.md),
+[the engine's](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-engine-2026-09-27.md)).
 
 `blobs` keeps the application's files in `blobs/`: objects under keys that
 are paths, their rows in `blobs.db` with the bytes up to 16 KiB, and above it
@@ -76,7 +77,7 @@ that names it commits; readers that keep what they opened, whole reads
 checked by their SHA-256, `Copy` and `Move` that share the bytes, a `Clear`
 however large, a scrub, and snapshots that link the files
 ([blobs/README.md](blobs/README.md), [docs/blobs.md](docs/blobs.md),
-[the round](docs/reports/blobs-mechanics-2026-09-27.md)).
+[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md)).
 
 The server is being built to [docs/server.md](docs/server.md) and
 [docs/wire.md](docs/wire.md), in `server/`, a module of its own: one
@@ -99,9 +100,8 @@ real `tinystore serve` (`task sdk`); their READMEs, examples and packages are
 not. Designed, not built: self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
-steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
-density figures are not engine guarantees. `spike/` preserves the experiments
-behind the decisions.
+steady-state performance, and the gaps listed in research's `rewrite.md`.
+Prototype density figures are not engine guarantees.
 
 Nothing is released: there is no tag, and no database written by an earlier
 revision has to be read. Readers for earlier formats are deleted, not kept,
@@ -125,14 +125,12 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
-| `spike/`             | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1`               |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
-| `server/spike/`      | the server measured through `tinystore serve`, skipped unless `TINYSTORE_SPIKE=1` |
 | `cmd/tinystore/`     | the one executable, a module of its own: `serve`, and `migrate` and `schema` for sqldb |
 | `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Python; `sdk/go.mod` keeps them out of the Go module |
-| `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
+| `docs/`              | the design, the format, the engines and the wire                              |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
 | `.github/workflows/` | the authoritative clean builds                                                |
@@ -148,23 +146,21 @@ records/ sqldb/ …   one package per engine, each arriving with its first worki
 internal/sqlite/    mechanics shared by every engine; no engine vocabulary
 internal/admission/ the gate and the slots every engine lets work in through
 internal/dirlock/   the LOCK that makes one store a directory, per platform
-bench/              a module of its own: corpora, and other engines to measure against
 ```
 
-Production gates belong beside their implementation. Keep historical spikes
-until a real-engine harness can reproduce what they measured. Do not copy their
-test-only parsers or call their helpers from production code. Records, sqldb,
+Production gates belong beside their implementation. Do not copy a
+prototype's test-only parsers from research or call its helpers from
+production code. Records, sqldb,
 KV, blobs and jobs get no placeholder packages, and engines never import each
 other.
 
 ## Modules
 
-Five, and the split is the point.
+Four, and the split is the point.
 
 ```text
 root            what a caller links: the engine and nothing else
 tools/          golangci-lint, govulncheck, task
-bench/          corpora, comparison harnesses, whatever a measurement drags in
 server/         the server: requires the root and nothing else; server/wire only the standard library
 cmd/tinystore/  the one executable, go tool tinystore: requires the root and server/, nothing else
 ```
@@ -184,8 +180,8 @@ beside the root.
 The root module's dependency list is a promise rather than an accident:
 `klauspost/compress` for zstd and `modernc.org/sqlite` for the file. Anything a
 measurement needs — a generator, another engine's client, a container library —
-belongs in `bench/`, which lives inside this repository and may therefore reach
-`internal/` while its dependencies stay out of everyone else's graph.
+belongs in a module of its own, whose dependencies stay out of everyone else's
+graph.
 `TestTheModuleCarriesOnlyTheEngine` fails when that list grows.
 
 `go` and `toolchain` are deliberately different versions. `go 1.27.0` is the
@@ -387,12 +383,12 @@ ownership, directory replacement and the newly sealed prefix publish atomically.
 `SealedBlocks` counts only new blocks, never the old blocks carried into a merge.
 
 **A measurement is a number with its environment, or it is an anecdote.** Every
-figure in `docs/` carries what produced it — machine or container, versions,
-fixture, sample count — and the command that reproduces it. A candidate is
-compared against what it replaces on identical input, in the same run. Take the
-economics from a measurement and not the explanation of the mechanism: the
-number is evidence, the story about why is a hypothesis until a second
-measurement separates it from the alternatives.
+figure in `docs/` and in research carries what produced it — machine or
+container, versions, fixture, sample count — and the command that reproduces it.
+A candidate is compared against what it replaces on identical input, in the same
+run. Take the economics from a measurement and not the explanation of the
+mechanism: the number is evidence, the story about why is a hypothesis until a
+second measurement separates it from the alternatives.
 
 **A storage measurement is a division of the file, not a total.** `dbstat`
 reports every b-tree's own pages, so a change that claims to save space says
@@ -415,27 +411,22 @@ changing something, not to look something up.
 |                                              |                                                                  |
 |----------------------------------------------|------------------------------------------------------------------|
 | [docs/architecture.md](docs/architecture.md) | the runtime, the engines, their files, logs, errors and weight    |
-| [docs/rewrite.md](docs/rewrite.md)           | how the metrics code is rewritten for people, and in what order  |
-| [docs/samples/](docs/samples/README.md)      | the reference rewrite of one metrics path                        |
 | [docs/design.md](docs/design.md)             | how the metrics store is meant to work, and why that shape       |
 | [docs/aggregate-contract.md](docs/aggregate-contract.md) | exact aggregate arithmetic, resets, boundaries        |
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
-| [docs/reports/implementation-2026-09-21.md](docs/reports/implementation-2026-09-21.md) | the first slice and its measured limits |
 | [docs/server.md](docs/server.md)             | the server and sidecar: modes, discovery, capabilities, limits   |
 | [docs/wire.md](docs/wire.md)                 | the wire protocol's bytes: frames, credit, MessagePack, errors   |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
-| [docs/measurements.md](docs/measurements.md) | every number, its environment and how to reproduce it            |
-| [docs/research.md](docs/research.md)         | what is not built: the open questions and their acceptance gates |
-| [docs/reports/](docs/reports/README.md)      | the dated rounds every number above came from                    |
+| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions |
 
-A reference a contributor returns to belongs in `docs/`, and a dated measurement
-round belongs in `docs/reports/` with the environment and command that reproduce
-it. A rule they are about to violate belongs here.
+A reference a contributor returns to belongs in `docs/`, and a dated
+measurement round belongs in tinyshed/research with the environment and
+command that reproduce it. A rule they are about to violate belongs here.
 
 How to do the recurring work is a skill in `.agents/skills/`, which
-`.claude/skills/` points to: `sdk`, `wire-change`, `measure`, `verify` and
+`.claude/skills/` points to: `sdk`, `wire-change`, `verify` and
 `platform-traps`. Read the one that fits before you start, and fix it where it
-is wrong, as you would this file.
+is wrong, as you would this file. Measuring is research's `measure` skill.
 
 ## Rules that are gates
 
@@ -539,7 +530,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a head that does not fit its body is refused        | the four moved heads in `TestPayloadCorruptionIsRefused`                        |
 | a decimal travels as the integer it was written as  | `TestDecimalsTravelAsTheIntegersTheyWereWrittenAs`                              |
 | a value no scale reproduces is refused, not rounded | `TestAValueNoScaleReproducesIsRefusedRatherThanRounded`                         |
-| a decode stays bounded                              | `TestSmallBlockCodecMemory`, against the 8 KiB ceiling; opt-in, CI skips it     |
+| a decode stays bounded                              | `TestADecodeStaysWithinTheBodysCeiling`, against the 8 KiB ceiling              |
 | an iterator outlives its codec                      | `TestIteratorOwnsItsBytesAndOutlivesTheCodec`                                   |
 | unordered or oversized input is refused             | `TestRejectsUnorderedAndOversizedInput`                                         |
 | a counter's increase survives a reset               | `TestCounterSummaryIncludesResets`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` |
@@ -743,7 +734,7 @@ race detector is the one exception — it builds test binaries, never a product.
 **A dependency is a decision, and here it is somebody else's decision too.**
 Whatever the root module requires, every program importing this links. Check
 what a module drags in, prefer the standard library, and put anything a
-measurement needs in `bench/`.
+measurement needs in a module of its own.
 
 **Watch the weight.** `task size` links a probe that calls the public API, for
 linux/amd64 on every host, and reports what the import cost. There is no
@@ -800,7 +791,8 @@ would be charging to somebody else's binary.
   a call named with a verb, the details in the functions it calls. A function
   over 40 lines needs a reason and over 60 is split; no line passes 120
   columns; SQL is a named constant beside its function; more than four
-  parameters become a named value. `docs/rewrite.md` shows it on real code.
+  parameters become a named value. Research's `rewrite.md` shows it on real
+  code.
 - **One byte layout, one parser.** Decoding, reuse and partial reads all start
   from what it returns.
 - **No file-level `//nolint`.** One line with its reason, or a helper that owns
@@ -856,34 +848,23 @@ release may leave both where they are, and either may move without a release.
 
 ## Research rounds
 
-A round is prototype code in `spike/` and one dated report in `docs/reports/`.
-Both land on `main`. Neither is a product, and neither may be quoted as one.
+A round is prototype code and one dated report in
+[tinyshed/research](https://github.com/tinyshed/research), under
+`tinystore/`, whose own AGENTS.md says how a round is run and written.
+Neither is a product, and neither may be quoted as one.
 
-**A round may be developed on a branch; it is not archived on one.** A report
-names the commit it measured, so a round whose base lives only on a branch
-somebody deleted is an anecdote with a number in it. The finding lands on `main`
-with its report, and the commit it names is never rewritten afterwards — check
-what the reports cite before touching history, because a rewrite that moves a
-cited base silently unmakes every measurement standing on it.
+**A round measures a commit of this repository, which is never rewritten.**
+Research keeps this repository as a submodule pinned to the commit a round
+measured, and its prototypes are modules under `github.com/tinyshed/tinystore/`
+so that Go lets them import `internal/`. A report names that commit, so a
+rewrite of `main` that moves it silently unmakes every measurement standing
+on it: check what the reports cite before touching history. A round measured
+on a branch lands its finding on `main` before its report does.
 
-**A report is dated in its filename and listed in the index.**
-`docs/reports/<topic>-<date>.md`, one line in `docs/reports/README.md`, and the
-machine, the versions, the corpus and the command inside the report itself. A
-later round supersedes an earlier one by saying so in the earlier one, rather
-than by editing the number it replaces.
+**A corpus is fetched, never committed**, here or in research.
 
-**A reproduction command carries no path from the machine that ran it.**
-`<repo>` for the repository, `<corpus>` for a prepared corpus. A real path is
-useless to the reader, and a home directory is a username published for as long
-as the history lasts.
-
-**A corpus is fetched, never committed.** The runners in `bench/` download and
-normalise one, `/bench/corpus/` is ignored, and a hash file is how a corpus is
-pinned.
-
-**A round is `test(spike):` and its report is `docs:`.** What the round proved
-is worth building becomes its own commit with its own type: the evidence and the
-feature are read by different people.
+**What a round proved is worth building is its own commit here**, with its
+own type: the evidence and the feature are read by different people.
 
 ## Build and checks
 
@@ -901,13 +882,13 @@ task tidy             # both module files
 Install Task with `go -C tools install github.com/go-task/task/v3/cmd/task`;
 `task setup` then builds the rest into `./bin`.
 
-Measurements are skipped unless `TINYSTORE_SPIKE=1`, so `task check` and CI do
-not run them. Heavy ones belong in a linux container, or their numbers cannot
-sit beside the others in `docs/measurements.md`:
+Measurements beside the engines are skipped unless `TINYSTORE_SPIKE=1`, so
+`task check` and CI do not run them. Heavy ones belong in a linux container, or
+their numbers cannot sit beside the others in research's `measurements.md`:
 
 ```sh
 docker run --rm -v <repo>:/src -w /src -e TINYSTORE_SPIKE=1 golang:1.27 \
-  go test ./spike -run <name> -v -count=1
+  go test ./records -run <name> -v -count=1
 ```
 
 Property tests are `testing.F`, not a generator library: an in-package target

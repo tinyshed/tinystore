@@ -30,7 +30,7 @@ linters:
     - unconvert
     - wastedassign
 
-    # readability gates of docs/rewrite.md
+    # readability gates of AGENTS.md's editing rules
     - lll
     - funlen
     - gocognit

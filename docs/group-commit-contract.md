@@ -6,10 +6,10 @@ caller to find no leader commits the queue and hands the lead on. There is no
 gathering delay: the writes that arrive during one commit make the next. A
 group holds at most 1024 writes and 8 MiB, a heavier write alone, and at most
 ten seconds of the writer; kv bounds the writes waiting through its admission
-slots. The measurements are [the kv round](reports/kv-mechanics-2026-09-26.md).
+slots. The measurements are [the kv round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md).
 Metrics' `Ingest` still commits one call in one immediate SQLite transaction;
 checkpoint policy is a separate decision.
-The [batching round](reports/grouping-ceiling-2026-09-23.md) measured a large
+The [batching round](https://github.com/tinyshed/research/blob/main/tinystore/reports/grouping-ceiling-2026-09-23.md) measured a large
 successful-path benefit from explicit caller batching but no actor's queue or
 failure path. Keep explicit batching as the implementation choice until
 independent low-volume requests justify an actor that satisfies these rules.

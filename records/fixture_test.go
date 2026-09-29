@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// the fixtures of the research rounds, seeded as spike/ seeds them, so that a
-// figure measured here stands beside the one measured there
+// the fixtures of the research rounds, seeded as tinyshed/research's spike
+// seeds them, so that a figure measured here stands beside the one there
 const fixtureBase = int64(1_790_000_000_000_000_000)
 
 func jsonText(value any) string {

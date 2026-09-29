@@ -1,9 +1,9 @@
 # sqldb: the application's own SQLite
 
 Built on 28 September 2026, from this design as it was agreed that day. [The
-mechanics round](reports/sqldb-mechanics-2026-09-28.md) measured what lies
+mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-mechanics-2026-09-28.md) measured what lies
 under it, on Windows and in the container, and set the bounds and internals
-below; [the engine round](reports/sqldb-engine-2026-09-28.md) measured what was
+below; [the engine round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-engine-2026-09-28.md) measured what was
 built. The contract as built is [sqldb/README.md](../sqldb/README.md). Building
 it changed the surface in two names and one return, and the internals in a few
 places; [what building it settled](#what-building-it-settled) says each and
@@ -307,7 +307,7 @@ CREATE INDEX notes_open ON notes (done, due);
   As 16 bytes the same `where` finds nothing and says nothing, and
   `json_object` refuses a blob. It costs 20 to 23 bytes more wherever the key
   lies, in its row, its index and every reference and its index: 1.64 times
-  those objects in [the round](reports/sqldb-mechanics-2026-09-28.md#uuid-keys),
+  those objects in [the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-mechanics-2026-09-28.md#uuid-keys),
   whose reads by key were 3 to 12 % slower. `sqldb.Storage("id", sqldb.Blob)`
   stores 16 bytes; a raw query then passes `id[:]`.
 - **A key's uuid should be version 7**, its milliseconds first: 500,000 notes
@@ -340,7 +340,7 @@ CREATE INDEX notes_open ON notes (done, due);
   its own snapshot, as kv's reads are: 38 to 73 % more reads a second than a
   transaction around a statement compiled each call on Windows, and 57 to 71 %
   in the container. `One[Note]`, decoding every column, serves 23 to 43 % more
-  than that path in [the engine round](reports/sqldb-engine-2026-09-28.md).
+  than that path in [the engine round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-engine-2026-09-28.md).
 - **Rows decode through a plan** made once for a type and its columns: as fast
   as decoding by hand in the round, where reflection every row cost a fifth to
   a third more.
@@ -766,10 +766,10 @@ Each waits for a workload that needs it and a measurement that pays for it.
 
 ## What was measured
 
-[The mechanics round](reports/sqldb-mechanics-2026-09-28.md), the prototype
-`spike/sqldb_*` on one AMD Ryzen 7 7700 with an NVMe disk under Windows 11 and
+[The mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-mechanics-2026-09-28.md), the prototype
+`spike/sqldb_*` in tinyshed/research on one AMD Ryzen 7 7700 with an NVMe disk under Windows 11 and
 in a Linux container on it, twice each; [the engine
-round](reports/sqldb-engine-2026-09-28.md), the built engine on the same
+round](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-engine-2026-09-28.md), the built engine on the same
 machine. The rounds have the environment, the command and every figure.
 
 | | Windows |
@@ -793,11 +793,11 @@ The built engine, Windows and the container's first pass:
 
 Earlier rounds measured the part of sqldb built before:
 
-- [The kv engine round](reports/kv-engine-2026-09-26.md): a stored session
+- [The kv engine round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-engine-2026-09-26.md): a stored session
   read through sqldb at 141,791 a second against kv's 289,717, eight
   goroutines over a million sessions; sqldb prepared its SQL on every call and
   read inside a transaction.
-- [The jobs engine round](reports/jobs-engine-2026-09-27.md): inserts through
+- [The jobs engine round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-engine-2026-09-27.md): inserts through
   grouped `Exec` at 301, 1,447, 10,663 and 63,727 a second from 1, 8, 64 and
   512 goroutines, against about 300 a transaction each.
 

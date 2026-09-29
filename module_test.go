@@ -24,7 +24,7 @@ func TestTheModuleCarriesOnlyTheEngine(t *testing.T) {
 
 	for _, module := range directRequirements(string(text)) {
 		if !theEngineMayRequire[module] {
-			t.Errorf("go.mod requires %s directly; a measurement's dependency belongs in bench/", module)
+			t.Errorf("go.mod requires %s directly; a measurement's dependency belongs in a module of its own", module)
 		}
 	}
 }

@@ -4,11 +4,11 @@ The design of the blobs engine, built on 27 September from this page:
 [blobs/README.md](../blobs/README.md) states its contract as built, and
 [What building it settled](#what-building-it-settled) what the code decided
 that the draft had not. Its questions were settled with the user after
-[the mechanics round](reports/blobs-mechanics-2026-09-27.md); what those
+[the mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md); what those
 decisions were is under [Decided](#decided), and what is still to measure
 under [Operational checks](#operational-checks). Figures marked as the probe come from throwaway programs run on
 27 September 2026 outside the repository; the round repeated them in
-`spike/blobs_*`, and where the two differ the round's stand. The probe ran on an AMD Ryzen 7
+`spike/blobs_*` in tinyshed/research, and where the two differ the round's stand. The probe ran on an AMD Ryzen 7
 7700 with a Samsung 990 PRO NVMe disk, on Windows 11 Pro 10.0.26200 with NTFS
 and Defender's real-time protection on, and in Docker Desktop 29.6.2 on WSL2,
 `golang:1.27` on a named ext4 volume; go1.27.1; random bytes from a seeded
@@ -550,7 +550,7 @@ type Object struct {
 - **`Usage(ctx)` is the objects and bytes under a folder**, the bucket's own
   included, counted from the objects' rows over the folder's range of keys: a
   millisecond over ten thousand objects, 8 over a hundred thousand and 89 over
-  a million in [the round](reports/blobs-mechanics-2026-09-27.md). No write
+  a million in [the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md). No write
   pays for it. Totals kept for every folder would cost up to half the writes
   of deep paths under load, for a call many applications never make; they come
   when a workload calls `Usage` often over folders that large.
@@ -666,7 +666,7 @@ step                                                    an exit after it leaves 
   few times before it fails, and the gates show how often it must.
 - **Windows creates and renames upload files one call at a time per store.**
   Concurrent rooted directory walks caused most of the syscall delay in
-  [the write round](reports/blobs-write-2026-09-27.md). The lock covers those
+  [the write round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-write-2026-09-27.md). The lock covers those
   calls alone: writing bytes, syncs, publication and reads stay outside it;
   other operating systems take no lock.
 - **A process that dies and a disk that loses power are different tests.** The
@@ -709,7 +709,7 @@ step                                                    an exit after it leaves 
 
 ## Storage
 
-Settled by [the round](reports/blobs-mechanics-2026-09-27.md) and the user.
+Settled by [the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md) and the user.
 The engine claims `blobs/`, a directory, where every other engine claims a
 file.
 
@@ -759,7 +759,7 @@ microseconds an object at the median:
 - **So the first version keeps files**, and inline covers the sizes where a
   sync an object hurts most, since an inline write shares its commit with the
   writes beside it, as kv's do: 53,000 durable `Set`s a second in the
-  container at 512 callers in [the kv round](reports/kv-mechanics-2026-09-26.md).
+  container at 512 callers in [the kv round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md).
   A content's place is a column, so packs can take a range of sizes later, a
   group's leader syncing the pack before its commit, without a call changing.
 
@@ -775,7 +775,7 @@ then to the file, a copy in every snapshot of `blobs.db`, and a body read
 whole: 64 KiB is a chain of sixteen overflow pages, and the driver cannot read
 part of one, since `modernc.org/sqlite` v1.59.0 hands out no incremental BLOB
 I/O (`sqlite3_blob_open` is in its `lib` and nowhere in the driver, as
-`bench/blob` found). A file costs a sync of its own and its directory's, and
+research's `bench/blob` found). A file costs a sync of its own and its directory's, and
 an open a read. Nothing else the driver ships changes this:
 `vfs`, `pcache`, `vtab` and `vec` answer other questions, and each would be an
 import the size probe weighs.
@@ -996,7 +996,7 @@ Each waits for a workload that needs it and a measurement that pays for it.
 
 ## Decided
 
-With the user on 27 September, after [the round](reports/blobs-mechanics-2026-09-27.md):
+With the user on 27 September, after [the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md):
 
 | Question | Decided | Why |
 |---|---|---|
@@ -1017,7 +1017,7 @@ With the user on 27 September, after [the round](reports/blobs-mechanics-2026-09
 
 ## Operational checks
 
-[The completion round](reports/blobs-completion-2026-09-27.md) covers the two
+[The completion round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-completion-2026-09-27.md) covers the two
 first-version checks below, as well as streaming, mixed work, memory and scale.
 Its results apply to its measured fixtures and hosts, not every production load.
 

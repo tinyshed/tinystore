@@ -1,8 +1,8 @@
 # https://taskfile.dev
 version: '3'
 
-# a contributor may keep a local go.work so an editor resolves bench/; every
-# check here must still see exactly the module graph CI sees
+# a contributor may keep a local go.work so an editor resolves every module;
+# each check here must still see exactly the module graph CI sees
 env:
   GOWORK: off
 
@@ -31,7 +31,7 @@ tasks:
       - go -C tools build -o ../{{.GOVULNCHECK}} golang.org/x/vuln/cmd/govulncheck
 
   test:
-    # measurements skip unless TINYSTORE_SPIKE is set; task spike runs one
+    # measurements skip unless TINYSTORE_SPIKE is set
     desc: Run tests (also runs go vet)
     cmds:
       - go test -shuffle=on ./...
@@ -53,13 +53,6 @@ tasks:
     cmds:
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out | tail -1
-
-  spike:
-    desc: Run one opt-in measurement, e.g. task spike -- TestAdaptiveCodecAgainstTheBaseline
-    env:
-      TINYSTORE_SPIKE: 1
-    cmds:
-      - go test ./spike -run '{{.CLI_ARGS}}' -v -count=1
 
   size:
     desc: Report what importing the public API costs a cgo-free linux/amd64 binary

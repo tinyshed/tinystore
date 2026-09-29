@@ -84,7 +84,7 @@ Payload only. A whole SQLite file holding those blocks costs 0.72 bytes a
 sample for the whole numbers and 0.52 for the decimals, with the summaries,
 the indexes and the pages they sit in counted. The environment, the fixtures
 and the command that reproduces each number are in
-[docs/measurements.md](docs/measurements.md).
+[tinyshed/research](https://github.com/tinyshed/research/blob/main/tinystore/measurements.md).
 
 ## Layout
 
@@ -99,9 +99,7 @@ and the command that reproduces each number are in
 | `examples/`           | programs using the public API, built and tested with it         |
 | `internal/sqlite/`    | file handles, transactions and checked migrations               |
 | `internal/admission/` | the gate and slots every engine lets work in through            |
-| `spike/`              | prototypes and measurements, skipped unless `TINYSTORE_SPIKE=1` |
-| `docs/`               | the design, the format, the numbers and what is still unknown   |
-| `bench/`              | a module of its own: corpus runners and the engines compared to |
+| `docs/`               | the design, the format, the engines and the wire                |
 | `tools/`              | a second module pinning developer tools                         |
 | `cmd/tinystore/`      | a module of its own: `go tool tinystore`, migrations for sqldb  |
 
@@ -111,9 +109,7 @@ and the command that reproduces each number are in
 |----------------------------------------------|--------------------------------------------------------|
 | [docs/design.md](docs/design.md)             | how the store is meant to work, and why that shape     |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version    |
-| [docs/measurements.md](docs/measurements.md) | every number, its environment, and how to reproduce it |
-| [docs/research.md](docs/research.md)         | what is not built: the open questions and their gates  |
-| [docs/reports/](docs/reports/README.md)      | the dated measurement rounds each number came from     |
+| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | every number, the rounds it came from, the open questions |
 
 ## License
 

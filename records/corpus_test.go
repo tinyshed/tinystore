@@ -15,9 +15,9 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Measurements on a private docker json-file corpus, as
-// bench/fetch-docker-logs.sh leaves it. Skipped unless TINYSTORE_SPIKE=1 and
-// TINYSTORE_CORPUS name it.
+// Measurements on a private docker json-file corpus, as tinyshed/research's
+// tinystore/bench/fetch-docker-logs.sh leaves it. Skipped unless
+// TINYSTORE_SPIKE=1 and TINYSTORE_CORPUS name it.
 
 // corpusTexts are the bodies of the text records a writer of Lines makes of
 // each container's entries, at the times docker received them, and those times

@@ -80,7 +80,7 @@ The current directory format does not contain it. Introducing it requires a
 new directory version and a golden reader for older versions. Legacy blocks
 decode raw for exact aggregates now.
 
-The [representation round](reports/aggregate-representation-2026-09-23.md)
+The [representation round](https://github.com/tinyshed/research/blob/main/tinystore/reports/aggregate-representation-2026-09-23.md)
 compares this candidate with a fixed superaccumulator and floating expansion.
 The current API has tests for cancellation after intermediate overflow,
 subnormals, signed zero, nonfinite inputs, reset transitions, clipped blocks,

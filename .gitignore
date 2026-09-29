@@ -9,7 +9,7 @@ coverage.out
 # IDE
 .idea/
 .vscode/
-# a local workspace so an editor resolves the bench modules; task sets GOWORK=off
+# a local workspace so an editor resolves every module; task sets GOWORK=off
 go.work
 go.work.sum
 
@@ -21,4 +21,3 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
-/bench/corpus/

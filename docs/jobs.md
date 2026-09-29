@@ -2,7 +2,7 @@
 
 The design of the jobs engine, built in its first slice: `jobs/` holds the API
 and the contracts below. What lies under [Storage](#storage) was settled by
-[the mechanics round](reports/jobs-mechanics-2026-09-27.md) in a container on
+[the mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-mechanics-2026-09-27.md) in a container on
 one development machine; what the round left is under [Open](#open).
 
 ## What it is for
@@ -475,7 +475,7 @@ An error about one job is a `*jobs.JobError` naming its queue and key;
 
 Settled by the round: rows in the order of their time, a lease in a table of
 its own, 4 KiB pages, values past 512 bytes spilled; and by
-[the engine's round](reports/jobs-engine-2026-09-27.md), keys in a table of
+[the engine's round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-engine-2026-09-27.md), keys in a table of
 their own.
 
 ```text
@@ -579,7 +579,7 @@ The five cases are the gates' workloads.
 - **Grouped writes in sqldb.** A handler that writes the application's
   database commits once an `Exec`, and a transaction each held about 340
   writes a second in the container at any concurrency in
-  [the kv round](reports/kv-mechanics-2026-09-26.md); eight workers inserting
+  [the kv round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md); eight workers inserting
   messages wait for each other's fsync however fast the queue is. `Exec` joins
   `internal/sqlite.File.UpdateGrouped`, as kv's writes did, as a change of its
   own with its own gate.
@@ -598,7 +598,7 @@ Each waits for a workload that needs it and a measurement that pays for it.
 
 ## Open
 
-What [the round](reports/jobs-mechanics-2026-09-27.md) left, for the next:
+What [the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-mechanics-2026-09-27.md) left, for the next:
 
 | Question | Why |
 |---|---|
@@ -606,6 +606,6 @@ What [the round](reports/jobs-mechanics-2026-09-27.md) left, for the next:
 | the page cache of the writer in a burst over a large file | every burst ran with 1 MiB a connection |
 | a queue's count at open | `OpenQueue` reads the durable `queues.waiting` counter; jobs table triggers keep it exact inside a write |
 
-Settled since, in [the engine's round](reports/jobs-engine-2026-09-27.md): a
+Settled since, in [the engine's round](https://github.com/tinyshed/research/blob/main/tinystore/reports/jobs-engine-2026-09-27.md): a
 Work loop holds two jobs a worker, sqldb's `Exec` commits grouped, and keys
 live in a table of their own, dropped lazily in key order by maintenance.

@@ -17,8 +17,9 @@ import (
 )
 
 // Measurements of the engine, skipped unless TINYSTORE_SPIKE=1. Each has the
-// shape of a measurement of the prototype in spike/blobs_*, so that both run in
-// one session with matching payloads.
+// shape of a measurement of the prototype in tinyshed/research's
+// tinystore/spike/blobs_*, so that both run in one session with matching
+// payloads.
 //
 // TINYSTORE_BLOBS_DIR puts their files on a chosen disk, and
 // TINYSTORE_BLOBS_SECONDS sets a load's length.

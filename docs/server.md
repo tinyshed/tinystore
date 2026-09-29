@@ -7,7 +7,7 @@ transports, every engine, kv, jobs, blobs, sql, records and metrics, and
 contract the server and its SDKs are built to: what a connection may do, how
 a sidecar starts and is found, what a lost connection means, and what bounds
 the server's memory. The bytes are [wire.md](wire.md). Its figures are
-[the round](reports/rpc-mechanics-2026-09-28.md)'s: `spike/rpc_*`, a sidecar
+[the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-mechanics-2026-09-28.md)'s: research's `spike/rpc_*`, a sidecar
 holding one kv bucket reached from Go, Bun and Python, on Windows and in a
 Linux container; the probe before it, outside the repository, is superseded
 but for the encoding, which the round did not measure again.
@@ -454,7 +454,7 @@ added as ordinary API:
 
 ## The round
 
-[The round](reports/rpc-mechanics-2026-09-28.md) settled, on Windows and in a
+[The round](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-mechanics-2026-09-28.md) settled, on Windows and in a
 Linux container:
 
 1. **the transports**: a named pipe on Windows, a Unix socket elsewhere,
@@ -619,7 +619,7 @@ Where the slices stand, 29 September 2026:
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
 | the JS SDK, the Python SDK | built: `sdk/js` and `sdk/python`, every vector and every engine tested through a real `tinystore serve` (`task sdk`); not yet their READMEs, examples, packages of the binary, or a measurement against the prototype |
-| the measurement against the prototype | done: [rpc-server-2026-09-29](reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
+| the measurement against the prototype | done: [rpc-server-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
 
 Every slice built passes `go test`, `-race` in the `golang:1.27` container
 three times shuffled, and golangci-lint for Windows and Linux; nothing of it
@@ -708,10 +708,10 @@ is released, and the gates it brought are in AGENTS.md.
 - **A point read without a goroutine**, built: `internal/sqlite`'s
   `QueryRowByKey` checks the context and runs a statement that finds its row
   by a key with `context.WithoutCancel`, as
-  [the measurement](reports/rpc-server-2026-09-29.md#what-follows) proposed; a
+  [the measurement](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-server-2026-09-29.md#what-follows) proposed; a
   count or a sum over a range stays on `QueryRow`, which the context
   interrupts. Measured in
-  [rpc-contexts-2026-09-29](reports/rpc-contexts-2026-09-29.md) with a
+  [rpc-contexts-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-contexts-2026-09-29.md) with a
   grouped write's statements run without their contexts too: 6 to 18 % more
   gets from Go at depth, 18 to 35 % more sets at 256, on Windows; the
   container, and the race suite, once Docker runs. Then the SDKs, tested
@@ -747,8 +747,8 @@ What building them settled, beside the proposals above:
   `SECURITY_IDENTIFICATION`, so a process that took the name cannot act as it.
 
 - **Read first**: AGENTS.md, this page, [wire.md](wire.md) and
-  [the round](reports/rpc-mechanics-2026-09-28.md). The prototype
-  `spike/rpc_*` is prior art to read, not code to import: production code
+  [the round](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-mechanics-2026-09-28.md). The prototype
+  Research's `spike/rpc_*` is prior art to read, not code to import: production code
   calls no helper of the spike.
 - **A slice is done** when its messages and vectors are on wire.md, its gates
   in the table above pass, and what its engine gained is in that engine's

@@ -3,18 +3,18 @@
 The design of the records engine. `records/` is built to it, with the one
 difference [below](#what-the-engine-leaves-out); its contract is
 [records/README.md](../records/README.md), and
-[the engine report](reports/records-engine-2026-09-25.md) measures it on the
-corpora the research used. The prototype is `spike/record_v2_*`; every figure
+[the engine report](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-engine-2026-09-25.md) measures it on the
+corpora the research used. The prototype is research's `spike/record_v2_*`; every figure
 below comes from a dated report that names its commit and command:
 
-- [v2 codec, layout and search](reports/record-v2-2026-09-25.md), on synthetic
+- [v2 codec, layout and search](https://github.com/tinyshed/research/blob/main/tinystore/reports/record-v2-2026-09-25.md), on synthetic
   fixtures and one public control;
-- [production container logs](reports/record-docker-logs-2026-09-25.md), 1.32
+- [production container logs](https://github.com/tinyshed/research/blob/main/tinystore/reports/record-docker-logs-2026-09-25.md), 1.32
   million real lines;
-- [sealing, the head, late records, id blooms and memory](reports/record-sealing-2026-09-25.md).
+- [sealing, the head, late records, id blooms and memory](https://github.com/tinyshed/research/blob/main/tinystore/reports/record-sealing-2026-09-25.md).
 
 The first prototype, with its whole-segment envelope and exhaustive encoder, is
-history in [its reports](reports/record-reconstruction-2026-09-25.md); nothing
+history in [its reports](https://github.com/tinyshed/research/blob/main/tinystore/reports/record-reconstruction-2026-09-25.md); nothing
 reads its format and nothing will.
 
 ## The public surface
@@ -300,12 +300,12 @@ and a segment row may decompress or copy at most twice a segment's input.
 ## What was measured
 
 The prototype, and the engine on the same fixtures and corpus, in the same
-kind of container; [the engine report](reports/records-engine-2026-09-25.md)
-has the environment and the commands, [the rice round](reports/records-rice-2026-09-26.md)
-chose each rice parameter among all 64, [the stamps round](reports/records-stamps-2026-09-26.md)
+kind of container; [the engine report](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-engine-2026-09-25.md)
+has the environment and the commands, [the rice round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-rice-2026-09-26.md)
+chose each rice parameter among all 64, [the stamps round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-stamps-2026-09-26.md)
 has the corpus's figures since a line's own time is kept apart,
-[the merge round](reports/records-merge-2026-09-26.md) those sealed hourly
-since small segments merge, and [the text round](reports/records-text-2026-09-26.md)
+[the merge round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-merge-2026-09-26.md) those sealed hourly
+since small segments merge, and [the text round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-text-2026-09-26.md)
 those in full segments since a segment's text takes zstd's stronger level.
 
 | | Prototype | Engine |
@@ -332,7 +332,7 @@ from 20.09 to 20.90, 0.80 bytes, where the JSON services' bytes are the
 prototype's to the hundredth. Decided on 25 September: the engine stays
 without it, and text's next lever is templates, not a decoder state per
 segment. The first of them, a line's own time kept apart, has since taken the
-corpus to 16.55. [The text round](reports/records-text-2026-09-26.md) measured
+corpus to 16.55. [The text round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-text-2026-09-26.md) measured
 the rest: templates with typed numbers cost 1.2 to 2.0 bytes a record more
 than zstd a block at a time, and one zstd frame a segment, the most a sample
 could take back, 0.48 bytes a record less; the engine keeps its blocks apart
@@ -349,7 +349,7 @@ record written again one and a half times, and the default stays an hour.
 ## Open
 
 - Measured since: reads beside a writer appending and sealing, in
-  [the load round](reports/records-load-2026-09-26.md); not measured on macOS,
+  [the load round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-load-2026-09-26.md); not measured on macOS,
   bare Linux or a disk.
 
 - Input: OTLP, and a server taking lines from programs that do not embed the

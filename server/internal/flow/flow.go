@@ -18,7 +18,7 @@ import (
 //
 // A write for each frame loses three to twenty-seven times at depth, and a
 // goroutine that drains a queue costs a hand-off at one in flight,
-// docs/reports/rpc-mechanics-2026-09-28.md.
+// tinyshed/research tinystore/reports/rpc-mechanics-2026-09-28.md.
 type Writer struct {
 	mu      sync.Mutex
 	room    sync.Cond // queued bytes fell, or the writer failed

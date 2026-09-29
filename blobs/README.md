@@ -6,7 +6,7 @@ downloads tomorrow, an editor's documents. Objects sit under keys that are
 paths, their rows in `blobs.db`, their bytes inline up to 16 KiB and in a file
 of their own above it. The design and the measurements behind it are
 [docs/blobs.md](../docs/blobs.md) and
-[the mechanics round](../docs/reports/blobs-mechanics-2026-09-27.md).
+[the mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md).
 
 ```go
 objects, err := blobs.Open(ctx, store, blobs.Options{}) // data/blobs/

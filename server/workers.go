@@ -16,7 +16,7 @@ import (
 // A goroutine started for each call grows its stack on the way into SQLite
 // every time, a quarter of a sidecar's time in the round. Too few workers
 // starve a group commit of the writes that would join it,
-// docs/reports/rpc-mechanics-2026-09-28.md.
+// tinyshed/research tinystore/reports/rpc-mechanics-2026-09-28.md.
 type workers struct {
 	calls   chan *call
 	busy    atomic.Int64 // calls handed over and not yet finished

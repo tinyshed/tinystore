@@ -11,7 +11,7 @@ are the gate. Say in your report which of them ran, where, and which could not.
 ## The modules
 
 The root, `server/` and `cmd/tinystore/`, each with its own `go.mod`; `tools/`
-pins the linters; each `bench/*` is a module of its own. `task` runs with
+pins the linters; `sdk/go.mod` keeps the SDKs out of Go. `task` runs with
 `GOWORK=off`. A local, ignored `go.work` lets an editor see every module: a new
 module goes into it with `go work use ./<dir>`, or GoLand shows it red.
 

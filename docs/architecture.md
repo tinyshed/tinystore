@@ -5,7 +5,7 @@ today is `codec/`, `internal/sqlite/`, `metrics/`, which opens through the
 store, `sqldb/`, `records/`, `kv/`, `jobs/`, `blobs/`, `backup/`, and the root's lifecycle: `Open`, `Close`, the directory lock, `Claim`,
 `Attach`, `Logger`, `Now`, `Every`, the memory budget and snapshots. Everything else here is designed and
 agreed, not built. [examples/notes](../examples/notes/main.go) is a program
-using the built part, and [samples/](samples/README.md) holds a reference
+using the built part, and [samples/](https://github.com/tinyshed/research/blob/main/tinystore/samples/README.md) holds a reference
 rewrite of one metrics path. A section that describes something unbuilt says so.
 
 ## What TinyStore is
@@ -172,8 +172,8 @@ In: TinyStore logs through the application's `*slog.Logger`
 
 This table describes the built event categories. Ordinary caller-visible
 limit and query-deadline errors are returned, not logged again; migration
-notifications are not implemented. [The diagnostics audit](reports/readability-2026-09-27.md)
-records the original gaps, and [the logging round](reports/logging-2026-09-27.md)
+notifications are not implemented. [The diagnostics audit](https://github.com/tinyshed/research/blob/main/tinystore/reports/readability-2026-09-27.md)
+records the original gaps, and [the logging round](https://github.com/tinyshed/research/blob/main/tinystore/reports/logging-2026-09-27.md)
 states what changed. Background engine work uses `Store.EveryEngine` to keep
 `engine=name` on failure and recovery records. The public `Store.Every` still
 registers application work without an engine attribute.
@@ -264,8 +264,8 @@ keeps its place for that cursor. Retention removes whole segments, fourteen
 days by default. On the research corpora it keeps 7.89 bytes a frontend
 record and 16.55 a production log line, whose own time it keeps apart from
 its text;
-[the engine report](reports/records-engine-2026-09-25.md) and
-[the stamps round](reports/records-stamps-2026-09-26.md) have the rest.
+[the engine report](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-engine-2026-09-25.md) and
+[the stamps round](https://github.com/tinyshed/research/blob/main/tinystore/reports/records-stamps-2026-09-26.md) have the rest.
 
 ```go
 logger := slog.New(logs.Handler("notes"))
@@ -493,4 +493,4 @@ Usage, a Clear and maintenance. Built the same way from Windows 11, it adds
   `records`, `kv`, `jobs`, `blobs` and `backup`, built and tested with the
   module. It replaces the text prototype the runtime was designed from.
 - Commit `407e728`, merged into `main`: the metrics ingest path rewritten in
-  the target style, behaviour and bytes unchanged; see `docs/rewrite.md`.
+  the target style, behaviour and bytes unchanged; see research's `rewrite.md`.
