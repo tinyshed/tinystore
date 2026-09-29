@@ -54,10 +54,11 @@ func create(want *Table) string {
 	return out.String()
 }
 
-// rebuilds is a change ALTER TABLE cannot make: a column's type, NULL,
-// default, the key, a reference, STRICT or rowids; a column it cannot add or
-// drop, unless one gone beside one new may be a rename; a UNIQUE constraint
-// the table's text holds
+// rebuilds is a change ALTER TABLE cannot make:
+//
+//	a column's type, NULL, default, the key, a reference, STRICT or rowids
+//	a column it cannot add or drop, unless one gone beside one new may be a rename
+//	a UNIQUE constraint the table's text holds
 func rebuilds(want, have *Table, differences []Difference) bool {
 	renaming := hasWhat(differences, MissingColumn) && hasWhat(differences, ExtraColumn)
 	for _, d := range differences {
@@ -123,9 +124,9 @@ func droppable(t *Table, column string) bool {
 	return true
 }
 
-// alter makes the changes ALTER TABLE can: indexes dropped first, columns
-// added and dropped, indexes made last. A column gone beside one new may be a
-// rename, which only a person can tell
+// alter makes the changes ALTER TABLE can: indexes dropped first, columns added
+// and dropped, indexes made last. A column gone beside one new may be a rename,
+// which only a person can tell.
 func alter(want *Table, differences []Difference) (string, bool) {
 	var dropped, added, drops, creates []string
 	for _, d := range differences {

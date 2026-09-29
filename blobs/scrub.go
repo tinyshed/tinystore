@@ -15,9 +15,9 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// scrubPlace is where the scrub is: the content it reads and how far, the
-// hash of that content's bytes before there, and the bytes a slice reads in
-// this pass; a zero pace begins a pass
+// scrubPlace is where the scrub is: the content it reads and how far, the hash
+// of that content's bytes before there, and the bytes a slice reads in this
+// pass. A zero pace begins a pass.
 type scrubPlace struct {
 	content int64
 	offset  int64
@@ -25,7 +25,6 @@ type scrubPlace struct {
 	pace    int64
 }
 
-// scrubbed is a content as the scrub reads it
 type scrubbed struct {
 	id     int64
 	size   int64
@@ -50,11 +49,13 @@ const (
 		where id >= ?1 and names > 0 and damaged = 0 order by id limit 1`
 )
 
-// scrub reads a slice of the contents, a 43,200th of their bytes a call and
-// at least 1 MiB, so that a pass at a call a minute takes thirty days, and
-// keeps its place and its hash's state in blobs.db, so that a restart does
-// not begin the pass again. Its buffer waits for no memory: when the store's
-// is taken, the slice waits for the next call.
+// scrub reads a slice of the contents: a 43,200th of their bytes a call and at
+// least 1 MiB, so that a pass at a call a minute takes thirty days. It keeps
+// its place and its hash's state in blobs.db, so that a restart does not begin
+// the pass again.
+//
+// Its buffer waits for no memory: when the store's is taken, the slice waits
+// for the next call.
 func (s *Store) scrub(ctx context.Context) (read int64, damaged int, err error) {
 	hold := s.scrubHold()
 	reserved, err := s.runtime.ReserveNow(int64(hold))
@@ -195,8 +196,8 @@ func stateOf(sum hash.Hash) ([]byte, error) {
 const bodyOf = `select bytes from bodies where id = ?1`
 
 // readAt reads n bytes of a content at the scrub's place into the slice's
-// buffer: an inline content's from its row, a file's from the file, opened
-// for the read alone
+// buffer. An inline content is read from its row, a file from the file, which
+// is opened for the read alone.
 func (p *scrubbing) readAt(ctx context.Context, next scrubbed, n int64) (int, error) {
 	s, off := p.store, p.at.offset
 	if next.inline {

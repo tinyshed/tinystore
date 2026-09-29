@@ -53,9 +53,9 @@ func (s *testStore) ids(t *testing.T, query string, arguments ...any) []int64 {
 	return ids
 }
 
-// a head row that no longer reads is logged once and left, the rest of its
-// head seals around it, a read over it names it, and Drop removes it so that
-// reads work again
+// A head row that no longer reads is logged once and left, and the rest of its
+// head seals around it. A read over it names it, and Drop removes it so that
+// reads work again.
 func TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals(t *testing.T) {
 	var logged bytes.Buffer
 	runtime := tinystore.Options{Logger: slog.New(slog.NewTextHandler(&logged, nil))}

@@ -136,8 +136,8 @@ func compareRanked(a, b *ranked) int {
 }
 
 // selection keeps the first limit records in page order, and the time of the
-// best one it had to let go: records at that time cannot all be returned, so
-// the page ends before it
+// best one it had to let go. Records at that time cannot all be returned, so
+// the page ends before it.
 type selection struct {
 	limit     int
 	newest    bool
@@ -146,9 +146,9 @@ type selection struct {
 	droppedAt int64
 }
 
-// offer keeps a record that belongs on the page; a kept record is detached
-// from the block it was decoded from, so the page holds its records and not
-// the columns they came from
+// offer keeps a record that belongs on the page. A kept record is detached from
+// the block it was decoded from, so the page holds its records and not the
+// columns they came from.
 func (s *selection) offer(record *Record, src *source, row int) {
 	r := rankedRecord(record, src, row)
 	if len(s.kept.items) < s.limit {

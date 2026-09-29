@@ -52,16 +52,16 @@ func checkFollow(after Cursor, limit int) (int, error) {
 	return checkLimit(limit)
 }
 
-// followReservation is what a Follow holds: its budget, a decoded block, its records, and the
-// cache it fills for the batches after it
+// followReservation is what a Follow holds: its budget, a decoded block, its
+// records, and the cache it fills for the batches after it
 func (s *Store) followReservation(limit int) int64 {
 	return int64(s.opts.Budget.Bytes) + blockReservation + int64(limit)*recordReservation + followCacheBytes
 }
 
-// followed is what one batch decodes, copied out of one read transaction:
-// the places from the cursor on, each with the blocks of its holder the batch
-// needs
+// followed is what one batch decodes, copied out of one read transaction.
 type followed struct {
+	// places are those from the cursor on, each with the blocks of its holder
+	// the batch needs.
 	places   []followedPlace
 	sequence int64 // the last segment id ever given, when no place was found
 	blocks   int
@@ -136,18 +136,19 @@ func (s *Store) fetchFollowed(ctx context.Context, after Cursor, limit int) (fol
 }
 
 // followRead gathers places and the blocks holding them until the batch has
-// limit records or has spent its bytes; a byte the cache had is spent as one
-// fetched from the file, so that a batch ends where it would without the cache
+// limit records or has spent its bytes.
 type followRead struct {
-	tx           sqlite.Reader
-	after        Cursor
-	limit        int
-	budget       int
-	names        *streams
-	cache        *followCache
-	holders      map[int64]*heldSegment
-	taken        []followedPlace
-	gathered     int
+	tx       sqlite.Reader
+	after    Cursor
+	limit    int
+	budget   int
+	names    *streams
+	cache    *followCache
+	holders  map[int64]*heldSegment
+	taken    []followedPlace
+	gathered int
+	// spent counts a byte the cache had as one fetched from the file, so that
+	// a batch ends where it would without the cache.
 	spent        int
 	fetched      int // blocks read from the file
 	fetchedBytes int // bytes read from the file
@@ -201,9 +202,9 @@ func (r *followRead) withBlocks(ctx context.Context, found []followedPlace) ([]f
 	return r.taken, nil
 }
 
-// holderOf is the segment holding a place's records, fetched once a batch;
-// nil when the batch has taken places already and its bytes do not afford
-// another holder's row
+// holderOf is the segment holding a place's records, fetched once a batch. It
+// is nil when the batch has taken places already and its bytes do not afford
+// another holder's row.
 func (r *followRead) holderOf(ctx context.Context, place *followedPlace) (*heldSegment, error) {
 	if holder, ok := r.holders[place.holderID]; ok {
 		return holder, nil

@@ -39,9 +39,10 @@ func loadLength() time.Duration {
 }
 
 // TestExecsMeasured inserts a message a call into the application's database
-// from 1 to 512 goroutines for three seconds each, through Exec, whose writes
-// share a commit, and through a Tx a call, which is what Exec was before: a
-// commit, and its fsync, each.
+// from 1 to 512 goroutines for three seconds each.
+//
+// It goes through Exec, whose writes share a commit, and through a Tx a call,
+// which is what Exec was before: a commit, and its fsync, each.
 func TestExecsMeasured(t *testing.T) {
 	measuring(t)
 	const insert = `insert into notes (title, body) values (?, ?)`
@@ -151,9 +152,9 @@ func measure(workers int, length time.Duration, call func(worker int) error) res
 }
 
 // measuredNotes is a file of the design's notes, count of them written a
-// transaction of ten thousand at a time, as the mechanics round's were: ids
+// transaction of ten thousand at a time, as the mechanics round's were. Ids are
 // version 4 uuids as text, a hundred notes an author, a third done, one in four
-// due
+// due.
 func measuredNotes(t *testing.T, count int) (*DB, design, string) {
 	t.Helper()
 	d := declareDesign(t)
@@ -244,10 +245,12 @@ func scanNote(scan func(dest ...any) error) (Note, error) {
 	return note, nil
 }
 
-// TestPointReadsMeasured reads a note by its id from 1, 8 and 64 goroutines
-// in a file of a million: through sqldb.One, and in the same run through the
-// prototype's two paths, a prepared statement scanned by hand and a
-// transaction compiling its statement each call, which was sqldb's before
+// TestPointReadsMeasured reads a note by its id from 1, 8 and 64 goroutines in
+// a file of a million.
+//
+// It goes through sqldb.One, and in the same run through the prototype's two
+// paths: a prepared statement scanned by hand, and a transaction compiling its
+// statement each call, which was sqldb's before.
 func TestPointReadsMeasured(t *testing.T) {
 	measuring(t)
 	const count = 1_000_000
@@ -294,8 +297,8 @@ func TestPointReadsMeasured(t *testing.T) {
 }
 
 // TestDecodingMeasured reads 200,000 notes, twice each way: All and Each into
-// the model, and by hand through the same reader, and reports a row's time
-// and allocations
+// the model, and by hand through the same reader. It reports a row's time and
+// allocations.
 func TestDecodingMeasured(t *testing.T) {
 	measuring(t)
 	const count = 200_000
@@ -354,9 +357,11 @@ func TestDecodingMeasured(t *testing.T) {
 }
 
 // TestInsertsMeasured inserts a note a call from 1 to 512 goroutines, all
-// grouped: through Insert, which encodes the model's fields; through ExecOne
-// and Exec of the same insert returning the row, and through Exec of it
-// returning nothing, the columns already encoded, which is the floor
+// grouped, through:
+//
+//	Insert, which encodes the model's fields
+//	ExecOne and Exec of the same insert returning the row
+//	Exec of it returning nothing, the columns already encoded: the floor
 func TestInsertsMeasured(t *testing.T) {
 	measuring(t)
 	const insert = `insert into notes (id, author_id, title, done, tags, due, created_at) values (?, ?, ?, ?, ?, ?, ?)`
@@ -405,11 +410,12 @@ func TestInsertsMeasured(t *testing.T) {
 }
 
 // TestAsAProgramOpensItMeasured reads and writes the same notes through
-// database/sql and modernc as a program that opens the file itself does, one
+// database/sql and modernc as a program that opens the file itself does: one
 // pool for reads and writes, a busy timeout of five seconds, each query
-// compiled for itself and each Exec a transaction of its own; and in the same
-// run through sqldb, whose reads the pool's are compared with and whose
-// grouped writes its Execs are
+// compiled for itself and each Exec a transaction of its own.
+//
+// The same run goes through sqldb, whose reads the pool's are compared with and
+// whose grouped writes its Execs are.
 func TestAsAProgramOpensItMeasured(t *testing.T) {
 	measuring(t)
 	const count = 100_000

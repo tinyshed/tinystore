@@ -47,9 +47,10 @@ func main() {
 	exit(run(context.Background(), os.Args[1:], os.Stdout))
 }
 
-// exit ends the process as err says: a directory held by another store with a
-// code of its own, which a client starting a sidecar reads as another having
-// won
+// exit ends the process as err says.
+//
+// A directory held by another store has a code of its own, which a client
+// starting a sidecar reads as another having won.
 func exit(err error) {
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):

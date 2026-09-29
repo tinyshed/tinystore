@@ -31,7 +31,6 @@ type content struct {
 	shared bool
 }
 
-// version is an object's row as a write gives it
 type version struct {
 	content     content
 	revision    int64
@@ -41,7 +40,6 @@ type version struct {
 	meta        map[string]string
 }
 
-// object is the version as a caller sees it, under key
 func (v *version) object(key string) Object {
 	object := Object{
 		Key: key, Size: v.content.size, ETag: etagOf(v.content.etag), ContentType: v.contentType,

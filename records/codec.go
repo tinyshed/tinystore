@@ -42,9 +42,11 @@ func newDecoder(blobs *zstd.Decoder) *decoder {
 	return &decoder{zstd: blobs}
 }
 
-// blobCoders are the zstd coders every encoder and decoder shares: a segment's
-// text is written once and kept for weeks, so it takes the stronger level, and
-// a head row lives an hour at most, so it takes the one that costs an append less
+// blobCoders are the zstd coders every encoder and decoder shares.
+//
+// A segment's text is written once and kept for weeks, so it takes the stronger
+// level. A head row waits at most SealAge (an hour unless set), so it takes the
+// level that costs an append less.
 type blobCoders struct {
 	segments, heads *zstd.Encoder
 	unpack          *zstd.Decoder
@@ -72,8 +74,8 @@ func (c blobCoders) close() error {
 	return errors.Join(c.segments.Close(), c.heads.Close())
 }
 
-// newBlobEncoder makes an encoder EncodeAll may call concurrently, for nothing
-// larger than a block's input, which is ever one frame
+// newBlobEncoder makes an encoder whose EncodeAll may be called concurrently,
+// for input no larger than a block's, which always comes out as one frame.
 func newBlobEncoder(level zstd.EncoderLevel) (*zstd.Encoder, error) {
 	writer, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(2), zstd.WithEncoderLevel(level),
 		zstd.WithWindowSize(maxBlockInput), zstd.WithLowerEncoderMem(true), zstd.WithEncoderCRC(false))

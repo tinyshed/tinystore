@@ -20,13 +20,16 @@ type groupRow struct {
 	data                []byte
 }
 
-// snapshotRead is what every fetch inside one read transaction shares: the
-// connection, the range, the budget each fetch charges, and whether external
-// payloads wait for one batched fetch at the end.
+// snapshotRead is what every fetch inside one read transaction shares.
 type snapshotRead struct {
-	tx            sqlite.Reader
-	from, to      int64
-	budget        *queryBudget
+	tx       sqlite.Reader
+	from, to int64
+
+	// budget is charged by each fetch.
+	budget *queryBudget
+
+	// deferPayloads makes external payloads wait for one batched fetch at the
+	// end.
 	deferPayloads bool
 }
 

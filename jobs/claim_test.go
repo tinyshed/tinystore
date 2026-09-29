@@ -177,9 +177,9 @@ func TestExtendKeepsTheJob(t *testing.T) {
 	}
 }
 
-// a value that no longer reads into the queue's type, because the type
-// changed, fails its job for good with the reason, and a Claim or a Work goes
-// on to the next job rather than stopping
+// A value that no longer reads into the queue's type, because the type changed,
+// fails its job for good with the reason. A Claim or a Work goes on to the next
+// job rather than stopping.
 func TestAValueThatNoLongerReadsFailsItsJob(t *testing.T) {
 	queues := openTestQueues(t, t.TempDir())
 	texts := openTestQueue[string](t, queues, "changed")

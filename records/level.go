@@ -48,7 +48,6 @@ var levelNames = map[string]slog.Level{
 	"emerg": slog.LevelError + 4,
 }
 
-// the keys a JSON line gives its level under
 var levelKeys = []string{"level", "lvl", "severity", "levelname", "log.level"}
 
 func fieldLevel(fields []Field) (slog.Level, bool) {
@@ -152,9 +151,9 @@ func logfmtLevel(line string) (slog.Level, bool) {
 	return 0, false
 }
 
-// wordLevel is the first level a line names: a word in capitals, or a name
-// in brackets or in colour in any case; Postgres's LOG counts only with its
-// colon, unless it is in colour
+// wordLevel is the first level a line names: a word in capitals, or a name in
+// brackets or in colour in any case. Postgres's LOG counts only with its colon,
+// unless it is in colour.
 func wordLevel(head string) (slog.Level, bool) {
 	for start := 0; start < len(head); {
 		end := start

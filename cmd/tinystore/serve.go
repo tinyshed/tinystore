@@ -124,9 +124,11 @@ func readServing(asked serveFlags) (serving, error) {
 	return read, nil
 }
 
-// serve runs a server of the store in a directory until its private
-// connection ends, it has been idle, or ctx ends, which closes it: the streams
-// running finish, SERVE goes, and the store lets the directory go
+// serve runs a server of the store in a directory until its private connection
+// ends, it has been idle, or ctx ends.
+//
+// Ending closes it: the streams running finish, SERVE goes, and the store
+// lets the directory go.
 func serve(ctx context.Context, args []string, streams console) error {
 	asked, err := parseServe(args, streams.stderr)
 	if err != nil {
@@ -185,10 +187,12 @@ func servePrivate(ctx context.Context, srv *server.Server, streams console) erro
 }
 
 // stdio is a private child's connection: what its parent writes and what it
-// reads. stdin is read on a goroutine of its own and never closed, since
-// closing a blocking stdin ends no read waiting on it and a console's close
-// waits for that read: closing the connection lets the read go, and the
-// process's exit ends it.
+// reads.
+//
+// stdin is read on a goroutine of its own and never closed, because closing a
+// blocking stdin ends no read waiting on it and a console's close waits for
+// that read. Closing the connection lets the read go, and the process's exit
+// ends the goroutine.
 type stdio struct {
 	in  *io.PipeReader
 	out io.WriteCloser

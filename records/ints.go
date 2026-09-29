@@ -50,8 +50,8 @@ type intPlan struct {
 	bytes       int
 }
 
-// appendInts writes the smallest of the direct plan, a dictionary and a dominant
-// value with exceptions
+// appendInts writes the smallest of the direct plan, a dictionary and a
+// dominant value with exceptions
 func (e *encoder) appendInts(out []byte, values []int64) []byte {
 	start := len(out)
 	out = e.appendDirectInts(out, values)

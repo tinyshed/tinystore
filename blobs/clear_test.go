@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// Clear empties a folder and every folder under it at once: under its bound
-// in one transaction, over it by a mark that hides the objects before
-// maintenance deletes them; a neighbour whose name the folder's begins stays,
-// and an object written after the Clear is a new object
+// Clear empties a folder and every folder under it at once: under its bound in
+// one transaction, over it by a mark that hides the objects before maintenance
+// deletes them. A neighbour whose name the folder's begins stays, and an object
+// written after the Clear is a new object.
 func TestClearEmptiesAFolderAndThoseUnderIt(t *testing.T) {
 	for _, bound := range []int{clearAtOnce, 10} {
 		t.Run(fmt.Sprint("bound ", bound), func(t *testing.T) {

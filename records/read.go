@@ -46,11 +46,11 @@ func (s *Store) Read(ctx context.Context, query Query) (Page, error) {
 	return page, nil
 }
 
-// checkedQuery is a query the engine can run: its range as nanoseconds, both
-// ends included and the first clipped by one retention cutoff, and its
-// conditions resolved
+// checkedQuery is a query the engine can run, its conditions resolved.
 type checkedQuery struct {
-	asked       Query
+	asked Query
+	// first and last are the range as nanoseconds, both ends included, the
+	// first clipped by one retention cutoff.
 	first, last int64
 	streams     map[int64]bool // nil: every stream
 	levels      int64          // the level bits a block must share, zero for any
@@ -184,8 +184,8 @@ func (q *checkedQuery) filtersRows() bool {
 }
 
 // expectedBefore is how many of a candidate's records fall on this page's side
-// of bound, were they spread evenly over its span; it only decides when to
-// stop fetching, never what a page returns
+// of bound, were they spread evenly over its span. It only decides when to stop
+// fetching, never what a page returns.
 func (q *checkedQuery) expectedBefore(candidate source, bound int64) float64 {
 	low, high := float64(max(candidate.first, q.first)), float64(min(candidate.last, q.last))
 	if q.asked.Newest {

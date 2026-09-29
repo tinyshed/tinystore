@@ -28,9 +28,9 @@ const (
 	sddlRevision             = 1
 )
 
-// ownerOnly is the DACL of a directory its user alone may enter: protected
-// from what the directories above pass on, and one entry, full access for the
-// user, inherited by every file and directory made in it
+// ownerOnly is the DACL of a directory its user alone may enter. It is
+// protected from what the directories above pass on, and has one entry, full
+// access for the user, inherited by every file and directory made in it.
 func ownerOnly() (string, error) {
 	entry, err := ownerEntry()
 	if err != nil {

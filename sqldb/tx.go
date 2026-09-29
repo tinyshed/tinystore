@@ -11,9 +11,9 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Tx is one transaction of the database, given to the function DB.Tx or
-// DB.View runs and used by the goroutine that runs it; every typed call takes
-// it where it takes a DB.
+// Tx is one transaction of the database, given to the function DB.Tx or DB.View
+// runs and used by the goroutine that runs it. Every typed call takes it where
+// it takes a DB.
 type Tx struct {
 	db       *DB
 	writer   sqlite.Writer // nil in a View
@@ -22,10 +22,11 @@ type Tx struct {
 	open     atomic.Bool
 }
 
-// Tx runs work in one writer transaction of its own, on the caller's
-// goroutine: nil commits, an error rolls back, and a panic rolls back and goes
-// on. A call on the DB inside its own Tx waits for the Tx, which waits for it,
-// until the call's context ends; sqldb logs a write that has waited ten
+// Tx runs work in one writer transaction of its own, on the caller's goroutine:
+// nil commits, an error rolls back, and a panic rolls back and goes on.
+//
+// A call on the DB inside its own Tx waits for the Tx, which waits for it,
+// until the call's context ends. sqldb logs a write that has waited ten
 // seconds, naming the transaction.
 func (d *DB) Tx(ctx context.Context, work func(tx *Tx) error) error {
 	from := caller()
@@ -52,7 +53,7 @@ func (d *DB) Tx(ctx context.Context, work func(tx *Tx) error) error {
 }
 
 // View runs read against one snapshot of the database, held at most five
-// seconds, since the write-ahead log grows with the oldest reader; a write
+// seconds, since the write-ahead log grows with the oldest reader. A write
 // inside it is tinystore.ErrInvalid.
 func (d *DB) View(ctx context.Context, read func(tx *Tx) error) error {
 	leave, err := d.admit(ctx)
@@ -120,9 +121,9 @@ func (t *Tx) run(ctx context.Context, c *call) error {
 	return t.db.explain(heldTooLong(ctx, err))
 }
 
-// snapshotEnds is when a View's snapshot ends: database/sql rolls its
+// snapshotEnds is when a View's snapshot ends. database/sql rolls its
 // transaction back then, and a statement on its connection after that would
-// read outside the snapshot, so every statement inside ends with it
+// read outside the snapshot, so every statement inside ends with it.
 func (t *Tx) snapshotEnds() (time.Time, bool) {
 	if t.snapshot == nil {
 		return time.Time{}, false

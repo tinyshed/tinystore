@@ -174,7 +174,6 @@ func (g *GoAway) Decode(body []byte) error {
 	return d.End()
 }
 
-// Uint32 reads an unsigned integer that fits 32 bits.
 func (d *Decoder) Uint32() uint32 {
 	v := d.Uint()
 	if v > 1<<32-1 {
@@ -184,7 +183,6 @@ func (d *Decoder) Uint32() uint32 {
 	return uint32(v)
 }
 
-// Strs reads an array of str.
 func (d *Decoder) Strs() []string {
 	var strs []string
 	for range d.Items() {

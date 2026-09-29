@@ -16,7 +16,6 @@ type Tokens struct {
 	known []tokenLine
 }
 
-// tokenLine is one token of a tokens file, with the capability it gives
 type tokenLine struct {
 	secret     []byte
 	capability wire.Capability

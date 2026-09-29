@@ -1,7 +1,9 @@
 // Package pipe serves and reaches a Windows named pipe the way Go's runtime
-// polls it: each end is overlapped and given to os.NewFile, whose completion
-// port a synchronous handle would lack, holding every write behind a pending
-// read. Elsewhere it has nothing to serve.
+// polls it: each end is overlapped and given to os.NewFile.
+//
+// A synchronous handle would lack the completion port os.NewFile gives an
+// overlapped one, and would hold every write behind a pending read. Elsewhere
+// the package has nothing to serve.
 package pipe
 
 import (
@@ -54,9 +56,10 @@ func Path(name string) string {
 	return `\\.\pipe\` + name
 }
 
-// Listener serves a named pipe that only its owner may open, refusing remote
-// clients, whose first instance it created, so that no other process held the
-// name before it. An instance always waits for the next client.
+// Listener serves a named pipe that only its owner may open and that refuses
+// remote clients. It creates the pipe's first instance itself, so that no other
+// process held the name before it. An instance always waits for the next
+// client.
 type Listener struct {
 	name       string
 	descriptor uintptr // the owner-only DACL every instance carries

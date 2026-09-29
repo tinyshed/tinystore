@@ -276,16 +276,17 @@ func (d *Decoder) Duration() int64 {
 	return ms
 }
 
-// KVEntry answers a call about one key, and is an item of a scan. Found says
-// a live key held a value, or for set that it wrote: false when IfAbsent
-// found a live key, whose entry this is. Expires is unix milliseconds, zero
-// for a key that never expires; Key is a scan item's alone.
+// KVEntry answers a call about one key, and is an item of a scan.
 type KVEntry struct {
+	// Found says a live key held a value, or for set that it wrote. It is
+	// false when IfAbsent found a live key, whose entry this is.
 	Found   bool
 	Value   KVValue
 	Version []byte
+	// Expires is unix milliseconds, zero for a key that never expires.
 	Expires int64
-	Key     string
+	// Key is a scan item's alone.
+	Key string
 }
 
 func (e KVEntry) Append(dst []byte) []byte {
@@ -366,9 +367,9 @@ func (p *KVPage) Decode(body []byte) error {
 	return d.End()
 }
 
-// KVCalls is kv.batch's request, calls run in one transaction that a failure
-// of any rolls back, and kv.view's, reads from one snapshot: each is a
-// KVCall's fields with its method under key 0.
+// KVCalls is kv.batch's request, calls run in one transaction that a failure of
+// any rolls back, and kv.view's, reads from one snapshot. Each is a KVCall's
+// fields with its method under key 0.
 type KVCalls struct {
 	Calls []KVOperation
 }

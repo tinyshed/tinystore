@@ -311,8 +311,8 @@ func TestAFailedStreamReleasesItsLargerBuffer(t *testing.T) {
 	}
 }
 
-// memory does not follow an object's size: an upload of 64 MiB holds the
-// inline size of the store's memory and allocates next to nothing
+// Memory does not follow an object's size: with a store whose memory is the
+// inline size, an upload of 64 MiB fits it and allocates next to nothing.
 func TestMemoryDoesNotGrowWithAnObjectsSize(t *testing.T) {
 	s := openTestStoreWith(t, t.TempDir(), tinystore.Options{Memory: inlineSize}, Options{})
 	media := openTestBucket(t, s, "media")
@@ -401,9 +401,9 @@ func TestIfNoneMatchCreatesOnce(t *testing.T) {
 	s.mustHoldFiles(t, 1)
 }
 
-// of two replaces conditional on the ETag both read, one goes through and the
-// other conflicts and leaves nothing, inline or in a file, whether it began
-// before the first committed or after
+// Of two replaces conditional on the ETag both read, one goes through and the
+// other conflicts and leaves nothing, inline or in a file. It holds whether the
+// second began before the first committed or after.
 func TestOneOfTwoConditionalReplacesConflicts(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

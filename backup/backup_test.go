@@ -276,9 +276,9 @@ func (f *fill) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// an object past 4 GiB goes through a backup and back bit for bit, the zip's
-// entry and directory in their zip64 forms; it writes 13 GiB, so it runs only
-// when TINYSTORE_LARGE_BACKUP says
+// An object past 4 GiB goes through a backup and back bit for bit, the zip's
+// entry and directory in their zip64 forms. It writes 13 GiB, so it runs only
+// when TINYSTORE_LARGE_BACKUP says.
 func TestABackupRestoresAnObjectPast4GiB(t *testing.T) {
 	if os.Getenv("TINYSTORE_LARGE_BACKUP") == "" {
 		t.Skip("writes 13 GiB; set TINYSTORE_LARGE_BACKUP=1")

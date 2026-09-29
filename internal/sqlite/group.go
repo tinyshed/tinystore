@@ -14,9 +14,11 @@ import (
 // may or may not be in the file, and its caller reconciles before retrying.
 var ErrOutcomeUnknown = errors.New("commit outcome unknown")
 
-// what one group commits at most, how long it may hold the writer once it
-// holds it, and how long a grouped write waits for the writer before its
-// engine is told
+// A group commits at most groupWrites writes and groupBytes bytes, and may hold
+// the writer for groupHold once it holds it.
+//
+// writerPatience is how long a grouped write waits for the writer before its
+// engine is told.
 const (
 	groupWrites    = 1024
 	groupBytes     = 8 << 20
@@ -30,11 +32,14 @@ const (
 	rollbackToQuery = `rollback to grouped`
 )
 
-// group is the writes waiting for the file's writer. The first caller to find
-// no leader commits every write queued behind it in one transaction, each in a
-// savepoint, then hands the lead to the first caller still waiting, so that a
-// commit's fsync is shared by the writes that arrived while the last one ran,
-// and no goroutine is started. See docs/group-commit-contract.md.
+// group is the writes waiting for the file's writer.
+//
+// The first caller to find no leader commits every write queued behind it in
+// one transaction, each in a savepoint, then hands the lead to the first caller
+// still waiting. A commit's fsync is therefore shared by the writes that
+// arrived while the last one ran, and no goroutine is started.
+//
+// See docs/group-commit-contract.md.
 type group struct {
 	mu      sync.Mutex
 	queue   []*groupedWrite
@@ -144,10 +149,11 @@ func (g *group) leave(entry *groupedWrite) bool {
 	return true
 }
 
-// lead waits for the writer as its own caller, commits the batch at the head
-// of the queue, where that caller's write is, answers every write in it and
-// hands the lead on; a caller who leaves before the writer is free hands the
-// lead on at once
+// lead waits for the writer as its own caller, commits the batch at the head of
+// the queue (where its own write is), answers every write in it and hands the
+// lead on.
+//
+// A caller who leaves before the writer is free hands the lead on at once.
 func (f *File) lead(own *groupedWrite) error {
 	if err := f.waitForWriter(own); err != nil {
 		f.writes.resign(own, err)
@@ -194,9 +200,9 @@ func (g *group) resign(own *groupedWrite, err error) {
 	g.passLead()
 }
 
-// take removes the batch from the head of the queue, at most groupWrites and
-// groupBytes but one write at least, and answers the writes whose callers left
-// before they started
+// take removes the batch from the head of the queue: at most groupWrites and
+// groupBytes, but one write at least. It answers the writes whose callers left
+// before they started.
 func (g *group) take() []*groupedWrite {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -238,10 +244,12 @@ func (g *group) passLead() {
 	close(next.lead)
 }
 
-// commitGroup holds the writer waitForWriter took, and takes the batch only
-// then, so that the writes queued while it waited join; it runs each in its
-// savepoint of one transaction, bounded by the file's hold from now rather
-// than by any caller
+// commitGroup runs the batch at the head of the queue, each write in its own
+// savepoint of one transaction.
+//
+// It holds the writer waitForWriter took and takes the batch only then, so the
+// writes queued while it waited join. The transaction is bounded by the file's
+// hold from now, not by any caller.
 func (f *File) commitGroup(ctx context.Context) ([]*groupedWrite, []error) {
 	defer freeSlot(f.writeSlots)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), f.hold)

@@ -16,10 +16,12 @@ import (
 	"time"
 )
 
-// measurements of the engine, skipped unless TINYSTORE_SPIKE=1, each the shape
-// of a measurement of the prototype in spike/blobs_*, so that both run in one
-// session with matching payloads; TINYSTORE_BLOBS_DIR puts their files on a
-// chosen disk, and TINYSTORE_BLOBS_SECONDS sets a load's length
+// Measurements of the engine, skipped unless TINYSTORE_SPIKE=1. Each has the
+// shape of a measurement of the prototype in spike/blobs_*, so that both run in
+// one session with matching payloads.
+//
+// TINYSTORE_BLOBS_DIR puts their files on a chosen disk, and
+// TINYSTORE_BLOBS_SECONDS sets a load's length.
 
 func measuring(t *testing.T) {
 	t.Helper()
@@ -28,9 +30,9 @@ func measuring(t *testing.T) {
 	}
 }
 
-// measureDir is a directory for one measurement: under TINYSTORE_BLOBS_DIR
-// when it is set, so that a container writes to a volume rather than to the
-// bind mount, and removed when the test ends
+// measureDir is a directory for one measurement, removed when the test ends. It
+// is under TINYSTORE_BLOBS_DIR when that is set, so that a container writes to
+// a volume rather than to the bind mount.
 func measureDir(t *testing.T) string {
 	t.Helper()
 	root := os.Getenv("TINYSTORE_BLOBS_DIR")
@@ -121,8 +123,8 @@ func errorsJoin(first, second error) error {
 
 // TestPlacesMeasured writes and reads objects of 4 to 256 KiB from 1, 16 and
 // 128 callers through the engine, as spike's TestBlobsPlaces writes and reads
-// them through the prototype: a new key each Put, then Opens read whole at
-// random among the caller's keys
+// them through the prototype. Each Put has a new key, and the Opens read whole
+// at random among the caller's keys.
 func TestPlacesMeasured(t *testing.T) {
 	measuring(t)
 	for _, size := range []int{4 << 10, 16 << 10, 64 << 10, 256 << 10} {
@@ -160,10 +162,10 @@ func sizeText(size int) string {
 	return fmt.Sprintf("%d KiB", size>>10)
 }
 
-// TestLargeUploadMeasured puts 4 GiB through Put's bounded transfer buffer
-// and through an upload written 64 KiB at a time, as
-// spike's TestBlobsLargeUpload writes its file; then reads the object whole,
-// checked, and in ranges of 4 MiB at random offsets, unchecked
+// TestLargeUploadMeasured puts 4 GiB through Put's bounded transfer buffer and
+// through an upload written 64 KiB at a time, as spike's TestBlobsLargeUpload
+// writes its file. It then reads the object whole, checked, and in ranges of 4
+// MiB at random offsets, unchecked.
 func TestLargeUploadMeasured(t *testing.T) {
 	measuring(t)
 	const size = 4 << 30
@@ -230,8 +232,8 @@ func logRanges(t *testing.T, media *Bucket) {
 }
 
 // TestUploadsAtOnceMeasured runs 16 to 1024 Puts of 1 MiB at once, 4 GiB in
-// all, as spike's TestBlobsUploadsAtOnce runs them through the prototype, and
-// reports their rate and the sampled Go heap in use
+// all, as spike's TestBlobsUploadsAtOnce runs them through the prototype. It
+// reports their rate and the sampled Go heap in use.
 func TestUploadsAtOnceMeasured(t *testing.T) {
 	measuring(t)
 	chunk := randomBytes(99, 64<<10)
@@ -306,9 +308,9 @@ func watchHeap() func() string {
 	}
 }
 
-// TestScrubBesideReadersMeasured times Opens of 64 KiB files read whole from
-// 16 callers alone, then beside the scrub reading as fast as it can, far past
-// its normal one-minute spacing, to measure readers under that stress
+// TestScrubBesideReadersMeasured times Opens of 64 KiB files read whole from 16
+// callers alone, and then beside the scrub reading as fast as it can, far past
+// its normal one-minute spacing. It measures readers under that stress.
 func TestScrubBesideReadersMeasured(t *testing.T) {
 	measuring(t)
 	s := openTestStore(t, measureDir(t))

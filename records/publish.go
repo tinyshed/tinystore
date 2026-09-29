@@ -10,8 +10,8 @@ import (
 )
 
 // publish writes a segment with its blocks, filters and keys, and deletes the
-// head rows it was made of, in one transaction: a reader finds each record in
-// the head or in the segment, never in both and never in neither
+// head rows it was made of, in one transaction. A reader finds each record in
+// the head or in the segment, never in both and never in neither.
 func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segment encodedSegment) error {
 	s.spans.note(segment.blocks)
 	s.appendMu.Lock()
@@ -42,9 +42,9 @@ func (s *Store) publish(ctx context.Context, head headKey, chunk headChunk, segm
 
 const selectNextBlockID = `select coalesce(max(seq), 0) + 1 from sqlite_sequence where name = 'blocks'`
 
-// nextBlockID is the id a segment's first block takes: the writer is alone,
-// so a segment's blocks are the ids from it on, named by the segment row; the
-// sequence remembers the ids of deleted blocks, so none is given twice
+// nextBlockID is the id a segment's first block takes. The writer is alone, so
+// a segment's blocks are the ids from it on, named by the segment row. The
+// sequence remembers the ids of deleted blocks, so none is given twice.
 func nextBlockID(ctx context.Context, tx sqlite.Writer) (int64, error) {
 	var id int64
 	err := sqlite.QueryRowByKey(ctx, tx, selectNextBlockID).Scan(&id)

@@ -15,12 +15,13 @@ const (
 )
 
 // BlobsBucket is blobs.open's request: a bucket by name, with its handle's
-// options. DefaultTTL is milliseconds, zero for none; MaxSize bounds its
-// objects' bytes, zero for no bound.
+// options.
 type BlobsBucket struct {
-	Name       string
+	Name string
+	// DefaultTTL is in milliseconds, zero for none.
 	DefaultTTL int64
-	MaxSize    uint64
+	// MaxSize bounds an object's bytes, zero for no bound.
+	MaxSize uint64
 }
 
 func (b BlobsBucket) Append(dst []byte) []byte {

@@ -12,7 +12,8 @@ import (
 )
 
 // the largest value kept in its row: past it a row costs more than a spilled
-// value and slows the lookups beside it, docs/reports/kv-mechanics-2026-09-26.md
+// value and slows the lookups beside it,
+// docs/reports/kv-mechanics-2026-09-26.md
 const inlineLimit = 512
 
 // the largest value: larger bytes are the blobs engine's
@@ -25,9 +26,10 @@ type Codec[V any] interface {
 	Decode([]byte) (V, error)
 }
 
-// codec is how a bucket keeps its values in a row: encode gives a []byte, an
-// int64 or nil, decode takes back what the row holds, and weigh says what the
-// encoding may hold before it is made
+// codec is how a bucket keeps its values in a row.
+//
+// encode gives a []byte, an int64 or nil, and decode takes back what the row
+// holds. weigh says what the encoding may hold before it is made.
 type codec[V any] struct {
 	encode func(V) (any, error)
 	decode func(any) (V, error)
@@ -40,10 +42,11 @@ func weighFixed[V any](V) int { return 8 }
 // a value only its encoding measures weighs the largest until it is encoded
 func weighLargest[V any](V) int { return maxValue }
 
-// Raw is a value as its row keeps it: nothing, an integer or bytes. A bucket
-// of Raw reads what a bucket of any type wrote, and what it writes a bucket of
-// a type kept the same way reads, so that a program without the types, the
-// server for its clients, reads and writes every bucket:
+// Raw is a value as its row keeps it: nothing, an integer or bytes.
+//
+// A bucket of Raw reads what a bucket of any type wrote, and what it writes is
+// read by a bucket of the type that kept it the same way. So a program without
+// the types, such as the server for its clients, reads and writes every bucket:
 //
 //	Raw{}                                    nothing, as a struct{} of a set
 //	Raw{Kind: RawInt, Int: 42}               an integer, as a bool or an int64
@@ -67,8 +70,8 @@ const (
 // they are named for:
 //
 //	[]byte, string                    their bytes
-//	bool, int8…int64, uint8…uint32    an integer of the row
-//	uint, uint64                      eight bytes, big-endian
+//	bool, int…int64, uint8…uint32     an integer of the row
+//	uint, uint64, uintptr             eight bytes, big-endian
 //	float32, float64                  their bits, big-endian
 //	struct{}                          nothing: a bucket of them is a set
 //	Raw                               what the row holds

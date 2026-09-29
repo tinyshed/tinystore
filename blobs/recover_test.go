@@ -65,9 +65,9 @@ var crashMoments = map[string]step{
 	"written": stepWritten, "synced": stepSynced, "published": stepPublished, "committed": stepCommitted,
 }
 
-// an exit at every step of an upload that replaces an object leaves the old
-// object whole or the new one, no row naming bytes that are not there, and no
-// file that the next Open and one maintenance keep
+// An exit at every step of an upload that replaces an object leaves the old
+// object whole or the new one. No row names bytes that are not there, and no
+// file survives the next Open and one maintenance.
 func TestAnExitAtEveryStepOfAnUploadLeavesNothingBehind(t *testing.T) {
 	for _, moment := range []string{"writing", "written", "synced", "published", "committed"} {
 		t.Run(moment, func(t *testing.T) {
@@ -133,9 +133,9 @@ func (e *exitingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// the next Open empties uploads/ and removes a file of objects/ that no
-// content names only where an upload may have left one, past the settled
-// mark: a file below it, and a name the engine did not give, it leaves alone
+// The next Open empties uploads/ and removes a file of objects/ that no content
+// names only where an upload may have left one, past the settled mark. A file
+// below it, and a name the engine did not give, it leaves alone.
 func TestOpenRemovesWhatAbandonedUploadsLeft(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

@@ -132,7 +132,6 @@ func TestALoseAtMostCounterRefusesATransaction(t *testing.T) {
 	}
 }
 
-// countersHeld counts what memory holds in its shards
 func countersHeld(held *memory) int {
 	count := 0
 	for i := range held.shards {
@@ -219,9 +218,9 @@ func TestColdCountersArrivingTogetherStayWithinTheBound(t *testing.T) {
 	}
 }
 
-// while the file refuses what a flush writes, a counter memory does not hold
-// is refused with the flush's error rather than held past the bound; the ones
-// it holds still change, and nothing is lost once the file accepts again
+// While the file refuses what a flush writes, a counter memory does not hold is
+// refused with the flush's error rather than held past the bound. The ones it
+// holds still change, and nothing is lost once the file accepts again.
 func TestAFailedFlushRefusesNewCountersRatherThanHoldThem(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	attempts := openTestCounters(t, state, "attempts", LoseAtMost(time.Hour))
@@ -306,11 +305,12 @@ func TestChangesCountOnceWhileFlushesRun(t *testing.T) {
 	}
 }
 
-// BenchmarkChangesInMemory adds to LoseAtMost counters from every processor
-// at once, on a Manual store that writes nothing while it runs: to 1024 keys
-// memory holds already, and to keys it never held, each of which reads the
-// file once. It opens the store itself, so that it runs against an earlier
-// kv as it is.
+// BenchmarkChangesInMemory adds to LoseAtMost counters from every processor at
+// once, on a Manual store that writes nothing while it runs.
+//
+// It adds to 1024 keys memory holds already, and to keys it never held, each of
+// which reads the file once. It opens the store itself, so that it runs against
+// an earlier kv as it is.
 func BenchmarkChangesInMemory(b *testing.B) {
 	b.Run("held", func(b *testing.B) {
 		attempts := benchmarkCounters(b)
@@ -418,9 +418,9 @@ func TestLoseAtMostLosesNoMoreThanItsInterval(t *testing.T) {
 	}
 }
 
-// TestLoseAtMostExitHelper runs in the child: its store flushes in the
-// background, it adds, waits through several flushes, adds again and exits
-// without closing
+// TestLoseAtMostExitHelper runs in the child. Its store flushes in the
+// background: it adds, waits through several flushes, adds again and exits
+// without closing.
 func TestLoseAtMostExitHelper(t *testing.T) {
 	dir := os.Getenv("TINYSTORE_KV_RELAXED_DIR")
 	if dir == "" {

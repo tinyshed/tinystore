@@ -16,8 +16,6 @@ type model struct {
 	err      error          // a tag sqldb cannot read, or two fields of one column
 }
 
-// field is one column of a struct: its name, the path to its field, and how
-// its type is stored
 type field struct {
 	column    string
 	name      string // Note.CreatedAt, as errors name it

@@ -28,9 +28,9 @@ type memory struct {
 	seed   maphash.Seed
 	shards [memoryShards]shard
 
-	// a change that reads the file holds gate shared until it has kept what it
-	// read; eviction and Clear hold it alone, so that nothing keeps a value the
-	// file held before them
+	// A change that reads the file holds gate shared until it has kept what it
+	// read. Eviction and Clear hold it alone, so that nothing keeps a value the
+	// file held before them.
 	gate     sync.RWMutex
 	held     atomic.Int64 // counters in the shards, and the places taken for ones on their way
 	flushing sync.Mutex   // one flush at a time, and none while a Clear runs
@@ -42,13 +42,14 @@ type shard struct {
 	_        [48]byte // a cache line of its own
 }
 
-// counter is one key in memory: absent when a Delete said so or the file held
-// none, dirty until a flush has written it
+// counter is one key in memory.
 type counter struct {
 	value   int64
 	expires int64 // unix milliseconds, 0 for never
-	absent  bool
-	dirty   bool
+	// absent is set when a Delete said so or the file held none.
+	absent bool
+	// dirty is set until a flush has written the counter.
+	dirty bool
 }
 
 func (c *counter) live(now int64) bool {
@@ -74,9 +75,9 @@ func (m *memory) shardOf(path []byte) *shard {
 	return &m.shards[maphash.Bytes(m.seed, path)%memoryShards]
 }
 
-// change applies next to the counter at c's path and returns what it holds
-// now; a counter it finds absent or expired starts from zero with the expiry
-// created, 0 for never
+// change applies next to the counter at c's path and returns what it holds now.
+// A counter it finds absent or expired starts from zero with the expiry
+// created, 0 for never.
 func (m *memory) change(ctx context.Context, c call, created int64, next func(held int64) (int64, error)) (
 	value int64, err error,
 ) {
@@ -92,9 +93,9 @@ func (m *memory) forget(ctx context.Context, c call) error {
 	return m.withRoom(ctx, func() (bool, error) { return m.tryForget(c), nil })
 }
 
-// withRoom runs try until it finds room for a counter it adds, flushing when
-// memory holds as many as it may, so that memory lets go of what the file
-// then holds as memory does
+// withRoom runs try until it finds room for a counter it adds. When memory
+// holds as many as it may it flushes first, which lets go of the counters the
+// file then holds as memory does.
 func (m *memory) withRoom(ctx context.Context, try func() (full bool, err error)) error {
 	for {
 		full, err := try()
@@ -152,9 +153,9 @@ func (m *memory) tryForget(c call) (full bool) {
 	return false
 }
 
-// takeRoom takes a place for one more counter below the bound, and says
-// whether there was one; places are taken one at a time, so that callers
-// arriving together cannot pass the bound between a look and an add
+// takeRoom takes a place for one more counter below the bound, and says whether
+// there was one. Places are taken one at a time, so that callers arriving
+// together cannot pass the bound between a look and an add.
 func (m *memory) takeRoom() bool {
 	for {
 		held := m.held.Load()
@@ -210,8 +211,9 @@ func (s *shard) change(path []byte, now, created int64, next func(int64) (int64,
 	return value, true, nil
 }
 
-// forget marks the counter at path absent when the shard holds it, or when
-// add says there is room adds it absent; it says whether the shard held it
+// forget marks the counter at path absent and says whether the shard held it.
+// One it does not hold is added, absent, only when add is true, which the
+// caller sets once it has taken room for one.
 func (s *shard) forget(path []byte, add bool) (held bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -270,8 +272,8 @@ const writeCounter = `insert into cells (bucket, path, version, expires, value) 
 		version = excluded.version, expires = excluded.expires, value = excluded.value`
 
 // flush writes every counter changed since the last flush, flushBatch a
-// transaction, then lets go of those that did not change again; it returns
-// how many it wrote
+// transaction, then lets go of those that did not change again. It returns how
+// many it wrote.
 func (m *memory) flush(ctx context.Context) (int, error) {
 	m.flushing.Lock()
 	defer m.flushing.Unlock()
@@ -372,11 +374,14 @@ func (m *memory) giveBack(batch []flushed) {
 }
 
 // clear runs a Clear of the branch under prefix in a transaction of its own,
-// and lets go of what memory holds under it once the Clear commits. Flushes
-// and changes wait throughout, and reads of memory from the commit until
-// memory has let go, so that no flush writes a cleared counter again and no
-// read finds one. A Clear that rolled back leaves memory as it was; one whose
-// commit failed may be in the file, so memory lets go as a crash would.
+// and lets go of what memory holds under it once the Clear commits.
+//
+// Flushes and changes wait throughout, and reads of memory from the commit
+// until memory has let go, so that no flush writes a cleared counter again and
+// no read finds one.
+//
+// A Clear that rolled back leaves memory as it was. One whose commit failed may
+// be in the file, so memory lets go as a crash would.
 func (m *memory) clear(ctx context.Context, prefix []byte, clearIn func(sqlite.Writer) error) error {
 	m.flushing.Lock()
 	defer m.flushing.Unlock()

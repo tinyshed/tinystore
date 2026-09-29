@@ -200,9 +200,9 @@ func TestLinesNeverWaitAndCloseWithTheStore(t *testing.T) {
 	}
 }
 
-// a writer of Lines loses no byte of a line one record holds: its records,
-// one after another with a newline between them, are what it was given,
-// however it was cut, less each longer line, which is dropped and counted
+// A writer of Lines loses no byte of a line that one record holds, however it
+// was cut. Its records, one after another with a newline between them, are what
+// it was given, less each longer line, which is dropped and counted.
 func FuzzLinesLoseNoByte(f *testing.F) {
 	f.Add("2026-09-26 12:00:01,500 ERROR failed\n  at frame\nnext\n{\n\"a\": [1,\n2]}\n", uint8(3))
 	f.Add(`{"level":30,"msg":"ok"}`+"\nplain\r\n\n", uint8(1))

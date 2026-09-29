@@ -181,7 +181,8 @@ type testMessage struct {
 }
 
 // a value goes in as JSON and comes back as it went in, a []byte as its bytes,
-// a large one through its own row; one JSON cannot write or past 1 MiB is refused
+// a large one through its own row; one JSON cannot write or past 1 MiB is
+// refused
 func TestAValueComesBackAsTheJSONItWentIn(t *testing.T) {
 	queues := openTestQueues(t, t.TempDir())
 	messages := openTestQueue[testMessage](t, queues, "messages")

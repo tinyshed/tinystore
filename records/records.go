@@ -89,7 +89,6 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 	return engine, nil
 }
 
-// openEngine opens and migrates the file, then hands the engine to the store
 func openEngine(ctx context.Context, store *tinystore.Store, path string, opts Options) (*Store, error) {
 	file, err := openFile(ctx, path)
 	if err != nil {

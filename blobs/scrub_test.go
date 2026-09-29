@@ -53,9 +53,9 @@ func (l *logged) at(level slog.Level) []string {
 	return lines
 }
 
-// the scrub reads every content, finds one changed and one missing, marks
-// them so that their next Open is ErrCorrupt, and logs each once at Error
-// with the keys that name it; writes over them work as over any other
+// The scrub reads every content, finds one changed and one missing, marks them
+// so that their next Open is ErrCorrupt, and logs each once at Error with the
+// keys that name it. Writes over them work as over any other.
 func TestTheScrubNamesTheKeysOfWhatChanged(t *testing.T) {
 	log := &logged{}
 	s := openTestStoreWith(t, t.TempDir(), tinystore.Options{Logger: slog.New(log)}, Options{})

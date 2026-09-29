@@ -223,8 +223,8 @@ func pageHeld(limit int) int {
 }
 
 // scanRows reads at most limit rows of scanBranch, asking for one more, and
-// ends before the row whose value would take them past scanBytes; more says
-// that rows were left
+// ends before the row whose value would take them past scanBytes. more says
+// that rows were left.
 func scanRows(ctx context.Context, r sqlite.Reader, arguments []any, limit int) (rows []row, more bool, err error) {
 	//nolint:rowserrcheck // EachRow checks Err
 	result, err := r.QueryContext(ctx, scanBranch, arguments...)

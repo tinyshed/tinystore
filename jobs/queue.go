@@ -16,15 +16,16 @@ const (
 	kindSchedule = "schedule"
 )
 
-// queueState is one queue as this process knows it: its id in the file, its
-// policy, its alarm and how many jobs it holds; every handle on the queue
-// shares it
+// queueState is one queue as this process knows it. Every handle on the queue
+// shares it.
 type queueState struct {
-	id       int64
-	name     string
-	kind     string
-	policy   policy
-	alarm    *alarm
+	// id is the queue's id in the file.
+	id     int64
+	name   string
+	kind   string
+	policy policy
+	alarm  *alarm
+	// waiting is how many jobs the queue holds.
 	waiting  atomic.Int64
 	failures *quietLog
 	limits   *quietLog
@@ -85,8 +86,9 @@ const (
 	countWaiting  = `select waiting from queues where id = ?1`
 )
 
-// openQueue finds or registers a queue, and, the first time this process
-// opens it, counts its jobs and sets its alarm to the first of them
+// openQueue finds or registers a queue. The first time this process opens it,
+// it reads the count of the queue's jobs that the file keeps for MaxWaiting.
+// Its alarm rings at once, so the first Work loop reads the file.
 func (s *Store) openQueue(ctx context.Context, name, kind string, p policy) (*queueState, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("%w: jobs: queue name %q", tinystore.ErrInvalid, name)
@@ -152,8 +154,8 @@ func (q *Queue[V]) WithTx(tx *Tx) *Queue[V] {
 }
 
 // write runs work in the file's writer: inside the handle's transaction, or
-// grouped with the writes other goroutines are waiting to commit, its bytes
-// held in the store's memory while they wait
+// grouped with the writes other goroutines are waiting to commit. Its bytes are
+// held in the store's memory while they wait.
 func (q *Queue[V]) write(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
 	_, leave, err := q.enter(ctx, bytes)
 	if err != nil {
@@ -163,9 +165,10 @@ func (q *Queue[V]) write(ctx context.Context, bytes int, work func(sqlite.Writer
 	return q.commit(ctx, bytes, work)
 }
 
-// writeValue is write for a job's value, which it encodes into e once the
-// write holds its turn and the memory the value may take, so that a write
-// waiting for its turn has made nothing the store has not counted
+// writeValue is write for a job's value, which it encodes into e once the write
+// holds its turn and the memory the value may take.
+//
+// So a write waiting for its turn has made nothing the store has not counted.
 func (q *Queue[V]) writeValue(ctx context.Context, value V, e *enqueued, work func(sqlite.Writer) error) error {
 	weight := q.codec.weigh(value)
 	if weight > maxValue {
@@ -187,8 +190,8 @@ func (q *Queue[V]) writeValue(ctx context.Context, value V, e *enqueued, work fu
 }
 
 // enter takes a write's turn and bytes of the store's memory before the write
-// makes anything; inside Tx the turn is the transaction's, and the memory only
-// what is free
+// makes anything. Inside Tx the turn is the transaction's, and the memory only
+// what is free.
 func (q *Queue[V]) enter(ctx context.Context, bytes int) (*tinystore.Reservation, func(), error) {
 	if q.tx != nil {
 		if err := q.checkTx(); err != nil {
@@ -317,9 +320,9 @@ const (
 		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6)`
 )
 
-// setSchedule adds the job, or gives the one there the program's repeat: a
+// setSchedule adds the job, or gives the one there the program's repeat. A
 // waiting one moves to the repeat's next time, and a leased one keeps its row
-// where its lease names it
+// where its lease names it.
 func setSchedule(ctx context.Context, w sqlite.Writer, s scheduled) error {
 	var there row
 	err := sqlite.QueryRowByKey(ctx, w, scheduleNamed, s.queue, s.key).Scan(&there.next, &there.id, &there.repeat)

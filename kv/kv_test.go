@@ -14,7 +14,6 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// testClock is the store's clock, moved by the test
 type testClock struct {
 	mu  sync.Mutex
 	now time.Time

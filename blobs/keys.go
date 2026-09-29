@@ -100,8 +100,9 @@ func checkPrefix(prefix string) error {
 	return nil
 }
 
-// prefixEnd is the first text past every text that starts with prefix: its
-// last byte one higher, which no path's last byte can be past 0xf4
+// prefixEnd is the first text past every text that starts with prefix: the
+// prefix with its last byte raised by one, which cannot overflow because no
+// path's last byte is past 0xf4.
 //
 //	"users/4/" → "users/40", so "users/42/…" lies past it
 //	""         → "\xff", past every path

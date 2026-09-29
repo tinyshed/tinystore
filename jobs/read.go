@@ -34,36 +34,44 @@ func (s State) String() string {
 	return "any"
 }
 
-// Entry is a job as the queue holds it. At is the time it runs for; Attempt
-// counts its attempts, a running one included; Err is its last failure, and
-// Repeat a repeating job's cron text and zone.
+// Entry is a job as the queue holds it.
 type Entry[V any] struct {
-	Key     string
-	Value   V
-	At      time.Time
+	Key   string
+	Value V
+	// At is the time the job runs for.
+	At time.Time
+	// Attempt counts the job's attempts, a running one included.
 	Attempt int
 	State   State
-	Err     string
-	Repeat  string
+	// Err is the job's last failure.
+	Err string
+	// Repeat is a repeating job's repeat as jobs.db keeps it: cron text and
+	// zone, or an interval.
+	Repeat string
 }
 
-// Query asks Scan for a page: the keys under Prefix in the byte order of
-// their text, or, with State Failed and no prefix, the failed jobs, the last
-// failed first, keyed or not. State narrows either; After is where the page
-// before ended, and Page.Next carries it.
+// Query asks Scan for a page of the queue's jobs.
+//
+// With a Prefix it lists the keys under it in the byte order of their text.
+// With State Failed and no Prefix it lists the failed jobs instead, the last
+// failed first, keyed or not.
 type Query struct {
 	Prefix string
-	State  State
-	After  string
-	Limit  int // jobs a page returns: 100 when zero, at most 1000
+	// State narrows either listing.
+	State State
+	// After is where the page before ended. Page.Next carries it.
+	After string
+	Limit int // jobs a page returns: 100 when zero, at most 1000
 }
 
-// Page is one page of a Scan, from one snapshot. More says the limit, or the
-// page's 4 MiB of values, ended it before the jobs did, and Next reads on.
+// Page is one page of a Scan, from one snapshot.
 type Page[V any] struct {
 	Entries []Entry[V]
-	More    bool
-	Next    Query
+	// More says the limit, or the page's 4 MiB of values, ended the page before
+	// the jobs did.
+	More bool
+	// Next is the query that reads on.
+	Next Query
 }
 
 // JobError is a call refused because of one job: its queue and key, empty for
@@ -82,8 +90,9 @@ func (e *JobError) Error() string {
 
 func (e *JobError) Unwrap() error { return e.Err }
 
-// ErrOutcomeUnknown is a write whose group's commit failed: it may or may not
-// be in the file, and its caller reads it back before writing again.
+// ErrOutcomeUnknown is returned for a write whose group's commit failed. The
+// write may or may not be in the file, so its caller reads it back before
+// writing again.
 var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
 
 type found struct {
@@ -100,10 +109,11 @@ type found struct {
 	size     int // the value's bytes, in the row or spilled
 }
 
-// a job found through its key, whose row names where the job lies, and a
-// key a job left behind names nothing; a value's size is read without its
-// bytes, since SQLite's length() of a blob column takes it from the row's
-// header and leaves its overflow pages alone
+// A job is found through its key, whose row names where the job lies. A key a
+// job left behind names nothing.
+//
+// A value's size is read without its bytes, since SQLite's length() of a blob
+// column takes it from the row's header and leaves its overflow pages alone.
 const (
 	keyedColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
 			coalesce(length(j.value), (select length(s.value) from spilled s where s.id = j.spill), 0)
@@ -181,8 +191,8 @@ func (q *Queue[V]) Scan(ctx context.Context, query Query) (Page[V], error) {
 }
 
 // All walks what query names a page at a time, holding no snapshot between
-// pages, so a slow loop keeps no reader open; a job written during the walk
-// may or may not be met.
+// pages, so a slow loop keeps no reader open. A job written during the walk may
+// or may not be met.
 func (q *Queue[V]) All(ctx context.Context, query Query) iter.Seq2[Entry[V], error] {
 	return func(yield func(Entry[V], error) bool) {
 		for {
@@ -245,8 +255,8 @@ func (q *Queue[V]) scanRows(ctx context.Context, r sqlite.Reader, query Query, l
 }
 
 // pageOf makes the entries of a page, ending it before the value that would
-// take it past 4 MiB, a spilled value's bytes counted as a row's are; the
-// first entry is taken whatever its size, so that every page moves on
+// take it past 4 MiB, a spilled value's bytes counted as a row's are. The first
+// entry is taken whatever its size, so that every page moves on.
 func (q *Queue[V]) pageOf(ctx context.Context, r sqlite.Reader, query Query, jobs []found, limit int) (Page[V], error) {
 	page := Page[V]{Next: query}
 	bytes := 0
@@ -293,8 +303,8 @@ func failedCursor(after string) (int64, int64, error) {
 // byte order SQLite compares keys by, or none when the prefix is empty or
 // only bytes that cannot grow; the bound need not be UTF-8
 //
-//	"aé"  c3 a9  → "aê"  c3 aa
-//	"a\xff"    ff     → "b"
+//	"aé"    61 c3 a9  → "aê"  61 c3 aa
+//	"a\xff" 61 ff     → "b"   62
 func prefixEnd(prefix string) (string, bool) {
 	end := []byte(prefix)
 	for i := len(end) - 1; i >= 0; i-- {

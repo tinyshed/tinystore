@@ -15,9 +15,8 @@ type groupAddress struct {
 	seriesID, start int64
 }
 
-// fetchGroupRows reads the group descriptors of many series in batches,
-// charges the budget for each, then fetches only the directories the range
-// needs.
+// fetchGroupRows reads the group descriptors of many series in batches, charges
+// the budget for each, then fetches only the directories the range needs.
 func fetchGroupRows(
 	ctx context.Context, snapshot snapshotRead, matched []registeredSeries,
 ) (map[int64][]groupRow, error) {

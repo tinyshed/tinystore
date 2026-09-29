@@ -34,9 +34,9 @@ func writeSessions(t *testing.T, sessions *Bucket[string]) {
 	}
 }
 
-// a Clear empties its branch and the branches under it and nothing beside
-// them, whether it deletes the keys at once or marks the branch and leaves
-// the rows to maintenance
+// A Clear empties its branch and the branches under it and nothing beside them.
+// It does so whether it deletes the keys at once or marks the branch and leaves
+// the rows to maintenance.
 func TestClearEmptiesTheBranchAndThoseUnderIt(t *testing.T) {
 	for _, bound := range []int{clearAtOnce, 2} {
 		t.Run(map[int]string{clearAtOnce: "at once", 2: "marked"}[bound], func(t *testing.T) {
@@ -236,9 +236,9 @@ func TestAFailedClearKeepsTheCountersWaitingForTheFlush(t *testing.T) {
 	}
 }
 
-// a Clear whose commit fails may be in the file, so memory lets go of the
-// branch as a crash would: its reads go to the file, and nothing beside the
-// branch is lost
+// A Clear whose commit fails may be in the file, so memory lets go of the
+// branch as a crash would. Its reads go to the file, and nothing beside the
+// branch is lost.
 func TestAClearWhoseCommitFailsLetsGoAsACrashWould(t *testing.T) {
 	for _, bound := range []int{clearAtOnce, 0} {
 		state := openTestState(t, t.TempDir())
@@ -321,9 +321,9 @@ func TestClearsBesideChangesAndFlushesKeepTheirBranchesApart(t *testing.T) {
 	}
 }
 
-// a mark hides what lies under its branch at every depth, the branches the
-// statements look up by length and those deeper than their slots alike, and
-// nothing beside it or above it
+// A mark hides what lies under its branch at every depth, the branches the
+// statements look up by length and those deeper than their slots alike. It
+// hides nothing beside it or above it.
 func TestAMarkHidesWhatLiesUnderItAtEveryDepth(t *testing.T) {
 	for _, depth := range []int{1, hiddenLevels, hiddenLevels + 1, hiddenLevels + 3} {
 		t.Run(fmt.Sprintf("depth=%d", depth), func(t *testing.T) {

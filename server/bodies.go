@@ -2,9 +2,9 @@ package server
 
 import "sync"
 
-// the bodies frames are read into come from pools of two sizes, a call's and
-// a transfer's chunk, so that neither allocates a body of its own; a larger
-// body is allocated and left to the collector
+// Bodies that frames are read into come from pools of two sizes, a call's and a
+// transfer's chunk, so that neither allocates a body of its own. A larger body
+// is allocated and left to the collector.
 const (
 	callBody  = 4 << 10
 	chunkBody = 64 << 10
@@ -12,7 +12,6 @@ const (
 
 var callBodies, chunkBodies sync.Pool
 
-// takeBody lends a buffer that holds n bytes
 func takeBody(n uint32) []byte {
 	switch {
 	case n <= callBody:

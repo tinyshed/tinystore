@@ -10,9 +10,9 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// a key is its own bytes everywhere: it names no file, so keys that differ
-// by case are two objects on NTFS and APFS too, and a name Windows reserves
-// is a key like any other
+// A key is its own bytes everywhere: it names no file. Keys that differ by
+// case are two objects on NTFS and APFS too, and a name Windows reserves is a
+// key like any other.
 func TestAKeyIsItsOwnBytesOnEveryFileSystem(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")
@@ -67,9 +67,9 @@ func TestAPathThatIsNotOneIsRefused(t *testing.T) {
 	}
 }
 
-// an owner is a segment: a string, or an integer by its decimal text, named
-// or not, so that a handler holding an int64 and one holding a URL's text
-// name one folder
+// An owner is a segment: a string, or an integer by its decimal text, named or
+// not. So a handler holding an int64 and one holding a URL's text name one
+// folder.
 func TestAnOwnerIsItsDecimalText(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

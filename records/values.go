@@ -161,7 +161,6 @@ func distancesBehind(numbers, times []int64, unit byte) ([]int64, bool) {
 	return distances, true
 }
 
-// spread is how far apart the largest and the smallest value lie
 func spread(values []int64) uint64 {
 	return distance(slices.Min(values), slices.Max(values))
 }

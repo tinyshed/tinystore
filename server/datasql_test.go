@@ -17,9 +17,9 @@ import (
 	"github.com/tinyshed/tinystore/sqldb"
 )
 
-// the database the adversarial round attacks: a table with an index, a
-// trigger, full-text search, an autoincrement's sequence, and the history
-// every sqldb file keeps
+// The database the adversarial round attacks. It has a table with an index, a
+// trigger, full-text search, an autoincrement's sequence, and the history every
+// sqldb file keeps.
 const scratchSchema = `create table notes (id integer primary key, title text not null, score real) strict;
 create index notes_title on notes (title);
 create table log (note_id integer not null) strict;
@@ -274,9 +274,10 @@ var guardedPragmas = []string{
 	"max_page_count", "journal_size_limit", "wal_autocheckpoint", "mmap_size", "analysis_limit", "database_list",
 }
 
-// guardedState is, as text, what no data connection's statement may change:
-// the schema, the migration history, the writer's settings and the databases
-// it attached, all read on the writer, and the files in the store's directory
+// guardedState is, as text, what no data connection's statement may change. It
+// holds the schema, the migration history, the writer's settings and the
+// databases it attached, all read on the writer, and the files in the store's
+// directory.
 func guardedState(t testing.TB, db *sqldb.DB, root string) string {
 	t.Helper()
 	var state strings.Builder

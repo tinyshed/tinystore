@@ -38,9 +38,9 @@ func heldElsewhere(err error) bool {
 	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
 }
 
-// beingRemoved says an open failed on a file whose removal has begun: until
-// the handle that removes it closes, Windows refuses to open it rather than
-// saying it is gone
+// beingRemoved says an open failed on a file whose removal has begun. Until the
+// handle that removes it closes, Windows refuses to open it rather than saying
+// it is gone.
 func beingRemoved(err error) bool {
 	return errors.Is(err, syscall.ERROR_ACCESS_DENIED)
 }
@@ -53,8 +53,9 @@ func freeSpace(dir string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	// the count the system fills is unsigned, and no disk takes it past 2⁶³;
-	// the pointers are made inside the call, so that the stack cannot move under them
+	// The count the system fills is unsigned, and no disk takes it past 2⁶³.
+	// The pointers are made inside the call, so that the stack cannot move
+	// under them.
 	var free int64
 	//nolint:gosec // the call's own parameters
 	succeeded, _, failure := getDiskFreeSpaceEx.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&free)),

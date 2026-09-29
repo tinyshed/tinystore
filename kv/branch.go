@@ -66,7 +66,6 @@ type call struct {
 	hidden  int64 // packed prefix lengths for clear-mark checks
 }
 
-// args appends the packed prefix lengths used by clear-mark checks
 func (c call) args(own ...any) []any {
 	return append(own, c.hidden)
 }
@@ -154,7 +153,7 @@ func (p place) leave() {
 
 // enter takes a write's place and the memory it will hold before the write
 // makes anything, so that a write waiting for its turn holds nothing the store
-// has not counted; inside Tx the place is the transaction's
+// has not counted. Inside Tx the place is the transaction's.
 func (b *branch) enter(ctx context.Context, held int) (place, error) {
 	out, err := b.takeTurn(ctx)
 	if err != nil {
@@ -195,8 +194,8 @@ func (b *branch) write(ctx context.Context, held int, work func(sqlite.Writer) e
 }
 
 // commit runs a write that holds its place: in the handle's transaction, or in
-// a group that shares one commit with the writes beside it, bytes weighing it
-// against the group's bound
+// a group that shares one commit with the writes beside it. bytes weighs the
+// write against the group's bound.
 func (b *branch) commit(ctx context.Context, bytes int, work func(sqlite.Writer) error) error {
 	if b.tx != nil {
 		writer, err := b.tx.writer(b.state)

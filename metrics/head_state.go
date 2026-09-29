@@ -71,7 +71,6 @@ func (s *Store) fetchHead(
 	return head, budget.takeSamples(selectedHeadSamples(head.chunks, from, to))
 }
 
-// mutablePoints decodes a whole head inside a write transaction.
 func (s *Store) mutablePoints(ctx context.Context, tx sqlite.Reader, id int64) ([]Sample, error) {
 	head, err := s.fetchHead(ctx, tx, id, math.MinInt64, math.MaxInt64, nil)
 	if err != nil {
@@ -151,9 +150,10 @@ func (s *Store) loadIngestState(ctx context.Context, tx sqlite.Writer, id int64)
 	return state, nil
 }
 
-// ingestUpdate is one UPDATE for one series' write. It moves max_seen_ts once for
-// the whole batch, and names ready and next_gc_ts only when they change: both are
-// indexed, and naming a column rewrites its index entry even for the same value.
+// ingestUpdate is one UPDATE for one series' write. It moves max_seen_ts once
+// for the whole batch, and names ready and next_gc_ts only when they change:
+// both are indexed, and naming a column rewrites its index entry even for the
+// same value.
 func ingestUpdate(write headWrite, next headUpdate) (string, []any) {
 	state := write.state
 	query := `update series_state set tail=?, head_count=?, head_start=?, head_end=?, max_seen_ts=?, version=version+1`

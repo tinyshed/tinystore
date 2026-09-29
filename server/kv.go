@@ -331,7 +331,6 @@ func kvView(c *call) error {
 	return respond(c, results)
 }
 
-// the methods a batch runs
 var batched = map[wire.Method]bool{
 	wire.KVGet: true, wire.KVHas: true, wire.KVSet: true, wire.KVDelete: true, wire.KVTake: true,
 	wire.KVTouch: true, wire.KVAdd: true, wire.KVMax: true, wire.KVClear: true,

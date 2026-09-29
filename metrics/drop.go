@@ -113,9 +113,10 @@ func (s *Store) dropGroups(ctx context.Context, tx *sql.Tx, id int64) (int, erro
 	return unreadable, nil
 }
 
-// dropGroup deletes one group and reports whether its directory and clock
-// read; only a directory that reads, and so proves it is this series', may
-// name the payload rows to delete.
+// dropGroup deletes one group and reports whether its directory and clock read.
+//
+// Only a directory that reads, and so proves it is this series', may name the
+// payload rows to delete.
 func (s *Store) dropGroup(ctx context.Context, tx *sql.Tx, id int64, row groupRow) (bool, error) {
 	payloads, err := s.groupPayloads(ctx, tx, id, row)
 	read := err == nil

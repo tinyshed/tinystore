@@ -6,21 +6,23 @@ import "sync"
 // for the batches after it; every Follow reserves them beside its own weight
 const followCacheBytes = 4 << 20
 
-// followCache keeps the block bodies and segment rows Follow fetched, so that
-// a follower far behind fetches a merged segment's block once rather than once
-// for every place it holds; the places of a quiet stream lie hours apart in
-// the order segments were sealed, and each batch that reaches one needs the
-// same block again:
+// followCache keeps the block bodies and segment rows Follow fetched, so that a
+// follower far behind fetches a merged segment's block once rather than once
+// for every place it holds.
+//
+// The places of a quiet stream lie hours apart in the order segments were
+// sealed, and each batch that reaches one needs the same block again:
 //
 //	places 1 4 7 9, held by 1 in one block; batches reach them one at a time
 //	without the cache   the block is fetched four times
 //	with it             once
 //
-// block ids never repeat, and a holder's row changes only with its first
-// block, so an entry never goes stale; the recent half fills first, and a
-// full recent half becomes the older one, whose entries move back when used
+// An entry never goes stale: block ids never repeat, and a holder's row changes
+// only with its first block.
 type followCache struct {
-	mu            sync.Mutex
+	mu sync.Mutex
+	// recent fills first. Once it holds half the cache's bytes it becomes
+	// older, and older's entries move back to recent when they are used.
 	recent, older map[cacheKey][]byte
 	recentBytes   int
 }

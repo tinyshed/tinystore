@@ -5,8 +5,9 @@ import (
 	"time"
 )
 
-// a follower far behind fetches each block of a merged segment once, however
-// many of its places and batches reach it; the example in the comment on followCache
+// A follower far behind fetches each block of a merged segment once, however
+// many of its places and batches reach it. This is the example in the comment
+// on followCache.
 func TestAFollowerFetchesAMergedBlockOnce(t *testing.T) {
 	s := openRecords(t)
 	for range 4 {

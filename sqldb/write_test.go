@@ -118,9 +118,9 @@ func openSchema(t *testing.T, schema *SchemaDef) *DB {
 	return db
 }
 
-// a transaction holding the writer past a group's hold fails none of the
-// writes waiting behind it, and the one leading them is logged once, with the
-// transaction that holds the writer
+// A transaction holding the writer past a group's hold fails none of the writes
+// waiting behind it. The one leading them is logged once, with the transaction
+// that holds the writer.
 func TestALongTransactionFailsNoWriteBehindIt(t *testing.T) {
 	var logged bytes.Buffer
 	var logMu sync.Mutex

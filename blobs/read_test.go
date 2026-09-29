@@ -227,8 +227,8 @@ func TestARangeReadsItsBytesAndNoOthers(t *testing.T) {
 }
 
 // http.ServeContent serves an object from its reader, its ETag and its
-// Modified: ranges, several ranges, If-Range, If-None-Match,
-// If-Modified-Since and HEAD
+// Modified: ranges, several ranges, If-Range, If-None-Match, If-Modified-Since
+// and HEAD.
 func TestServeContentAnswersRangesAndConditions(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

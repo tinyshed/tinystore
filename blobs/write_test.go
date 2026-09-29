@@ -83,8 +83,9 @@ func TestAMoveIsOneWrite(t *testing.T) {
 	}
 }
 
-// every write gives its object the expiry a Put would: its own, else the
-// bucket's default from now, else none; a Copy or Move keeps no expiry of its source
+// Every write gives its object the expiry a Put would: its own, else the
+// bucket's default from now, else none. A Copy or Move keeps no expiry of its
+// source.
 func TestACopyOrMoveTakesTheExpiryOfAWrite(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	exports := openTestBucket(t, s, "exports", DefaultTTL(24*time.Hour))
@@ -117,9 +118,9 @@ func TestACopyOrMoveTakesTheExpiryOfAWrite(t *testing.T) {
 	}
 }
 
-// an expired object is absent to every call: reads and Scan and Usage do
-// not see it, IfNoneMatch claims its key, IfMatch conflicts with it, a Copy
-// finds nothing; maintenance then removes its row and its bytes
+// An expired object is absent to every call: reads and Scan and Usage do not
+// see it, IfNoneMatch claims its key, IfMatch conflicts with it, a Copy finds
+// nothing. Maintenance then removes its row and its bytes.
 func TestAnExpiredObjectIsAbsentToEveryOperation(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

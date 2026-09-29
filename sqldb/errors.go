@@ -28,17 +28,17 @@ func (k ConstraintKind) String() string {
 	return [...]string{"", "unique", "primary key", "foreign key", "check", "not null"}[k]
 }
 
-// ConstraintError is a write that broke a constraint. Kind comes from
-// SQLite's extended code; Table and Constraint are filled when SQLite's
-// message names them, and are empty otherwise:
+// ConstraintError is a write that broke a constraint. A unique or primary key
+// is tinystore.ErrConflict, the others tinystore.ErrInvalid.
+//
+// SQLite's message becomes Table and Constraint when it names them:
 //
 //	UNIQUE constraint failed: users.email      Table users, Constraint email
 //	CHECK constraint failed: length(title) > 0 Constraint length(title) > 0
-//
-// A unique or primary key is tinystore.ErrConflict, the others
-// tinystore.ErrInvalid.
 type ConstraintError struct {
-	Kind         ConstraintKind
+	// Kind comes from SQLite's extended code.
+	Kind ConstraintKind
+	// Table and Constraint are empty when SQLite's message does not name them.
 	Table        string
 	Constraint   string
 	ExtendedCode int
@@ -111,10 +111,11 @@ func columnsOf(named string) (table, columns string) {
 	return table, strings.Join(names, ", ")
 }
 
-// explain names the database an error is about, says which call a write sent
-// to a reader belongs to, gives a constraint its kind, and says ErrInvalid of
-// a statement SQLite cannot run as it is written and ErrLimit of a value past
-// its length; a context's error and a closed store's are kept as they came
+// explain names the database an error is about, and says which call a write
+// sent to a reader belongs to. It gives a constraint its kind, and says
+// ErrInvalid of a statement SQLite cannot run as it is written and ErrLimit of
+// a value past its length. A context's error and a closed store's are kept as
+// they came.
 func (d *DB) explain(err error) error {
 	switch {
 	case err == nil:

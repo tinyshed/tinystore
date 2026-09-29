@@ -207,7 +207,7 @@ func TestPutThenOpenEverySize(t *testing.T) {
 	s.mustHoldFiles(t, 2) // inlineSize+1 and 1 MiB
 }
 
-// an ETag is the bytes', quoted as a header carries it: equal bytes, one ETag
+// An ETag comes from the bytes, quoted as a header carries it: equal bytes, one ETag.
 func TestAnETagIsTheBytes(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

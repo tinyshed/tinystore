@@ -72,17 +72,20 @@ func (d *SQLDatabase) Decode(body []byte) error {
 }
 
 // SQLStatement is one statement with its arguments: positional, named, or
-// both, each nil, an integer, a float, str, bin or a bool. A name is written
-// without the :, @ or $ the statement spells it with, as sql.Named takes it.
-// Write runs a query on the writer, for a write whose returning clause gives
-// rows; Rows asks a batch's statement for the rows it returns.
+// both.
 type SQLStatement struct {
 	Handle uint64
 	SQL    string
-	Args   []any
-	Named  map[string]any
-	Write  bool
-	Rows   bool
+	// Args are each nil, an integer, a float, str, bin or a bool.
+	Args []any
+	// Named are written without the :, @ or $ the statement spells them
+	// with, as sql.Named takes them.
+	Named map[string]any
+	// Write runs a query on the writer, for a write whose returning clause
+	// gives rows.
+	Write bool
+	// Rows asks a batch's statement for the rows it returns.
+	Rows bool
 }
 
 func (s SQLStatement) Append(dst []byte) []byte {

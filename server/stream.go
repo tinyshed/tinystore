@@ -161,7 +161,6 @@ type call struct {
 	ended   bool   // the final frame went
 }
 
-// message is anything that appends itself as a body
 type message interface {
 	Append(dst []byte) []byte
 }

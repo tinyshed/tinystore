@@ -1,7 +1,9 @@
 // Package private makes a directory its owner's alone, as a local server's
-// SERVE and socket need: on Unix mode 0700 on a directory the user owns and no
-// link leads to, on Windows a protected DACL naming the user alone, which the
-// files made in it inherit.
+// SERVE and socket need.
+//
+// On Unix that is mode 0700 on a directory the user owns and no link leads to.
+// On Windows it is a protected DACL naming the user alone, which the files made
+// in it inherit.
 package private
 
 import (

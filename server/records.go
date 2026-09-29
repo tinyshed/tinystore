@@ -117,10 +117,11 @@ func sendRecords(c *call, found []records.Record) error {
 }
 
 // recordsLines is an upload: another program's output, cut anywhere, becomes
-// records of a stream as Lines makes them. The writer closes whatever ends the
-// upload, handing over the record it holds, since the lines it was given were
-// written as a program's output is; a cancel or a lost connection ends only
-// what had not reached it.
+// records of a stream as Lines makes them.
+//
+// The writer is closed however the upload ends, which hands over the record it
+// holds, since the lines it was given were written as a program's output is. A
+// cancel or a lost connection ends only what had not reached it.
 func recordsLines(c *call) error {
 	var ask wire.RecordsStream
 	if err := ask.Decode(c.request); err != nil {
@@ -200,7 +201,6 @@ func recordsDrop(c *call) error {
 	return respond(c, wire.Empty{})
 }
 
-// recordOf is a record the wire carried as the engine takes it
 func recordOf(sent wire.Record) (records.Record, error) {
 	record := records.Record{
 		At: time.Unix(0, sent.At).UTC(), Stream: sent.Stream, Name: sent.Name, Body: sent.Body,
@@ -241,7 +241,6 @@ func fieldsOf(sent []wire.RecordField) []records.Field {
 	return fields
 }
 
-// wireRecord is a record as the wire carries it
 func wireRecord(record records.Record) wire.Record {
 	sent := wire.Record{
 		At: record.At.UnixNano(), Stream: record.Stream, Name: record.Name, Body: record.Body,

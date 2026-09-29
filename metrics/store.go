@@ -44,8 +44,8 @@ type Store struct {
 
 const fileName = "metrics.db"
 
-// Open opens metrics.db inside the store. The store closes it, and unless it
-// is Manual runs Maintain every Options.MaintenanceInterval, a minute by default.
+// Open opens metrics.db inside the store. The store closes it, and unless it is
+// Manual runs Maintain every Options.MaintenanceInterval, a minute by default.
 func Open(ctx context.Context, runtime *tinystore.Store, options Options) (*Store, error) {
 	opts, err := normalizeOptions(options)
 	if err != nil {

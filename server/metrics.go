@@ -158,8 +158,9 @@ func metricsDrop(c *call) error {
 }
 
 // itemsInABody is how many items of size bytes each fit half the body the
-// client agreed, leaving the other half to the series' labels: a sample is
-// its time and its value, a bucket four integers, a value and a byte of flags
+// client agreed, the other half being left to the series' labels. A sample is
+// its time and its value; a bucket is four integers, a value and a byte of
+// flags.
 func (c *call) itemsInABody(size int) int {
 	return max(1, int(c.session.agreed.maxBody)/2/size)
 }

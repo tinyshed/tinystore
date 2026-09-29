@@ -35,9 +35,9 @@ func TestOrderedPreparationFallsBackForDuplicatesAndLatePoints(t *testing.T) {
 	assertSamples(t, readAll(t, s), want)
 }
 
-// a sample past the store's clock and its skew is refused and names its
-// series, so that one wrong clock cannot hold a series' watermark in the future;
-// the edge itself is accepted
+// A sample past the store's clock and its skew is refused and names its series,
+// so that one wrong clock cannot hold a series' watermark in the future. The
+// edge itself is accepted.
 func TestASampleAheadOfTheClockIsRefused(t *testing.T) {
 	s, _ := openTestStore(t, Options{ClockSkew: time.Minute})
 	horizon := testEpoch + 900 + time.Minute.Milliseconds()

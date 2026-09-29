@@ -12,9 +12,9 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// damaged is the rows this handle met that no longer read, each logged once;
-// the file is the record of them, so a reopened store finds them again as it
-// meets them
+// damaged is the rows this handle met that no longer read, each logged once.
+// The file is the record of them, so a reopened store finds them again as it
+// meets them.
 type damaged struct {
 	mu    sync.Mutex
 	found map[damageKey]Damage
@@ -209,8 +209,10 @@ const (
 )
 
 // dropSegment removes a segment that no longer reads, whole, with the places
-// merged into it: a block cannot go alone, since a Follow cursor counts a
-// segment's rows through its blocks
+// merged into it.
+//
+// A block cannot go alone, since a Follow cursor counts a segment's rows
+// through its blocks.
 func (s *Store) dropSegment(ctx context.Context, id int64) error {
 	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		holder := id

@@ -11,10 +11,12 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// the owners below a bucket's root whose branches the test of a hidden row
-// looks up by their prefixes' lengths, packed ten bits each into one integer:
-// a path is at most 1 KiB, so a prefix that leaves a key room fits; the bit
-// past them says that a branch lies deeper
+// A hidden row's test looks up each branch above the row by the length of its
+// prefix. The lengths of the first hiddenLevels owners below a bucket's root
+// are packed lengthBits (ten) bits each into one integer, and deeperBit says
+// that a branch lies deeper than they reach.
+//
+// A path is at most 1 KiB, so a prefix that leaves a key room fits in ten bits.
 const (
 	hiddenLevels = 6
 	lengthBits   = 10
@@ -24,17 +26,19 @@ const (
 // hidden is true of a row a marked Clear hid: its version is the mark's or
 // older, and the mark's prefix is a branch above it. Every statement that
 // finds live rows says "and not" this, so a mark hides its rows from the
-// moment it commits, to readers and writers alike.
+// moment it commits, to readers and writers alike. row names the statement's
+// table.
 //
 // It asks first whether the row's bucket has a mark at all, which costs a
 // bucket without one a single seek. Then it looks up the root and each branch
-// above the row by its prefix, the first bytes of the row's path as many as
-// the lengths packed in ?param say, so that a thousand marks cost a seek a
-// branch rather than a thousand comparisons; one integer binds faster than a
-// length each. A row deeper than the lengths reach is compared with every mark
-// of its bucket instead: the prefix, then an owner's mark or a key's, since a
-// name under another branch may begin with the prefix's bytes. row names the
-// statement's table.
+// above the row by its prefix: the first bytes of the row's path, as many as
+// the lengths packed in ?param say. A thousand marks so cost a seek a branch
+// rather than a thousand comparisons, and one integer binds faster than a
+// length each.
+//
+// A row deeper than the lengths reach is compared with every mark of its bucket
+// instead: the prefix, then an owner's mark or a key's, since a name under
+// another branch may begin with the prefix's bytes.
 func hidden(row string, param int) string {
 	lookups := []string{fmt.Sprintf(`exists (select 1 from branches as m where m.bucket = %[1]s.bucket
 		and m.prefix = x'' and m.cleared >= %[1]s.version)`, row)}
@@ -62,8 +66,8 @@ func (b *Bucket[V]) Clear(ctx context.Context) error {
 }
 
 // Clear removes every counter of this branch and of the branches under it, as
-// Bucket.Clear does; LoseAtMost counters it removes from memory as well once
-// it commits, so that no flush writes them again. One that fails leaves them.
+// Bucket.Clear does. LoseAtMost counters it also removes from memory once it
+// commits, so that no flush writes them again; a Clear that fails leaves them.
 func (c *Counters) Clear(ctx context.Context) error {
 	switch {
 	case c.memory == nil:

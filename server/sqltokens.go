@@ -2,9 +2,9 @@ package server
 
 import "strings"
 
-// tokenKind is what one of SQLite's tokens is to a data connection's check,
-// which tells apart only what decides where a statement ends and which names
-// it uses
+// tokenKind is what one of SQLite's tokens is to a data connection's check. The
+// check tells apart only what decides where a statement ends and which names it
+// uses.
 type tokenKind uint8
 
 const (
@@ -22,8 +22,7 @@ type sqlToken struct {
 	text string
 }
 
-// tokensOf is statement's tokens as SQLite reads them, but its whitespace and
-// comments
+// tokensOf returns statement's tokens as SQLite reads them, without its whitespace and comments.
 func tokensOf(statement string) []sqlToken {
 	var tokens []sqlToken
 	for rest := statement; rest != ""; {
@@ -190,9 +189,9 @@ func blob(sql string) (tokenKind, int) {
 	return kind, i
 }
 
-// number reads a numeric literal: hexadecimal, or digits with a fraction and
-// an exponent, any of them with _ between digits; a letter after it makes it
-// illegal, as in 12abc
+// number reads a numeric literal: hexadecimal, or digits with a fraction and an
+// exponent, any of them with _ between digits. A letter after it makes it
+// illegal, as in 12abc.
 func number(sql string) (tokenKind, int) {
 	var i int
 	if sql[0] == '0' && (at(sql, 1) == 'x' || at(sql, 1) == 'X') && isHex(at(sql, 2)) {
@@ -262,7 +261,7 @@ func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 // multibyte character is one, so SQLite reads no Unicode whitespace
 func isWordStart(c byte) bool { return isLetter(c) || c == '_' || c >= 0x80 }
 
-// isIDChar is a byte a name goes on with: a digit and a $ too
+// isIDChar is a byte a name goes on with: a word start, a digit or a $.
 func isIDChar(c byte) bool { return isWordStart(c) || isDigit(c) || c == '$' }
 
 // upperASCII folds only ASCII letters, as SQLite compares keywords and names:

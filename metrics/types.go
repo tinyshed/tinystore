@@ -69,7 +69,8 @@ type Batch struct {
 	Samples []Sample
 }
 
-// Range selects exact labels and an exclusive upper timestamp bound; limits may only narrow the store's limits.
+// Range selects exact labels and an exclusive upper timestamp bound; limits may
+// only narrow the store's limits.
 type Range struct {
 	Matchers []Label
 	From, To int64
@@ -97,14 +98,16 @@ type AggregateRequest struct {
 	Op    AggregateOp
 }
 
-// AggregateBucket keeps the edges it was asked for. Partial reports that
-// retention cut it: only its samples from the cutoff on were counted.
+// AggregateBucket keeps the edges it was asked for.
 type AggregateBucket struct {
 	From, To      int64
 	Count, Resets int
 	Value         float64
 	Overflow      bool
-	Partial       bool
+
+	// Partial reports that retention cut the bucket: only its samples from the
+	// cutoff on were counted.
+	Partial bool
 }
 
 type AggregateResult struct {
@@ -112,29 +115,36 @@ type AggregateResult struct {
 	Buckets []AggregateBucket
 }
 
-// DroppedSeries is what DropSeries removed. UnreadableGroups counts the groups
-// removed without the payload rows their directory named.
+// DroppedSeries is what DropSeries removed.
 type DroppedSeries struct {
-	Found            bool
+	Found bool
+
+	// UnreadableGroups counts the groups removed without the payload rows their
+	// directory named.
 	UnreadableGroups int
 }
 
 type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts, QuarantinedSeries, ReclaimedSeries int }
 
-// Stats counts this handle's work; QuarantinedSeries is the current persisted count.
+// Stats counts this handle's work.
 type Stats struct {
-	IngestedSamples   uint64
-	RejectedBatches   uint64
-	Queries           uint64
-	SealedBlocks      uint64
-	ExpiredSamples    uint64
+	IngestedSamples uint64
+	RejectedBatches uint64
+	Queries         uint64
+	SealedBlocks    uint64
+	ExpiredSamples  uint64
+
+	// QuarantinedSeries is the current persisted count, not this handle's work.
 	QuarantinedSeries uint64
-	ReclaimedSeries   uint64
+
+	ReclaimedSeries uint64
 }
 
-// MaintenanceFailure is a persisted diagnostic; SeriesID is a file-local cursor, not a series handle.
+// MaintenanceFailure is a persisted diagnostic.
 type MaintenanceFailure struct {
+	// SeriesID is a file-local cursor, not a series handle.
 	SeriesID int64
+
 	FailedAt int64
 	Reason   string
 }

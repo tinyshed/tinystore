@@ -11,7 +11,7 @@ import (
 )
 
 // Tx is one transaction of kv.db, given to the function passed to Store.Tx or
-// Store.View and used by the goroutine that runs it; a bucket works in it
+// Store.View and used by the goroutine that runs it. A bucket works in it
 // through WithTx.
 type Tx struct {
 	state    *Store

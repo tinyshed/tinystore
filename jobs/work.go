@@ -16,16 +16,19 @@ import (
 // the longest the settlements of a stopping Work may take to write
 const lastWrite = 10 * time.Second
 
-// Work claims the queue's jobs as they fall due and runs handle on each, in
-// up to Workers goroutines it starts and waits for before it returns, until
+// Work claims the queue's jobs as they fall due and runs handle on each, until
 // ctx ends or the store closes, or, with UntilIdle, until nothing is due and
-// nothing runs. A handler's nil acknowledges its job and an error retries it
-// by the queue's policy; a handler that settles its job itself is left as it
-// settled it, and a panic is an error. While a handler runs its lease is
-// extended. A handler stopped by ctx or by Close gives its job back, the
-// attempt not counted. Each worker's next job is claimed while it runs the one
-// before, and a job claimed is settled in the same write that claims the next
-// ones, so that a queue under load commits once for many jobs.
+// nothing runs. It runs up to Workers goroutines, which it starts itself and
+// waits for before it returns.
+//
+// A handler's nil acknowledges its job and an error retries it by the queue's
+// policy. A handler that settles its job itself is left as it settled it, and a
+// panic is an error. While a handler runs its lease is extended. A handler
+// stopped by ctx or by Close gives its job back, the attempt not counted.
+//
+// Each worker's next job is claimed while it runs the one before, and a job
+// claimed is settled in the same write that claims the next ones, so that a
+// queue under load commits once for many jobs.
 func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]) error, options ...WorkOption) error {
 	settings, err := collectWork(options)
 	if err == nil && q.tx != nil {
@@ -172,9 +175,10 @@ func (l *workLoop[V]) finishing() int {
 	return finished
 }
 
-// idle says the loop holds nothing, has nothing to write, and no job is due:
-// a loop whose workers were all busy has not asked the file, and its alarm,
-// which a claim that came back short set, still says a job may be due
+// idle says the loop holds nothing, has nothing to write, and no job is due.
+//
+// A loop whose workers were all busy has not asked the file, and its alarm,
+// which a claim that came back short set, still says a job may be due.
 func (l *workLoop[V]) idle(now int64) bool {
 	return len(l.holding) == 0 && len(l.pending) == 0 && !l.q.state.alarm.due(now)
 }
@@ -226,9 +230,9 @@ func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settle
 	return settlement{lease: job.lease, how: retried, cause: err}
 }
 
-// unstarted settles a job whose handler never ran: a value that no longer
-// reads fails it for good, a stopping loop gives it back, and anything else
-// costs the attempt
+// unstarted settles a job whose handler never ran. A value that no longer reads
+// fails it for good, a stopping loop gives it back, and anything else costs the
+// attempt.
 func unstarted[V any](handlers context.Context, job Job[V], err error) settlement {
 	switch {
 	case errors.Is(err, errUnreadable):
@@ -305,8 +309,8 @@ type claimResult struct {
 }
 
 // write settles what is pending and claims up to want jobs in one grouped
-// write, and when fewer than want were due reads when the queue next needs a
-// claim; a settlement whose lease another claim has taken is dropped
+// write. When fewer than want were due it also reads when the queue next needs
+// a claim. A settlement whose lease another claim has taken is dropped.
 func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResult, error) {
 	if len(l.pending) == 0 && want == 0 {
 		return claimResult{}, nil
@@ -385,9 +389,10 @@ func settleAll(ctx context.Context, w sqlite.Writer, pending []settlement, now i
 	return done, nil
 }
 
-// settled follows in memory what the written settlements changed. A lease lost
-// while its handler runs is let go and no longer extended, but still holds its
-// worker until the handler returns
+// settled follows in memory what the written settlements changed.
+//
+// A lease lost while its handler runs is let go and no longer extended, but it
+// still holds its worker until the handler returns.
 func (l *workLoop[V]) settled(done []settled) {
 	for i, s := range l.pending {
 		done[i].apply(l.q.state)
@@ -413,8 +418,8 @@ func (l *workLoop[V]) dispatch(result claimResult) {
 }
 
 // wait sleeps until a handler returns, the alarm rings or is lowered, a held
-// lease needs extending, or the loop must stop; with every worker busy the
-// alarm does not wake it
+// lease needs extending, or the loop must stop. With every worker busy the
+// alarm does not wake it.
 func (l *workLoop[V]) wait(ctx context.Context, now int64) {
 	lowered, sleep := l.q.state.alarm.wait(now)
 	if len(l.holding) >= l.hold {

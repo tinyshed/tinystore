@@ -25,7 +25,8 @@ func failure(ctx context.Context, err error) *wire.Error {
 	return &wire.Error{Code: codeOf(ctx, err), Message: err.Error(), What: whatOf(err)}
 }
 
-// the store's sentinels, whose codes a client's error classes mirror
+// The errors a code is found by, the first that matches: the store's sentinels,
+// whose codes a client's error classes mirror, and the server's own.
 var sentinels = []struct {
 	err  error
 	code wire.Code

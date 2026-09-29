@@ -10,7 +10,6 @@ import (
 	"syscall"
 )
 
-// Supported says a second holder is refused on this platform.
 const Supported = true
 
 // ERROR_SHARING_VIOLATION, which syscall does not name

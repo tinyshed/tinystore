@@ -30,7 +30,8 @@ type Sample struct {
 }
 
 // Head is what the row around a body already holds. Encode returns it, the
-// caller stores it, and Decode is given it back; nothing in the body repeats it.
+// caller stores it, and Decode is given it back; nothing in the body repeats
+// it.
 type Head struct {
 	Start, End int64
 	Count      int
@@ -192,8 +193,8 @@ func (c *Codec) EncodeValues(values []float64) ([]byte, error) {
 }
 
 // DecodeValues reads what EncodeValues wrote, given the first value and the
-// count, which the stream does not repeat. It carries no checksum of its own, so
-// the caller checks the bytes it stored; each Sample's At is its index.
+// count, which the stream does not repeat. It carries no checksum of its own,
+// so the caller checks the bytes it stored; each Sample's At is its index.
 func (c *Codec) DecodeValues(first float64, count int, stream []byte) (*Iterator, error) {
 	if count < 1 || count > MaxSamples {
 		return nil, fmt.Errorf("%w: value count", ErrInvalid)

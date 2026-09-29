@@ -113,9 +113,9 @@ func openEngine(ctx context.Context, store *tinystore.Store, dir string, options
 	return s, nil
 }
 
-// openDirectory roots every file the engine opens in blobs/, which also keeps
-// a path from leaving it, creates uploads/ and objects/ there, and syncs the
-// directories that name them
+// openDirectory roots every file the engine opens in blobs/, which also keeps a
+// path from leaving it. It creates uploads/ and objects/ there, and syncs the
+// directories that name them.
 func openDirectory(dir string) (*os.Root, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -171,7 +171,6 @@ func (s *Store) Close(ctx context.Context) error {
 	return s.closeErr
 }
 
-// admit lets one operation in while the store is open; release lets it out
 func (s *Store) admit(ctx context.Context) (release func(), err error) {
 	if err = s.gate.Enter(ctx, errClosed); err != nil {
 		return nil, err

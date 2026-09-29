@@ -213,8 +213,8 @@ func (s *Store) clock() int64 {
 }
 
 // idRange hands out job ids from a block reserved in meta, so that an id is
-// never given twice, not after a crash either, for one write of meta a
-// thousand jobs
+// never given twice, not after a crash either. One write of meta serves a
+// thousand jobs.
 type idRange struct {
 	mu        sync.Mutex
 	next, end int64

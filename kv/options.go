@@ -12,7 +12,6 @@ import (
 // arrive without breaking a caller.
 type Options struct{}
 
-// the engine's own bounds and schedule
 const (
 	pageSize      = 4 << 10         // at 1 KiB a row with a 256-byte value overflows its page
 	readers       = 8               // the reader connections, what the measured reads went through
@@ -45,10 +44,8 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 // bytes mean, so a program may change them between runs.
 type BucketOption interface{ bucketOption(*settings) }
 
-// CounterOption changes how counters serve their numbers.
 type CounterOption interface{ counterOption(*settings) }
 
-// OpenOption fits a bucket and counters alike.
 type OpenOption interface {
 	BucketOption
 	CounterOption
@@ -76,12 +73,14 @@ func (f forBoth) bucketOption(s *settings)      { f(s) }
 func (f forBoth) counterOption(s *settings)     { f(s) }
 
 // LoseAtMost keeps the counters in memory and writes what changed every d, on
-// Close and on Maintain, so that an Add takes no write: a crash loses the
-// changes since the last flush that committed, a Delete's as an Add's. A flush
-// waits for the writer as any write does, so on a busy file that is d and the
-// flush's own wait and time. Handles on counters of one name share the memory,
-// and opening them again with another d, or without LoseAtMost, is ErrInvalid;
-// they join no transaction.
+// Close and on Maintain, so that an Add takes no write.
+//
+// A crash loses the changes since the last flush that committed, a Delete's as
+// an Add's. A flush waits for the writer as any write does, so on a busy file
+// the loss can reach d plus the flush's own wait and time.
+//
+// Handles on counters of one name share the memory and join no transaction.
+// Opening them again with another d, or without LoseAtMost, is ErrInvalid.
 func LoseAtMost(d time.Duration) CounterOption {
 	return forCounters(func(s *settings) {
 		if d <= 0 {
@@ -105,11 +104,13 @@ func DefaultTTL(d time.Duration) OpenOption {
 // Sliding gives a key term from the last time it was read: a key created
 // without kv.TTL or kv.ExpireAt gets term, and a Get, GetEntry or Has renews a
 // live key to term from now once a thirtieth of the term has passed since it
-// last did. A read does not write: the renewal waits a second for the next
-// flush, and a crash forgets the renewals since the last, so a key read at t
-// lives at least until t + term − term/30 unless it is renewed. A key with less
-// than a minute left is renewed before its read returns. With DefaultTTL it is
-// ErrInvalid.
+// last did. With DefaultTTL it is ErrInvalid.
+//
+// A read does not write: the renewal waits a second for the next flush, and a
+// crash forgets the renewals since the last. So a key read at t lives at least
+// until t + term − term/30 unless it is renewed.
+//
+// A key with less than a minute left is renewed before its read returns.
 func Sliding(term time.Duration) BucketOption {
 	return forBuckets(func(s *settings) {
 		if term <= 0 {
@@ -125,7 +126,6 @@ func WithCodec[V any](codec Codec[V]) BucketOption {
 	return forBuckets(func(s *settings) { s.codec = codec })
 }
 
-// Option changes one call.
 type Option func(*callOptions)
 
 type callOptions struct {
@@ -180,7 +180,6 @@ func collect(options []Option) (callOptions, error) {
 	return collected, collected.err
 }
 
-// hasExpiry says that the call names an expiry of its own
 func (o callOptions) hasExpiry() bool {
 	return o.ttl > 0 || !o.expireAt.IsZero()
 }

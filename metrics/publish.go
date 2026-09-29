@@ -14,9 +14,10 @@ func (s *Store) publish(ctx context.Context, candidate packingCandidate, group b
 	})
 }
 
-// publishTx writes one sealed group in the writer's transaction: it checks
-// that the head has not changed since the group was encoded, absorbs preceding
-// groups, stores payloads and the directory, then moves the frontier.
+// publishTx writes one sealed group in the writer's transaction.
+//
+// It checks that the head has not changed since the group was encoded, absorbs
+// preceding groups, stores payloads and the directory, then moves the frontier.
 func (s *Store) publishTx(
 	ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup, cutoff int64,
 ) error {

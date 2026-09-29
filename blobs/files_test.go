@@ -58,9 +58,9 @@ func TestFreeSpaceIsTheDisks(t *testing.T) {
 	}
 }
 
-// a file another program holds without sharing its deletion is not removed
-// while it holds it: the write that freed it succeeds, and maintenance
-// removes the file once it is let go
+// A file another program holds without sharing its deletion is not removed
+// while it holds it. The write that freed it succeeds, and maintenance removes
+// the file once it is let go.
 func TestAFileHeldElsewhereIsRemovedLater(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows refuses to remove a file another program holds")

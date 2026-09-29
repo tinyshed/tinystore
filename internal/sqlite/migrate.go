@@ -39,15 +39,17 @@ func (f *File) Migrate(ctx context.Context, applicationID int, scripts fs.FS) er
 // none.
 var ErrPending = errors.New("migrations the file has not applied")
 
-// ErrMismatch is a history the scripts given do not match: a script changed
-// or renamed after the file ran it, fewer scripts than the file ran, or
-// another engine's file.
+// ErrMismatch is a history the given scripts do not match.
+//
+// A script changed or renamed after the file ran it, fewer scripts than the
+// file ran, or another engine's file all cause it.
 var ErrMismatch = errors.New("migrations that do not match the file")
 
-// Verify checks the scripts against the history the file ran, in a snapshot,
-// and runs none: a script changed or renamed after the file ran it, or a
-// history longer than the scripts, is refused as Migrate refuses it, and a
-// script the file has not run, or a file no engine has claimed, is ErrPending.
+// Verify checks the scripts against the history the file ran, in a snapshot, and runs none.
+//
+// A script changed or renamed after the file ran it, or a history longer than
+// the scripts, is refused as Migrate refuses it. A script the file has not run,
+// or a file no engine has claimed, is ErrPending.
 //
 //	history   0001_schema.sql
 //	scripts   0001_schema.sql   0002_labels.sql
@@ -137,10 +139,11 @@ const (
 )
 
 // withoutForeignKeys runs work in a transaction with foreign keys off, as
-// SQLite's procedure for changing a table asks: with them on, dropping a
-// parent to rebuild it deletes its children through their ON DELETE actions.
+// SQLite's procedure for changing a table asks. With them on, dropping a parent
+// to rebuild it deletes its children through their ON DELETE actions.
+//
 // foreign_keys cannot change inside a transaction, so it goes off before BEGIN
-// and on after COMMIT
+// and on after COMMIT.
 func withoutForeignKeys(ctx context.Context, conn *sql.Conn, work func(*sql.Tx) error) (bool, error) {
 	if _, err := conn.ExecContext(ctx, foreignKeysOff); err != nil {
 		return false, fmt.Errorf("turn foreign keys off: %w", err)

@@ -37,7 +37,6 @@ func exampleState() (state *kv.Store, at *clock, done func()) {
 	}
 }
 
-// check ends an example that meets an error
 func check(err error) {
 	if err != nil {
 		panic(err)
@@ -141,8 +140,8 @@ func Example_attemptLimits() {
 }
 
 // A provider delivers an event until it gets a 200, so an event may arrive
-// twice; a claim's version keeps a handler slower than its claim from
-// finishing the next one's.
+// twice. A claim's version keeps a handler slower than its claim from finishing
+// the next one's.
 func Example_webhookClaims() {
 	ctx := context.Background()
 	state, clock, done := exampleState()

@@ -9,8 +9,7 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// every metrics message reads back as it was written, a value's bits
-// included
+// A value comes back with the bits it went in with.
 func TestMetricsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	cpu := map[string]string{"__name__": "cpu", "host": "web-1"}
 	nan := math.Float64frombits(0x7ff8000000000001)

@@ -155,9 +155,9 @@ func (c refusingCodec) Decode([]byte) (string, error) {
 	return "", errors.New("a codec that refuses")
 }
 
-// a Take whose value no longer decodes is ErrCorrupt and keeps the value, a
-// spilled one too, in a group and inside Tx; a codec's panic is such a
-// failure of its own write rather than of the writes beside it
+// A Take whose value no longer decodes is ErrCorrupt and keeps the value, a
+// spilled one too, in a group and inside Tx. A codec's panic is such a failure
+// of its own write rather than of the writes beside it.
 func TestAFailedTakeKeepsItsValue(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	for _, panics := range []bool{false, true} {
@@ -321,9 +321,9 @@ func TestTheWriterKeepsFourMiBOfPages(t *testing.T) {
 const writersPerCPU = 32
 
 // BenchmarkRandomSetsByWriterCache overwrites keys at random, 64 bytes each,
-// from many goroutines at once, with the writer's page cache at 1, 4, 8 and
-// 16 MiB, in a file of 20,000 keys and of 200,000: what a larger cache is
-// worth to grouped writes that land on pages all over the file
+// from many goroutines at once, with the writer's page cache at 1, 4, 8 and 16
+// MiB, in a file of 20,000 keys and of 200,000. It shows what a larger cache is
+// worth to grouped writes that land on pages all over the file.
 func BenchmarkRandomSetsByWriterCache(b *testing.B) {
 	for _, count := range []int{20_000, 200_000} {
 		for _, mib := range []int{1, 4, 8, 16} {

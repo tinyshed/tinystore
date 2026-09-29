@@ -20,9 +20,9 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// SERVE is written whole, only by the server whose store holds the
-// directory's lock, in a directory its owner alone may enter, and names the
-// endpoint a client finds the server by and the secret it proves itself with
+// SERVE is written whole, only by the server whose store holds the directory's
+// lock, in a directory its owner alone may enter. It names the endpoint a
+// client finds the server by and the secret it proves itself with.
 func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 	ts := startTestServer(t, Options{Version: "0.4.0"})
 	l, unpublish, err := ts.server.Publish(t.Context())
@@ -215,9 +215,9 @@ func takeTheEndpoint(t *testing.T, dir string) {
 	}
 }
 
-// Windows refuses to rename over or remove a file another handle holds
-// without sharing its deletion, as Go and Python open files: a change to SERVE
-// that a client reading it holds up is tried again, and no other
+// Windows refuses to rename over or remove a file another handle holds without
+// sharing its deletion, as Go and Python open files. A change to SERVE that a
+// client reading it holds up is tried again, and no other.
 func TestAChangeHeldUpByAReaderIsTriedAgain(t *testing.T) {
 	tries := 0
 	held := func() error {

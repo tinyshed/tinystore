@@ -20,7 +20,6 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// the file this engine claims inside the store's directory
 const fileName = "kv.db"
 
 // kvApplicationID is "TKVS", the SQLite application id that claims a file for this engine
@@ -136,9 +135,9 @@ func (s *Store) loadRevision(ctx context.Context) error {
 	return nil
 }
 
-// nextRevision is the version of one write, kept as the file's high-water
-// mark in the write's own transaction; a write rolled back leaves a gap, never
-// a repeat
+// nextRevision is the version of one write, kept as the file's high-water mark
+// in the write's own transaction. A write rolled back leaves a gap, never a
+// repeat.
 func (s *Store) nextRevision(ctx context.Context, w sqlite.Writer) (int64, error) {
 	revision := s.revision.Add(1)
 	_, err := w.ExecContext(ctx, updateRevision, revision)
@@ -175,8 +174,10 @@ func (s *Store) Close(ctx context.Context) error {
 }
 
 // memoryFor is the memory of the counters name, the one their first opening
-// made; opening them again with another LoseAtMost, or without, is ErrInvalid,
-// since one handle would read the file while another holds newer numbers
+// made.
+//
+// Opening them again with another LoseAtMost, or without, is ErrInvalid, since
+// one handle would read the file while another holds newer numbers.
 func (s *Store) memoryFor(name string, bucket int64, loseAtMost time.Duration) (*memory, error) {
 	s.opened.Lock()
 	defer s.opened.Unlock()

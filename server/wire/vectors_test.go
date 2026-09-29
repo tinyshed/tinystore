@@ -245,7 +245,6 @@ func TestTheExamplesAreWhatTheMessagesWrite(t *testing.T) {
 	}
 }
 
-// every kv message reads back as it was written
 func TestKVMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	call := wire.KVCall{
 		Handle: 3, Owners: []string{"tenant", "\xff"}, Key: "k", TTL: 1000, ExpireAt: 1_790_000_000_000,

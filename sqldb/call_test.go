@@ -10,9 +10,9 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// a read and a write hold the store's memory before they decode or write: a
+// A read and a write hold the store's memory before they decode or write. A
 // read waits for it before it takes a reader, a write heavier than the whole
-// budget is refused at once, and inside Tx a call takes only what is free
+// budget is refused at once, and inside Tx a call takes only what is free.
 func TestStoreMemoryBoundsReadsAndWrites(t *testing.T) {
 	store := openStoreWith(t, t.TempDir(), tinystore.Options{Manual: true, Memory: 1 << 20})
 	db, err := Open(t.Context(), store, "app", notesMigrations, nil)

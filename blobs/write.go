@@ -37,12 +37,14 @@ func (b *Bucket) Delete(ctx context.Context, key string, options ...Option) erro
 	return b.fail(c, err)
 }
 
-// Copy writes the object under from again under to, sharing its bytes: no
-// byte is read or written, whatever its size. The copy is a new version with
-// the source's type and meta unless the call gives others, and with the
-// expiry a Put would give it; onto its own key a Copy changes those and keeps
-// the bytes. It takes the options Put takes but Size, its conditions for to.
-// An absent source is tinystore.ErrConflict.
+// Copy writes the object under from again under to, sharing its bytes: no byte
+// is read or written, whatever its size. The copy is a new version with the
+// source's type and meta unless the call gives others, and with the expiry a
+// Put would give it.
+//
+// Onto its own key a Copy changes those and keeps the bytes. It takes the
+// options Put takes but Size, its conditions for to. An absent source is
+// tinystore.ErrConflict.
 func (b *Bucket) Copy(ctx context.Context, from, to string, options ...Option) (Object, error) {
 	source, target, err := b.beginCopy(from, to, "Copy", options)
 	if err != nil {

@@ -153,8 +153,8 @@ func differ(want, got *Record) string {
 }
 
 // textRecords are lines of software that is not ours, each spelling its own
-// time a little before it was received, in the layouts stamps are found in,
-// and a JSON service's lines whose "time" counts milliseconds
+// time a little before it was received, in the layouts stamps are found in.
+// They include a JSON service's lines whose "time" counts milliseconds.
 func textRecords(count int) []Record {
 	random := rand.New(rand.NewPCG(41, 43))
 	eastern := time.FixedZone("", 8*3600)

@@ -24,7 +24,7 @@ func One[T any](ctx context.Context, h Handle, query string, args ...any) (T, bo
 }
 
 // All reads every row query returns, holding them in the store's memory as it
-// decodes them; past 64 MiB of them it is tinystore.ErrLimit, and Each reads
+// decodes them. Past 64 MiB of them it is tinystore.ErrLimit, and Each reads
 // them instead.
 func All[T any](ctx context.Context, h Handle, query string, args ...any) ([]T, error) {
 	return all[T](ctx, h, &call{query: query, args: args, bound: allBound})
@@ -82,25 +82,27 @@ func ExecScalar[T any](ctx context.Context, h Handle, query string, args ...any)
 	return scalar[T](ctx, h, &call{query: query, args: args, write: true})
 }
 
-// Rows is what a query returns without a struct to take it: the columns'
-// names, and each row's values as SQLite returned them, a column each: nil,
-// an int64, a float64, a string or a []byte, and a time.Time where the driver
-// parses TEXT in a column declared DATE, DATETIME or TIMESTAMP.
+// Rows is what a query returns without a struct to take it: the columns' names,
+// and each row's values as SQLite returned them, a column each.
+//
+// A value is nil, an int64, a float64, a string or a []byte, and a time.Time
+// where the driver parses TEXT in a column declared DATE, DATETIME or
+// TIMESTAMP.
 type Rows struct {
 	Columns []string
 	Values  [][]any
 }
 
-// Query reads every row query returns as SQLite returns it, for a program
-// that has no struct for them, as the server has none for its clients; the
-// rows are held in the store's memory as All holds them.
+// Query reads every row query returns as SQLite returns it, for a program that
+// has no struct for them, as the server has none for its clients. The rows are
+// held in the store's memory as All holds them.
 func Query(ctx context.Context, h Handle, query string, args ...any) (Rows, error) {
 	return rowsOf(ctx, h, &call{query: query, args: args, bound: allBound})
 }
 
-// ExecQuery runs a write on the writer and reads the rows its returning
-// clause gives, as Query reads a query's; a write that returns none answers
-// its columns alone, or none.
+// ExecQuery runs a write on the writer and reads the rows its returning clause
+// gives, as Query reads a query's. A write that returns none answers its
+// columns alone, or none.
 func ExecQuery(ctx context.Context, h Handle, query string, args ...any) (Rows, error) {
 	return rowsOf(ctx, h, &call{query: query, args: args, write: true, bound: allBound})
 }

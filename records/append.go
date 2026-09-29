@@ -22,8 +22,7 @@ func (s *Store) Append(ctx context.Context, batch ...Record) error {
 	return s.appendChecked(ctx, batch)
 }
 
-// appendChecked is admit → reserve → route → write the heads, for records
-// already checked: Append's, and what the handler queued
+// appendChecked appends records that are already checked: Append's, and what the handler queued.
 func (s *Store) appendChecked(ctx context.Context, batch []Record) error {
 	release, err := s.admitTo(ctx, s.appends)
 	if err != nil {

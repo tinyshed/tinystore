@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// fixed counts give both binaries the same bytes and keys, including reads after the writes
+// Fixed counts, so that every run compared sees the same bytes and keys, reads
+// after the writes included.
 func TestPutCompared(t *testing.T) {
 	measuring(t)
 	for _, fixture := range []struct{ size, callers, count int }{

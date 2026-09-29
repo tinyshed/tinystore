@@ -10,7 +10,11 @@
 //	workers.go   the goroutines that run a connection's calls, and a call's one end
 //	errors.go    an engine's error as a code and the item it names
 //	listen.go    Listen: Unix sockets, TCP and TLS; pipe.go: Windows named pipes
+//	local.go     Publish: the directory's shared sidecar and its SERVE
 //	tokens.go    the tokens a remote connection is let in with
 //	handles.go   the numbers open calls answer with
-//	methods.go   every method, by its number; kv.go: the kv engine's
+//	bodies.go    the pools frame bodies are read into
+//	datasql.go   the check a data connection's SQL passes; sqltokens.go: SQLite's tokens
+//	methods.go   every method, by its number
+//	kv.go, jobs.go, jobs_work.go, blobs.go, records.go, metrics.go, sql.go: each engine's handlers
 package server

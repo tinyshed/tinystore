@@ -49,9 +49,9 @@ func goldenFixtures() map[string][]Record {
 	}
 }
 
-// the first format's bytes still read as the records they were written from,
-// and the encoder still writes them: a change to either is a new format
-// version, not an edit
+// The first format's bytes still read as the records they were written from,
+// and the encoder still writes them. A change to either is a new format
+// version, not an edit.
 func TestSegmentsWrittenBeforeStillRead(t *testing.T) {
 	e, d := testCoders(t)
 	written := map[string]goldenSegment{}

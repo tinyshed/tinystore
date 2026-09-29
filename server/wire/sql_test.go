@@ -10,7 +10,6 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// every sql message reads back as it was written
 func TestSQLMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	values := []any{nil, int64(-7), 2.5, "text", []byte{0, 0xff}, true}
 	messages := []struct {

@@ -131,9 +131,9 @@ const firstNotes = `CREATE TABLE notes (
 ) STRICT;
 `
 
-// a check fails on what the schema declares and the migrations do not make,
-// names the command that writes it, and writes nothing; the tool asks it to
-// write the next migration, after which the check passes
+// A check fails on what the schema declares and the migrations do not make,
+// names the command that writes it, and writes nothing. The tool asks it to
+// write the next migration, after which the check passes.
 func TestCheckSchemaFindsWhatIsMissingAndWritesOnlyWhenAsked(t *testing.T) {
 	notes := sqldb.Table[Note]("notes", sqldb.PrimaryKey("id"), sqldb.Check("length(title) > 0"))
 	dir := migrations(t, map[string]string{"001_notes.sql": firstNotes})

@@ -156,8 +156,8 @@ func writeOptions(ask wire.BlobsCall) []blobs.Option {
 }
 
 // blobsPut is an upload: the object's bytes arrive as DATA and go to the
-// engine's upload as they come, and the object appears at its commit, whole,
-// or not at all
+// engine's upload as they come. The object appears at its commit, whole, or not
+// at all.
 func blobsPut(c *call) error {
 	var ask wire.BlobsCall
 	if err := ask.Decode(c.request); err != nil {

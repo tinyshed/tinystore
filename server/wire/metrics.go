@@ -164,9 +164,9 @@ type MetricsRange struct {
 	Op       string // count, sum, min, max or increase
 }
 
-// MetricsLimits bound one read or aggregate: the series it matches, the
-// blocks it decodes, the bytes it fetches, the samples it decodes and the
-// samples or buckets it answers; zero is the server's.
+// MetricsLimits bound one read or aggregate: the series it matches, the blocks
+// it decodes, the bytes it fetches, the samples it decodes and the samples or
+// buckets it answers. Zero is the server's.
 type MetricsLimits struct {
 	Series, Blocks, PayloadBytes, DecodedSamples, OutputSamples uint64
 }
@@ -230,15 +230,17 @@ type MetricsBuckets struct {
 	Buckets []MetricsBucket
 }
 
-// MetricsBucket is one bucket of an aggregate: its edges in unix
-// milliseconds, the samples it counted and the resets among them, its value,
-// and whether the value overflowed a float or retention cut the bucket.
+// MetricsBucket is one bucket of an aggregate.
 type MetricsBucket struct {
-	From, To      int64
+	// From and To are the bucket's edges in unix milliseconds.
+	From, To int64
+	// Count is the samples it counted and Resets the resets among them.
 	Count, Resets int64
 	Value         float64
-	Overflow      bool
-	Partial       bool
+	// Overflow says the value overflowed a float.
+	Overflow bool
+	// Partial says retention cut the bucket.
+	Partial bool
 }
 
 // a bucket's flags, a byte each

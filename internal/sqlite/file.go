@@ -156,10 +156,11 @@ func Open(ctx context.Context, path string, config Config) (*File, error) {
 
 const walQuery = `pragma journal_mode=WAL`
 
-// openWriter opens the pool of the one connection that writes, and turns the
-// file to WAL, so that readers keep their snapshots while it writes. The page
-// size is a pragma of the connection because it must precede the file's first
-// write, which turning on WAL is.
+// openWriter opens the single writer connection and turns the file to WAL, so
+// readers keep their snapshots while it writes.
+//
+// The page size is set first because it must precede the file's first write,
+// and turning on WAL is one.
 func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	arguments := writerArguments()
 	if config.PageSize > 0 {

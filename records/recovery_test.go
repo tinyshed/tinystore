@@ -14,9 +14,9 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// an abrupt exit loses no record an Append returned for, whenever it comes:
-// the head is rows of the file, and a seal is one transaction that the next
-// open finds whole or not at all
+// An abrupt exit loses no record an Append returned for, whenever it comes.
+// The head is rows of the file, and a seal is one transaction that the next
+// open finds whole or not at all.
 func TestAnAbruptExitKeepsEveryAppendedRecord(t *testing.T) {
 	want := sortedByTime(frontendRecords(3 * maxSegmentRecords))
 	for _, moment := range []string{"appended", "publishing", "sealed"} {
@@ -46,8 +46,8 @@ func TestAnAbruptExitKeepsEveryAppendedRecord(t *testing.T) {
 	}
 }
 
-// crashTrigger ends the process inside a publication, after its segment row
-// and first block are written and before its head rows are deleted
+// crashTrigger ends the process inside a publication, once the segment row and
+// the first two blocks are inserted and before its head rows are deleted.
 const crashTrigger = `create trigger crash after insert on blocks when new.id = 2 begin select exit_now(); end`
 
 // TestAbruptExitHelper runs in the child: it appends three segments' worth,

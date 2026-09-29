@@ -90,9 +90,9 @@ func waitServe(t *testing.T, dir, not string, serving <-chan error) wire.Publish
 	return wire.Published{}
 }
 
-// handshake reaches the endpoint SERVE names as an SDK does, a HELLO carrying
-// a challenge, and returns the WELCOME that answers it with the proof SERVE's
-// secret makes
+// handshake reaches the endpoint SERVE names as an SDK does, with a HELLO
+// carrying a challenge. It returns the WELCOME that answers with the proof
+// SERVE's secret makes.
 func handshake(t *testing.T, published wire.Published) wire.Welcome {
 	t.Helper()
 	challenge := make([]byte, wire.ChallengeSize)

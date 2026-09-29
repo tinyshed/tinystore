@@ -13,18 +13,21 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// Lines is a writer for another program's output, a child process's stdout or
-// a file being followed: each line it is given becomes a record in stream,
-// queued as the handler queues its lines, so a Write never waits and a record
-// the buffer has no room for is dropped and counted in Stats. The lines of one
-// record are joined first: a stack trace's frames, a traceback, a JSON value
-// printed over several lines. A record named "log" keeps its text byte for
-// byte as its body; one named "json" or "logfmt" keeps a JSON object's fields
-// or logfmt pairs, which spell its line again. Its level is taken from where
-// pino, logfmt, glog, Redis, log4j and their kin write it, in colour or not,
-// and its time is when its first line arrived. A record still growing waits a
-// flush or two for a line that joins it; Close hands it over. A line larger
-// than one record's bound is dropped and counted.
+// Lines is a writer for another program's output, a child process's stdout or a
+// file being followed: each line it is given becomes a record in stream, queued
+// as the handler queues its lines. A Write never waits, and a record the buffer
+// has no room for is dropped and counted in Stats. A line larger than one
+// record's bound is dropped and counted too.
+//
+// The lines of one record are joined first: a stack trace's frames, a
+// traceback, a JSON value printed over several lines. A record still growing
+// waits a flush or two for a line that joins it; Close hands it over.
+//
+// A record named "log" keeps its text byte for byte as its body; one named
+// "json" or "logfmt" keeps a JSON object's fields or logfmt pairs, which spell
+// its line again. A record's level is taken from where pino, logfmt, glog,
+// Redis, log4j and their kin write it, in colour or not, and its time is when
+// its first line arrived.
 func (s *Store) Lines(stream string) io.WriteCloser {
 	w := newLineWriter(stream, s.now, s.enqueue)
 	w.release = func() { s.lines.remove(w) }
@@ -45,7 +48,6 @@ const (
 	logfmtLine = "logfmt" // the attributes are logfmt pairs, as spellLogfmt writes them
 )
 
-// maxJoinedLines is how many lines one record joins
 const maxJoinedLines = 1000
 
 var errLinesClosed = fmt.Errorf("records: lines: %w", tinystore.ErrClosed)
@@ -69,7 +71,6 @@ func newLineWriter(stream string, now func() time.Time, enqueue func(Record)) *l
 	return &lineWriter{stream: stream, now: now, enqueue: enqueue, release: func() {}, drop: func() {}, room: room}
 }
 
-// pendingRecord is one record's lines so far
 type pendingRecord struct {
 	text   []byte
 	at     time.Time
@@ -274,7 +275,6 @@ func (b *brackets) scan(line []byte) {
 	b.json = b.depth > 0
 }
 
-// handOverPending hands over the record being joined
 func (w *lineWriter) handOverPending() {
 	if w.pending != nil {
 		w.enqueue(w.record(w.pending))

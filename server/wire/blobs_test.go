@@ -7,7 +7,6 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// every blobs message reads back as it was written
 func TestBlobsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	jpeg := "image/jpeg"
 	messages := []struct {

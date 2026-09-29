@@ -207,9 +207,9 @@ func echo(t *testing.T, conn *client.Conn, n uint64) {
 	}
 }
 
-// the server says GOAWAY to each connection when it closes: the streams
-// running finish, what crosses the GOAWAY is answered unavailable, and the
-// connection closes after its last stream
+// The server says GOAWAY to each connection when it closes. The streams running
+// finish, what crosses the GOAWAY is answered unavailable, and the connection
+// closes after its last stream.
 func TestClosingTheServerLetsTheStreamsRunningFinish(t *testing.T) {
 	ts := startTestServer(t, Options{})
 	conn := ts.dial(t, wire.Hello{})

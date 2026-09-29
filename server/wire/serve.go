@@ -35,8 +35,7 @@ func Prove(secret, challenge []byte) []byte {
 }
 
 // Proves says whether a WELCOME's proof answers the challenge with the secret
-// SERVE names, in constant time; a SERVE without a whole secret proves
-// nothing.
+// SERVE names, in constant time. A SERVE without a whole secret proves nothing.
 func (p Published) Proves(challenge, proof []byte) bool {
 	secret, err := base64.RawURLEncoding.DecodeString(p.Secret)
 	if err != nil || len(secret) != SecretSize || len(challenge) != ChallengeSize {

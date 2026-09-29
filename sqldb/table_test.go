@@ -140,9 +140,12 @@ func panicOf(declare func()) (panicked string) {
 	return "nothing"
 }
 
-// what a declaration may say: a default of an untyped constant for a named
-// type, a JSON default of the value it holds, a uuid kept as bytes, and a
-// field shadowed by a shallower one of the same column
+// What a declaration may say:
+//
+//	a default of an untyped constant for a named type
+//	a JSON default of the value it holds
+//	a uuid kept as bytes
+//	a field shadowed by a shallower one of the same column
 func TestADeclarationSaysWhatItsStructCannot(t *testing.T) {
 	knowUUIDs(t)
 	type ticket struct {

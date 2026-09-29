@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// the engine's own bounds
 const (
 	readers      = 8               // four served 15 to 26 % fewer point reads in the container, as many on Windows
 	statements   = 128             // compiled statements a connection keeps, about a megabyte of them

@@ -58,7 +58,7 @@ func (u *Upload) placeInline(placed *content) error {
 
 // placeFile syncs and closes the upload's file and renames it into objects/,
 // then syncs that directory, so that the commit names bytes whose name is
-// durable; the file is never written again, nor given another name
+// durable. The file is never written again, nor given another name.
 func (u *Upload) placeFile(placed *content) error {
 	s := u.bucket.store
 	s.reach(stepWritten)
@@ -87,8 +87,8 @@ func (u *Upload) placeFile(placed *content) error {
 }
 
 // commitUpload commits an upload's object under its key, beside the writes of
-// other goroutines: its condition checked again, its content and row written,
-// and the content the key named before let go
+// other goroutines. It checks the condition again, writes the content and the
+// row, and lets go of the content the key named before.
 func (b *Bucket) commitUpload(ctx context.Context, c call, placed content) (Object, error) {
 	free, err := b.store.writes.Take(ctx)
 	if err != nil {
@@ -104,9 +104,9 @@ func (b *Bucket) commitUpload(ctx context.Context, c call, placed content) (Obje
 	return v.object(c.key), err
 }
 
-// finish ends the upload after its commit: a committed one lets its id go, a
+// finish ends the upload after its commit. A committed one lets its id go, a
 // failed one removes its bytes, and one whose outcome is unknown asks the file
-// whether its content is there before it removes them
+// whether its content is there before it removes them.
 func (u *Upload) finish(ctx context.Context, err error) {
 	s := u.bucket.store
 	switch {
@@ -125,9 +125,9 @@ func (u *Upload) Abort() {
 	u.abort(errEnded)
 }
 
-// abort ends the upload from any goroutine, its own, maintenance's once its
-// context has ended, or the store's Close, and says whether it was the one
-// that ended it
+// abort ends the upload from any goroutine: its own, maintenance's once its
+// context has ended, or the store's Close. It says whether it was the one that
+// ended it.
 func (u *Upload) abort(reason error) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -145,9 +145,9 @@ func (u *Upload) end(reason error) {
 	u.release(reason)
 }
 
-// removeBytes removes the upload's file wherever it lies and lets its id go;
-// a file of objects/ that will not go keeps its id held, so that the settled
-// mark stays below it until maintenance or the next open removes it
+// removeBytes removes the upload's file wherever it lies and lets its id go. A
+// file of objects/ that will not go keeps its id held, so that the settled mark
+// stays below it until maintenance or the next open removes it.
 func (u *Upload) removeBytes() {
 	s := u.bucket.store
 	var err error

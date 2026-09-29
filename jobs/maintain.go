@@ -30,10 +30,12 @@ const (
 )
 
 // Maintain removes the failed jobs each queue this process opened keeps no
-// longer, the keys its jobs left behind and the done keys past their KeepDone,
-// 10,000 a transaction and at most ten transactions of each a call; the store
-// calls it every minute unless it is Manual. A queue this process has not
-// opened keeps its failed jobs and its keys.
+// longer, the keys its jobs left behind and the done keys past their KeepDone.
+// It removes 10,000 a transaction and runs at most ten transactions of each a
+// call.
+//
+// The store calls it every minute unless it is Manual. A queue this process has
+// not opened keeps its failed jobs and its keys.
 func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	release, err := s.holdMaintenance(ctx)
 	if err != nil {
@@ -79,9 +81,10 @@ const (
 		and not exists (select 1 from jobs j where j.queue = keys.queue and j.next = keys.next and j.id = keys.id)`
 )
 
-// dropKeysLeft removes the keys that jobs gone from a queue left behind,
-// walking its keys in their order from where the last call ended, 10,000 a
-// transaction and ten a call, and from the first again after the last
+// dropKeysLeft removes the keys that jobs gone from a queue left behind. It
+// walks the queue's keys in order from where the last call ended, 10,000 a
+// transaction and ten transactions a call, and starts again from the first key
+// once it has reached the last.
 func (s *Store) dropKeysLeft(ctx context.Context, state *queueState) (int, error) {
 	dropped := 0
 	for range 10 {
@@ -182,8 +185,9 @@ func expireBatch(ctx context.Context, w sqlite.Writer, queue, cutoff int64) (int
 	return len(spilled), err
 }
 
-// quietLog logs one kind of event of one queue once a quiet period, with how
-// many happened since, so that a million failures are not a million lines:
+// quietLog logs one kind of event of one queue at most once in a quiet period,
+// with how many happened since, so that a million failures are not a million
+// lines:
 //
 //	00:00  a job failed for good   → Warn count=1
 //	00:01…00:09 1,204 more         → counted

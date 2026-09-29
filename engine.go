@@ -13,7 +13,6 @@ import (
 	"github.com/tinyshed/tinystore/internal/dirlock"
 )
 
-// Engine is what the store needs from an opened engine.
 type Engine interface {
 	Close(ctx context.Context) error
 }

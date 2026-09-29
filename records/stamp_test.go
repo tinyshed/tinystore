@@ -135,9 +135,9 @@ func TestAColumnKeepsItsStampsWhenTheyPay(t *testing.T) {
 	}
 }
 
-// integers that count their records' time are kept as their distance behind
-// it, and integers that do not are kept as they are; the first is the example
-// in the comments on valueTimed and distanceBehind
+// Integers that count their records' time are kept as their distance behind it,
+// and integers that do not are kept as they are. The first is the example in
+// the comments on valueTimed and distanceBehind.
 func TestIntegersThatCountTimeAreKeptBehindIt(t *testing.T) {
 	if distance, ok := distanceBehind(1727300000123456789, 1727300000121, 6); !ok || distance != 2 {
 		t.Errorf("%d ms behind, want 2", distance)

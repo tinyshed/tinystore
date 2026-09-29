@@ -106,8 +106,8 @@ func (d *decoder) keepTrace(block *openedBlock, q *checkedQuery, keep []bool) er
 }
 
 // keepAttrs keeps, for each attribute asked for, the rows holding its value in
-// any occurrence of its key; a row whose attributes are serialized is kept
-// for the whole check
+// any occurrence of its key. A row whose attributes are serialized is kept for
+// the whole check.
 func (d *decoder) keepAttrs(block *openedBlock, q *checkedQuery, keep []bool) error {
 	s := block.schema
 	for _, want := range q.asked.Attrs {

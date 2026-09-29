@@ -15,9 +15,9 @@ import (
 // interval. It is kept as text, so that another language reads the same
 // schedule:
 //
-//	jobs.Daily("03:10", moscow)        10 3 * * * Europe/Moscow
-//	jobs.Cron("*/15 9-18 * * 1-5", tz)   */15 9-18 * * 1-5 America/New_York
-//	jobs.Every(15 * time.Minute)       @every 15m
+//	jobs.Daily("03:10", moscow)         10 3 * * * Europe/Moscow
+//	jobs.Cron("*/15 9-18 * * 1-5", tz)  */15 9-18 * * 1-5 America/New_York
+//	jobs.Every(15 * time.Minute)        @every 15m
 type Repeat struct {
 	text  string
 	every time.Duration
@@ -37,12 +37,14 @@ func (r Repeat) enqueueOption(s *enqueueSettings) {
 	s.repeat = &r
 }
 
-// Cron repeats a job by a five-field cron expression, minute, hour, day of the
-// month, month and day of the week, in zone: *, ranges, steps, lists and the
-// names of months and days, or @hourly, @daily, @weekly, @monthly or @yearly.
-// A day of the month and a day of the week both given run on either. A zone
-// without a name, time.Local, is ErrInvalid, since a schedule kept by it would
-// change meaning on a host in another zone.
+// Cron repeats a job by a five-field cron expression in zone: minute, hour, day
+// of the month, month and day of the week. A field takes *, ranges, steps,
+// lists and the names of months and days, or the whole expression is @hourly,
+// @daily, @weekly, @monthly or @yearly. A day of the month and a day of the
+// week both given run on either.
+//
+// A zone without a name, time.Local, is ErrInvalid, since a schedule kept by it
+// would change meaning on a host in another zone.
 func Cron(expr string, zone *time.Location) Repeat {
 	if len(expr) > maxRepeat {
 		return Repeat{err: fmt.Errorf("%w: jobs: repeat exceeds %d bytes", tinystore.ErrLimit, maxRepeat)}
@@ -331,10 +333,11 @@ func (c cron) firstInDay(year int, month time.Month, day, hour, minute int, afte
 	return time.Time{}, false
 }
 
-// instant is a wall time of the zone as an instant, or, when daylight saving
-// skips it, the instant the skip ends: time.Date maps a skipped wall time to
-// one before the skip or after it, and the skip's edge is where that zone
-// period ends or begins
+// instant is a wall time of the zone as an instant. When daylight saving skips
+// it, the result is the instant the skip ends.
+//
+// time.Date maps a skipped wall time to one before the skip or after it, and
+// the skip's edge is where that zone period ends or begins.
 func (c cron) instant(year int, month time.Month, day, hour, minute int) time.Time {
 	t := time.Date(year, month, day, hour, minute, 0, 0, c.zone)
 	if t.Hour() == hour && t.Minute() == minute {

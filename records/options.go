@@ -9,7 +9,8 @@ import (
 
 type Options struct {
 	// Retention is how long a record is kept: a segment goes once its newest
-	// record is older, and Append refuses an older one. Fourteen days when zero.
+	// record is older, and Append refuses an older one. Fourteen days when
+	// zero.
 	Retention time.Duration
 
 	// ClockSkew is how far ahead of the store's clock a record's time may be;

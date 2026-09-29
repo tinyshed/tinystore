@@ -14,7 +14,8 @@ import (
 	"strings"
 )
 
-// the package whose CheckSchema a program's test calls, a check a database
+// sqldbtestPath is the package whose CheckSchema a program's test calls, one
+// check for each database
 const sqldbtestPath = "github.com/tinyshed/tinystore/sqldb/sqldbtest"
 
 // check is one call of sqldbtest.CheckSchema: the database it checks, the test
@@ -27,8 +28,10 @@ type check struct {
 }
 
 // findChecks reads every test file of the module at root, its nested modules
-// left out, for the checks it calls; a check whose name is not a literal is
-// one no command can find by name
+// left out, for the checks they call.
+//
+// A check whose name is not a literal comes back in unnamed, since no command
+// can find it by name.
 func findChecks(root string) (checks []check, unnamed []string, err error) {
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -152,9 +155,11 @@ func moduleRoot(from string) (string, error) {
 	}
 }
 
-// pick is the checks a command acts on: the named database's, or every one
-// when none is named and the command allows it; one name checked twice in the
-// module is an error, as sqldbtest refuses it in one test binary
+// pick returns the checks a command acts on: the named database's, or every one
+// when none is named and the command allows it.
+//
+// One name checked twice in the module is an error, as sqldbtest refuses it
+// in one test binary.
 func pick(checks []check, unnamed []string, database string, many bool) ([]check, error) {
 	byName := map[string]check{}
 	var names []string

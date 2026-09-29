@@ -22,11 +22,13 @@ func refused(format string, args ...any) error {
 }
 
 // checkDataSQL lets a data connection's statement run only when both lines
-// pass: SQLite's own tokens, then the program SQLite compiles the statement
-// to. Where the statement ends is the first line's alone, since SQLite runs
-// every statement of a string, EXPLAIN's included, and compiling a PRAGMA
-// already changes its connection: the second line sees one statement of the
-// words a data connection may begin with, or nothing.
+// pass: readDataSQL over SQLite's own tokens, then explainDataSQL over the
+// program SQLite compiles the statement to.
+//
+// Where the statement ends is the first line's alone. SQLite runs every
+// statement of a string, EXPLAIN's included, and compiling a PRAGMA already
+// changes its connection, so the second line must only ever see one statement
+// that begins with a data verb, or nothing.
 func checkDataSQL(ctx context.Context, db *sqldb.DB, statement string, args []any) error {
 	if err := readDataSQL(statement); err != nil {
 		return err
@@ -34,15 +36,14 @@ func checkDataSQL(ctx context.Context, db *sqldb.DB, statement string, args []an
 	return explainDataSQL(ctx, db, statement, args)
 }
 
-// the words a data connection's statement begins with: a query, or a change
-// of rows
+// An allow-list: any other first word, EXPLAIN and PRAGMA included, is refused.
 var dataVerbs = map[string]bool{
 	"SELECT": true, "VALUES": true, "WITH": true, "INSERT": true, "REPLACE": true, "UPDATE": true, "DELETE": true,
 }
 
-// readDataSQL is the first line: one statement, which begins with a data
-// verb, leaves nothing unclosed and names neither sqlite_dbpage nor a
-// pragma's table
+// readDataSQL is the first line. It passes one statement that begins with a
+// data verb, leaves nothing unclosed, and names neither sqlite_dbpage nor a
+// pragma's table.
 func readDataSQL(statement string) error {
 	if at := strings.IndexByte(statement, 0); at >= 0 {
 		return refused("a NUL byte at %d, past which SQLite reads nothing", at)
@@ -68,10 +69,15 @@ func readDataSQL(statement string) error {
 	return nil
 }
 
-// isReservedName is a name that stands for sqlite_dbpage, which writes a
-// file's pages, or for a pragma's table, pragma_optimize among them, which
-// may analyze and so make tables. A string counts, since SQLite takes one for
-// a name where a name may stand: select * from 'pragma_optimize'.
+// isReservedName says whether token names sqlite_dbpage or a pragma's table.
+//
+// sqlite_dbpage writes a file's pages. A pragma's table, pragma_optimize among
+// them, may analyze and so make tables.
+//
+// A string counts as a name, since SQLite takes one for a name where a name
+// may stand:
+//
+//	select * from 'pragma_optimize'
 func isReservedName(token sqlToken) bool {
 	name, isName := nameOf(token)
 	if !isName {
@@ -120,10 +126,13 @@ const (
 )
 
 // explainDataSQL is the second line: it compiles the statement with EXPLAIN on
-// a reader, which runs nothing, and refuses a program that changes the schema,
-// attaches or detaches a file, vacuums, ends a transaction, changes how the
-// file is kept, writes the migration history or opens sqlite_dbpage or
-// pragma_optimize. It reads the guarded pages from the same snapshot.
+// a reader, which runs nothing, and refuses the program it gets back.
+//
+// A program is refused when it changes the schema, attaches or detaches a file,
+// vacuums, ends a transaction, changes how the file is kept, writes the
+// migration history, or opens sqlite_dbpage or pragma_optimize.
+//
+// The guarded pages are read from the same snapshot as the program.
 func explainDataSQL(ctx context.Context, db *sqldb.DB, statement string, args []any) error {
 	return db.View(ctx, func(tx *sqldb.Tx) error {
 		guard, err := guardOf(ctx, tx)
@@ -168,7 +177,6 @@ func guardOf(ctx context.Context, tx *sqldb.Tx) (guarded, error) {
 	return guard, nil
 }
 
-// the columns EXPLAIN lists a program in
 var explainColumns = []string{"addr", "opcode", "p1", "p2", "p3", "p4", "p5", "comment"}
 
 func (g guarded) check(program sqldb.Rows) error {
@@ -183,9 +191,9 @@ func (g guarded) check(program sqldb.Rows) error {
 	return nil
 }
 
-// refusedOpcodes change the schema, attach or detach a file, vacuum, end or
-// begin a transaction or change how the file is kept; a change of rows holds
-// none of them
+// refusedOpcodes change the schema, vacuum, end or begin a transaction or
+// change how the file is kept; a change of rows holds none of them. Attaching a
+// file is a function call, which refuses checks by its name.
 var refusedOpcodes = map[string]bool{
 	"CreateBtree": true, "Destroy": true, "DropTable": true, "DropIndex": true, "DropTrigger": true,
 	"ParseSchema": true, "SetCookie": true, "VCreate": true, "VDestroy": true, "VRename": true, "Vacuum": true,
@@ -197,7 +205,7 @@ var refusedOpcodes = map[string]bool{
 // as a new index's is
 const p2IsRegister = 0x10
 
-// opcode is one row of EXPLAIN
+// opcode is one row of EXPLAIN, less the addr and comment columns, which refuses does not read.
 type opcode struct {
 	name       string
 	p1, p2, p3 int64
@@ -212,9 +220,12 @@ func opcodeOf(row []any) opcode {
 	}
 }
 
-// refuses says what op does that a data connection may not: OpenWrite's p2 and
-// Clear's p1 are the page a table or an index begins at, page 1 being
-// sqlite_schema's, and their p3 and p2 the database, 0 being main
+// refuses says what op does that a data connection may not, or "" when it
+// does nothing of the kind.
+//
+// OpenWrite's p2 and Clear's p1 are the page a table or an index begins at,
+// page 1 being sqlite_schema's. OpenWrite's p3 and Clear's p2 are the database,
+// 0 being main.
 func (g guarded) refuses(op opcode) string {
 	switch {
 	case refusedOpcodes[op.name]:

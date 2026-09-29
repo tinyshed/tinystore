@@ -89,9 +89,9 @@ func countRows(t *testing.T, file *File) int {
 	return count
 }
 
-// writes that queue while the writer is busy commit together, in one
-// transaction and one fsync, and a write that fails is rolled back to its
-// savepoint without failing the others
+// Writes that queue while the writer is busy commit together, in one
+// transaction and one fsync. A write that fails is rolled back to its savepoint
+// without failing the others.
 func TestGroupedWritesShareACommitAndFailAlone(t *testing.T) {
 	file := openGroupTestFile(t)
 	release := holdWriter(t, file)
@@ -189,9 +189,9 @@ func TestAHeavyGroupedWriteCommitsAlone(t *testing.T) {
 	}
 }
 
-// a transaction holding the writer past a group's hold fails none of the
-// writes queued behind it: the hold counts from when a group holds the writer,
-// and the engine is told once that the leader has waited
+// A transaction holding the writer past a group's hold fails none of the writes
+// queued behind it, because the hold counts from when a group holds the writer.
+// The engine is told once that the leader has waited.
 func TestALongTransactionFailsNoGroupedWriteBehindIt(t *testing.T) {
 	var waited []string
 	var mu sync.Mutex

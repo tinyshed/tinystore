@@ -51,8 +51,8 @@ func jobsWork(c *call) error {
 	return trailer(c, wire.Empty{})
 }
 
-// workOptions is a remote Work's, its workers no more than a connection's
-// streams in flight
+// workOptions are a remote Work's options; its workers are at most a
+// connection's streams in flight.
 func workOptions(ask wire.JobsWorkers, most uint32) ([]jobs.WorkOption, error) {
 	var options []jobs.WorkOption
 	if ask.Workers > uint64(most) {
@@ -97,10 +97,12 @@ func workRemotely[V any](remote *remoteWork, queue *jobs.Queue[V], options []job
 }
 
 // remoteWork hands a Work loop's jobs to a client and routes the outcomes it
-// sends back to the handlers waiting for them. When the client ends its side,
-// cancels or leaves, the jobs in its hands fail as a dead worker's would, and
-// only after their handlers return does the loop's context end, so that the
-// jobs it claimed ahead and never handed over go back uncounted.
+// sends back to the handlers waiting for them.
+//
+// When the client ends its side, cancels or leaves, the jobs in its hands fail
+// as a dead worker's would. The loop's context ends only after their handlers
+// return, so that the jobs it claimed ahead and never handed over go back
+// uncounted.
 type remoteWork struct {
 	call    *call
 	ctx     context.Context // the Work loop's
@@ -123,8 +125,8 @@ func newRemoteWork(c *call) *remoteWork {
 	return remote
 }
 
-// listen reads the client's outcomes until its side ends, and returns what
-// stops it once the loop has
+// listen reads the client's outcomes until its side ends, and returns the
+// function that stops it, to be called once the loop has returned.
 func (w *remoteWork) listen() (stop func()) {
 	w.listening.Go(func() { w.leave(w.readOutcomes()) })
 	unwatch := context.AfterFunc(w.call.ctx, func() { w.leave(context.Cause(w.call.ctx)) })

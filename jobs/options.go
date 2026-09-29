@@ -12,7 +12,6 @@ import (
 // arrive without breaking a caller.
 type Options struct{}
 
-// the engine's own bounds and schedule
 const (
 	pageSize       = 4 << 10          // 4 KiB pages measured for short rows
 	readers        = 4                // reader connections: lookups, scans and the alarm's reads
@@ -51,28 +50,23 @@ var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 // mean, so a program may change them between runs.
 type QueueOption interface{ queueOption(*policy) }
 
-// ClaimOption changes one Claim.
 type ClaimOption interface{ claimOption(*claimSettings) }
 
-// LeaseOption fits a queue and a Claim alike.
 type LeaseOption interface {
 	QueueOption
 	ClaimOption
 }
 
-// EnqueueOption changes one Enqueue or Update.
 type EnqueueOption interface{ enqueueOption(*enqueueSettings) }
 
 // SettleOption names when a retried or snoozed job runs again.
 type SettleOption interface{ settleOption(*settleSettings) }
 
-// TimeOption fits an Enqueue and a settlement alike.
 type TimeOption interface {
 	EnqueueOption
 	SettleOption
 }
 
-// WorkOption changes how Work runs its handler.
 type WorkOption interface{ workOption(*workSettings) }
 
 // policy is what a queue's options say
@@ -184,8 +178,8 @@ func Key(key string) EnqueueOption {
 }
 
 // Lease is how long a claimed job stays its worker's before another claim may
-// take it: 30 seconds unless it says, for a queue or for one Claim. Work extends
-// it while its handler runs.
+// take it: 30 seconds unless it says, for a queue or for one Claim. Work
+// extends it while its handler runs.
 func Lease(d time.Duration) LeaseOption {
 	return leaseOption(d)
 }
@@ -202,7 +196,7 @@ func MaxAttempts(n int) QueueOption {
 }
 
 // Backoff is a retry's wait: first after the first failure, doubling after
-// each, never past longest, each a tenth longer or shorter at random; one
+// each, never past longest, each a tenth longer or shorter at random. It is one
 // second to an hour unless it says.
 func Backoff(first, longest time.Duration) QueueOption {
 	return forQueues(func(p *policy) {
@@ -214,7 +208,7 @@ func Backoff(first, longest time.Duration) QueueOption {
 }
 
 // MaxWaiting refuses a job past n in the queue with tinystore.ErrLimit, ten
-// million unless it says, so that a loop that enqueues without end stops at a
+// million unless it says. A loop that enqueues without end then stops at a
 // limit and not at a full disk.
 func MaxWaiting(n int64) QueueOption {
 	return forQueues(func(p *policy) {

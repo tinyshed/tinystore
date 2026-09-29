@@ -11,7 +11,6 @@ import (
 
 var errClosed = fmt.Errorf("records: %w", tinystore.ErrClosed)
 
-// admit lets one operation in while the store is open; release lets it out
 func (s *Store) admit(ctx context.Context) (release func(), err error) {
 	if err = s.gate.Enter(ctx, errClosed); err != nil {
 		return nil, err
@@ -20,8 +19,8 @@ func (s *Store) admit(ctx context.Context) (release func(), err error) {
 }
 
 // admitTo lets one operation in and holds one of slots through all of its
-// work, decoding and encoding included, so that what runs at once is bounded
-// whether or not the store has Options.Memory
+// work, decoding and encoding included. What runs at once is therefore bounded
+// whether or not the store has Options.Memory.
 func (s *Store) admitTo(ctx context.Context, slots admission.Slots) (release func(), err error) {
 	leave, err := s.admit(ctx)
 	if err != nil {
@@ -54,7 +53,6 @@ func (s *Store) reserve(ctx context.Context, weigh func() int64) (release func()
 	return reserved.Release, nil
 }
 
-// holdMaintenance lets one Maintain at a time run on a store
 func (s *Store) holdMaintenance(ctx context.Context) (release func(), err error) {
 	select {
 	case <-s.maintenance:

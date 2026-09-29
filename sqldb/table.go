@@ -96,10 +96,14 @@ type index struct {
 type TableOption func(*table) error
 
 // Table declares the table name for the rows of T, and panics, as
-// regexp.MustCompile does, on a declaration that cannot be a table: an option
-// naming a column T lacks, a default of another type, a generated column
-// nothing fills, a field sqldb cannot store, a custom type without Storage, a
-// reference to a table keyed by several columns.
+// regexp.MustCompile does, on a declaration that cannot be a table:
+//
+//	an option naming a column T lacks
+//	a default of another type
+//	a generated column nothing fills
+//	a field sqldb cannot store
+//	a custom type without Storage
+//	a reference to a table keyed by several columns
 func Table[T any](name string, options ...TableOption) *TableDef[T] {
 	declared, err := declare(reflect.TypeFor[T](), name, options)
 	if err != nil {
@@ -250,9 +254,8 @@ func PrimaryKey(columns ...string) TableOption {
 	}
 }
 
-// Unique is a unique index named <table>_<columns>, rather than a table
-// constraint, so that a later migration can drop it without rebuilding the
-// table.
+// Unique is a unique index named <table>_<columns>, not a table constraint. A
+// later migration can then drop it without rebuilding the table.
 func Unique(columns ...string) TableOption {
 	return indexOn("", columns, true)
 }
@@ -373,8 +376,8 @@ func Check(expression string) TableOption {
 }
 
 // Storage says how column keeps a type sqldb does not know, whose own Scan and
-// Value convert it; or keeps a uuid as its 16 bytes, which a raw query then
-// passes as id[:].
+// Value convert it. It can also keep a uuid as its 16 bytes, which a raw query
+// then passes as id[:].
 func Storage(column string, class StorageClass) TableOption {
 	return func(t *table) error {
 		c, err := t.column(column)

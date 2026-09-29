@@ -9,4 +9,6 @@
 //	message.go   HELLO, WELCOME and GOAWAY
 //	serve.go     SERVE, and the proof a WELCOME answers a HELLO's challenge with
 //	errors.go    the codes, and Error, a stream's failure
+//	kv.go, jobs.go, blobs.go, records.go, sql.go, metrics.go   each engine's messages
+//	testdata/    the vectors every SDK is tested against
 package wire

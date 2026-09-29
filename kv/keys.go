@@ -98,8 +98,8 @@ func keyOf(path []byte, prefix int) string {
 	return strings.ReplaceAll(string(path[prefix+1:]), string([]byte{nameEnd, escaped}), string([]byte{nameEnd}))
 }
 
-// shownPath is owners and key as an error names them; no key, which no call
-// on a key can have, names the branch itself
+// shownPath is owners and key as an error names them. With no key, as in a
+// Clear, it names the branch itself.
 func shownPath(owners []string, key string) string {
 	if key == "" {
 		return strings.Join(owners, "/")

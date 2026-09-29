@@ -8,7 +8,6 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// every records message reads back as it was written
 func TestRecordsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	warn, body, empty := int64(4), "slow request", ""
 	record := wire.Record{

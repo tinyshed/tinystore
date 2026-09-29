@@ -13,16 +13,17 @@ type Snapshotter interface {
 	Snapshot(ctx context.Context, dir string) ([]SnapshotFile, error)
 }
 
-// SnapshotFile is one file of an engine's copy: Name is its path inside the
-// store, such as "metrics.db", "sql/app.db" or "blobs/objects/1a3/1a3f07",
-// and Schema how many migrations its engine's database has. Stored asks a
-// backup to keep the bytes as they are rather than deflate them: an
-// application's files are mostly media, which does not compress.
+// SnapshotFile is one file of an engine's copy.
 type SnapshotFile struct {
+	// Name is the file's path inside the store, such as "metrics.db",
+	// "sql/app.db" or "blobs/objects/1a3/1a3f07".
 	Name   string `json:"name"`
 	Engine string `json:"engine"`
-	Schema int    `json:"schema"`
-	Stored bool   `json:"-"`
+	// Schema is how many migrations the engine's database has.
+	Schema int `json:"schema"`
+	// Stored asks a backup to keep the bytes as they are rather than deflate
+	// them: an application's files are mostly media, which does not compress.
+	Stored bool `json:"-"`
 }
 
 // Snapshot is a copy of every engine's file, in Dir inside the store's
@@ -32,7 +33,6 @@ type Snapshot struct {
 	Files []SnapshotFile
 }
 
-// Remove deletes the copies.
 func (s Snapshot) Remove() error {
 	return os.RemoveAll(s.Dir)
 }

@@ -11,7 +11,8 @@ import (
 )
 
 // Work acknowledges a job whose handler returned nil, retries one whose handler
-// failed or panicked, and leaves one its handler settled itself as it settled it
+// failed or panicked, and leaves one its handler settled itself as it settled
+// it
 func TestWorkSettlesByWhatTheHandlerReturns(t *testing.T) {
 	queues := openTestQueues(t, t.TempDir())
 	queue := openTestQueue[string](t, queues, "work")
@@ -74,9 +75,9 @@ func workUntilIdle(t *testing.T, queue *Queue[string]) []string {
 	return ran
 }
 
-// jobs due together are claimed as many at a time as there are free workers,
-// and their settlements share the writes that claim, so that a burst does not
-// cost a commit a job
+// Jobs due together are claimed as many at a time as there are free workers.
+// Their settlements share the writes that claim, so that a burst does not cost
+// a commit a job.
 func TestJobsDueTogetherAreClaimedInBatches(t *testing.T) {
 	const burst = 64
 	queues := openTestQueues(t, t.TempDir())
@@ -151,8 +152,8 @@ func TestWorkLetsGoOfALeaseAnotherClaimTook(t *testing.T) {
 }
 
 // claimTheEndedLease moves the clock past the lease a Work loop holds and
-// claims its job, both inside one transaction, so that the loop cannot extend
-// the lease in between
+// claims its job. Both happen inside one transaction, so that the loop cannot
+// extend the lease in between.
 func claimTheEndedLease[V any](t *testing.T, queues *testQueues, queue *Queue[V]) Job[V] {
 	t.Helper()
 	var taken Job[V]
@@ -171,7 +172,6 @@ func claimTheEndedLease[V any](t *testing.T, queues *testQueues, queue *Queue[V]
 	return taken
 }
 
-// commits is how many transactions the writer of jobs.db has committed
 func commits(t *testing.T, queues *testQueues) uint64 {
 	t.Helper()
 	counters, err := queues.file.WriterCounters(t.Context())

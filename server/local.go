@@ -20,19 +20,22 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// the names a local server publishes in its store's directory, docs/server.md#serve
+// The names a local server publishes in its store's directory, docs/server.md "SERVE".
 const (
 	publishedDir = "server/"
 	serveName    = "SERVE"
 	socketName   = "tinystore.sock"
 )
 
-// Publish listens where the directory's shared sidecar is found, a Unix socket
-// in <dir>/server/ or, on Windows, a named pipe named after the directory, and
-// writes SERVE beside it, whole. The store holds the directory's lock, so
-// claiming server/ from it proves the directory is this server's to publish;
-// the directory is its owner's alone. unpublish removes SERVE and the socket;
-// Serve closes the listener once the server closes.
+// Publish listens where the directory's shared sidecar is found and writes
+// SERVE beside it, whole. The place is a Unix socket in <dir>/server/ or, on
+// Windows, a named pipe named after the directory.
+//
+// The store holds the directory's lock, so claiming server/ from it proves the
+// directory is this server's to publish. The directory is its owner's alone.
+//
+// unpublish removes SERVE and the socket. Serve closes the listener once the
+// server closes.
 func (s *Server) Publish(ctx context.Context) (l Listener, unpublish func() error, err error) {
 	dir, release, err := s.store.Claim(publishedDir)
 	if err != nil {
@@ -107,9 +110,9 @@ const (
 	errorSharingViolation syscall.Errno = 32
 )
 
-// whileHeld tries a rename or a remove of SERVE again for a moment on Windows,
-// where a client reading SERVE, which Go and Python open without sharing its
-// deletion, or a scanner reading it refuses both
+// whileHeld tries a rename or a remove of SERVE again for a moment on Windows.
+// Windows refuses both while a client reads SERVE, which Go and Python open
+// without sharing its deletion, or while a scanner reads it.
 func whileHeld(change func() error) error {
 	for try := 1; ; try++ {
 		err := change()
@@ -121,10 +124,12 @@ func whileHeld(change func() error) error {
 	}
 }
 
-// localEndpoint is where a store's shared sidecar listens: a Windows named pipe
-// named after the store's absolute path, or a socket in server/ when its path
-// fits a sockaddr_un, and in a directory of the user's own, named after the
-// store's path, when it does not
+// localEndpoint is where a store's shared sidecar listens.
+//
+// On Windows it is a named pipe named after the store's absolute path.
+// Elsewhere it is a socket in server/ when its path fits a sockaddr_un, and
+// otherwise a socket in a directory of the user's own, named after the store's
+// path.
 func localEndpoint(dir string) (string, error) {
 	absolute, err := filepath.Abs(dir)
 	if err != nil {

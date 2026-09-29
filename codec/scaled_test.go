@@ -155,8 +155,8 @@ func TestPayloadsWrittenBeforeStillRead(t *testing.T) {
 }
 
 // 573 of the 9999 two-place decimals have a product that lands just under the
-// integer they were written as, so truncating instead of rounding would refuse
-// very nearly every block of them
+// integer they were written as. Truncating instead of rounding would refuse
+// very nearly every block of them.
 func TestADecimalWhoseProductFallsShortIsStillFound(t *testing.T) {
 	c := testCodec(t)
 	for _, value := range []float64{0.29, 0.57, 1.15, 2.01, 4.35} {

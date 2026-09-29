@@ -18,11 +18,13 @@ import (
 const filesNamed = `select id from contents where not inline and names > 0 order by id`
 
 // Snapshot copies blobs.db into dir while the engine keeps working, and links
-// there every file the copy names: a link copies no byte, and keeps the bytes
+// there every file the copy names. A link copies no byte and keeps the bytes
 // after the engine removes its own name, so a 17 GB film costs the snapshot a
-// directory entry. Collection waits meanwhile, so that no file the copy names
-// goes before it is linked. A file missing is left out and logged, and one
-// the system will not link is copied.
+// directory entry.
+//
+// Collection waits meanwhile, so that no file the copy names goes before it is
+// linked. A file missing is left out and logged, and one the system will not
+// link is copied.
 func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
 	s.collection.Lock()
 	defer s.collection.Unlock()
@@ -77,9 +79,9 @@ type linker struct {
 	made  map[string]bool
 }
 
-// link puts a content's file into the snapshot under its own name: a hard
-// link, or a copy where the system links nothing; a file missing is left out
-// and logged, and the restored store reports it as this one does
+// link puts a content's file into the snapshot under its own name: a hard link,
+// or a copy where the system links nothing. A file missing is left out and
+// logged, and the restored store reports it as this one does.
 func (l *linker) link(ctx context.Context, id int64) (name string, linked bool, err error) {
 	if err = ctx.Err(); err != nil {
 		return "", false, err

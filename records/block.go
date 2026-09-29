@@ -24,7 +24,6 @@ type encodedBlock struct {
 	filters     []blockFilter
 }
 
-// blockFilter is a bloom over the values of one id-like attribute key
 type blockFilter struct {
 	key   string
 	bloom []byte
@@ -178,8 +177,8 @@ func levelsFrom(minimum int64) int64 {
 }
 
 // idFilters gives a bloom to each attribute key whose values in the block are
-// id-like, serialized attributes included, so a lookup that skips the block
-// never misses a value
+// id-like, serialized attributes included. A lookup that skips the block thus
+// never misses a value.
 func idFilters(s *schema, records []Record, ids recordIDs, gathered *columns) []blockFilter {
 	values := map[string][]string{}
 	for column, key := range s.columnKeys {
@@ -259,8 +258,8 @@ func (d *decoder) openBlock(s *schema, body []byte) (*openedBlock, error) {
 }
 
 // readDirectory decodes each row's shape and name, which say how many values
-// every other slot holds, and each row's time, which every read needs first
-// and every time a value keeps behind its record's
+// every other slot holds. It also decodes each row's time, which every read
+// needs first and every time a value keeps behind its record's.
 func (d *decoder) readDirectory(block *openedBlock) error {
 	s := block.schema
 	block.shapes = d.idColumn(block, slotShape, len(s.shapes))

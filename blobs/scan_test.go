@@ -8,8 +8,8 @@ import (
 )
 
 // Scan walks every key under a folder, its sub-folders' included, in the byte
-// order of the paths, a page at a time; a folder never meets its neighbours
-// whose names it begins
+// order of the paths, a page at a time. A folder never meets its neighbours
+// whose names it begins.
 func TestScanWalksEveryKeyUnderItsFolder(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

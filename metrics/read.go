@@ -28,7 +28,8 @@ func (b *queryBudget) takeSamples(count int) error {
 	return nil
 }
 
-// Read returns owned samples, or an error with no partial result; the caller holds no SQLite snapshot.
+// Read returns owned samples, or an error with no partial result; the caller
+// holds no SQLite snapshot.
 func (s *Store) Read(ctx context.Context, request Range) ([]Result, error) {
 	results := []Result{}
 	err := s.readEach(ctx, request, func(result Result) error {
@@ -41,7 +42,8 @@ func (s *Store) Read(ctx context.Context, request Range) ([]Result, error) {
 	return results, nil
 }
 
-// Stream passes one owned series at a time after the snapshot closes; an error may follow earlier results.
+// Stream passes one owned series at a time after the snapshot closes; an error
+// may follow earlier results.
 func (s *Store) Stream(ctx context.Context, request Range, yield func(Result) error) error {
 	if yield == nil {
 		return fmt.Errorf("%w: nil stream callback", ErrInvalid)

@@ -44,9 +44,9 @@ func idOf(name string) (int64, bool) {
 	return id, err == nil && id > 0 && strconv.FormatInt(id, 16) == name
 }
 
-// makeDir creates a directory of objects/ the first time a file goes there,
-// and syncs objects/ so that the directory's name is durable before any file
-// in it is
+// makeDir creates a directory of objects/ the first time a file goes there. It
+// syncs objects/ so that the directory's name is durable before any file in it
+// is.
 func (s *Store) makeDir(dir string) error {
 	if _, made := s.made.Load(dir); made {
 		return nil
@@ -137,8 +137,8 @@ func (d *dirSync) run(flush func() error) error {
 	return d.err
 }
 
-// removeFile removes a content's file, which no key names any more; a file
-// already gone is removed
+// removeFile removes a content's file, which no key names any more. A file
+// already gone counts as removed.
 func (s *Store) removeFile(id int64) error {
 	_, name := objectName(id)
 	if err := s.root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -147,8 +147,9 @@ func (s *Store) removeFile(id int64) error {
 	return nil
 }
 
-// letFilesGo removes the files of contents a commit left without names; while
-// a snapshot links files, and where a removal fails, maintenance removes them
+// letFilesGo removes the files of contents a commit left without names. While a
+// snapshot links files, or where a removal fails, it leaves them to
+// maintenance.
 func (s *Store) letFilesGo(ids []int64) {
 	if len(ids) == 0 || !s.collection.TryRLock() {
 		return
@@ -162,8 +163,8 @@ func (s *Store) letFilesGo(ids []int64) {
 }
 
 // checkFree refuses an upload that would leave less than KeepFree of the disk
-// free once need more bytes are written; a disk that does not say what it has
-// free is not checked
+// free once need more bytes are written. A disk that does not say what it has
+// free is not checked.
 func (s *Store) checkFree(need int64) error {
 	if s.keepFree < 0 {
 		return nil

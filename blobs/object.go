@@ -12,28 +12,31 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Object is an object as the file knows it. Key is its path under the handle
-// that returned it. ETag is quoted, as an HTTP header carries it, and derives
-// from the bytes, so two objects with the same bytes have one ETag; it is
-// compared with ETags and nothing else. Modified is the store's clock at the
-// commit of this version; Expires is zero for an object that does not expire.
+// Object is an object as the file knows it.
 type Object struct {
-	Key         string
-	Size        int64
+	// Key is the object's path under the handle that returned it.
+	Key  string
+	Size int64
+	// ETag is quoted, as an HTTP header carries it, and derives from the
+	// bytes, so two objects with the same bytes have one ETag. It is compared
+	// with ETags and nothing else.
 	ETag        string
 	ContentType string
-	Modified    time.Time
-	Expires     time.Time
-	Meta        map[string]string
+	// Modified is the store's clock at the commit of this version.
+	Modified time.Time
+	// Expires is zero for an object that does not expire.
+	Expires time.Time
+	Meta    map[string]string
 }
 
 // Query asks Scan for a page of every key under a handle's folder, its
-// sub-folders' included, in the byte order of their paths: those that start
-// with Prefix, after the key After when it is not empty.
+// sub-folders' included, in the byte order of their paths.
 type Query struct {
+	// Prefix keeps only the keys that start with it.
 	Prefix string
-	After  string
-	Limit  int // objects a page returns: 100 when zero, at most 1000
+	// After keeps only the keys past it, when it is not empty.
+	After string
+	Limit int // objects a page returns: 100 when zero, at most 1000
 }
 
 // Page is one page of a Scan, from one snapshot. More says the limit ended it
@@ -65,7 +68,7 @@ func (e *KeyError) Error() string {
 func (e *KeyError) Unwrap() error { return e.Err }
 
 // ErrOutcomeUnknown is a write whose group's commit failed: the object may or
-// may not be there, and its caller Stats it before writing again.
+// may not be there, and its caller should Stat it before writing again.
 var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
 
 // the bytes of a content's SHA-256 that its objects keep and their ETag spells
@@ -105,7 +108,6 @@ func metaText(meta map[string]string) (sql.NullString, error) {
 	return sql.NullString{String: string(text), Valid: err == nil}, err
 }
 
-// metaOf reads meta back from its row
 func metaOf(text sql.NullString) (map[string]string, error) {
 	if !text.Valid {
 		return nil, nil
@@ -117,7 +119,6 @@ func metaOf(text sql.NullString) (map[string]string, error) {
 	return meta, nil
 }
 
-// objectRow is an object's row as a read scans it
 type objectRow struct {
 	path        string
 	size        int64
@@ -134,7 +135,6 @@ func (r *objectRow) fields() []any {
 	return []any{&r.path, &r.size, &r.etag, &r.contentType, &r.modified, &r.expires, &r.meta}
 }
 
-// object is the row as a caller sees it, its key the path under folder
 func (r objectRow) object(folder string) (Object, error) {
 	meta, err := metaOf(r.meta)
 	if err == nil && len(r.etag) != etagBytes {

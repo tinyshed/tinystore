@@ -30,13 +30,14 @@ const (
 	IndexName
 )
 
-// Difference is one way a file differs from the schema declared. Column is the
-// column's or the index's name; Declared and File are how each side spells it,
-// empty where one has nothing.
+// Difference is one way a file differs from the schema declared.
 type Difference struct {
-	What     What
-	Table    string
-	Column   string
+	What  What
+	Table string
+	// Column is the column's or the index's name.
+	Column string
+	// Declared and File are how each side spells it, empty where one has
+	// nothing.
 	Declared string
 	File     string
 }
@@ -48,8 +49,8 @@ func (d Difference) Structural() bool {
 }
 
 // Compare is how file differs from declared, table by table in declared's
-// order; what declared does not name, a table, a trigger, a view, an index
-// on an expression, is the file's own.
+// order. What declared does not name, a table, a trigger, a view, an index on
+// an expression, is the file's own.
 func Compare(declared, file *Catalog) []Difference {
 	var found []Difference
 	for _, want := range declared.Tables {

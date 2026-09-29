@@ -50,7 +50,8 @@ func (c headChunk) overlaps(from, to int64) bool {
 }
 
 // parseHead checks a head against its row and splits it into chunks. It is the
-// only reader of the layout above; decoding, reuse and partial reads start here.
+// only reader of the layout above; decoding, reuse and partial reads start
+// here.
 func (s *Store) parseHead(head headSnapshot) ([]headChunk, error) {
 	data := head.packed
 	if len(data) < 6 || len(data) > s.opts.MaxHeadBytes {
@@ -238,7 +239,6 @@ func (s *Store) encodeHeadAfter(ctx context.Context, id int64, kept []headChunk,
 	return binary.LittleEndian.AppendUint32(out, headChecksum(id, out)), nil
 }
 
-// appendHeadChunk encodes up to 240 samples as one chunk.
 func (s *Store) appendHeadChunk(out []byte, points []Sample) ([]byte, error) {
 	header, body, err := s.encoder.Encode(points)
 	if err != nil {
@@ -307,8 +307,9 @@ func mergeHead(existing, incoming []Sample, limit int) ([]Sample, error) {
 	return merged, nil
 }
 
-// removeSealed drops exactly the samples a new block holds. A sample that changed
-// since maintenance read it means a write won the race, so publication stops.
+// removeSealed drops exactly the samples a new block holds. A sample that
+// changed since maintenance read it means a write won the race, so publication
+// stops.
 func removeSealed(existing, sealed []Sample) ([]Sample, error) {
 	out := make([]Sample, 0, len(existing))
 	removed := 0

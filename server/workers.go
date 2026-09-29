@@ -10,11 +10,13 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// workers run a connection's calls on goroutines that live as long as it
-// does, as many as its streams in flight at most. A goroutine started for
-// each call grows its stack on the way into SQLite every time, a quarter of a
-// sidecar's time in the round, and too few workers starve a group commit of
-// the writes that would join it, docs/reports/rpc-mechanics-2026-09-28.md.
+// workers run a connection's calls on goroutines that live as long as it does,
+// as many as its streams in flight at most.
+//
+// A goroutine started for each call grows its stack on the way into SQLite
+// every time, a quarter of a sidecar's time in the round. Too few workers
+// starve a group commit of the writes that would join it,
+// docs/reports/rpc-mechanics-2026-09-28.md.
 type workers struct {
 	calls   chan *call
 	busy    atomic.Int64 // calls handed over and not yet finished

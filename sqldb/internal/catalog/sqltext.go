@@ -134,7 +134,6 @@ func isWordStart(c byte) bool {
 }
 func isWordPart(c byte) bool { return isWordStart(c) || isDigit(c) }
 
-// solid drops the space and comments between tokens
 func solid(tokens []token) []token {
 	kept := tokens[:0:0]
 	for _, t := range tokens {

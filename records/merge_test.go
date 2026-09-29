@@ -120,9 +120,9 @@ func TestFourQuietHoursMergeIntoOneSegment(t *testing.T) {
 	}
 }
 
-// a follower's cursor names a place in the order segments were sealed; a
-// merge moves the records of places, and each follower goes on from where it
-// was, the middle of a place included, and finds every record once
+// A follower's cursor names a place in the order segments were sealed. A merge
+// moves the records of places, and each follower goes on from where it was, the
+// middle of a place included, and finds every record once.
 func TestAFollowerKeepsItsPlaceAcrossMerges(t *testing.T) {
 	s := openRecords(t)
 	for range 3 {

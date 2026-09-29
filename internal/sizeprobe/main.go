@@ -91,9 +91,10 @@ var (
 	probeSchema = sqldb.Schema(probeNotes)
 )
 
-// probeSQL links sqldb the way an application uses it: a schema Open checks
-// the file against, Insert, the typed reads, Each, a transaction, a View and
-// a constraint's error
+// probeSQL links sqldb the way an application uses it.
+//
+// It covers a schema Open checks the file against, Insert, the typed reads,
+// Each, a transaction, a View and a constraint's error.
 func probeSQL(ctx context.Context, runtime *tinystore.Store) {
 	db, err := sqldb.Open(ctx, runtime, "app", migrations, probeSchema)
 	if err != nil {
@@ -170,9 +171,10 @@ func probeRecords(ctx context.Context, runtime *tinystore.Store) {
 	fmt.Println(len(page.Records), len(batch.Records), logs.Stats())
 }
 
-// probeKV links the kv engine the way an application uses it: a sliding
-// bucket, its writes and reads, a transaction, a walk and a Clear, counters in
-// memory, and maintenance
+// probeKV links the kv engine the way an application uses it.
+//
+// It covers a sliding bucket, its writes and reads, a transaction, a walk and a
+// Clear, counters in memory, and maintenance.
 func probeKV(ctx context.Context, runtime *tinystore.Store) {
 	state, err := kv.Open(ctx, runtime, kv.Options{})
 	if err != nil {
@@ -246,9 +248,10 @@ func probeBucket(ctx context.Context, state *kv.Store) (value string, found bool
 	return value, found, walked
 }
 
-// probeJobs links the jobs engine the way an application uses it: keyed and
-// timed enqueues in a transaction, an update, a cancel and reads, a schedule,
-// a claim settled by hand, a Work loop and maintenance
+// probeJobs links the jobs engine the way an application uses it.
+//
+// It covers keyed and timed enqueues in a transaction, an update, a cancel,
+// reads, a schedule, a claim settled by hand, a Work loop and maintenance.
 func probeJobs(ctx context.Context, runtime *tinystore.Store) {
 	queues, err := jobs.Open(ctx, runtime, jobs.Options{})
 	if err != nil {
@@ -315,9 +318,10 @@ func probeEnqueues(ctx context.Context, queues *jobs.Store) *jobs.Queue[string] 
 	return later
 }
 
-// probeBlobs links the blobs engine the way an application uses it: a Put and
-// an upload, a reader that seeks and reads a range, Stat, Copy, Move, Delete,
-// a walk, Usage, a Clear and maintenance
+// probeBlobs links the blobs engine the way an application uses it.
+//
+// It covers a Put and an upload, a reader that seeks and reads a range, Stat,
+// Copy, Move, Delete, a walk, Usage, a Clear and maintenance.
 func probeBlobs(ctx context.Context, runtime *tinystore.Store) {
 	objects, err := blobs.Open(ctx, runtime, blobs.Options{})
 	if err != nil {

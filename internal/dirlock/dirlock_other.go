@@ -4,7 +4,7 @@ package dirlock
 
 import "io"
 
-// Supported says a second holder is refused on this platform: not here.
+// Supported is false where a second holder of the directory is not refused, as here.
 const Supported = false
 
 type none struct{}

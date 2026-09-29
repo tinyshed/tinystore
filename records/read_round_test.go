@@ -13,7 +13,8 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// the page the previous Read built from every candidate before its budget
+// Times fetchSnapshot and Read under a four-block budget over 5000 head rows.
+// The Read before the budget built its page from every candidate.
 func TestReadCandidatesMeasured(t *testing.T) {
 	measureReadCandidates(t, 5000, false)
 }

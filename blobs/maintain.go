@@ -10,7 +10,6 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Maintenance is what one Maintain call did.
 type Maintenance struct {
 	Expired  int   // objects past their expiry, removed
 	Cleared  int   // objects a marked Clear hid, removed
@@ -20,11 +19,13 @@ type Maintenance struct {
 	Damaged  int   // contents the scrub found changed or missing
 }
 
-// Maintain removes expired objects and the objects marked Clears hid, 10,000
-// a transaction and at most ten transactions of each a call; removes the
-// files no key names any more; aborts the uploads whose context has ended and
-// removes what uploads left behind; moves the settled mark up; and scrubs a
-// slice of the contents. The store calls it every minute unless it is Manual.
+// Maintain removes expired objects and the objects marked Clears hid, 10,000 a
+// transaction and at most ten transactions of each a call, and removes the
+// files no key names any more.
+//
+// It also aborts the uploads whose context has ended, removes what uploads left
+// behind, moves the settled mark up, and scrubs a slice of the contents. The
+// store calls it every minute unless it is Manual.
 func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	release, err := s.holdMaintenance(ctx)
 	if err != nil {
@@ -61,7 +62,6 @@ func (s *Store) maintainInBackground(ctx context.Context) error {
 	return err
 }
 
-// holdMaintenance lets one Maintain at a time run on a store
 func (s *Store) holdMaintenance(ctx context.Context) (release func(), err error) {
 	select {
 	case <-s.maintenance:
@@ -83,10 +83,10 @@ func (s *Store) expire(ctx context.Context) (int, error) {
 	})
 }
 
-// batches runs batch in a transaction of its own until one deletes fewer than
-// a full batch, at most ten times: each takes a name from the contents of the
-// objects it deleted, and removes the files it leaves without names once it
-// has committed
+// batches runs batch in a transaction of its own until one deletes fewer than a
+// full batch, at most ten times. Each takes a name from the contents of the
+// objects it deleted, and removes the files it leaves without names once it has
+// committed.
 func (s *Store) batches(ctx context.Context, batch func(*change) ([]int64, error)) (int, error) {
 	total := 0
 	for range maintainBatches {
@@ -177,10 +177,11 @@ const (
 	dropUnnamed   = `delete from contents where id = ?1 and names = 0`
 )
 
-// removeUnnamed removes the files of contents no key names, which a commit
-// left behind because its own removal failed or a snapshot was linking files,
-// then their rows, a batch at a time; a file that will not go stays listed,
-// and is tried again next time
+// removeUnnamed removes the files of contents no key names, which a commit left
+// behind because its own removal failed or a snapshot was linking files, and
+// then their rows, a batch at a time.
+//
+// A file that will not go stays listed, and is tried again next time.
 func (s *Store) removeUnnamed(ctx context.Context) (int, error) {
 	if !s.collection.TryRLock() {
 		return 0, nil
@@ -221,7 +222,7 @@ func (s *Store) unnamed(ctx context.Context) ([]int64, error) {
 	return ids, err
 }
 
-// removeFiles removes each file it can and returns whose went
+// removeFiles removes each file it can and returns the ids of those that went.
 func (s *Store) removeFiles(ids []int64) []int64 {
 	gone := make([]int64, 0, len(ids))
 	for _, id := range ids {

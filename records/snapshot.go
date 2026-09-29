@@ -86,10 +86,12 @@ const (
 	candidateChunk   = 256
 )
 
-// candidates are the blocks and head rows the time index and level masks
-// cannot rule out, less the blocks their segment's keys or their blooms rule
-// out, in the order a page takes them. The head rows are read first: the
-// snapshot begins with them, and the spans are known from then on.
+// candidates are the blocks and head rows the time index and level masks cannot
+// rule out, less the blocks their segment's keys or their blooms rule out, in
+// the order a page takes them.
+//
+// The head rows are read first: the snapshot begins with them, and the spans
+// are known from then on.
 func (r *snapshotRead) candidates(ctx context.Context) ([]source, error) {
 	heads, err := r.headCandidates(ctx)
 	if err != nil {
@@ -127,8 +129,8 @@ func (r *snapshotRead) blockCandidates(ctx context.Context) ([]source, error) {
 }
 
 // pagedCandidates walks one index in the order a page takes candidates, and
-// stops one past the block budget: a page takes no more from any walk, so
-// the walks of other spans cannot push a candidate further in
+// stops one past the block budget. A page takes no more from any walk, so the
+// walks of other spans cannot push a candidate further in.
 func (r *snapshotRead) pagedCandidates(ctx context.Context, block bool, base string, args []any) ([]source, error) {
 	most := r.query.budget.Blocks + 1
 	query := base + oldestCandidates
@@ -297,9 +299,9 @@ const (
 	selectAttrBloom  = `select bloom from block_filters where block = ? and key = ?`
 )
 
-// bloomsMayMatch rules a block out when its trace bloom lacks the trace, or
-// an attribute's bloom lacks the value; a block without a bloom for a key may
-// still hold it
+// bloomsMayMatch rules a block out when its trace bloom lacks the trace, or an
+// attribute's bloom lacks the value. A block without a bloom for a key may
+// still hold it.
 func (r *snapshotRead) bloomsMayMatch(ctx context.Context, block int64) (bool, error) {
 	asked := &r.query.asked
 	if asked.TraceID != (TraceID{}) {
@@ -391,9 +393,10 @@ func (r *snapshotRead) affords(spent Budget, candidate source, segmentSize int) 
 
 // enough stops a page once the candidates taken hold, spread evenly over their
 // spans, a page's worth of records before the next candidate begins: the page
-// ends there, and what lies past it is the next page's to read. A query that
-// filters rows cannot tell how many will match, so it takes what its budget
-// allows instead.
+// ends there, and what lies past it is the next page's to read.
+//
+// A query that filters rows cannot tell how many will match, so it takes what
+// its budget allows instead.
 //
 //	limit 100, oldest first    taken [0 s, 10 s) 1000 records    next begins at 2 s
 //	expected before 2 s: 1000 × 2/10 = 200 ≥ 100                  → the page ends at 2 s

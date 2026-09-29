@@ -16,9 +16,11 @@ const (
 )
 
 // Snapshot writes a consistent copy of the file to into, which must not exist,
-// and returns how many migrations the copy has applied. It runs on a
-// connection of its own, opened read-only at the file: the query_only readers
-// refuse VACUUM INTO, and a read-only file lets the writer keep writing.
+// and returns how many migrations the copy has applied.
+//
+// It runs on a connection of its own, opened read-only at the file: the
+// query_only readers refuse VACUUM INTO, and a read-only file lets the writer
+// keep writing.
 func (f *File) Snapshot(ctx context.Context, into string) (applied int, err error) {
 	if err = os.MkdirAll(filepath.Dir(into), 0o750); err != nil {
 		return 0, fmt.Errorf("snapshot SQLite: %w", err)

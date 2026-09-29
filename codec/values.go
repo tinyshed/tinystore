@@ -57,8 +57,9 @@ func (c *Codec) encodeValues(samples []Sample) (byte, []byte) {
 	return mode, best
 }
 
-// encodeScaled turns decimals into the integers they were written as, and
-// refuses the block unless the decoder's own expression returns the original
+// encodeScaled turns decimals into the integers they were written as.
+//
+// It refuses the block unless the decoder's own expression returns the original
 // bits for every sample.
 func (c *Codec) encodeScaled(samples []Sample) []byte {
 	scale := 0

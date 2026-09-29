@@ -78,8 +78,8 @@ func (d *DB) read(ctx context.Context, c *call, args []any) error {
 }
 
 // write runs a statement grouped with the writes other goroutines wait to
-// commit, which may run it on theirs: a panic reading its rows rolls back its
-// savepoint alone and goes on in its caller's goroutine
+// commit, which may run it on theirs. A panic reading its rows rolls back its
+// savepoint alone and goes on in its caller's goroutine.
 func (d *DB) write(ctx context.Context, c *call, args []any) error {
 	leave, err := d.admitWrite(ctx)
 	if err != nil {
@@ -153,9 +153,11 @@ func weigh(args []any) int {
 	return weight
 }
 
-// held is the store's memory one call holds for what it decodes: a first part
-// reserved before it waits for a connection, then more only while it is free,
-// since the call then holds a connection that a call holding memory may wait for
+// held is the store's memory one call holds for what it decodes.
+//
+// A first part is reserved before the call waits for a connection. More is
+// reserved only while it is free, since the call then holds a connection that a
+// call holding memory may wait for.
 type held struct {
 	runtime  *tinystore.Store // nil when the store has no Options.Memory
 	parts    []*tinystore.Reservation
@@ -185,7 +187,7 @@ func (d *DB) hold(ctx context.Context, first, bound int64, wait bool) (*held, er
 	return h, nil
 }
 
-// take counts bytes more of what the call holds, as All decodes a row
+// take adds bytes to what the call holds, as All decodes a row.
 func (h *held) take(bytes int64) error {
 	h.used += bytes
 	if h.bound > 0 && h.used > h.bound {

@@ -18,7 +18,6 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// testStart is the clock every test store starts at
 var testStart = time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 
 type testClock struct {
@@ -237,9 +236,9 @@ func TestCloseGivesRunningJobsBackUncounted(t *testing.T) {
 	}
 }
 
-// every call that holds a value waits until the store's memory has room for
-// it and gives the room back when it is done: an Enqueue while it waits for the
-// writer, a Get or a Scan while it reads, a handler while it runs
+// Every call that holds a value waits until the store's memory has room for it.
+// It gives the room back when it is done: an Enqueue while it waits for the
+// writer, a Get or a Scan while it reads, a handler while it runs.
 func TestStoreMemoryBoundsEnqueuesReadsAndHandlers(t *testing.T) {
 	const capacity = 8 << 20
 	queues := openTestQueuesWith(t, t.TempDir(), tinystore.Options{Memory: capacity})
@@ -354,9 +353,9 @@ func TestAnEnqueueWaitingForMemoryHasWrittenNothing(t *testing.T) {
 	}
 }
 
-// a call inside Tx waits for none of the store's memory, which the writes
-// waiting for its writer hold: it takes what is free, and past that it is
-// ErrLimit at once
+// A call inside Tx waits for none of the store's memory, which the writes
+// waiting for its writer hold. It takes what is free, and past that it is
+// ErrLimit at once.
 func TestATransactionTakesOnlyTheMemoryThatIsFree(t *testing.T) {
 	const capacity = 4 << 20
 	queues := openTestQueuesWith(t, t.TempDir(), tinystore.Options{Memory: capacity})

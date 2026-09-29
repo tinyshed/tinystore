@@ -67,9 +67,13 @@ func TestOpenChecksTheFileAgainstTheSchemaAndChangesNothing(t *testing.T) {
 	}
 }
 
-// what the file may spell otherwise and still match: a default whose text
-// SQLite computes to the same value, an expression, a check, the case of a
-// name, an index a migration named otherwise
+// What the file may spell otherwise and still match:
+//
+//	a default whose text SQLite computes to the same value
+//	an expression
+//	a check
+//	the case of a name
+//	an index a migration named otherwise
 func TestOpenDoesNotRefuseAnExpressionSpelledOtherwise(t *testing.T) {
 	d := declareDesign(t)
 	spelled := fstest.MapFS{"001_notes.sql": {Data: []byte(`

@@ -61,12 +61,14 @@ var (
 )
 
 // CheckSchema applies the migrations in dir to a new file and compares what
-// they make with schema. A difference of structure fails the test, naming
-// each and the command that writes the migration; a CHECK or a default's
-// expression spelled otherwise is a line to read. name is the database's, as
-// sqldb.Open takes it, and how go tool tinystore finds this check; a second
-// check of one name in a test binary fails. It never writes, unless the tool
-// asks it to.
+// they make with schema.
+//
+// A difference of structure fails the test, naming each and the command that
+// writes the migration. A CHECK or a default's expression spelled otherwise is
+// a line to read. It never writes, unless go tool tinystore asks it to.
+//
+// name is the database's, as sqldb.Open takes it, and how go tool tinystore
+// finds this check. A second check of one name in a test binary fails.
 func CheckSchema(t testing.TB, name string, schema *sqldb.SchemaDef, dir string) {
 	t.Helper()
 	if !claim(name) {

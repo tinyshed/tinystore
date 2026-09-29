@@ -241,9 +241,9 @@ func TestAQueryValueMustBeJSON(t *testing.T) {
 	}
 }
 
-// a reader sees each record appended before it began exactly once while a
-// writer appends and maintenance seals: a record is in the head or in its
-// segment, never in both and never in neither
+// A reader sees each record appended before it began exactly once while a
+// writer appends and maintenance seals. A record is in the head or in its
+// segment, never in both and never in neither.
 func TestReadersSeeEveryRecordOnceWhileSealing(t *testing.T) {
 	s := openRecords(t)
 	const batches = 3 * maxSegmentRecords / maxBlockRecords

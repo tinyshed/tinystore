@@ -54,9 +54,9 @@ func TestStoreMemoryBoundsAppendReadSealAndFollow(t *testing.T) {
 	}
 }
 
-// reads and follows share the reader connections' slots and appends have their
-// own, held through decoding and encoding: work beyond them waits, and a caller
-// that stops waiting leaves
+// Reads and follows share the reader connections' slots and appends have their
+// own, held through decoding and encoding. Work beyond them waits, and a caller
+// that stops waiting leaves.
 func TestReadsAndAppendsWaitForTheirSlots(t *testing.T) {
 	s := openRecords(t)
 	s.append(t, backendRecords(10)...)

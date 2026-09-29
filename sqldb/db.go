@@ -83,13 +83,13 @@ func Open(ctx context.Context, store *tinystore.Store, name string, migrations f
 	return open(ctx, store, name, migrations, schema, timing)
 }
 
-// OpenOption changes how Open treats the file.
 type OpenOption func(*tuning)
 
 // ApplyNone opens a file only if it has applied every migration given, and
-// applies none, as a program that may change rows and not the schema opens
-// one: a migration the file has not applied is ErrPending, and a file that is
-// not there is not made.
+// applies none, as a program that may change rows and not the schema opens one.
+//
+// A migration the file has not applied is ErrPending, and a file that is not
+// there is not made.
 func ApplyNone() OpenOption {
 	return func(t *tuning) { t.applyNone = true }
 }
@@ -204,8 +204,8 @@ func (d *DB) Migrated(ctx context.Context, migrations fs.FS) error {
 	return nil
 }
 
-// findMigrations is the directory of migrations holds its .sql files: its
-// root, or, while the root has none, its one directory
+// findMigrations is the directory in which migrations holds its .sql files: its
+// root, or, while the root has none, its one directory.
 //
 //	embed.FS of migrations/*.sql → migrations/
 func findMigrations(migrations fs.FS) (fs.FS, error) {
@@ -289,9 +289,9 @@ func (d *DB) admitWrite(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-// waited logs a write that has waited ten seconds for the writer, and the
-// transaction holding it, when one does: a call on the DB inside its own Tx
-// waits for the Tx, which waits for it
+// waited logs a write that has waited ten seconds for the writer, naming the
+// transaction holding it when there is one. A call on the DB inside its own Tx
+// waits for the Tx, which waits for it.
 func (d *DB) waited(query string) {
 	if held := d.holder.Load(); held != nil {
 		d.log.Warn("a write has waited ten seconds behind a transaction", "query", query,
@@ -301,7 +301,8 @@ func (d *DB) waited(query string) {
 	d.log.Warn("a write has waited ten seconds for the writer", "query", query)
 }
 
-// caller is where the function calling the one that calls it was called from
+// caller is where the function that calls it was called from: for Tx, the
+// application's line that called Tx.
 func caller() uintptr {
 	var pcs [1]uintptr
 	runtime.Callers(3, pcs[:])

@@ -17,13 +17,15 @@ type headBatch struct {
 	records []Record
 }
 
-// routeToHeads splits a batch by stream, sends what lags more than ten
-// seconds behind the newest record its stream showed before it, earlier in
-// the batch or waiting on time in its head, or behind the store's clock when
-// that is earlier, to that stream's late head, and cuts each head's share at a
-// block's bounds. A record appended alone can be late too; a batch in time
-// order makes none of its own records late however long it spans; a producer
-// ahead of the store's clock does not make its neighbours late:
+// routeToHeads splits a batch by stream, sends the late records of each stream
+// to that stream's late head, and cuts each head's share at a block's bounds.
+//
+// A record is late when it lags more than ten seconds behind the newest record
+// its stream showed before it (earlier in the batch, or waiting on time in its
+// head), or behind the store's clock when that is earlier. So a record appended
+// alone can be late; a batch in time order makes none of its own records late
+// however long it spans; and a producer ahead of the store's clock does not
+// make its neighbours late:
 //
 //	clock 12:01, web waiting until 12:00:40; batch 12:00:35 12:00:41 11:50:02 12:00:45
 //	→ on time 12:00:35 12:00:41 12:00:45, late 11:50:02

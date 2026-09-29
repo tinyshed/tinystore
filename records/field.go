@@ -21,9 +21,9 @@ func Int(key string, value int64) Field {
 	return Field{Key: key, Value: strconv.FormatInt(value, 10)}
 }
 
-// Float writes the shortest spelling that reads back as the same float; NaN
-// and the infinities, which JSON has no number for, become the strings
-// "NaN", "+Inf" and "-Inf".
+// Float writes the shortest spelling that reads back as the same float. NaN and
+// the infinities, which JSON has no number for, become the strings "NaN",
+// "+Inf" and "-Inf".
 func Float(key string, value float64) Field {
 	return Field{Key: key, Value: string(appendJSONFloat(nil, value))}
 }
@@ -44,9 +44,9 @@ func appendJSONFloat(out []byte, value float64) []byte {
 	return strconv.AppendFloat(out, value, 'g', -1, 64)
 }
 
-// appendJSONString quotes as encoding/json does, without escaping HTML: control
+// appendJSONString quotes as encoding/json does, without escaping HTML. Control
 // characters and the line and paragraph separators are escaped, and an invalid
-// byte becomes the replacement character
+// byte becomes the replacement character.
 func appendJSONString(out []byte, value string) []byte {
 	const hex = "0123456789abcdef"
 	out = append(out, '"')

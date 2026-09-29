@@ -8,8 +8,8 @@ import (
 )
 
 // handles are what a session's open calls answered with a number, as a file
-// descriptor stands for a file: the calls after them carry the number, and the
-// session's end closes them all
+// descriptor stands for a file. The calls after them carry the number, and the
+// session's end drops them all.
 type handles[T any] struct {
 	mu   sync.Mutex
 	last uint64

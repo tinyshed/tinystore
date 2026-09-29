@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 )
 
-// CounterInstrument only grows. Its total since the process started is ingested as a
-// counter sample at each flush, so a restart is a reset Aggregate counts.
+// CounterInstrument only grows. Its total since the process started is ingested
+// as a counter sample at each flush, so a restart is a reset Aggregate counts.
 type CounterInstrument struct{ *instrument }
 
 // GaugeInstrument is a value set or moved by the application, ingested at each flush.

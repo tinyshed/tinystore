@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// a snapshot copies blobs.db and hard-links every file its copy names: no
-// byte is copied, the links keep their bytes after the objects go, and each
-// linked file is a snapshot file of its own that a backup stores as it is
+// A snapshot copies blobs.db and hard-links every file its copy names. No byte
+// is copied, the links keep their bytes after the objects go, and each linked
+// file is a snapshot file of its own that a backup stores as it is.
 func TestASnapshotLinksFilesAndCopiesTheDatabase(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

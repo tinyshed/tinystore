@@ -10,10 +10,14 @@ import (
 )
 
 // Exec runs one statement that may write on the file's one writer, and returns
-// once it is durable. Statements from many goroutines commit together, each in
-// its savepoint of one transaction, with one fsync: one that fails rolls back
-// alone, one whose caller's context ends before its turn writes nothing, and a
-// group whose commit fails answers ErrOutcomeUnknown.
+// once it is durable.
+//
+// Statements from many goroutines commit together, each in its savepoint of one
+// transaction, with one fsync.
+//
+// A statement that fails rolls back alone. One whose caller's context ends
+// before its turn writes nothing. A group whose commit fails answers
+// ErrOutcomeUnknown.
 func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	c := &call{query: query, args: args, write: true}
 	err := d.run(ctx, c)
@@ -81,8 +85,8 @@ func (d *TableDef[T]) number(inserted *T, result sql.Result) error {
 }
 
 // asStored is row as the file keeps it: a time to the millisecond in UTC, a
-// duration to the millisecond; a pointer to either is a new one, so that the
-// caller's value stays as it was
+// duration to the millisecond. A pointer to either is a new one, so that the
+// caller's value stays as it was.
 func (d *TableDef[T]) asStored(row T) (T, error) {
 	root := reflect.ValueOf(&row).Elem()
 	for _, c := range d.table.columns {

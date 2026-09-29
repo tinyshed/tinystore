@@ -61,8 +61,8 @@ func TestTheCheckReadsSQLitesTokens(t *testing.T) {
 }
 
 // SQLite ends a statement where the check does: what the check reads as one
-// statement runs as one, and each case would answer otherwise if SQLite read
-// it otherwise, since the driver answers a script with its last rows
+// statement runs as one. Each case would answer otherwise if SQLite read it
+// otherwise, since the driver answers a script with its last rows.
 func TestSQLiteEndsAStatementWhereTheCheckDoes(t *testing.T) {
 	db, _ := openScratch(t)
 	for _, c := range []struct {

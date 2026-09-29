@@ -52,9 +52,9 @@ func TestScanReadsABranchsOwnKeysInPages(t *testing.T) {
 	}
 }
 
-// a page ends before the value that would take it past its bytes, and the
-// next begins with that value, so that no key is lost or read twice; a page
-// that its values fill exactly keeps them all
+// A page ends before the value that would take it past its bytes, and the next
+// begins with that value, so that no key is lost or read twice. A page that its
+// values fill exactly keeps them all.
 func TestAPageEndsBeforeTheValueThatPassesItsBytes(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	values := openTestBucket[[]byte](t, state, "values")
@@ -113,9 +113,9 @@ func pageSizes(t *testing.T, page Page[[]byte], first int) []int {
 }
 
 // BenchmarkGetBesideClearMarks reads one key of 64 bytes under one owner,
-// beside the marks of Clears of up to 1000 other branches, each cleared after
-// the key was written, so that each passes the version test: what a point read
-// pays for the marks of its bucket
+// beside the marks of Clears of up to 1000 other branches. Each was cleared
+// after the key was written, so that each passes the version test: this is what
+// a point read pays for the marks of its bucket.
 func BenchmarkGetBesideClearMarks(b *testing.B) {
 	for _, marks := range []int{0, 10, 100, 1000} {
 		b.Run(fmt.Sprintf("marks=%d", marks), func(b *testing.B) {
@@ -154,9 +154,9 @@ func BenchmarkGetBesideClearMarks(b *testing.B) {
 	}
 }
 
-// All walks every key of a branch across pages, holds no snapshot between
-// them, so a key written after the first page is met, and stops when its loop
-// does
+// All walks every key of a branch across pages and holds no snapshot between
+// them, so a key written after the first page is met. It stops when its loop
+// does.
 func TestAllWalksEveryKeyAPageAtATime(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	drafts := openTestBucket[int](t, state, "drafts")

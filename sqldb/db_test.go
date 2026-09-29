@@ -153,9 +153,9 @@ type panicky struct {
 	Title explosive
 }
 
-// a panic inside a grouped statement's own work rolls back that statement
-// alone and goes on in its caller's goroutine, whichever goroutine ran it, and
-// the writer takes the next write
+// A panic inside a grouped statement's own work rolls back that statement alone
+// and goes on in its caller's goroutine, whichever goroutine ran it. The writer
+// takes the next write.
 func TestAPanicInsideAWriteRollsBackItsStatementAlone(t *testing.T) {
 	db := openNotes(t)
 	ctx := t.Context()

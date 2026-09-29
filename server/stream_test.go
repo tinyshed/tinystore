@@ -202,7 +202,6 @@ func TestADownloadWaitsForTheCreditItsClientGrants(t *testing.T) {
 	}
 }
 
-// a stream's number is free the moment its final frame arrives
 func TestAStreamNumberIsFreeWhenItsFinalFrameArrives(t *testing.T) {
 	ts := startTestServer(t, Options{})
 	raw := ts.raw(t, ts.endpoint)

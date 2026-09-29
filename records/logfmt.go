@@ -89,9 +89,9 @@ func bareValue(bare string) string {
 	return string(appendJSONString(nil, bare))
 }
 
-// spellLogfmt writes fields as a logfmt line: a JSON string bare when what it
-// holds is bare text, a value quoted as it is otherwise, and every other value
-// as it is
+// spellLogfmt writes fields as a logfmt line. A JSON string is bare when what
+// it holds is bare text and quoted as it is otherwise; every other value is
+// written as it is.
 func spellLogfmt(fields []Field) string {
 	var line strings.Builder
 	for i, field := range fields {

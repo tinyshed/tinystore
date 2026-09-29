@@ -13,17 +13,20 @@ const (
 	RecordsDrop    Method = 0x0506
 )
 
-// Record is one log line or event. At is unix nanoseconds; a nil Level or
-// Body is absent, which an empty body is not, and an empty TraceID or SpanID
-// is none. Context and Attrs keep their order and repeated keys.
+// Record is one log line or event. Context and Attrs keep their order and
+// repeated keys.
 type Record struct {
-	At      int64
-	Stream  string
-	Name    string
-	Level   *int64 // slog's: -4 debug, 0 info, 4 warn, 8 error
-	Body    *string
-	TraceID []byte // 16 bytes
-	SpanID  []byte // 8 bytes
+	// At is unix nanoseconds.
+	At     int64
+	Stream string
+	Name   string
+	// Level is slog's: -4 debug, 0 info, 4 warn, 8 error. Nil is absent.
+	Level *int64
+	// Body is absent when nil, which an empty body is not.
+	Body *string
+	// TraceID is 16 bytes and SpanID 8; empty is none.
+	TraceID []byte
+	SpanID  []byte
 	Context []RecordField
 	Attrs   []RecordField
 }
@@ -175,11 +178,12 @@ func (b *RecordsBatch) Decode(body []byte) error {
 	return d.End()
 }
 
-// RecordsQuery is records.read's request: the records in [From, To), unix
-// nanoseconds with zero for an open end, that meet every condition given. No
-// streams or names is every one; Budget narrows the server's.
+// RecordsQuery is records.read's request: the records in [From, To) that
+// meet every condition given.
 type RecordsQuery struct {
+	// From and To are unix nanoseconds, zero for an open end.
 	From, To int64
+	// Streams and Names select records by them; none is every one.
 	Streams  []string
 	Names    []string
 	MinLevel *int64
@@ -188,7 +192,8 @@ type RecordsQuery struct {
 	Context  []RecordField
 	Newest   bool
 	Limit    uint64
-	Budget   RecordsBudget
+	// Budget narrows the server's.
+	Budget RecordsBudget
 }
 
 // RecordsBudget bounds one read: the blocks it opens, the bytes it fetches
@@ -290,11 +295,12 @@ func (d *Decoder) texts() []string {
 	return texts
 }
 
-// RecordsPage ends a read: More says its limit or its budget ended the page
-// before the range did, and From and To are the range the next page reads,
-// the query's own with one end moved past this page.
+// RecordsPage ends a read.
 type RecordsPage struct {
-	More     bool
+	// More says the limit or the budget ended the page before the range did.
+	More bool
+	// From and To are the range the next page reads: the query's own with
+	// one end moved past this page.
 	From, To int64
 }
 
@@ -324,8 +330,8 @@ func (p *RecordsPage) Decode(body []byte) error {
 }
 
 // RecordsCursor is a place in the sealed segments, in the order they were
-// sealed: follow's request, with the records it asks for at most, and its
-// trailer, the place the next follow begins at, with the segments retention
+// sealed. It is follow's request, with the records it asks for at most, and its
+// trailer: the place the next follow begins at, with the segments retention
 // removed before the cursor reached them.
 type RecordsCursor struct {
 	Segment int64
@@ -384,14 +390,15 @@ func (l *RecordsStream) Decode(body []byte) error {
 }
 
 // RecordsDamage is a row that no longer reads: a sealed segment, dropped
-// whole, or a head row, the other being zero. From and To are the times it
-// held, unix nanoseconds, and Reason the invariant its bytes broke.
+// whole, or a head row, the other being zero.
 type RecordsDamage struct {
-	Stream   string
-	Segment  int64
-	HeadRow  int64
+	Stream  string
+	Segment int64
+	HeadRow int64
+	// From and To are the times it held, unix nanoseconds.
 	From, To int64
-	Reason   string
+	// Reason is the invariant its bytes broke.
+	Reason string
 }
 
 func (g RecordsDamage) Append(dst []byte) []byte {

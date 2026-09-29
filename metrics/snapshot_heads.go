@@ -11,9 +11,10 @@ import (
 
 const headReadBatch = 64
 
-// fetchHeads reads the heads of many series in batches: descriptors first, so
-// that the budget pays before any packed tail is fetched, then only the tails
-// the range needs.
+// fetchHeads reads the heads of many series in batches.
+//
+// It reads descriptors first, so that the budget pays before any packed tail is
+// fetched, then only the tails the range needs.
 func (s *Store) fetchHeads(
 	ctx context.Context, snapshot snapshotRead, matched []registeredSeries,
 ) ([]headSnapshot, error) {

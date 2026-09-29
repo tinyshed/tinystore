@@ -116,9 +116,9 @@ func TestAScheduleKeepsItsZoneAcrossDaylightSaving(t *testing.T) {
 	}
 }
 
-// a repeating job moves to its next time when it is settled: a run that took
-// long, or a program down for hours, runs once and not for every time it missed,
-// and a failure does not end it
+// A repeating job moves to its next time when it is settled. A run that took
+// long, or a program down for hours, runs once and not for every time it
+// missed, and a failure does not end it.
 func TestARepeatingJobNeitherOverlapsNorPilesUp(t *testing.T) {
 	queues := openTestQueues(t, t.TempDir())
 	schedule, err := OpenSchedule(t.Context(), queues.Store, "tick", Every(time.Minute))

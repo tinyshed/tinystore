@@ -6,20 +6,24 @@ import (
 	"time"
 )
 
-// Record is one log line or event. A nil Level or Body is absent, which is not
-// the same as an empty body, and a zero TraceID or SpanID is none. Context
-// says who produced the record and Attrs what happened; both keep their order
-// and repeated keys.
+// Record is one log line or event.
 type Record struct {
-	At      time.Time // unix nanoseconds in the file, read back in UTC
-	Stream  string    // a namespace the application names: a service, a container
-	Name    string    // the event: "click", "checkout"; the slog handler writes "log"
-	Level   *slog.Level
-	Body    *string
+	At     time.Time // unix nanoseconds in the file, read back in UTC
+	Stream string    // a namespace the application names: a service, a container
+	Name   string    // the event: "click", "checkout"; the slog handler writes "log"
+	// Level is absent when nil.
+	Level *slog.Level
+	// Body is absent when nil, which is not the same as an empty body.
+	Body *string
+	// TraceID is none when zero.
 	TraceID TraceID
-	SpanID  SpanID
+	// SpanID is none when zero.
+	SpanID SpanID
+	// Context says who produced the record. It keeps its order and repeated
+	// keys.
 	Context []Field
-	Attrs   []Field
+	// Attrs says what happened. It keeps its order and repeated keys.
+	Attrs []Field
 }
 
 type TraceID [16]byte
@@ -40,20 +44,26 @@ func (e *RecordError) Error() string {
 
 func (e *RecordError) Unwrap() error { return e.Err }
 
-// Query selects the records in [From, To) that meet every condition given:
-// one of Streams, one of Names, a level of MinLevel or above, the TraceID, and
-// each of Attrs and Context by key and exact JSON spelling.
+// Query selects the records in [From, To) that meet every condition given.
 type Query struct {
 	From, To time.Time
-	Streams  []string
-	Names    []string
-	MinLevel *slog.Level // a record without a level does not match
+	// Streams matches a record of any one of them.
+	Streams []string
+	// Names matches a record of any one of them.
+	Names []string
+	// MinLevel matches a level of MinLevel or above. A record without a level
+	// does not match.
+	MinLevel *slog.Level
 	TraceID  TraceID
-	Attrs    []Field
-	Context  []Field
-	Newest   bool   // newest first; oldest first otherwise
-	Limit    int    // records a page returns: 1000 when zero, at most 10000
-	Budget   Budget // may only narrow Options.Budget
+	// Attrs matches a record holding each field, by key and exact JSON
+	// spelling.
+	Attrs []Field
+	// Context matches a record holding each field, by key and exact JSON
+	// spelling.
+	Context []Field
+	Newest  bool   // newest first; oldest first otherwise
+	Limit   int    // records a page returns: 1000 when zero, at most 10000
+	Budget  Budget // may only narrow Options.Budget
 }
 
 // Budget bounds one Read before it starts: the blocks it may open, the bytes
@@ -64,12 +74,13 @@ type Budget struct {
 }
 
 // Page is one bounded part of an answer, in event-time order. It never splits
-// a timestamp. More says the limit or the budget ended it before the range
-// did, and Next is the same query with its range moved past this page.
+// a timestamp.
 type Page struct {
 	Records []Record
-	More    bool
-	Next    Query
+	// More says the limit or the budget ended the page before the range did.
+	More bool
+	// Next is the same query with its range moved past this page.
+	Next Query
 }
 
 // Cursor is a place in the sealed segments, in the order they were sealed:
@@ -115,30 +126,34 @@ func (e *DamageError) Error() string {
 
 func (e *DamageError) Unwrap() error { return e.Err }
 
-// Stats counts this handle's work. Dropped is the sum of its three reasons:
-// a full buffer, an invalid or out-of-window record, and a failed flush.
-// ReadBlocks and ReadBytes
-// are what reads and follows fetched: blocks and head rows, and their bytes
-// with the segment rows beside them, the figures a Budget bounds. Damaged is
-// how many rows this handle has met that no longer read and are not dropped.
+// Stats counts this handle's work.
 type Stats struct {
-	Appended, Dropped                         uint64
+	// Dropped is the sum of the three reasons that follow.
+	Appended, Dropped uint64
+	// DroppedFull is a full buffer, DroppedInvalid an invalid or
+	// out-of-window record, and DroppedWrite a failed flush.
 	DroppedFull, DroppedInvalid, DroppedWrite uint64
 	SealedSegments, ExpiredSegments           uint64
 	MergedSegments                            uint64
 	Queries                                   uint64
-	ReadBlocks, ReadBytes                     uint64
-	Damaged                                   uint64
+	// ReadBlocks and ReadBytes are what reads and follows fetched. They count
+	// blocks and head rows, and their bytes with the segment rows beside them:
+	// the figures a Budget bounds.
+	ReadBlocks, ReadBytes uint64
+	// Damaged is how many rows this handle has met that no longer read and
+	// are not dropped.
+	Damaged uint64
 }
 
-// Maintenance is what one Maintain call did. MergedSegments counts the
-// segments a merge moved into another segment of their stream, each keeping
-// its place for Follow, and MergedRecords the records the merges wrote again.
-// Damaged counts the head rows that no longer read, which the rest of their
-// heads sealed around.
+// Maintenance is what one Maintain call did.
 type Maintenance struct {
 	SealedSegments, SealedRecords int
 	ExpiredSegments, ExpiredHeads int
+	// MergedSegments counts the segments a merge moved into another segment of
+	// their stream, each keeping its place for Follow. MergedRecords counts
+	// the records the merges wrote again.
 	MergedSegments, MergedRecords int
-	Damaged                       int
+	// Damaged counts the head rows that no longer read, which the rest of
+	// their heads sealed around.
+	Damaged int
 }

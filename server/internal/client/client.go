@@ -40,7 +40,6 @@ type Conn struct {
 	read    chan struct{} // closed when the reader stops
 }
 
-// Message is anything that appends itself as a body.
 type Message interface {
 	Append(dst []byte) []byte
 }
@@ -58,9 +57,9 @@ func Dial(ctx context.Context, endpoint string, hello wire.Hello) (*Conn, error)
 // the server that wrote SERVE is gone, and another process holds its endpoint.
 var ErrNotTheServer = errors.New("client: the endpoint SERVE names cannot prove it read SERVE")
 
-// Found reaches the sidecar that SERVE in <dir>/server/ names, as an SDK
-// does: its HELLO carries a fresh challenge, and no call goes before the
-// WELCOME's proof checks.
+// Found reaches the sidecar that SERVE in <dir>/server/ names, as an SDK does.
+// Its HELLO carries a fresh challenge, and no call goes before the WELCOME's
+// proof checks.
 func Found(ctx context.Context, dir string, hello wire.Hello) (*Conn, error) {
 	text, err := os.ReadFile(filepath.Join(dir, "server", "SERVE")) //nolint:gosec // the store the caller names
 	if err != nil {
@@ -175,7 +174,6 @@ func (c *Conn) Err() error {
 	return c.ended
 }
 
-// GoAway is the GOAWAY the server sent, or nil.
 func (c *Conn) GoAway() *wire.GoAway {
 	c.mu.Lock()
 	defer c.mu.Unlock()

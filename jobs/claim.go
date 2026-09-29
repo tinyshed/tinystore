@@ -20,20 +20,20 @@ var (
 	errSettled    = fmt.Errorf("%w: jobs: the job was settled already", tinystore.ErrConflict)
 )
 
-// Job is a job in a worker's hands: its lease is held until the worker
-// settles it with Ack, Retry, Fail or Snooze, or the lease ends and another
-// claim may take it. Attempt is this attempt's number, one for the first.
-// Copies of a Job share its lease.
+// Job is a job in a worker's hands. Its lease is held until the worker settles
+// it with Ack, Retry, Fail or Snooze, or the lease ends and another claim may
+// take it. Copies of a Job share its lease.
 type Job[V any] struct {
-	Key     string
-	Value   V
-	At      time.Time
+	Key   string
+	Value V
+	At    time.Time
+	// Attempt is this attempt's number, one for the first.
 	Attempt int
 	lease   *lease
 }
 
-// Ack settles the job as done: it leaves the queue, or a repeating job, or
-// one an Enqueue asked to run again while it ran, waits for its next time.
+// Ack settles the job as done and it leaves the queue. A repeating job, or one
+// an Enqueue asked to run again while it ran, waits for its next time instead.
 func (j Job[V]) Ack(ctx context.Context) error {
 	return j.lease.settleNow(ctx, settlement{how: acked})
 }
@@ -220,9 +220,9 @@ const (
 	dropJobRow = `delete from jobs where queue = ?1 and next = ?2 and id = ?3`
 )
 
-// write applies the settlement in the writer: the lease must still be the
-// one this worker holds, or it is ErrConflict and nothing changes; its caller
-// marks the lease settled once the write commits
+// write applies the settlement in the writer. The lease must still be the one
+// this worker holds, or it is ErrConflict and nothing changes. Its caller marks
+// the lease settled once the write commits.
 func (s settlement) write(ctx context.Context, w sqlite.Writer, now int64) (settled, error) {
 	l := s.lease
 	if s.how == extended {
@@ -245,8 +245,8 @@ func (s settlement) write(ctx context.Context, w sqlite.Writer, now int64) (sett
 }
 
 // ackAlone deletes an acknowledged job that neither repeats nor was asked to
-// run again, reading nothing first; gone is false for a job that must move to
-// its next time instead
+// run again, reading nothing first. gone is false for a job that must move to
+// its next time instead.
 func (l *lease) ackAlone(ctx context.Context, w sqlite.Writer, now int64) (settled, bool, error) {
 	var spill sql.NullInt64
 	err := sqlite.QueryRowByKey(ctx, w, deleteDone, l.queue.id, l.next, l.id).Scan(&spill)
@@ -364,8 +364,8 @@ func (l *lease) retry(ctx context.Context, w sqlite.Writer, h heldRow, now int64
 	return settled{due: due}, l.move(ctx, w, due, l.at, l.attempt, failure)
 }
 
-// fail keeps the job as failed for good, unless it repeats, or an Enqueue
-// asked it to run again, when it waits for that time with its error kept
+// fail keeps the job as failed for good. A job that repeats, or that an Enqueue
+// asked to run again, waits for that time instead, with its error kept.
 func (l *lease) fail(ctx context.Context, w sqlite.Writer, h heldRow, now int64, cause string) (settled, error) {
 	failure := sql.NullString{String: cause, Valid: true}
 	if next, again := l.nextRun(h, now); again {
@@ -378,8 +378,10 @@ func (l *lease) fail(ctx context.Context, w sqlite.Writer, h heldRow, now int64,
 	return settled{gone: true, failed: cause}, err
 }
 
-// nextRun is when a settled job runs again without a retry: the next time of
-// its repeat after its own and after now, or the time an Enqueue asked of it
+// nextRun is when a settled job runs again without a retry.
+//
+// It is the earlier of its repeat's next time (after its own and after now)
+// and the time an Enqueue asked of it.
 func (l *lease) nextRun(h heldRow, now int64) (int64, bool) {
 	next := int64(0)
 	if h.repeat.Valid {
@@ -413,8 +415,8 @@ func earliest(due int64, again sql.NullInt64) int64 {
 }
 
 // backoff is the wait after attempt n failed: first, doubling, never past
-// longest, a tenth longer or shorter at random so that the jobs one outage
-// failed do not return in the same second
+// longest, and a tenth longer or shorter at random so that the jobs one outage
+// failed do not return in the same second.
 //
 //	first 1s, longest 1h: 1s, 2s, 4s … 34m8s, 1h, 1h … each ± 10 %
 func backoff(p policy, attempt int64) int64 {
@@ -457,9 +459,9 @@ const (
 	earliestLease = `select min(until) from leases where queue = ?1 and until > ?2`
 )
 
-// claimedRow is a due job a claim leased: its value when the row holds it, or
-// where it spilled, and its size, so that memory holds room for it before
-// anyone reads it
+// claimedRow is a due job a claim leased. It carries the value when the row
+// holds it, or where it spilled, and its size, so that memory holds room for
+// it before anyone reads it.
 type claimedRow struct {
 	next, id, at, attempt int64
 	key, repeat           sql.NullString
@@ -475,9 +477,11 @@ type claiming struct {
 }
 
 // claimRows leases up to limit due jobs until until, leaving the values they
-// spilled for their workers to read outside the writer. A job whose attempts
-// all ended without a settlement, its process dead or its worker gone each
-// time, fails for good instead of running again; abandoned counts them
+// spilled for their workers to read outside the writer.
+//
+// A job whose attempts all ended without a settlement, its process dead or its
+// worker gone each time, fails for good instead of running again. abandoned
+// counts them.
 func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []claimedRow, abandoned int, err error) {
 	rows, err := w.QueryContext(ctx, claimJobs, c.queue, c.now, c.limit) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {

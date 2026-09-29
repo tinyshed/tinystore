@@ -53,7 +53,6 @@ type session struct {
 	sqlHandles   handles[*sqlHandle]
 }
 
-// agreed is what a handshake settled for its connection
 type agreed struct {
 	maxBody        uint32 // the largest body either side sends
 	inFlight       uint32 // the streams a client may have open at once
@@ -274,9 +273,9 @@ func (s *session) open(h wire.Header) (*stream, error) {
 	return st, nil
 }
 
-// data hands a DATA frame to the upload its stream is; DATA on a stream that
+// data hands a DATA frame to the upload its stream is. DATA on a stream that
 // ended, sent before the client learnt it, is dropped and its credit given
-// back
+// back.
 func (s *session) data(h wire.Header) error {
 	if h.Length == 0 && h.Flags&wire.FlagEnd == 0 {
 		return fmt.Errorf("%w: an empty DATA that does not end stream %d", wire.ErrProtocol, h.Stream)
@@ -364,7 +363,6 @@ func (s *session) letGo(n int64) {
 	}
 }
 
-// stopUnless ends the connection with err, when it is not nil
 func (s *session) stopUnless(err error) {
 	if err != nil {
 		s.stop(err)
@@ -380,8 +378,8 @@ func (s *session) letGoFromReader(n int64) error {
 }
 
 // finish takes a stream out of use before its final frame leaves, so that the
-// client may name its number again as soon as the frame arrives, and closes a
-// connection going away once its last stream has
+// client may name its number again as soon as the frame arrives. It closes a
+// connection going away once its last stream has finished.
 func (s *session) finish(st *stream, frame []byte) error {
 	s.mu.Lock()
 	delete(s.streams, st.id)
@@ -416,9 +414,11 @@ func (s *session) goAway() {
 }
 
 // end is what follows the reader's last frame. Every stream waiting for the
-// client learns it is gone; after a clean end the calls running finish and
-// their answers are written, and after a frame that broke the protocol the
-// GOAWAY saying so is, while anything else ends the calls running.
+// client learns it is gone.
+//
+// After a clean end, or once the server is going away, the calls running finish
+// and their answers are written. Otherwise the calls running end, after the
+// GOAWAY saying so if a frame broke the protocol.
 func (s *session) end(err error) error {
 	s.loseStreams(err)
 	if errors.Is(err, io.EOF) || s.isGoingAway() {

@@ -75,9 +75,9 @@ func (s *testStore) queryPlan(t *testing.T, statement string, arguments ...any) 
 	return strings.Join(plan, " ")
 }
 
-// a read finds every record its range holds whatever the widths of the blocks
-// holding them: a busy stream's, a quiet stream's merged over hours, and late
-// ones, in the head and sealed
+// A read finds every record its range holds, whatever the widths of the blocks
+// holding them. Those are a busy stream's, a quiet stream's merged over hours,
+// and late ones, in the head and sealed.
 func TestReadsFindRecordsInBlocksOfEveryWidth(t *testing.T) {
 	s := openRecords(t)
 	all := frontendRecords(20_000)

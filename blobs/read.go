@@ -24,12 +24,15 @@ var (
 )
 
 // Open returns a reader of the object under key as it is at this moment, and
-// whether a live object is there. A reader of a file holds the file open and
-// nothing of the engine's, so it reads on after its key is deleted, replaced
-// or expired, and after the store closes, until its own Close. An inline
-// object is checked before its first byte, and a file's read from its first
-// byte to its last in order before its last bytes are handed over; a range is
-// not checked.
+// whether a live object is there.
+//
+// A reader of a file holds the file open and nothing of the engine's, so it
+// reads on after its key is deleted, replaced or expired, and after the store
+// closes, until its own Close.
+//
+// An inline object is checked before its first byte. A file is read from its
+// first byte to its last in order, and checked before its last bytes are handed
+// over; a range is not checked.
 func (b *Bucket) Open(ctx context.Context, key string) (*Reader, bool, error) {
 	c, err := b.begin(key, "Open", nil, nil)
 	if err != nil {
@@ -53,10 +56,12 @@ func (b *Bucket) Open(ctx context.Context, key string) (*Reader, bool, error) {
 	return reader, true, nil
 }
 
-// open looks the key up and opens what it names. A file gone between the
-// lookup and the open went because its key changed, so the key is looked up
-// again, three lookups in all; a file that will not open while its key still
-// names it is corrupt when it is missing, and the open's error otherwise.
+// open looks the key up and opens what it names. A file gone between the lookup
+// and the open went because its key changed, so the key is looked up again,
+// three lookups in all.
+//
+// A file that will not open while its key still names it is corrupt when it is
+// missing, and the open's error otherwise.
 func (b *Bucket) open(ctx context.Context, c call, reserved *tinystore.Reservation) (*Reader, error) {
 	var failed int64
 	var failure error
@@ -107,7 +112,7 @@ func (b *Bucket) lookup(ctx context.Context, c call) (*opened, error) {
 
 // readerOf is a reader of what a lookup found: an inline object checked
 // against its SHA-256 before its first byte, or its file opened through the
-// store's root, which lets the engine remove it under the reader
+// store's root. The root lets the engine remove the file under the reader.
 func (b *Bucket) readerOf(c call, found *opened, reserved *tinystore.Reservation) (*Reader, error) {
 	object, err := found.object(b.folder)
 	switch {

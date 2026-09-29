@@ -140,9 +140,9 @@ func TestAValueJSONCannotWriteIsRefused(t *testing.T) {
 	}
 }
 
-// a bucket of Raw reads what a bucket of each type wrote as its row holds it,
-// an empty string as empty bytes and not as nothing, and what it writes reads
-// in the bucket of the type it came from
+// A bucket of Raw reads what a bucket of each type wrote as its row holds it,
+// an empty string as empty bytes and not as nothing. What it writes reads in
+// the bucket of the type it came from.
 func TestARawValueIsWhatItsRowHolds(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	raw := openTestBucket[Raw](t, state, "shared")
@@ -217,7 +217,6 @@ func TestARawValueIsWhatItsRowHolds(t *testing.T) {
 	}
 }
 
-// bigEndian is a codec that writes an int64 as eight bytes, big-endian
 type bigEndian struct{}
 
 func (bigEndian) Encode(n int64) ([]byte, error) {

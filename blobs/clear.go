@@ -17,10 +17,12 @@ const (
 )
 
 // Clear removes every object of this handle's folder and of the folders under
-// it, at once. Up to 10,000 objects go in one transaction; a larger folder is
-// marked cleared at the file's revision, which hides its objects from every
-// call the moment it commits, and maintenance deletes them 10,000 a
-// transaction. An object written after the Clear is a new object and stays.
+// it, at once. Up to 10,000 objects go in one transaction.
+//
+// A larger folder is marked cleared at the file's revision, which hides its
+// objects from every call the moment the mark commits; maintenance then deletes
+// them 10,000 a transaction. An object written after the Clear is a new object
+// and stays.
 func (b *Bucket) Clear(ctx context.Context) error {
 	if b.err != nil {
 		return b.err

@@ -80,9 +80,9 @@ func TestMigrateRunsOnlyWhatTheFileHasNotRun(t *testing.T) {
 	}
 }
 
-// a migration that rebuilds a parent keeps its children, since foreign keys
-// are off while it runs; one that leaves a child referring to nothing is
-// refused whole; and foreign keys are on again for the writes after them
+// A migration that rebuilds a parent keeps its children, since foreign keys are
+// off while it runs. One that leaves a child referring to nothing is refused
+// whole, and foreign keys are on again for the writes after it.
 func TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit(t *testing.T) {
 	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "keys.db"), Config{Readers: 1})
 	if err != nil {

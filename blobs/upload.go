@@ -17,11 +17,12 @@ import (
 
 // Upload is an object whose bytes arrive over time: Write takes them, Commit
 // makes the object appear whole under its key, and Abort leaves nothing, so
-// that defer upload.Abort() is always safe. It lives as long as the context
-// given to Create: a call after that context ended finds the upload aborted,
-// and maintenance aborts one left without calls. The store's Close aborts it
-// too; used after either, or after Commit or Abort, it is the context's error
-// or tinystore.ErrClosed. An Upload is one goroutine's.
+// that defer upload.Abort() is always safe. An Upload is one goroutine's.
+//
+// It lives as long as the context given to Create: a call after that context
+// ended finds the upload aborted, and maintenance aborts one left without
+// calls. The store's Close aborts it too. Used after either, or after Commit or
+// Abort, it is the context's error or tinystore.ErrClosed.
 type Upload struct {
 	ctx         context.Context
 	bucket      *Bucket
@@ -42,7 +43,6 @@ type Upload struct {
 	leave       func() // gives back its slot and its place in the store
 }
 
-// lying is where an upload's bytes are
 type lying int
 
 const (
@@ -70,11 +70,12 @@ func (b *Bucket) Create(ctx context.Context, key string, options ...Option) (*Up
 
 // Put stores what r yields under key, and returns once the object is durable:
 // its bytes synced and its row committed. Whatever the key held is replaced
-// whole at that moment. Memory does not follow the object's size: 16 KiB hold
-// the bytes while they may stay inline, and past them the bytes go to a file
-// as they arrive. A long stream may use 64 KiB when the store's memory is
-// available immediately. A *bytes.Reader, *bytes.Buffer or *strings.Reader
-// says its own Size.
+// whole at that moment. A *bytes.Reader, *bytes.Buffer or *strings.Reader says
+// its own Size.
+//
+// Memory does not follow the object's size: 16 KiB hold the bytes while they
+// may stay inline, and past them the bytes go to a file as they arrive. A long
+// stream may use 64 KiB when the store's memory is available immediately.
 func (b *Bucket) Put(ctx context.Context, key string, r io.Reader, options ...Option) (Object, error) {
 	c, err := b.begin(key, "Put", withLength(r, options), putTakes)
 	if err != nil {
@@ -111,9 +112,9 @@ func withLength(r io.Reader, options []Option) []Option {
 	return append([]Option{Size(int64(length))}, options...)
 }
 
-// startUpload admits an upload: one of the upload slots, the store's memory
-// for its buffer, its bounds and condition checked; from then on the store's
-// Close aborts it, and so does maintenance once ctx has ended
+// startUpload admits an upload: one of the upload slots, the store's memory for
+// its buffer, its bounds and condition checked. From then on the store's Close
+// aborts it, and so does maintenance once ctx has ended.
 func (b *Bucket) startUpload(ctx context.Context, c call) (*Upload, error) {
 	leave, err := b.store.admitUpload(ctx)
 	if err != nil {
@@ -188,11 +189,13 @@ func (u *Upload) alive() error {
 	return u.ended
 }
 
-// readFrom takes r's bytes into the upload through its own buffer: while they
-// may stay inline they gather in its free end, a full buffer reads one byte to
-// learn whether more follow, and once they go to the file the buffer carries
-// them there. The lock is taken between reads rather than across them, so an
-// abort does not wait for r.
+// readFrom takes r's bytes into the upload through its own buffer. While they
+// may stay inline they gather in its free end, and a full buffer reads one byte
+// to learn whether more follow; once they go to the file the buffer carries
+// them there.
+//
+// The lock is taken between reads rather than across them, so an abort does
+// not wait for r.
 func (u *Upload) readFrom(r io.Reader) error {
 	for {
 		space, gathering, err := u.room()
@@ -212,9 +215,9 @@ func (u *Upload) readFrom(r io.Reader) error {
 	}
 }
 
-// room is where the next read goes: the buffer's free end while the bytes may
-// stay inline, one byte once that end is full, the whole buffer once they go
-// to a file
+// room is where the next read goes. While the bytes may stay inline it is the
+// buffer's free end, and one byte once that end is full; once they go to a file
+// it is the whole buffer.
 func (u *Upload) room() (space []byte, gathering bool, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -232,7 +235,8 @@ func (u *Upload) room() (space []byte, gathering bool, err error) {
 	return u.probe[:], false, nil
 }
 
-// reserve both buffers while replacing one; a tight budget keeps streaming with the smaller one
+// growBuffer reserves both buffers while replacing one; a tight budget keeps
+// streaming with the smaller one.
 func (u *Upload) growBuffer() {
 	u.bufferTried = true
 	reserved, err := u.bucket.store.runtime.ReserveNow(streamBuffer)
@@ -244,9 +248,9 @@ func (u *Upload) growBuffer() {
 	u.reserved = reserved
 }
 
-// took accounts for bytes a read put where room said: in the buffer's free end
-// they already lie where they stay, and anywhere else they are taken as Write
-// takes them
+// took accounts for bytes a read put where room said. In the buffer's free end
+// they already lie where they stay; anywhere else they are taken as Write takes
+// them.
 func (u *Upload) took(p []byte, gathered bool) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -314,9 +318,9 @@ func (u *Upload) fitsInline(n int) bool {
 	return u.call.settings.size <= inlineSize && len(u.buffer)+n <= inlineSize
 }
 
-// spill gives the upload its file: an id held from the store's block, its
-// name in uploads/, the disk's free space checked and the bytes the buffer
-// gathered, after which the buffer only carries bytes to the file
+// spill gives the upload its file: an id held from the store's block, its name
+// in uploads/, the disk's free space checked and the bytes the buffer gathered.
+// After that the buffer only carries bytes to the file.
 func (u *Upload) spill() error {
 	s := u.bucket.store
 	id, err := s.takeID(u.ctx)

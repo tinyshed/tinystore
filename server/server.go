@@ -34,9 +34,9 @@ type Options struct {
 	// connection needs none.
 	Tokens Tokens
 
-	// KV is the kv engine the program opened; nil opens it with KVOptions the
-	// first time a client asks, since an engine opens once a store. So for
-	// every engine.
+	// KV is the kv engine the program opened. When it is nil the server opens
+	// it with KVOptions the first time a client asks, since an engine opens
+	// once a store. The same holds for every engine below.
 	KV             *kv.Store
 	KVOptions      kv.Options
 	Jobs           *jobs.Store
@@ -48,9 +48,10 @@ type Options struct {
 	Metrics        *metrics.Store
 	MetricsOptions metrics.Options
 
-	// SQL are the databases the program opened, by name: a client's sql.open
-	// of one checks the migrations it carries against the file's, since a
-	// database opens once a store. The server opens any other with them.
+	// SQL holds the databases the program opened, by name. A client's sql.open
+	// of one checks the migrations it carries against those the file applied,
+	// since a database opens once a store. The server opens any other name
+	// itself, with the migrations the client carries.
 	SQL map[string]*sqldb.DB
 }
 
@@ -146,9 +147,11 @@ func (s *Server) Instance() []byte {
 
 var errClosing = errors.New("the server is closing")
 
-// Serve accepts connections from l and serves each, until l closes, ctx ends
-// or the server closes, which return nil, or l fails. The connections it
-// accepted go on until they end, or Close ends them.
+// Serve accepts connections from l and serves each. It returns nil when l
+// closes, ctx ends or the server closes, and an error when l fails.
+//
+// The connections it accepted go on until they end, until ctx ends, or until
+// Close ends them.
 func (s *Server) Serve(ctx context.Context, l Listener) error {
 	if !s.track(l) {
 		return errClosing
@@ -196,10 +199,11 @@ func (s *Server) isClosing() bool {
 	return s.closing
 }
 
-// ServeConn serves one connection until it ends, as a private child serves
-// its parent's stdin and stdout: remote says it came from a network, and must
-// carry a token. The end of what the client sends drains the streams running
-// and returns nil.
+// ServeConn serves one connection until it ends or ctx ends, as a private child
+// serves its parent's stdin and stdout. remote says it came from a network, and
+// so it must carry a token.
+//
+// The end of what the client sends drains the streams running and returns nil.
 func (s *Server) ServeConn(ctx context.Context, conn io.ReadWriteCloser, remote bool) error {
 	session, err := s.join(ctx, conn, remote)
 	if err != nil {
@@ -257,7 +261,7 @@ func (s *Server) cameOrWent() {
 }
 
 // WaitIdle returns once no connection has been open for idle, as a shared
-// sidecar leaves when its clients have, or with ctx's error when it ends
+// sidecar leaves when its clients have. It returns ctx's error if ctx ends
 // first.
 func (s *Server) WaitIdle(ctx context.Context, idle time.Duration) error {
 	for {
@@ -379,7 +383,6 @@ func (s *Server) kvStore(ctx context.Context) (*kv.Store, error) {
 	return s.kv, nil
 }
 
-// jobsStore is the jobs engine, opened the first time a client asks for it
 func (s *Server) jobsStore(ctx context.Context) (*jobs.Store, error) {
 	s.opening.Lock()
 	defer s.opening.Unlock()
@@ -393,7 +396,6 @@ func (s *Server) jobsStore(ctx context.Context) (*jobs.Store, error) {
 	return s.jobs, nil
 }
 
-// blobsStore is the blobs engine, opened the first time a client asks for it
 func (s *Server) blobsStore(ctx context.Context) (*blobs.Store, error) {
 	s.opening.Lock()
 	defer s.opening.Unlock()
@@ -407,8 +409,6 @@ func (s *Server) blobsStore(ctx context.Context) (*blobs.Store, error) {
 	return s.blobs, nil
 }
 
-// recordsStore is the records engine, opened the first time a client asks for
-// it
 func (s *Server) recordsStore(ctx context.Context) (*records.Store, error) {
 	s.opening.Lock()
 	defer s.opening.Unlock()
@@ -422,8 +422,6 @@ func (s *Server) recordsStore(ctx context.Context) (*records.Store, error) {
 	return s.records, nil
 }
 
-// metricsStore is the metrics engine, opened the first time a client asks for
-// it
 func (s *Server) metricsStore(ctx context.Context) (*metrics.Store, error) {
 	s.opening.Lock()
 	defer s.opening.Unlock()

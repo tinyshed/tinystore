@@ -48,8 +48,8 @@ func check(err error) {
 	}
 }
 
-// An avatar's original and the sizes a page shows live in the user's folder;
-// a job makes the sizes from whatever original is there when it runs, and
+// An avatar's original and the sizes a page shows live in the user's folder. A
+// job makes the sizes from whatever original is there when it runs, and
 // deleting the account clears the folder.
 func Example_avatars() {
 	ctx := context.Background()
@@ -90,8 +90,8 @@ func Example_avatars() {
 	// false
 }
 
-// A file the composer uploads waits a day under pending/; sending moves it
-// to sent/, where it stays, and the user's folder answers a quota check by
+// A file the composer uploads waits a day under pending/. Sending moves it to
+// sent/, where it stays, and the user's folder answers a quota check by
 // counting its objects' rows.
 func Example_chatAttachments() {
 	ctx := context.Background()
@@ -124,7 +124,7 @@ func Example_chatAttachments() {
 }
 
 // A camera writes one object a minute, so a crash loses the minute being
-// written and never the minutes before it; a player seeks, and the server
+// written and never the minutes before it. A player seeks, and the server
 // answers its range with http.ServeContent.
 func Example_recordings() {
 	ctx := context.Background()
@@ -208,7 +208,7 @@ func Example_export() {
 }
 
 // A client that retries an upload sends If-None-Match: *, and the retry adds
-// nothing; an editor saving sends the ETag it read, and a save over someone
+// nothing. An editor saving sends the ETag it read, and a save over someone
 // else's is refused.
 func Example_documents() {
 	ctx := context.Background()

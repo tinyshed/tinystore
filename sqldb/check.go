@@ -10,9 +10,9 @@ import (
 	"github.com/tinyshed/tinystore/sqldb/internal/catalog"
 )
 
-// check compares the file with schema as SQLite describes both, the schema in
-// a database in memory made from its SQL: a difference of structure refuses
-// the file, and text, a CHECK or a default's expression, is never compared
+// check compares the file with schema as SQLite describes both, the schema in a
+// database in memory made from its SQL. A difference of structure refuses the
+// file. Text, a CHECK or a default's expression, is never compared.
 func (d *DB) check(ctx context.Context, schema *SchemaDef) error {
 	declared, err := catalog.Declare(ctx, schema.SQL())
 	if err != nil {

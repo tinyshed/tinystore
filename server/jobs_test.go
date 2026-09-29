@@ -211,9 +211,8 @@ func sendOutcome(t *testing.T, st *client.Stream, outcome wire.JobsOutcome, last
 	}
 }
 
-// a worker that goes away with a job in its hands fails that attempt, as a
-// process that died would, and the job claimed ahead for it goes back
-// uncounted
+// A worker that goes away with a job in its hands fails that attempt, as a
+// process that died would. The job claimed ahead for it goes back uncounted.
 func TestALostWorkerFailsTheAttemptsInItsHands(t *testing.T) {
 	ts := startTestServer(t, Options{})
 	conn := ts.dial(t, wire.Hello{})

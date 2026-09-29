@@ -30,9 +30,9 @@ type withEmbedded struct {
 	Body  sql.NullString
 }
 
-// a struct takes each column by its tag or its field's name, an embedded
-// struct's fields counting as its own even through a nil pointer, and refuses
-// a column no field takes
+// A struct takes each column by its tag or its field's name, an embedded
+// struct's fields counting as its own even through a nil pointer. It refuses a
+// column no field takes.
 func TestStructsTakeColumnsByTagOrNameAndRefuseWhatDoesNotFit(t *testing.T) {
 	db := openNotes(t)
 	ctx := t.Context()

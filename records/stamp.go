@@ -39,8 +39,8 @@ const (
 )
 
 // stampPatterns are the layouts a stamp is looked for in, each perhaps followed
-// by a fraction: Y year, M month, N its name, D day, E a day a space pads, and
-// h m s the time of day
+// by a fraction. Y year, M month, N its name, D day, E a day a space pads, and
+// h m s the time of day.
 var stampPatterns = patterns(
 	"Y-M-D h:m:s", // Python, log4j, Postgres
 	"Y-M-DTh:m:s", // RFC 3339
@@ -80,7 +80,6 @@ func (s *stamp) key() int {
 	return s.pattern<<16 | int(s.separator)<<8 | int(s.digits)
 }
 
-// layout is how the stamp is spelled: its pattern, and its fraction
 func (s *stamp) layout() string {
 	if s.separator == 0 {
 		return stampPatterns[s.pattern]
@@ -108,9 +107,9 @@ const (
 	monthInitials = "ADFJMNOS" // the letters a month's name begins with
 )
 
-// nextStamp tries the patterns at each place a stamp could start: those that
-// begin with a digit at a digit, the one that begins with a month's name at
-// its initial
+// nextStamp tries the patterns at each place a stamp could start. Those that
+// begin with a digit are tried at a digit, and the one that begins with a
+// month's name at its initial.
 func nextStamp(text string, from int, at int64) (stamp, bool) {
 	for i := from; i < min(len(text)-shortestStamp+1, from+stampReach); i++ {
 		byName := strings.IndexByte(monthInitials, text[i]) >= 0
@@ -348,9 +347,9 @@ func (e *encoder) findColumnStamps(values []string, times []int64) bool {
 	return len(e.stamps) >= 8 && len(e.stamps)*8 >= len(values)
 }
 
-// cutStamps takes each value's stamps, found already, out of it; a stamp
-// whose layout the column has no room for, or whose distance an int64 cannot
-// hold, stays text
+// cutStamps takes each value's stamps, found already, out of it. A stamp whose
+// layout the column has no room for, or whose distance an int64 cannot hold,
+// stays text.
 func (e *encoder) cutStamps(values []string, times []int64) *stampedColumn {
 	column := &stampedColumn{known: map[int]int{}}
 	var rest joiner
@@ -535,7 +534,6 @@ func (r *stampRebuild) spell(layout string, at, behind int64) bool {
 	return ok
 }
 
-// layoutWidth is how many bytes a layout spells
 func layoutWidth(layout string) int {
 	width := 0
 	for i := 0; i < len(layout); i++ {

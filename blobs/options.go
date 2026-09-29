@@ -11,8 +11,8 @@ import (
 // Options changes how the engine keeps its files.
 type Options struct {
 	// KeepFree is the disk an upload leaves free, so that one upload cannot
-	// take the space every engine's commits need: 1 GiB when zero, and nothing
-	// is checked when it is negative.
+	// take the space every engine's commits need. It is 1 GiB when zero, and
+	// nothing is checked when it is negative.
 	KeepFree int64
 }
 

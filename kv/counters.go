@@ -10,7 +10,6 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// the kind of bucket that holds counters
 const kindCounters = "counters"
 
 // Counters holds an int64 by key. Of and WithTx give handles on the same
@@ -56,10 +55,12 @@ func (c *Counters) WithTx(tx *Tx) *Counters {
 	return &bound
 }
 
-// the sum and the larger of a counter and n, in the writer: a counter expired
-// or hidden by a Clear starts again from n with a new expiry, a live one keeps
-// its own, and a sum past the int64 range writes nothing, since SQLite would
-// turn it into a REAL
+// The sum and the larger of a counter and n, in the writer. A counter expired
+// or hidden by a Clear starts again from n with a new expiry, and a live one
+// keeps its own.
+//
+// A sum past the int64 range writes nothing, since SQLite would turn it into a
+// REAL.
 var (
 	counterGone = `(cells.expires <= ?6 or ` + hidden("cells", 7) + `)`
 	addCounter  = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)

@@ -25,7 +25,6 @@ type Catalog struct {
 	Tables []*Table
 }
 
-// Table is one table as its file describes it.
 type Table struct {
 	Name         string
 	Strict       bool

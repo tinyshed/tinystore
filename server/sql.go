@@ -65,11 +65,13 @@ func migrationsOf(files []wire.SQLMigration) (fs.FS, error) {
 	return directory, nil
 }
 
-// database is the database of name, opened the first time a client asks for
-// it: an admin's open applies its migrations, and a data connection's finds
-// them applied or is refused. A database opens once a store, so every later
-// open, and an open of one the program passed, checks the migrations it
-// carries against those the file applied.
+// database is the database of name, opened the first time a client asks for it:
+// an admin's open applies its migrations, and a data connection's finds them
+// applied or is refused.
+//
+// A database opens once a store, so every later open, and an open of one the
+// program passed, checks the migrations it carries against those the file
+// applied.
 func (s *Server) database(ctx context.Context, name string, migrations fs.FS, capability wire.Capability) (*sqldb.DB,
 	error,
 ) {
@@ -96,9 +98,9 @@ func (s *Server) database(ctx context.Context, name string, migrations fs.FS, ca
 	return db, nil
 }
 
-// migrated checks the migrations an open of a database already open carries;
-// one it has not applied waits for the server's next start, when an admin's
-// open applies it
+// migrated checks the migrations an open of a database already open carries.
+// One it has not applied waits for the server's next start, when an admin's
+// open applies it.
 func migrated(ctx context.Context, db *sqldb.DB, name string, migrations fs.FS, capability wire.Capability) error {
 	if migrations == nil {
 		return nil
@@ -300,8 +302,8 @@ func (s *session) statementContext(ctx context.Context) (context.Context, contex
 }
 
 // tookTooLong says that a statement ended at its deadline rather than by its
-// own failure, keeping only the text of how it stopped; a write whose commit
-// it interrupted stays outcome unknown
+// own failure. Only the text of how it stopped is kept, not the error itself. A
+// write whose commit it interrupted stays outcome unknown.
 func tookTooLong(ctx context.Context, err error) error {
 	if errors.Is(context.Cause(ctx), errStatementTook) && !errors.Is(err, sqldb.ErrOutcomeUnknown) {
 		return fmt.Errorf("%w: %s", errStatementTook, err.Error())

@@ -47,7 +47,6 @@ const (
 	deleteSegment      = `delete from segments where id = ?`
 )
 
-// expiredSegment is a segment and the range of its blocks' ids
 type expiredSegment struct {
 	id, firstBlock, lastBlock int64
 }

@@ -49,8 +49,7 @@ const (
 )
 
 // Method is an operation: its high byte names the engine and its low byte the
-// operation, so that a new engine takes a new high byte and the frame stays as
-// it is.
+// operation. A new engine takes a new high byte, so the frame stays as it is.
 type Method uint16
 
 type Header struct {
@@ -101,10 +100,14 @@ var rules = map[Kind]rule{
 	KindGoAway:   {"GOAWAY", noStream, 0, anyLength},
 }
 
-// Check refuses a header that breaks the protocol: an unknown kind, a flag its
-// kind does not define, ERROR without END, a method outside a REQUEST or none
-// in one, a stream where the kind names none or none where it names one, and a
-// body of a length the kind cannot have.
+// Check refuses a header that breaks the protocol:
+//
+//	an unknown kind
+//	a flag its kind does not define
+//	ERROR without END
+//	a method outside a REQUEST, or none in one
+//	a stream where the kind names none, or none where it names one
+//	a body of a length the kind cannot have
 func (h Header) Check() error {
 	rule, known := rules[h.Kind]
 	switch {
@@ -162,7 +165,6 @@ func AppendCredit(dst []byte, stream, n uint32) []byte {
 	return binary.LittleEndian.AppendUint32(dst, n)
 }
 
-// Granted is the bytes a CREDIT's body grants.
 func Granted(body []byte) uint32 {
 	return binary.LittleEndian.Uint32(body)
 }

@@ -21,7 +21,7 @@ func (c *clock) advance(d time.Duration) { c.now = c.now.Add(d) }
 
 // exampleQueues opens jobs in a Manual store in a new directory, at noon UTC,
 // so that an example moves its clock instead of sleeping and runs its jobs with
-// UntilIdle; done closes and removes it
+// UntilIdle. done closes and removes it.
 func exampleQueues() (queues *jobs.Store, at *clock, done func()) {
 	ctx := context.Background()
 	directory, err := os.MkdirTemp("", "tinystore-jobs-")

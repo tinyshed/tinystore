@@ -248,9 +248,9 @@ func (a *app) useDrafts(ctx context.Context, out io.Writer) error {
 	return err
 }
 
-// useAttachments keeps a note's file beside its row: the row names the note
-// and the bucket holds the bytes; an edit made from a stale read is refused,
-// as a stale draft's save is
+// useAttachments keeps a note's file beside its row: the row names the note and
+// the bucket holds the bytes. An edit made from a stale read is refused, as a
+// stale draft's save is.
 func (a *app) useAttachments(ctx context.Context, out io.Writer) error {
 	files := a.files.Of("notes", 1)
 	list, err := files.Put(ctx, "list.txt", strings.NewReader("milk, bread, eggs, tea"),

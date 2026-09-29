@@ -1,6 +1,6 @@
-// Package flow is how a connection's frames leave and what paces them, the
-// same at the server and at a client: a writer with no goroutine of its own,
-// and credit, a sender's allowance and a receiver's window.
+// Package flow is how a connection's frames leave and what paces them, the same
+// at the server and at a client. It holds a writer with no goroutine of its
+// own, and credit: a sender's allowance and a receiver's window.
 package flow
 
 import (
@@ -11,10 +11,12 @@ import (
 	"sync/atomic"
 )
 
-// Writer writes a connection's frames from many goroutines without one of its
-// own: the first sender to find nobody writing writes everything queued, what
-// arrives meanwhile included, as UpdateGrouped's leader commits the writes
-// behind it. A write a frame loses three to twenty-seven times at depth, and a
+// Writer writes a connection's frames from many goroutines without a goroutine
+// of its own: the first sender to find nobody writing writes everything queued,
+// what arrives meanwhile included, as UpdateGrouped's leader commits the writes
+// behind it.
+//
+// A write for each frame loses three to twenty-seven times at depth, and a
 // goroutine that drains a queue costs a hand-off at one in flight,
 // docs/reports/rpc-mechanics-2026-09-28.md.
 type Writer struct {
@@ -148,7 +150,6 @@ func (w *Writer) lead() {
 	w.room.Broadcast()
 }
 
-// Flush waits until everything queued is written, or the writer failed.
 func (w *Writer) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -235,10 +236,12 @@ func (a *Allowance) wake() {
 	}
 }
 
-// Credit is a receiver's side of a window: Receive counts what the sender
-// sent and refuses what passes the window, and Consume says when to grant
-// back what was let go, once half the window has gone, so that a grant is not
-// a frame a frame. The reader receives while handlers consume.
+// Credit is a receiver's side of a window. The reader receives while handlers
+// consume.
+//
+// Receive counts what the sender sent and refuses what passes the window.
+// Consume says when to grant back what was let go: once half the window has
+// gone, so that a grant is not sent for every frame.
 type Credit struct {
 	window      int64
 	outstanding atomic.Int64 // sent and not granted back

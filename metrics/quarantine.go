@@ -11,8 +11,9 @@ import (
 const suspendQuery = `update series_state set failed_at=?,failure_reason=? where series_id=? and failed_at is null`
 
 // handleMaintenanceFailure suspends a series whose maintenance failed on its
-// own corrupt data or limits, and reports whether this call suspended it; any
-// other failure is returned for the pass to stop on.
+// own corrupt data or limits, and reports whether this call suspended it.
+//
+// Any other failure is returned for the pass to stop on.
 func (s *Store) handleMaintenanceFailure(ctx context.Context, id int64, phase string, cause error) (bool, error) {
 	if ctx.Err() != nil {
 		return false, ctx.Err()

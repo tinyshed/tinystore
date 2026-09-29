@@ -52,8 +52,8 @@ func TestAHeadSealsWhenFullOrOld(t *testing.T) {
 	sameRecords(t, sortedByTime(records), s.readAll(t, Query{}))
 }
 
-// a record more than ten seconds behind its stream goes to the stream's late head
-// and seals into a segment of its own
+// a record more than ten seconds behind its stream goes to the stream's late
+// head and seals into a segment of its own
 func TestLateRecordsSealFromTheirOwnHead(t *testing.T) {
 	s := openRecords(t)
 	records := frontendRecords(1000)
@@ -136,9 +136,9 @@ func TestADamagedHeadDoesNotStopTheOthers(t *testing.T) {
 	sameRecords(t, backendRecords(100), s.readAll(t, Query{Streams: []string{"backend"}}))
 }
 
-// retention removes whole segments, their blocks, filters and keys, and head
-// rows; a read never returns a record past the cutoff, even from a segment
-// retention has only partly passed
+// Retention removes whole segments, their blocks, filters and keys, and head
+// rows. A read never returns a record past the cutoff, even from a segment
+// retention has only partly passed.
 func TestRetentionRemovesWholeSegmentsAndClipsReads(t *testing.T) {
 	s := openTestStore(t, t.TempDir(), Options{Retention: time.Hour}, tinystore.Options{})
 	records := backendRecords(2 * maxSegmentRecords)

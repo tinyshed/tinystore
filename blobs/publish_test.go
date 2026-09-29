@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// doomCommits makes every commit that writes the object doomed fail, after
-// its statements ran: a trigger inserts a row that a deferred foreign key
-// refuses only when the transaction commits
+// doomCommits makes every commit that writes the object doomed fail, after its
+// statements ran. A trigger inserts a row that a deferred foreign key refuses
+// only when the transaction commits.
 func (s *testStore) doomCommits(t *testing.T) {
 	t.Helper()
 	err := s.file.Update(t.Context(), func(tx *sql.Tx) error {
@@ -31,9 +31,9 @@ func (s *testStore) doomCommits(t *testing.T) {
 	}
 }
 
-// a commit whose outcome is unknown asks the file whether its content is
-// there before it lets go of its bytes: none is, so no file stays behind,
-// and no id stays held
+// A commit whose outcome is unknown asks the file whether its content is there
+// before it lets go of its bytes. None is, so no file stays behind, and no id
+// stays held.
 func TestAnUnknownCommitLeavesNoFileBehind(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	media := openTestBucket(t, s, "media")

@@ -250,17 +250,18 @@ func (k *JobsKey) Decode(body []byte) error {
 }
 
 // JobsEntry is a job as its queue holds it: get's answer and a scan's item.
-// State is 1 waiting, 2 leased or 3 failed; Err is its last failure, and
-// Repeat a repeating job's cron text and zone.
 type JobsEntry struct {
 	Found   bool
 	Key     string
 	Value   string
 	At      int64
 	Attempt uint64
-	State   uint64
-	Err     string
-	Repeat  string
+	// State is 1 waiting, 2 leased or 3 failed.
+	State uint64
+	// Err is the job's last failure.
+	Err string
+	// Repeat is a repeating job's cron text and zone.
+	Repeat string
 }
 
 func (e JobsEntry) Append(dst []byte) []byte {
@@ -504,15 +505,16 @@ func (s *JobsSettled) Decode(body []byte) error {
 	return d.End()
 }
 
-// JobsQuery is jobs.scan's request: the keys under Prefix in the byte order of
-// their text, or with State 3 and no prefix the failed jobs, the last failed
-// first; After is where the page before ended.
+// JobsQuery is jobs.scan's request.
 type JobsQuery struct {
 	Handle uint64
+	// Prefix selects the keys under it, in the byte order of their text.
 	Prefix string
-	State  uint64
-	After  string
-	Limit  uint64
+	// State 3 with no prefix selects the failed jobs, the last failed first.
+	State uint64
+	// After is where the page before ended.
+	After string
+	Limit uint64
 }
 
 func (s JobsQuery) Append(dst []byte) []byte {

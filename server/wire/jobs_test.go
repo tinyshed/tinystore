@@ -7,7 +7,6 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// every jobs message reads back as it was written
 func TestJobsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 	repeat := &wire.Repeat{Cron: "10 3 * * *", Zone: "Europe/Moscow"}
 	messages := []struct {

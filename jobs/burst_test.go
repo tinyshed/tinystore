@@ -16,15 +16,15 @@ import (
 // measurements of the engine under a burst, skipped unless TINYSTORE_SPIKE=1;
 // TINYSTORE_JOBS_DIR puts their files on a volume of their own
 
-// a scheduled message of about 190 bytes, the round's
+// A scheduled message of about 190 bytes, the size the round measured.
 type burstMessage struct {
 	ID, Chat, Author, Text string
 }
 
 // TestWorkBurstMeasured drains jobs due at once through Work from 1 to 512
-// workers, each handler returning at once, the loop holding as many jobs as it
-// has workers or claiming two and four times as many ahead of them, and the
-// jobs keyed at random or not
+// workers, each handler returning at once. The loop holds as many jobs as it
+// has workers, or claims two and four times as many ahead of them, and the jobs
+// are keyed at random or not.
 func TestWorkBurstMeasured(t *testing.T) {
 	if os.Getenv("TINYSTORE_SPIKE") != "1" {
 		t.Skip("a measurement: set TINYSTORE_SPIKE=1")
@@ -38,7 +38,6 @@ func TestWorkBurstMeasured(t *testing.T) {
 	}
 }
 
-// burst is one measured drain
 type burst struct {
 	jobs, workers, ahead int
 	keyed                bool
@@ -116,7 +115,8 @@ func enqueueBurst(t *testing.T, queues *testQueues, queue *Queue[burstMessage], 
 var burstText = strings.Repeat("see you at nine by the station ", 4)
 
 // TestOpenQueueMeasured times opening a queue that holds a million jobs spread
-// over a week, which counts them for MaxWaiting, after the store reopens
+// over a week, after the store reopens. Opening reads the count of them that
+// MaxWaiting uses.
 func TestOpenQueueMeasured(t *testing.T) {
 	if os.Getenv("TINYSTORE_SPIKE") != "1" {
 		t.Skip("a measurement: set TINYSTORE_SPIKE=1")

@@ -93,7 +93,6 @@ func queueOptions(ask wire.JobsQueue) []jobs.QueueOption {
 	return options
 }
 
-// durationOf is milliseconds as a duration
 func durationOf(ms int64) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
@@ -118,7 +117,6 @@ func repeatOf(r wire.Repeat) (jobs.Repeat, error) {
 		tinystore.ErrInvalid)
 }
 
-// enqueueOptions is when a job runs, its key and its repeat, as Enqueue takes them
 func enqueueOptions(job wire.JobsJob) ([]jobs.EnqueueOption, error) {
 	var options []jobs.EnqueueOption
 	if job.Key != "" {
@@ -286,7 +284,6 @@ func entryOfJob[V any](entry jobs.Entry[V], found bool) (wire.JobsEntry, error) 
 	}, err
 }
 
-// jsonOf is a value as the wire carries a job's: its JSON text
 func jsonOf[V any](value V) (string, error) {
 	if raw, ok := any(value).(json.RawMessage); ok {
 		return string(raw), nil
@@ -371,7 +368,6 @@ func jobsSettle(c *call) error {
 	return respond(c, answer)
 }
 
-// settle is an outcome as the engine takes it
 func settle(ctx context.Context, held heldJob, outcome wire.JobsOutcome) error {
 	switch outcome.How {
 	case wire.JobAck:

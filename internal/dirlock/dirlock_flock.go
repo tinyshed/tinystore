@@ -10,7 +10,6 @@ import (
 	"syscall"
 )
 
-// Supported says a second holder is refused on this platform.
 const Supported = true
 
 // Hold takes an exclusive flock of dir's LOCK, which the operating system

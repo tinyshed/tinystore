@@ -146,8 +146,8 @@ func (c *column) literal(value any) (string, error) {
 }
 
 // asField is a default given as a value of the field's type, or of the type
-// a pointer, a sql.Null or a sqldb.JSON of it holds, or one convertible to it
-// without changing kind, such as an untyped constant
+// a pointer, a sql.Null or a sqldb.JSON of it holds. A value convertible to it
+// without changing kind is accepted too, such as an untyped constant.
 func (c *column) asField(given reflect.Value) (reflect.Value, error) {
 	inner := c.field.value.inner
 	if given.Kind() == reflect.Pointer && given.Type().Elem() == inner {

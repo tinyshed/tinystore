@@ -13,10 +13,12 @@ import (
 )
 
 // ids hands out content ids from a block reserved in meta, so that an id is
-// never given twice, not after a crash either, and holds each until its
+// never given twice, not after a crash either. It holds each id until its
 // upload ends, so that the settled mark stays below every id whose file may
-// still lack its row. A doubtful id's commit failed with its outcome unknown,
-// and it stays held until the file answers whether its content is there.
+// still lack its row.
+//
+// A doubtful id is one whose commit failed with its outcome unknown; it stays
+// held until the file answers whether its content is there.
 type ids struct {
 	mu       sync.Mutex
 	last     int64 // the last id handed out
@@ -104,7 +106,7 @@ const contentNamed = `select 1 from contents where id = ?1`
 
 // resolve learns what became of a file content whose commit's outcome is
 // unknown: a content row says it committed, and none that it did not, so its
-// file goes; a file that cannot answer leaves the id doubtful
+// file goes. A file that cannot answer leaves the id doubtful.
 func (s *Store) resolve(ctx context.Context, id int64) {
 	var one int
 	err := s.file.Lookup(ctx, func(r sqlite.Reader) error {
@@ -134,9 +136,9 @@ func (s *Store) resolveDoubts(ctx context.Context) {
 	}
 }
 
-// nextRevision is the revision of one write, kept as the file's high-water
-// mark in the write's own transaction; a write rolled back leaves a gap, never
-// a repeat
+// nextRevision is the revision of one write, kept as the file's high-water mark
+// in the write's own transaction. A write rolled back leaves a gap, never a
+// repeat.
 func (s *Store) nextRevision(ctx context.Context, w sqlite.Writer) (int64, error) {
 	revision := s.revision.Add(1)
 	_, err := w.ExecContext(ctx, revisionIs, revision)

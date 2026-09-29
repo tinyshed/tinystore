@@ -18,11 +18,12 @@ var (
 	errTxClosed = fmt.Errorf("jobs: a handle used after its transaction: %w", tinystore.ErrClosed)
 )
 
-// Enqueue adds a job that runs at jobs.At or jobs.After, or now. Under a key
-// whose job waits it adds nothing, and can bring that job forward but never
-// back; under one whose job runs it asks for one run more after it; under a
-// failed one it starts the job again. A repeat needs a key. The call returns
-// once the job is in the file.
+// Enqueue adds a job that runs at jobs.At or jobs.After, or now, and returns
+// once the job is in the file. A repeat needs a key.
+//
+// Under a key whose job waits it adds nothing, and can bring that job forward
+// but never back. Under a key whose job runs it asks for one run more after it.
+// Under a failed one it starts the job again.
 func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOption) error {
 	e, err := q.prepare(options)
 	if err == nil {
@@ -52,9 +53,9 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 }
 
 // Update gives a job that still waits, or failed, a new value, and a new time
-// or repeat when options name one; a failed job waits again, its attempts from
-// zero, now unless they name a time. A job that runs, ran or was cancelled, or
-// a key that names none, is tinystore.ErrConflict.
+// or repeat when options name one. A failed job waits again with its attempts
+// from zero, now unless they name a time. A job that runs, ran or was
+// cancelled, or a key that names none, is tinystore.ErrConflict.
 func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...EnqueueOption) error {
 	e, err := q.prepare(append(options, Key(key)))
 	if err == nil {
@@ -255,9 +256,9 @@ func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err 
 	return true, insertRow(ctx, w, e)
 }
 
-// onto is an Enqueue under a key whose job is there: a waiting job can come
-// forward, a running one is asked for one run more, unless the queue keeps its
-// keys once
+// onto is an Enqueue under a key whose job is there. A waiting job can come
+// forward, and a running one is asked for one run more, unless the queue keeps
+// its keys once.
 func (e enqueued) onto(ctx context.Context, w sqlite.Writer, there row) error {
 	leased, err := leaseHeld(ctx, w, there.id, e.now)
 	switch {

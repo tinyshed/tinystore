@@ -165,10 +165,12 @@ func spellAny(value any) string {
 	return string(encoded)
 }
 
-// Flush writes what the handler holds, and the records the writers of Lines
-// held through a whole flush without a line joining them, an Append for each
-// segment's worth of input. A write that fails is dropped and counted with
-// what was to follow it, as a full buffer's lines are.
+// Flush writes what the handler has queued, and the records that writers of
+// Lines held through a whole flush without a line joining them. It appends one
+// segment's worth of input at a time.
+//
+// A write that fails is dropped and counted with what was to follow it, as a
+// full buffer's lines are.
 func (s *Store) Flush(ctx context.Context) error {
 	return s.flush(ctx, (*lineWriter).handOverIdle)
 }

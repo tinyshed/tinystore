@@ -70,8 +70,7 @@ func (r *renewals) ask(key renewed, due renewal) {
 	r.waiting[key] = due
 }
 
-// schedule has the store flush renewals every renewEvery, from the first
-// Sliding bucket on
+// scheduleRenewals has the store flush renewals every renewEvery, from the first Sliding bucket on.
 func (s *Store) scheduleRenewals() {
 	s.renewals.scheduled.Do(func() {
 		s.runtime.EveryEngine("kv", "kv renewals", renewEvery, func(ctx context.Context) error {
@@ -82,8 +81,8 @@ func (s *Store) scheduleRenewals() {
 }
 
 // flushRenewals writes the renewals asked for, flushBatch a transaction, and
-// returns how many keys they renewed; a key written, touched, deleted or
-// cleared since its read keeps what was done to it
+// returns how many keys they renewed. A key written, touched, deleted or
+// cleared since its read keeps what was done to it.
 func (s *Store) flushRenewals(ctx context.Context) (int, error) {
 	batch := s.renewals.take()
 	renewedKeys := 0

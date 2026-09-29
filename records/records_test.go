@@ -168,9 +168,9 @@ func TestAppendRefusesARecordAndNamesIt(t *testing.T) {
 	}
 }
 
-// a record past retention would never be read, and one far ahead of the
-// store's clock would hold its segment past retention: Append refuses both and
-// names them, writes nothing of their batch, and takes the window's edges
+// A record past retention would never be read, and one far ahead of the store's
+// clock would hold its segment past retention. Append refuses both and names
+// them, writes nothing of their batch, and takes the window's edges.
 func TestARecordOutsideItsWindowIsRefused(t *testing.T) {
 	s := openTestStore(t, t.TempDir(), Options{Retention: time.Hour, ClockSkew: time.Minute}, tinystore.Options{})
 	oldest, newest := testNow.Add(-time.Hour), testNow.Add(time.Minute)

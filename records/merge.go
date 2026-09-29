@@ -36,7 +36,6 @@ type mergeable struct {
 	firstBlock, lastBlock int64
 }
 
-// mergeSmall merges the small segments of each stream this pass sealed
 func (p *maintenancePass) mergeSmall(ctx context.Context) error {
 	for _, stream := range slices.Sorted(maps.Keys(p.sealedStreams)) {
 		if err := p.mergeStream(ctx, stream); err != nil {
@@ -96,8 +95,8 @@ func (s *Store) mergeable(ctx context.Context, stream int64) ([]mergeable, error
 }
 
 // pickMerge chooses the next segments to merge, the smallest size first: four
-// of one size, taken in time order and each beginning where the one before
-// ended or later, so that their records one after another are in time order
+// of one size, taken in time order. Each begins where the one before ended or
+// later, so that their records one after another are in time order.
 func pickMerge(candidates []mergeable) []mergeable {
 	bySize := map[int][]mergeable{}
 	for _, candidate := range candidates {
@@ -275,10 +274,10 @@ func planMerge(members []member) mergePlan {
 	return plan
 }
 
-// publishMerge writes the merged segment into the holder's row, which keeps
-// its place, deletes the blocks and keys the members were made of, and makes
-// every other member a place the holder holds, in one transaction: a reader
-// finds each record once, before or after it
+// publishMerge writes the merged segment into the holder's row, which keeps its
+// place. In the same transaction it deletes the blocks and keys the members
+// were made of and makes every other member a place the holder holds, so a
+// reader finds each record once, before or after the merge.
 func (s *Store) publishMerge(ctx context.Context, stream int64, plan mergePlan, segment encodedSegment) error {
 	s.spans.note(segment.blocks)
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {

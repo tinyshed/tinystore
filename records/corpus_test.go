@@ -15,8 +15,9 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// measurements on a private docker json-file corpus, as bench/fetch-docker-logs.sh
-// leaves it; skipped unless TINYSTORE_SPIKE=1 and TINYSTORE_CORPUS name it
+// Measurements on a private docker json-file corpus, as
+// bench/fetch-docker-logs.sh leaves it. Skipped unless TINYSTORE_SPIKE=1 and
+// TINYSTORE_CORPUS name it.
 
 // corpusTexts are the bodies of the text records a writer of Lines makes of
 // each container's entries, at the times docker received them, and those times
@@ -100,11 +101,14 @@ func dockerEntries(t *testing.T, dir string) []dockerEntry {
 	return entries
 }
 
-// the text of the production corpus: what the body column costs as the engine
-// writes it, what is left of it past the stamps a block at a time at three
-// zstd levels and as one frame a segment, and templated with the numbers
-// standing in it typed, in one column a block and in a column for each place
-// in each template
+// TestTextTemplatesAgainstZstd measures the text of the production corpus
+// three ways:
+//
+//	the body column as the engine writes it
+//	what is left of it past the stamps, a block at a time at three zstd
+//	levels and as one frame a segment
+//	templated, with the numbers standing in it typed: in one column a
+//	block, and in a column for each place in each template
 func TestTextTemplatesAgainstZstd(t *testing.T) {
 	bodies, times := corpusTexts(t)
 	e, _ := testCoders(t)
@@ -189,9 +193,11 @@ func measureTexts(e *encoder, levels map[string]*zstd.Encoder, bodies []string, 
 }
 
 // templateCut is a text cut into its template, the numbers standing in it and
-// the hex words: a number is a digit run a letter or digit does not precede,
-// canonical and at most eighteen digits long, and a hex word eight hex digits
-// or more with both a digit and a letter
+// the hex words.
+//
+// A number is a digit run that no letter or digit precedes, canonical and at
+// most eighteen digits long. A hex word is eight hex digits or more with both a
+// digit and a letter.
 type templateCut struct {
 	template string
 	numbers  []int64
@@ -257,9 +263,9 @@ func hexWord(text string, i int) int {
 	return end - i
 }
 
-// templatedCost is what rests cost with a template dictionary a segment, the
-// templates seen twice or more: a block writes each value's template id, its
-// numbers and hex words, and the values of no template as text
+// templatedCost is what rests cost with a template dictionary a segment: the
+// templates seen twice or more. A block writes each value's template id, its
+// numbers and hex words, and the values of no template as text.
 func templatedCost(e *encoder, rests []string) (oneColumn, byPlace, dictionary int) {
 	cuts := make([]templateCut, len(rests))
 	cut := make([]bool, len(rests))

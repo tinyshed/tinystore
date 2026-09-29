@@ -6,10 +6,12 @@ import (
 	"time"
 )
 
-// alarm is a queue's next time in memory. A Work loop sets it from the file
-// when a claim found fewer jobs than it wanted; a write that makes a job due
-// sooner lowers it and wakes every loop waiting on it; so nothing polls, and a
-// million jobs due next week cost nothing until next week:
+// alarm is a queue's next time in memory, so that nothing polls and a million
+// jobs due next week cost nothing until next week.
+//
+// A Work loop sets it from the file when a claim found fewer jobs than it
+// wanted. A write that makes a job due sooner lowers it and wakes every loop
+// waiting on it:
 //
 //	claim finds 3 of 8, the next due at 18:00   → at 18:00, loops sleep until then
 //	Enqueue at 17:30 commits                    → at 17:30, the loops wake and sleep again
@@ -32,7 +34,7 @@ func newAlarm() *alarm {
 	return &alarm{reads: map[*alarmRead]struct{}{}, changed: make(chan struct{})}
 }
 
-// lower is a write's, once it has committed a job due at
+// lower is called by a write once it has committed a job due at the time given.
 func (a *alarm) lower(at int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
