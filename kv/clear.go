@@ -201,26 +201,30 @@ const (
 	unmark = `delete from branches where bucket = ?1 and prefix = ?2 and cleared = ?3`
 )
 
-// dropCleared deletes the rows marked Clears hid, a bound's worth a
-// transaction and at most ten transactions a mark, and each mark once nothing
-// is left under it; it returns how many rows it deleted
-func (s *Store) dropCleared(ctx context.Context) (int, error) {
+// dropCleared deletes the rows that marked Clears hid, clearBound rows a
+// transaction and at most ten transactions a mark. It deletes each mark once
+// nothing is left under it, and returns how many rows it deleted and whether
+// a mark still hides rows past that bound.
+func (s *Store) dropCleared(ctx context.Context) (int, bool, error) {
 	marks, err := s.readMarks(ctx)
-	total := 0
+	total, left := 0, false
 	for _, marked := range marks {
 		if err != nil {
 			break
 		}
+		full := 0
 		for range expiryBatches {
 			var dropped int
 			dropped, err = s.dropMarked(ctx, marked)
 			total += dropped
-			if err != nil || dropped < s.clearBound {
+			if err != nil || dropped == 0 || dropped < s.clearBound {
 				break
 			}
+			full++
 		}
+		left = left || full == expiryBatches
 	}
-	return total, err
+	return total, left, err
 }
 
 func (s *Store) readMarks(ctx context.Context) ([]mark, error) {

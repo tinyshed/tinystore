@@ -40,6 +40,9 @@ type Store struct {
 	closing     sync.Once
 	closeErr    error
 	clearBound  int // keys a Clear deletes in its transaction before it marks instead
+	expireBound int // expired keys a transaction of maintenance deletes
+
+	backlog atomic.Bool // the last Maintain stopped at a bound with rows left to delete
 
 	opened   sync.Mutex
 	counters map[string]openCounters
@@ -55,7 +58,8 @@ type openCounters struct {
 }
 
 // Open opens kv.db inside the store. The store closes it and, unless it is
-// Manual, deletes expired keys every minute.
+// Manual, deletes expired keys every minute, and every ten seconds while the
+// last pass stopped at its bound with expired or cleared rows left.
 func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error) {
 	path, release, err := store.Claim(fileName)
 	if err != nil {
@@ -69,6 +73,7 @@ func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error
 	}
 
 	store.EveryEngine("kv", "kv expiry", expiryEvery, state.maintainInBackground)
+	store.EveryEngine("kv", "kv expiry backlog", catchUpEvery, state.catchUpInBackground)
 	state.log.Info("opened", "path", path)
 	return state, nil
 }
@@ -83,7 +88,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 	state := &Store{
 		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
-		clearBound: clearAtOnce, counters: map[string]openCounters{},
+		clearBound: clearAtOnce, expireBound: expiryBatch, counters: map[string]openCounters{},
 		renewals: renewals{waiting: map[renewed]renewal{}},
 	}
 	state.maintenance <- struct{}{}

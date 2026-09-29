@@ -34,6 +34,11 @@ const (
 	maxRenewals   = 100_000         // renewals that may wait; past them a key's next read asks again
 )
 
+// catchUpEvery is how soon a Maintain that stopped at its bounds runs again:
+// ten batches every ten seconds rather than every minute. That is up to
+// 600,000 keys a minute for about 5 % of the writer.
+const catchUpEvery = 10 * time.Second
+
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // BucketOption changes how a bucket serves its values; none changes what its

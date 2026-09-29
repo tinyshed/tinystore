@@ -394,7 +394,11 @@ Clear(42) at revision R
   so it takes only what is free and is `ErrLimit` past it.
 - **Maintenance runs through `Store.Every`**: the `LoseAtMost` and `Sliding`
   flushes, the rows a mark hid, expired rows in batches through the expiry
-  index, spilled rows no cell names any more.
+  index, spilled rows no cell names any more. A pass deletes at most ten
+  batches of each, every minute, and again every ten seconds while the last
+  one stopped there with rows left: 600,000 expired keys a minute at most, for
+  about 5 % of the writer, where a minute alone held 100,000 and let a faster
+  stream grow the file for good.
 - **Backup copies `kv.db`** like any engine's file; the deltas a `LoseAtMost`
   counter holds in memory are not in the copy.
 

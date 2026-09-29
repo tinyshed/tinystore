@@ -93,7 +93,9 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   keeps the expiry a live key has; `Touch` gives a new expiry and keeps the
   value and version. An expired key is absent to every call: reads do not see
   it, `SetIfAbsent` claims it, `IfVersion` conflicts with it. `Maintain`,
-  every minute unless the store is Manual, deletes expired rows.
+  every minute unless the store is Manual, deletes expired rows, 100,000 at
+  most, and every ten seconds while the last one stopped there with rows
+  left, so that up to 600,000 keys a minute expire without growing the file.
 - **A version never repeats.** It is the revision of the file that wrote the
   value, kept across a delete, an expiry and a reopen. `kv.IfVersion` lets
   `Set`, `SetEntry`, `Take`, `Delete` and `Touch` apply only to a live key at
