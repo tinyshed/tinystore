@@ -75,7 +75,7 @@ func (s *streams) resolve(ctx context.Context, tx sqlite.Writer, name string, ad
 		return id, nil
 	}
 	var id int64
-	if err := sqlite.QueryRow(ctx, tx, insertStream, name).Scan(&id); err != nil {
+	if err := sqlite.QueryRowByKey(ctx, tx, insertStream, name).Scan(&id); err != nil {
 		return 0, fmt.Errorf("records: store stream %q: %w", name, err)
 	}
 	added[name] = id

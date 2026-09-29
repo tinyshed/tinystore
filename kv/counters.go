@@ -114,7 +114,7 @@ func (c *Counters) Get(ctx context.Context, key any) (int64, error) {
 	var held int64
 	err = c.read(ctx, func(r sqlite.Reader) error {
 		var value any
-		readErr := sqlite.QueryRow(ctx, r, selectCounter, cl.args(c.id, cl.path, cl.now)...).Scan(&value)
+		readErr := sqlite.QueryRowByKey(ctx, r, selectCounter, cl.args(c.id, cl.path, cl.now)...).Scan(&value)
 		if errors.Is(readErr, sql.ErrNoRows) {
 			return nil
 		}
@@ -160,7 +160,7 @@ func (c *Counters) change(ctx context.Context, key any, statement string, n int6
 			return writeErr
 		}
 		var value any
-		writeErr = sqlite.QueryRow(ctx, w, statement, cl.args(c.id, cl.path, version, expires, n, cl.now)...).
+		writeErr = sqlite.QueryRowByKey(ctx, w, statement, cl.args(c.id, cl.path, version, expires, n, cl.now)...).
 			Scan(&value)
 		if errors.Is(writeErr, sql.ErrNoRows) {
 			return fmt.Errorf("%w: adding %d passes the int64 range", tinystore.ErrLimit, n)

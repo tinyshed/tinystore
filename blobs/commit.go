@@ -123,7 +123,7 @@ var selectCurrent = `select o.content, o.size, o.etag, o.type, o.expires, o.meta
 
 func (ch *change) current(of address) (current, error) {
 	found := current{found: true}
-	err := sqlite.QueryRow(ch.ctx, ch.w, selectCurrent, of.bucket, of.path).Scan(found.fields()...)
+	err := sqlite.QueryRowByKey(ch.ctx, ch.w, selectCurrent, of.bucket, of.path).Scan(found.fields()...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return current{}, nil
 	}
@@ -168,7 +168,7 @@ const (
 func (ch *change) name(c content) error {
 	if c.shared {
 		var names int64
-		err := sqlite.QueryRow(ch.ctx, ch.w, nameContent, c.id).Scan(&names)
+		err := sqlite.QueryRowByKey(ch.ctx, ch.w, nameContent, c.id).Scan(&names)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: content %d, which an object names, is missing", tinystore.ErrCorrupt, c.id)
 		}
@@ -202,7 +202,7 @@ const deleteObject = `delete from objects where bucket = ?1 and path = ?2 return
 // remove deletes a key's row, whatever it holds, and takes a name from its content
 func (ch *change) remove(at address) error {
 	var id int64
-	err := sqlite.QueryRow(ch.ctx, ch.w, deleteObject, at.bucket, at.path).Scan(&id)
+	err := sqlite.QueryRowByKey(ch.ctx, ch.w, deleteObject, at.bucket, at.path).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -223,7 +223,7 @@ const (
 func (ch *change) release(id int64, count int) error {
 	var names int64
 	var inline bool
-	err := sqlite.QueryRow(ch.ctx, ch.w, unnameContent, id, count).Scan(&names, &inline)
+	err := sqlite.QueryRowByKey(ch.ctx, ch.w, unnameContent, id, count).Scan(&names, &inline)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: content %d, which an object named, is missing", tinystore.ErrCorrupt, id)

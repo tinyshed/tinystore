@@ -163,8 +163,8 @@ func (b *Bucket[V]) Delete(ctx context.Context, key any, options ...Option) erro
 
 	err = b.write(ctx, 0, func(w sqlite.Writer) error {
 		var spill sql.NullInt64
-		deleteErr := sqlite.QueryRow(ctx, w, deleteCell, c.args(b.id, c.path, c.now, c.options.version.revision)...).
-			Scan(&spill)
+		deleteErr := sqlite.QueryRowByKey(ctx, w, deleteCell, c.args(b.id, c.path, c.now,
+			c.options.version.revision)...).Scan(&spill)
 		if errors.Is(deleteErr, sql.ErrNoRows) {
 			return c.absent()
 		}
@@ -192,7 +192,7 @@ func (b *Bucket[V]) Touch(ctx context.Context, key any, options ...Option) (bool
 	found := false
 	err = b.write(ctx, 0, func(w sqlite.Writer) error {
 		var version int64
-		touchErr := sqlite.QueryRow(ctx, w, touchCell, c.args(b.id, c.path, c.now, expires,
+		touchErr := sqlite.QueryRowByKey(ctx, w, touchCell, c.args(b.id, c.path, c.now, expires,
 			c.options.version.revision)...).Scan(&version)
 		if errors.Is(touchErr, sql.ErrNoRows) {
 			return c.absent()
@@ -284,7 +284,7 @@ func (b *Bucket[V]) setCell(ctx context.Context, w sqlite.Writer, c call, value 
 
 func readCell(ctx context.Context, w sqlite.Writer, bucket int64, c call) (cell, error) {
 	found := cell{found: true}
-	err := sqlite.QueryRow(ctx, w, selectCell, c.args(bucket, c.path)...).
+	err := sqlite.QueryRowByKey(ctx, w, selectCell, c.args(bucket, c.path)...).
 		Scan(&found.version, &found.expires, &found.spill, &found.hidden)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cell{}, nil
@@ -337,7 +337,7 @@ func dropSpilled(ctx context.Context, w sqlite.Writer, spill sql.NullInt64) erro
 // takeRow deletes a live key's row and its spilled value, and returns them
 func takeRow(ctx context.Context, w sqlite.Writer, bucket int64, c call) (row, bool, error) {
 	taken := row{path: c.path}
-	err := sqlite.QueryRow(ctx, w, takeCell, c.args(bucket, c.path, c.now, c.options.version.revision)...).
+	err := sqlite.QueryRowByKey(ctx, w, takeCell, c.args(bucket, c.path, c.now, c.options.version.revision)...).
 		Scan(&taken.version, &taken.expires, &taken.value, &taken.spill)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -345,7 +345,7 @@ func takeRow(ctx context.Context, w sqlite.Writer, bucket int64, c call) (row, b
 	case err != nil || !taken.spill.Valid:
 		return taken, err == nil, err
 	}
-	err = sqlite.QueryRow(ctx, w, takeSpilled, taken.spill.Int64).Scan(&taken.spilled)
+	err = sqlite.QueryRowByKey(ctx, w, takeSpilled, taken.spill.Int64).Scan(&taken.spilled)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = fmt.Errorf("%w: the spilled value %d is missing", tinystore.ErrCorrupt, taken.spill.Int64)
 	}

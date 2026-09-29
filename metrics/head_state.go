@@ -29,7 +29,7 @@ func (s *Store) fetchHead(
 	head := headSnapshot{seriesID: id}
 	var first, last sql.NullInt64
 	var size int
-	row := sqlite.QueryRow(ctx, tx, headQuery, limit, from, to, id)
+	row := sqlite.QueryRowByKey(ctx, tx, headQuery, limit, from, to, id)
 	err := row.Scan(&head.count, &first, &last, &size, &head.packed)
 	if err != nil {
 		return head, fmt.Errorf("read mutable state: %w", err)
@@ -121,7 +121,7 @@ func (s *Store) loadIngestState(ctx context.Context, tx sqlite.Writer, id int64)
 	state := ingestState{head: headSnapshot{seriesID: id}}
 	var first, last sql.NullInt64
 	var size int
-	err := sqlite.QueryRow(ctx, tx, ingestStateQuery, s.opts.MaxHeadBytes, id).Scan(
+	err := sqlite.QueryRowByKey(ctx, tx, ingestStateQuery, s.opts.MaxHeadBytes, id).Scan(
 		&state.frontier, &state.version, &state.maxSeen, &state.ready, &state.nextGC, &state.failedAt, &state.failure,
 		&state.head.count, &first, &last, &size, &state.head.packed,
 	)

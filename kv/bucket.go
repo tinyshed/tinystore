@@ -96,10 +96,10 @@ func (s *Store) claimBucket(ctx context.Context, name, kind string) (int64, erro
 	var id int64
 	err = s.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
 		var found string
-		scanErr := sqlite.QueryRow(ctx, w, selectBucket, name).Scan(&id, &found)
+		scanErr := sqlite.QueryRowByKey(ctx, w, selectBucket, name).Scan(&id, &found)
 		switch {
 		case errors.Is(scanErr, sql.ErrNoRows):
-			return sqlite.QueryRow(ctx, w, insertBucket, name, kind).Scan(&id)
+			return sqlite.QueryRowByKey(ctx, w, insertBucket, name, kind).Scan(&id)
 		case scanErr == nil && found != kind:
 			return fmt.Errorf("%w: kv: bucket %q holds %s, not %s", tinystore.ErrInvalid, name, found, kind)
 		}

@@ -258,7 +258,7 @@ func (s *Store) resolveSeries(ctx context.Context, tx sqlite.Writer, batch prepa
 	var id int64
 	var kind Kind
 	var stored []byte
-	err := sqlite.QueryRow(ctx, tx, resolveSeriesQuery, identity).Scan(&id, &kind, &stored)
+	err := sqlite.QueryRowByKey(ctx, tx, resolveSeriesQuery, identity).Scan(&id, &kind, &stored)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s.registerSeries(ctx, tx, identity, batch)
 	}
@@ -308,7 +308,7 @@ const cardinalityQuery = `select series_count from store_state where id=1`
 
 func (s *Store) checkCardinality(ctx context.Context, tx sqlite.Writer) error {
 	var count int
-	if err := sqlite.QueryRow(ctx, tx, cardinalityQuery).Scan(&count); err != nil {
+	if err := sqlite.QueryRowByKey(ctx, tx, cardinalityQuery).Scan(&count); err != nil {
 		return fmt.Errorf("read cardinality: %w", err)
 	}
 	if count >= s.opts.MaxSeries {

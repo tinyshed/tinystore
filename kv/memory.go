@@ -246,7 +246,7 @@ func (m *memory) readFile(ctx context.Context, c call) (counter, error) {
 	var value any
 	var expires sql.NullInt64
 	err := m.state.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, selectCounterRow, c.args(m.bucket, c.path, c.now)...).Scan(&value, &expires)
+		return sqlite.QueryRowByKey(ctx, r, selectCounterRow, c.args(m.bucket, c.path, c.now)...).Scan(&value, &expires)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return counter{absent: true}, nil

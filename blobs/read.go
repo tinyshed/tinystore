@@ -96,7 +96,7 @@ func (b *Bucket) lookup(ctx context.Context, c call) (*opened, error) {
 	found := &opened{}
 	now := b.store.clock()
 	err := b.store.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, selectOpen, b.id, c.path, now).Scan(append(found.fields(), &found.content,
+		return sqlite.QueryRowByKey(ctx, r, selectOpen, b.id, c.path, now).Scan(append(found.fields(), &found.content,
 			&found.id, &found.inline, &found.damaged, &found.sha256, &found.body)...)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -155,7 +155,7 @@ func (b *Bucket) Stat(ctx context.Context, key string) (Object, bool, error) {
 	var found objectRow
 	now := b.store.clock()
 	err = b.store.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, selectStat, b.id, c.path, now).Scan(found.fields()...)
+		return sqlite.QueryRowByKey(ctx, r, selectStat, b.id, c.path, now).Scan(found.fields()...)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return Object{}, false, nil
@@ -172,7 +172,7 @@ func (b *Bucket) Stat(ctx context.Context, key string) (Object, bool, error) {
 func (b *Bucket) current(ctx context.Context, c call) (current, error) {
 	found := current{found: true}
 	err := b.store.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, selectCurrent, b.id, c.path).Scan(found.fields()...)
+		return sqlite.QueryRowByKey(ctx, r, selectCurrent, b.id, c.path).Scan(found.fields()...)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return current{}, nil

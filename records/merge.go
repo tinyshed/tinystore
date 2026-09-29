@@ -185,7 +185,7 @@ func (s *Store) readMembers(ctx context.Context, run []mergeable) ([]member, err
 	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
 		for i := range run {
 			members[i].mergeable = run[i]
-			if err := sqlite.QueryRow(ctx, tx, selectMemberRow, run[i].id).Scan(&members[i].row); err != nil {
+			if err := sqlite.QueryRowByKey(ctx, tx, selectMemberRow, run[i].id).Scan(&members[i].row); err != nil {
 				return err
 			}
 			//nolint:rowserrcheck // EachRow checks Err

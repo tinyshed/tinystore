@@ -213,9 +213,23 @@ type Row struct {
 	err  error
 }
 
+// QueryRow runs a statement that walks a range for its row, a count or a sum,
+// which ctx interrupts while it runs.
 func QueryRow(ctx context.Context, reader Reader, query string, args ...any) *Row {
 	rows, err := reader.QueryContext(ctx, query, args...) //nolint:rowserrcheck // Scan iterates and checks Err
 	return &Row{rows: rows, err: err}
+}
+
+// QueryRowByKey runs a statement that finds its row by a key, or writes that row and returns it.
+//
+// ctx is checked before the statement and not while it runs: a context that can
+// end costs database/sql and the driver a goroutine each, more than such a
+// statement takes.
+func QueryRowByKey(ctx context.Context, reader Reader, query string, args ...any) *Row {
+	if err := ctx.Err(); err != nil {
+		return &Row{err: err}
+	}
+	return QueryRow(context.WithoutCancel(ctx), reader, query, args...)
 }
 
 func (r *Row) Scan(dest ...any) error {

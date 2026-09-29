@@ -348,7 +348,7 @@ func loadClock(ctx context.Context, tx sqlite.Reader, id int64, budget *queryBud
 	}
 	var size int
 	var body []byte
-	err := sqlite.QueryRow(ctx, tx, clockQuery, limit, id).Scan(&size, &body)
+	err := sqlite.QueryRowByKey(ctx, tx, clockQuery, limit, id).Scan(&size, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: shared clock missing", ErrCorrupt)
 	}

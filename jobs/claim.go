@@ -249,7 +249,7 @@ func (s settlement) write(ctx context.Context, w sqlite.Writer, now int64) (sett
 // its next time instead
 func (l *lease) ackAlone(ctx context.Context, w sqlite.Writer, now int64) (settled, bool, error) {
 	var spill sql.NullInt64
-	err := sqlite.QueryRow(ctx, w, deleteDone, l.queue.id, l.next, l.id).Scan(&spill)
+	err := sqlite.QueryRowByKey(ctx, w, deleteDone, l.queue.id, l.next, l.id).Scan(&spill)
 	if errors.Is(err, sql.ErrNoRows) {
 		return settled{}, false, nil
 	}
@@ -296,7 +296,8 @@ type heldRow struct {
 
 func (l *lease) held(ctx context.Context, w sqlite.Writer) (heldRow, error) {
 	var h heldRow
-	err := sqlite.QueryRow(ctx, w, jobHeld, l.queue.id, l.next, l.id).Scan(&h.again, &h.repeat, &h.failure, &h.attempt)
+	err := sqlite.QueryRowByKey(ctx, w, jobHeld, l.queue.id, l.next, l.id).
+		Scan(&h.again, &h.repeat, &h.failure, &h.attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return h, errLeaseLost
 	}
@@ -329,7 +330,7 @@ func (l *lease) ack(ctx context.Context, w sqlite.Writer, h heldRow, now int64) 
 		return settled{due: next}, l.move(ctx, w, next, next, 0, sql.NullString{})
 	}
 	var spill sql.NullInt64
-	if err := sqlite.QueryRow(ctx, w, deleteJob, l.queue.id, l.next, l.id).Scan(&spill); err != nil {
+	if err := sqlite.QueryRowByKey(ctx, w, deleteJob, l.queue.id, l.next, l.id).Scan(&spill); err != nil {
 		return settled{}, err
 	}
 	return l.forget(ctx, w, spill, now)
@@ -510,7 +511,7 @@ const dropLeaseRow = `delete from leases where id = ?1`
 // leaseRow leases one due job, or fails it for good when this would be an
 // attempt past the queue's MaxAttempts
 func leaseRow(ctx context.Context, w sqlite.Writer, c claiming, row *claimedRow) (bool, error) {
-	err := sqlite.QueryRow(ctx, w, takeLease, row.id, c.queue, row.next, row.attempt+1, c.until).Scan(&row.attempt)
+	err := sqlite.QueryRowByKey(ctx, w, takeLease, row.id, c.queue, row.next, row.attempt+1, c.until).Scan(&row.attempt)
 	if err != nil {
 		return false, err
 	}
@@ -626,7 +627,7 @@ func (q *Queue[V]) valueOf(ctx context.Context, row claimedRow) (V, error) {
 	encoded := row.value
 	if row.spill.Valid {
 		err := q.store.file.Lookup(ctx, func(r sqlite.Reader) error {
-			return sqlite.QueryRow(ctx, r, valueSpilled, row.spill.Int64).Scan(&encoded)
+			return sqlite.QueryRowByKey(ctx, r, valueSpilled, row.spill.Int64).Scan(&encoded)
 		})
 		if err != nil {
 			var zero V

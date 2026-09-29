@@ -128,10 +128,10 @@ func (s *Store) registerQueue(ctx context.Context, name, kind string, p policy) 
 		if _, err := w.ExecContext(ctx, registerQueue, name, kind); err != nil {
 			return err
 		}
-		if err := sqlite.QueryRow(ctx, w, queueNamed, name).Scan(&state.id, &stored); err != nil {
+		if err := sqlite.QueryRowByKey(ctx, w, queueNamed, name).Scan(&state.id, &stored); err != nil {
 			return err
 		}
-		return sqlite.QueryRow(ctx, w, countWaiting, state.id).Scan(&waiting)
+		return sqlite.QueryRowByKey(ctx, w, countWaiting, state.id).Scan(&waiting)
 	})
 	switch {
 	case err != nil:
@@ -322,7 +322,7 @@ const (
 // where its lease names it
 func setSchedule(ctx context.Context, w sqlite.Writer, s scheduled) error {
 	var there row
-	err := sqlite.QueryRow(ctx, w, scheduleNamed, s.queue, s.key).Scan(&there.next, &there.id, &there.repeat)
+	err := sqlite.QueryRowByKey(ctx, w, scheduleNamed, s.queue, s.key).Scan(&there.next, &there.id, &there.repeat)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err = checkRoom(ctx, w, enqueued{queue: s.queue, maxWaiting: s.maxWaiting}); err != nil {
 			return err

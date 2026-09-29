@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
+	"runtime/metrics"
 	"testing"
+	"time"
 )
 
 func openReaderTestFile(t *testing.T) *File {
@@ -361,5 +364,78 @@ func TestAConnectionKeepsTheStatementsItsFileWasOpenedWith(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A statement by key whose context can end starts no goroutine, where
+// database/sql and the driver would each start one to watch the context.
+func TestAStatementByKeyStartsNoGoroutine(t *testing.T) {
+	file := openReaderTestFile(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	read := func() error {
+		return file.Lookup(ctx, func(reader Reader) error {
+			var n int
+			return QueryRowByKey(ctx, reader, `select n from example where rowid = ?`, 1).Scan(&n)
+		})
+	}
+	if err := read(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC() // The collector's workers start here rather than during the reads.
+
+	const reads = 200
+	before := goroutinesStarted(t)
+	for range reads {
+		if err := read(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if started := goroutinesStarted(t) - before; started > reads/10 {
+		t.Fatalf("%d reads by key started %d goroutines", reads, started)
+	}
+}
+
+func goroutinesStarted(t *testing.T) uint64 {
+	t.Helper()
+	sample := []metrics.Sample{{Name: "/sched/goroutines-created:goroutines"}}
+	metrics.Read(sample)
+	if sample[0].Value.Kind() != metrics.KindUint64 {
+		t.Fatalf("the runtime does not count %s", sample[0].Name)
+	}
+	return sample[0].Value.Uint64()
+}
+
+// A statement by key whose context has ended does not run.
+func TestAStatementByKeyWhoseContextEndedDoesNotRun(t *testing.T) {
+	file := openReaderTestFile(t)
+	ended, end := context.WithCancel(t.Context())
+	end()
+	err := file.UpdatePrepared(t.Context(), func(w Writer) error {
+		var n int
+		return QueryRowByKey(ended, w, `insert into example values(2) returning n`).Scan(&n)
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a write by key whose context had ended: %v", err)
+	}
+	if rows := countOf(t, file, `select count(*) from example`); rows != 1 {
+		t.Fatalf("%d rows after a write whose context had ended; want 1", rows)
+	}
+}
+
+// A statement that walks a range ends at its deadline, however long the rest
+// of the walk would take.
+func TestARangeReadEndsAtItsDeadline(t *testing.T) {
+	file := openReaderTestFile(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	const walk = `with recursive n(i) as (select 1 union all select i + 1 from n where i < 1000000000)
+		select count(*) from n`
+	err := file.Lookup(ctx, func(reader Reader) error {
+		var count int
+		return QueryRow(ctx, reader, walk).Scan(&count)
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a walk of a billion rows with 50 ms to run: %v", err)
 	}
 }

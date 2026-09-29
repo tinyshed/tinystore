@@ -230,7 +230,7 @@ func (s *Store) nextID(ctx context.Context) (int64, error) {
 	if s.ids.next == s.ids.end {
 		var end int64
 		err := s.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
-			return sqlite.QueryRow(ctx, w, reserveIDs, idBlock).Scan(&end)
+			return sqlite.QueryRowByKey(ctx, w, reserveIDs, idBlock).Scan(&end)
 		})
 		if err != nil {
 			return 0, fmt.Errorf("jobs: reserve ids: %w", err)

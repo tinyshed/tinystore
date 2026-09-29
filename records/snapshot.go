@@ -288,7 +288,7 @@ func (r *snapshotRead) hasKeys(ctx context.Context, segment int64, kind byte, fi
 
 func (r *snapshotRead) hasKey(ctx context.Context, segment int64, kind byte, key string) (bool, error) {
 	var count int
-	err := sqlite.QueryRow(ctx, r.tx, selectSegmentKey, segment, kind, key).Scan(&count)
+	err := sqlite.QueryRowByKey(ctx, r.tx, selectSegmentKey, segment, kind, key).Scan(&count)
 	return count > 0, err
 }
 
@@ -319,7 +319,7 @@ func (r *snapshotRead) bloomsMayMatch(ctx context.Context, block int64) (bool, e
 
 func (r *snapshotRead) bloom(ctx context.Context, query string, args ...any) ([]byte, bool, error) {
 	var bloom []byte
-	err := sqlite.QueryRow(ctx, r.tx, query, args...).Scan(&bloom)
+	err := sqlite.QueryRowByKey(ctx, r.tx, query, args...).Scan(&bloom)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -371,7 +371,7 @@ func (r *snapshotRead) segmentSize(ctx context.Context, candidate source, segmen
 		return 0, nil
 	}
 	var size int
-	err := sqlite.QueryRow(ctx, r.tx, selectSegmentSize, candidate.segment).Scan(&size)
+	err := sqlite.QueryRowByKey(ctx, r.tx, selectSegmentSize, candidate.segment).Scan(&size)
 	if errors.Is(err, sql.ErrNoRows) {
 		found := Damage{
 			Stream: r.names.name(candidate.stream), Segment: candidate.segment,
@@ -424,7 +424,7 @@ func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segmentSize
 	segments map[int64]segmentRow,
 ) error {
 	if !candidate.block {
-		if err := sqlite.QueryRow(ctx, r.tx, selectHeadBody, candidate.id).Scan(&candidate.body); err != nil {
+		if err := sqlite.QueryRowByKey(ctx, r.tx, selectHeadBody, candidate.id).Scan(&candidate.body); err != nil {
 			return err
 		}
 		if len(candidate.body) != candidate.size {
@@ -434,7 +434,8 @@ func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segmentSize
 	}
 	if _, fetched := segments[candidate.segment]; !fetched {
 		var row segmentRow
-		err := sqlite.QueryRow(ctx, r.tx, selectSegmentBody, candidate.segment).Scan(&row.first, &row.last, &row.body)
+		err := sqlite.QueryRowByKey(ctx, r.tx, selectSegmentBody, candidate.segment).
+			Scan(&row.first, &row.last, &row.body)
 		if err != nil {
 			return err
 		}
@@ -443,7 +444,7 @@ func (r *snapshotRead) fetch(ctx context.Context, candidate *source, segmentSize
 		}
 		segments[candidate.segment] = row
 	}
-	if err := sqlite.QueryRow(ctx, r.tx, selectBlockBody, candidate.id).Scan(&candidate.body); err != nil {
+	if err := sqlite.QueryRowByKey(ctx, r.tx, selectBlockBody, candidate.id).Scan(&candidate.body); err != nil {
 		return err
 	}
 	if len(candidate.body) != candidate.size {

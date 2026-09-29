@@ -58,9 +58,9 @@ func (s *Store) claimBucket(ctx context.Context, name string) (int64, error) {
 
 	var id int64
 	err = s.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
-		scanErr := sqlite.QueryRow(ctx, w, selectBucket, name).Scan(&id)
+		scanErr := sqlite.QueryRowByKey(ctx, w, selectBucket, name).Scan(&id)
 		if errors.Is(scanErr, sql.ErrNoRows) {
-			return sqlite.QueryRow(ctx, w, insertBucket, name).Scan(&id)
+			return sqlite.QueryRowByKey(ctx, w, insertBucket, name).Scan(&id)
 		}
 		return scanErr
 	})

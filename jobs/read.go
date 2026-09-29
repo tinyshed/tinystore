@@ -333,7 +333,7 @@ func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Ent
 	}
 	encoded := job.value
 	if job.spill.Valid {
-		if err := sqlite.QueryRow(ctx, r, valueSpilled, job.spill.Int64).Scan(&encoded); err != nil {
+		if err := sqlite.QueryRowByKey(ctx, r, valueSpilled, job.spill.Int64).Scan(&encoded); err != nil {
 			return entry, fmt.Errorf("%w: jobs: the value spilled by a job is gone: %w", tinystore.ErrCorrupt, err)
 		}
 	}

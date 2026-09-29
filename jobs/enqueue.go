@@ -153,7 +153,7 @@ func (waitingLimit) Unwrap() error { return tinystore.ErrLimit }
 // queue's row, which triggers keep, so that a Tx sees its own enqueues
 func checkRoom(ctx context.Context, w sqlite.Writer, e enqueued) error {
 	var waiting int64
-	if err := sqlite.QueryRow(ctx, w, countWaiting, e.queue).Scan(&waiting); err != nil {
+	if err := sqlite.QueryRowByKey(ctx, w, countWaiting, e.queue).Scan(&waiting); err != nil {
 		return err
 	}
 	if waiting >= e.maxWaiting {
@@ -331,7 +331,7 @@ func requeue(ctx context.Context, w sqlite.Writer, e enqueued) (int64, bool, err
 func cancel(ctx context.Context, w sqlite.Writer, queue int64, key string, now int64) (waited, failed bool, err error) {
 	var id int64
 	var spill sql.NullInt64
-	err = sqlite.QueryRow(ctx, w, cancelWaiting, queue, key, now).Scan(&id, &spill)
+	err = sqlite.QueryRowByKey(ctx, w, cancelWaiting, queue, key, now).Scan(&id, &spill)
 	switch {
 	case err == nil:
 		if _, err = w.ExecContext(ctx, dropLeaseOf, id); err == nil {
@@ -387,7 +387,7 @@ func dropSpilled(ctx context.Context, w sqlite.Writer, spill sql.NullInt64) erro
 // dropFailedJob deletes the failed job under a key and its spilled value
 func dropFailedJob(ctx context.Context, w sqlite.Writer, queue int64, key string) (bool, error) {
 	var spill sql.NullInt64
-	err := sqlite.QueryRow(ctx, w, dropFailed, queue, key).Scan(&spill)
+	err := sqlite.QueryRowByKey(ctx, w, dropFailed, queue, key).Scan(&spill)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -399,7 +399,7 @@ func dropFailedJob(ctx context.Context, w sqlite.Writer, queue int64, key string
 
 func findByKey(ctx context.Context, r sqlite.Reader, queue int64, key string) (row, bool, error) {
 	var there row
-	err := sqlite.QueryRow(ctx, r, jobByKey, queue, key).Scan(&there.next, &there.id, &there.at, &there.attempt,
+	err := sqlite.QueryRowByKey(ctx, r, jobByKey, queue, key).Scan(&there.next, &there.id, &there.at, &there.attempt,
 		&there.again, &there.repeat, &there.failure, &there.spill)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row{}, false, nil
@@ -415,7 +415,7 @@ func leaseHeld(ctx context.Context, r sqlite.Reader, id, now int64) (bool, error
 
 func exists(ctx context.Context, r sqlite.Reader, query string, args ...any) (bool, error) {
 	var one int
-	err := sqlite.QueryRow(ctx, r, query, args...).Scan(&one)
+	err := sqlite.QueryRowByKey(ctx, r, query, args...).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -473,7 +473,7 @@ func (tx *Tx) nextID(ctx context.Context) (int64, error) {
 	}
 	if tx.ids.next == tx.ids.end {
 		var end int64
-		if err := sqlite.QueryRow(ctx, tx.writer, reserveIDs, idBlock).Scan(&end); err != nil {
+		if err := sqlite.QueryRowByKey(ctx, tx.writer, reserveIDs, idBlock).Scan(&end); err != nil {
 			return 0, fmt.Errorf("jobs: reserve ids: %w", err)
 		}
 		tx.ids.next, tx.ids.end = end-idBlock, end

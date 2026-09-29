@@ -127,7 +127,7 @@ func (s *Store) fetchFollowed(ctx context.Context, after Cursor, limit int) (fol
 		if err != nil || len(out.places) > 0 {
 			return err
 		}
-		return sqlite.QueryRow(ctx, tx, selectSegmentSequence).Scan(&out.sequence)
+		return sqlite.QueryRowByKey(ctx, tx, selectSegmentSequence).Scan(&out.sequence)
 	})
 	if err != nil {
 		return followed{}, fmt.Errorf("records: follow: %w", err)
@@ -209,7 +209,7 @@ func (r *followRead) holderOf(ctx context.Context, place *followedPlace) (*heldS
 		return holder, nil
 	}
 	holder := &heldSegment{id: place.holderID}
-	err := sqlite.QueryRow(ctx, r.tx, selectHolder, holder.id).Scan(&holder.stream, &holder.first, &holder.last,
+	err := sqlite.QueryRowByKey(ctx, r.tx, selectHolder, holder.id).Scan(&holder.stream, &holder.first, &holder.last,
 		&holder.firstBlock, &holder.lastBlock, &holder.held)
 	if errors.Is(err, sql.ErrNoRows) {
 		found := Damage{Stream: r.names.name(place.stream), Segment: place.id}
@@ -241,7 +241,7 @@ func (r *followRead) fetch(ctx context.Context, key cacheKey, query string, id i
 		return body, false, nil
 	}
 	var body []byte
-	if err := sqlite.QueryRow(ctx, r.tx, query, id).Scan(&body); err != nil {
+	if err := sqlite.QueryRowByKey(ctx, r.tx, query, id).Scan(&body); err != nil {
 		return nil, false, err
 	}
 	r.fetchedBytes += len(body)

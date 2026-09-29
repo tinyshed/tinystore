@@ -152,7 +152,7 @@ func (s *Store) dropHeadRow(ctx context.Context, id int64) error {
 		var first, last int64
 		var size int
 		var body []byte
-		err := sqlite.QueryRow(ctx, tx, selectHeadRowToDrop, id).Scan(&head.stream, &head.late, &first, &last,
+		err := sqlite.QueryRowByKey(ctx, tx, selectHeadRowToDrop, id).Scan(&head.stream, &head.late, &first, &last,
 			&count, &input, &size, &body)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -214,7 +214,7 @@ const (
 func (s *Store) dropSegment(ctx context.Context, id int64) error {
 	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		holder := id
-		err := sqlite.QueryRow(ctx, tx, selectHolderToDrop, id).Scan(&holder)
+		err := sqlite.QueryRowByKey(ctx, tx, selectHolderToDrop, id).Scan(&holder)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -242,7 +242,7 @@ func (s *Store) segmentReads(ctx context.Context, tx sqlite.Writer, id int64) (f
 	var row []byte
 	var first, last int64
 	var held int
-	err = sqlite.QueryRow(ctx, tx, selectSegmentToDrop, id).Scan(&first, &last, &held, &row)
+	err = sqlite.QueryRowByKey(ctx, tx, selectSegmentToDrop, id).Scan(&first, &last, &held, &row)
 	missing := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !missing {
 		return false, false, err

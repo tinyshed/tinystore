@@ -65,7 +65,7 @@ func (s *Store) scrub(ctx context.Context) (read int64, damaged int, err error) 
 
 	pass := &scrubbing{store: s, buffer: make([]byte, hold)}
 	err = s.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, selectScrub).Scan(&pass.at.content, &pass.at.offset, &pass.at.state,
+		return sqlite.QueryRowByKey(ctx, r, selectScrub).Scan(&pass.at.content, &pass.at.offset, &pass.at.state,
 			&pass.at.pace)
 	})
 	if err == nil {
@@ -202,7 +202,7 @@ func (p *scrubbing) readAt(ctx context.Context, next scrubbed, n int64) (int, er
 	if next.inline {
 		var body []byte
 		err := s.file.Lookup(ctx, func(r sqlite.Reader) error {
-			return sqlite.QueryRow(ctx, r, bodyOf, next.id).Scan(&body)
+			return sqlite.QueryRowByKey(ctx, r, bodyOf, next.id).Scan(&body)
 		})
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && int64(len(body)) < off+n) {
 			return 0, fs.ErrNotExist

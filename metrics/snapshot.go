@@ -215,7 +215,7 @@ const payloadQuery = `select length(body),case when length(body)=? then body els
 
 func readPayload(ctx context.Context, tx sqlite.Reader, block *storedBlock) error {
 	var size int
-	err := sqlite.QueryRow(ctx, tx, payloadQuery, block.bodyBytes, block.payload).Scan(&size, &block.body)
+	err := sqlite.QueryRowByKey(ctx, tx, payloadQuery, block.bodyBytes, block.payload).Scan(&size, &block.body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: payload missing", ErrCorrupt)
 	}

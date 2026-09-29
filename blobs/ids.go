@@ -39,7 +39,7 @@ func (s *Store) takeID(ctx context.Context) (int64, error) {
 	if s.ids.last == s.ids.end {
 		var end int64
 		err := s.file.UpdatePrepared(ctx, func(w sqlite.Writer) error {
-			return sqlite.QueryRow(ctx, w, reserveIDs, idBlock).Scan(&end)
+			return sqlite.QueryRowByKey(ctx, w, reserveIDs, idBlock).Scan(&end)
 		})
 		if err != nil {
 			return 0, fmt.Errorf("blobs: reserve content ids: %w", err)
@@ -108,7 +108,7 @@ const contentNamed = `select 1 from contents where id = ?1`
 func (s *Store) resolve(ctx context.Context, id int64) {
 	var one int
 	err := s.file.Lookup(ctx, func(r sqlite.Reader) error {
-		return sqlite.QueryRow(ctx, r, contentNamed, id).Scan(&one)
+		return sqlite.QueryRowByKey(ctx, r, contentNamed, id).Scan(&one)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

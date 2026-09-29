@@ -49,7 +49,7 @@ const labelIDQuery = `select id from label_values where name=? and value=?`
 // resolveMatcher needs no posting count: a single matcher has nothing to rank.
 func resolveMatcher(ctx context.Context, tx sqlite.Reader, matcher Label) ([]matcherPosting, bool, error) {
 	var posting matcherPosting
-	err := sqlite.QueryRow(ctx, tx, labelIDQuery, matcher.Name, matcher.Value).Scan(&posting.labelID)
+	err := sqlite.QueryRowByKey(ctx, tx, labelIDQuery, matcher.Name, matcher.Value).Scan(&posting.labelID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -65,7 +65,7 @@ func countEachMatcher(ctx context.Context, tx sqlite.Reader, matchers []Label) (
 	ranked := make([]matcherPosting, 0, len(matchers))
 	for _, matcher := range matchers {
 		var posting matcherPosting
-		err := sqlite.QueryRow(ctx, tx, labelPostingsQuery, matcher.Name, matcher.Value).
+		err := sqlite.QueryRowByKey(ctx, tx, labelPostingsQuery, matcher.Name, matcher.Value).
 			Scan(&posting.labelID, &posting.seriesCount)
 		if errors.Is(err, sql.ErrNoRows) || posting.seriesCount == 0 && err == nil {
 			return nil, false, nil

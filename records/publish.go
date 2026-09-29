@@ -47,7 +47,7 @@ const selectNextBlockID = `select coalesce(max(seq), 0) + 1 from sqlite_sequence
 // sequence remembers the ids of deleted blocks, so none is given twice
 func nextBlockID(ctx context.Context, tx sqlite.Writer) (int64, error) {
 	var id int64
-	err := sqlite.QueryRow(ctx, tx, selectNextBlockID).Scan(&id)
+	err := sqlite.QueryRowByKey(ctx, tx, selectNextBlockID).Scan(&id)
 	return id, err
 }
 
@@ -67,7 +67,7 @@ func insertSegmentRow(
 		return blockOwner{}, err
 	}
 	owner := blockOwner{stream: stream, firstBlock: firstBlock}
-	err = sqlite.QueryRow(ctx, tx, insertSegment, stream, segment.first, segment.last, segment.count,
+	err = sqlite.QueryRowByKey(ctx, tx, insertSegment, stream, segment.first, segment.last, segment.count,
 		segment.count, segment.input, firstBlock, owner.lastBlock(segment.blocks), segment.row).Scan(&owner.segment)
 	return owner, err
 }
@@ -154,7 +154,7 @@ func settleHead(ctx context.Context, tx sqlite.Writer, head headKey, left headWe
 		return false, err
 	}
 	var since int64
-	err = sqlite.QueryRow(ctx, tx, selectOldestHead, head.stream, head.late).Scan(&since)
+	err = sqlite.QueryRowByKey(ctx, tx, selectOldestHead, head.stream, head.late).Scan(&since)
 	if errors.Is(err, sql.ErrNoRows) {
 		_, err = tx.ExecContext(ctx, deleteHeadState, head.stream, head.late)
 		return err == nil, err

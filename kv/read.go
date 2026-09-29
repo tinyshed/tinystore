@@ -71,7 +71,7 @@ func (b *Bucket[V]) Has(ctx context.Context, key any) (bool, error) {
 	var version int64
 	var expires sql.NullInt64
 	err = b.read(ctx, func(r sqlite.Reader) error {
-		scanErr := sqlite.QueryRow(ctx, r, selectHas, c.args(b.id, c.path, c.now)...).Scan(&version, &expires)
+		scanErr := sqlite.QueryRowByKey(ctx, r, selectHas, c.args(b.id, c.path, c.now)...).Scan(&version, &expires)
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return nil
 		}
@@ -203,7 +203,7 @@ func (r row) held() (any, error) {
 
 func readLive(ctx context.Context, r sqlite.Reader, bucket int64, c call) (row, bool, error) {
 	found := row{path: c.path}
-	err := sqlite.QueryRow(ctx, r, selectLive, c.args(bucket, c.path, c.now)...).
+	err := sqlite.QueryRowByKey(ctx, r, selectLive, c.args(bucket, c.path, c.now)...).
 		Scan(&found.version, &found.expires, &found.value, &found.spill, &found.spilled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row{}, false, nil
