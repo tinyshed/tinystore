@@ -754,9 +754,32 @@ would be charging to somebody else's binary.
   it, delete it, split it, or collapse the two branches into one. A comment
   that explains a confusing name leaves the name confusing.
 - A comment says what the code cannot: why this way, what broke last time,
-  which trap is being avoided. **One line**, lower case, no closing full stop,
-  in Go and YAML alike; a second line is usually a `so that ...` clause, and
-  that is rationale, which belongs in this file. Never restate the line below.
+  which trap is being avoided. Never restate the line below.
+- **Comment prose** is ordinary prose, in Go and YAML alike. A doc comment on a
+  declaration, and any comment of more than one sentence, has a capital and
+  full stops. A short inline comment that reads as a label (`// fast path`) may
+  omit the final stop. A comment already in the file keeps its form until it is
+  edited for another reason; nothing is reflowed to match.
+  - A simple why is **one line**; two lines when one would be too wide.
+    Wrapped prose stays within 80 columns, tabs counted as four. A single-line
+    comment may run to 100 when that keeps a small fact on one line.
+  - Avoid three or more lines that are still one sentence. Tighten it to one or
+    two lines, or write proper sentences in paragraphs.
+  - A long explanation is paragraphs separated by a blank `//` line, one piece
+    of reasoning each: what it guarantees, why the obvious way is wrong, the
+    edge case or invariant. The first sentence stands alone as the summary.
+  - A table, a small diagram or a worked example beats prose when it explains the
+    behaviour more directly.
+  - If a type's comment starts explaining individual fields, move each
+    explanation onto its field, unless the relationship between the fields is
+    itself the invariant (`[Start, End)` belongs on the type). A field whose
+    meaning its name and type already give gets no comment.
+  - When editing an old comment, the facts may change order for clarity; what
+    must survive is their meaning and the guarantees they state.
+  - A good short comment is not lengthened for uniformity.
+  - Where durability, concurrency, security, SQLite or file-system behaviour,
+    protocol state or a memory bound is at stake, say enough that a reviewer need
+    not rebuild the invariant from the code.
 - **A worked example is the exception, and it is welcome.** Where a function
   transforms data — an encoding, a boundary, a merge — show one input and its
   output in a small aligned block (`12.02 → 1202 → +2`). Every such example
@@ -779,10 +802,10 @@ would be charging to somebody else's binary.
   line, it ages on its own, and it teaches the reader that comments here can be
   skipped. When the name and the signature say it, write nothing. revive's
   `exported` rule is off for exactly this reason.
-- Doc comments are exempt from the lower-case sentence form, **not from the
-  length and not from the rule above**. They earn their place by saying what a
-  caller cannot see — that the slice is not copied, that the iterator owns its
-  buffer, that the codec may be closed while an iterator lives.
+- Doc comments follow the same prose rules and the same restraint. They earn
+  their place by saying what a caller cannot see — that the slice is not
+  copied, that the iterator owns its buffer, that the codec may be closed while
+  an iterator lives.
 - Errors wrap with `%w` and carry what failed. A decoding error names the
   invariant that broke rather than the offset it was standing at.
 - `context.Context` is the first parameter on anything touching the file or the

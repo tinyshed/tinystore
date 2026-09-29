@@ -162,3 +162,9 @@ fetch and normalise them.
 | | |
 |---|---|
 | [rpc-server-2026-09-29.md](rpc-server-2026-09-29.md) | the built server through `tinystore serve` beside the prototype, in the same session, on Windows and in the container: at depth 267 to 331 thousand gets a second from Go and Bun on Windows where the prototype as its round ran it served 150 to 268, and 68 to 78 % of its best sidecar, at up to twice its CPU a get; one call in flight the round trip's; sets the group's; a point read whose context can end 27 to 35 % slower embedded, the goroutine `database/sql` starts to watch it |
+
+## 29 September 2026 — comments
+
+| | |
+|---|---|
+| [comment-cleanup-2026-09-29.md](comment-cleanup-2026-09-29.md) | every comment read once: about 8 % needed an edit, mostly run-on sentences and restated names, and fifteen were stale, one on the SQL check's security boundary; width 80, field notes on their fields; both rounds done and tests green, nothing committed |
