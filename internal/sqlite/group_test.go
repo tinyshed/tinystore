@@ -264,3 +264,91 @@ func TestALeaderWhoseCallerLeavesHandsTheLeadOn(t *testing.T) {
 		t.Fatalf("the file holds %d, %v; want the follower's 2 alone", n, err)
 	}
 }
+
+// A write whose statement's context ends while it runs, by a cancel or by a
+// deadline, finishes with its group, and the writes before and after it commit.
+// Interrupting the statement would make SQLite roll back the whole transaction.
+func TestAWriteThatHasStartedFinishesWithItsGroup(t *testing.T) {
+	endings := map[string]func(context.Context) (context.Context, context.CancelFunc){
+		"cancel": func(parent context.Context) (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(parent)
+			time.AfterFunc(20*time.Millisecond, cancel)
+			return ctx, cancel
+		},
+		"deadline": func(parent context.Context) (context.Context, context.CancelFunc) {
+			return context.WithTimeout(parent, 20*time.Millisecond)
+		},
+	}
+	for ending, endSoon := range endings {
+		t.Run(ending, func(t *testing.T) {
+			ended, errs := writeBesideAHeavyOne(t, endSoon)
+			if err := errors.Join(errs...); err != nil {
+				t.Fatalf("the writes before, during and after the one whose %s came: %v", ending, err)
+			}
+			if !ended {
+				t.Fatalf("the %s came after the statement had finished", ending)
+			}
+		})
+	}
+}
+
+// writeBesideAHeavyOne groups three writes, the middle one a million rows under
+// a context endSoon makes as its statement starts. It checks that every row is
+// in the file and says whether that context ended before the statement did.
+func writeBesideAHeavyOne(t *testing.T, endSoon func(context.Context) (context.Context, context.CancelFunc)) (
+	ended bool, errs []error,
+) {
+	t.Helper()
+	file := openGroupTestFile(t)
+	release := holdWriter(t, file)
+	const heavy = `insert into example
+		with recursive n(i) as (select 1 union all select i + 1 from n where i < 1000000) select i from n`
+
+	errs = make([]error, 3)
+	var wg sync.WaitGroup
+	for n := range errs {
+		wg.Go(func() {
+			if n != 1 {
+				errs[n] = insertGrouped(t.Context(), file, n, nil)
+				return
+			}
+			errs[n] = file.UpdateGrouped(t.Context(), 8, func(w Writer) error {
+				statement, stop := endSoon(t.Context())
+				defer stop()
+				_, err := w.ExecContext(statement, heavy)
+				ended = statement.Err() != nil
+				return err
+			})
+		})
+		waitQueued(t, file, n+1)
+	}
+	release()
+	wg.Wait()
+	if rows := countRows(t, file); rows != 1000002 {
+		t.Errorf("%d rows, want the heavy write's million and the two beside it", rows)
+	}
+	return ended, errs
+}
+
+// A grouped statement run through UntilDeadline that outruns its caller's deadline ends there.
+func TestAStatementUntilItsDeadlineEndsThere(t *testing.T) {
+	file := openGroupTestFile(t)
+	const endless = `insert into example
+		select count(*) from (with recursive n(i) as (select 1 union all select i + 1 from n) select i from n)`
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	begun := time.Now()
+	err := file.UpdateGrouped(ctx, 8, func(w Writer) error {
+		_, execErr := UntilDeadline(w).ExecContext(ctx, endless)
+		return execErr
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("an endless write with 50 ms to run: %v", err)
+	}
+	if took := time.Since(begun); took > 5*time.Second {
+		t.Fatalf("an endless write with 50 ms to run took %s", took)
+	}
+	if rows := countRows(t, file); rows != 0 {
+		t.Fatalf("%d rows after a write stopped at its deadline", rows)
+	}
+}

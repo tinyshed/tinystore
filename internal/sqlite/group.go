@@ -64,15 +64,22 @@ const (
 )
 
 // UpdateGrouped runs write in a savepoint of a transaction it may share with
-// the writes queued beside it, and returns once that transaction committed.
-// A write that fails, and whose savepoint rolls back, fails alone; a caller
-// whose context ends before its write starts writes nothing, whether it waits
-// behind a leader or leads the wait for the writer; a write that has started
-// finishes with its group, whatever its caller's context does. A group holds
-// the writer at most Config.GroupHold, counted from when it holds it, so that
-// a transaction holding the writer longer fails none of the writes behind it.
-// bytes weigh the write against the group's bound, and a heavier one commits
-// alone. A commit that fails is ErrOutcomeUnknown.
+// writes queued beside it, and returns once that transaction commits.
+//
+// A failed write rolls back its savepoint and fails alone. If a caller's
+// context ends before its write starts, that write never runs, whether the
+// caller waits behind a leader or leads the wait for the writer. Once started,
+// a write finishes with its group whatever its caller's context does.
+//
+// A statement run through UntilDeadline is different: it ends at its caller's
+// deadline, and if the deadline passes while SQLite is executing it, SQLite
+// rolls back the whole transaction and the group fails with it.
+//
+// A group holds the writer for at most Config.GroupHold, counted from when it
+// acquires the writer. Waiting for the writer does not count, so a long
+// transaction ahead fails none of the writes queued behind it. bytes counts
+// toward the group's size bound, and a write heavier than the bound commits
+// alone. A failed commit is ErrOutcomeUnknown.
 func (f *File) UpdateGrouped(ctx context.Context, bytes int, write func(Writer) error) error {
 	return f.UpdateGroupedAs(ctx, "", bytes, write)
 }
@@ -246,9 +253,10 @@ func (f *File) commitGroup(ctx context.Context) ([]*groupedWrite, []error) {
 	err := f.holding(ctx, preparedTransaction(ctx, func(w Writer) error {
 		batch, started = f.writes.take(), true
 		failed = make([]error, len(batch))
+		grouped := &groupedWriter{Writer: w}
 		for i, entry := range batch {
 			var err error
-			if failed[i], err = runSavepoint(ctx, w, entry.write); err != nil {
+			if failed[i], err = runSavepoint(ctx, grouped, entry.write); err != nil {
 				return err
 			}
 		}
@@ -274,26 +282,102 @@ func preparedTransaction(ctx context.Context, write func(Writer) error) func(*wr
 	}
 }
 
-// runSavepoint runs one write in a savepoint: a write that fails is rolled back
-// to it and fails alone, and err says that the rollback failed as well
-func runSavepoint(ctx context.Context, w Writer, write func(Writer) error) (failed, err error) {
-	if _, err = w.ExecContext(ctx, savepointQuery); err != nil {
+// runSavepoint runs one write in a savepoint while the group's hold lasts.
+//
+// A write that fails is rolled back to the savepoint and fails alone; err says
+// that the rollback failed as well. The savepoint's own statements take no time
+// and a rollback must not be interrupted, so they run without the hold's
+// deadline.
+func runSavepoint(ctx context.Context, w *groupedWriter, write func(Writer) error) (failed, err error) {
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	if failed = write(w); failed == nil {
-		_, err = w.ExecContext(ctx, releaseQuery)
+	instant := context.WithoutCancel(ctx)
+	if _, err = w.Writer.ExecContext(instant, savepointQuery); err != nil {
 		return nil, err
 	}
-	if _, err = w.ExecContext(ctx, rollbackToQuery); err != nil {
+	failed = write(w)
+	w.letGo()
+	if failed == nil {
+		_, err = w.Writer.ExecContext(instant, releaseQuery)
+		return nil, err
+	}
+	if _, err = w.Writer.ExecContext(instant, rollbackToQuery); err != nil {
 		return failed, errors.Join(failed, err)
 	}
-	_, err = w.ExecContext(ctx, releaseQuery)
+	_, err = w.Writer.ExecContext(instant, releaseQuery)
 	return failed, err
 }
 
-// outcome is one write's answer: its own failure, which rolled it back whatever
-// the group did; the group's, when the transaction ended before its commit;
-// ErrOutcomeUnknown, when the commit itself failed; or none
+// groupedWriter runs a grouped write's statements without their caller's
+// cancel or deadline.
+//
+// SQLite rolls back the whole transaction when it interrupts a write statement,
+// and every write of the group with it. An engine's own statements are bounded
+// and never worth that.
+type groupedWriter struct {
+	Writer
+	deadlines []context.CancelFunc
+}
+
+func (w *groupedWriter) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return w.Writer.ExecContext(context.WithoutCancel(ctx), query, args...)
+}
+
+func (w *groupedWriter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return w.Writer.QueryContext(context.WithoutCancel(ctx), query, args...)
+}
+
+// UntilDeadline is a grouped write's writer whose statements end at their
+// caller's deadline, for SQL that may run without end, such as an
+// application's.
+//
+// If the deadline passes while SQLite is executing one of them, SQLite rolls
+// back the whole transaction and the group fails with it. A cancel still lets
+// the statement finish. Any other writer comes back as it is.
+func UntilDeadline(w Writer) Writer {
+	if grouped, ok := w.(*groupedWriter); ok {
+		return deadlineWriter{grouped}
+	}
+	return w
+}
+
+type deadlineWriter struct{ grouped *groupedWriter }
+
+func (w deadlineWriter) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return w.grouped.Writer.ExecContext(w.grouped.untilDeadline(ctx), query, args...)
+}
+
+func (w deadlineWriter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return w.grouped.Writer.QueryContext(w.grouped.untilDeadline(ctx), query, args...)
+}
+
+// untilDeadline is ctx without its cancel, ending at its deadline when it has
+// one. The rows of a query keep that context until the write returns.
+func (w *groupedWriter) untilDeadline(ctx context.Context) context.Context {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithoutCancel(ctx)
+	}
+	bounded, stop := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	w.deadlines = append(w.deadlines, stop)
+	return bounded
+}
+
+// letGo stops the deadlines of the write that has returned
+func (w *groupedWriter) letGo() {
+	for _, stop := range w.deadlines {
+		stop()
+	}
+	w.deadlines = w.deadlines[:0]
+}
+
+// outcome is one write's answer:
+//
+//	its own failure      it rolled back whatever the group did
+//	the group's failure  the transaction ended before its commit
+//	ErrOutcomeUnknown    the commit itself failed
+//	nil                  none of the above
 func outcome(failed, group error, ran bool) error {
 	switch {
 	case failed != nil:

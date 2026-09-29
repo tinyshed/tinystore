@@ -33,6 +33,17 @@ the writer connection is closed, and no per-handle statistics or cached state
 are published as committed. A caller must reconcile before retrying an
 outcome-unknown batch.
 
+A started call's statements do not run under its caller's context. SQLite
+rolls back the whole transaction of a write statement it interrupts, so a
+caller cancelling while its statement ran used to fail every write of its
+group; since 29 September 2026 a grouped statement runs without its caller's
+cancel or deadline, and the group's savepoints without the hold's.
+`sqlite.UntilDeadline` gives the application's SQL, which sqldb runs and which
+may never end, its caller's deadline back: past it the statement ends and the
+group fails with it, each write told so. A cancel still lets it finish.
+`TestAWriteThatHasStartedFinishesWithItsGroup` and
+`TestAStatementUntilItsDeadlineEndsThere` are the gates.
+
 The queue must have explicit request and byte caps, a maximum gathering delay,
 and a maximum writer hold time. A request holds per-store and shared admission
 through preparation, queueing and acknowledgement. Full queues apply

@@ -114,7 +114,10 @@ wrote internal/data/migrations/002_add_description.sql:
   the writer together and commit in one transaction, each in a savepoint, with
   one fsync: one that fails rolls back alone, one whose caller's context ends
   before its turn writes nothing, one that has started finishes with its
-  group. A group holds the writer at most ten seconds counted from when it
+  group though its caller cancels. A deadline that passes while its statement
+  runs ends the statement, since the application's SQL may never end, and
+  SQLite then rolls back the whole transaction: the group fails with it, each
+  write told so. A group holds the writer at most ten seconds counted from when it
   holds it, so a transaction holding the writer longer fails none of the
   writes behind it; a group whose commit fails answers
   `sqldb.ErrOutcomeUnknown`, and its caller reads back before writing again. A

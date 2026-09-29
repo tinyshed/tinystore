@@ -106,7 +106,7 @@ func (d *DB) write(ctx context.Context, c *call, args []any) error {
 				panicked, err = recovered, errPanicked
 			}
 		}()
-		return c.writeTo(ctx, w, args, held)
+		return c.writeTo(ctx, sqlite.UntilDeadline(w), args, held)
 	})
 	if panicked != nil {
 		panic(panicked)
