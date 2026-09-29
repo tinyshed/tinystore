@@ -80,6 +80,10 @@ func TestNotesThroughEveryCall(t *testing.T) {
 	if err != nil || len(listed) != 2 || listed[0].Title != "renamed" {
 		t.Fatalf("list: %+v, %v", listed, err)
 	}
+	touched, err := ExecAll[note](ctx, db, `update notes set body = 'seen' returning *`)
+	if err != nil || len(touched) != 2 || touched[0].Body != "seen" || touched[1].Body != "seen" {
+		t.Fatalf("touch every note: %+v, %v", touched, err)
+	}
 	if _, err = db.Exec(ctx, `delete from notes where id = ?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
