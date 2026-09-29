@@ -333,3 +333,24 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 		t.Fatalf("a refused serve left %v, %v", entries, err)
 	}
 }
+
+// A remote server holds 1 GiB of the store's memory unless --memory says
+// otherwise, 0 for no bound. A local one is bound only when --memory says.
+func TestARemoteServerIsBoundedUnlessToldOtherwise(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		args   []string
+		memory int64
+	}{
+		{[]string{"--dir", dir, "--listen", "tcp://127.0.0.1:0", "--tokens", "t"}, 1 << 30},
+		{[]string{"--dir", dir, "--listen", "tcp://127.0.0.1:0", "--tokens", "t", "--memory", "0"}, 0},
+		{[]string{"--dir", dir, "--local", "--listen", "tcp://127.0.0.1:0", "--tokens", "t", "--memory", "5"}, 5},
+		{[]string{"--dir", dir, "--local"}, 0},
+		{[]string{"--dir", dir, "--stdio"}, 0},
+	} {
+		asked, err := parseServe(c.args, &lockedBuffer{})
+		if err != nil || asked.memory != c.memory {
+			t.Errorf("serve %q holds %d bytes, %v; want %d", c.args, asked.memory, err, c.memory)
+		}
+	}
+}

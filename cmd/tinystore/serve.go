@@ -22,7 +22,7 @@ const serveUsage = `usage:
   tinystore serve --dir <dir> --local [--idle 30s]    the directory's shared sidecar, published in <dir>/server/SERVE
   tinystore serve --dir <dir> --listen tls://<host:port> --tls-cert <file> --tls-key <file> --tokens <file>
 flags:
-  --memory <bytes>   the most every engine's work holds at once`
+  --memory <bytes>   the most every engine's work holds at once; 1 GiB with --listen, 0 for no bound`
 
 // errHeld is a directory another store holds: the sidecar a client asked for
 // is running already, and SERVE says where
@@ -31,6 +31,12 @@ var errHeld = errors.New("the directory is held by another store")
 // the exit code of a serve that found the directory held, which a client
 // starting a sidecar reads as another having won
 const exitHeld = 3
+
+// remoteMemory is a remote server's store memory when --memory does not say.
+//
+// Without a bound a data client's statement could make SQLite allocate a
+// gigabyte. A local client is the same user's own, so it gets no default.
+const remoteMemory = 1 << 30
 
 // console is the streams serve runs on: a private child's frames are on stdin
 // and stdout, and every server's logs on stderr
@@ -63,6 +69,9 @@ func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
 	if err := flags.Parse(args); err != nil {
 		return serveFlags{}, err
 	}
+	if asked.listen != "" && !given(flags, "memory") {
+		asked.memory = remoteMemory
+	}
 	overTLS := strings.HasPrefix(asked.listen, "tls://")
 	switch {
 	case asked.dir == "" || flags.NArg() > 0:
@@ -77,6 +86,13 @@ func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
 		return serveFlags{}, errors.New("serve --idle is a duration, 0 for never")
 	}
 	return asked, nil
+}
+
+// given says whether the command line set a flag, rather than leaving its default
+func given(flags *flag.FlagSet, name string) bool {
+	set := false
+	flags.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
 }
 
 // serving is what serve was asked and what the files it names hold, read
