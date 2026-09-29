@@ -67,6 +67,7 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
+| `internal/release/`  | what a release publishes: binaries, archives, npm packages, wheels            |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
@@ -366,7 +367,7 @@ measurement round belongs in tinyshed/research with the environment and
 command that reproduce it. A rule they are about to violate belongs here.
 
 How to do the recurring work is a skill in `.agents/skills/`, which
-`.claude/skills/` points to: `sdk`, `wire-change`, `verify` and
+`.claude/skills/` points to: `sdk`, `wire-change`, `verify`, `release` and
 `platform-traps`. Read the one that fits before you start, and fix it where it
 is wrong, as you would this file. Measuring is research's `measure` skill.
 
@@ -784,6 +785,8 @@ Do not commit or push unless you were asked to.
 Work lands on `main` directly. Versions are `v0.x.y` until the API stops
 moving, which in Go is not modesty but the compatibility statement the module
 system reads. A release is a tag; tag nothing before there is something to run.
+One version covers the Go modules, the binary, npm and PyPI; the `release`
+skill has the order the tags go in and what `internal/release` builds.
 
 The payload format's version and the schema's version are not the module's. A
 release may leave both where they are, and either may move without a release.

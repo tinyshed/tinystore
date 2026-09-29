@@ -54,6 +54,18 @@ tasks:
       - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -func=coverage.out | tail -1
 
+  release:snapshot:
+    # needs uv; e.g. task release:snapshot -- v0.1.0
+    desc: Build every release artifact into dist/ from the working tree, to try them
+    cmds:
+      - go run ./internal/release -snapshot -version {{.CLI_ARGS}}
+
+  release:build:
+    # from a clean checkout of cmd/tinystore's tag, which stamps the binaries' version
+    desc: Build a release's artifacts into dist/, e.g. task release:build -- v0.1.0
+    cmds:
+      - go run ./internal/release -version {{.CLI_ARGS}}
+
   size:
     desc: Report what importing the public API costs a cgo-free linux/amd64 binary
     vars:

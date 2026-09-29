@@ -88,6 +88,12 @@ linters:
           - lll
           - funlen
           - gocognit
+      # the release command runs go and uv on the maintainer's own checkout, reads
+      # the files it packs, and writes what is published for anyone to read
+      - path: internal/release/
+        linters:
+          - gosec
+        text: "G204|G301|G304|G306"
 
 formatters:
   enable:
