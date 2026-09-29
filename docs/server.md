@@ -90,7 +90,7 @@ What follows from it:
 ## Layers
 
 ```text
-   Bun SDK      Python SDK        Go program (embedded)
+   JS SDK       Python SDK        Go program (embedded)
       │              │                   │
       ▼              ▼                   │  function calls
   transport:  stdio │ Unix socket │ named pipe │ TCP │ TLS
@@ -117,7 +117,7 @@ What follows from it:
 - **`server` holds everything else**: sessions, credit, limits, tokens,
   listeners and the handlers. A handler imports no transport, a transport no
   engine, and engines import neither.
-- **The SDKs live here while the protocol moves**: `sdk/bun` and
+- **The SDKs live here while the protocol moves**: `sdk/js` and
   `sdk/python`, each with its own manifest and releases, and `sdk/go.mod`
   keeping them out of the Go module's zip. One commit changes the protocol,
   the server, both SDKs and the vectors they are tested against.
@@ -127,6 +127,7 @@ What follows from it:
 ```text
 tinystore serve --dir ./data --stdio              a private child: frames on stdin and stdout
 tinystore serve --dir ./data --local --idle 30s   the directory's shared sidecar
+tinystore serve --dir ./data --local --log ./data/server/serve.log   as an SDK starts it
 tinystore serve --dir /srv/data --listen tls://0.0.0.0:7443 --tls-cert … --tls-key … --tokens tokens.txt
 ```
 
@@ -158,6 +159,11 @@ const there = await connect("tls://db.internal:7443", { token })
   `--memory`, which is `Options.Memory`: 1 GiB for a server with `--listen`
   unless it says, 0 for no bound, and no bound for a local one, whose clients
   are its user's own; the engines' own options wait for their flags.
+- **A sidecar started in the background logs to a file.** Nothing reads its
+  stderr, so the SDK starting it passes `--log <dir>/server/serve.log`, which
+  serve opens first, owner-only, and appends every line to, the error it ends
+  with included; an SDK whose sidecar does not come up says what its last
+  lines say. Nothing rotates the file.
 - **What serve cannot do opens nothing.** Its flags, a tokens file and a
   certificate are read before the store opens, so a mistake leaves no `LOCK`
   and no file behind; a `tls://` listener takes `--tls-cert` and `--tls-key`
@@ -511,36 +517,61 @@ Each promise above is a test once its code exists; those marked built pass:
 
 ## SDKs
 
-Designed with the server and built after it, in `sdk/bun` and `sdk/python`:
+Being built after the server, in `sdk/js`, for Bun and later Node, and
+`sdk/python`: `tinystore` on npm, and `tinyshed-tinystore` on PyPI, imported
+as `tinystore`, since PyPI's `tinystore` is another project's.
 
 ```ts
-const store = await open("./data")
-const sessions = store.kv.bucket<Session>("sessions", { sliding: "30d" })
-const s = await sessions.of(userId).get(token)                        // undefined when absent
-await sessions.of(userId).set(token, s, { ttl: "1h" })
+import { ConflictError, open } from 'tinystore'
 
-const reminders = store.jobs.queue<Reminder>("reminders")
-await reminders.enqueue({ user: 42, text: "call mom" }, { at: evening })
-await reminders.work(async (job) => remind(job.value), { workers: 8 })  // returning acknowledges, throwing retries
+await using store = await open('./data')                 // the directory's sidecar, found or started
+// open('./data', { private: true })                     // a child on stdio, living and dying with this process
+// connect('tls://db.internal:7443', { token })          // a remote server
 
-const { object, body } = await store.blobs.bucket("avatars").of(user.id).get("original") // body: a ReadableStream
-const notes = await (await store.sql("app", { migrations: "./migrations" })).all<Note>(
-  "select * from notes where author_id = ?", [user])
+const sessions = store.kv.bucket<Session>('sessions', { sliding: '30d' })   // JSON
+const codes = store.kv.bucket('login-codes', 'int', { defaultTtl: '15m' })   // number
+await sessions.of(user.id).set(token, { device }, { ttl: '1h' })
+const s = await sessions.of(user.id).get(token)            // undefined when absent
+
+const reminders = store.jobs.queue<Reminder>('reminders')
+await reminders.enqueue({ user: 42, text: 'call mom' }, { at: evening })
+await reminders.work(async job => remind(job.value), { workers: 8, signal })  // returning acks, throwing retries
+
+const photo = await store.blobs.bucket('avatars').of(user.id).get('original') // photo.body: a ReadableStream
+const app = await store.sql('app', { migrations: './migrations' })
+const notes = await app.all<Note>`select * from notes where author_id = ${user.id}`
 ```
 
 ```python
-store = await tinystore.open("./data")
-sessions = store.kv.bucket("sessions", Session, sliding=timedelta(days=30))
-s = await sessions.of(user_id).get(token)
-await reminders.work(remind, workers=8)
-
-store = tinystore.open_sync("./data")  # a program without asyncio: one call at a time
+async with tinystore.open("./data") as store:
+    sessions = store.kv.bucket("sessions", Session, sliding=timedelta(days=30))
+    s = await sessions.of(user_id).get(token)             # Session | None
+    await reminders.work(remind, workers=8)
 ```
 
 - **The Go API's vocabulary.** A type is given once, when a bucket or queue
   opens; the daily calls are plain verbs; what the engine chooses goes into
   open's options and never into a call. A plain verb returns the least and
   its entry twin the version, as kv's `Get` and `GetEntry` do.
+- **A handle opens with its first call.** `bucket`, `counters`, `queue` and
+  `schedule` return at once and send their open with the first call that
+  needs it, and again on a new connection, so an application declares them
+  where it builds its services; what refuses a name or an option without the
+  server refuses at once. `open`, `connect` and `sql`, which applies or checks
+  migrations, are awaited.
+- **A value's type is given where its bucket opens.** TypeScript's types are
+  gone when the program runs, so a bucket of a primitive names it by a word,
+  `'int'`, `'float'`, `'bigint'`, `'string'`, `'bytes'`, `'bool'` or `'none'`
+  for a set; any other holds JSON, its type the generic's, or a Standard
+  Schema's, zod's or valibot's, which checks each value as it is read. Python
+  gives the type itself: `int`, `float`, `str`, `bytes`, `bool`, `None`, a
+  dataclass, a `TypedDict`, or a model with `model_validate`. Each maps onto
+  nothing, an integer or bytes as `codecFor` maps Go's, so that every language
+  reads every bucket.
+- **No dependency when the program runs.** Each SDK has a MessagePack codec of
+  the profile's own, which refuses what `refused` refuses, as no general
+  library does; the server's binary is the one thing it carries. Python's C
+  extension waits for a measurement that asks for it.
 - **A sidecar found through `SERVE` proves itself before the first call**:
   the client's `HELLO` carries a fresh challenge, and no `REQUEST` leaves
   until `WELCOME`'s proof checks; `proofs` in the vectors is one to test by.
@@ -561,17 +592,19 @@ store = tinystore.open_sync("./data")  # a program without asyncio: one call at 
   logging handler, Python's `logging.Handler` or a Bun logger, appends its
   records once a second without waiting, dropping and counting what does not
   fit; counters and gauges live in the SDK and are ingested every flush.
-- **Python**: asyncio for concurrency, the MessagePack C extension,
-  `unpackb(..., strict_map_key=False)`; a client without asyncio makes one call
-  at a time, since threads add none. **Bun**: `Bun.connect` for sockets,
-  `node:net` for Windows pipes, `Bun.spawn` for a private child.
+- **Python**: 3.12 or later, asyncio first; a program without asyncio gets
+  `open_sync`, one call at a time, generated from the asyncio code as httpx
+  generates its own, after the first version. **JavaScript**: `Bun.connect`
+  for sockets, `node:net` for Windows pipes, `node:child_process` to start a
+  sidecar that outlives its parent; Node takes all of it but the runtime's
+  file, which the package's `exports` pick by the `bun` condition.
 
 ## Building it
 
 In slices, each engine's messages fixed in [wire.md](wire.md) before its
 code: `server/wire`; a session with its transports; kv, with a Go client the
 tests use; jobs; blobs; sql, with the adversarial round of its SQL check;
-records; metrics; `tinystore serve` with `SERVE`; the Bun SDK; the Python SDK.
+records; metrics; `tinystore serve` with `SERVE`; the JS SDK; the Python SDK.
 Where the slices stand, 29 September 2026:
 
 | slice | state |
@@ -585,7 +618,7 @@ Where the slices stand, 29 September 2026:
 | records | built: `records.go`; the messages on wire.md |
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
-| the Bun SDK, the Python SDK | not begun |
+| the JS SDK, the Python SDK | built: `sdk/js` and `sdk/python`, every vector and every engine tested through a real `tinystore serve` (`task sdk`); not yet their READMEs, examples, packages of the binary, or a measurement against the prototype |
 | the measurement against the prototype | done: [rpc-server-2026-09-29](reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
 
 Every slice built passes `go test`, `-race` in the `golang:1.27` container

@@ -111,6 +111,13 @@ tasks:
       - '{{.GOVULNCHECK}} -C server ./...'
       - '{{.GOVULNCHECK}} -C cmd/tinystore ./...'
 
+  sdk:
+    # needs bun and uv; not in check until CI installs them
+    desc: Check and test both SDKs against a tinystore built from this repository
+    cmds:
+      - cd sdk/js && bun install --frozen-lockfile && bun run check && bun test
+      - cd sdk/python && uv sync --frozen && uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest -q --cov
+
   tidy:
     desc: Tidy every module file CI checks
     cmds:

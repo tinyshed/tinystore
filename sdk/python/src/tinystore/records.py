@@ -1,0 +1,371 @@
+"""The application's logs and events in records.db, as Go's records keeps them.
+
+One log of the store's whose calls name their streams, read by time and by
+what records hold, followed in the order they were sealed; and a
+logging.Handler that never makes its caller wait.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from ._connection import Connection, Link, download
+from ._time import unix_ns
+from ._values import to_json
+from ._wire.messages import (
+    METHODS,
+    Empty,
+    RecordsBatch,
+    RecordsCursor,
+    RecordsDamage,
+    RecordsDamages,
+    RecordsPage,
+    RecordsQuery,
+    RecordsRecord,
+    RecordsStream,
+)
+from .errors import InvalidError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+    from datetime import datetime
+
+    from ._session import Stream
+
+type Fields = Mapping[str, Any] | Sequence[tuple[str, Any]]
+"""Keys and values, each value written as JSON; pairs may repeat a key."""
+
+_LEVELS = {"debug": -4, "info": 0, "warn": 4, "warning": 4, "error": 8}
+
+
+def _level(level: str | int | None) -> int | None:
+    if level is None or isinstance(level, int):
+        return level
+    return _LEVELS[level.lower()]
+
+
+def _fields(fields: Fields | None) -> list[str] | None:
+    if not fields:
+        return None
+    pairs = fields.items() if hasattr(fields, "items") else fields  # type: ignore[union-attr]
+    flat: list[str] = []
+    for key, value in pairs:  # type: ignore[misc]
+        flat += [key, to_json(value)]
+    return flat
+
+
+def _id(given: bytes | str | None, size: int, what: str) -> bytes | None:
+    if given is None:
+        return None
+    raw = bytes.fromhex(given) if isinstance(given, str) else given
+    if len(raw) != size:
+        raise InvalidError(f"a {what} id of {len(raw)} bytes, not {size}")
+    return raw
+
+
+def _text(t: str | bytes | None) -> str:
+    return "" if t is None else t if isinstance(t, str) else t.decode(errors="replace")
+
+
+@dataclass(frozen=True, slots=True)
+class Record:
+    """A record as it was kept; a field's value is the JSON it was written as, spelled as given."""
+
+    at: int
+    """unix nanoseconds"""
+    stream: str
+    name: str
+    level: int | None
+    body: str | bytes | None
+    trace_id: bytes | None
+    span_id: bytes | None
+    context: list[tuple[str, str | bytes]]
+    attrs: list[tuple[str, str | bytes]]
+
+
+def _record(r: dict[str, Any]) -> Record:
+    def pairs(flat: list[Any] | None) -> list[tuple[str, str | bytes]]:
+        flat = flat or []
+        return [(_text(flat[i]), flat[i + 1]) for i in range(0, len(flat) - 1, 2)]
+
+    return Record(
+        r.get("at", 0),
+        _text(r.get("stream")),
+        _text(r.get("name")),
+        r.get("level"),
+        r.get("body"),
+        r.get("trace_id"),
+        r.get("span_id"),
+        pairs(r.get("context")),
+        pairs(r.get("attrs")),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Cursor:
+    """Where a follower stands in the sealed segments, kept by the caller between follows."""
+
+    segment: int = 0
+    row: int = 0
+
+
+class Records:
+    def __init__(self, link: Link) -> None:
+        self._link = link
+        self._handlers: list[Handler] = []
+
+    async def append(self, *records: Mapping[str, Any]) -> None:
+        """Appends records in one transaction, all or none; a refused one names itself as call.
+
+        A record is a mapping of at (a datetime or unix nanoseconds, now when
+        absent), stream, name, level, body, trace_id, span_id, context, attrs.
+        """
+        now = time.time_ns()
+        batch = [
+            {
+                "at": now if r.get("at") is None else unix_ns(r["at"]),
+                "stream": r["stream"],
+                "name": r["name"],
+                "level": _level(r.get("level")),
+                "body": r.get("body"),
+                "trace_id": _id(r.get("trace_id"), 16, "trace"),
+                "span_id": _id(r.get("span_id"), 8, "span"),
+                "context": _fields(r.get("context")),
+                "attrs": _fields(r.get("attrs")),
+            }
+            for r in records
+        ]
+
+        async def attempt(connection: Connection) -> None:
+            await connection.session.call(METHODS["records.append"], RecordsBatch.encode(records=batch))
+
+        await self._link.run("write", attempt)
+
+    async def read(
+        self,
+        *,
+        from_: datetime | int | None = None,
+        to: datetime | int | None = None,
+        streams: Iterable[str] | None = None,
+        names: Iterable[str] | None = None,
+        min_level: str | int | None = None,
+        trace_id: bytes | str | None = None,
+        attrs: Fields | None = None,
+        context: Fields | None = None,
+        newest: bool = False,
+        limit: int | None = None,
+    ) -> tuple[list[Record], dict[str, Any] | None]:
+        """One page of the records a query matches, and the query for the rest while one ended it early."""
+        query = {
+            "from_": None if from_ is None else unix_ns(from_),
+            "to": None if to is None else unix_ns(to),
+            "streams": list(streams) if streams else None,
+            "names": list(names) if names else None,
+            "min_level": _level(min_level),
+            "trace_id": _id(trace_id, 16, "trace"),
+            "attrs": _fields(attrs),
+            "context": _fields(context),
+            "newest": True if newest else None,
+            "limit": limit,
+        }
+
+        async def attempt(connection: Connection) -> Any:
+            return await download(connection, METHODS["records.read"], RecordsQuery.encode(query))
+
+        got = await self._link.run("read", attempt)
+        page = RecordsPage.decode(got.trailer)
+        records = [_record(RecordsRecord.decode(i)) for i in got.items]
+        if not page.get("more"):
+            return records, None
+        rest = {
+            "from_": from_,
+            "to": to,
+            "streams": streams,
+            "names": names,
+            "min_level": min_level,
+            "trace_id": trace_id,
+            "attrs": attrs,
+            "context": context,
+            "newest": newest,
+            "limit": limit,
+        }
+        rest["from_"] = page.get("from_", rest["from_"])
+        rest["to"] = page.get("to", rest["to"])
+        return records, rest
+
+    async def all(self, **query: Any) -> AsyncIterator[Record]:
+        """Every record a query matches, a page at a time."""
+        rest: dict[str, Any] | None = query
+        while rest is not None:
+            records, rest = await self.read(**rest)
+            for record in records:
+                yield record
+
+    async def follow(self, cursor: Cursor | None = None, limit: int | None = None) -> tuple[list[Record], Cursor, int]:
+        """The sealed records after a cursor, the cursor to follow from next, and the segments expired first."""
+        at = cursor or Cursor()
+
+        async def attempt(connection: Connection) -> Any:
+            body = RecordsCursor.encode(segment=at.segment or None, row=at.row or None, limit=limit)
+            return await download(connection, METHODS["records.follow"], body)
+
+        got = await self._link.run("read", attempt)
+        trailer = RecordsCursor.decode(got.trailer)
+        records = [_record(RecordsRecord.decode(i)) for i in got.items]
+        return (
+            records,
+            Cursor(trailer.get("segment", 0), trailer.get("row", 0)),
+            trailer.get("expired", 0),
+        )
+
+    def lines(self, stream: str, *, buffer: int = 1 << 20) -> Lines:
+        """A writer of another program's output that never waits, dropping and counting what does not fit."""
+        if not stream:
+            raise InvalidError("lines of no stream")
+        return Lines(self._link, stream, buffer)
+
+    def handler(self, stream: str, level: int = logging.NOTSET, *, buffer: int = 1024) -> Handler:
+        """A logging.Handler whose records reach the stream once a second, never making the logger wait."""
+        handler = Handler(self, stream, level, buffer)
+        self._handlers.append(handler)
+        return handler
+
+    async def damaged(self) -> list[dict[str, Any]]:
+        """The rows the server's records have met that no longer read."""
+
+        async def attempt(connection: Connection) -> bytes:
+            return await connection.session.call(METHODS["records.damaged"], Empty.encode())
+
+        return RecordsDamages.decode(await self._link.run("read", attempt)).get("damages", [])
+
+    async def drop(self, damage: Mapping[str, Any]) -> None:
+        """Removes a damaged row, a repair an admin connection alone may make."""
+
+        async def attempt(connection: Connection) -> None:
+            await connection.session.call(METHODS["records.drop"], RecordsDamage.encode(damage))
+
+        await self._link.run("write", attempt)
+
+    async def stop(self) -> None:
+        for handler in self._handlers:
+            await handler.flush_now()
+
+
+class Lines:
+    """An upload of lines that stays open while it is written; write returns at once."""
+
+    def __init__(self, link: Link, stream: str, most: int) -> None:
+        self._link, self._stream, self._most = link, stream, most
+        self._waiting: deque[bytes] = deque()
+        self._held = 0
+        self._upload: Stream | None = None
+        self._pumping: asyncio.Task[None] | None = None
+        self.dropped = 0
+        """bytes dropped since the writer began: a full buffer, or a lost connection"""
+
+    def write(self, chunk: str | bytes) -> bool:
+        data = chunk.encode() if isinstance(chunk, str) else chunk
+        if not data:
+            return True
+        if self._held + len(data) > self._most:
+            self.dropped += len(data)
+            return False
+        for at in range(0, len(data), 64 << 10):
+            self._waiting.append(data[at : at + (64 << 10)])
+        self._held += len(data)
+        if self._pumping is None or self._pumping.done():
+            self._pumping = asyncio.ensure_future(self._pump())
+        return True
+
+    async def _pump(self) -> None:
+        while self._waiting:
+            piece = self._waiting[0]
+            try:
+                if self._upload is None or self._upload.finished:
+                    connection = await self._link.connection()
+                    self._upload = await connection.session.open(
+                        METHODS["records.lines"], RecordsStream.encode(stream=self._stream), False
+                    )
+                await self._upload.send(piece, False)
+            except Exception:
+                self._upload = None
+                self.dropped += self._held
+                self._waiting.clear()
+                self._held = 0
+                return
+            self._waiting.popleft()
+            self._held -= len(piece)
+
+    async def end(self) -> None:
+        """Hands over what the writer holds, a line cut short included, and ends the upload."""
+        if self._pumping is not None:
+            await self._pumping
+        if self._upload is not None and not self._upload.finished:
+            await self._upload.send(b"", True)
+            await self._upload.next()
+
+
+class Handler(logging.Handler):
+    """A logging.Handler: emit only queues, and a task on the store's loop appends once a second."""
+
+    def __init__(self, records: Records, stream: str, level: int, most: int) -> None:
+        super().__init__(level)
+        self._records, self._stream, self._most = records, stream, most
+        self._queue: deque[dict[str, Any]] = deque()
+        self._lock = threading.Lock()
+        self._loop = asyncio.get_running_loop()
+        self._task = self._loop.create_task(self._flushing())
+        self.dropped = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        attrs = {k: v for k, v in record.__dict__.items() if k not in _STANDARD and not k.startswith("_")}
+        if record.exc_info:
+            attrs["error"] = (
+                self.formatter.formatException(record.exc_info) if self.formatter else str(record.exc_info[1])
+            )
+        entry = {
+            "at": int(record.created * 1e9),
+            "stream": self._stream,
+            "name": "log",
+            "level": (record.levelno - 20) * 4 // 10,
+            "body": record.getMessage(),
+            "context": {"logger": record.name},
+            "attrs": attrs,
+        }
+        with self._lock:
+            if len(self._queue) >= self._most:
+                self.dropped += 1
+                return
+            self._queue.append(entry)
+
+    async def _flushing(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            await self.flush_now()
+
+    async def flush_now(self) -> None:
+        with self._lock:
+            batch = list(self._queue)
+            self._queue.clear()
+        if batch:
+            try:
+                await self._records.append(*batch)
+            except Exception:
+                self.dropped += len(batch)
+
+    def close(self) -> None:
+        self._task.cancel()
+        super().close()
+
+
+_STANDARD = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {
+    "message",
+    "asctime",
+    "taskName",
+}

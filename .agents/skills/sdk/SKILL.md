@@ -1,6 +1,6 @@
 ---
 name: sdk
-description: Use when building or changing a TinyStore client SDK (sdk/bun, sdk/python) or any code that talks to `tinystore serve` as a client - finding or starting the sidecar, the handshake and its proof, streams, credit, errors, value mapping, reconnecting, and packaging the server binary with the SDK.
+description: Use when building or changing a TinyStore client SDK (sdk/js, sdk/python) or any code that talks to `tinystore serve` as a client - finding or starting the sidecar, the handshake and its proof, streams, credit, errors, value mapping, reconnecting, and packaging the server binary with the SDK.
 ---
 
 # Building a TinyStore SDK
@@ -15,11 +15,14 @@ contract from the documents, not from the Go client in
   connection may do*, *Across the wire*, *SDKs*.
 - `docs/wire.md`: frames, `HELLO` and `WELCOME`, every engine's methods, the
   error codes.
-- `server/wire/testdata/vectors.json`: the bytes every SDK is tested against.
+- `server/wire/testdata/vectors.json`: the bytes every SDK is tested against;
+  `messages.json` beside it, every message by its fields' names, with the
+  methods' numbers and the errors' codes.
 
 One commit changes the protocol, the server, both SDKs and the vectors. The
-SDKs live in `sdk/bun` and `sdk/python`, and `sdk/go.mod` keeps them out of the
-Go module's zip.
+SDKs live in `sdk/js` (Bun, and Node later) and `sdk/python`, and `sdk/go.mod`
+keeps them out of the Go module's zip. What they look like to an application
+is `docs/server.md` "SDKs".
 
 ## Reaching the server, in this order
 
@@ -39,11 +42,14 @@ Go module's zip.
      A process that took a dead server's endpoint cannot answer it; the
      `proofs` vector is the test;
    - on any failure (no file, a refused connection, a proof that does not
-     check), run `tinystore serve --dir <dir> --local`. Exit code 3 means
+     check), run `tinystore serve --dir <dir> --local --log
+     <dir>/server/serve.log`, detached and with no pipes, since nothing will
+     read them and it outlives this process. Exit code 3 means
      another process holds the directory: read `SERVE` again until the winner
      answers, five seconds at most, and start once more when none does, since
      a sidecar leaving for idleness removes `SERVE` first and holds `LOCK`
-     until its store has closed;
+     until its store has closed; any other code, or no answer, is an error
+     quoting the log's last lines;
    - never trust `pid`: pids are reused, and `LOCK` is the truth.
 3. **A remote server**: `tls://` verifies the server's certificate before the
    token leaves in `HELLO`; `tcp://` sends the token in the clear.
@@ -88,12 +94,43 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
 ## Tests and packaging
 
 - Every SDK decodes and encodes every vector: `values`, `refused`, `frames`,
-  `refused frames`, `proofs`.
+  `refused frames`, `proofs`, and each of `messages.json` through its own
+  message codecs, whose field names are wire.md's (`if absent` is `ifAbsent`
+  in JavaScript and `if_absent` in Python), so the loop needs no table.
 - Integration tests run against a real `tinystore serve` built from
   `cmd/tinystore`, over every transport the platform has.
 - The binary is pure Go (`CGO_ENABLED=0`), so every target builds from one
   machine: per-platform optional dependencies on npm, per-platform wheels on
   PyPI.
+
+## What building them taught
+
+- Each SDK's layers carry the same names: `wire/` (codec, frames, messages),
+  a session without I/O, a runtime file (Bun's; asyncio's), a connection
+  with its `Link` that dials again, a store, an engine a file. A message's
+  fields are wire.md's names, camelCase or snake_case, so the vector tests
+  are one loop.
+- A handle opens with its first call and again on each connection; `open`,
+  `connect` and `sql`, which migrates, are awaited.
+- Batches record calls and send them as the block ends: a callback in
+  JavaScript, `async with` in Python; each call's promise or future settles
+  with the batch.
+- Python calls the `cancelled` code `CallCancelledError`, apart from
+  asyncio's; a cancelled task cancels its stream.
+- Bun 1.4's `expect(p).rejects` does not run the loop's I/O, so a call
+  answered by the server never settles in it: tests take the error with a
+  `caught()` helper.
+- `records.lines` reach a read after the server's next flush, a second; a
+  private child is waited for until it exits, or asyncio warns of its pipes.
+- `task sdk` checks and tests both, building `tinystore` from this
+  repository (`test/binary.ts`, `tests/conftest.py`) unless `TINYSTORE_BIN`
+  names one.
+- Windows hides two things only Linux shows: pyright narrows a platform only
+  by `sys.platform == "win32"` written at the test, not through a constant;
+  and a refused socket is `ECONNREFUSED` at once, where a Windows client
+  waits, so `dial` turns it into `ClosedError`. Run both suites in a Linux
+  container too: `golang:1.27`, bun and uv from their installers, the
+  repository copied in so `node_modules` and `.venv` stay the host's.
 
 Platform behaviour behind several of these rules is in the `platform-traps`
 skill; a protocol change is the `wire-change` skill.

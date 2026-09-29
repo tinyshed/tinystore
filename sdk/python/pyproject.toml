@@ -1,0 +1,75 @@
+[project]
+name = "tinyshed-tinystore"
+version = "0.1.0"
+description = "TinyStore for Python: kv, jobs, blobs, SQL, records and metrics in one directory, served by a sidecar"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/tinyshed/tinystore"
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "tinystore"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "pytest-cov>=7.1",
+    "ruff>=0.16",
+    "pyright>=1.1.414",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT", "N", "C4", "PERF", "PIE", "RET", "TC",
+]
+ignore = [
+    "RUF001",  # an en dash or a multiplication sign in prose is what it says
+    "RUF002",
+    "RUF003",
+    "ASYNC109",  # a job's timeout is the handler's, not the call's
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PT018", "PT012"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+include = ["src", "tests"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["tinystore"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true

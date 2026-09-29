@@ -93,8 +93,10 @@ program's lines included, and metrics; and `tinystore serve`, a private child
 on stdin and stdout, the directory's sidecar published in `server/SERVE`
 under the store's lock and gone once idle, or a remote server with TLS and
 tokens; [docs/server.md](docs/server.md) "Building it" says where each slice
-stands and how the next goes on. Designed, not built: the SDKs, and
-self-metrics.
+stands and how the next goes on. The SDKs are built, in `sdk/js` (Bun) and
+`sdk/python`, each tested against every vector and every engine through a
+real `tinystore serve` (`task sdk`); their READMEs, examples and packages are
+not. Designed, not built: self-metrics.
 
 Unfinished in metrics: the versioned exact summary shortcut for aggregates,
 steady-state performance, and the gaps listed in `docs/rewrite.md`. Prototype
@@ -129,6 +131,7 @@ Do not describe unbuilt behaviour as though it works.
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
 | `server/spike/`      | the server measured through `tinystore serve`, skipped unless `TINYSTORE_SPIKE=1` |
 | `cmd/tinystore/`     | the one executable, a module of its own: `serve`, and `migrate` and `schema` for sqldb |
+| `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Python; `sdk/go.mod` keeps them out of the Go module |
 | `docs/`              | the design, the format, the numbers, the open questions; `reports/` the rounds |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
@@ -671,13 +674,13 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a frame past its agreed size is refused unread         | `TestAFrameLargerThanAgreedIsRefusedUnread`, `FuzzFrames` in `server/wire`      |
 | a body the profile does not allow is refused           | `FuzzMessages`, a refused vector for each rule                                  |
 | the vectors are the bytes                              | `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`     |
-| a client past its credit is cut off, the reader never waits | `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection` |
-| every stream ends with one final frame                 | `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up |
-| answers queued during a write leave in the next        | `TestQueuedAnswersShareAWrite` in `server/internal/flow`                        |
 | every message is a vector, every field by its name     | `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one |
 | the largest kv or jobs value travels in one body       | `TestTheLargestValueTravelsInOneBody`                                           |
 | a work stream asked to end when idle ends              | `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`                                    |
 | a sidecar started in the background says why it ended | `TestServeLogsToTheFileItIsGivenWhyItEnded` in `cmd/tinystore`                  |
+| a client past its credit is cut off, the reader never waits | `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection` |
+| every stream ends with one final frame                 | `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up |
+| answers queued during a write leave in the next        | `TestQueuedAnswersShareAWrite` in `server/internal/flow`                        |
 | a stream's number is free when its final frame arrives | `TestAStreamNumberIsFreeWhenItsFinalFrameArrives`                               |
 | a closing server lets the streams running finish       | `TestClosingTheServerLetsTheStreamsRunningFinish`, `TestARequestThatCrossesTheGoAwayIsAnsweredUnavailable` |
 | a remote connection needs its token                    | `TestARemoteConnectionNeedsItsToken`                                            |

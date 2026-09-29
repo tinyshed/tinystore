@@ -1,0 +1,35 @@
+{
+	"name": "tinystore",
+	"version": "0.1.0",
+	"description": "TinyStore for Bun: kv, jobs, blobs, SQL, records and metrics in one directory, served by a sidecar",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/tinyshed/tinystore.git",
+		"directory": "sdk/js"
+	},
+	"type": "module",
+	"engines": {
+		"bun": ">=1.4"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"files": [
+		"src",
+		"README.md"
+	],
+	"scripts": {
+		"check": "biome check . && tsc --noEmit",
+		"check:write": "biome check --write .",
+		"format": "biome format --write .",
+		"lint": "biome lint .",
+		"test": "bun test",
+		"coverage": "bun test --coverage"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.14",
+		"@types/bun": "^1.4.2",
+		"typescript": "^7.0.2"
+	}
+}

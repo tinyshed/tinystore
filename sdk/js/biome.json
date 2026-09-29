@@ -1,0 +1,61 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"ignoreUnknown": false,
+		"includes": ["**"]
+	},
+	"formatter": {
+		"enabled": true,
+		"lineEnding": "lf",
+		"indentStyle": "tab",
+		"indentWidth": 2,
+		"lineWidth": 100
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"suspicious": {
+				"noConsole": "error",
+				"noExplicitAny": "warn",
+				"noImplicitAnyLet": "off"
+			},
+			"style": {
+				"useConst": "error",
+				"noNonNullAssertion": "off",
+				"useImportType": "error"
+			},
+			"correctness": {
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error"
+			}
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"bracketSpacing": true,
+			"quoteStyle": "single",
+			"semicolons": "asNeeded",
+			"arrowParentheses": "asNeeded",
+			"trailingCommas": "all"
+		}
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": {
+					"level": "on",
+					"options": {
+						"groups": [[":BUN:", ":NODE:", ":PACKAGE:"], ":BLANK_LINE:", ":PATH:"]
+					}
+				}
+			}
+		}
+	}
+}
