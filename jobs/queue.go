@@ -81,9 +81,9 @@ func OpenSchedule(ctx context.Context, store *Store, name string, repeat Repeat,
 }
 
 const (
-	registerQueue = `insert into queues (name, kind) values (?1, ?2) on conflict (name) do nothing`
-	queueNamed    = `select id, kind from queues where name = ?1`
-	countWaiting  = `select waiting from queues where id = ?1`
+	registerQueue = `insert into _tinystore_jobs_queues (name, kind) values (?1, ?2) on conflict (name) do nothing`
+	queueNamed    = `select id, kind from _tinystore_jobs_queues where name = ?1`
+	countWaiting  = `select waiting from _tinystore_jobs_queues where id = ?1`
 )
 
 // openQueue finds or registers a queue. The first time this process opens it,
@@ -312,11 +312,12 @@ type scheduled struct {
 
 const (
 	scheduleNamed = `select j.next, j.id, j.repeat
-		from keys k join jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+		from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
 		where k.queue = ?1 and k.key = ?2`
-	moveSchedule = `update jobs set next = ?4, at = ?4, repeat = ?5 where queue = ?1 and next = ?2 and id = ?3`
-	keepSchedule = `update jobs set repeat = ?4 where queue = ?1 and next = ?2 and id = ?3`
-	addSchedule  = `insert into jobs (queue, next, id, key, at, attempt, repeat, value)
+	moveSchedule = `update _tinystore_jobs set next = ?4, at = ?4, repeat = ?5
+		where queue = ?1 and next = ?2 and id = ?3`
+	keepSchedule = `update _tinystore_jobs set repeat = ?4 where queue = ?1 and next = ?2 and id = ?3`
+	addSchedule  = `insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value)
 		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6)`
 )
 

@@ -21,11 +21,12 @@ type Maintenance struct {
 // the oldest failed jobs of a queue first, with the values they spilled, and
 // the keys remembered longest ago
 const (
-	expireFailed = `delete from failed where (queue, id) in (
-			select queue, id from failed where queue = ?1 and failed <= ?2 order by failed limit cast(?3 as integer)
+	expireFailed = `delete from _tinystore_jobs_failed where (queue, id) in (
+			select queue, id from _tinystore_jobs_failed where queue = ?1 and failed <= ?2
+			order by failed limit cast(?3 as integer)
 		) returning spill`
-	forgetDone = `delete from done where (queue, key) in (
-			select queue, key from done where until <= ?1 order by until limit cast(?2 as integer)
+	forgetDone = `delete from _tinystore_jobs_done where (queue, key) in (
+			select queue, key from _tinystore_jobs_done where until <= ?1 order by until limit cast(?2 as integer)
 		)`
 )
 
@@ -76,9 +77,10 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 // whose job has left the queue
 const (
 	keysSlice = `select count(*), coalesce(max(key), '') from (
-			select key from keys where queue = ?1 and key > ?2 order by key limit cast(?3 as integer))`
-	dropKeysLeft = `delete from keys where queue = ?1 and key > ?2 and key <= ?3
-		and not exists (select 1 from jobs j where j.queue = keys.queue and j.next = keys.next and j.id = keys.id)`
+			select key from _tinystore_jobs_keys where queue = ?1 and key > ?2 order by key limit cast(?3 as integer))`
+	dropKeysLeft = `delete from _tinystore_jobs_keys where queue = ?1 and key > ?2 and key <= ?3
+		and not exists (select 1 from _tinystore_jobs j where j.queue = _tinystore_jobs_keys.queue
+			and j.next = _tinystore_jobs_keys.next and j.id = _tinystore_jobs_keys.id)`
 )
 
 // dropKeysLeft removes the keys that jobs gone from a queue left behind. It

@@ -205,19 +205,21 @@ func (d settled) apply(q *queueState) {
 // what a settlement reads and writes: the lease is its token, then the job's
 // row moves, leaves, or becomes a failed one
 const (
-	dropLease   = `delete from leases where id = ?1 and attempt = ?2`
-	extendLease = `update leases set until = ?3 where id = ?1 and attempt = ?2`
-	jobHeld     = `select again, repeat, error, attempt from jobs where queue = ?1 and next = ?2 and id = ?3`
-	deleteJob   = `delete from jobs where queue = ?1 and next = ?2 and id = ?3 returning spill`
-	deleteDone  = `delete from jobs where queue = ?1 and next = ?2 and id = ?3 and again is null and repeat is null
+	dropLease   = `delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2`
+	extendLease = `update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2`
+	jobHeld     = `select again, repeat, error, attempt from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3`
+	deleteJob   = `delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3 returning spill`
+	deleteDone  = `delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
+		and again is null and repeat is null
 		returning spill`
-	moveJob = `update jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7
+	moveJob = `update _tinystore_jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7
 		where queue = ?1 and next = ?2 and id = ?3`
-	keepDoneKey = `insert into done (queue, key, until) values (?1, ?2, ?3)
+	keepDoneKey = `insert into _tinystore_jobs_done (queue, key, until) values (?1, ?2, ?3)
 		on conflict (queue, key) do update set until = excluded.until`
-	failJob = `insert into failed (queue, id, key, at, attempt, failed, error, value, spill)
-		select queue, id, key, at, ?4, ?5, ?6, value, spill from jobs where queue = ?1 and next = ?2 and id = ?3`
-	dropJobRow = `delete from jobs where queue = ?1 and next = ?2 and id = ?3`
+	failJob = `insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill)
+		select queue, id, key, at, ?4, ?5, ?6, value, spill from _tinystore_jobs
+		where queue = ?1 and next = ?2 and id = ?3`
+	dropJobRow = `delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3`
 )
 
 // write applies the settlement in the writer. The lease must still be the one
@@ -445,18 +447,19 @@ func describe(cause error) string {
 // lease each, whose attempt counts the attempt a lease that ended held
 const (
 	claimJobs = `select next, id, key, at, attempt, repeat, value, spill,
-			coalesce(length(j.value), (select length(s.value) from spilled s where s.id = j.spill), 0)
-		from jobs j
-		where queue = ?1 and next <= ?2 and not exists (select 1 from leases l where l.id = j.id and l.until > ?2)
+			coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0)
+		from _tinystore_jobs j
+		where queue = ?1 and next <= ?2
+			and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
 		order by next, id limit cast(?3 as integer)`
-	takeLease = `insert into leases (id, queue, next, attempt, until) values (?1, ?2, ?3, ?4, ?5)
+	takeLease = `insert into _tinystore_jobs_leases (id, queue, next, attempt, until) values (?1, ?2, ?3, ?4, ?5)
 		on conflict (id) do update set next = excluded.next, until = excluded.until,
-			attempt = max(leases.attempt, excluded.attempt - 1) + 1
+			attempt = max(_tinystore_jobs_leases.attempt, excluded.attempt - 1) + 1
 		returning attempt`
-	nextDue = `select next from jobs j where queue = ?1
-		and not exists (select 1 from leases l where l.id = j.id and l.until > ?2)
+	nextDue = `select next from _tinystore_jobs j where queue = ?1
+		and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
 		order by next, id limit 1`
-	earliestLease = `select min(until) from leases where queue = ?1 and until > ?2`
+	earliestLease = `select min(until) from _tinystore_jobs_leases where queue = ?1 and until > ?2`
 )
 
 // claimedRow is a due job a claim leased. It carries the value when the row
@@ -510,7 +513,7 @@ func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []clai
 	return claimed, abandoned, err
 }
 
-const dropLeaseRow = `delete from leases where id = ?1`
+const dropLeaseRow = `delete from _tinystore_jobs_leases where id = ?1`
 
 // leaseRow leases one due job, or fails it for good when this would be an
 // attempt past the queue's MaxAttempts

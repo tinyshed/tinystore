@@ -179,34 +179,36 @@ type row struct {
 
 const (
 	jobByKey = `select j.next, j.id, j.at, j.attempt, j.again, j.repeat, j.error, j.spill
-		from keys k join jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+		from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
 		where k.queue = ?1 and k.key = ?2`
-	leaseOf = `select 1 from leases where id = ?1 and until > ?2`
-	doneKey = `select 1 from done where queue = ?1 and key = ?2 and until > ?3`
+	leaseOf = `select 1 from _tinystore_jobs_leases where id = ?1 and until > ?2`
+	doneKey = `select 1 from _tinystore_jobs_done where queue = ?1 and key = ?2 and until > ?3`
 
-	insertJob = `insert into jobs (queue, next, id, key, at, attempt, repeat, value, spill)
+	insertJob = `insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill)
 		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7)`
-	insertSpilled = `insert into spilled (id, value) values (?1, ?2)`
-	deleteSpilled = `delete from spilled where id = ?1`
-	bringForward  = `update jobs set next = ?4, at = ?4 where queue = ?1 and next = ?2 and id = ?3`
-	askAgain      = `update jobs set again = min(coalesce(again, ?4), ?4) where queue = ?1 and next = ?2 and id = ?3`
-	dropFailed    = `delete from failed where queue = ?1 and key = ?2 returning spill`
-	updateWaiting = `update jobs set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat)
+	insertSpilled = `insert into _tinystore_jobs_spilled (id, value) values (?1, ?2)`
+	deleteSpilled = `delete from _tinystore_jobs_spilled where id = ?1`
+	bringForward  = `update _tinystore_jobs set next = ?4, at = ?4 where queue = ?1 and next = ?2 and id = ?3`
+	askAgain      = `update _tinystore_jobs set again = min(coalesce(again, ?4), ?4)
 		where queue = ?1 and next = ?2 and id = ?3`
-	cancelWaiting = `delete from jobs where (queue, next, id) in (
-			select k.queue, k.next, k.id from keys k where k.queue = ?1 and k.key = ?2)
-		and not exists (select 1 from leases l where l.id = jobs.id and l.until > ?3)
+	dropFailed    = `delete from _tinystore_jobs_failed where queue = ?1 and key = ?2 returning spill`
+	updateWaiting = `update _tinystore_jobs
+		set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat)
+		where queue = ?1 and next = ?2 and id = ?3`
+	cancelWaiting = `delete from _tinystore_jobs where (queue, next, id) in (
+			select k.queue, k.next, k.id from _tinystore_jobs_keys k where k.queue = ?1 and k.key = ?2)
+		and not exists (select 1 from _tinystore_jobs_leases l where l.id = _tinystore_jobs.id and l.until > ?3)
 		returning id, spill`
-	dropLeaseOf = `delete from leases where id = ?1`
+	dropLeaseOf = `delete from _tinystore_jobs_leases where id = ?1`
 )
 
 // a key's row: where its job lies, replacing a key a job left behind, then
 // following the job as it moves; a job gone leaves it for maintenance
 const (
-	insertKey = `insert into keys (queue, key, next, id) values (?1, ?2, ?3, ?4)
+	insertKey = `insert into _tinystore_jobs_keys (queue, key, next, id) values (?1, ?2, ?3, ?4)
 		on conflict (queue, key) do update set next = excluded.next, id = excluded.id`
-	moveKey = `update keys set next = ?3 where queue = ?1 and key = ?2`
-	dropKey = `delete from keys where queue = ?1 and key = ?2`
+	moveKey = `update _tinystore_jobs_keys set next = ?3 where queue = ?1 and key = ?2`
+	dropKey = `delete from _tinystore_jobs_keys where queue = ?1 and key = ?2`
 )
 
 // keepKey names where a keyed job's row lies

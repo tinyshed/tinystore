@@ -116,15 +116,15 @@ type found struct {
 // column takes it from the row's header and leaves its overflow pages alone.
 const (
 	keyedColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
-			coalesce(length(j.value), (select length(s.value) from spilled s where s.id = j.spill), 0)
-		from keys k join jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
-		left join leases l on l.id = j.id and l.until > ?9`
+			coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0)
+		from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
+		left join _tinystore_jobs_leases l on l.id = j.id and l.until > ?9`
 	failedColumns = `f.key, f.failed, f.id, f.at, f.attempt, null, 1, null, f.error, f.value, f.spill,
-			coalesce(length(f.value), (select length(s.value) from spilled s where s.id = f.spill), 0)
-		from failed f`
+			coalesce(length(f.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = f.spill), 0)
+		from _tinystore_jobs_failed f`
 	getWaiting   = `select ` + keyedColumns + ` where k.queue = ?1 and k.key = ?2`
 	getFailed    = `select ` + failedColumns + ` where f.queue = ?1 and f.key = ?2`
-	valueSpilled = `select value from spilled where id = ?1`
+	valueSpilled = `select value from _tinystore_jobs_spilled where id = ?1`
 )
 
 // Get reads the job under key from one snapshot: waiting, leased or failed.

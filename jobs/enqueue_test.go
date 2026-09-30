@@ -401,7 +401,7 @@ func keysKept(t *testing.T, queues *testQueues) int {
 	t.Helper()
 	var count int
 	err := queues.file.Lookup(t.Context(), func(r sqlite.Reader) error {
-		return sqlite.QueryRow(t.Context(), r, `select count(*) from keys`).Scan(&count)
+		return sqlite.QueryRow(t.Context(), r, `select count(*) from _tinystore_jobs_keys`).Scan(&count)
 	})
 	if err != nil {
 		t.Fatal(err)

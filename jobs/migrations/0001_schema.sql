@@ -2,7 +2,7 @@
 -- few hundred bytes, and a value past 512 of them lives in spilled
 
 -- kind: a queue or a schedule, and a name opened as the other is refused
-create table queues (
+create table _tinystore_jobs_queues (
     id   integer primary key,
     name text    not null unique,
     kind text    not null,
@@ -15,7 +15,7 @@ create table queues (
 -- attempt: the attempts counted before its lease's; again: the earliest time an
 -- Enqueue asked of the job while it ran; repeat: a repeating job's cron text
 -- and zone; error: the last attempt's failure
-create table jobs (
+create table _tinystore_jobs (
     queue   integer not null,
     next    integer not null,
     id      integer not null,
@@ -32,18 +32,18 @@ create table jobs (
 
 -- the writer keeps MaxWaiting's count in one row, including every statement
 -- of a grouped write and every call in a Tx before it commits
-create trigger jobs_count_insert after insert on jobs begin
-    update queues set waiting = waiting + 1 where id = new.queue;
+create trigger _tinystore_jobs_count_insert after insert on _tinystore_jobs begin
+    update _tinystore_jobs_queues set waiting = waiting + 1 where id = new.queue;
 end;
-create trigger jobs_count_delete after delete on jobs begin
-    update queues set waiting = waiting - 1 where id = old.queue;
+create trigger _tinystore_jobs_count_delete after delete on _tinystore_jobs begin
+    update _tinystore_jobs_queues set waiting = waiting - 1 where id = old.queue;
 end;
 
 -- a job's key and where its row lies: a job that moves takes its key along,
 -- and one that leaves the queue leaves its key behind, naming no row, until
 -- maintenance drops it in the order of the keys; so that settling a burst of
 -- keyed jobs writes no page outside the order of their time
-create table keys (
+create table _tinystore_jobs_keys (
     queue integer not null,
     key   text    not null,
     next  integer not null,
@@ -53,7 +53,7 @@ create table keys (
 
 -- a claimed job's lease, beside its row so that a claim leaves the row alone:
 -- attempt: the attempt it was given for, the token that settles it; until: its end
-create table leases (
+create table _tinystore_jobs_leases (
     id      integer primary key,
     queue   integer not null,
     next    integer not null,
@@ -62,7 +62,7 @@ create table leases (
 ) strict;
 
 -- a job that failed for good, kept until its queue's KeepFailed has passed
-create table failed (
+create table _tinystore_jobs_failed (
     queue    integer not null,
     id       integer not null,
     key      text,
@@ -75,28 +75,28 @@ create table failed (
     primary key (queue, id)
 ) strict, without rowid;
 
-create unique index failed_by_key on failed (queue, key) where key is not null;
-create index failed_by_time on failed (queue, failed, id);
+create unique index _tinystore_jobs_failed_by_key on _tinystore_jobs_failed (queue, key) where key is not null;
+create index _tinystore_jobs_failed_by_time on _tinystore_jobs_failed (queue, failed, id);
 
-create table spilled (
+create table _tinystore_jobs_spilled (
     id    integer primary key,
     value blob    not null
 ) strict;
 
 -- the keys of acknowledged jobs a queue with KeepDone remembers, until when
-create table done (
+create table _tinystore_jobs_done (
     queue integer not null,
     key   text    not null,
     until integer not null,
     primary key (queue, key)
 ) strict, without rowid;
 
-create index done_by_time on done (until);
+create index _tinystore_jobs_done_by_time on _tinystore_jobs_done (until);
 
 -- ids: the high-water mark of job ids, reserved a block at a time, never repeated
-create table meta (
+create table _tinystore_jobs_meta (
     name  text    primary key,
     value integer not null
 ) strict, without rowid;
 
-insert into meta (name, value) values ('ids', 0);
+insert into _tinystore_jobs_meta (name, value) values ('ids', 0);

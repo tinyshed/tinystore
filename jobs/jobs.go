@@ -103,9 +103,9 @@ func openFile(ctx context.Context, path string) (*sqlite.File, error) {
 // a lease the file still holds at open belongs to a process that died: its
 // attempt counts, and its job is due again at once
 const (
-	countDeadAttempts = `update jobs set attempt = l.attempt from leases l
-		where jobs.queue = l.queue and jobs.next = l.next and jobs.id = l.id`
-	dropDeadLeases = `delete from leases`
+	countDeadAttempts = `update _tinystore_jobs set attempt = l.attempt from _tinystore_jobs_leases l
+		where _tinystore_jobs.queue = l.queue and _tinystore_jobs.next = l.next and _tinystore_jobs.id = l.id`
+	dropDeadLeases = `delete from _tinystore_jobs_leases`
 )
 
 func (s *Store) endDeadLeases(ctx context.Context) error {
@@ -220,7 +220,7 @@ type idRange struct {
 	next, end int64
 }
 
-const reserveIDs = `update meta set value = value + ?1 where name = 'ids' returning value`
+const reserveIDs = `update _tinystore_jobs_meta set value = value + ?1 where name = 'ids' returning value`
 
 // nextID takes the next id of the store's block, reserving another in a
 // transaction of its own when the block is spent; a Tx reserves its own
