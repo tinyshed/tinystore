@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncruces/go-sqlite3/driver"
+
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -410,7 +412,7 @@ func TestInsertsMeasured(t *testing.T) {
 }
 
 // TestAsAProgramOpensItMeasured reads and writes the same notes through
-// database/sql and modernc as a program that opens the file itself does: one
+// database/sql and the driver as a program that opens the file itself does: one
 // pool for reads and writes, a busy timeout of five seconds, each query
 // compiled for itself and each Exec a transaction of its own.
 //
@@ -420,7 +422,7 @@ func TestAsAProgramOpensItMeasured(t *testing.T) {
 	measuring(t)
 	const count = 100_000
 	db, _, path := measuredNotes(t, count)
-	pool, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	pool, err := driver.Open("file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

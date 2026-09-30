@@ -41,9 +41,10 @@ type readConnection struct {
 func (r *preparedConnection) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	statement, err := r.prepare(ctx, query) //nolint:sqlclosecheck // retained until eviction or connection close
 	if err != nil {
-		return nil, err
+		return nil, ended(ctx, err)
 	}
-	return statement.QueryContext(ctx, args...)
+	rows, err := statement.QueryContext(ctx, args...)
+	return rows, ended(ctx, err)
 }
 
 func (r *preparedConnection) prepare(ctx context.Context, query string) (*sql.Stmt, error) {
@@ -157,9 +158,6 @@ func (f *File) withReader(ctx context.Context, work func(*readConnection) (reusa
 		if connection.conn, err = f.reader.Conn(ctx); err != nil {
 			return fmt.Errorf("acquire SQLite reader: %w", err)
 		}
-		if err = f.limitLength(connection.conn); err != nil {
-			return errors.Join(err, connection.close())
-		}
 	}
 
 	reusable, err := work(connection)
@@ -212,6 +210,7 @@ func EachRow(rows *sql.Rows, what string, visit func(*sql.Rows) error) error {
 }
 
 type Row struct {
+	ctx  context.Context
 	rows *sql.Rows
 	err  error
 }
@@ -220,7 +219,7 @@ type Row struct {
 // which ctx interrupts while it runs.
 func QueryRow(ctx context.Context, reader Reader, query string, args ...any) *Row {
 	rows, err := reader.QueryContext(ctx, query, args...) //nolint:rowserrcheck // Scan iterates and checks Err
-	return &Row{rows: rows, err: err}
+	return &Row{ctx: ctx, rows: rows, err: err}
 }
 
 // QueryRowByKey runs a statement that finds its row by a key, or writes that row and returns it.
@@ -239,6 +238,10 @@ func (r *Row) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
+	return ended(r.ctx, r.scan(dest))
+}
+
+func (r *Row) scan(dest []any) error {
 	defer r.rows.Close()
 	if !r.rows.Next() {
 		if err := r.rows.Err(); err != nil {

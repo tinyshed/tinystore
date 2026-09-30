@@ -132,8 +132,15 @@ func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) 
 	var entry Entry[V]
 	var there bool
 	err := q.read(ctx, maxValue, func(r sqlite.Reader) error {
-		for _, query := range []string{getWaiting, getFailed} {
-			rows, err := r.QueryContext(ctx, query, q.state.id, key, nil, nil, nil, nil, nil, nil, q.store.clock())
+		// each statement is given the parameters it has, up to the highest it names
+		for _, lookup := range []struct {
+			query string
+			args  []any
+		}{
+			{getWaiting, []any{q.state.id, key, nil, nil, nil, nil, nil, nil, q.store.clock()}},
+			{getFailed, []any{q.state.id, key}},
+		} {
+			rows, err := r.QueryContext(ctx, lookup.query, lookup.args...)
 			if err != nil {
 				return err
 			}
@@ -235,7 +242,7 @@ func (q *Queue[V]) scanRows(ctx context.Context, r sqlite.Reader, query Query, l
 		if err != nil {
 			return nil, err
 		}
-		rows, err := r.QueryContext(ctx, scanFailed, q.state.id, nil, nil, nil, nil, limit, before, beforeID, now)
+		rows, err := r.QueryContext(ctx, scanFailed, q.state.id, nil, nil, nil, nil, limit, before, beforeID)
 		if err != nil {
 			return nil, err
 		}

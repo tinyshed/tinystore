@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	_ "modernc.org/sqlite" // Declare opens a database in memory
+	"github.com/ncruces/go-sqlite3/driver"
 )
 
 // Reader is where a catalog is read from: a connection, or a pool of them.
@@ -123,7 +123,7 @@ func Read(ctx context.Context, r Reader) (*Catalog, error) {
 
 // Declare is the catalog of the file ddl makes, in a database in memory.
 func Declare(ctx context.Context, ddl string) (_ *Catalog, err error) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := driver.Open(":memory:")
 	if err != nil {
 		return nil, err
 	}

@@ -120,9 +120,11 @@ const (
 	// historyRootsQuery finds the pages the migration history's table and its
 	// index begin at, which a data connection may read and never write
 	historyRootsQuery = `select rootpage from sqlite_schema where tbl_name = '_tinystore_migrations'`
-	// rawTablesQuery shows, as its VOpen's p4, the pointer each of the two
-	// virtual tables a data connection may not open has on this connection
-	rawTablesQuery = `explain select 1 from sqlite_dbpage, pragma_optimize`
+	// rawTablesQuery shows, as its VOpen's p4, the pointer the virtual table a
+	// data connection may not open has on this connection. The store's SQLite
+	// has no sqlite_dbpage: a program naming it does not compile, and the first
+	// line refuses its name before that.
+	rawTablesQuery = `explain select 1 from pragma_optimize`
 )
 
 // explainDataSQL is the second line: it compiles the statement with EXPLAIN on
@@ -130,7 +132,7 @@ const (
 //
 // A program is refused when it changes the schema, attaches or detaches a file,
 // vacuums, ends a transaction, changes how the file is kept, writes the
-// migration history, or opens sqlite_dbpage or pragma_optimize.
+// migration history, or opens pragma_optimize.
 //
 // The guarded pages are read from the same snapshot as the program.
 func explainDataSQL(ctx context.Context, db *sqldb.DB, statement string, args []any) error {
@@ -150,7 +152,7 @@ func explainDataSQL(ctx context.Context, db *sqldb.DB, statement string, args []
 // guarded is what a data connection's statement may not open
 type guarded struct {
 	history map[int64]bool  // the migration history's root pages, in main
-	tables  map[string]bool // sqlite_dbpage's and pragma_optimize's pointers, as EXPLAIN shows them
+	tables  map[string]bool // pragma_optimize's pointer, as EXPLAIN shows it
 }
 
 func guardOf(ctx context.Context, tx *sqldb.Tx) (guarded, error) {
@@ -171,8 +173,8 @@ func guardOf(ctx context.Context, tx *sqldb.Tx) (guarded, error) {
 			guard.tables[op.p4] = true
 		}
 	}
-	if len(guard.tables) != 2 {
-		return guard, fmt.Errorf("server: the check found %d of the two virtual tables it guards", len(guard.tables))
+	if len(guard.tables) != 1 {
+		return guard, fmt.Errorf("server: the check found %d virtual tables where it guards one", len(guard.tables))
 	}
 	return guard, nil
 }
@@ -238,7 +240,7 @@ func (g guarded) refuses(op opcode) string {
 		(strings.HasPrefix(op.p4, "sqlite_attach(") || strings.HasPrefix(op.p4, "sqlite_detach(")):
 		return "attaches or detaches a file"
 	case strings.HasPrefix(op.name, "V") && g.tables[op.p4]:
-		return "opens sqlite_dbpage or pragma_optimize"
+		return "opens pragma_optimize"
 	}
 	return ""
 }

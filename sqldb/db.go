@@ -15,6 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ncruces/go-sqlite3"
+	"github.com/ncruces/go-sqlite3/ext/fts5"
+	"github.com/ncruces/go-sqlite3/ext/rtree"
+
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/admission"
 	"github.com/tinyshed/tinystore/internal/sqlite"
@@ -134,6 +138,21 @@ func open(
 	return d, nil
 }
 
+// registerExtensions gives a connection the virtual tables an application's
+// migrations may make, FTS5 and R*Tree with Geopoly, which SQLite as the
+// driver builds it leaves to each connection. SQLite tells an FTS5 table's
+// shadow tables from the application's own only on a connection that has
+// the module, so every connection to the file has them.
+func registerExtensions(conn *sqlite3.Conn) error {
+	if err := fts5.Register(conn); err != nil {
+		return fmt.Errorf("register FTS5: %w", err)
+	}
+	if err := rtree.Register(conn); err != nil {
+		return fmt.Errorf("register R*Tree: %w", err)
+	}
+	return nil
+}
+
 func openFile(
 	ctx context.Context, store *tinystore.Store, name, path string, scripts fs.FS, timing tuning,
 ) (*DB, error) {
@@ -147,6 +166,7 @@ func openFile(
 	config := timing.writer
 	config.Readers, config.Statements, config.Waited = readers, statements, d.waited
 	config.MaxLength = int(min(store.Memory().Capacity, math.MaxInt32))
+	config.Connected = registerExtensions
 	file, err := sqlite.Open(ctx, path, config)
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)

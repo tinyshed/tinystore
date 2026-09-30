@@ -18,11 +18,11 @@ type writeConnection struct {
 func (w *writeConnection) ExecContext(ctx context.Context, query string, arguments ...any) (sql.Result, error) {
 	statement, err := w.prepare(ctx, query) //nolint:sqlclosecheck // retained until eviction or connection close
 	if err != nil {
-		return nil, err
+		return nil, ended(ctx, err)
 	}
 	result, err := statement.ExecContext(ctx, arguments...)
 	if err != nil {
-		return nil, fmt.Errorf("execute SQLite write: %w", err)
+		return nil, fmt.Errorf("execute SQLite write: %w", ended(ctx, err))
 	}
 	return result, nil
 }

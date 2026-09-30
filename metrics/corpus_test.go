@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tinyshed/tinystore/internal/dbstat"
 )
 
 // opt-in integration gate: the public engine, not a prototype schema, owns all corpus writes
@@ -84,20 +86,7 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 			return readErr
 		}
 		t.Logf("PUBLIC STORE head_samples=%d groups=%d clocks=%d", head, groups, clocks)
-		rows, readErr := tx.QueryContext(t.Context(), `select name,sum(pgsize) from dbstat group by name`)
-		if readErr != nil {
-			return readErr
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			var size int64
-			if readErr = rows.Scan(&name, &size); readErr != nil {
-				return readErr
-			}
-			t.Logf("PUBLIC OBJECT %s bytes=%d", name, size)
-		}
-		return rows.Err()
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +104,13 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	}
 	t.Logf("PUBLIC STORE size is the entire file after close; freed pages are included")
 	t.Logf("PUBLIC STORE series=%d samples=%d file=%d B/sample=%.6f ingest+maintain=%s", seriesCount, samples, info.Size(), float64(info.Size())/float64(samples), time.Since(begin))
+	objects, err := dbstat.Read(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range objects {
+		t.Logf("PUBLIC OBJECT %s bytes=%d", object.Name, object.Bytes)
+	}
 	reopened, err := openAt(t, path, options)
 	if err != nil {
 		t.Fatal(err)

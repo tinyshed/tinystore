@@ -8,7 +8,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"math"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -16,8 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"modernc.org/sqlite"
-	sqlitelib "modernc.org/sqlite/lib"
+	"github.com/ncruces/go-sqlite3"
 )
 
 type File struct {
@@ -32,7 +30,6 @@ type File struct {
 	idleReaders []*readConnection
 	commits     atomic.Uint64
 	statements  int
-	maxLength   int
 	hold        time.Duration
 	patience    time.Duration
 	waited      func(label string)
@@ -64,32 +61,6 @@ func (f *File) WriterCounters(ctx context.Context) (WriterCounters, error) {
 	return result, err
 }
 
-func readCacheCounters(driverConn any, result *WriterCounters) error {
-	status, ok := driverConn.(sqlite.DBStatus)
-	if !ok {
-		return fmt.Errorf("SQLite writer does not expose database status")
-	}
-	for _, item := range []struct {
-		op sqlite.DBStatusOp
-		to *uint64
-	}{
-		{sqlite.DBStatusCacheWrite, &result.CacheWrites},
-		{sqlite.DBStatusCacheSpill, &result.CacheSpills},
-		{sqlite.DBStatusCacheHit, &result.CacheHits},
-		{sqlite.DBStatusCacheMiss, &result.CacheMisses},
-	} {
-		count, _, err := status.Status(item.op, false)
-		if err != nil {
-			return fmt.Errorf("read SQLite writer status: %w", err)
-		}
-		if count < 0 {
-			return fmt.Errorf("SQLite writer status counter overflow")
-		}
-		*item.to = uint64(count)
-	}
-	return nil
-}
-
 // Config sizes the reader pool once, because every pragma here is per
 // connection and nothing in the pool may expire and reopen. PageSize applies
 // only to a file this call creates; zero keeps SQLite's default.
@@ -103,6 +74,11 @@ type Config struct {
 	// SQLite allocates one whole before a budget can count it. Zero keeps
 	// SQLite's default.
 	MaxLength int
+
+	// Connected runs on each connection as it opens. SQLite as the driver
+	// builds it leaves FTS5 and R*Tree to each connection, and an
+	// application's database registers them here.
+	Connected func(*sqlite3.Conn) error
 
 	// Waited is told once when a grouped write has waited Patience for the
 	// writer, with the label UpdateGroupedAs gave the write.
@@ -144,7 +120,7 @@ func Open(ctx context.Context, path string, config Config) (*File, error) {
 	}
 	f.path = abs
 
-	if err = f.openReaders(ctx, abs, config.Readers); err != nil {
+	if err = f.openReaders(ctx, abs, config); err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
 
@@ -169,7 +145,7 @@ func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	if config.WriterCache > 0 {
 		withWriterCache(arguments, config.WriterCache)
 	}
-	writer, err := sql.Open("sqlite", connectionURL(abs, arguments))
+	writer, err := openPool(connectionURL(abs, arguments), config.MaxLength, config.Connected)
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite writer: %w", err)
 	}
@@ -178,7 +154,6 @@ func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	f := &File{
 		writer: writer, writeSlots: make(chan struct{}, 1), waited: config.Waited,
 		statements: cmp.Or(config.Statements, keptStatements),
-		maxLength:  config.MaxLength,
 		hold:       cmp.Or(config.GroupHold, groupHold),
 		patience:   cmp.Or(config.Patience, writerPatience),
 	}
@@ -193,18 +168,18 @@ func openWriter(ctx context.Context, abs string, config Config) (*File, error) {
 	return f, nil
 }
 
-func (f *File) openReaders(ctx context.Context, abs string, readers int) error {
+func (f *File) openReaders(ctx context.Context, abs string, config Config) error {
 	var err error
-	f.reader, err = sql.Open("sqlite", connectionURL(abs, readerArguments()))
+	f.reader, err = openPool(connectionURL(abs, readerArguments()), config.MaxLength, config.Connected)
 	if err != nil {
 		return fmt.Errorf("open SQLite reader: %w", err)
 	}
-	f.reader.SetMaxOpenConns(readers)
-	f.reader.SetMaxIdleConns(readers)
+	f.reader.SetMaxOpenConns(config.Readers)
+	f.reader.SetMaxIdleConns(config.Readers)
 	if err = f.reader.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect SQLite reader: %w", err)
 	}
-	f.readSlots = make(chan struct{}, readers)
+	f.readSlots = make(chan struct{}, config.Readers)
 	return nil
 }
 
@@ -215,22 +190,7 @@ func (f *File) connectWriter(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = f.limitLength(connection); err != nil {
-		return errors.Join(err, connection.Close())
-	}
 	f.writerConn = &writeConnection{preparedConnection{conn: connection, limit: f.statements}}
-	return nil
-}
-
-// limitLength gives a connection the file's MaxLength, which SQLite keeps per
-// connection
-func (f *File) limitLength(connection *sql.Conn) error {
-	if f.maxLength == 0 {
-		return nil
-	}
-	if _, err := sqlite.Limit(connection, sqlitelib.SQLITE_LIMIT_LENGTH, min(f.maxLength, math.MaxInt32)); err != nil {
-		return fmt.Errorf("limit SQLite lengths: %w", err)
-	}
 	return nil
 }
 
@@ -247,15 +207,14 @@ func withWriterCache(arguments url.Values, bytes int) {
 // connectionURL carries the pragmas, because each pooled connection applies
 // them itself when it opens:
 //
-//	writer  file:///data/metrics.db?_pragma=foreign_keys%281%29&…&_txlock=immediate&mode=rwc
-//	reader  file:///data/metrics.db?_pragma=foreign_keys%281%29&…&_pragma=query_only%281%29&_txlock=deferred&mode=rw
+//	writer  file:/data/metrics.db?_pragma=foreign_keys%281%29&…&_txlock=immediate&mode=rwc
+//	reader  file:/data/metrics.db?_pragma=foreign_keys%281%29&…&_pragma=query_only%281%29&_txlock=deferred&mode=rw
+//
+// A Windows path keeps its drive first, file:D:/data/metrics.db, since the
+// driver's file layer takes the path as SQLite hands it over.
 func connectionURL(abs string, arguments url.Values) string {
-	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
-	if !strings.HasPrefix(uri.Path, "/") {
-		uri.Path = "/" + uri.Path
-	}
-	uri.RawQuery = arguments.Encode()
-	return uri.String()
+	path := (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath()
+	return "file:" + path + "?" + arguments.Encode()
 }
 
 // writerArguments sync a commit before it returns. On macOS an fsync leaves the

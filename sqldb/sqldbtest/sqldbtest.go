@@ -148,8 +148,10 @@ func compare(ctx context.Context, scratch, name string, schema *sqldb.SchemaDef,
 }
 
 // migrate applies the migrations to a file of its own, through sqldb.Open as
-// a program's first run does, and reads what they made
-func migrate(ctx context.Context, scratch, name, dir string, scripts int) (*catalog.Catalog, error) {
+// a program's first run does, and reads what they made through the
+// database's own connections, which tell a virtual table's shadow tables from
+// the application's
+func migrate(ctx context.Context, scratch, name, dir string, scripts int) (_ *catalog.Catalog, err error) {
 	if scripts == 0 {
 		return &catalog.Catalog{}, nil
 	}
@@ -157,13 +159,14 @@ func migrate(ctx context.Context, scratch, name, dir string, scripts int) (*cata
 	if err != nil {
 		return nil, err
 	}
-	_, err = sqldb.Open(ctx, store, name, os.DirFS(dir), nil)
-	if err = errors.Join(err, store.Close(ctx)); err != nil {
+	defer func() { err = errors.Join(err, store.Close(ctx)) }()
+	db, err := sqldb.Open(ctx, store, name, os.DirFS(dir), nil)
+	if err != nil {
 		return nil, fmt.Errorf("the migrations do not apply: %w", err)
 	}
 
 	var migrated *catalog.Catalog
-	err = sqlite.ReadCopy(ctx, filepath.Join(scratch, "sql", name+".db"), func(r sqlite.Reader) (readErr error) {
+	err = db.SQLiteFile().ViewPrepared(ctx, func(r sqlite.Reader) (readErr error) {
 		migrated, readErr = catalog.Read(ctx, r)
 		return readErr
 	})

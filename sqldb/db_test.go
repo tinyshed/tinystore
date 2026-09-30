@@ -327,3 +327,69 @@ func TestApplyNoneAndMigratedApplyNothing(t *testing.T) {
 		t.Fatalf("a file that applied every migration: %v", err)
 	}
 }
+
+// searchSQL is docs/sqldb.md's full-text recipe for the notes, and a table of
+// places by their bounds
+const searchSQL = `create virtual table notes_fts using fts5(title, body, content = 'notes', content_rowid = 'id');
+create trigger notes_fts_insert after insert on notes begin
+	insert into notes_fts (rowid, title, body) values (new.id, new.title, new.body);
+end;
+create trigger notes_fts_delete after delete on notes begin
+	insert into notes_fts (notes_fts, rowid, title, body) values ('delete', old.id, old.title, old.body);
+end;
+create virtual table places using rtree(id, min_x, max_x, min_y, max_y);
+`
+
+// FTS5 and R*Tree, which SQLite as the driver builds it leaves to each
+// connection, work on the writer that runs the triggers and on the readers.
+// The check of the file against its schema passes over their shadow tables,
+// and a snapshot of the file searches as the file does.
+func TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot(t *testing.T) {
+	schema := Schema(Table[note]("notes", PrimaryKey("id")))
+	migrations := mapFS(map[string]string{"001_schema.sql": schema.SQL(), "002_search.sql": searchSQL})
+	store := openStore(t, t.TempDir())
+	db, err := Open(t.Context(), store, "app", migrations, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []note{
+		{Title: "tinystore", Body: "an embedded data runtime"},
+		{Title: "search", Body: "a full-text index"},
+		{Title: "gone", Body: "a runtime deleted"},
+	} {
+		if _, err = db.Exec(t.Context(), `insert into notes (title, body) values (?, ?)`, n.Title, n.Body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.Exec(t.Context(), `delete from notes where title = 'gone'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(t.Context(), `insert into places values (1, 0, 10, 0, 10), (2, 20, 30, 20, 30)`); err != nil {
+		t.Fatal(err)
+	}
+	searchNotesAndPlaces(t, db)
+
+	snapshot, err := store.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := Open(t.Context(), openStore(t, snapshot.Dir), "app", migrations, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchNotesAndPlaces(t, copied)
+}
+
+func searchNotesAndPlaces(t *testing.T, db *DB) {
+	t.Helper()
+	hits, err := All[note](t.Context(), db, `select n.* from notes_fts f join notes n on n.id = f.rowid
+		where notes_fts match ? order by bm25(notes_fts)`, "runtime")
+	if err != nil || len(hits) != 1 || hits[0].Title != "tinystore" {
+		t.Fatalf("the full-text search found %+v, %v", hits, err)
+	}
+	place, err := Scalar[int64](t.Context(), db,
+		`select id from places where min_x <= 25 and max_x >= 25 and min_y <= 25 and max_y >= 25`)
+	if err != nil || place != 2 {
+		t.Fatalf("the R*Tree found place %d, %v", place, err)
+	}
+}

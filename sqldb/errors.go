@@ -7,8 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	sqlite3 "modernc.org/sqlite"
-	sqlitelib "modernc.org/sqlite/lib"
+	"github.com/ncruces/go-sqlite3"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -57,32 +56,33 @@ func (e *ConstraintError) Unwrap() []error {
 	return []error{tinystore.ErrInvalid, e.Err}
 }
 
-var constraintKinds = map[int]ConstraintKind{
-	sqlitelib.SQLITE_CONSTRAINT_UNIQUE:     UniqueViolation,
-	sqlitelib.SQLITE_CONSTRAINT_PRIMARYKEY: PrimaryKeyViolation,
-	sqlitelib.SQLITE_CONSTRAINT_ROWID:      PrimaryKeyViolation,
-	sqlitelib.SQLITE_CONSTRAINT_FOREIGNKEY: ForeignKeyViolation,
-	sqlitelib.SQLITE_CONSTRAINT_CHECK:      CheckViolation,
-	sqlitelib.SQLITE_CONSTRAINT_NOTNULL:    NotNullViolation,
+var constraintKinds = map[sqlite3.ExtendedErrorCode]ConstraintKind{
+	sqlite3.CONSTRAINT_UNIQUE:     UniqueViolation,
+	sqlite3.CONSTRAINT_PRIMARYKEY: PrimaryKeyViolation,
+	sqlite3.CONSTRAINT_ROWID:      PrimaryKeyViolation,
+	sqlite3.CONSTRAINT_FOREIGNKEY: ForeignKeyViolation,
+	sqlite3.CONSTRAINT_CHECK:      CheckViolation,
+	sqlite3.CONSTRAINT_NOTNULL:    NotNullViolation,
 }
 
 // constraintOf reads SQLite's message for what the constraint names:
 //
-//	constraint failed: UNIQUE constraint failed: notes.author_id, notes.slug (2067)
+//	sqlite3: constraint failed: UNIQUE constraint failed: notes.author_id, notes.slug
 //	→ Table notes, Constraint author_id, slug
-func constraintOf(failure *sqlite3.Error) (*ConstraintError, bool) {
-	kind, known := constraintKinds[failure.Code()]
+func constraintOf(code sqlite3.ExtendedErrorCode, err error) (*ConstraintError, bool) {
+	kind, known := constraintKinds[code]
 	if !known {
 		return nil, false
 	}
-	message := failure.Error()
-	if _, after, found := strings.Cut(message, ": "); found {
+	message := err.Error()
+	var detailed *sqlite3.Error
+	if errors.As(err, &detailed) {
+		message = detailed.Error()
+	}
+	if _, after, found := strings.Cut(message, "constraint failed: "); found {
 		message = after
 	}
-	if at := strings.LastIndex(message, " ("); at > 0 && strings.HasSuffix(message, ")") {
-		message = message[:at]
-	}
-	c := &ConstraintError{Kind: kind, ExtendedCode: failure.Code(), Err: failure, message: message}
+	c := &ConstraintError{Kind: kind, ExtendedCode: int(code), Err: err, message: message}
 	_, named, found := strings.Cut(message, " constraint failed: ")
 	switch {
 	case !found:
@@ -124,46 +124,50 @@ func (d *DB) explain(err error) error {
 		errors.Is(err, tinystore.ErrClosed):
 		return err
 	}
-	var failure *sqlite3.Error
+	// the driver gives a code with SQLite's message, or the bare code
+	var code sqlite3.ExtendedErrorCode
 	switch {
-	case errors.As(err, &failure):
+	case errors.As(err, &code):
 	case missingArgument(err):
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
 	default:
 		return fmt.Errorf("sql %q: %w", d.name, err)
 	}
-	switch failure.Code() & 0xff {
-	case sqlitelib.SQLITE_READONLY:
+	switch code.Code() {
+	case sqlite3.READONLY:
 		return fmt.Errorf("%w: sql %q: a read cannot write; use Exec or an Exec form: %w",
 			tinystore.ErrInvalid, d.name, err)
-	case sqlitelib.SQLITE_CONSTRAINT:
-		if broken, known := constraintOf(failure); known {
+	case sqlite3.CONSTRAINT:
+		if broken, known := constraintOf(code, err); known {
 			return fmt.Errorf("sql %q: %w", d.name, broken)
 		}
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
-	case sqlitelib.SQLITE_CORRUPT, sqlitelib.SQLITE_NOTADB:
+	case sqlite3.CORRUPT, sqlite3.NOTADB:
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrCorrupt, d.name, err)
-	case sqlitelib.SQLITE_ERROR, sqlitelib.SQLITE_RANGE, sqlitelib.SQLITE_MISMATCH:
+	case sqlite3.ERROR, sqlite3.RANGE, sqlite3.MISMATCH:
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
-	case sqlitelib.SQLITE_TOOBIG:
+	case sqlite3.TOOBIG:
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrLimit, d.name, err)
 	}
 	return fmt.Errorf("sql %q: %w", d.name, err)
 }
 
-// missingArgument is the driver's error for a parameter no argument fills,
-// which it gives no type of its own
+// missingArgument is the error for arguments that do not fill a statement's
+// parameters, which database/sql and the store give no type of their own
 //
-//	missing argument with index 2    missing named argument "id"
+//	sql: expected 2 arguments, got 1    missing named argument "id"
 func missingArgument(err error) bool {
 	text := err.Error()
-	return strings.Contains(text, "missing argument with index ") || strings.Contains(text, "missing named argument ")
+	return strings.Contains(text, " arguments, got ") || strings.Contains(text, "missing argument with index ") ||
+		strings.Contains(text, "missing named argument ")
 }
 
 // heldTooLong says that a snapshot ended by its own bound, not its caller's:
-// a statement it stopped, or a commit database/sql's rollback came before
+// a statement it stopped, or a commit or a statement database/sql's rollback
+// came before, which may have let the connection go
 func heldTooLong(ctx context.Context, err error) error {
-	ended := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sql.ErrTxDone)
+	ended := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sql.ErrTxDone) ||
+		errors.Is(err, sql.ErrConnDone)
 	if err != nil && ended && errors.Is(context.Cause(ctx), errSnapshotHeld) {
 		return errSnapshotHeld
 	}

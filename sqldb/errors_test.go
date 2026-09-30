@@ -1,6 +1,7 @@
 package sqldb
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -112,5 +113,28 @@ func TestAStatementSQLiteRefusesIsInvalid(t *testing.T) {
 	}
 	if _, err := Query(ctx, db, `select :id`); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Errorf("a missing named argument: %v", err)
+	}
+}
+
+func TestAStatementWithNumberedParametersNeedsEveryArgument(t *testing.T) {
+	db := openNotes(t)
+	for _, c := range []struct {
+		query string
+		args  []any
+	}{
+		{`select ?1 + ?2`, []any{1}},
+		{`select ?1 + :second`, []any{sql.Named("second", 2)}},
+		{`select :first + ?2`, []any{sql.Named("first", 1)}},
+	} {
+		if _, err := db.Exec(t.Context(), c.query, c.args...); !errors.Is(err, tinystore.ErrInvalid) {
+			t.Errorf("%s without every argument: %v", c.query, err)
+		}
+	}
+
+	for _, query := range []string{`select ?1 + ?2`, `select $1 + $2`} {
+		value, err := Scalar[int64](t.Context(), db, query, 1, 2)
+		if err != nil || value != 3 {
+			t.Errorf("%s with its arguments: %d, %v", query, value, err)
+		}
 	}
 }

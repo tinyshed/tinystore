@@ -55,9 +55,11 @@ Each line cost a debugging session once. The fix named is the one in the code.
 ## Go and its libraries
 
 - **`database/sql` starts a goroutine for every query whose context can end**
-  (`Rows.initContextClose`), **and modernc another** (`interruptOnDone`, for
-  every query and exec): a point read with a request's context was 27 to 35 %
-  slower at depth than with `context.Background`. A statement by key goes
+  (`Rows.initContextClose`); the driver checks the context inside SQLite
+  instead, and answers `INTERRUPT`, which `internal/sqlite` turns back into the
+  context's error. With `modernc.org/sqlite`, which started a goroutine of its
+  own, a point read with a request's context was 27 to 35 % slower at depth
+  than with `context.Background`. A statement by key goes
   through `sqlite.QueryRowByKey`, which checks the context and runs without its
   cancel; `TestAStatementByKeyStartsNoGoroutine` counts them with
   `/sched/goroutines-created:goroutines`.

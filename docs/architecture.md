@@ -445,7 +445,7 @@ No engine gets a package before its first working code.
 
 ## Dependencies and weight
 
-- The root module requires only `klauspost/compress` and `modernc.org/sqlite`
+- The root module requires only `klauspost/compress` and `ncruces/go-sqlite3`
   (`TestTheModuleCarriesOnlyTheEngine`). A service or an integration is a module
   of its own.
 - The root package imports no engine. Engines import the root and `internal/`,

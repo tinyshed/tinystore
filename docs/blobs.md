@@ -676,8 +676,8 @@ step                                                    an exit after it leaves 
   a directory is refused there (access is denied, in the probe); a directory
   opened through `syscall.CreateFile` with `GENERIC_WRITE` and
   `FILE_FLAG_BACKUP_SEMANTICS` flushes, in about a millisecond, so the engine
-  opens it that way. SQLite's Windows VFS, as `modernc.org/sqlite` compiles
-  it, flushes a file and never its directory.
+  opens it that way. The driver's file layer, as SQLite's own on Windows,
+  flushes a file and never its directory.
 
 ## Integrity
 
@@ -772,10 +772,10 @@ leave the file its size.
 file on Linux and on Windows at every concurrency the round tried; at 64 KiB a
 file read faster on both. Inline costs every byte written twice, to the WAL and
 then to the file, a copy in every snapshot of `blobs.db`, and a body read
-whole: 64 KiB is a chain of sixteen overflow pages, and the driver cannot read
-part of one, since `modernc.org/sqlite` v1.59.0 hands out no incremental BLOB
-I/O (`sqlite3_blob_open` is in its `lib` and nowhere in the driver, as
-research's `bench/blob` found). A file costs a sync of its own and its directory's, and
+whole: 64 KiB is a chain of sixteen overflow pages, which the engine reads
+whole. `modernc.org/sqlite`, which this was measured on, handed out no
+incremental BLOB I/O; `ncruces/go-sqlite3`, which replaced it, has
+`Conn.OpenBlob`, and the engine does not use it yet. A file costs a sync of its own and its directory's, and
 an open a read. Nothing else the driver ships changes this:
 `vfs`, `pcache`, `vtab` and `vec` answer other questions, and each would be an
 import the size probe weighs.

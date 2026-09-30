@@ -268,11 +268,11 @@ truth.
   `REPLACE`, `UPDATE` or `DELETE`. DDL, `ATTACH`, `DETACH`, `VACUUM` (whose
   `INTO` writes a file wherever the server may), `PRAGMA`, `ANALYZE`,
   `REINDEX` and transaction control are `permission`, and so is a second
-  statement in the same string, which the driver would run as well: modernc
-  v1.59.0 runs every statement of a string (`stmt.go`), a query's too. The
-  driver exposes no SQLite authorizer, as its `driver.go` says, so the check is
-  the server's own, in two lines; an authorizer replaces both if the driver
-  gains one.
+  statement in the same string, which the driver would run as well: an exec
+  without arguments runs every statement of its string. The check is the
+  server's own, in two lines. The driver now exposes SQLite's authorizer,
+  `Conn.SetAuthorizer`, which could replace both; `modernc.org/sqlite`, which
+  the check was written for, had none.
 - **The first line is SQLite's own tokens**, `sqltokens.go` following
   `sqlite3GetToken` rule by rule: whitespace is space, tab, newline, form feed
   and carriage return, and a byte order mark, while every byte past 0x7f is

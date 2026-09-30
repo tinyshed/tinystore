@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/ncruces/go-sqlite3/driver"
 )
 
 func TestPhysicalWriteCounters(t *testing.T) {
@@ -153,7 +155,7 @@ func TestPhysicalWriteCounters(t *testing.T) {
 }
 
 func precreatePageSize(ctx context.Context, path string, size int) error {
-	db, err := sql.Open("sqlite", path)
+	db, err := driver.Open("file:" + filepath.ToSlash(path))
 	if err != nil {
 		return err
 	}
@@ -186,7 +188,7 @@ func truncateWAL(ctx context.Context, path string) error {
 }
 
 func checkpointWAL(ctx context.Context, path, mode string) (int, int, int, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := driver.Open("file:" + filepath.ToSlash(path))
 	if err != nil {
 		return 0, 0, 0, err
 	}

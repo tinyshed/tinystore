@@ -3,13 +3,12 @@ package records
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
-	sqlite3 "modernc.org/sqlite"
+	"github.com/ncruces/go-sqlite3"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -57,9 +56,9 @@ func TestAbruptExitHelper(t *testing.T) {
 	if dir == "" {
 		t.Skip("subprocess only")
 	}
-	sqlite3.MustRegisterScalarFunction("exit_now", 0, func(*sqlite3.FunctionContext, []driver.Value) (driver.Value, error) {
-		os.Exit(0)
-		return nil, nil
+	// a trigger may call only an innocuous function, the schema being untrusted
+	sqlite3.AutoExtension(func(c *sqlite3.Conn) error {
+		return c.CreateFunction("exit_now", 0, sqlite3.INNOCUOUS, func(sqlite3.Context, ...sqlite3.Value) { os.Exit(0) })
 	})
 	store, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true, Clock: func() time.Time { return testNow }})
 	if err != nil {

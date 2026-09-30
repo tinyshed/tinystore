@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -25,7 +24,7 @@ func (f *File) Snapshot(ctx context.Context, into string) (applied int, err erro
 	if err = os.MkdirAll(filepath.Dir(into), 0o750); err != nil {
 		return 0, fmt.Errorf("snapshot SQLite: %w", err)
 	}
-	copier, err := sql.Open("sqlite", connectionURL(f.path, snapshotArguments()))
+	copier, err := openPool(connectionURL(f.path, snapshotArguments()), 0, nil)
 	if err != nil {
 		return 0, fmt.Errorf("snapshot SQLite: %w", err)
 	}
@@ -47,7 +46,7 @@ func ReadCopy(ctx context.Context, path string, read func(Reader) error) (err er
 	if err != nil {
 		return fmt.Errorf("read SQLite copy: %w", err)
 	}
-	copied, err := sql.Open("sqlite", connectionURL(abs, snapshotArguments()))
+	copied, err := openPool(connectionURL(abs, snapshotArguments()), 0, nil)
 	if err != nil {
 		return fmt.Errorf("read SQLite copy: %w", err)
 	}

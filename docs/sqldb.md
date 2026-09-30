@@ -428,8 +428,8 @@ sqldb.Open          applies what the file has not applied, then checks it agains
 ```
 
 - **A migration is a `.sql` file** named `NNN_what.sql`, applied in name order.
-  Anything SQLite runs belongs in one: triggers, views, FTS5, indexes on
-  expressions.
+  Anything SQLite runs belongs in one: triggers, views, FTS5 and R*Tree tables,
+  indexes on expressions.
 - **Applied once, never edited** (built). The file keeps each one's checksum:
   an edited, renamed or missing migration, or a file that has run more of them
   than the binary knows, refuses to open.
@@ -574,8 +574,9 @@ CREATE INDEX notes_author_id_created_at ON notes (author_id, created_at);
 
 ## Full-text search
 
-FTS5 is compiled into SQLite, and sqldb leaves it as it is. A migration makes
-the index and keeps it in step:
+FTS5 is registered on every connection to the file, as R*Tree is, and sqldb
+leaves both as SQLite has them. A migration makes the index and keeps it in
+step:
 
 ```sql
 -- migrations/004_search.sql
@@ -626,6 +627,13 @@ of its own, after this version.
 
 - **One file a database**, `sql/<name>.db`, its tables `STRICT`, one writer
   and a pool of eight `query_only` readers.
+- **SQLite is `ncruces/go-sqlite3`'s build**, translated to Go, which leaves
+  FTS5 and R*Tree with Geopoly to each connection; sqldb registers them on
+  every one, since SQLite tells an FTS5 table's shadow tables from the
+  application's only where the module is. A double-quoted word is a name and
+  never a string (`SQLITE_DQS=0`): `where status = "open"` names a column.
+  `dbstat`, `sqlite_dbpage`, `sqlite_offset()` and `load_extension()` are not
+  built; `internal/dbstat` divides a closed file's pages for a measurement.
 - **The writer commits `Exec`s in groups** of at most 1024 writes and 8 MiB,
   each write weighed by its arguments. A group's ten seconds count from when it
   holds the writer, so a transaction holding the writer longer fails none of
@@ -645,7 +653,8 @@ of its own, after this version.
   `sqlite3VdbeSetVarmask`, and `vdbeUnbind` expires the statement whenever that
   parameter is bound again. `limit cast(? as integer)` is not marked and costs
   nothing; the documentation shows it, and sqldb rewrites no SQL. QPSG would
-  stop the marking too, and modernc v1.59 exposes no call for it.
+  stop the marking too, which the driver's `Conn.Config` could set and the
+  store does not.
 - **Work enters through the store's gate and slots**, `internal/admission`, as
   every engine's does, and reserves the store's memory before it decodes: 64
   KiB and its arguments before it waits for a connection, more only while it is
@@ -698,6 +707,8 @@ The five cases are their workloads. Every one is built.
 | a constraint says its kind | `TestAConstraintSaysItsKind` |
 | a statement is compiled once a connection | `TestAStatementIsCompiledOnceAConnection`; `TestAConnectionKeepsTheStatementsItsFileWasOpenedWith` in `internal/sqlite` |
 | sqldb holds the store's memory before it decodes | `TestStoreMemoryBoundsReadsAndWrites` |
+| FTS5 and R*Tree work in the file and its snapshot | `TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot` |
+| a virtual table's shadow tables are not the application's | `TestAVirtualTablesShadowsAreNotTheSchemas` in `sqldbtest` |
 
 ## Not in the first version
 

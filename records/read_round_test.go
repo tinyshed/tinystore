@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/dbstat"
 )
 
 // Times fetchSnapshot and Read under a four-block budget over 5000 head rows.
@@ -118,23 +120,20 @@ func measureReadCandidates(t *testing.T, rows int, sealed bool) {
 			return scanErr
 		}
 		t.Logf("logical file: %d bytes (%d pages of %d, %d free)", pages*pageSize, pages, pageSize, free)
-		rows, queryErr := tx.QueryContext(t.Context(), `select name, sum(pgsize) from dbstat group by name order by name`)
-		if queryErr != nil {
-			return queryErr
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			var size int64
-			if scanErr := rows.Scan(&name, &size); scanErr != nil {
-				return scanErr
-			}
-			t.Logf("dbstat %s: %d bytes", name, size)
-		}
-		return rows.Err()
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err = s.runtime.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	objects, err := dbstat.Read(t.Context(), filepath.Join(dir, fileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range objects {
+		t.Logf("dbstat %s: %d bytes", object.Name, object.Bytes)
 	}
 }
 

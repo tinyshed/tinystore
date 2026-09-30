@@ -235,3 +235,17 @@ func TestTwoChecksOfOneNameFail(t *testing.T) {
 		t.Fatalf("a second check of app: %v", r.errors)
 	}
 }
+
+// the shadow tables a virtual table keeps are SQLite's, which no schema
+// declares and the check does not count as the application's
+func TestAVirtualTablesShadowsAreNotTheSchemas(t *testing.T) {
+	notes := sqldb.Table[Note]("notes", sqldb.PrimaryKey("id"), sqldb.Check("length(title) > 0"))
+	dir := migrations(t, map[string]string{
+		"001_notes.sql": firstNotes,
+		"002_search.sql": "create virtual table notes_fts using fts5(title, content = 'notes', content_rowid = 'id');\n" +
+			"create virtual table places using rtree(id, min_x, max_x);\n",
+	})
+	if r := check(t, sqldb.Schema(notes), dir); len(r.errors) > 0 || len(r.logs) > 0 {
+		t.Fatalf("a virtual table's shadows were taken for the application's tables: %v, %v", r.errors, r.logs)
+	}
+}

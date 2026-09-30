@@ -61,8 +61,8 @@ func TestTheCheckReadsSQLitesTokens(t *testing.T) {
 }
 
 // SQLite ends a statement where the check does: what the check reads as one
-// statement runs as one. Each case would answer otherwise if SQLite read it
-// otherwise, since the driver answers a script with its last rows.
+// statement runs as one, and what it reads as two SQLite refuses to prepare as
+// one. Each case would answer otherwise if SQLite read it otherwise.
 func TestSQLiteEndsAStatementWhereTheCheckDoes(t *testing.T) {
 	db, _ := openScratch(t)
 	for _, c := range []struct {
@@ -79,7 +79,7 @@ func TestSQLiteEndsAStatementWhereTheCheckDoes(t *testing.T) {
 			[][]any{{int64(7)}},
 		},
 		{"a line comment runs past a carriage return", "select 1 -- ;\r; select 2", nil, true, [][]any{{int64(1)}}},
-		{"a newline ends a line comment", "select 1 -- ;\n; select 2", nil, false, [][]any{{int64(2)}}},
+		{"a newline ends a line comment", "select 1 -- ;\n; select 2", nil, false, nil},
 		{"comments do not nest", `select 1 /* /* */ , 2`, nil, true, [][]any{{int64(1), int64(2)}}},
 		{"a bracketed name holds a ;", `select [a;b] from (select 1 as [a;b])`, nil, true, [][]any{{int64(1)}}},
 		{"a byte order mark is whitespace", "\xef\xbb\xbfselect 1", nil, true, [][]any{{int64(1)}}},
@@ -90,7 +90,10 @@ func TestSQLiteEndsAStatementWhereTheCheckDoes(t *testing.T) {
 			t.Errorf("%s: the check says %v", c.name, lexed)
 		}
 		rows, err := sqldb.Query(t.Context(), db, c.sql, c.args...)
-		if err != nil || !reflect.DeepEqual(rows.Values, c.rows) {
+		switch {
+		case !c.one && (err == nil || !strings.Contains(err.Error(), "multiple statements")):
+			t.Errorf("%s: SQLite reads it as one statement: %#v, %v", c.name, rows.Values, err)
+		case c.one && (err != nil || !reflect.DeepEqual(rows.Values, c.rows)):
 			t.Errorf("%s: SQLite answers %#v, %v", c.name, rows.Values, err)
 		}
 	}

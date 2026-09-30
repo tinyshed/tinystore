@@ -13,7 +13,7 @@ import (
 // what this module requires, every program importing it links, see AGENTS.md
 var theEngineMayRequire = map[string]bool{
 	"github.com/klauspost/compress": true,
-	"modernc.org/sqlite":            true,
+	"github.com/ncruces/go-sqlite3": true,
 }
 
 func TestTheModuleCarriesOnlyTheEngine(t *testing.T) {

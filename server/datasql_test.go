@@ -67,7 +67,7 @@ var attempts = []struct {
 	{"a line comment runs past a carriage return", "select 1 -- x\r; drop table notes", false, planPasses, false},
 	{"a bracketed name holding a semicolon", `select 1 as [a;b]`, false, planPasses, false},
 	{"a Tcl parameter holding a semicolon", `select $a(;)`, false, planFails, false},
-	{"an extension loaded", `select load_extension('evil')`, false, planPasses, false},
+	{"an extension loaded", `select load_extension('evil')`, false, planFails, false}, // the store's SQLite has none
 
 	{"a second statement", `select 1; drop table notes`, true, planUnasked, false},
 	{"a second statement after a comment", `select 1 /* ; */ ; drop table notes`, true, planUnasked, false},
@@ -122,18 +122,18 @@ var attempts = []struct {
 	{"an optimize of main", `select * from main.pragma_optimize`, true, planRefuses, false},
 	{"an optimize inside an insert", `insert into log select 1 from pragma_optimize`, true, planRefuses, false},
 	{"a pragma's table, read", `select * from pragma_table_info('notes')`, true, planPasses, false},
-	{"the file's pages, read", `select * from sqlite_dbpage`, true, planRefuses, false},
+	{"the file's pages, read", `select * from sqlite_dbpage`, true, planFails, false},
 	{
 		"the schema's page overwritten", `update sqlite_dbpage set data = zeroblob(4096) where pgno = 1`, true,
-		planRefuses, false,
+		planFails, false,
 	},
-	{"a page inserted", `insert into sqlite_dbpage values (1, zeroblob(4096))`, true, planRefuses, false},
+	{"a page inserted", `insert into sqlite_dbpage values (1, zeroblob(4096))`, true, planFails, false},
 	{
-		"the pages named by a string", `update 'sqlite_dbpage' set data = data where pgno = 1`, true, planRefuses,
+		"the pages named by a string", `update 'sqlite_dbpage' set data = data where pgno = 1`, true, planFails,
 		false,
 	},
-	{"the pages of temp", `update temp.sqlite_dbpage set data = data where pgno = 1`, true, planRefuses, false},
-	{"the pages of a schema argument", `select * from sqlite_dbpage('main')`, true, planRefuses, false},
+	{"the pages of temp", `update temp.sqlite_dbpage set data = data where pgno = 1`, true, planFails, false},
+	{"the pages of a schema argument", `select * from sqlite_dbpage('main')`, true, planFails, false},
 
 	{"the history written", `insert into _tinystore_migrations values (9, 'x', x'00')`, false, planRefuses, false},
 	{"the history cleared", `delete from _tinystore_migrations`, false, planRefuses, false},

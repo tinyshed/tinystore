@@ -67,6 +67,7 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
+| `internal/dbstat/`   | a closed file's pages divided among its tables and indexes, for measurements  |
 | `internal/release/`  | what a release publishes: binaries, archives, npm packages, wheels            |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
@@ -121,7 +122,7 @@ require through a `replace`. `task` tests, lints, formats and tidies both
 beside the root.
 
 The root module's dependency list is a promise rather than an accident:
-`klauspost/compress` for zstd and `modernc.org/sqlite` for the file. Anything a
+`klauspost/compress` for zstd and `ncruces/go-sqlite3` for the file. Anything a
 measurement needs — a generator, another engine's client, a container library —
 belongs in a module of its own, whose dependencies stay out of everyone else's
 graph.
@@ -343,8 +344,9 @@ run. Take the economics from a measurement and not the explanation of the
 mechanism: the number is evidence, the story about why is a hypothesis until a
 second measurement separates it from the alternatives.
 
-**A storage measurement is a division of the file, not a total.** `dbstat`
-reports every b-tree's own pages, so a change that claims to save space says
+**A storage measurement is a division of the file, not a total.**
+`internal/dbstat` reports every b-tree's own pages, as SQLite's `dbstat` does
+where it is built, so a change that claims to save space says
 which object it took the bytes from and which object it gave them to. The
 failure it exists to prevent is moving bytes to the next pocket and calling it
 a saving: an index deleted here and an index created there net to zero, and
@@ -411,7 +413,11 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a declaration that cannot be a table fails at start | `TestADeclarationThatCannotBeATableFailsAtStart`                                |
 | an sqldb value comes back as it went in             | `TestEveryValueComesBackAsItWentIn`, `TestArgumentsAreWrittenByTheirGoType`     |
 | sixteen bytes of a type sqldb does not know are bytes | `TestOnlyAKnownUUIDTypeIsText`                                                |
+| FTS5 and R*Tree work in an application's file and its snapshot | `TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot`                  |
+| a virtual table's shadow tables are not the application's | `TestAVirtualTablesShadowsAreNotTheSchemas`                                 |
+| a file's pages are divided with none counted twice or left over | `TestEveryPageIsCountedOnce`, `TestAPageCountedTwiceOrNeverIsRefused`    |
 | a value that does not decode names column and field | `TestAValueThatDoesNotDecodeNamesItsColumnAndField`                             |
+| a numbered SQL parameter without its argument is refused | `TestAStatementWithNumberedParametersNeedsEveryArgument`                    |
 | a value SQLite would change is refused              | `TestAValueSQLiteWouldChangeIsRefused`: NaN, `uint64` past `int64`, a day no calendar has |
 | `Insert` writes every field but the generated ones  | `TestInsertWritesEveryFieldButTheGeneratedOnes`, `TestInsertReturnsWhatTheDatabaseGenerated` |
 | `Open` checks the file and changes nothing          | `TestOpenChecksTheFileAgainstTheSchemaAndChangesNothing`, `TestOpenNamesEachDifferenceOfStructure` |
@@ -686,8 +692,13 @@ This exists because the alternatives cost more memory than what they watch.
 **No cgo, ever.** `CGO_ENABLED=0` in the CI build on all three platforms, so a
 dependency needing a C toolchain fails on the pull request that introduces it,
 and in `task size`, whose report refuses a probe built with cgo. This is why
-the file is `modernc.org/sqlite`; do not swap it for a faster cgo driver. The
-race detector is the one exception — it builds test binaries, never a product.
+the file is `ncruces/go-sqlite3`, SQLite translated to Go; do not swap it for a
+faster cgo driver. Its driver registers `sqlite3` with
+database/sql, as mattn's does; the store opens through the driver's connector
+and never by that name, so a program linking both builds with
+`-ldflags=-X=github.com/ncruces/go-sqlite3/driver.driverName=`. The race
+detector is the one exception to no cgo — it builds test binaries, never a
+product.
 
 **A dependency is a decision, and here it is somebody else's decision too.**
 Whatever the root module requires, every program importing this links. Check
