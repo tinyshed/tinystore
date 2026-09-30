@@ -11,7 +11,8 @@ import (
 func TestConnectionURLCarriesEveryPragma(t *testing.T) {
 	const (
 		pragmas = `_pragma=foreign_keys%281%29&_pragma=busy_timeout%285000%29` +
-			`&_pragma=synchronous%28FULL%29&_pragma=cache_size%28-1024%29`
+			`&_pragma=synchronous%28FULL%29&_pragma=fullfsync%281%29&_pragma=checkpoint_fullfsync%281%29` +
+			`&_pragma=cache_size%28-1024%29`
 		writer = `&_txlock=immediate&mode=rwc`
 		reader = `&_pragma=query_only%281%29&_txlock=deferred&mode=rw`
 	)
@@ -112,5 +113,31 @@ func TestPageSizeIsChosenOnceWhenTheFileIsCreated(t *testing.T) {
 		if _, err = Open(t.Context(), filepath.Join(dir, "refused.db"), Config{Readers: 1, PageSize: size}); err == nil {
 			t.Errorf("page size %d accepted", size)
 		}
+	}
+}
+
+// A commit syncs as far as the platform lets it: on macOS past the drive's own
+// cache, which an fsync there leaves the data in.
+func TestACommitSyncsPastTheDrivesCache(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "sync.db"), Config{Readers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	want := map[string]int{"synchronous": 2, "fullfsync": 1, "checkpoint_fullfsync": 1} // 2 is FULL
+	err = file.Update(t.Context(), func(tx *sql.Tx) error {
+		for pragma, set := range want {
+			var value int
+			if scanErr := tx.QueryRowContext(t.Context(), "pragma "+pragma).Scan(&value); scanErr != nil {
+				return scanErr
+			}
+			if value != set {
+				t.Errorf("pragma %s is %d on the writer, not %d", pragma, value, set)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

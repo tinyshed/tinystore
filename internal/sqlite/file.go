@@ -258,9 +258,15 @@ func connectionURL(abs string, arguments url.Values) string {
 	return uri.String()
 }
 
+// writerArguments sync a commit before it returns. On macOS an fsync leaves the
+// data in the drive's own cache, so fullfsync and checkpoint_fullfsync ask for
+// F_FULLFSYNC there; other platforms ignore them.
 func writerArguments() url.Values {
 	arguments := url.Values{"mode": {"rwc"}, "_txlock": {"immediate"}}
-	for _, pragma := range []string{"foreign_keys(1)", "busy_timeout(5000)", "synchronous(FULL)", "cache_size(-1024)"} {
+	for _, pragma := range []string{
+		"foreign_keys(1)", "busy_timeout(5000)", "synchronous(FULL)", "fullfsync(1)", "checkpoint_fullfsync(1)",
+		"cache_size(-1024)",
+	} {
 		arguments.Add("_pragma", pragma)
 	}
 	return arguments
