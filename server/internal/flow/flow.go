@@ -181,17 +181,32 @@ type Allowance struct {
 	mu      sync.Mutex
 	bytes   int64
 	ended   error
-	granted chan struct{}
+	changed chan struct{}
 }
 
 func NewAllowance(bytes int64) *Allowance {
-	return &Allowance{bytes: bytes, granted: make(chan struct{}, 1)}
+	return &Allowance{bytes: bytes, changed: make(chan struct{})}
 }
 
-// Take waits until n bytes may be sent and takes them. Its one waiter is the
-// stream's sender.
+// Take waits until n bytes may be sent and takes them. A connection shares
+// its allowance among the senders of every stream.
 func (a *Allowance) Take(ctx context.Context, n int64) error {
+	return a.TakeUntil(ctx, n, nil)
+}
+
+// ErrEnded is a sender stopped while waiting for an allowance.
+var ErrEnded = errors.New("flow: the sender ended")
+
+func (a *Allowance) TakeUntil(ctx context.Context, n int64, ended <-chan struct{}) error {
 	for {
+		if ended != nil {
+			select {
+			case <-ended:
+				return ErrEnded
+			default:
+			}
+		}
+
 		a.mu.Lock()
 		switch {
 		case a.ended != nil:
@@ -203,36 +218,39 @@ func (a *Allowance) Take(ctx context.Context, n int64) error {
 			a.mu.Unlock()
 			return nil
 		}
+		changed := a.changed
 		a.mu.Unlock()
 		select {
-		case <-a.granted:
+		case <-changed:
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ended:
+			return ErrEnded
 		}
 	}
 }
 
 func (a *Allowance) Grant(n int64) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ended != nil {
+		return
+	}
 	a.bytes += n
-	a.mu.Unlock()
-	a.wake()
+	close(a.changed)
+	a.changed = make(chan struct{})
 }
 
 // End makes Take return err, for a stream or a connection that ended.
 func (a *Allowance) End(err error) {
+	if err == nil {
+		err = ErrEnded
+	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.ended == nil {
 		a.ended = err
-	}
-	a.mu.Unlock()
-	a.wake()
-}
-
-func (a *Allowance) wake() {
-	select {
-	case a.granted <- struct{}{}:
-	default:
+		close(a.changed)
 	}
 }
 

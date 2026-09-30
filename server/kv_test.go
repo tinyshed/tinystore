@@ -3,13 +3,62 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/server/internal/client"
 	"github.com/tinyshed/tinystore/server/wire"
 )
+
+func TestACancelledPointReadLetsTheConnectionGoOn(t *testing.T) {
+	root := t.TempDir()
+	store, err := tinystore.Open(t.Context(), root, tinystore.Options{Manual: true, Memory: 16 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := serveTestStore(t, root, store, Options{})
+	entered := make(chan struct{})
+	get := ts.server.methods[wire.KVGet]
+	ts.server.methods[wire.KVGet] = func(c *call) error {
+		close(entered)
+		return get(c)
+	}
+	conn := ts.dial(t, wire.Hello{})
+	bucket := openKV(t, conn, wire.KVBucket{Name: "notes"})
+	waitFor(t, "the open call released its memory", func() bool { return store.Memory().Used == 0 })
+
+	held, err := store.Reserve(t.Context(), store.Memory().Capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	st, err := conn.Open(ctx, wire.KVGet, wire.KVCall{Handle: bucket, Key: "one"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("the point read did not start")
+	}
+	if err = st.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = st.Response(ctx)
+	failure, ok := errors.AsType[*wire.Error](err)
+	if !ok || failure.Code != wire.CodeCancelled {
+		t.Fatalf("a point read cancelled while memory was held: %v", err)
+	}
+	held.Release()
+	ts.server.methods[wire.KVGet] = get
+	mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: bucket, Key: "one"})
+}
 
 func openKV(t *testing.T, conn *client.Conn, bucket wire.KVBucket) uint64 {
 	t.Helper()

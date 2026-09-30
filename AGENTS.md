@@ -637,6 +637,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a client past its credit is cut off, the reader never waits | `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection` |
 | every stream ends with one final frame                 | `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up |
 | answers queued during a write leave in the next        | `TestQueuedAnswersShareAWrite` in `server/internal/flow`                        |
+| a connection grant wakes every sender whose body fits | `TestAGrantWakesEverySenderWhoseBodyFits` in `server/internal/flow`             |
+| a Go test client's upload stops with its stream or connection | `TestAFinalResponseStopsAnUploadWaitingForCredit`, `TestALostConnectionStopsAnUploadWaitingForCredit` in `server/internal/client` |
 | a stream's number is free when its final frame arrives | `TestAStreamNumberIsFreeWhenItsFinalFrameArrives`                               |
 | a closing server lets the streams running finish       | `TestClosingTheServerLetsTheStreamsRunningFinish`, `TestARequestThatCrossesTheGoAwayIsAnsweredUnavailable` |
 | a remote connection needs its token                    | `TestARemoteConnectionNeedsItsToken`                                            |

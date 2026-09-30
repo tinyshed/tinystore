@@ -249,6 +249,7 @@ func (c *Conn) newStream(end bool) (*Stream, error) {
 	st.window = flow.NewCredit(c.window)
 	if !end {
 		st.sends = flow.NewAllowance(int64(c.Welcome.StreamCredit))
+		st.uploadDone = make(chan struct{})
 	}
 	c.streams[st.id] = st
 	return st, nil
@@ -264,6 +265,7 @@ func (c *Conn) receive() {
 	c.streams = map[uint32]*Stream{}
 	c.mu.Unlock()
 	for _, st := range streams {
+		st.endUpload(c.ended)
 		st.push(frame{err: c.ended})
 	}
 	c.credit.End(c.ended)
@@ -320,6 +322,10 @@ func (c *Conn) deliver(h wire.Header, body []byte) {
 	c.mu.Unlock()
 	if st == nil {
 		return
+	}
+	if h.Flags&wire.FlagEnd != 0 {
+		_, err := failed(frame{header: h, body: body})
+		st.endUpload(err)
 	}
 	st.push(frame{header: h, body: body})
 }

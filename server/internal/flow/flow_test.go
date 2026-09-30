@@ -153,3 +153,36 @@ func TestCreditIsGrantedBackOnceHalfTheWindowHasGone(t *testing.T) {
 		t.Fatal("the window after its grant")
 	}
 }
+
+func TestAGrantWakesEverySenderWhoseBodyFits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	waiting := make(chan struct{}, 3)
+	seen := waitingContext{Context: ctx, waiting: waiting}
+	allowance := NewAllowance(0)
+	taken := make(chan error, 3)
+
+	for range 3 {
+		go func() { taken <- allowance.Take(seen, 1) }()
+	}
+	for range 3 {
+		<-waiting
+	}
+	allowance.Grant(3)
+
+	for range 3 {
+		if err := <-taken; err != nil {
+			t.Fatalf("a sender was left waiting beside enough credit: %v", err)
+		}
+	}
+}
+
+type waitingContext struct {
+	context.Context
+	waiting chan struct{}
+}
+
+func (c waitingContext) Done() <-chan struct{} {
+	c.waiting <- struct{}{}
+	return c.Context.Done()
+}

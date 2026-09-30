@@ -18,10 +18,12 @@ type Stream struct {
 	sends  *flow.Allowance // what the client may still upload; nil when its REQUEST ended its side
 	window *flow.Credit    // what the client took of the server's DATA, to grant back
 
-	mu     sync.Mutex
-	frames []frame
-	ready  chan struct{}
-	ended  bool // the final frame was taken
+	mu         sync.Mutex
+	frames     []frame
+	ready      chan struct{}
+	ended      bool // the final frame was taken
+	uploadDone chan struct{}
+	uploadErr  error
 }
 
 type frame struct {
@@ -118,11 +120,12 @@ func (st *Stream) Send(ctx context.Context, body []byte, end bool) error {
 	if st.sends == nil {
 		return errors.New("client: a stream whose REQUEST ended the client's side")
 	}
-	if err := st.sends.Take(ctx, int64(len(body))); err != nil {
-		return err
+	if err := st.sends.TakeUntil(ctx, int64(len(body)), st.uploadDone); err != nil {
+		return st.sendError(err)
 	}
-	if err := st.conn.credit.Take(ctx, int64(len(body))); err != nil {
-		return err
+	if err := st.conn.credit.TakeUntil(ctx, int64(len(body)), st.uploadDone); err != nil {
+		st.sends.Grant(int64(len(body)))
+		return st.sendError(err)
 	}
 	flags := wire.Flags(0)
 	if end {
@@ -130,6 +133,30 @@ func (st *Stream) Send(ctx context.Context, body []byte, end bool) error {
 	}
 	return st.conn.writer.Send(wire.AppendFrame(nil, wire.Header{Kind: wire.KindData, Flags: flags, Stream: st.id},
 		body))
+}
+
+func (st *Stream) endUpload(err error) {
+	if st.sends == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.uploadErr == nil {
+		if err == nil {
+			err = errors.New("client: the stream ended")
+		}
+		st.uploadErr = err
+		close(st.uploadDone)
+	}
+}
+
+func (st *Stream) sendError(err error) error {
+	if !errors.Is(err, flow.ErrEnded) {
+		return err
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.uploadErr
 }
 
 // Cancel asks the server to stop the stream, which still ends with its final
