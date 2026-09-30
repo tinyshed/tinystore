@@ -23,7 +23,9 @@ minutes, or a Redis beside the program that the program must also keep.
   is acknowledged; steps that wait on each other are the application's.
 - **Its own engine.** `jobs.db` has its own writer, schema and code; the
   package imports the root and `internal/`, never kv or sqldb, and no write
-  spans two files.
+  spans two files. A store opened `In` an sqldb database keeps its tables in
+  that file instead, so that a job commits in the database's `Batch` with the
+  rows it is about: the file's writer is then the database's and the queue's.
 
 ## The public surface
 

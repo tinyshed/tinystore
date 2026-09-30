@@ -135,6 +135,8 @@ wrote internal/data/migrations/002_add_description.sql:
   the group. Building it runs nothing, so it may take its time; a statement
   that needs an earlier one's result says so in SQL, `last_insert_rowid()` or
   a key the program chose, and one that must read before it decides is a `Tx`.
+  An engine that keeps its tables in the database adds its own writes, as a
+  jobs queue's `Enqueued` adds a job that commits with the rows it is about.
 - **`Tx` is a transaction of its own** on the writer, run on the caller's
   goroutine: nil commits, an error rolls back, and a panic rolls back and goes
   on. A call on the `DB` inside its own `Tx` waits for the `Tx`, which waits
@@ -145,6 +147,9 @@ wrote internal/data/migrations/002_add_description.sql:
   `tinystore.ErrClosed`. A `Tx` holds the writer for itself and pays an fsync
   of its own, so transactions from many goroutines commit one at a time: what
   can be a `Batch` should be.
+- **Tables named `_tinystore_…` are the store's**: its migration history, and
+  the queues a jobs store opened `In` the database keeps there. A schema leaves
+  them out, and a table cannot be declared with such a name.
 - **A declaration that cannot be a table panics when the program starts**,
   as `regexp.MustCompile` does, naming the table: an option naming a column
   the struct lacks, a default of another type, a generated column nothing

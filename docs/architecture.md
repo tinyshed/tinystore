@@ -38,8 +38,14 @@ data/
 - Every engine owns its file: its own `application_id`, migrations, writer and
   budgets. SQLite has one writer per file, so no engine ever waits on another
   engine's writer.
-- No write is atomic across two engines. The one flow that wanted it,
-  materialising metrics from events, is an idempotent recompute.
+- No write is atomic across two files. The one flow that wanted it most, a
+  row and the job it asks for, puts the queue in the row's file: a jobs store
+  opened `In` an sqldb database keeps its tables there, named
+  `_tinystore_jobs…` with a migration history of their own, and a `Batch`
+  commits the job with the rows, one savepoint of one grouped commit. The
+  application chooses that; by default each engine keeps its own file, and a
+  file shared shares its writer. Materialising metrics from events is an
+  idempotent recompute.
 - A damaged file fails that engine's `Open` and nothing else.
 - Application databases live only under `sql/`, so their names cannot collide
   with engine files. A name is `[a-z0-9][a-z0-9_-]{0,63}`; `Store.Claim` refuses

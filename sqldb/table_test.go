@@ -121,9 +121,9 @@ func TestADeclarationThatCannotBeATableFailsAtStart(t *testing.T) {
 		"done is a bool, which sqldb stores as INTEGER; Storage is for a type it does not know, or a uuid": func() {
 			Table[Note]("notes", Storage("done", Text))
 		},
-		"sqlite_notes is a name SQLite or sqldb keeps for itself": func() { Table[User]("sqlite_notes") },
-		"twice.A and twice.B are both the column name":            func() { Table[twice]("twice") },
-		"schema: two tables named USERS":                          func() { Schema(users, Table[User]("USERS", PrimaryKey("id"))) },
+		"sqlite_notes is a name SQLite or the store keeps for itself": func() { Table[User]("sqlite_notes") },
+		"twice.A and twice.B are both the column name":                func() { Table[twice]("twice") },
+		"schema: two tables named USERS":                              func() { Schema(users, Table[User]("USERS", PrimaryKey("id"))) },
 		"children.parent_a references users, which the schema does not hold": func() {
 			Schema(Table[child]("children", PrimaryKey("id"), References("parent_a", users)))
 		},

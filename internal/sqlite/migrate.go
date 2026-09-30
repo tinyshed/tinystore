@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -30,10 +31,44 @@ func (f *File) Migrate(ctx context.Context, applicationID int, scripts fs.FS) er
 
 	return f.update(ctx, func(connection *writeConnection) (bool, error) {
 		return withoutForeignKeys(ctx, connection.conn, func(tx *sql.Tx) error {
-			return runMigrations(ctx, tx, applicationID, scripts, paths)
+			if err := claimFile(ctx, tx, applicationID); err != nil {
+				return err
+			}
+			return runMigrations(ctx, tx, ownHistory, scripts, paths)
 		})
 	})
 }
+
+// MigrateHosted runs an engine's scripts in a file another engine owns, as
+// jobs' in an application's database: the owner's application id stays, and
+// the guest keeps its own history beside the owner's, so that neither's
+// scripts are the other's.
+//
+//	owner's history   _tinystore_migrations        0001_app.sql
+//	guest's history   _tinystore_jobs_migrations   0001_schema.sql
+func (f *File) MigrateHosted(ctx context.Context, engine string, scripts fs.FS) error {
+	paths, err := fs.Glob(scripts, "*.sql")
+	if err != nil {
+		return fmt.Errorf("list migrations: %w", err)
+	}
+	if len(paths) == 0 || !validGuest.MatchString(engine) {
+		return fmt.Errorf("migrate SQLite: missing scripts or an engine named %q", engine)
+	}
+	sort.Strings(paths)
+
+	h := history("_tinystore_" + engine + "_migrations")
+	return f.update(ctx, func(connection *writeConnection) (bool, error) {
+		return withoutForeignKeys(ctx, connection.conn, func(tx *sql.Tx) error {
+			if err := h.ensure(ctx, tx); err != nil {
+				return err
+			}
+			return runMigrations(ctx, tx, h, scripts, paths)
+		})
+	})
+}
+
+// a guest engine's name, which names its history table
+var validGuest = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
 
 // ErrPending is a script the file has not run, found by Verify, which runs
 // none.
@@ -81,14 +116,14 @@ func verifyMigrations(ctx context.Context, tx *sql.Tx, applicationID int, script
 		return fmt.Errorf("%w: SQLite file belongs to application %d", ErrMismatch, owner)
 	}
 
-	applied, err := countApplied(ctx, tx, len(paths))
+	applied, err := countApplied(ctx, tx, ownHistory, len(paths))
 	if err != nil {
 		return err
 	}
 	for i, path := range paths[:applied] {
 		script, err := readMigration(scripts, path, i+1)
 		if err == nil {
-			err = script.verify(ctx, tx)
+			err = script.verify(ctx, tx, ownHistory)
 		}
 		if err != nil {
 			return err
@@ -100,14 +135,10 @@ func verifyMigrations(ctx context.Context, tx *sql.Tx, applicationID int, script
 	return nil
 }
 
-// runMigrations checks the scripts the file has run and runs the rest, then
-// refuses a history that leaves a row referring to nothing
-func runMigrations(ctx context.Context, tx *sql.Tx, applicationID int, scripts fs.FS, paths []string) error {
-	if err := claimFile(ctx, tx, applicationID); err != nil {
-		return err
-	}
-
-	applied, err := countApplied(ctx, tx, len(paths))
+// runMigrations checks the scripts the history says the file has run and runs
+// the rest, then refuses a history that leaves a row referring to nothing
+func runMigrations(ctx context.Context, tx *sql.Tx, h history, scripts fs.FS, paths []string) error {
+	applied, err := countApplied(ctx, tx, h, len(paths))
 	if err != nil {
 		return err
 	}
@@ -118,9 +149,9 @@ func runMigrations(ctx context.Context, tx *sql.Tx, applicationID int, scripts f
 			return err
 		}
 		if i < applied {
-			err = script.verify(ctx, tx)
+			err = script.verify(ctx, tx, h)
 		} else {
-			err = script.apply(ctx, tx)
+			err = script.apply(ctx, tx, h)
 		}
 		if err != nil {
 			return err
@@ -185,11 +216,41 @@ const (
 	applicationIDQuery = `pragma application_id`
 	claimQuery         = `pragma application_id=%d`
 	userTablesQuery    = `select count(*) from sqlite_schema where name not like 'sqlite_%'`
-
-	// the file's schema keeps this text, so it stays as the first files wrote it
-	historyTableQuery = `create table _tinystore_migrations(` +
-		`version integer primary key,name text not null,checksum blob not null) strict`
+	tableNamedQuery    = `select count(*) from sqlite_schema where type = 'table' and name = ?1`
 )
+
+// history is the table a file's migrations are recorded in: its owner's, or
+// the one a guest engine keeps beside it
+type history string
+
+const ownHistory history = "_tinystore_migrations"
+
+// the file's schema keeps this text, so it stays as the first files wrote it
+func (h history) createQuery() string {
+	return `create table ` + string(h) +
+		`(version integer primary key,name text not null,checksum blob not null) strict`
+}
+
+func (h history) countQuery() string { return `select count(*) from ` + string(h) }
+func (h history) findQuery() string {
+	return `select name,checksum from ` + string(h) + ` where version=?`
+}
+func (h history) recordQuery() string { return `insert into ` + string(h) + ` values(?,?,?)` }
+
+// ensure makes a guest's history on its first migration
+func (h history) ensure(ctx context.Context, tx *sql.Tx) error {
+	var there int
+	if err := tx.QueryRowContext(ctx, tableNamedQuery, string(h)).Scan(&there); err != nil {
+		return fmt.Errorf("find migration history %s: %w", h, err)
+	}
+	if there > 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, h.createQuery()); err != nil {
+		return fmt.Errorf("create migration history %s: %w", h, err)
+	}
+	return nil
+}
 
 // claimFile stamps a fresh, empty file with the engine's application id and a
 // migration history, and refuses a file that belongs to another engine.
@@ -215,18 +276,16 @@ func claimFile(ctx context.Context, tx *sql.Tx, applicationID int) error {
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(claimQuery, applicationID)); err != nil {
 		return fmt.Errorf("claim SQLite file: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, historyTableQuery); err != nil {
+	if _, err := tx.ExecContext(ctx, ownHistory.createQuery()); err != nil {
 		return fmt.Errorf("create migration history: %w", err)
 	}
 	return nil
 }
 
-const appliedCountQuery = `select count(*) from _tinystore_migrations`
-
 // countApplied refuses a file that has run more scripts than this binary knows.
-func countApplied(ctx context.Context, tx *sql.Tx, known int) (int, error) {
+func countApplied(ctx context.Context, tx *sql.Tx, h history, known int) (int, error) {
 	var applied int
-	if err := tx.QueryRowContext(ctx, appliedCountQuery).Scan(&applied); err != nil {
+	if err := tx.QueryRowContext(ctx, h.countQuery()).Scan(&applied); err != nil {
 		return 0, fmt.Errorf("read migration history: %w", err)
 	}
 	if applied > known {
@@ -251,13 +310,11 @@ func readMigration(scripts fs.FS, path string, version int) (migration, error) {
 	return migration{version: version, path: path, body: body, checksum: sha256.Sum256(body)}, nil
 }
 
-const appliedMigrationQuery = `select name,checksum from _tinystore_migrations where version=?`
-
 // verify refuses a script renamed or edited after the file ran it.
-func (m migration) verify(ctx context.Context, tx *sql.Tx) error {
+func (m migration) verify(ctx context.Context, tx *sql.Tx, h history) error {
 	var name string
 	var stored []byte
-	if err := tx.QueryRowContext(ctx, appliedMigrationQuery, m.version).Scan(&name, &stored); err != nil {
+	if err := tx.QueryRowContext(ctx, h.findQuery(), m.version).Scan(&name, &stored); err != nil {
 		return fmt.Errorf("read migration %d: %w", m.version, err)
 	}
 	if name != m.path || !bytes.Equal(stored, m.checksum[:]) {
@@ -266,13 +323,11 @@ func (m migration) verify(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-const recordMigrationQuery = `insert into _tinystore_migrations values(?,?,?)`
-
-func (m migration) apply(ctx context.Context, tx *sql.Tx) error {
+func (m migration) apply(ctx context.Context, tx *sql.Tx, h history) error {
 	if _, err := tx.ExecContext(ctx, string(m.body)); err != nil {
 		return fmt.Errorf("apply migration %s: %w", m.path, err)
 	}
-	if _, err := tx.ExecContext(ctx, recordMigrationQuery, m.version, m.path, m.checksum[:]); err != nil {
+	if _, err := tx.ExecContext(ctx, h.recordQuery(), m.version, m.path, m.checksum[:]); err != nil {
 		return fmt.Errorf("record migration %s: %w", m.path, err)
 	}
 	return nil

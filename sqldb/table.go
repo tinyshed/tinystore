@@ -159,8 +159,8 @@ func checkTableName(name string) error {
 	switch {
 	case name == "":
 		return errors.New("a table needs a name")
-	case strings.HasPrefix(lower, "sqlite_"), lower == "_tinystore_migrations":
-		return fmt.Errorf("%s is a name SQLite or sqldb keeps for itself", name)
+	case strings.HasPrefix(lower, "sqlite_"), strings.HasPrefix(lower, "_tinystore_"):
+		return fmt.Errorf("%s is a name SQLite or the store keeps for itself", name)
 	}
 	return nil
 }

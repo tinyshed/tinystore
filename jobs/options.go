@@ -6,11 +6,24 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Options holds nothing a program sets yet; it is here so that an option can
-// arrive without breaking a caller.
-type Options struct{}
+// Options says where the store keeps its queues.
+type Options struct {
+	// In keeps the queues in a database's own file, an sqldb DB's, instead of
+	// jobs.db, so that a batch of the database commits a job with the rows it
+	// is about: see Queue.Enqueued. Its tables are named _tinystore_jobs, and
+	// the database's schema leaves them out. Nil keeps jobs.db.
+	In Database
+}
+
+// Database is a file whose owner lets the queues live in it, as sqldb's DB
+// does. A program does not implement it: its method names the store's own
+// type.
+type Database interface {
+	SQLiteFile() *sqlite.File
+}
 
 const (
 	pageSize       = 4 << 10          // 4 KiB pages measured for short rows

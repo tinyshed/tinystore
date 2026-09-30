@@ -92,7 +92,7 @@ const (
 	tablesQuery = `select s.name, s.sql, t.wr, t.strict from sqlite_schema as s
 		join pragma_table_list as t on t.schema = 'main' and t.name = s.name
 		where s.type = 'table' and t.type = 'table' and s.name not like 'sqlite\_%' escape '\'
-			and s.name <> '_tinystore_migrations'
+			and s.name not like '\_tinystore\_%' escape '\'
 		order by s.rowid`
 	columnsQuery = `select name, type, "notnull", coalesce(dflt_value, ''), pk
 		from pragma_table_xinfo(?) order by cid`
@@ -106,7 +106,8 @@ const (
 )
 
 // Read is the catalog of the file r reads, its own tables left out: SQLite's,
-// the migration history, and the shadow tables of a virtual one.
+// the store's, as its migration history and the queues jobs keeps there, and
+// the shadow tables of a virtual one.
 func Read(ctx context.Context, r Reader) (*Catalog, error) {
 	tables, err := readTables(ctx, r)
 	if err != nil {

@@ -247,6 +247,12 @@ func (d *DB) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile
 	return []tinystore.SnapshotFile{{Name: fileName(d.name), Engine: "sql", Schema: schema}}, nil
 }
 
+// SQLiteFile is the database's file, for an engine that keeps its tables in it,
+// as a jobs store opened with Options.In does. A program has no use for it.
+func (d *DB) SQLiteFile() *sqlite.File {
+	return d.file
+}
+
 // Close lets the calls in flight finish and closes the file; cancellation
 // stops waiting, not the cleanup. The store calls it: an application closes
 // the store instead.

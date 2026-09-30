@@ -31,7 +31,31 @@ func remind(ctx context.Context, job jobs.Job[Reminder]) error {
 [example_test.go](example_test.go) runs the five cases of
 [docs/jobs.md](../docs/jobs.md) as examples, and `go doc` shows them.
 
+A store opened `In` an sqldb database keeps its queues in that database's own
+file, so that a job commits with the rows it is about, in one batch and one
+fsync, or not at all:
+
+```go
+queues, err := jobs.Open(ctx, store, jobs.Options{In: db}) // data/sql/app.db
+index, err := jobs.OpenQueue[IndexNote](ctx, queues, "index")
+
+err = db.Batch(ctx, func(b *sqldb.Batch) error {
+	b.Exec(`update notes set body = ? where id = ?`, body, id)
+	b.Add(index.Enqueued(ctx, IndexNote{ID: id}))
+	return nil
+})
+```
+
 ## Contracts
+
+- **Queues live in `jobs.db`, or `In` a database.** A store opened with
+  `Options.In` migrates its tables, named `_tinystore_jobs…`, into the
+  database's file with a history of their own, keeps no file of its own and
+  copies nothing into a snapshot: the database's copy holds the queues. A
+  database holds one store's queues. Its `Enqueued` writes a job in a batch of
+  that database, which commits it with the batch's rows or not at all; a queue
+  whose store lives elsewhere is refused there with `ErrInvalid`. The store
+  opens after the database it names, and so closes before it.
 
 - **A job runs at least once.** An `Enqueue` returns once the job is in the
   file, and a job not cancelled runs whatever the process does. It may run

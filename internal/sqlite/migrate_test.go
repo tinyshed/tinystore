@@ -184,3 +184,55 @@ func TestVerifyChecksTheHistoryAndRunsNothing(t *testing.T) {
 		t.Fatal("Verify ran a script")
 	}
 }
+
+// A guest engine migrates in its owner's file with a history of its own: the
+// owner's id and history stay the owner's, the guest's scripts run once and
+// refuse to change, and the owner's next migration does not see them.
+func TestAGuestKeepsItsOwnHistoryInItsOwnersFile(t *testing.T) {
+	ctx := t.Context()
+	file, err := Open(ctx, filepath.Join(t.TempDir(), "app.db"), Config{Readers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	app := &fstest.MapFile{Data: []byte(`create table notes(n integer) strict;`)}
+	guest := testMigrations(`create table _tinystore_jobs(n integer) strict;`)
+	if err = file.Migrate(ctx, 1234, fstest.MapFS{"0001_app.sql": app}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err = file.MigrateHosted(ctx, "jobs", guest); err != nil {
+			t.Fatalf("the guest's migration: %v", err)
+		}
+	}
+	changed := testMigrations(`create table changed(n integer);`)
+	if err = file.MigrateHosted(ctx, "jobs", changed); !errors.Is(err, ErrMismatch) {
+		t.Fatalf("a guest's changed script: %v", err)
+	}
+	labels := &fstest.MapFile{Data: []byte(`create table labels(n integer) strict;`)}
+	if err = file.Migrate(ctx, 1234, fstest.MapFS{"0001_app.sql": app, "0002_labels.sql": labels}); err != nil {
+		t.Fatalf("the owner's next migration beside a guest: %v", err)
+	}
+	counts := map[string]int{}
+	err = file.View(ctx, func(tx *sql.Tx) error {
+		for _, table := range []string{"_tinystore_migrations", "_tinystore_jobs_migrations"} {
+			var n int
+			if scanErr := tx.QueryRowContext(ctx, `select count(*) from `+table).Scan(&n); scanErr != nil {
+				return scanErr
+			}
+			counts[table] = n
+		}
+		var owner int
+		if scanErr := tx.QueryRowContext(ctx, applicationIDQuery).Scan(&owner); scanErr != nil || owner != 1234 {
+			return errors.Join(scanErr, errors.New("the owner's application id moved"))
+		}
+		return nil
+	})
+	if err != nil || counts["_tinystore_migrations"] != 2 || counts["_tinystore_jobs_migrations"] != 1 {
+		t.Fatalf("histories %v: %v", counts, err)
+	}
+}

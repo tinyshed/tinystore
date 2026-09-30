@@ -28,6 +28,7 @@ var errClosed = fmt.Errorf("jobs: %w", tinystore.ErrClosed)
 type Store struct {
 	runtime     *tinystore.Store
 	file        *sqlite.File
+	hosted      bool // the file is a database's, In which the queues live
 	log         *slog.Logger
 	now         func() time.Time
 	gate        admission.Gate
@@ -43,45 +44,81 @@ type Store struct {
 	repeats sync.Map // a kept repeat's text → Repeat, so that a zone is loaded once
 }
 
-// Open opens jobs.db inside the store and gives back the leases a process that
-// died held, counting their attempts. The store closes it and, unless it is
-// Manual, removes every minute what the queues keep no longer.
-func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error) {
+// Open opens jobs.db inside the store, or with Options.In a database's file, and
+// gives back the leases a process that died held, counting their attempts. The
+// store closes it and, unless it is Manual, removes every minute what the
+// queues keep no longer.
+func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error) {
+	if options.In != nil {
+		return openIn(ctx, store, options.In)
+	}
 	path, release, err := store.Claim(fileName)
 	if err != nil {
 		return nil, err
 	}
 
-	s, err := openEngine(ctx, store, path)
+	file, err := openFile(ctx, path)
 	if err != nil {
 		release()
 		return nil, err
 	}
-
-	store.EveryEngine("jobs", "jobs maintenance", maintainEvery, s.maintainInBackground)
+	s, err := openEngine(ctx, store, file, false)
+	if err != nil {
+		release()
+		return nil, errors.Join(err, file.Close())
+	}
 	s.log.Info("opened", "path", path)
 	return s, nil
 }
 
-// openEngine opens and migrates the file, ends the leases of the process that
-// held it before, and hands the engine to the store
-func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Store, error) {
-	file, err := openFile(ctx, path)
-	if err != nil {
-		return nil, err
+// hosts are the files a store keeps its queues in besides jobs.db, one store
+// each, so that two stores never reserve the ids of one file
+var hosts sync.Map // *sqlite.File → *Store
+
+// openIn keeps the queues in a database's file, beside its rows: the tables
+// migrate with a history of their own, and the database keeps the file,
+// which it closes after this store, having opened before it.
+func openIn(ctx context.Context, store *tinystore.Store, db Database) (*Store, error) {
+	file := db.SQLiteFile()
+	if file == nil {
+		return nil, fmt.Errorf("%w: jobs: In a database that is closed", tinystore.ErrInvalid)
 	}
+	if _, taken := hosts.LoadOrStore(file, (*Store)(nil)); taken {
+		return nil, fmt.Errorf("%w: jobs: the database holds another store's queues", tinystore.ErrInUse)
+	}
+	scripts, err := fs.Sub(migrationFiles, "migrations")
+	if err == nil {
+		err = file.MigrateHosted(ctx, "jobs", scripts)
+	}
+	var s *Store
+	if err == nil {
+		s, err = openEngine(ctx, store, file, true)
+	}
+	if err != nil {
+		hosts.Delete(file)
+		return nil, fmt.Errorf("jobs: open in a database: %w", err)
+	}
+	hosts.Store(file, s)
+	s.log.Info("opened in a database")
+	return s, nil
+}
+
+// openEngine ends the leases of the process that held the file before, hands
+// the engine to the store and has it maintained
+func openEngine(ctx context.Context, store *tinystore.Store, file *sqlite.File, hosted bool) (*Store, error) {
 	s := &Store{
-		runtime: store, file: file, log: store.Logger("jobs"), now: store.Now,
+		runtime: store, file: file, hosted: hosted, log: store.Logger("jobs"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), closing: make(chan struct{}),
 		maintenance: make(chan struct{}, 1), queues: map[string]*queueState{},
 	}
 	s.maintenance <- struct{}{}
-	if err = s.endDeadLeases(ctx); err == nil {
-		err = store.Attach(s)
+	if err := s.endDeadLeases(ctx); err != nil {
+		return nil, err
 	}
-	if err != nil {
-		return nil, errors.Join(err, file.Close())
+	if err := store.Attach(s); err != nil {
+		return nil, err
 	}
+	store.EveryEngine("jobs", "jobs maintenance", maintainEvery, s.maintainInBackground)
 	return s, nil
 }
 
@@ -122,8 +159,12 @@ func (s *Store) endDeadLeases(ctx context.Context) error {
 	return nil
 }
 
-// Snapshot copies jobs.db into dir while the engine keeps working.
+// Snapshot copies jobs.db into dir while the engine keeps working; queues kept
+// In a database are in that database's copy.
 func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
+	if s.hosted {
+		return nil, nil
+	}
 	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
 	if err != nil {
 		return nil, fmt.Errorf("snapshot jobs: %w", err)
@@ -132,9 +173,9 @@ func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotF
 }
 
 // Close stops every Work, which gives back the jobs its handlers had without
-// counting their attempts, waits for the work in flight and closes jobs.db;
-// cancellation stops waiting, not the cleanup. The store calls it: an
-// application closes the store instead.
+// counting their attempts, waits for the work in flight and closes jobs.db, or
+// leaves a database's file to the database; cancellation stops waiting, not
+// the cleanup. The store calls it: an application closes the store instead.
 func (s *Store) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() { close(s.closing) })
 	drained, _ := s.gate.Close()
@@ -146,7 +187,11 @@ func (s *Store) Close(ctx context.Context) error {
 	s.opened.Lock()
 	defer s.opened.Unlock()
 	if s.file != nil {
-		s.closeErr = s.file.Close()
+		if s.hosted {
+			hosts.Delete(s.file)
+		} else {
+			s.closeErr = s.file.Close()
+		}
 		s.file = nil
 		s.log.Info("closed")
 	}

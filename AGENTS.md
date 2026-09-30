@@ -137,9 +137,14 @@ nothing.
 Breaking one of these is a design change. [docs/architecture.md](docs/architecture.md)
 has the reasons and the API; the rules hold for the runtime as it is built.
 
-**One directory, a file per engine.** `metrics.db`, `records.db`, `jobs.db`,
-`kv.db`, `blobs/`, and `sql/<name>.db` for databases the application names. No
-engine waits on another's writer, and no write is atomic across two engines.
+**One directory, a file per engine, unless the application joins two.**
+`metrics.db`, `records.db`, `jobs.db`, `kv.db`, `blobs/`, and `sql/<name>.db`
+for databases the application names. No engine waits on another's writer, and
+no write is atomic across two files. A jobs store opened `In` a database keeps
+its queues in that database's file, so that a `Batch` commits a job with the
+rows it is about: what shares a file shares its writer, by the application's
+choice and never by default. A guest engine's tables are `_tinystore_<engine>…`
+with a migration history of their own.
 
 **Writes known before they run share a commit; a Tx does not.** A `Batch` is
 one savepoint of a grouped commit, built before it takes the writer, so the
@@ -398,6 +403,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
 | an application's writes share a commit, fail alone  | `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone` |
 | a batch commits whole in its group, and fails alone | `TestABatchCommitsTogetherAndFailsAlone`, `TestABatchThatDoesNotBuildWritesNothing` |
+| a guest engine keeps its history in its owner's file | `TestAGuestKeepsItsOwnHistoryInItsOwnersFile`                                  |
+| a job in a batch commits with its rows or not at all | `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn` |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a migration rebuilding a parent keeps its children  | `TestARebuiltTableKeepsItsChildren`, `TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit` |
 | a schema is the SQL it prints                       | `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`        |
