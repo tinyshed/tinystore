@@ -107,8 +107,9 @@ func TestAReservationShrinksToWhatItHolds(t *testing.T) {
 	go func() {
 		reserved, reserveErr := store.Reserve(t.Context(), 5)
 		if reserveErr == nil {
-			defer reserved.Release()
+			reserved.Release()
 		}
+
 		waiter <- reserveErr
 	}()
 	waitForWaiters(t, store.memory, 1)
