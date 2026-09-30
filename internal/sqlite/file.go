@@ -282,6 +282,16 @@ func (f *File) holding(ctx context.Context, work func(*writeConnection) (bool, e
 }
 
 func takeSlot(ctx context.Context, slots chan struct{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case slots <- struct{}{}:
+		return nil
+	default:
+	}
+
 	select {
 	case slots <- struct{}{}:
 		return nil

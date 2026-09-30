@@ -73,10 +73,18 @@ func NewSlots(count int) Slots {
 
 // Take waits for a slot and returns what gives it back
 func (s Slots) Take(ctx context.Context) (release func(), err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	select {
 	case s <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	default:
+		select {
+		case s <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	if err = ctx.Err(); err != nil {
 		<-s
