@@ -27,7 +27,8 @@ type Options struct {
 	// record is dropped and counted, never waited for. 1024 when zero.
 	Buffer int
 
-	// Flush is how often the handler writes what it holds. A second when zero.
+	// Flush is how often the handler writes what it holds, and sooner once
+	// half its Buffer waits. A second when zero.
 	Flush time.Duration
 
 	// Budget is the most one Read may spend; a query may only narrow it.

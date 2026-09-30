@@ -10,36 +10,51 @@ import (
 // a failure repeated within this long is counted rather than logged again
 const quietFailures = 10 * time.Minute
 
-// Every runs work at each interval until the store closes. A Manual store runs
-// nothing; a failure is logged, and the next run still happens.
-func (s *Store) Every(name string, interval time.Duration, work func(context.Context) error) {
-	s.every(s.logger, name, interval, work)
+// Every runs work at each interval until the store closes, and soon asks for
+// its next run now rather than at the next interval: asks that come while it
+// runs or waits to run make one run more. A Manual store runs nothing, and its
+// soon does nothing; a failure is logged, and the next run still happens.
+func (s *Store) Every(name string, interval time.Duration, work func(context.Context) error) (soon func()) {
+	return s.every(s.logger, name, interval, work)
 }
 
 // EveryEngine runs engine work with the same engine attribute as Store.Logger.
-func (s *Store) EveryEngine(engine, name string, interval time.Duration, work func(context.Context) error) {
-	s.every(s.Logger(engine), name, interval, work)
+func (s *Store) EveryEngine(engine, name string, interval time.Duration, work func(context.Context) error) (
+	soon func(),
+) {
+	return s.every(s.Logger(engine), name, interval, work)
 }
 
-func (s *Store) every(logger *slog.Logger, name string, interval time.Duration, work func(context.Context) error) {
+func (s *Store) every(logger *slog.Logger, name string, interval time.Duration,
+	work func(context.Context) error,
+) (soon func()) {
 	if s.manual {
-		return
+		return func() {}
 	}
 	if interval <= 0 {
 		logger.Warn("background work refused: interval must be positive", "work", name, "interval", interval)
-		return
+		return func() {}
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return
+		return func() {}
 	}
 	failures := &failureLog{logger: logger, work: name, quiet: quietFailures}
-	s.running.Go(func() { s.repeat(interval, work, failures) })
+	asked := make(chan struct{}, 1)
+	s.running.Go(func() { s.repeat(interval, work, failures, asked) })
+	return func() {
+		select {
+		case asked <- struct{}{}:
+		default:
+		}
+	}
 }
 
-func (s *Store) repeat(interval time.Duration, work func(context.Context) error, failures *failureLog) {
+func (s *Store) repeat(interval time.Duration, work func(context.Context) error, failures *failureLog,
+	asked <-chan struct{},
+) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -47,6 +62,7 @@ func (s *Store) repeat(interval time.Duration, work func(context.Context) error,
 		case <-s.background.Done():
 			return
 		case <-ticker.C:
+		case <-asked:
 		}
 		failures.observe(s.clock(), work(s.background))
 	}

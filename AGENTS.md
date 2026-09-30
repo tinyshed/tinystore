@@ -427,6 +427,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an ambiguous change is a draft that does not run    | `TestAnAmbiguousChangeIsADraftThatDoesNotRun`                                   |
 | the tool finds each database by its name            | `TestTheToolFindsEachDatabaseByItsName`, `TestTheToolWritesTheNextMigrationThroughTheCheck` in `cmd/tinystore` |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
+| a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`                                 |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
 | a line one record holds loses no byte; a longer one is dropped and counted | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`, `TestALargeLineWriteKeepsOnlyOneBoundedPartial` |
 | a writer of lines never waits, and closes with the store | `TestLinesNeverWaitAndCloseWithTheStore`                                   |

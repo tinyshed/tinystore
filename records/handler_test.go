@@ -176,3 +176,36 @@ func BenchmarkHandler(b *testing.B) {
 		logger.Info("request finished", "route", "/notes", "status", 200, "ms", 12)
 	}
 }
+
+// A buffer half full asks for its flush before the interval, so that bursts
+// the buffer could not hold between two intervals are written, not dropped.
+func TestAHalfFullBufferFlushesBeforeItsInterval(t *testing.T) {
+	ctx := t.Context()
+	store, err := tinystore.Open(ctx, t.TempDir(), tinystore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	s, err := Open(ctx, store, Options{Buffer: 64, Flush: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(s.Handler("app"))
+	var written uint64
+	for range 8 {
+		for range 32 {
+			logger.Info("line")
+		}
+		written += 32
+		for deadline := time.Now().Add(5 * time.Second); s.Stats().Appended < written && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if stats := s.Stats(); stats.Appended != written || stats.Dropped != 0 {
+		t.Fatalf("%d lines in bursts of half the buffer, an hour's flush: %+v", written, stats)
+	}
+}

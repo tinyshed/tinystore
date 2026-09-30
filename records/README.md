@@ -51,7 +51,8 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   it received them and keeps theirs as an attribute.
 - `Handler(stream)` never blocks its caller. Lines wait in a buffer
   (`Options.Buffer`, 1024) and are written as one `Append` every
-  `Options.Flush` (a second), on `Close`, or on `Flush(ctx)` in a Manual store;
+  `Options.Flush` (a second), sooner once the buffer is half full, on `Close`,
+  or on `Flush(ctx)` in a Manual store;
   a line that does not fit the buffer or the format, or a batch whose write
   failed, or a line outside the store's window, is dropped and counted in
   `Stats`, with separate full-buffer, invalid/out-of-window and failed-write

@@ -46,6 +46,8 @@ type Store struct {
 	damaged     damaged
 	lines       lineWriters
 	queue       chan Record
+	flushSoon   func()       // runs the flush now, once the queue is half full
+	asked       atomic.Bool  // the queue has asked for the flush since the last one
 	appendMu    sync.Mutex   // routing, its commit and what the cache learns move together
 	enqueueMu   sync.RWMutex // handlers share it; the last flush takes it to shut them out
 	stopping    bool
@@ -83,7 +85,7 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 		return nil, err
 	}
 
-	store.EveryEngine("records", "records flush", opts.Flush, engine.flushInBackground)
+	engine.flushSoon = store.EveryEngine("records", "records flush", opts.Flush, engine.flushInBackground)
 	store.EveryEngine("records", "records maintenance", maintenanceEvery, engine.maintainInBackground)
 	engine.log.Info("opened", "path", path)
 	return engine, nil
@@ -129,7 +131,7 @@ func newStore(ctx context.Context, file *sqlite.File, opts Options) (*Store, err
 	engine := &Store{
 		file: file, opts: opts, blobs: coders.segments, heads: coders.heads, unpack: coders.unpack, now: time.Now,
 		log:   slog.New(slog.DiscardHandler),
-		queue: make(chan Record, opts.Buffer), maintenance: make(chan struct{}, 1),
+		queue: make(chan Record, opts.Buffer), flushSoon: func() {}, maintenance: make(chan struct{}, 1),
 		reads: admission.NewSlots(readSlots), appends: admission.NewSlots(appendSlots),
 	}
 	engine.damaged.found = map[damageKey]Damage{}

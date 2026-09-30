@@ -59,9 +59,19 @@ func (s *Store) enqueue(record Record) {
 	}
 	select {
 	case s.queue <- record:
+		s.askForFlush()
 	default:
 		s.dropped.Add(1)
 		s.droppedFull.Add(1)
+	}
+}
+
+// askForFlush asks for the flush before its interval once the queue is half
+// full, once until that flush drains it, so that a burst is written rather than
+// dropped and a steady trickle still waits for the interval
+func (s *Store) askForFlush() {
+	if len(s.queue) >= cap(s.queue)/2 && s.asked.CompareAndSwap(false, true) {
+		s.flushSoon()
 	}
 }
 
@@ -247,6 +257,7 @@ func appendsOf(records []Record) [][]Record {
 // drain takes at most a buffer's worth, so that lines arriving meanwhile wait
 // for the next flush instead of stretching this one
 func (s *Store) drain() []Record {
+	s.asked.Store(false)
 	var batch []Record
 	for range cap(s.queue) {
 		select {
