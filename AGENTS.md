@@ -509,6 +509,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |
 | exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |
 | writes queued for the writer share a commit, fail alone | `TestGroupedWritesShareACommitAndFailAlone`                                    |
+| a commit gathers the writers its last one answered     | `TestAGroupGathersTheWritesItsLastBatchAnswered`                               |
 | a write whose caller left before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing`                             |
 | a grouped write that has started finishes with its group | `TestAWriteThatHasStartedFinishesWithItsGroup`, cancelled or past its deadline mid-statement |
 | the application's grouped SQL ends at its deadline     | `TestAStatementUntilItsDeadlineEndsThere`, `TestADataStatementEndsAtItsDeadline` |

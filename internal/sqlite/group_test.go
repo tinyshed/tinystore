@@ -89,6 +89,43 @@ func countRows(t *testing.T, file *File) int {
 	return count
 }
 
+// Writers that each write again shortly after they are answered share the
+// next commit: its leader gathers them rather than taking the queue before
+// they are back, which split sixteen writers into commits of about eight.
+func TestAGroupGathersTheWritesItsLastBatchAnswered(t *testing.T) {
+	file := openGroupTestFile(t)
+	before := file.commits.Load()
+
+	const writers, rounds = 16, 40
+	var groups sync.Map // a group's writer, kept so that no later group reuses its address
+	var wg sync.WaitGroup
+	for n := range writers {
+		wg.Go(func() {
+			for range rounds {
+				err := file.UpdateGrouped(t.Context(), 8, func(w Writer) error {
+					if _, seen := groups.LoadOrStore(w, true); !seen {
+						time.Sleep(4 * time.Millisecond) // a commit long enough to gather in, on any disk
+					}
+					_, err := w.ExecContext(t.Context(), `insert into example values(?)`, n)
+					return err
+				})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				time.Sleep(300 * time.Microsecond) // what a caller does between two writes
+			}
+		})
+	}
+	wg.Wait()
+
+	commits := file.commits.Load() - before
+	if perCommit := float64(writers*rounds) / float64(commits); perCommit < writers*3/4 {
+		t.Fatalf("%.1f writes a commit over %d commits, want most of the %d writers in each", perCommit, commits,
+			writers)
+	}
+}
+
 // Writes that queue while the writer is busy commit together, in one
 // transaction and one fsync. A write that fails is rolled back to its savepoint
 // without failing the others.

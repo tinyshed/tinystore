@@ -26,6 +26,18 @@ const (
 	writerPatience = 10 * time.Second
 )
 
+// A leader gathers for at most a quarter of the last commit and never more
+// than gatherMost.
+//
+// The callers a commit answers need tens of microseconds to wake and write
+// again, and a leader that took the queue at once left them all to the next
+// commit: 64 writers made groups of about 32, half the writes a sync could
+// carry, tinyshed/research tinystore/reports/compare-2026-09-30.md.
+const (
+	gatherShare = 4
+	gatherMost  = 2 * time.Millisecond
+)
+
 const (
 	savepointQuery  = `savepoint grouped`
 	releaseQuery    = `release grouped`
@@ -44,6 +56,9 @@ type group struct {
 	mu      sync.Mutex
 	queue   []*groupedWrite
 	leading bool
+	last    int           // writes the last batch answered, whose callers may be about to write again
+	held    time.Duration // how long the last batch held the writer
+	grew    chan struct{} // told of a write queued, for a leader gathering
 }
 
 // groupedWrite is one caller's write from its queueing to its answer: err is
@@ -110,6 +125,10 @@ func (g *group) enqueue(entry *groupedWrite) (lead bool) {
 	defer g.mu.Unlock()
 	g.queue = append(g.queue, entry)
 	if g.leading {
+		select {
+		case g.grew <- struct{}{}:
+		default:
+		}
 		return false
 	}
 	g.leading = true
@@ -159,7 +178,10 @@ func (f *File) lead(own *groupedWrite) error {
 		f.writes.resign(own, err)
 		return err
 	}
+	f.writes.gather()
+	began := time.Now()
 	batch, outcomes := f.commitGroup(own.ctx)
+	f.writes.held = time.Since(began) // only the leader, which holds the writer, reads or writes it
 	f.writes.answer(batch, outcomes)
 	f.writes.handOn()
 	<-own.done
@@ -198,6 +220,40 @@ func (g *group) resign(own *groupedWrite, err error) {
 	g.queue = slices.DeleteFunc(g.queue, func(queued *groupedWrite) bool { return queued == own })
 	own.settle(err)
 	g.passLead()
+}
+
+// gather lets the writes the last batch answered join the next before it is
+// taken: it waits until the queue holds as many as that batch did, or for a
+// quarter of that batch's commit, whichever comes first. One writer alone
+// finds itself queued and never waits.
+func (g *group) gather() {
+	g.mu.Lock()
+	want, wait := g.last, min(g.held/gatherShare, gatherMost)
+	if len(g.queue) >= want || wait <= 0 {
+		g.mu.Unlock()
+		return
+	}
+	if g.grew == nil {
+		g.grew = make(chan struct{}, 1)
+	}
+	grew := g.grew
+	g.mu.Unlock()
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-grew:
+		case <-timer.C:
+			return
+		}
+		g.mu.Lock()
+		gathered := len(g.queue) >= want
+		g.mu.Unlock()
+		if gathered {
+			return
+		}
+	}
 }
 
 // take removes the batch from the head of the queue: at most groupWrites and
@@ -402,6 +458,7 @@ func outcome(failed, group error, ran bool) error {
 func (g *group) answer(batch []*groupedWrite, errs []error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.last = len(batch)
 	for i, entry := range batch {
 		entry.settle(errs[i])
 	}

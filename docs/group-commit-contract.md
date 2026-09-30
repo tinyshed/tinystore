@@ -2,11 +2,19 @@
 
 `internal/sqlite.File.UpdateGrouped` follows these rules, and the kv engine
 writes through it since 26 September 2026. There is no actor: the first
-caller to find no leader commits the queue and hands the lead on. There is no
-gathering delay: the writes that arrive during one commit make the next. A
-group holds at most 1024 writes and 8 MiB, a heavier write alone, and at most
-ten seconds of the writer; kv bounds the writes waiting through its admission
-slots. The measurements are [the kv round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md).
+caller to find no leader commits the queue and hands the lead on. The writes
+that arrive during one commit make the next, and since 30 September 2026 its
+leader gathers before it takes them: it waits until the queue holds as many
+writes as the last batch answered, or for a quarter of that batch's commit and
+never past 2 ms, whichever comes first. The callers a commit answers need tens
+of microseconds to write again, and a leader that took the queue at once left
+them to the commit after, so 64 writers made groups of about 32 and a sync
+carried half what it could; gathering took 64 writers from 10,000 to 14,900
+grouped writes a second on WSL2 and 8 from 1,400 to 2,550, and one writer alone
+never waits. A group holds at most 1024 writes and 8 MiB, a heavier write
+alone, and at most ten seconds of the writer; kv bounds the writes waiting
+through its admission slots. `TestAGroupGathersTheWritesItsLastBatchAnswered`
+is the gate. The measurements are [the kv round](https://github.com/tinyshed/research/blob/main/tinystore/reports/kv-mechanics-2026-09-26.md).
 Metrics' `Ingest` still commits one call in one immediate SQLite transaction;
 checkpoint policy is a separate decision.
 The [batching round](https://github.com/tinyshed/research/blob/main/tinystore/reports/grouping-ceiling-2026-09-23.md) measured a large
