@@ -129,6 +129,12 @@ wrote internal/data/migrations/002_add_description.sql:
   keeps it, a time to the millisecond in UTC, with what the database
   generated: the rowid the insert's result carries, and the generated columns
   a default fills, which it returns. Everything else is SQL.
+- **`Batch` writes several statements as one**, gathered before any runs and
+  then committed with the writes beside them, in one savepoint of the group:
+  all of them or none, a failure rolling back the batch alone, one fsync for
+  the group. Building it runs nothing, so it may take its time; a statement
+  that needs an earlier one's result says so in SQL, `last_insert_rowid()` or
+  a key the program chose, and one that must read before it decides is a `Tx`.
 - **`Tx` is a transaction of its own** on the writer, run on the caller's
   goroutine: nil commits, an error rolls back, and a panic rolls back and goes
   on. A call on the `DB` inside its own `Tx` waits for the `Tx`, which waits
@@ -136,7 +142,9 @@ wrote internal/data/migrations/002_add_description.sql:
   for the writer is logged once, naming the transaction's caller. `View` reads
   several statements from one snapshot, held at most five seconds; a write
   inside it is `ErrInvalid`, and a `Tx` used after its function returned is
-  `tinystore.ErrClosed`.
+  `tinystore.ErrClosed`. A `Tx` holds the writer for itself and pays an fsync
+  of its own, so transactions from many goroutines commit one at a time: what
+  can be a `Batch` should be.
 - **A declaration that cannot be a table panics when the program starts**,
   as `regexp.MustCompile` does, naming the table: an option naming a column
   the struct lacks, a default of another type, a generated column nothing

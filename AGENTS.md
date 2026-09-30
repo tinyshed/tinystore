@@ -141,6 +141,11 @@ has the reasons and the API; the rules hold for the runtime as it is built.
 `kv.db`, `blobs/`, and `sql/<name>.db` for databases the application names. No
 engine waits on another's writer, and no write is atomic across two engines.
 
+**Writes known before they run share a commit; a Tx does not.** A `Batch` is
+one savepoint of a grouped commit, built before it takes the writer, so the
+program's code never runs while a group waits. A `Tx` holds the writer alone
+and pays its own fsync, for reads that decide what to write.
+
 **The store opens first, engines open against it.** `metrics.Open(ctx, store, …)`,
 `sqldb.Open(ctx, store, "app", migrations, schema)`. The caller keeps the handles; the
 store has no accessors. One `Close` closes every engine, the last opened first.
@@ -392,6 +397,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | engines never import each other, nor the server     | `TestEnginesDoNotImportEachOther`, over every engine package                    |
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
 | an application's writes share a commit, fail alone  | `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone` |
+| a batch commits whole in its group, and fails alone | `TestABatchCommitsTogetherAndFailsAlone`, `TestABatchThatDoesNotBuildWritesNothing` |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a migration rebuilding a parent keeps its children  | `TestARebuiltTableKeepsItsChildren`, `TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit` |
 | a schema is the SQL it prints                       | `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`        |
