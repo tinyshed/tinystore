@@ -714,8 +714,11 @@ is released, and the gates it brought are in AGENTS.md.
   [rpc-contexts-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-contexts-2026-09-29.md) with a
   grouped write's statements run without their contexts too: 6 to 18 % more
   gets from Go at depth, 18 to 35 % more sets at 256, on Windows; the
-  container, and the race suite, once Docker runs. Then the SDKs, tested
-  against the vectors file.
+  saved-revision Linux comparison and race suites are now complete in the
+  [continuation draft](https://github.com/tinyshed/research/blob/research/runtime-benchmarks/tinystore/reports/runtime-continuation-2026-10-01.md).
+  Both SDKs passed their vectors and real-server suites. The draft measures
+  the checked ncruces port, rejects inline reader dispatch that blocks CANCEL,
+  and records the Go client's upload termination and shared-credit fixes.
 - **Checks to run**: `go test` in the root, `go -C server test` and
   `go -C cmd/tinystore test`; lint with `bin/golangci-lint` in all three, for
   Windows and with `GOOS=linux`; and the race suite in the container, as the

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="242" viewBox="0 0 400 242" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0.5" y="0.5" width="399" height="241" rx="6" fill="none" stroke="#3d444d"/>
+<text x="20" y="36" font-size="16" font-weight="600" fill="#f0f6fc">Log lines on disk</text>
+<text x="20" y="56" font-size="12" fill="#9198a1">MiB after close · lower is better</text>
+<text x="20" y="89.0" font-size="14" font-weight="600" fill="#f0f6fc">TinyStore</text>
+<rect x="138" y="74" width="19.4" height="20" rx="3" fill="#ECEAF3"/>
+<text x="165.4" y="89.0" font-size="14" font-weight="600" fill="#f0f6fc">12.3</text>
+<text x="20" y="121.0" font-size="14" font-weight="400" fill="#f0f6fc">JSONL+zstd</text>
+<rect x="138" y="106" width="13.2" height="20" rx="3" fill="#3d444d"/>
+<text x="159.2" y="121.0" font-size="14" font-weight="400" fill="#f0f6fc">8.4</text>
+<text x="20" y="153.0" font-size="14" font-weight="400" fill="#f0f6fc">JSONL</text>
+<rect x="138" y="138" width="162.0" height="20" rx="3" fill="#3d444d"/>
+<text x="308.0" y="153.0" font-size="14" font-weight="400" fill="#f0f6fc">103</text>
+</svg>

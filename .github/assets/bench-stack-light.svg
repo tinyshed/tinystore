@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="242" viewBox="0 0 400 242" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0.5" y="0.5" width="399" height="241" rx="6" fill="none" stroke="#d1d9e0"/>
+<text x="20" y="36" font-size="16" font-weight="600" fill="#1f2328">An application, 64 clients</text>
+<text x="20" y="56" font-size="12" fill="#59636e">requests a second · higher is better</text>
+<text x="20" y="89.0" font-size="14" font-weight="600" fill="#1f2328">TinyStore Batch</text>
+<rect x="138" y="74" width="162.0" height="20" rx="3" fill="#23212B"/>
+<text x="308.0" y="89.0" font-size="14" font-weight="600" fill="#1f2328">82 k</text>
+<text x="20" y="121.0" font-size="14" font-weight="400" fill="#1f2328">two files</text>
+<rect x="138" y="106" width="103.3" height="20" rx="3" fill="#d1d9e0"/>
+<text x="249.3" y="121.0" font-size="14" font-weight="400" fill="#1f2328">52 k</text>
+<text x="20" y="153.0" font-size="14" font-weight="400" fill="#1f2328">services</text>
+<rect x="138" y="138" width="109.1" height="20" rx="3" fill="#d1d9e0"/>
+<text x="255.1" y="153.0" font-size="14" font-weight="400" fill="#1f2328">55 k</text>
+</svg>

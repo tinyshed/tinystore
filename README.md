@@ -1,72 +1,173 @@
-# TinyStore
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
+    <img src=".github/assets/logo-light.svg" width="96" alt="TinyStore">
+  </picture>
+</p>
 
-An embedded data runtime for Go, on SQLite: metrics, records, SQL databases,
-key-value state, files and jobs in one directory, a file per engine, with
-bounded memory, no daemon and no cgo. Bun and Python reach the same directory
-through `tinystore serve`.
+<h1 align="center">TinyStore</h1>
 
-**Unreleased: the API moves without notice**, and no file written by an
-earlier revision has to be read.
+<p align="center">
+  A small storage runtime for applications.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <img alt="Go" src="https://img.shields.io/badge/go-1.27-00ADD8?style=flat-square">
+  <img alt="Status" src="https://img.shields.io/badge/status-pre--release-orange?style=flat-square">
+</p>
+
+---
+
+> **Not released yet.** The engines below are built and tested; the API may
+> still change, and no file written by an earlier revision has to be read.
+
+TinyStore gives an application SQL, key-value state, durable jobs, files,
+metrics and logs in one directory, with one lifecycle, one memory budget and
+one backup. Go programs embed it. Bun and Python programs reach the same
+directory through `tinystore serve`, a sidecar their SDK starts, and the same
+protocol serves remote clients.
+
+It is not a new database engine and does not try to beat specialised ones at
+their own job. SQLite is underneath, with formats of its own where a workload
+needs one. The goal is to make the storage of an application on one machine
+boring to operate.
+
+## A first look
 
 ```go
+// errors left out
 store, err := tinystore.Open(ctx, "./data", tinystore.Options{})
-if err != nil {
-	return err
-}
-defer store.Close()
+defer store.Close(ctx)
 
 state, err := kv.Open(ctx, store, kv.Options{})
-if err != nil {
-	return err
-}
 drafts, err := kv.OpenBucket[string](ctx, state, "drafts")
-if err != nil {
-	return err
-}
-if err = drafts.Set(ctx, "note/1", "hello"); err != nil {
-	return err
-}
-text, found, err := drafts.Get(ctx, "note/1")
+err = drafts.Set(ctx, "note/1", "hello")
+
+queues, err := jobs.Open(ctx, store, jobs.Options{})
+reminders, err := jobs.OpenQueue[Reminder](ctx, queues, "reminders")
+err = reminders.Enqueue(ctx, Reminder{Note: 1}, jobs.After(time.Hour))
 ```
 
+<details>
+<summary><b>Bun</b></summary>
+
+```ts
+import { open } from 'tinystore'
+
+await using store = await open('./data')
+
+const drafts = store.kv.bucket('drafts', 'string')
+await drafts.set('note/1', 'hello')
+
+const reminders = store.jobs.queue<{ note: number }>('reminders')
+await reminders.enqueue({ note: 1 }, { after: '1h' })
+```
+
+</details>
+
+<details>
+<summary><b>Python</b></summary>
+
+```python
+import asyncio
+import tinystore
+
+async def main() -> None:
+    async with tinystore.open("./data") as store:
+        drafts = store.kv.bucket("drafts", str)
+        await drafts.set("note/1", "hello")
+
+        reminders = store.jobs.queue("reminders", dict[str, int])
+        await reminders.enqueue({"note": 1}, after=3600)
+
+asyncio.run(main())
+```
+
+</details>
+
+From the first release:
+
+```sh
+go get github.com/tinyshed/tinystore
+bun add tinystore
+pip install tinyshed-tinystore
+```
+
+Release packages will carry the `tinystore` binary for Linux, macOS and Windows.
 [examples/notes](examples/notes/main.go) is a program using every engine.
 
 ## Engines
 
-| Package | What it keeps | File |
-|---|---|---|
-| [metrics](metrics/README.md) | samples, bit for bit, answered exactly | `metrics.db` |
-| [records](records/README.md) | logs and events, read by time, level and keys | `records.db` |
-| [sqldb](sqldb/README.md) | the application's own SQL, tables from structs, checked migrations | `sql/<name>.db` |
-| [kv](kv/README.md) | current state: typed buckets, counters, expiry, versions | `kv.db` |
-| [jobs](jobs/README.md) | work that runs at its time: retries, leases, repeats | `jobs.db` |
-| [blobs](blobs/README.md) | files by path, checked when read whole | `blobs/` |
-| [backup](backup/) | every engine's files in one checked zip | |
-
-## Other languages
-
-`tinystore serve` in [cmd/tinystore](cmd/tinystore/) serves a directory over
-one protocol, [docs/wire.md](docs/wire.md), as a sidecar the SDKs start, a
-private child, or a remote server with TLS and tokens. The clients are
-[sdk/js](sdk/js/) for Bun and [sdk/python](sdk/python/README.md).
-
-## Layout
-
-| Path | What it is |
+| | |
 |---|---|
-| `codec/` | the metrics block codec |
-| `metrics/`, `records/`, `sqldb/`, `kv/`, `jobs/`, `blobs/` | one package per engine |
-| `backup/` | a store's snapshot as one zip, and its restore |
-| `internal/` | SQLite files and transactions, admission, the directory lock |
-| `server/` | a module of its own: the store served to other processes |
-| `cmd/tinystore/` | a module of its own: `serve`, and `migrate` and `schema` for sqldb |
-| `sdk/` | the Bun and Python clients |
-| `examples/` | programs using the public API, built and tested with it |
-| `docs/` | the design, the formats and the wire protocol |
-| `tools/` | a module pinning developer tools |
+| [sqldb](sqldb/README.md) | the application's own SQL databases: tables from structs, checked migrations |
+| [kv](kv/README.md) | current state: typed buckets, counters, expiry, versions |
+| [jobs](jobs/README.md) | work that runs at its time: retries, leases, repeats |
+| [blobs](blobs/README.md) | files by path, checked when read whole |
+| [metrics](metrics/README.md) | samples kept bit for bit, answered exactly |
+| [records](records/README.md) | logs and events, read by time, level and keys |
+| [backup](backup/backup.go) | every engine's files in one checked zip |
 
-The measurements and prototypes behind the design are in
+By default each engine has its own file and writer. An application can put
+jobs in its SQL database and commit a job with its rows in one `Batch`.
+
+## Numbers
+
+The application workload at 64 concurrent clients completes **81,531
+requests/s locally** and **43,178 requests/s on an 8-vCPU Yandex VM**, median
+of three passes. With jobs joined to the application's SQL file and written
+in one `Batch`, that is **1.49x and 1.52x** the Redis + PostgreSQL +
+VictoriaMetrics + files stack. Every pass of this configuration has zero
+errors, dropped logs and jobs left waiting.
+
+Two three-minute passes on the VM complete 35,151 and 35,169 requests/s,
+**1.35x the service stack**, and handle every queued job. This is a bounded
+sustained-load check, not a half-hour steady-state guarantee.
+
+<p>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-stack-dark.svg"><img src=".github/assets/bench-stack-light.svg" width="400" alt="Application requests per second, 64 clients"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-stack-memory-dark.svg"><img src=".github/assets/bench-stack-memory-light.svg" width="400" alt="Application composite memory, client and services included"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-kv-dark.svg"><img src=".github/assets/bench-kv-light.svg" width="400" alt="kv"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sqldb-dark.svg"><img src=".github/assets/bench-sqldb-light.svg" width="400" alt="sqldb"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-records-dark.svg"><img src=".github/assets/bench-records-light.svg" width="400" alt="records"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-disk-dark.svg"><img src=".github/assets/bench-metrics-disk-light.svg" width="400" alt="metrics-disk"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-memory-dark.svg"><img src=".github/assets/bench-metrics-memory-light.svg" width="400" alt="metrics-memory"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-ingest-dark.svg"><img src=".github/assets/bench-metrics-ingest-light.svg" width="400" alt="metrics-ingest"></picture>
+</p>
+
+The cards use local Linux-container medians on a Ryzen 7 7700, 16 visible
+CPUs, Go 1.27.1 and Docker Desktop 29.6.2. Records: 445,136 private production
+lines. Metrics: 5,090,400 TSBS samples, with ingest plus settle timed together.
+Memory is client high-water RSS plus the greater of service high-water RSS
+and final service-tree PSS, not a simultaneous whole-stack peak.
+Application memory covers the full 8/64/256-client run.
+
+These are workload comparisons, not universal wins: cloud KV writes did
+not improve, specialized KV engines read faster, and Batch at 256 clients
+leaves a growing jobs queue. Metrics competitors do not have identical
+commit durability. The saved revisions, all passes, limits and reproduction
+commands are in the [round report](https://github.com/tinyshed/research/blob/research/runtime-benchmarks/tinystore/reports/runtime-continuation-2026-10-01.md).
+The report and these README figures are a local draft until the measured
+source is reviewed and merged.
+
+The rounds, prototypes and open questions behind the design are in
 [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore).
+
+## Origin
+
+TinyStore started inside [Dashbin](https://github.com/tinyshed/dashbin), which
+needed state, jobs, files and metrics without turning one self-hosted binary
+into a set of services. Different workloads wanted different storage shapes,
+but not different services, and the research grew into a project of its own.
+
+## Development
+
+TinyStore is developed with extensive AI assistance: its direction,
+architecture and acceptance criteria are a person's, and coding agents do
+much of the implementation, review and measurement. Generated code is not
+evidence that anything works; the tests, fuzzers and reproducible
+measurements are. [AGENTS.md](AGENTS.md) is the contract both follow.
 
 ## License
 
