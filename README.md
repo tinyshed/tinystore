@@ -166,13 +166,16 @@ labels, offsets and counts. Its **78.2 MiB** includes both files and has been
 checked bit for bit. It is a plain representation, not a database with
 queries, retention or integrity checks.
 
-### Bun and Python
+<details>
+<summary><b>KV: embedded, sidecar and server benchmarks</b></summary>
 
 <p>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sdk-bun-get-dark.svg"><img src=".github/assets/bench-sdk-bun-get-light.svg" width="400" alt="Bun KV reads beside embedded Go, sidecar and TCP server"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sdk-bun-set-dark.svg"><img src=".github/assets/bench-sdk-bun-set-light.svg" width="400" alt="Bun KV writes beside embedded Go, sidecar and TCP server"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sdk-python-get-dark.svg"><img src=".github/assets/bench-sdk-python-get-light.svg" width="400" alt="Python KV reads beside embedded Go, sidecar and TCP server"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sdk-python-set-dark.svg"><img src=".github/assets/bench-sdk-python-set-light.svg" width="400" alt="Python KV writes beside embedded Go, sidecar and TCP server"></picture>
+<picture>
+<source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset=".github/assets/bench-sdk-modes-mobile-dark.svg">
+<source media="(max-width: 600px)" srcset=".github/assets/bench-sdk-modes-mobile-light.svg">
+<source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sdk-modes-dark.svg">
+<img src=".github/assets/bench-sdk-modes-light.svg" width="800" alt="KV read and write throughput: embedded Go and Go, Bun, Python clients over sidecar and TCP server">
+</picture>
 </p>
 
 Embedded means a direct Go library call. Bun and Python use their SDKs through
@@ -180,6 +183,8 @@ a local sidecar or a loopback TCP server with a token; they have no embedded
 mode. Go sidecar/server rows isolate the process boundary within one language;
 SDK rows also include that language's encoding and scheduling. All modes use
 the same 100,000 keys and 128-byte values, in one interleaved session.
+
+</details>
 
 These are workload comparisons, not universal wins: cloud KV writes did
 not improve, specialized KV engines read faster, and Batch at 256 clients
