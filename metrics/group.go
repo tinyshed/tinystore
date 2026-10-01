@@ -10,20 +10,22 @@ import (
 )
 
 const (
-	blockSamples      = codec.MaxSamples
-	groupSlots        = 32
-	inlineBytes       = 16
-	maxDirectoryBytes = 8192
-	maxPayloadBytes   = 8200
+	blockSamples         = codec.MaxSamples
+	groupSlots           = 32
+	inlineBytes          = 16
+	maxDirectoryBytes    = 8192
+	maxPayloadBytes      = 8200
+	maxExpandedDirectory = maxDirectoryBytes - 128
 )
 
 type storedBlock struct {
-	payload   int64
-	clock     []byte
-	head      codec.Head
-	summary   blockSummary
-	body      []byte
-	bodyBytes int
+	payload    int64
+	clock      []byte
+	head       codec.Head
+	summary    blockSummary
+	body       []byte
+	bodyBytes  int
+	summarized bool // this query needs only the checked exact summary
 }
 
 type blockGroup struct {

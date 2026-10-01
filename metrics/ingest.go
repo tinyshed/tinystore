@@ -12,7 +12,10 @@ import (
 // call, or already waiting in the head, keeps the value supplied last.
 func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
 	defer s.countRejection(&err)
+	return s.ingest(ctx, batches, true, nil)
+}
 
+func (s *Store) ingest(ctx context.Context, batches []Batch, user bool, captured *window) error {
 	release, err := s.admit(ctx, s.ingestSlots)
 	if err != nil {
 		return err
@@ -29,7 +32,12 @@ func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
 	}
 	defer unreserve()
 
-	accepted := s.window()
+	var accepted window
+	if captured == nil {
+		accepted = s.window()
+	} else {
+		accepted = *captured
+	}
 	input, err := s.prepareIngest(batches, accepted)
 	if err != nil {
 		return err
@@ -38,7 +46,9 @@ func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error) {
 	if err = s.commitIngest(ctx, input, accepted.cutoff); err != nil {
 		return fmt.Errorf("ingest metrics: %w", err)
 	}
-	s.ingested.Add(uint64(countSamples(input))) //nolint:gosec // a count of committed samples
+	if user {
+		s.ingested.Add(uint64(countSamples(input))) //nolint:gosec // a count of committed samples
+	}
 	return nil
 }
 

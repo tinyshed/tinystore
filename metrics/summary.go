@@ -8,6 +8,7 @@ type blockSummary struct {
 	last, min, max, sum, increase float64
 	resets                        uint16
 	valid                         bool
+	exactSum, exactIncrease       []byte
 }
 
 func summarize(points []Sample, kind Kind) blockSummary {

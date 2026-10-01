@@ -40,13 +40,18 @@ type payloadFill struct {
 func newPayloadFill(reads []seriesRead) (payloadFill, []int64, error) {
 	fill := payloadFill{destinations: make(map[int64]payloadDestination), reads: reads}
 	ids := make([]int64, 0)
+	seen := make(map[int64]bool)
 	for readIndex := range reads {
 		for blockIndex, block := range reads[readIndex].blocks {
 			if block.payload == 0 {
 				continue
 			}
-			if _, found := fill.destinations[block.payload]; found {
+			if seen[block.payload] {
 				return payloadFill{}, nil, fmt.Errorf("%w: selected payload identifier repeats", ErrCorrupt)
+			}
+			seen[block.payload] = true
+			if block.summarized {
+				continue
 			}
 			destination := payloadDestination{read: readIndex, block: blockIndex, size: block.bodyBytes}
 			fill.destinations[block.payload] = destination

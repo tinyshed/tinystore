@@ -113,8 +113,8 @@ automatically below 2 KiB.
 ## Metrics group directories, versions 2 and 3
 
 These versions belong to the metrics directory, independently of the codec
-version above. Version 2 remains the format for newly sealed groups. Version 3
-is written when publication merges adjacent groups, retaining the payload ids
+version above. Version 2 was the format for newly sealed groups. Version 3
+was written when publication merged adjacent groups, retaining the payload ids
 already owned by their live slots. Both keep the same header:
 
 | offset | bytes | meaning |
@@ -140,3 +140,31 @@ The descriptor stream is bounded to 8 KiB before and after compression. Group
 clocks, value representations and payload checksums are unchanged. Version 3
 does not cause raw values or summaries to be re-encoded. Readers accept both
 versions; earlier binaries cannot read version 3. Golden vectors cover both.
+
+## Metrics Group Directories, Version 4
+
+New sealing and directory merges write version 4. It retains version 3's
+explicit payload addresses, so merging does not relocate or decode old bodies.
+The header and checksum binding stay the same; `first payload id` is zero.
+
+Bit 6 of a block's summary flags says that exact sum and increase follow the
+reset count, before body length. Bit 7 is reserved. Bit 6 is forbidden in
+earlier versions. A carried old block has no exact fields and still reads raw.
+
+Each exact value is an integer in units of `2^-1074`: an unsigned varint
+magnitude length, then (for nonzero lengths) an unsigned varint containing
+`exponent << 1 | negative`, followed by big-endian magnitude bytes. Zero is
+one zero byte. A nonzero magnitude has no leading zero byte and is odd; the
+decoder requires the complete field to match its canonical re-encoding.
+Magnitude length is at most 264 bytes, and magnitude bit length plus exponent
+is at most 2,106. A stored increase is nonnegative.
+
+These fields exist only for finite gauges and finite, nonnegative counters.
+They store exact internal arithmetic, not rounded float64 totals. Counter
+first/last values and reset count supply transitions between adjacent blocks;
+the query rounds once after combining every contribution to its bucket.
+
+Sealing and merging keep expanded descriptors below 8 KiB with header and
+compression overhead reserved. Extreme exponent mixtures may therefore
+produce fewer than 32 blocks in a group. Raw payload and clock formats stay
+unchanged. Golden vectors cover all three supported directory versions.

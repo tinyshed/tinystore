@@ -28,6 +28,10 @@ type Options struct {
 	// Memory bounds the bytes that all engines' in-flight work holds at once;
 	// zero leaves each engine to its own per-call limits.
 	Memory int64
+
+	// SelfMetrics periodically writes available engine reports into an opened
+	// metrics engine. Manual stores call FlushSelfMetrics themselves.
+	SelfMetrics bool
 }
 
 type Store struct {
@@ -37,6 +41,7 @@ type Store struct {
 	manual bool
 	lock   io.Closer
 	memory *memory
+	self   *selfMetrics
 
 	background context.Context
 	stop       context.CancelFunc
@@ -91,6 +96,10 @@ func newStore(ctx context.Context, dir string, options Options, lock io.Closer) 
 		store.memory = &memory{capacity: options.Memory}
 	}
 	store.background, store.stop = context.WithCancel(context.WithoutCancel(ctx))
+	if options.SelfMetrics {
+		store.self = &selfMetrics{slot: make(chan struct{}, 1)}
+		store.self.soon = store.EveryEngine("metrics", "self-metrics", selfInterval, store.FlushSelfMetrics)
+	}
 	return store
 }
 
@@ -121,6 +130,9 @@ func (s *Store) shutdown(ctx context.Context) {
 	s.running.Wait()
 
 	var err error
+	if s.self != nil {
+		err = s.flushSelf(ctx, true)
+	}
 	for _, engine := range slices.Backward(engines) {
 		err = errors.Join(err, engine.Close(ctx))
 	}

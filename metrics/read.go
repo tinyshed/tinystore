@@ -84,9 +84,10 @@ func (s *Store) readEach(ctx context.Context, request Range, yield func(Result) 
 // rangeQuery is a checked request: exact matchers, the limits it may spend and
 // its range, whose start retention may have moved forward.
 type rangeQuery struct {
-	matchers []Label
-	limits   Limits
-	from, to int64
+	matchers  []Label
+	limits    Limits
+	from, to  int64
+	aggregate *aggregateSelection
 }
 
 func (s *Store) checkRange(request Range) (rangeQuery, error) {
@@ -142,21 +143,31 @@ func (s *Store) yieldResults(
 // to visit in time order; it checks for cancellation once per block.
 func (s *Store) eachSample(ctx context.Context, read seriesRead, visit func(Sample) error) error {
 	for _, block := range read.blocks {
-		if err := ctx.Err(); err != nil {
+		if err := s.visitBlock(ctx, block, visit); err != nil {
 			return err
 		}
-		points, err := s.decodeBlock(block)
-		if err != nil {
-			return fmt.Errorf("%w: decode values: %w", ErrCorrupt, err)
-		}
-		for _, point := range points {
-			if err = visit(point); err != nil {
-				return err
-			}
+	}
+	return s.visitHead(ctx, read.head, visit)
+}
+
+func (s *Store) visitBlock(ctx context.Context, block storedBlock, visit func(Sample) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	points, err := s.decodeBlock(block)
+	if err != nil {
+		return fmt.Errorf("%w: decode values: %w", ErrCorrupt, err)
+	}
+	for _, point := range points {
+		if err = visit(point); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	head, err := s.decodeSelectedHead(ctx, read.head)
+func (s *Store) visitHead(ctx context.Context, selected headSnapshot, visit func(Sample) error) error {
+	head, err := s.decodeSelectedHead(ctx, selected)
 	if err != nil {
 		return err
 	}

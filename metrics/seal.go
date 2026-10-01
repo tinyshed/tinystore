@@ -90,11 +90,11 @@ func (s *Store) clearReady(ctx context.Context, candidate packingCandidate) erro
 
 func (s *Store) encodeCandidate(ctx context.Context, candidate packingCandidate) (blockGroup, error) {
 	group := blockGroup{
-		format: 2, modelScale: candidate.modelScale, seriesID: candidate.seriesID,
+		format: 4, modelScale: candidate.modelScale, seriesID: candidate.seriesID,
 		start: candidate.points[0].At, end: candidate.points[len(candidate.points)-1].At,
 	}
 	maxSpan := uint64(s.opts.MaxBlockSpan.Milliseconds()) //nolint:gosec // a validated positive duration
-	clockBytes := 6
+	clockBytes, directoryBytes := 6, 0
 	for start := 0; start < len(candidate.points) && len(group.blocks) < groupSlots; {
 		if err := ctx.Err(); err != nil {
 			return group, err
@@ -114,13 +114,23 @@ func (s *Store) encodeCandidate(ctx context.Context, candidate packingCandidate)
 			return group, fmt.Errorf("encode sealed block: %w", err)
 		}
 		group.modelScale = hint
-		block := storedBlock{clock: clock, summary: summarize(points, candidate.kind)}
+		block := storedBlock{clock: clock, summary: exactSummarize(points, candidate.kind)}
 		block.head.Start = points[0].At
 		block.head.End = points[len(points)-1].At
 		block.head.Count = len(points)
 		block.head.First = points[0].Value
 		block.body = sealValueBody(block, body)
 		block.bodyBytes = len(block.body)
+		// Payload IDs are assigned during publication; allow their longest varint.
+		descriptor := group
+		if block.bodyBytes > inlineBytes {
+			descriptor.allocation |= uint32(1) << len(group.blocks)
+		}
+		entryBytes := len(descriptor.appendBlock(nil, len(group.blocks), block)) + 9
+		if len(group.blocks) > 0 && entryBytes > maxExpandedDirectory-directoryBytes {
+			break
+		}
+		directoryBytes += entryBytes
 		if block.bodyBytes > inlineBytes {
 			group.allocation |= uint32(1) << len(group.blocks)
 		}

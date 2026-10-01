@@ -1,7 +1,8 @@
 # Exact aggregate contract
 
-`Aggregate(ctx, AggregateRequest)` implements the numerical rules below by
-decoding raw samples from one snapshot. `AggregateRequest` contains a `Range`,
+`Aggregate(ctx, AggregateRequest)` implements the numerical rules below from
+one snapshot, using checked exact whole-block summaries where eligible and
+decoding raw samples otherwise. `AggregateRequest` contains a `Range`,
 a positive whole-millisecond `Width`, and an operation: `count`, `sum`, `min`,
 `max` or `increase`. The buckets are anchored at the requested `Range.From`;
 retention clips contributing samples without shifting those bucket boundaries.
@@ -10,9 +11,8 @@ its half-open bounds, count, value, reset count and overflow flag, and
 `Partial` when the retention cutoff falls inside it.
 
 Existing directory `sum` and `increase` fields are ordinary float64 diagnostics
-and cannot answer the sums specified here. The current aggregate path decodes
-raw blocks, including complete ones. A versioned exact summary shortcut remains
-unbuilt.
+and cannot answer the sums specified here. Version-four directories carry
+bounded exact integer summaries. Earlier directories fall back to raw.
 
 ## Range and result
 
@@ -76,14 +76,18 @@ For finite float64 values, an exact sum is an integer count of units of
 removing trailing zero bits, with the removed exponent encoded separately.
 The representation is bounded by the float64 domain and block sample ceiling;
 the decoder must check sign, exponent, magnitude length and canonical form.
-The current directory format does not contain it. Introducing it requires a
-new directory version and a golden reader for older versions. Legacy blocks
-decode raw for exact aggregates now.
+Version four stores it as a bounded, canonical signed magnitude after removing
+trailing zero bits, with that exponent recorded separately. At most 2,106 bits
+are permitted for a block of 240 samples. A zero has one encoding; nonzero
+magnitudes must be odd with no leading zero byte. Golden readers retain
+versions two and three; their float64 summaries never answer exact sums.
 
 The [representation round](https://github.com/tinyshed/research/blob/main/tinystore/reports/aggregate-representation-2026-09-23.md)
 compares this candidate with a fixed superaccumulator and floating expansion.
 The current API has tests for cancellation after intermediate overflow,
 subnormals, signed zero, nonfinite inputs, reset transitions, clipped blocks,
-retention and reopen. A new persisted summary version still needs golden old
-and new readers, corruption tests and identical aggregate answers before its
-shortcut may ship.
+retention and reopen. Version four has a golden vector, malformed-summary
+tests and raw/summary differential checks. Eligible whole blocks spend the
+block/directory budgets but no raw payload or decoded-sample budget. Their
+unused raw rows are not fetched or checked; `Read` and partial blocks still
+check payload integrity. Bounds clip retention before eligibility is chosen.

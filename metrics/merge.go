@@ -85,7 +85,7 @@ func absorb(previous, group blockGroup) (blockGroup, bool, error) {
 	}
 
 	merged := group
-	merged.format = 3
+	merged.format = 4
 	merged.firstPayload = 0
 	merged.blocks = append(blocks, group.blocks...)
 	merged.start = merged.blocks[0].head.Start
@@ -99,6 +99,13 @@ func absorb(previous, group blockGroup) (blockGroup, bool, error) {
 		if block.bodyBytes > inlineBytes {
 			merged.allocation |= uint32(1) << slot
 		}
+	}
+	var directory []byte
+	for slot, block := range merged.blocks {
+		directory = merged.appendBlock(directory, slot, block)
+	}
+	if len(directory) > maxExpandedDirectory {
+		return group, false, nil
 	}
 	return merged, true, nil
 }

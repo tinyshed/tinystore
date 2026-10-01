@@ -20,5 +20,6 @@
 //	engine.go      Claim, Attach, Logger, Now: how an engine joins the store
 //	every.go       background work, and how its failures are logged
 //	memory.go      Reserve: one memory budget for every engine's work
+//	self.go        opt-in bounded engine reports, stored as ordinary metrics
 //	snapshot.go    Snapshot: every engine's file copied while it keeps working
 package tinystore

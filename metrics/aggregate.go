@@ -127,6 +127,7 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 	if query.from >= query.to {
 		return []AggregateResult{}, nil
 	}
+	query.aggregate = &aggregateSelection{origin: request.Range.From, width: request.Width.Milliseconds()}
 
 	unreserve, err := s.reserve(ctx, func() (int64, error) { return aggregateReservation(query.limits) })
 	if err != nil {
@@ -170,11 +171,15 @@ func aggregateReservation(limits Limits) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	extra, err := reservedMultiple(limits.OutputSamples, 48)
+	extra, err := reservedMultiple(limits.OutputSamples, 64)
 	if err != nil {
 		return 0, err
 	}
-	return reservation(weight, extra)
+	accumulators, err := reservedMultiple(limits.Series, 2048)
+	if err != nil {
+		return 0, err
+	}
+	return reservation(weight, extra, accumulators)
 }
 
 // aggregation is one Aggregate call. Its buckets start at the requested From,
@@ -196,7 +201,7 @@ func (a *aggregation) fold(ctx context.Context, reads []seriesRead) ([]Aggregate
 			return nil, fmt.Errorf("%w: increase requires a counter series", ErrInvalid)
 		}
 		series := seriesBuckets{aggregation: a, kind: read.series.kind}
-		if err := a.store.eachSample(ctx, read, series.add); err != nil {
+		if err := a.foldRead(ctx, read, &series); err != nil {
 			return nil, err
 		}
 		if err := series.flush(); err != nil {

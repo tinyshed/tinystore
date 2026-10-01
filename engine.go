@@ -65,6 +65,12 @@ func (s *Store) Attach(engine Engine) error {
 	if s.closed {
 		return ErrClosed
 	}
+	if writer, ok := engine.(SelfWriter); ok && s.self != nil {
+		if s.self.writer != nil {
+			return fmt.Errorf("%w: self-metrics writer", ErrInUse)
+		}
+		s.self.writer = writer
+	}
 	s.engines = append(s.engines, engine)
 	return nil
 }

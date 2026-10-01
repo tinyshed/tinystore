@@ -202,11 +202,16 @@ lines from the records engine itself, or writing a log would log again.
 
 ## Self-metrics
 
-Designed, not built.
+With `Options.SelfMetrics: true`, the store captures available reports every
+15 seconds and attempts one final report before closing the engines, bounded
+to five seconds. A Manual store instead
+calls `FlushSelfMetrics(ctx)`. Without an opened metrics engine it writes
+nothing. The root imports no engine: `Reporter.Report` and `SelfWriter.WriteSelf`
+are the interfaces by which an attached engine participates.
 
-An engine that can describe its work implements `Report() []tinystore.Measure`;
-the metrics engine also implements `WriteSelf`. With `Options.SelfMetrics` set,
-the store writes every report as ordinary series:
+The runtime reports its reserved memory (not process RSS) and engine count.
+Metrics and records report their existing counters; KV, jobs, blobs and SQL
+do not yet supply reports. These become ordinary series:
 
 ```text
 {Engine: "records", Name: "written_records", Value: 2}
@@ -214,6 +219,11 @@ the store writes every report as ordinary series:
 ```
 
 `Stats()` stays each engine's pull API.
+Reports are bounded to 256 fixed engine/name pairs, with names at most 64
+characters; bucket, queue, key and path labels do not belong in them. Values
+are unsigned integer counters or gauges. Integers above 2^53 are refused,
+not rounded into float64. Self-writes do not increment user ingest/rejection
+counters, and a reporter reads counters without running SQL or writing data.
 
 ## Errors
 

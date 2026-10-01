@@ -31,6 +31,7 @@ type snapshotRead struct {
 	// deferPayloads makes external payloads wait for one batched fetch at the
 	// end.
 	deferPayloads bool
+	aggregate     *aggregateSelection
 }
 
 // smaller matches keep one query per series, as tinyshed/research's
@@ -49,7 +50,7 @@ func (s *Store) fetchSnapshot(ctx context.Context, query rangeQuery) ([]seriesRe
 		if err != nil {
 			return err
 		}
-		snapshot := snapshotRead{tx: tx, from: query.from, to: query.to, budget: &budget}
+		snapshot := snapshotRead{tx: tx, from: query.from, to: query.to, budget: &budget, aggregate: query.aggregate}
 		if len(matched) >= batchedSeries {
 			snapshot.deferPayloads = true
 			reads, err = s.fetchBatched(ctx, snapshot, matched)
@@ -199,6 +200,13 @@ func (r snapshotRead) takeBlock(
 	if r.budget.blocks > r.budget.limits.Blocks {
 		return block, fmt.Errorf("%w: decoded blocks", ErrLimit)
 	}
+	if group.isExternal(slot) {
+		block.payload = group.payloadID(slot)
+	}
+	if r.aggregate != nil && r.aggregate.complete(block, r.from, r.to) {
+		block.summarized = true
+		return block, nil
+	}
 	if err := r.budget.takeSamples(block.head.Count); err != nil {
 		return block, err
 	}
@@ -208,7 +216,6 @@ func (r snapshotRead) takeBlock(
 	if err := r.budget.takeBytes(block.bodyBytes); err != nil {
 		return block, err
 	}
-	block.payload = group.payloadID(slot)
 	if r.deferPayloads {
 		return block, nil
 	}

@@ -142,9 +142,17 @@ also available; increase requires a counter series. `Count` and `Resets` remain
 integers, `Value` is rounded once from exact finite arithmetic, and `Overflow`
 distinguishes a finite sum that rounded to infinity. An error returns no
 results. `OutputSamples` limits buckets, while `DecodedSamples` limits raw
-work. The current engine decodes raw for every aggregate;
+work. Whole version-four blocks inside one clipped bucket use checked exact
+summaries without fetching external raw payloads. Cut blocks, head samples and
+older directories are decoded and filtered;
 [the numerical contract](../docs/aggregate-contract.md) specifies nonfinite,
 reset and boundary behavior.
+
+`tinystore.Options{SelfMetrics: true}` enables the runtime's periodic collection
+into this engine. `Store.FlushSelfMetrics(ctx)` is the Manual-store path.
+Self samples use fixed `__name__=tinystore_<name>` and `engine` labels and do
+not count toward user ingest/rejections. The collector covers runtime memory
+reservations and the metrics/records counters, not process RSS or every engine.
 
 ## Instruments
 

@@ -39,6 +39,9 @@ func (g blockGroup) appendBlock(raw []byte, slot int, block storedBlock) []byte 
 	if summary.valid {
 		flags |= 1 << 5
 	}
+	if g.format >= 4 && summary.exactSum != nil {
+		flags |= 1 << 6
+	}
 	for i, prediction := range summaryPredictions(block.head) {
 		if math.Float64bits(values[i]) == math.Float64bits(prediction) {
 			flags |= 1 << i
@@ -51,6 +54,10 @@ func (g blockGroup) appendBlock(raw []byte, slot int, block storedBlock) []byte 
 		}
 	}
 	raw = appendCount(raw, int(summary.resets))
+	if flags&(1<<6) != 0 {
+		raw = append(raw, summary.exactSum...)
+		raw = append(raw, summary.exactIncrease...)
+	}
 	raw = appendCount(raw, block.bodyBytes)
 	switch {
 	case g.format >= 3 && g.isExternal(slot):
@@ -106,7 +113,7 @@ func (s *Store) readDirectory(id int64, row groupRow, clock []storedBlock) (bloc
 func checkDirectory(id int64, row groupRow, slots int) (blockGroup, []byte, error) {
 	group := blockGroup{format: 2, seriesID: id, start: row.start, end: row.end, clockID: row.clockID}
 	data := row.data
-	if len(data) < 31 || len(data) > maxDirectoryBytes || (data[0] != 2 && data[0] != 3) {
+	if len(data) < 31 || len(data) > maxDirectoryBytes || (data[0] != 2 && data[0] != 3 && data[0] != 4) {
 		return group, nil, fmt.Errorf("%w: directory version or size", ErrCorrupt)
 	}
 	group.format = data[0]
@@ -136,7 +143,7 @@ func (g blockGroup) checkReferences(storedClock int64, count int) error {
 	}
 	allocated := int64(bits.OnesCount32(g.allocation))
 	switch {
-	case g.format == 3 && g.firstPayload != 0,
+	case g.format >= 3 && g.firstPayload != 0,
 		g.format == 2 && allocated == 0 && g.firstPayload != 0,
 		g.format == 2 && allocated > 0 && (g.firstPayload < 1 || g.firstPayload > math.MaxInt64-allocated):
 		return fmt.Errorf("%w: group payload range", ErrCorrupt)
@@ -149,10 +156,17 @@ func (g blockGroup) checkReferences(storedClock int64, count int) error {
 func (g *blockGroup) readBlock(reader *binaryReader, slot int, block storedBlock) (storedBlock, error) {
 	block.head.First = reader.float()
 	flags := reader.byte()
-	if flags&0xc0 != 0 {
+	if flags&0x80 != 0 || g.format < 4 && flags&0x40 != 0 {
 		return block, fmt.Errorf("%w: summary flags", ErrCorrupt)
 	}
 	block.summary = readSummary(reader, block.head, flags)
+	if flags&0x40 != 0 {
+		block.summary.exactSum = readExact(reader)
+		block.summary.exactIncrease = readExact(reader)
+		if reader.err != nil {
+			return block, reader.err
+		}
+	}
 	block.bodyBytes = reader.size(maxPayloadBytes)
 	if block.bodyBytes > 0 && block.bodyBytes < 6 {
 		return block, fmt.Errorf("%w: value body length", ErrCorrupt)
@@ -167,7 +181,7 @@ func (g *blockGroup) readBlock(reader *binaryReader, slot int, block storedBlock
 	if block.bodyBytes <= inlineBytes {
 		return block, fmt.Errorf("%w: external body length", ErrCorrupt)
 	}
-	if g.format == 3 {
+	if g.format >= 3 {
 		return g.readPayloadID(reader, block)
 	}
 	return block, nil

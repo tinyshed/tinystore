@@ -37,11 +37,15 @@ Where the building differs from the design:
 - `records` has no per-segment text sample, since one zstd frame a segment
   bounds the text at 0.48 bytes a record on the production corpus, and no text
   templates beyond a line's own time, which cost more than zstd there.
-- In metrics the versioned exact summary shortcut for aggregates and
-  steady-state performance are unfinished, with the gaps listed in research's
+- In metrics steady-state performance is unfinished, with the gaps listed in research's
   `rewrite.md`. Prototype density figures are not engine guarantees.
 
-Not built: self-metrics; the SDKs' READMEs, examples and packages; a release.
+Self-metrics is opt-in: the runtime's memory budget and the metrics/records
+reports are written to an opened metrics engine; other engines expose no
+report yet. Version-four summaries accelerate eligible whole-block aggregates;
+old directories and cut blocks still use raw.
+
+Not built: the SDKs' READMEs, examples and packages; a release.
 [docs/server.md](docs/server.md) "Building it" says where each server slice
 stands.
 
