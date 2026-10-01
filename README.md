@@ -189,11 +189,11 @@ the same 100,000 keys and 128-byte values, in one interleaved session.
 These are workload comparisons, not universal wins: cloud KV writes did
 not improve, specialized KV engines read faster, and Batch at 256 clients
 leaves a growing jobs queue. Metrics competitors do not have identical
-commit durability. The saved revisions, all passes, limits and reproduction
-commands are in the [round report](https://github.com/tinyshed/research/blob/research/runtime-benchmarks/tinystore/reports/runtime-continuation-2026-10-01.md).
-The report and these README figures are a branch draft until the measured
-source is reviewed and merged.
-The [consumer-memory and client-mode follow-up](https://github.com/tinyshed/research/blob/research/runtime-benchmarks/tinystore/reports/consumer-memory-2026-10-01.md)
+commit durability. The cards measure `ad4f047`, before the exact block
+summaries, which [a round of their own](https://github.com/tinyshed/research/blob/main/tinystore/reports/self-summary-2026-10-01.md)
+measures. The saved revisions, all passes, limits and reproduction commands
+are in the [round report](https://github.com/tinyshed/research/blob/main/tinystore/reports/runtime-continuation-2026-10-01.md).
+The [consumer-memory and client-mode follow-up](https://github.com/tinyshed/research/blob/main/tinystore/reports/consumer-memory-2026-10-01.md)
 records the small consumers, paired memory bars, raw representation and SDK modes.
 
 The rounds, prototypes and open questions behind the design are in
