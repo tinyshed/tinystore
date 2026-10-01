@@ -184,7 +184,7 @@ func (s *Store) Stats() Stats {
 		Queries:         s.queries.Load(),
 		ReadBlocks:      s.readBlocks.Load(),
 		ReadBytes:       s.readBytes.Load(),
-		Damaged:         uint64(len(s.damaged.list())),
+		Damaged:         uint64(s.damaged.count()), //nolint:gosec // a map length is nonnegative
 	}
 }
 

@@ -67,6 +67,12 @@ func (d *damaged) list() []Damage {
 	return list
 }
 
+func (d *damaged) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.found)
+}
+
 // damageOf is err as the damage of one row, when it is a corruption of that
 // row's bytes; any other error is itself
 func damageOf(found Damage, err error) error {
