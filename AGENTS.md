@@ -37,13 +37,14 @@ Where the building differs from the design:
 - `records` has no per-segment text sample, since one zstd frame a segment
   bounds the text at 0.48 bytes a record on the production corpus, and no text
   templates beyond a line's own time, which cost more than zstd there.
-- In metrics steady-state performance is unfinished, with the gaps listed in research's
-  `rewrite.md`. Prototype density figures are not engine guarantees.
+- In metrics steady-state performance is unfinished, with the gaps listed in
+  research's `rewrite.md`. Prototype density figures are not engine guarantees.
 
-Self-metrics is opt-in: the runtime's memory budget and the metrics/records
-reports are written to an opened metrics engine; other engines expose no
-report yet. Version-four summaries accelerate eligible whole-block aggregates;
-old directories and cut blocks still use raw.
+Self-metrics are opt-in, `Options.SelfMetrics`: the store's memory budget and
+the metrics and records engines' counters, written to its metrics engine as
+ordinary series; kv, jobs, blobs and sqldb report nothing yet. An aggregate
+answers a whole block inside one bucket from its exact summary, which version
+four directories keep; a cut block, the head and older directories decode raw.
 
 Not built: the SDKs' READMEs, examples and packages; a release.
 [docs/server.md](docs/server.md) "Building it" says where each server slice
@@ -335,7 +336,7 @@ golden readers. A module version is not a substitute for any of them.
 
 **Merging directories must not relocate payloads.** A preceding group is absorbed
 only when it has no more live blocks than the new group and the combination fits
-the existing group and clock bounds. Version-three directories retain explicit
+the existing group and clock bounds. Versions three and four keep explicit
 payload ids; values and summaries are neither decoded nor recomputed. Clock
 ownership, directory replacement and the newly sealed prefix publish atomically.
 `SealedBlocks` counts only new blocks, never the old blocks carried into a merge.
@@ -405,6 +406,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
 | one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
 | an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
+| self-metrics are opt-in, the last report before the engines close | `TestSelfMetricsAreOptInAndCollectBeforeClose`                    |
+| a self-report never counts itself, nor rounds a value | `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports` |
 | engines never import each other, nor the server     | `TestEnginesDoNotImportEachOther`, over every engine package                    |
 | an application's read cannot write                  | `TestAReadCannotWriteAndSaysWhereToWrite`                                       |
 | an application's writes share a commit, fail alone  | `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone` |
@@ -503,7 +506,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a counter's increase survives a reset               | `TestCounterSummaryIncludesResets`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` |
 | only the safe prefix is sealed                      | `TestWatermarkIsStrictAndFollowsTheSeries`, on the strict edge                  |
 | a late sample cannot enter a sealed block           | `TestHeadSealingReopenAndPartialRetention`, `ErrTooOld` behind the frontier     |
-| a partial range is not answered from a summary      | `TestAggregateRoundsExactSumAcrossSealedBlocks`: aggregates decode raw          |
+| a partial range is not answered from a summary      | `TestWholeSummarySkipsPayloadButPartialBlocksCheckIt`: a cut block decodes raw  |
 | retention clips before it summarises                | `TestAggregateClipsRetentionBeforeSummingSealedEdges`                           |
 | a bucket retention cut says so                      | `TestAggregateMarksOnlyTheBucketRetentionCut`                                   |
 | a quiet tail expires without becoming a block       | `TestHeadSealingReopenAndPartialRetention`, the one-sample head at its end      |
@@ -532,6 +535,11 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a series that cannot be repaired can still be dropped  | `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours` |
 | long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |
 | exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |
+| a whole block's summary answers as its samples do      | `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`, every operation, kind and boundary |
+| a whole-block summary spends no decoded-sample budget  | `TestWholeExactBlocksNeedNoDecodedSampleBudget`                                 |
+| a malformed exact summary is refused                   | `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary` |
+| exact summaries keep a directory within its bound      | `TestLargeExactSummariesStayWithinDirectoryBounds`                              |
+| a version-four directory is the bytes of its vector    | `TestVersionFourExactDirectoryGolden`                                           |
 | writes queued for the writer share a commit, fail alone | `TestGroupedWritesShareACommitAndFailAlone`                                    |
 | a commit gathers the writers its last one answered     | `TestAGroupGathersTheWritesItsLastBatchAnswered`                               |
 | a write whose caller left before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing`                             |
@@ -643,6 +651,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | answers queued during a write leave in the next        | `TestQueuedAnswersShareAWrite` in `server/internal/flow`                        |
 | a connection grant wakes every sender whose body fits | `TestAGrantWakesEverySenderWhoseBodyFits` in `server/internal/flow`             |
 | a Go test client's upload stops with its stream or connection | `TestAFinalResponseStopsAnUploadWaitingForCredit`, `TestALostConnectionStopsAnUploadWaitingForCredit` in `server/internal/client` |
+| a point read cancelled while it waits lets its connection go on | `TestACancelledPointReadLetsTheConnectionGoOn`                           |
 | a stream's number is free when its final frame arrives | `TestAStreamNumberIsFreeWhenItsFinalFrameArrives`                               |
 | a closing server lets the streams running finish       | `TestClosingTheServerLetsTheStreamsRunningFinish`, `TestARequestThatCrossesTheGoAwayIsAnsweredUnavailable` |
 | a remote connection needs its token                    | `TestARemoteConnectionNeedsItsToken`                                            |

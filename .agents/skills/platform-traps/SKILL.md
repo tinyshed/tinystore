@@ -71,6 +71,14 @@ Each line cost a debugging session once. The fix named is the one in the code.
 - **A goroutine started for each call grows its stack into SQLite every
   time**, and Go's default GC target collects hundreds of times a second: the
   server keeps workers and sets GOGC 400.
+- **The driver scans a column into a `*[]byte` by appending to what the slice
+  already holds** (`ScanColumn`, Go 1.27), where `database/sql` gives a copy: a
+  slice scanned again overwrites the bytes kept from its last row. Declare it
+  inside the row's loop, as every engine does; `*any` still gets a copy.
+- **`ncruces/go-sqlite3/driver` registers `sqlite3` when it loads**, as
+  `mattn/go-sqlite3` does, cgo or not: a program linking both panics before
+  `main`. The store opens through the driver's connector and never by name, so
+  `-ldflags=-X=github.com/ncruces/go-sqlite3/driver.driverName=` loses nothing.
 - **Windows' scheduler spins in `osyield`** while it steals work, visible as a
   large flat share in a profile when goroutines hand work back and forth.
 - **A timing test compares with the clock of the thing it tests**: take the
