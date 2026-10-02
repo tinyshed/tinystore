@@ -129,10 +129,14 @@ func (s *Store) shutdown(ctx context.Context) {
 	s.stop()
 	s.running.Wait()
 
-	var err error
+	// a report that did not reach the metrics engine loses no data of the
+	// application's, so it is logged rather than made a failure of Close
 	if s.self != nil {
-		err = s.flushSelf(ctx, true)
+		if selfErr := s.flushSelf(ctx, true); selfErr != nil {
+			s.Logger("metrics").Warn("background work failed", "work", "self-metrics", "error", selfErr)
+		}
 	}
+	var err error
 	for _, engine := range slices.Backward(engines) {
 		err = errors.Join(err, engine.Close(ctx))
 	}

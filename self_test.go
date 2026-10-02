@@ -1,9 +1,12 @@
 package tinystore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +24,7 @@ type recordingSelfWriter struct {
 	reports [][]Measure
 	closed  bool
 	written chan struct{}
+	refused error // what every write answers, when set
 }
 
 func (w *recordingSelfWriter) WriteSelf(_ context.Context, measures []Measure) error {
@@ -28,6 +32,9 @@ func (w *recordingSelfWriter) WriteSelf(_ context.Context, measures []Measure) e
 	defer w.mu.Unlock()
 	if w.closed {
 		return errors.New("writer was closed before its final report")
+	}
+	if w.refused != nil {
+		return w.refused
 	}
 	w.reports = append(w.reports, slices.Clone(measures))
 	if w.written != nil {
@@ -39,7 +46,14 @@ func (w *recordingSelfWriter) WriteSelf(_ context.Context, measures []Measure) e
 	return nil
 }
 
-func TestSelfMetricsRegisterBackgroundWorkOnlyWhenEnabled(t *testing.T) {
+func (w *recordingSelfWriter) Close(context.Context) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.closed = true
+	return nil
+}
+
+func TestSelfMetricsRunAsTheStoresBackgroundWork(t *testing.T) {
 	store := openTestStore(t, t.TempDir(), Options{SelfMetrics: true})
 	writer := &recordingSelfWriter{written: make(chan struct{}, 1)}
 	if err := store.Attach(writer); err != nil {
@@ -54,13 +68,6 @@ func TestSelfMetricsRegisterBackgroundWorkOnlyWhenEnabled(t *testing.T) {
 	if err := store.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func (w *recordingSelfWriter) Close(context.Context) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.closed = true
-	return nil
 }
 
 func TestSelfMetricsAreOptInAndCollectBeforeClose(t *testing.T) {
@@ -126,4 +133,28 @@ func TestSelfMetricsWaitWithTheirContext(t *testing.T) {
 		t.Fatalf("waiting: %v", err)
 	}
 	<-store.self.slot
+}
+
+// a last report the metrics engine refuses loses none of the application's
+// data, so Close logs it and closes every engine as it would have
+func TestAFailedLastSelfReportIsLoggedNotReturned(t *testing.T) {
+	var logged bytes.Buffer
+	store, err := Open(t.Context(), t.TempDir(), Options{
+		Manual: true, SelfMetrics: true, Logger: slog.New(slog.NewTextHandler(&logged, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingSelfWriter{refused: errors.New("the metrics engine is full")}
+	if err = store.Attach(writer); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = store.Close(t.Context()); err != nil {
+		t.Fatalf("a refused report failed Close: %v", err)
+	}
+	if !writer.closed || !strings.Contains(logged.String(), "work=self-metrics") ||
+		!strings.Contains(logged.String(), "the metrics engine is full") {
+		t.Fatalf("closed %t, logged: %s", writer.closed, logged.String())
+	}
 }
