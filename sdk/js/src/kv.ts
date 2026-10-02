@@ -6,8 +6,9 @@ import { Config, type ConfigOptions } from './config.ts'
 import type { Connection, Link } from './connection.ts'
 import { CorruptError, InvalidError } from './errors.ts'
 import { checkName, handleOn, ownerText, type Page } from './handles.ts'
-import { Limiter, type LimiterOptions, limiterOpen } from './limiter.ts'
+import { Limiter, type LimiterOptions, limiterOpen, type Rate } from './limiter.ts'
 import { Once, type OnceOptions } from './once.ts'
+import { Quota, quotaOpen } from './quota.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf } from './wire/codec.ts'
@@ -120,6 +121,15 @@ export class Kv {
 	/** A limiter of requests by key: `store.kv.limiter('api', { rate: '100/s', burst: 20 })`. */
 	limiter(name: string, options: LimiterOptions): Limiter {
 		return new Limiter(this.#link, name, limiterOpen(name, options), [])
+	}
+
+	/**
+	 * A quota of uses by key, its windows by name, each counted from a key's
+	 * first use and all of them together or none:
+	 * `store.kv.quota('ai', { session: '100/5h', weekly: '300/7d' })`.
+	 */
+	quota<W extends string>(name: string, windows: Record<W, Rate>): Quota<W> {
+		return new Quota(this.#link, name, quotaOpen(name, windows), [])
 	}
 
 	/**

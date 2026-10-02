@@ -27,6 +27,7 @@ from ._wire.messages import METHODS, KvBucket, KvCall, KvCalls, KvEntry, KvPage,
 from .config import Config
 from .errors import CorruptError, InvalidError, OutcomeUnknownError
 from .limiter import Limiter, limiter_open
+from .quota import Quota, quota_open
 
 if TYPE_CHECKING:
     import os
@@ -162,6 +163,15 @@ class Kv:
     def limiter(self, name: str, /, *, rate: str, burst: int | None = None) -> Limiter:
         """A limiter of requests by key: `store.kv.limiter("api", rate="100/s", burst=20)`."""
         return Limiter(self._link, name, limiter_open(name, rate, burst), ())
+
+    def quota(self, name: str, /, **windows: str) -> Quota:
+        """A quota of uses by key, its windows by name, all of them counted together or none.
+
+        Each window starts at a key's first use after the last ended::
+
+            ai = store.kv.quota("ai", session="100/5h", weekly="300/7d")
+        """
+        return Quota(self._link, name, quota_open(name, windows), ())
 
     def once[V](self, name: str, of: type[V], /, *, default_ttl: Duration | None = None) -> Once[V]:
         """The answers a function gives once a key, of one type, kept a day unless default_ttl says."""

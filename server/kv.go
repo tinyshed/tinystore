@@ -16,8 +16,8 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// kvHandle is a bucket of values, counters, a config, a limiter or once's
-// answers a session opened: one of the five is set
+// kvHandle is a bucket of values, counters, a config, a limiter, once's
+// answers or a quota a session opened: one of the six is set
 type kvHandle struct {
 	name     string
 	values   *kv.Bucket[kv.Raw]
@@ -25,6 +25,8 @@ type kvHandle struct {
 	config   *kv.RawConfig
 	limiter  *kv.Limiter
 	once     *kv.Once[kv.Raw]
+	quota    *kv.Quota
+	windows  []string // a quota's, in the order its open gave them, which its answers keep
 	state    *kv.Store
 }
 
@@ -43,6 +45,8 @@ func (s *Server) kvMethods(methods map[wire.Method]handler) {
 	methods[wire.KVConfigure] = kvConfigure
 	methods[wire.KVWatch] = kvWatch
 	methods[wire.KVRun] = kvRun
+	methods[wire.KVUsage] = kvUsage
+	methods[wire.KVRefund] = kvRefund
 }
 
 func kvOpen(c *call) error {
@@ -57,8 +61,8 @@ func kvOpen(c *call) error {
 	opened := &kvHandle{name: ask.Name, state: state}
 	switch {
 	case kinds(ask) > 1:
-		err = fmt.Errorf("%w: kv: %q opened as more than one of counters, a config, a limiter and once's answers",
-			tinystore.ErrInvalid, ask.Name)
+		err = fmt.Errorf("%w: kv: %q opened as more than one of counters, a config, a limiter, once's answers "+
+			"and a quota", tinystore.ErrInvalid, ask.Name)
 	case ask.Counters:
 		opened.counters, err = kv.OpenCounters(c.ctx, state, ask.Name, counterOptions(ask)...)
 	case ask.Config:
@@ -67,6 +71,11 @@ func kvOpen(c *call) error {
 		opened.limiter, err = kv.OpenLimiter(c.ctx, state, ask.Name, limiterOptions(ask)...)
 	case ask.Once:
 		opened.once, err = kv.OpenOnce[kv.Raw](c.ctx, state, ask.Name, bucketOptions(ask)...)
+	case len(ask.Windows) > 0:
+		opened.quota, err = kv.OpenQuota(c.ctx, state, ask.Name, windowsOf(ask)...)
+		for _, w := range ask.Windows {
+			opened.windows = append(opened.windows, w.Name)
+		}
 	default:
 		opened.values, err = kv.OpenBucket[kv.Raw](c.ctx, state, ask.Name, bucketOptions(ask)...)
 	}
@@ -76,11 +85,11 @@ func kvOpen(c *call) error {
 	return respond(c, wire.Handle{Handle: c.session.kvHandles.add(opened)})
 }
 
-// kinds is how many of counters, a config, a limiter and once's answers a
-// bucket asks to be
+// kinds is how many of counters, a config, a limiter, once's answers and a
+// quota a bucket asks to be
 func kinds(ask wire.KVBucket) int {
 	n := 0
-	for _, asked := range []bool{ask.Counters, ask.Config, ask.Rate > 0, ask.Once} {
+	for _, asked := range []bool{ask.Counters, ask.Config, ask.Rate > 0, ask.Once, len(ask.Windows) > 0} {
 		if asked {
 			n++
 		}
@@ -94,6 +103,14 @@ func limiterOptions(ask wire.KVBucket) []kv.LimiterOption {
 	}
 	if ask.Burst > 0 {
 		options = append(options, kv.Burst(int64(min(ask.Burst, math.MaxInt64))))
+	}
+	return options
+}
+
+func windowsOf(ask wire.KVBucket) []kv.QuotaOption {
+	options := make([]kv.QuotaOption, len(ask.Windows))
+	for i, w := range ask.Windows {
+		options[i] = kv.Window(w.Name, int64(min(w.Limit, math.MaxInt64)), time.Duration(w.Per)*time.Millisecond)
 	}
 	return options
 }
@@ -144,6 +161,13 @@ func (h *kvHandle) run(ctx context.Context, tx *kv.Tx, method wire.Method, ask w
 	}
 	if h.once != nil {
 		return runOnce(ctx, tx, h.once.Of(owners(ask.Owners)...), method, ask)
+	}
+	if h.quota != nil {
+		if tx != nil || method != wire.KVDelete {
+			return wire.KVEntry{}, fmt.Errorf("%w: kv: %q is a quota, which takes allow, usage, refund and "+
+				"delete, outside any batch", tinystore.ErrInvalid, h.name)
+		}
+		return wire.KVEntry{}, h.quota.Of(owners(ask.Owners)...).Delete(ctx, ask.Key)
 	}
 	if h.counters != nil {
 		counters := h.counters.Of(owners(ask.Owners)...)
@@ -525,8 +549,16 @@ func kvAllow(c *call) error {
 	if err != nil {
 		return err
 	}
+	if handle.quota != nil {
+		usage, quotaErr := handle.quota.Of(owners(ask.Owners)...).AllowN(c.ctx, ask.Key, max(ask.N, 1))
+		if quotaErr != nil {
+			return quotaErr
+		}
+		return respond(c, handle.allowanceOf(usage))
+	}
 	if handle.limiter == nil {
-		return fmt.Errorf("%w: kv: %q is not a limiter, which allow asks", tinystore.ErrInvalid, handle.name)
+		return fmt.Errorf("%w: kv: %q is not a limiter or a quota, which allow asks", tinystore.ErrInvalid,
+			handle.name)
 	}
 	allowance, err := handle.limiter.Of(owners(ask.Owners)...).AllowN(c.ctx, ask.Key, max(ask.N, 1))
 	if err != nil {
@@ -536,6 +568,61 @@ func kvAllow(c *call) error {
 	return respond(c, wire.KVAllowance{
 		OK: allowance.OK, Left: uint64(allowance.Left), RetryAfter: uint64(wait), //nolint:gosec // never negative
 	})
+}
+
+// kvUsage answers a quota's windows of a key without using them
+func kvUsage(c *call) error {
+	handle, ask, err := quotaCall(c)
+	if err != nil {
+		return err
+	}
+	usage, err := handle.quota.Of(owners(ask.Owners)...).Get(c.ctx, ask.Key)
+	if err != nil {
+		return err
+	}
+	return respond(c, handle.allowanceOf(usage))
+}
+
+// kvRefund gives n uses back to a quota's windows of a key, one when n is absent
+func kvRefund(c *call) error {
+	handle, ask, err := quotaCall(c)
+	if err != nil {
+		return err
+	}
+	if err = handle.quota.Of(owners(ask.Owners)...).RefundN(c.ctx, ask.Key, max(ask.N, 1)); err != nil {
+		return err
+	}
+	return respond(c, wire.Empty{})
+}
+
+// quotaCall is a call's request and the quota it names
+func quotaCall(c *call) (*kvHandle, wire.KVCall, error) {
+	var ask wire.KVCall
+	if err := ask.Decode(c.request); err != nil {
+		return nil, ask, err
+	}
+	handle, err := c.session.kvHandles.get(ask.Handle)
+	if err == nil && handle.quota == nil {
+		err = fmt.Errorf("%w: kv: %q is not a quota", tinystore.ErrInvalid, handle.name)
+	}
+	return handle, ask, err
+}
+
+// allowanceOf is a quota's answer as the wire carries it, its windows in the
+// order the open gave them, a wait rounded up to the millisecond
+func (h *kvHandle) allowanceOf(usage kv.QuotaUsage) wire.KVAllowance {
+	wait := (usage.RetryAfter + time.Millisecond - 1) / time.Millisecond
+	answer := wire.KVAllowance{
+		OK: usage.OK, Left: uint64(max(usage.Left, 0)), RetryAfter: uint64(wait), //nolint:gosec // never negative
+	}
+	for _, name := range h.windows {
+		w := usage.Windows[name]
+		answer.Windows = append(answer.Windows, wire.KVWindowUsage{
+			Name: name, Used: uint64(max(w.Used, 0)), Limit: uint64(max(w.Limit, 0)), Left: uint64(max(w.Left, 0)),
+			ResetAt: unixMillis(w.ResetAt),
+		})
+	}
+	return answer
 }
 
 // kvConfigure keeps and forgets a config's fields in one transaction

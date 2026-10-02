@@ -136,6 +136,32 @@ async def test_a_once_key_runs_once_and_a_call_meanwhile_waits_for_its_answer(st
     assert await charges.of("tenant-7").run("req-7", charge) == Receipt("r_3")
 
 
+async def test_a_quota_counts_a_use_in_every_window_or_in_none(store: tinystore.Store) -> None:
+    ai = store.kv.quota("ai", session="2/5h", weekly="3/7d")
+    first = await ai.allow("user-1")
+    assert (first.ok, first.left, first.windows["session"].used, first.windows["weekly"].used) == (True, 1, 1, 1)
+    assert list(first.windows) == ["session", "weekly"]
+    assert (await ai.allow("user-1")).left == 0
+    refused = await ai.allow("user-1")
+    assert (refused.ok, refused.windows["session"].used, refused.windows["weekly"].used) == (False, 2, 2)
+    assert refused.retry_after > 4 * 3600
+    assert refused.windows["session"].reset_at is not None
+    assert not (await ai.get("user-1")).ok
+
+    await ai.refund("user-1")
+    back = await ai.get("user-1")
+    assert (back.ok, back.left, back.windows["weekly"].used) == (True, 1, 1)
+    await ai.delete("user-1")
+    assert (await ai.get("user-1")).windows["session"].reset_at is None
+    assert (await ai.of("tenant-7").allow("user-1", 2)).windows["session"].used == 2
+    with pytest.raises(InvalidError):
+        await ai.allow("user-1", 3)
+    with pytest.raises(InvalidError):
+        store.kv.quota("bad")
+    with pytest.raises(InvalidError):
+        store.kv.quota("bad", Session="1/h")
+
+
 async def test_a_queue_waits_changes_cancels_and_works(store: tinystore.Store) -> None:
     later = store.jobs.queue("send-later", dict[str, int])
     await later.enqueue({"user": 42}, key="chat:42:a", after=3600)

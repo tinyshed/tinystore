@@ -35,6 +35,7 @@ from .jobs import ClaimedJob, Enqueue, Job, JobEntry, Queue, Repeat, cron, daily
 from .kv import Batch, Bucket, Counters, Entry, Once
 from .limiter import Allowance, Limiter
 from .metrics import Aggregate, Condition, Plan, Series, none_of, one_of, prefix
+from .quota import Quota, QuotaUsage, WindowUsage
 from .records import Cursor, Record, trace
 from .sql import Database, Done
 from .store import Status, Store, connect, open
@@ -75,6 +76,8 @@ __all__ = [
     "Plan",
     "ProtocolError",
     "Queue",
+    "Quota",
+    "QuotaUsage",
     "Record",
     "Repeat",
     "Series",
@@ -89,6 +92,7 @@ __all__ = [
     "UnavailableError",
     "UnimplementedError",
     "Usage",
+    "WindowUsage",
     "connect",
     "cron",
     "daily",

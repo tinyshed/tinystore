@@ -39,6 +39,8 @@ export const methods = {
 	'kv.configure': 0x010f,
 	'kv.watch': 0x0110,
 	'kv.run': 0x0111,
+	'kv.usage': 0x0112,
+	'kv.refund': 0x0113,
 	'jobs.open': 0x0201,
 	'jobs.enqueue': 0x0202,
 	'jobs.update': 0x0203,
@@ -113,6 +115,8 @@ export const Handle = message('handle', { handle: [1, uint] })
 
 export const Empty = message('empty', {})
 
+export const KvWindow = message('kv.window', { name: [1, str], limit: [2, uint], per: [3, uint] })
+
 export const KvBucket = message('kv.bucket', {
 	name: [1, str],
 	counters: [2, bool],
@@ -124,6 +128,7 @@ export const KvBucket = message('kv.bucket', {
 	per: [8, uint],
 	burst: [9, uint],
 	once: [10, bool],
+	windows: [11, list(KvWindow)],
 })
 
 const kvCall = {
@@ -158,10 +163,19 @@ export const KvResults = message('kv.results', { entries: [1, list(KvEntry)] })
 
 export const KvPage = message('kv.page', { more: [1, bool], after: [2, key] })
 
+export const KvWindowUsage = message('kv.window usage', {
+	name: [1, str],
+	used: [2, uint],
+	limit: [3, uint],
+	left: [4, uint],
+	resetAt: [5, int],
+})
+
 export const KvAllowance = message('kv.allowance', {
 	ok: [1, bool],
 	left: [2, uint],
 	retryAfter: [3, uint],
+	windows: [4, list(KvWindowUsage)],
 })
 
 export const KvConfigure = message('kv.configure', {

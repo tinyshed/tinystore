@@ -25,11 +25,14 @@ const (
 	KVConfigure Method = 0x010f
 	KVWatch     Method = 0x0110
 	KVRun       Method = 0x0111
+	KVUsage     Method = 0x0112
+	KVRefund    Method = 0x0113
 )
 
 // KVBucket is kv.open's request: a bucket of values, counters, a config, a
-// limiter or once's answers, by name, with its handle's options. A duration is
-// milliseconds, zero for none; a limiter is a bucket with a rate.
+// limiter, once's answers or a quota, by name, with its handle's options. A
+// duration is milliseconds, zero for none; a limiter is a bucket with a rate,
+// and a quota one with windows.
 type KVBucket struct {
 	Name       string
 	Counters   bool
@@ -41,6 +44,15 @@ type KVBucket struct {
 	Per        int64
 	Burst      uint64
 	Once       bool // the answers kv.run keeps
+	Windows    []KVWindow
+}
+
+// KVWindow is one of a quota's windows: a key may use up to Limit every Per
+// milliseconds, from its first use.
+type KVWindow struct {
+	Name  string
+	Limit uint64
+	Per   int64
 }
 
 func (b KVBucket) Append(dst []byte) []byte {
@@ -73,6 +85,18 @@ func (b KVBucket) Append(dst []byte) []byte {
 	if b.Once {
 		m.Bool(10, true)
 	}
+	if len(b.Windows) > 0 {
+		m.Key(11)
+		buf := AppendArray(m.Buf(), len(b.Windows))
+		for _, w := range b.Windows {
+			fields := BeginMap(buf)
+			optionalStr(&fields, 1, w.Name)
+			optionalUint(&fields, 2, w.Limit)
+			optionalInt(&fields, 3, w.Per)
+			buf = fields.End()
+		}
+		m.SetBuf(buf)
+	}
 	return m.End()
 }
 
@@ -100,9 +124,28 @@ func (b *KVBucket) Decode(body []byte) error {
 			b.Burst = d.Uint()
 		case 10:
 			b.Once = d.Bool()
+		case 11:
+			for range d.Items() {
+				b.Windows = append(b.Windows, d.kvWindow())
+			}
 		}
 	}
 	return d.End()
+}
+
+func (d *Decoder) kvWindow() KVWindow {
+	var w KVWindow
+	for field := range d.Fields() {
+		switch field {
+		case 1:
+			w.Name = d.Str()
+		case 2:
+			w.Limit = d.Uint()
+		case 3:
+			w.Per = d.Duration()
+		}
+	}
+	return w
 }
 
 // Handle answers an open with the number the calls on its handle carry.
@@ -506,13 +549,25 @@ func (*Empty) Decode(body []byte) error {
 	return d.End()
 }
 
-// KVAllowance is kv.allow's answer: whether the requests pass, how many more
-// would pass now, and, when they do not, how many milliseconds until they
-// would, rounded up.
+// KVAllowance is kv.allow's answer, and a quota's kv.usage: whether the
+// requests pass, how many more would pass now, and, when they do not, how
+// many milliseconds until they would, rounded up; and a quota's windows.
 type KVAllowance struct {
 	OK         bool
 	Left       uint64
 	RetryAfter uint64
+	Windows    []KVWindowUsage
+}
+
+// KVWindowUsage is one of a quota's windows of a key: what it used of its
+// limit, what is left, and when it resets, in unix milliseconds, zero for a
+// window not started.
+type KVWindowUsage struct {
+	Name    string
+	Used    uint64
+	Limit   uint64
+	Left    uint64
+	ResetAt int64
 }
 
 func (a KVAllowance) Append(dst []byte) []byte {
@@ -525,6 +580,20 @@ func (a KVAllowance) Append(dst []byte) []byte {
 	}
 	if a.RetryAfter != 0 {
 		m.Uint(3, a.RetryAfter)
+	}
+	if len(a.Windows) > 0 {
+		m.Key(4)
+		buf := AppendArray(m.Buf(), len(a.Windows))
+		for _, w := range a.Windows {
+			fields := BeginMap(buf)
+			optionalStr(&fields, 1, w.Name)
+			optionalUint(&fields, 2, w.Used)
+			optionalUint(&fields, 3, w.Limit)
+			optionalUint(&fields, 4, w.Left)
+			optionalInt(&fields, 5, w.ResetAt)
+			buf = fields.End()
+		}
+		m.SetBuf(buf)
 	}
 	return m.End()
 }
@@ -539,9 +608,32 @@ func (a *KVAllowance) Decode(body []byte) error {
 			a.Left = d.Uint()
 		case 3:
 			a.RetryAfter = d.Uint()
+		case 4:
+			for range d.Items() {
+				a.Windows = append(a.Windows, d.kvWindowUsage())
+			}
 		}
 	}
 	return d.End()
+}
+
+func (d *Decoder) kvWindowUsage() KVWindowUsage {
+	var w KVWindowUsage
+	for field := range d.Fields() {
+		switch field {
+		case 1:
+			w.Name = d.Str()
+		case 2:
+			w.Used = d.Uint()
+		case 3:
+			w.Limit = d.Uint()
+		case 4:
+			w.Left = d.Uint()
+		case 5:
+			w.ResetAt = d.Int()
+		}
+	}
+	return w
 }
 
 // KVConfigChange is kv.configure's request: the fields a config keeps, a path and

@@ -598,3 +598,60 @@ func keepAnswer(t *testing.T, st *client.Stream, answer wire.KVEntry) {
 		t.Fatalf("the run's end: last %v, %v", last, err)
 	}
 }
+
+// a quota over the wire counts a key's use in every window or in none,
+// answers its windows in the order its open gave them, and takes uses back
+func TestAQuotaOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	ai := openKV(t, conn, wire.KVBucket{Name: "ai", Windows: []wire.KVWindow{
+		{Name: "session", Limit: 2, Per: (5 * time.Hour).Milliseconds()},
+		{Name: "weekly", Limit: 3, Per: (7 * 24 * time.Hour).Milliseconds()},
+	}})
+	key := wire.KVCall{Handle: ai, Owners: []string{"tenant-7"}, Key: "user-1"}
+	expect := func(got wire.KVAllowance, ok bool, left uint64, used ...uint64) {
+		t.Helper()
+		if got.OK != ok || got.Left != left || len(got.Windows) != 2 || got.Windows[0].Name != "session" ||
+			got.Windows[1].Name != "weekly" || got.Windows[0].Used != used[0] || got.Windows[1].Used != used[1] {
+			t.Fatalf("%+v; want OK %v with %d left, used %v", got, ok, left, used)
+		}
+	}
+
+	expect(allow(t, conn, key), true, 1, 1, 1)
+	expect(allow(t, conn, key), true, 0, 2, 2)
+	refused := allow(t, conn, key)
+	expect(refused, false, 0, 2, 2)
+	if refused.RetryAfter < 4*3_600_000 || refused.Windows[0].ResetAt == 0 {
+		t.Fatalf("a session out of room: %+v; want to wait about five hours", refused)
+	}
+	expect(quotaUsage(t, conn, key), false, 0, 2, 2)
+
+	if _, err := conn.Call(t.Context(), wire.KVRefund, key); err != nil {
+		t.Fatal(err)
+	}
+	expect(quotaUsage(t, conn, key), true, 1, 1, 1)
+	mustKV(t, conn, wire.KVDelete, key)
+	expect(quotaUsage(t, conn, key), true, 2, 0, 0)
+
+	many := key
+	many.N = 3
+	if _, err := conn.Call(t.Context(), wire.KVAllow, many); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("three past a session of two: %v", err)
+	}
+	if _, err := kvDo(t, conn, wire.KVGet, key); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("a get of a quota: %v", err)
+	}
+}
+
+func quotaUsage(t *testing.T, conn *client.Conn, ask wire.KVCall) wire.KVAllowance {
+	t.Helper()
+	body, err := conn.Call(t.Context(), wire.KVUsage, ask)
+	var usage wire.KVAllowance
+	if err == nil {
+		err = usage.Decode(body)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return usage
+}

@@ -262,6 +262,42 @@ describe('once', () => {
 	})
 })
 
+describe('quota', () => {
+	test('a use counts in every window or in none, and a refund gives it back', async () => {
+		const ai = store.kv.quota('ai', { session: '2/5h', weekly: '3/7d' })
+		const first = await ai.allow('user-1')
+		expect([first.ok, first.left, first.windows.session.used, first.windows.weekly.used]).toEqual([
+			true,
+			1,
+			1,
+			1,
+		])
+		expect(Object.keys(first.windows)).toEqual(['session', 'weekly'])
+		expect((await ai.allow('user-1')).left).toBe(0)
+		const refused = await ai.allow('user-1')
+		expect([refused.ok, refused.windows.session.used, refused.windows.weekly.used]).toEqual([
+			false,
+			2,
+			2,
+		])
+		expect(refused.retryAfter).toBeGreaterThan(4 * 3_600_000)
+		expect(refused.windows.session.resetAt).toBeInstanceOf(Date)
+		expect((await ai.get('user-1')).ok).toBe(false)
+
+		await ai.refund('user-1')
+		const back = await ai.get('user-1')
+		expect([back.ok, back.left, back.windows.weekly.used]).toEqual([true, 1, 1])
+		// @ts-expect-error: a window is named as its quota names it
+		expect(back.windows.weeky).toBeUndefined()
+		await ai.delete('user-1')
+		expect((await ai.get('user-1')).windows.session.resetAt).toBeUndefined()
+		expect((await ai.of('tenant-7').allow('user-1', 2)).windows.session.used).toBe(2)
+		expect(await caught(ai.allow('user-1', 3))).toBeInstanceOf(InvalidError)
+		expect(() => store.kv.quota('bad', {})).toThrow(InvalidError)
+		expect(() => store.kv.quota('bad', { Session: '1/h' })).toThrow(InvalidError)
+	})
+})
+
 describe('batches', () => {
 	test('a batch writes every call or none', async () => {
 		const accounts = store.kv.bucket<number>('accounts')

@@ -58,6 +58,9 @@ cfg.watch(lambda c: server.set_port(c.port))
 
 limit = store.kv.limiter("api", rate="100/s", burst=20)
 ok, left, retry_after = await limit.of(tenant).allow(user_id)
+
+ai = store.kv.quota("ai", session="100/5h", weekly="300/7d")
+usage = await ai.allow(user.id)  # one of each window, or none: usage.windows["weekly"].left
 ```
 
 A config is a dataclass or a model whose defaults are its own: a file's
@@ -66,7 +69,9 @@ named by its field, `db_url` as `DB_URL`, after `prefix` when given. A number,
 `true`, a list `a.com,b.com` or JSON read as the default's kind, and one that
 does not is `InvalidError` at open, naming it. `env={"db_url":
 "DATABASE_URL"}` names a variable itself; `secret` fields are never kept;
-`validate` checks each change.
+`validate` checks each change. A quota's windows count a use together or not
+at all, each from a key's first use; `get` reads them without using any,
+`refund` gives uses back.
 
 ```python
 charges = store.kv.once("charges", Receipt)  # answers kept a day

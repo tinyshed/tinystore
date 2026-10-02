@@ -55,6 +55,9 @@ cfg.watch(c => server.setPort(c.port))
 
 const limit = store.kv.limiter('api', { rate: '100/s', burst: 20 })
 const { ok, retryAfter } = await limit.of(tenant).allow(userId)
+
+const ai = store.kv.quota('ai', { session: '100/5h', weekly: '300/7d' })
+const usage = await ai.allow(user.id)    // one of each window, or none: usage.windows.weekly.left
 ```
 
 A config is shaped and typed by its defaults: a file's values, then the
@@ -63,6 +66,8 @@ field, `dbUrl` as `DB_URL`, after `prefix` when given. A number, `true`, a
 list `a.com,b.com` or JSON read as the default's kind, and one that does not
 is `InvalidError` at open, naming it. `env: { dbUrl: 'DATABASE_URL' }` names a
 variable itself; `secret` fields are never kept; `schema` checks each change.
+A quota's windows count a use together or not at all, each from a key's first
+use; `get` reads them without using any, `refund` gives uses back.
 
 ```ts
 const charges = store.kv.once<Receipt>('charges')               // answers kept a day

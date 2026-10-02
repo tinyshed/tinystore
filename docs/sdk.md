@@ -240,6 +240,36 @@ A variable is named by the field's path in upper snake case after the prefix,
 | a rate | `kv.Rate(100, time.Second)` | `rate: '100/s'` | `rate="100/s"` |
 | retry after | `time.Duration` | milliseconds | seconds |
 
+## Quotas
+
+```go
+ai, err := kv.OpenQuota(ctx, state, "ai", kv.Window("session", 100, 5*time.Hour), kv.Window("weekly", 300, 7*24*time.Hour))
+usage, err := ai.Allow(ctx, userID) // usage.OK, usage.RetryAfter, usage.Windows["weekly"].Left
+```
+
+```ts
+const ai = store.kv.quota('ai', { session: '100/5h', weekly: '300/7d' })
+const { ok, retryAfter, windows } = await ai.allow(user.id) // windows.weekly.left, its name a type
+```
+
+```python
+ai = store.kv.quota("ai", session="100/5h", weekly="300/7d")
+usage = await ai.allow(user.id)  # usage.ok, usage.retry_after, usage.windows["weekly"].left
+```
+
+A use counts in every window or in none, in one durable write; each window
+starts at a key's first use after the last ended. `get` reads the windows
+without using them, `refund` gives uses back, `delete` starts every window
+anew, and `of` names a branch, as a limiter's does. A window is spelled as a
+limiter's rate, its name as the program calls it.
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| a window | `kv.Window("weekly", 300, 7*24*time.Hour)` | `weekly: '300/7d'` | `weekly="300/7d"` |
+| the answer | `kv.QuotaUsage` | `QuotaUsage<'session' \| 'weekly'>` | `QuotaUsage` |
+| several uses | `AllowN(ctx, key, n)`, `RefundN` | `allow(key, n)`, `refund(key, n)` | `allow(key, n)`, `refund(key, n)` |
+| a window's reset | `ResetAt time.Time`, zero before it starts | `resetAt: Date \| undefined` | `reset_at: datetime \| None` |
+
 ## Once
 
 ```go
@@ -387,6 +417,10 @@ Built after it:
   a key, its answer kept for the requests sent again, in every language; the
   claim lives as long as its call, so an effect outside the store carries the
   key too. Sessions from that list were left to kv's buckets.
+- **Quotas** from the same list: several windows a key, counted together or
+  not at all, each from the key's first use, the `AddWithin` kv had deferred.
+  In Bun a window's name is a type, and a duration's or a rate's spelling
+  too.
 
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):

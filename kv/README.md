@@ -33,6 +33,10 @@ for s := range settings.Watch(ctx) { server.SetRate(s.Limits.RPS) }
 limit, err := kv.OpenLimiter(ctx, state, "api", kv.Rate(100, time.Second), kv.Burst(20))
 allowed, err := limit.Of(tenant).Allow(ctx, userID) // allowed.OK, allowed.Left, allowed.RetryAfter
 
+ai, err := kv.OpenQuota(ctx, state, "ai",
+	kv.Window("session", 100, 5*time.Hour), kv.Window("weekly", 300, 7*24*time.Hour))
+usage, err := ai.Allow(ctx, userID) // one of each window, or none: usage.Windows["weekly"].Left
+
 charges, err := kv.OpenOnce[Receipt](ctx, state, "charges")         // answers kept a day
 receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, error) {
 	return pay.Charge(ctx, order, requestID) // runs once; the same request again gets this receipt
@@ -186,6 +190,22 @@ receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, 
   one burst more through. A key whose time has come is as one never seen, and
   maintenance deletes its row.
 
+## Quota
+
+- **Every window or none.** `Allow` and `AllowN` check every window of a key
+  and count in each, or in none when one has no room, in one durable write;
+  more than a window's limit is `ErrInvalid`. The answer is a limiter's,
+  `OK`, `Left` and `RetryAfter`, the wait until the windows that refused
+  reset, and each window's `Used`, `Limit`, `Left` and `ResetAt`.
+- **A window starts at a key's first use** after the last one ended and lasts
+  its span, as a counter with `DefaultTTL` does: each key resets on its own.
+- **`Get` uses nothing**, its `OK` saying whether one more use would pass.
+  `Refund` and `RefundN` give uses back to the windows that have not reset
+  since, never below nothing; `Delete` starts every window anew.
+- **The windows are the program's**, one to eight, each `[a-z][a-z0-9_]{0,31}`,
+  and may change between runs: a window no longer given is forgotten, a limit
+  changed counts what its window used, a window added starts at the next use.
+
 ## Once
 
 - **A key's function runs once and its answer is kept.** `Run` returns the
@@ -226,4 +246,4 @@ _, err = state.Maintain(ctx)             // writes counters and renewals, delete
 
 What [docs/kv.md](../docs/kv.md) leaves for later: a bucket held in memory, a
 filter that answers a miss without SQLite, history, watching a bucket of
-values, `AddWithin` for quotas, listing a branch's branches.
+values, listing a branch's branches.

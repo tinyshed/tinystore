@@ -51,6 +51,7 @@ export {
 	type Timer,
 } from './metrics.ts'
 export type { Once, OnceOptions } from './once.ts'
+export type { Quota, QuotaUsage, WindowUsage } from './quota.ts'
 export type {
 	Cursor,
 	Damage,

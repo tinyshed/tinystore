@@ -83,7 +83,9 @@ var schema = map[string][]field{
 		{8, "per", "uint"},
 		{9, "burst", "uint"},
 		{10, "once", "bool"},
+		{11, "windows", "[]kv.window"},
 	},
+	"kv.window":    {{1, "name", "str"}, {2, "limit", "uint"}, {3, "per", "uint"}},
 	"kv.call":      kvCall,
 	"kv.operation": append([]field{{0, "method", "uint"}}, kvCall...),
 	"kv.calls":     {{1, "calls", "[]kv.operation"}},
@@ -96,7 +98,14 @@ var schema = map[string][]field{
 	},
 	"kv.results":   {{1, "entries", "[]kv.entry"}},
 	"kv.page":      {{1, "more", "bool"}, {2, "after", "key"}},
-	"kv.allowance": {{1, "ok", "bool"}, {2, "left", "uint"}, {3, "retry after", "uint"}},
+	"kv.allowance": {{1, "ok", "bool"}, {2, "left", "uint"}, {3, "retry after", "uint"}, {4, "windows", "[]kv.window usage"}},
+	"kv.window usage": {
+		{1, "name", "str"},
+		{2, "used", "uint"},
+		{3, "limit", "uint"},
+		{4, "left", "uint"},
+		{5, "reset at", "int"},
+	},
 	"kv.configure": {{1, "handle", "uint"}, {2, "set", "[]str"}, {3, "reset", "[]str"}},
 	"kv.kept":      {{1, "changes", "uint"}, {2, "fields", "[]str"}},
 
@@ -342,6 +351,8 @@ var methods = []struct {
 	{"kv.configure", wire.KVConfigure},
 	{"kv.watch", wire.KVWatch},
 	{"kv.run", wire.KVRun},
+	{"kv.usage", wire.KVUsage},
+	{"kv.refund", wire.KVRefund},
 	{"jobs.open", wire.JobsOpen},
 	{"jobs.enqueue", wire.JobsEnqueue},
 	{"jobs.update", wire.JobsUpdate},
@@ -519,6 +530,16 @@ func kvExamples() []example {
 		}),
 		of("an allowance that passes", "kv.allowance", wire.KVAllowance{OK: true, Left: 18}),
 		of("an allowance that waits", "kv.allowance", wire.KVAllowance{RetryAfter: 50}),
+		of("a quota of 100 every five hours and 300 a week", "kv.bucket", wire.KVBucket{Name: "ai", Windows: []wire.KVWindow{
+			{Name: "session", Limit: 100, Per: 18_000_000}, {Name: "weekly", Limit: 300, Per: 604_800_000},
+		}}),
+		of("a quota's answer whose week has no room", "kv.allowance", wire.KVAllowance{
+			RetryAfter: 3_600_000, Windows: []wire.KVWindowUsage{
+				{Name: "session", Used: 37, Limit: 100, Left: 63, ResetAt: at},
+				{Name: "weekly", Used: 300, Limit: 300, ResetAt: at + 3_600_000},
+			},
+		}),
+		of("kv.refund of 2 uses of a key", "kv.call", wire.KVCall{Handle: 7, Key: "user-1", N: 2}),
 		of("kv.configure keeping two fields and forgetting one", "kv.configure", wire.KVConfigChange{
 			Handle: 5, Set: []string{"port", "4000", "origins", `["a.com","b.com"]`}, Reset: []string{"limits.rps"},
 		}),

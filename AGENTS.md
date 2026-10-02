@@ -25,7 +25,7 @@ design document:
 | `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [design.md](docs/design.md) |
 | `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
 | `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
-| `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, answers kept once a key | [README](kv/README.md) | [kv.md](docs/kv.md) |
+| `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, quotas of several windows, answers kept once a key | [README](kv/README.md) | [kv.md](docs/kv.md) |
 | `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, a bound on those running | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
@@ -632,6 +632,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a limiter lets its burst through, then its rate        | `TestALimiterLetsABurstThroughThenItsRate`, `TestAllowNTakesAllOrNoneAndNeverPastTheBurst`, `TestALimiterOverTheWire` |
 | a limiter's times outlive a reopen, a quiet key is forgotten | `TestALimiterKeepsItsTimesAcrossAReopen`, `TestAQuietKeyIsForgottenOnceItsTimeHasCome` |
 | requests racing for a key pass no more than the burst  | `TestRequestsRacingForAKeyPassNoMoreThanTheBurst`                               |
+| a quota counts a use in every window or in none, racing uses included | `TestAQuotaCountsInEveryWindowOrInNone`, `TestUsesRacingForAKeyPassNoMoreThanItsLimit`, `TestAQuotaOverTheWire`, `a use counts in every window or in none, and a refund gives it back` in `sdk/js/test/kv.test.ts`, `test_a_quota_counts_a_use_in_every_window_or_in_none` in Python's |
+| a quota's window starts at a key's first use after the last ended | `TestAWindowStartsAtTheFirstUseAfterTheLastEnded` |
+| a quota's `Get` counts nothing, a refund never goes below nothing, its windows outlive a reopen | `TestGetRefundAndDeleteChangeWhatTheySay` |
+| a quota that cannot count is refused at open | `TestAQuotaThatCannotCountIsRefused` |
 | a once key's function runs once and its answer is kept | `TestARunKeepsItsAnswerAndRunsAKeyOnce`, `TestAnErrorKeepsNothingAndTheNextRunRunsAgain` |
 | a run of a key waits for the one running it, every client's | `TestARunWaitsForTheRunOfItsKey`, `TestAWaitingRunEndsWithItsContextAndAnAnswerOutlivesIt`, `TestAOnceRunsAKeyOnceOverTheWire`, `a key runs once: a call meanwhile waits for its answer, and a throw keeps nothing` in `sdk/js/test/kv.test.ts`, `test_a_once_key_runs_once_and_a_call_meanwhile_waits_for_its_answer` in Python's |
 | an Enqueue that returned survives an abrupt exit       | `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once           |

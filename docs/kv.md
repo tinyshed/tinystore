@@ -76,6 +76,14 @@ Clear(ctx) error
 Of(owners ...any) *kv.Counters
 WithTx(tx *kv.Tx) *kv.Counters
 
+// Quota
+Allow(ctx, key) (kv.QuotaUsage, error)                            // one of every window, or none
+AllowN(ctx, key, n) (kv.QuotaUsage, error)
+Get(ctx, key) (kv.QuotaUsage, error)                              // the windows, nothing used
+Refund(ctx, key) error                                            // a use given back; RefundN for n
+Delete(ctx, key) error                                            // every window anew
+Of(owners ...any) *kv.Quota
+
 // Once[V]
 Run(ctx, key, fn) (V, error)                                      // the answer kept, or fn's, kept
 Get(ctx, key) (V, bool, error)
@@ -311,6 +319,46 @@ of now. A fixed window lets twice its rate through at its edge; this cannot.
 Times live in the memory `LoseAtMost` counters use, so an `Allow` takes no
 write, and reach the file every second: a crash lets at most one burst more
 through. A key whose time has come is absent, and expiry deletes its row.
+
+## Quota
+
+```go
+ai, err := kv.OpenQuota(ctx, state, "ai",
+	kv.Window("session", 100, 5*time.Hour), kv.Window("weekly", 300, 7*24*time.Hour))
+
+usage, err := ai.Allow(ctx, userID)
+if !usage.OK {
+	return tooMany(usage.RetryAfter) // the window out of room resets then
+}
+weekly := usage.Windows["weekly"] // Used 37, Limit 300, Left 263, ResetAt Thursday 13:42
+```
+
+A quota is the limits a paid plan states, several at once: 100 messages
+every five hours and 300 a week. A window starts at a key's first use after
+the last one ended and lasts its span, as a counter with `DefaultTTL` does, so
+each key resets on its own clock rather than on an edge every key shares:
+
+```text
+session, 5h   first use 13:42 → resets 18:42; a use at 19:07 → resets 00:07
+weekly, 7d    first use Tuesday 13:42 → resets the next Tuesday 13:42
+```
+
+- **Every window or none.** `Allow` checks each window and counts in each in
+  one durable write, or counts in none: two quotas asked one after the other
+  would leave the first counted when the second refused. `RetryAfter` is when
+  the windows that refused have reset.
+- **An answer, not an error.** A use that does not pass is `OK` false;
+  `AllowN` takes several, a model's tokens, and more than a window's limit is
+  `ErrInvalid`, since it never passes. `Get` reads the windows without using
+  them, for the bars a settings page draws.
+- **Durable, unlike the limiter.** Each `Allow` that passes is a write, so a
+  crash loses no use: a quota is a plan's promise, where a limiter guards a
+  rate and may forget a second. `Refund` gives a use back to the windows that
+  have not reset since, never below nothing: a generation that failed.
+- **The windows are the program's.** They may change between runs: a window no
+  longer given is forgotten, a limit changed counts what its window already
+  used, and a window added starts at the next use. A row expires when its last
+  window resets.
 
 ## Once
 
@@ -548,6 +596,10 @@ The five cases are the gates' workloads.
 | a limiter lets its burst through, then its rate | `TestALimiterLetsABurstThroughThenItsRate`, `TestAllowNTakesAllOrNoneAndNeverPastTheBurst` |
 | a limiter's times outlive a reopen, and a quiet key is forgotten | `TestALimiterKeepsItsTimesAcrossAReopen`, `TestAQuietKeyIsForgottenOnceItsTimeHasCome` |
 | requests racing for a key pass no more than the burst | `TestRequestsRacingForAKeyPassNoMoreThanTheBurst` |
+| a quota counts a use in every window or in none | `TestAQuotaCountsInEveryWindowOrInNone`, `TestUsesRacingForAKeyPassNoMoreThanItsLimit` |
+| a window starts at a key's first use after the last ended | `TestAWindowStartsAtTheFirstUseAfterTheLastEnded` |
+| `Get` counts nothing, a refund never goes below nothing, the windows outlive a reopen | `TestGetRefundAndDeleteChangeWhatTheySay` |
+| a quota that cannot count is refused at open | `TestAQuotaThatCannotCountIsRefused` |
 | a key's function runs once and its answer is kept | `TestARunKeepsItsAnswerAndRunsAKeyOnce` |
 | an error keeps nothing, and the next `Run` runs again | `TestAnErrorKeepsNothingAndTheNextRunRunsAgain` |
 | a `Run` of a key waits for the one running it, until its context ends | `TestARunWaitsForTheRunOfItsKey`, `TestAWaitingRunEndsWithItsContextAndAnAnswerOutlivesIt` |
@@ -561,7 +613,6 @@ Each waits for a workload that needs it and a measurement that pays for it.
 - A filter that answers a miss without SQLite.
 - `History`, with `At(t)` and `ErrTooOld` before its window, and `Watch` of a
   bucket of values; a config's watch is built.
-- `AddWithin` for quotas, beside the limiter.
 - Listing a branch's branches; secondary indexes.
 
 ## What was measured

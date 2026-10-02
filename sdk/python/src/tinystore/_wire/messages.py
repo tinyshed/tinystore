@@ -43,6 +43,8 @@ METHODS: dict[str, int] = {
     "kv.configure": 0x010F,
     "kv.watch": 0x0110,
     "kv.run": 0x0111,
+    "kv.usage": 0x0112,
+    "kv.refund": 0x0113,
     "jobs.open": 0x0201,
     "jobs.enqueue": 0x0202,
     "jobs.update": 0x0203,
@@ -113,6 +115,8 @@ Handle = message("handle", handle=(1, uint))
 
 Empty = message("empty")
 
+KvWindow = message("kv.window", name=(1, str_), limit=(2, uint), per=(3, uint))
+
 KvBucket = message(
     "kv.bucket",
     name=(1, str_),
@@ -125,6 +129,7 @@ KvBucket = message(
     per=(8, uint),
     burst=(9, uint),
     once=(10, bool_),
+    windows=(11, list_(KvWindow)),
 )
 
 _kv_call = {
@@ -156,7 +161,16 @@ KvEntry = message(
 
 KvResults = message("kv.results", entries=(1, list_(KvEntry)))
 KvPage = message("kv.page", more=(1, bool_), after=(2, key))
-KvAllowance = message("kv.allowance", ok=(1, bool_), left=(2, uint), retry_after=(3, uint))
+KvWindowUsage = message(
+    "kv.window usage", name=(1, str_), used=(2, uint), limit=(3, uint), left=(4, uint), reset_at=(5, int_)
+)
+KvAllowance = message(
+    "kv.allowance",
+    ok=(1, bool_),
+    left=(2, uint),
+    retry_after=(3, uint),
+    windows=(4, list_(KvWindowUsage)),
+)
 KvConfigure = message("kv.configure", handle=(1, uint), set=(2, list_(str_)), reset=(3, list_(str_)))
 KvKept = message("kv.kept", changes=(1, uint), fields=(2, list_(str_)))
 

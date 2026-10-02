@@ -320,6 +320,7 @@ carry:
 | | scan | a download, an entry a message |
 | | watch | a download that does not end: a config's kept fields, again after each change |
 | | run | both ways: the answer a key keeps, or the key's run handed over and its answer back |
+| | usage, refund | calls on a quota, which allow uses |
 | jobs | open, enqueue of many, update, cancel, get, claim, settle of many | calls |
 | | scan | a download, an entry a message |
 | | watch | a download that ends with its job: its entry, again after each change |
@@ -348,7 +349,7 @@ The values they carry:
 ### kv
 
 `kv.open` answers a handle on a bucket of values, on counters, on a config, on
-a limiter or on once's answers, and every other call carries it. A handle holds `kv.Raw` values, so the server reads
+a limiter, on once's answers or on a quota, and every other call carries it. A handle holds `kv.Raw` values, so the server reads
 what any bucket wrote.
 
 | method | | request | answer |
@@ -366,10 +367,12 @@ what any bucket wrote.
 | `0x010b` | batch | calls, in one transaction | results; a call that fails fails them all, and `what` names it as `call` |
 | `0x010c` | view | calls, get and has, from one snapshot | results |
 | `0x010d` | scan | a call naming a branch, after and limit | a download: `{}`, an entry a `DATA` with its key, a page |
-| `0x010e` | allow | a call on a limiter: a key, and n requests, 1 when absent | an allowance |
+| `0x010e` | allow | a call on a limiter or a quota: a key, and n requests or uses, 1 when absent | an allowance |
 | `0x010f` | configure | a config's fields to keep and paths to forget | `{}` |
 | `0x0110` | watch | a call on a config | a download that does not end: `{}`, then the kept fields a `DATA`, now and after each change |
 | `0x0111` | run | a call on once's answers, whose REQUEST leaves the client's side open | the answer kept, found, which ends the stream; or not found, the run handed over: the client's last `DATA` is the entry to keep, and the server's, `{}`, follows once it is kept |
+| `0x0112` | usage | a call on a quota: a key | an allowance, nothing used: ok says one more use would pass |
+| `0x0113` | refund | a call on a quota: a key, and n uses, 1 when absent | `{}` |
 
 A bucket:
 
@@ -385,6 +388,10 @@ A bucket:
 | 8 | per | uint | milliseconds |
 | 9 | burst | uint | the requests a limiter lets through at once; rate when absent |
 | 10 | once | bool | the answers `kv.run` keeps, a day unless default ttl says; get and delete read and forget one |
+| 11 | windows | array of windows | a quota's, one to eight: a bucket with windows is a quota, which delete also takes |
+
+A window is `{1: name, 2: limit, 3: per}`: a key may use up to limit every per
+milliseconds from its first use, the name `[a-z][a-z0-9_]{0,31}`.
 
 A handle is `{1: uint}`. A call:
 
@@ -417,7 +424,11 @@ when it is not UTF-8. An entry:
 A limiter answers `kv.allow` with an allowance, `{1: ok, 2: left, 3: retry
 after}`: whether the requests pass, how many more would pass now, and how many
 milliseconds until they would, rounded up, when they do not. More requests
-than the burst at once are `invalid`.
+than the burst at once are `invalid`. A quota's allowance adds `4: windows`,
+each `{1: name, 2: used, 3: limit, 4: left, 5: reset at}` in the order its
+open gave them, reset at in unix milliseconds and absent for a window not
+started; its `kv.allow` counts in every window or in none, and more uses than
+a window's limit are `invalid`.
 
 `kv.configure` is `{1: handle, 2: set, 3: reset}`, set an array of str, a path
 and its JSON each, and reset the paths to forget; the server keeps both in one

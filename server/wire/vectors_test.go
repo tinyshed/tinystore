@@ -262,9 +262,12 @@ func TestKVMessagesReadBackAsTheyWereWritten(t *testing.T) {
 		t.Errorf("calls read as %+v, %v", callsRead, err)
 	}
 
-	bucket := wire.KVBucket{Name: "attempts", Counters: true, DefaultTTL: 60_000, Sliding: 1, LoseAtMost: 1000}
+	bucket := wire.KVBucket{
+		Name: "attempts", Counters: true, DefaultTTL: 60_000, Sliding: 1, LoseAtMost: 1000,
+		Windows: []wire.KVWindow{{Name: "hour", Limit: 10, Per: 3_600_000}},
+	}
 	var bucketRead wire.KVBucket
-	if err := bucketRead.Decode(bucket.Append(nil)); err != nil || bucketRead != bucket {
+	if err := bucketRead.Decode(bucket.Append(nil)); err != nil || !reflect.DeepEqual(bucketRead, bucket) {
 		t.Errorf("a bucket read as %+v, %v", bucketRead, err)
 	}
 
