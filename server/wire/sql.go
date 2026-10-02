@@ -5,7 +5,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -172,15 +171,8 @@ func (d *Decoder) SQLValue() any {
 	return nil
 }
 
-// sqliteTime is how SQLite's date functions spell a time with its zone, and
-// the first spelling the driver reads a column declared as a time in
-const sqliteTime = "2006-01-02 15:04:05.999999999-07:00"
-
 // AppendSQLValue writes a value as SQLite returned it, or as an argument
-// travels: TEXT that is not UTF-8 as bin, and a time the driver read from a
-// column declared DATE, DATETIME or TIMESTAMP in SQLite's spelling of it:
-//
-//	TEXT '2024-01-02' in a DATETIME column → "2024-01-02 00:00:00+00:00"
+// travels: TEXT that is not UTF-8 as bin.
 func AppendSQLValue(dst []byte, value any) []byte {
 	switch v := value.(type) {
 	case nil:
@@ -200,8 +192,6 @@ func AppendSQLValue(dst []byte, value any) []byte {
 		return AppendBin(dst, []byte(v))
 	case []byte:
 		return AppendBin(dst, v)
-	case time.Time:
-		return AppendStr(dst, v.Format(sqliteTime))
 	}
 	panic(fmt.Sprintf("wire: a %T is not an SQL value", value))
 }

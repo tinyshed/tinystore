@@ -16,8 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncruces/go-sqlite3/driver"
-
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -422,7 +420,7 @@ func TestAsAProgramOpensItMeasured(t *testing.T) {
 	measuring(t)
 	const count = 100_000
 	db, _, path := measuredNotes(t, count)
-	pool, err := driver.Open("file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)")
+	pool, err := sqlite.OpenDB("file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

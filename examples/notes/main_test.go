@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -23,5 +24,13 @@ func TestTheExampleRunsTwice(t *testing.T) {
 		if out.String() != want {
 			t.Fatalf("printed:\n%s\nwant:\n%s", out.String(), want)
 		}
+	}
+}
+
+// a program using every engine registers no SQL driver by name, so it may
+// link one of its own, mattn/go-sqlite3 among them, which takes "sqlite3"
+func TestTheExampleRegistersNoSQLDriver(t *testing.T) {
+	if names := sql.Drivers(); len(names) > 0 {
+		t.Fatalf("linking the store registered %v with database/sql", names)
 	}
 }

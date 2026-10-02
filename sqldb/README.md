@@ -176,10 +176,9 @@ wrote internal/data/migrations/002_add_description.sql:
 - **`Query` and `ExecQuery` read rows without a struct**: the columns' names,
   even of no row, and each value as SQLite returned it, nil, an int64, a
   float64, a string or a []byte, held in the store's memory as `All` holds
-  rows; `ExecQuery` runs on the writer, for a returning clause. The driver
-  reads TEXT in a column declared `DATE`, `DATETIME` or `TIMESTAMP` as a
-  `time.Time` when it parses, which no `STRICT` table declares;
-  `cast(x as text)` reads its text.
+  rows; `ExecQuery` runs on the writer, for a returning clause. A value is
+  what the row keeps, whatever its column declares: a time held as text comes
+  back as its text.
 - **A statement SQLite refuses is `ErrInvalid`**: a syntax error, a table,
   column or function the file does not have, a parameter out of range or one
   no argument fills; a value past SQLite's length is `ErrLimit`.

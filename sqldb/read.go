@@ -85,9 +85,8 @@ func ExecScalar[T any](ctx context.Context, h Handle, query string, args ...any)
 // Rows is what a query returns without a struct to take it: the columns' names,
 // and each row's values as SQLite returned them, a column each.
 //
-// A value is nil, an int64, a float64, a string or a []byte, and a time.Time
-// where the driver parses TEXT in a column declared DATE, DATETIME or
-// TIMESTAMP.
+// A value is nil, an int64, a float64, a string or a []byte, what the row
+// keeps whatever its column declares.
 type Rows struct {
 	Columns []string
 	Values  [][]any

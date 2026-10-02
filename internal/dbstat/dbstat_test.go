@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ncruces/go-sqlite3/driver"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // written is a closed file whose b-trees have interior pages and overflow
@@ -24,7 +24,7 @@ type written struct {
 func write(t *testing.T, vacuum string) written {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "stat.db")
-	db, err := driver.Open("file:" + filepath.ToSlash(path))
+	db, err := sqlite.OpenDB("file:" + filepath.ToSlash(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestASchemasNamesKeepTheFilesEncodingAndPageSize(t *testing.T) {
 		for _, size := range []int{512, 65536} {
 			t.Run(fmt.Sprintf("%s/%d", encoding, size), func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "stat.db")
-				db, err := driver.Open("file:" + filepath.ToSlash(path))
+				db, err := sqlite.OpenDB("file:" + filepath.ToSlash(path))
 				if err != nil {
 					t.Fatal(err)
 				}

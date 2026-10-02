@@ -601,10 +601,8 @@ A statement:
 An argument is nil, an integer, a float, str, bin, or a bool, which SQLite
 keeps as 1 or 0; a NaN is `invalid`, since SQLite would keep NULL. A value
 that comes back is one of SQLite's five, nil, an integer, a float, str or bin,
-bin also carrying TEXT that is not UTF-8. The driver reads TEXT in a column
-declared `DATE`, `DATETIME` or `TIMESTAMP` as a time, so it travels as SQLite
-spells a time, `2006-01-02 15:04:05.999999999-07:00`; `cast(x as text)` reads
-the text as the row keeps it.
+bin also carrying TEXT that is not UTF-8, and it is what the row keeps: a time
+held as text travels as its text, whatever its column declares.
 
 Done is `{1: changes, 2: last id}`, the columns `{1: [name…]}` and a row
 `{1: [value…]}`. Statements are `{1: handle, 2: [statement…], 3: read}` and

@@ -211,9 +211,14 @@ func withWriterCache(arguments url.Values, bytes int) {
 //	reader  file:/data/metrics.db?_pragma=foreign_keys%281%29&…&_pragma=query_only%281%29&_txlock=deferred&mode=rw
 //
 // A Windows path keeps its drive first, file:D:/data/metrics.db, since the
-// driver's file layer takes the path as SQLite hands it over.
+// driver's file layer takes the path as SQLite hands it over. A share's path,
+// \\server\share, follows an empty authority, which SQLite would otherwise
+// read its server as and refuse.
 func connectionURL(abs string, arguments url.Values) string {
 	path := (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath()
+	if strings.HasPrefix(path, "//") {
+		path = "//" + path
+	}
 	return "file:" + path + "?" + arguments.Encode()
 }
 

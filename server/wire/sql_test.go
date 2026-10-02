@@ -78,18 +78,17 @@ func TestAnSQLValueIsOneOfSQLitesFive(t *testing.T) {
 	}
 }
 
-// a time the driver read from a column declared as one travels as SQLite
-// spells it, since the text it was read from is gone
-func TestATimeTravelsAsSQLiteSpellsIt(t *testing.T) {
-	at := time.Date(2024, 1, 2, 3, 4, 5, 600_000_000, time.FixedZone("", 3*60*60))
-	d := wire.NewDecoder(wire.AppendSQLValue(nil, at))
-	if text := d.SQLValue(); text != "2024-01-02 03:04:05.6+03:00" {
-		t.Errorf("a time written as %v", text)
+// a value of no SQL type is a bug in its writer, a time among them: SQLite
+// returns none, and an argument is one of SQLite's own
+func TestAValueOfNoSQLTypeIsRefusedLoudly(t *testing.T) {
+	for _, value := range []any{struct{}{}, time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("a %T written without a word", value)
+				}
+			}()
+			wire.AppendSQLValue(nil, value)
+		}()
 	}
-	defer func() {
-		if recover() == nil {
-			t.Error("a value of no SQL type written without a word")
-		}
-	}()
-	wire.AppendSQLValue(nil, struct{}{})
 }

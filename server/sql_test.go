@@ -399,18 +399,20 @@ func TestAnAnswerPastTheBodyIsALimit(t *testing.T) {
 	}
 }
 
-// the driver reads TEXT in a column declared DATE, DATETIME or TIMESTAMP as
-// a time, which travels as SQLite spells it; its text reads through a cast
-func TestATimeTravelsAsSQLiteSpellsIt(t *testing.T) {
+// a value travels as its row keeps it, whatever its column declares or its
+// text looks like: no time is read into text, no flag into an integer
+func TestAValueTravelsAsItsRowKeepsIt(t *testing.T) {
 	ts := startTestServer(t, Options{})
 	conn := ts.dial(t, wire.Hello{})
 	app := openSQL(t, conn, wire.SQLDatabase{Name: "app", Migrations: []wire.SQLMigration{
-		{Name: "0001_events.sql", Text: `create table events (at datetime);`},
+		{Name: "0001_events.sql", Text: `create table events (at datetime, done boolean);`},
 	}})
-	mustExec(t, conn, wire.SQLStatement{Handle: app, SQL: `insert into events values ('2024-01-02')`})
-	_, rows := mustQuery(t, conn, wire.SQLStatement{Handle: app, SQL: `select at, cast(at as text) from events`})
-	if !reflect.DeepEqual(rows, [][]any{{"2024-01-02 00:00:00+00:00", "2024-01-02"}}) {
-		t.Fatalf("a time: %#v", rows)
+	mustExec(t, conn, wire.SQLStatement{Handle: app, SQL: `insert into events values
+		('2024-01-02', 1), ('2026-10-02T10:00:00.123Z', 0)`})
+	_, rows := mustQuery(t, conn, wire.SQLStatement{Handle: app, SQL: `select at, done from events order by rowid`})
+	want := [][]any{{"2024-01-02", int64(1)}, {"2026-10-02T10:00:00.123Z", int64(0)}}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("a time and a flag: %#v", rows)
 	}
 }
 

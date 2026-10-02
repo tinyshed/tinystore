@@ -24,6 +24,7 @@ func TestConnectionURLCarriesEveryPragma(t *testing.T) {
 		{"/data/metrics.db", writerArguments(), `file:/data/metrics.db?` + pragmas + writer},
 		{"/data/metrics.db", readerArguments(), `file:/data/metrics.db?` + pragmas + reader},
 		{"/tmp/a # b & c.db", writerArguments(), `file:/tmp/a%20%23%20b%20&%20c.db?` + pragmas + writer},
+		{"//server/share/metrics.db", writerArguments(), `file:////server/share/metrics.db?` + pragmas + writer},
 	} {
 		if got := connectionURL(test.path, test.arguments); got != test.want {
 			t.Errorf("%s\n got %s\nwant %s", test.path, got, test.want)

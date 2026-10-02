@@ -397,6 +397,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | no cgo                                              | `CGO_ENABLED=0` in the build, on all three CI platforms                         |
 | the module carries only the engine                  | `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod                        |
 | importing this stays cheap                          | `task size` links a cgo-free linux/amd64 probe and reports what it cost         |
+| a program may link another SQLite driver beside it  | `TestTheExampleRegistersNoSQLDriver` in `examples/notes`: no name registered    |
 | a `//nolint` silences a named finding and says why  | `nolintlint`: no unused, unexplained or blanket directive                       |
 | the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |
 | one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
@@ -419,6 +420,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a schema is the SQL it prints                       | `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`        |
 | a declaration that cannot be a table fails at start | `TestADeclarationThatCannotBeATableFailsAtStart`                                |
 | an sqldb value comes back as it went in             | `TestEveryValueComesBackAsItWentIn`, `TestArgumentsAreWrittenByTheirGoType`     |
+| a value comes back as SQLite keeps it, no time read into its text | `TestAValueComesBackAsSQLiteKeepsIt`, `TestAValueTravelsAsItsRowKeepsIt` in `server` |
+| bytes a caller scanned are its own                  | `TestABlobScannedAgainLeavesTheLastOnesBytes`                                   |
+| a call prepares one statement and refuses a second  | `TestACallPreparesOneStatement`, `TestSQLiteEndsAStatementWhereTheCheckDoes`    |
 | sixteen bytes of a type sqldb does not know are bytes | `TestOnlyAKnownUUIDTypeIsText`                                                |
 | FTS5 and R*Tree work in an application's file and its snapshot | `TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot`                  |
 | a virtual table's shadow tables are not the application's | `TestAVirtualTablesShadowsAreNotTheSchemas`                                 |
@@ -708,12 +712,11 @@ This exists because the alternatives cost more memory than what they watch.
 dependency needing a C toolchain fails on the pull request that introduces it,
 and in `task size`, whose report refuses a probe built with cgo. This is why
 the file is `ncruces/go-sqlite3`, SQLite translated to Go; do not swap it for a
-faster cgo driver. Its driver registers `sqlite3` with
-database/sql, as mattn's does; the store opens through the driver's connector
-and never by that name, so a program linking both builds with
-`-ldflags=-X=github.com/ncruces/go-sqlite3/driver.driverName=`. The race
-detector is the one exception to no cgo — it builds test binaries, never a
-product.
+faster cgo driver. The store reaches it through a database/sql driver of its
+own in `internal/sqlite`, never ncruces' `driver` package, which registers
+`sqlite3` as it loads, as mattn's does, so that a program linking both panics.
+The race detector is the one exception to no cgo — it builds test binaries,
+never a product.
 
 **A dependency is a decision, and here it is somebody else's decision too.**
 Whatever the root module requires, every program importing this links. Check

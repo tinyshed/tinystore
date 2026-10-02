@@ -338,8 +338,6 @@ func setTime(v reflect.Value, raw any) error {
 	switch value := raw.(type) {
 	case int64:
 		at = time.UnixMilli(value).UTC()
-	case time.Time:
-		at = value.UTC()
 	case string:
 		parsed, err := parseTime(value)
 		if err != nil {
