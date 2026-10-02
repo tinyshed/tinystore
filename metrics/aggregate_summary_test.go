@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/tinyshed/tinystore"
 )
 
 func sealedAggregateStore(t *testing.T, kind Kind, values []float64) (*Store, Series) {
@@ -44,6 +46,11 @@ func TestWholeExactBlocksNeedNoDecodedSampleBudget(t *testing.T) {
 	}
 	if len(got) != 1 || len(got[0].Buckets) != 1 || got[0].Buckets[0].Count != len(values) {
 		t.Fatalf("result: %+v", got)
+	}
+	var reached *tinystore.LimitError
+	if _, err = store.Read(t.Context(), request.Range); !errors.As(err, &reached) || !errors.Is(err, ErrLimit) ||
+		reached.Name != "decoded samples" || reached.Bound != 1 || reached.Wanted <= 1 {
+		t.Fatalf("a read past its decoded samples: %v", err)
 	}
 	if _, err = store.Read(t.Context(), request.Range); !errors.Is(err, ErrLimit) {
 		t.Fatalf("raw ignored budget: %v", err)

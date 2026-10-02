@@ -71,6 +71,13 @@ func whatOf(err error) map[string]string {
 	if errors.As(err, &unknown) {
 		return map[string]string{"field": unknown.List()}
 	}
+	var reached *tinystore.LimitError
+	if errors.As(err, &reached) {
+		return map[string]string{
+			"limit": reached.Name, "wanted": strconv.FormatInt(reached.Wanted, 10),
+			"bound": strconv.FormatInt(reached.Bound, 10),
+		}
+	}
 	var op *opError
 	if errors.As(err, &op) {
 		return op.what()

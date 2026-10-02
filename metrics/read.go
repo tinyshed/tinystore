@@ -15,7 +15,7 @@ type queryBudget struct {
 
 func (b *queryBudget) takeBytes(size int) error {
 	if size < 0 || size > b.limits.PayloadBytes-b.bytes {
-		return fmt.Errorf("%w: fetched bytes", ErrLimit)
+		return limit("fetched bytes", b.bytes+size, b.limits.PayloadBytes)
 	}
 	b.bytes += size
 	return nil
@@ -23,7 +23,7 @@ func (b *queryBudget) takeBytes(size int) error {
 
 func (b *queryBudget) takeSamples(count int) error {
 	if count < 0 || count > b.limits.DecodedSamples-b.decoded {
-		return fmt.Errorf("%w: decoded samples", ErrLimit)
+		return limit("decoded samples", b.decoded+count, b.limits.DecodedSamples)
 	}
 	b.decoded += count
 	return nil
@@ -161,7 +161,7 @@ func (s *Store) yieldResults(
 				return nil
 			}
 			if output == query.limits.OutputSamples {
-				return fmt.Errorf("%w: output samples", ErrLimit)
+				return limit("output samples", output+1, query.limits.OutputSamples)
 			}
 			if len(result.Samples) > 0 && point.At <= result.Samples[len(result.Samples)-1].At {
 				return fmt.Errorf("%w: overlapping samples", ErrCorrupt)

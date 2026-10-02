@@ -64,8 +64,10 @@ func checkBatch(batch []Record, accepted window) error {
 		input += inputSize(&batch[i])
 	}
 	if input > maxAppendInput {
-		return fmt.Errorf("%w: %d bytes of records in one Append, more than a segment's %d; split it",
-			tinystore.ErrLimit, input, maxAppendInput)
+		return &tinystore.LimitError{
+			Name:   "bytes of records in one Append, a segment's; split it",
+			Wanted: int64(input), Bound: maxAppendInput,
+		}
 	}
 	return nil
 }
@@ -115,7 +117,10 @@ func checkRecord(r *Record) error {
 	case len(r.Context) > maxFields || len(r.Attrs) > maxFields:
 		return fmt.Errorf("%w: more than %d context fields or attributes", tinystore.ErrLimit, maxFields)
 	case inputSize(r) > maxBlockInput:
-		return fmt.Errorf("%w: %d bytes, more than a block holds", tinystore.ErrLimit, inputSize(r))
+		return &tinystore.LimitError{
+			Name: "bytes of a record, a block's", Wanted: int64(inputSize(r)),
+			Bound: maxBlockInput,
+		}
 	}
 	for _, fields := range [][]Field{r.Context, r.Attrs} {
 		for _, field := range fields {

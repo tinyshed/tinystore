@@ -30,6 +30,12 @@ type sentinel struct {
 
 func kindOf(message string, kind error) error { return &sentinel{message: message, kind: kind} }
 
+// limit is a metrics limit a query reached, named, which errors.Is finds as
+// ErrLimit and the store's.
+func limit(name string, wanted, bound int) error {
+	return &tinystore.LimitError{Name: name, Wanted: int64(wanted), Bound: int64(bound), Kind: ErrLimit}
+}
+
 func (s *sentinel) Error() string { return s.message }
 func (s *sentinel) Unwrap() error { return s.kind }
 

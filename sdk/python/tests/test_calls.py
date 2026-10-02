@@ -252,3 +252,13 @@ async def test_an_aggregate_joins_series_by_a_label_exactly(store: tinystore.Sto
     assert [g.buckets[0].value for g in rates] == [19 / 4, 3 / 4]
     with pytest.raises(InvalidError):
         await store.metrics.aggregate(name="hits", from_=start, to=end, width=4, op="delta", by=["route"])
+
+
+async def test_a_limit_says_which_it_is_what_the_read_wanted_and_the_bound(store: tinystore.Store) -> None:
+    now = datetime.now(UTC)
+    samples = [(now - timedelta(seconds=s), float(s)) for s in (3, 2, 1)]
+    await store.metrics.ingest({"name": "bounded", "kind": "gauge", "samples": samples})
+    with pytest.raises(tinystore.LimitError) as refused:
+        await store.metrics.read(name="bounded", since="1m", limits={"decoded": 1})
+    assert (refused.value.limit, refused.value.bound) == ("decoded samples", 1)
+    assert refused.value.wanted is not None and refused.value.wanted > 1

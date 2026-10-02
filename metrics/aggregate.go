@@ -343,7 +343,7 @@ func (g *bucketGroup) join(bucket *bucketAccumulator, a *aggregation) error {
 	into, found := g.buckets[bucket.from]
 	if !found {
 		if a.output == a.limit {
-			return fmt.Errorf("%w: aggregate output buckets", ErrLimit)
+			return limit("output buckets", a.output+1, a.limit)
 		}
 		a.output++
 		into = &bucketAccumulator{from: bucket.from, to: bucket.to}
@@ -422,7 +422,7 @@ func (b *seriesBuckets) flush() error {
 		return fmt.Errorf("%w: exact count representation", ErrLimit)
 	}
 	if b.output == b.limit {
-		return fmt.Errorf("%w: aggregate output buckets", ErrLimit)
+		return limit("output buckets", b.output+1, b.limit)
 	}
 	bucket := b.current.result(b.op)
 	bucket.Partial = bucket.From < b.from

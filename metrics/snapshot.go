@@ -198,7 +198,7 @@ func (r snapshotRead) takeBlock(
 ) (storedBlock, error) {
 	r.budget.blocks++
 	if r.budget.blocks > r.budget.limits.Blocks {
-		return block, fmt.Errorf("%w: decoded blocks", ErrLimit)
+		return block, limit("decoded blocks", r.budget.blocks, r.budget.limits.Blocks)
 	}
 	if r.aggregate != nil && r.aggregate.complete(block, r.from, r.to) {
 		block.summarized = true

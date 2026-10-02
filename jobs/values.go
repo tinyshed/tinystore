@@ -56,7 +56,7 @@ func (c valueCodec[V]) weigh(value V) int {
 }
 
 func tooLarge(size int) error {
-	return fmt.Errorf("%w: jobs: a value of %d bytes, over 1 MiB", tinystore.ErrLimit, size)
+	return &tinystore.LimitError{Name: "bytes of a job's value", Wanted: int64(size), Bound: maxValue}
 }
 
 // decode reads a value back; one that no longer reads into V, because the

@@ -232,6 +232,11 @@ counters, and a reporter reads counters without running SQL or writing data.
   `ErrTooNew`, `ErrSuspended`); engines wrap them, so `errors.Is` means the
   same everywhere. `metrics` keeps its own messages, and each of its errors
   wraps the root's.
+- A limit a call reached is a `*tinystore.LimitError` where the engine knows
+  its numbers: which bound, what the call would have taken of it, and the
+  bound, `decoded samples: 120000 past 100000`, so that a caller can say which
+  limit to raise or how much less to ask for. A query's budgets, the store's
+  memory, a record's, a job value's and an object's size are named so far.
 - An error about one item names it. An `Ingest` refused because of one series
   returns a `*metrics.SeriesError` carrying that series' name and labels
   (`errors.As`), and `DropSeries(ctx, name, labels)` removes a series that

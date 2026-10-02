@@ -276,7 +276,7 @@ An error is the final frame of its stream, with ERROR set:
 | code | means | sent again |
 |---|---|---|
 | `invalid` | the request cannot be done as asked | no |
-| `limit` | a bound: memory, size or count | later, or smaller |
+| `limit` | a bound: memory, size or count; `what` names the `limit`, what the call `wanted` of it and the `bound`, where the engine knows them | later, or smaller |
 | `closed` | the store or the handle closed | after opening again |
 | `in_use` | a name is taken | no |
 | `conflict` | a condition or a version no longer holds | after reading again |

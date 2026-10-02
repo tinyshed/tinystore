@@ -30,9 +30,20 @@ class InvalidError(TinystoreError):
 
 
 class LimitError(TinystoreError):
-    """A bound: memory, size or count. Later, or smaller, it may go through."""
+    """A bound: memory, size or count. Later, or smaller, it may go through.
+
+    A limit the store names says which, what the call would have taken of it,
+    and the bound: ``decoded samples``, 120000, 100000.
+    """
 
     code = "limit"
+
+    def __init__(self, message: str, what: What | None = None) -> None:
+        super().__init__(message, what)
+        limit, wanted, bound = self.what.get("limit"), self.what.get("wanted"), self.what.get("bound")
+        self.limit: str | None = limit if isinstance(limit, str) else None
+        self.wanted: int | None = int(wanted) if isinstance(wanted, str) else None
+        self.bound: int | None = int(bound) if isinstance(bound, str) else None
 
 
 class ClosedError(TinystoreError):

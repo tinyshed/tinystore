@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import {
 	type Condition,
 	InvalidError,
+	LimitError,
 	noneOf,
 	oneOf,
 	open,
@@ -329,6 +330,26 @@ describe('metrics', () => {
 		expect(
 			await caught(store.metrics.aggregate({ ...range, op: 'delta', by: ['route'] })),
 		).toBeInstanceOf(InvalidError)
+	})
+
+	test('a limit says which it is, what the read wanted and the bound', async () => {
+		const now = Date.now()
+		await store.metrics.ingest({
+			name: 'bounded',
+			kind: 'gauge',
+			samples: [
+				[new Date(now - 3000), 1],
+				[new Date(now - 2000), 2],
+				[new Date(now - 1000), 3],
+			],
+		})
+		const refused = await caught(
+			store.metrics.read({ name: 'bounded', since: '1m', limits: { decoded: 1 } }),
+		)
+		expect(refused).toBeInstanceOf(LimitError)
+		const limit = refused as LimitError
+		expect([limit.limit, limit.bound]).toEqual(['decoded samples', 1])
+		expect(limit.wanted).toBeGreaterThan(1)
 	})
 
 	test('a drop removes a series', async () => {

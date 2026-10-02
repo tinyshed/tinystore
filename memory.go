@@ -2,7 +2,6 @@ package tinystore
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sync"
 )
@@ -138,8 +137,7 @@ func (m *memory) acquireNow(bytes int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if free := m.capacity - m.used; bytes > free {
-		return fmt.Errorf("%w: a reservation of %d bytes that cannot wait, and %d of the store's %d are free",
-			ErrLimit, bytes, free, m.capacity)
+		return &LimitError{Name: "store memory, now", Wanted: m.used + bytes, Bound: m.capacity}
 	}
 	m.take(bytes)
 	return nil
@@ -147,7 +145,7 @@ func (m *memory) acquireNow(bytes int64) error {
 
 func (m *memory) fits(bytes int64) error {
 	if bytes <= 0 || bytes > m.capacity {
-		return fmt.Errorf("%w: a reservation of %d bytes against the store's %d", ErrLimit, bytes, m.capacity)
+		return &LimitError{Name: "store memory", Wanted: bytes, Bound: m.capacity}
 	}
 	return nil
 }

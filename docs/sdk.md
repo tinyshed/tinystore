@@ -170,6 +170,9 @@ Built after it:
 - **Across series**: `by` and `without` on aggregates, one result a group,
   `by: []` every series of a name; and `avg`, `rate` for counters, `delta` for
   gauges, each exact and rounded once, a group's too (`aggregate-contract.md`).
+- **A limit says which**: `LimitError` names the bound, what the call would
+  have taken of it and the bound, `limit`, `wanted` and `bound` in both SDKs,
+  `Name`, `Wanted` and `Bound` in Go.
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.
@@ -177,8 +180,7 @@ Built after it:
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):
 
-- **`explain`**: what a query would open, fetch and decode, before it runs;
-  and a `LimitError` naming the budget, what it used and its bound.
+- **`explain`**: what a query would open, fetch and decode, before it runs.
 - **`status` and `capabilities`**: what a server serves, asked before a call.
   A client newer than its server is told already: a field or a method the
   server does not know is `UnimplementedError`, naming the field and the

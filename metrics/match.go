@@ -200,7 +200,7 @@ func readMatchedSeries(
 	var matched []registeredSeries
 	for rows.Next() {
 		if len(matched) == budget.limits.Series {
-			return nil, fmt.Errorf("%w: matched series", ErrLimit)
+			return nil, limit("matched series", len(matched)+1, budget.limits.Series)
 		}
 		var series registeredSeries
 		var source []byte

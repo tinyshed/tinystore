@@ -48,10 +48,21 @@ export class InvalidError extends TinystoreError {
 	}
 }
 
-/** A bound: memory, size or count. Later, or smaller, it may go through. */
+/**
+ * A bound: memory, size or count. Later, or smaller, it may go through. A
+ * limit the store names says which, what the call would have taken of it,
+ * and the bound: `decoded samples`, 120000, 100000.
+ */
 export class LimitError extends TinystoreError {
+	readonly limit: string | undefined
+	readonly wanted: number | undefined
+	readonly bound: number | undefined
+
 	constructor(message: string, what?: What) {
 		super('limit', message, what)
+		this.limit = typeof what?.limit === 'string' ? what.limit : undefined
+		this.wanted = typeof what?.wanted === 'string' ? Number(what.wanted) : undefined
+		this.bound = typeof what?.bound === 'string' ? Number(what.bound) : undefined
 	}
 }
 
