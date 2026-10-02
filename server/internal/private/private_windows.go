@@ -40,6 +40,14 @@ func ownerOnly() (string, error) {
 }
 
 func ownerEntry() (string, error) {
+	sid, err := ownerSID()
+	if err != nil {
+		return "", err
+	}
+	return "(A;OICI;FA;;;" + sid + ")", nil
+}
+
+func ownerSID() (string, error) {
 	token, err := syscall.OpenCurrentProcessToken()
 	if err != nil {
 		return "", err
@@ -49,11 +57,22 @@ func ownerEntry() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sid, err := user.User.Sid.String()
-	if err != nil {
-		return "", err
+	return user.User.Sid.String()
+}
+
+// sameSID says whether SDDL's spelling of a trustee names sid: Windows spells a
+// well-known account by its alias, LA for the built-in Administrator a CI
+// runner may be
+func sameSID(spelled, sid string) bool {
+	if spelled == sid {
+		return true
 	}
-	return "(A;OICI;FA;;;" + sid + ")", nil
+	parsed, err := syscall.StringToSid(spelled)
+	if err != nil {
+		return false
+	}
+	text, err := parsed.String()
+	return err == nil && text == sid
 }
 
 // restrict gives dir the owner-only DACL, which Windows passes on to what the
@@ -102,7 +121,7 @@ func restrict(dir string, _ os.FileInfo) error {
 //
 //	D:PAI(A;OICI;FA;;;S-1-5-21-…) → protected, the owner's entry alone
 func Check(dir string) error {
-	want, err := ownerEntry()
+	sid, err := ownerSID()
 	if err != nil {
 		return err
 	}
@@ -111,8 +130,10 @@ func Check(dir string) error {
 		return err
 	}
 	flags, entries, _ := strings.Cut(strings.TrimPrefix(got, "D:"), "(")
-	if !strings.Contains(flags, "P") || "("+entries != want {
-		return fmt.Errorf("%s's DACL is %s, not protected with %s alone", dir, got, want)
+	trustee, owners := strings.CutPrefix(entries, "A;OICI;FA;;;")
+	trustee, closed := strings.CutSuffix(trustee, ")")
+	if !strings.Contains(flags, "P") || !owners || !closed || !sameSID(trustee, sid) {
+		return fmt.Errorf("%s's DACL is %s, not protected with (A;OICI;FA;;;%s) alone", dir, got, sid)
 	}
 	return nil
 }

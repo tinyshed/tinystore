@@ -5,7 +5,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { CancelledError, ConflictError, InvalidError, open, type Store } from '../src/index.ts'
+import {
+	CancelledError,
+	ConflictError,
+	InvalidError,
+	type Job,
+	open,
+	type Store,
+} from '../src/index.ts'
 
 let dir: string
 let store: Store
@@ -253,23 +260,24 @@ describe('a work loop', () => {
 		let searches = 0
 		let asks = 0
 		const answers: string[] = []
-		await q.work(
-			async job => {
-				const hits = await job.step('search', async () => {
-					searches++
-					return ['a file', 'a lock']
-				})
-				const answer = await job.step('answer', () => {
-					asks++
-					if (asks === 1) {
-						throw new Error('the model is down')
-					}
-					return hits.join(' and ')
-				})
-				answers.push(answer)
-			},
-			{ untilIdle: true },
-		)
+		const handler = async (job: Job<{ question: string }>) => {
+			const hits = await job.step('search', async () => {
+				searches++
+				return ['a file', 'a lock']
+			})
+			const answer = await job.step('answer', () => {
+				asks++
+				if (asks === 1) {
+					throw new Error('the model is down')
+				}
+				return hits.join(' and ')
+			})
+			answers.push(answer)
+		}
+		// a loop until idle may end before the retry is due, a millisecond on
+		await q.work(handler, { untilIdle: true })
+		await Bun.sleep(20)
+		await q.work(handler, { untilIdle: true })
 		expect([searches, asks, answers]).toEqual([1, 2, ['a file and a lock']])
 
 		await q.enqueue({ question: 'claimed' }, { key: 'claimed' })

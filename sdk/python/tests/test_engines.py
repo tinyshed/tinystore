@@ -223,6 +223,9 @@ async def test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_ke
 
         answers.append(await job.step("answer", ask))
 
+    # a loop until idle may end before the retry is due, a millisecond on
+    await q.work(handle, until_idle=True)
+    await asyncio.sleep(0.02)
     await q.work(handle, until_idle=True)
     assert (searches, asks, answers) == (1, 2, ["a file and a lock"])
 
