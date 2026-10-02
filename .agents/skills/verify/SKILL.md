@@ -1,44 +1,41 @@
 ---
 name: verify
-description: Use before committing a change to TinyStore, when reporting which checks ran, and whenever a test fails or seems flaky - the checks CI would run, on Windows and in a Linux container, lint for each platform, the race suite, and how to tell a flaky test from a broken one.
+description: Use before committing or pushing a change to TinyStore, when reporting which checks ran, and whenever a test fails or seems flaky - the checks CI runs, on Windows and in a Linux container, lint for each platform, the race suite, the SDK suites, and how to tell a flaky test from a broken one.
 ---
 
 # Verifying a change
 
-CI on GitHub is off until the account's quota returns, so these local checks
-are the gate. Say in your report which of them ran, where, and which could not.
+CI (`.github/workflows/ci.yml`) is the gate, and a red run is real: every
+push, to any branch, tests the three modules on Linux, Windows and macOS, with
+the race detector off Windows, and both SDKs on all three; it lints as each
+platform builds and checks formatting, tidiness, `govulncheck` and the size
+probe. `task check` runs the same on this host, so that a failure arrives
+before the push instead of after it. Say in your report which checks ran,
+where, and which could not.
 
 ## The modules
 
 The root, `server/` and `cmd/tinystore/`, each with its own `go.mod`; `tools/`
-pins the linters; `sdk/go.mod` keeps the SDKs out of Go. `task` runs with
-`GOWORK=off`. A local, ignored `go.work` lets an editor see every module: a new
-module goes into it with `go work use ./<dir>`, or GoLand shows it red.
+pins the linters and `task`; `sdk/go.mod` keeps the SDKs out of Go. `task`
+runs with `GOWORK=off`. A local, ignored `go.work` lets an editor see every
+module: a new module goes into it with `go work use ./<dir>`, or GoLand shows
+it red. Anything that copies the repository elsewhere, a container included,
+leaves `go.work` behind or sets `GOWORK=off`, since it names no `tools/`.
 
 ## Before every commit
 
-- `task check`: tidy, format, lint and tests of the three modules,
-  `govulncheck` and the size probe, as CI would.
-- Code behind build tags: lint it for the other platforms too, from inside
-  each module:
-
-  ```sh
-  GOOS=linux ../bin/golangci-lint run ./...
-  GOOS=darwin ../bin/golangci-lint run ./...
-  ```
-
-  and build a fallback such as `//go:build !unix && !windows` with
+- `task check`: tidy, format, lint as Linux, macOS and Windows build the code
+  (`task lint:platforms`), the tests of the three modules, both SDKs (bun and
+  uv on `PATH`), `govulncheck` and the size probe, as CI would.
+- `task race:linux`: the race detector, which this Windows host cannot run
+  without cgo, over the three modules in the `golang:1.27` container.
+- `task sdk:linux` when a change touches what the SDKs do with processes,
+  sockets, pipes or files: both suites in Linux, where a refused socket fails
+  at once and pyright narrows platforms otherwise.
+- A fallback behind build tags, such as `//go:build !unix && !windows`:
   `GOOS=plan9 go build .`.
-- Linux and the race detector, which Windows cannot run without cgo, in the
-  container, from Git Bash with `MSYS_NO_PATHCONV=1`, again with
-  `-w /src/cmd/tinystore` and `-w /src` for those modules:
-
-  ```sh
-  docker run --rm -v <repo>:/src -v tinystore-race-cache:/go -v tinystore-gocache:/root/.cache/go-build \
-    -e GOWORK=off -e CGO_ENABLED=1 -w /src/server golang:1.27 go test -race -count=3 -shuffle=on ./...
-  ```
-
-- Never while a measurement runs: see the `measure` skill.
+- Docker Desktop may be stopped: `platform-traps` says how to start it.
+- Never while a measurement runs: see research's `measure` skill.
 
 ## A test that fails, or seems to
 
@@ -56,9 +53,12 @@ module goes into it with `go work use ./<dir>`, or GoLand shows it red.
   handling it replaced; the proof's gate fails when the client skips its check.
 - Never weaken or delete a test to make a change pass; when behaviour changes
   on purpose, change the test and say what the new contract is.
+- A failure in CI: `gh run list --branch <branch>`, then `gh run view <id>
+  --log-failed` for the failing steps' output.
 
 ## After the checks
 
 State what changed, which checks ran on which platform, what could not run and
 why. Do not claim a platform was tested from another operating system: linting
-with `GOOS=darwin` is not running on macOS.
+with `GOOS=darwin` is not running on macOS, and only CI's macOS runner runs
+there.

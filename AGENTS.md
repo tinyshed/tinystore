@@ -385,9 +385,10 @@ measurement round belongs in tinyshed/research with the environment and
 command that reproduce it. A rule they are about to violate belongs here.
 
 How to do the recurring work is a skill in `.agents/skills/`, which
-`.claude/skills/` points to: `sdk`, `wire-change`, `verify`, `release` and
-`platform-traps`. Read the one that fits before you start, and fix it where it
-is wrong, as you would this file. Measuring is research's `measure` skill.
+`.claude/skills/` points to with the same frontmatter: `api-change`, `sdk`,
+`wire-change`, `verify`, `release` and `platform-traps`. Read the one that fits
+before you start, and fix it where it is wrong, as you would this file.
+Measuring is research's `measure` skill.
 
 ## Rules that are gates
 

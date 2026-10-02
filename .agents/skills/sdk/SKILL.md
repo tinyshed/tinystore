@@ -21,8 +21,9 @@ contract from the documents, not from the Go client in
 
 One commit changes the protocol, the server, both SDKs and the vectors. The
 SDKs live in `sdk/js` (Bun, and Node later) and `sdk/python`, and `sdk/go.mod`
-keeps them out of the Go module's zip. What they look like to an application
-is `docs/server.md` "SDKs".
+keeps them out of the Go module's zip. What they look like to an application,
+beside Go, is `docs/sdk.md`, whose rules every call follows; a change to what a
+program writes is the `api-change` skill, since it reaches all three.
 
 ## Reaching the server, in this order
 
@@ -124,13 +125,25 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
   private child is waited for until it exits, or asyncio warns of its pipes.
 - `task sdk` checks and tests both, building `tinystore` from this
   repository (`test/binary.ts`, `tests/conftest.py`) unless `TINYSTORE_BIN`
-  names one.
+  names one; it is part of `task check`, and CI runs it on Linux, Windows and
+  macOS.
+- Formatting is the tools', never by hand: `bun run check:write` in `sdk/js`
+  (biome, then `tsc`), and `uv run ruff format .` and `uv run ruff check --fix
+  .` in `sdk/python`. ruff formats the Python blocks of `README.md` too, so
+  run it after editing the README.
+- `tsc` runs with `exactOptionalPropertyTypes`: an option a caller may pass as
+  `undefined`, as spreading another query does, is declared
+  `after?: string | undefined`.
+- A Bun test file opens one private store in `beforeAll`, so each of its tests
+  names a bucket or queue of its own; Python's `store` fixture opens one a
+  test, in `tmp_path`. Both are private children: a test of the sidecar opens
+  one itself, with a short `idle`.
 - Windows hides two things only Linux shows: pyright narrows a platform only
   by `sys.platform == "win32"` written at the test, not through a constant;
   and a refused socket is `ECONNREFUSED` at once, where a Windows client
-  waits, so `dial` turns it into `ClosedError`. Run both suites in a Linux
-  container too: `golang:1.27`, bun and uv from their installers, the
-  repository copied in so `node_modules` and `.venv` stay the host's.
+  waits, so `dial` turns it into `ClosedError`. `task sdk:linux` runs both
+  suites in a Linux container (`sdk/test.Dockerfile`), the repository copied
+  in so `node_modules` and `.venv` stay the host's.
 
 Platform behaviour behind several of these rules is in the `platform-traps`
 skill; a protocol change is the `wire-change` skill.

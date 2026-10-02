@@ -91,4 +91,20 @@ Each line cost a debugging session once. The fix named is the one in the code.
 - **Git Bash rewrites `/paths` in arguments**: run `docker` with
   `MSYS_NO_PATHCONV=1`.
 - **The race detector needs cgo**, which Windows does not have here: run
-  `-race` in the Linux container.
+  `-race` in the Linux container, `task race:linux`.
+- **A long script inline in a shell command may be cut, or its quoting
+  broken**, a heredoc inside the tool's own quoting above all: write the
+  script to a file in the scratchpad with the file tool and run the file. A
+  script that edits files asserts each old text occurs exactly once before it
+  replaces it, so a miss fails instead of writing nothing.
+- **Task runs its commands in a shell of its own, not Git Bash**: nothing
+  rewrites `/paths` inside the Taskfile, and `{{.ROOT_DIR}}` is a Windows path
+  with forward slashes, `D:/dev/...`, which `docker -v` takes as it is.
+- **Git Bash's tar takes `C:` in a path for a remote host** and fails to
+  connect: give it a relative path, or `--force-local`.
+- **A copy of the checkout carries the local `go.work`**, which names no
+  `tools/`: `go -C tools` then finds no module providing `task`. Leave it out
+  of the copy or set `GOWORK=off`.
+- **Docker Desktop may be stopped**: `docker info` fails on the pipe
+  `dockerDesktopLinuxEngine`. Start `C:\Program Files\Docker\Docker\Docker
+  Desktop.exe` and wait until `docker info` answers, usually seconds.
