@@ -278,7 +278,7 @@ func wireDamage(damage records.Damage) wire.RecordsDamage {
 func queryOf(sent wire.RecordsQuery) (records.Query, error) {
 	query := records.Query{
 		From: timeOf(sent.From), To: timeOf(sent.To), Attrs: fieldsOf(sent.Attrs), Context: fieldsOf(sent.Context),
-		Newest: sent.Newest, Limit: int(min(sent.Limit, math.MaxInt32)),
+		Newest: sent.Newest, Limit: int(min(sent.Limit, math.MaxInt32)), Search: sent.Search,
 		Budget: records.Budget{
 			Blocks: int(min(sent.Budget.Blocks, math.MaxInt32)), Bytes: int(min(sent.Budget.Bytes, math.MaxInt32)),
 			Decoded: int(min(sent.Budget.Decoded, math.MaxInt32)),

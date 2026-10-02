@@ -330,6 +330,7 @@ RecordsQuery = message(
     budget_blocks=(11, uint),
     budget_bytes=(12, uint),
     budget_records=(13, uint),
+    search=(14, str_),
 )
 
 RecordsPage = message("records.page", more=(1, bool_), from_=(2, int_), to=(3, int_))

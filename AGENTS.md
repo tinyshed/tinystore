@@ -494,6 +494,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a budget ends a page rather than failing it         | `TestABudgetEndsAPageEarly`                                                     |
 | a records scan since a span pages on in that range  | `TestAScanSinceStartsThatLongBeforeNowAndPagesOn`, the clock moved between pages |
 | `All` walks every record a page at a time           | `TestAllWalksEveryRecordAPageAtATime`, a walk stopped early reads no further     |
+| a search finds a record by its text, the case ignored | `TestASearchFindsARecordByItsTextItsCaseIgnored`, sealed and in its head        |
 | blooms and level masks skip blocks                  | `TestBloomsAndLevelMasksSkipBlocks`                                             |
 | a read walks the time index near its range only     | `TestTheTimeIndexIsWalkedWithinEachSpan`, on the plan SQLite chooses            |
 | a read finds records in blocks of every width       | `TestReadsFindRecordsInBlocksOfEveryWidth`                                      |

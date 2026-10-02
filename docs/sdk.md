@@ -89,6 +89,7 @@ labels follow its Prometheus client: Go's `With(pairs...)`, Bun's
 ```go
 logger := slog.New(logs.Handler("api"))               // never waits for the file
 page, err := logs.Scan(ctx, records.Query{Since: time.Hour, MinLevel: &warn, Limit: 100})
+resets, err := logs.Scan(ctx, records.Query{Since: time.Hour, Search: "connection reset"})
 next, err := logs.Scan(ctx, page.Next)                // while page.More
 for record, err := range logs.All(ctx, records.Query{Since: 24 * time.Hour, TraceID: trace}) { … }
 ```
@@ -98,6 +99,7 @@ const log = store.records.logger('api')               // never waits for the ser
 log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })
 const page = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100 })
+const resets = await store.records.scan({ since: '1h', search: 'connection reset' })
 const more = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100, after: page.next })
 for await (const record of store.records.all({ since: '24h', traceId })) { … }
 ```
@@ -105,6 +107,7 @@ for await (const record of store.records.all({ since: '24h', traceId })) { … }
 ```python
 logging.getLogger().addHandler(store.records.handler("api"))   # never waits for the server
 page = await store.records.scan(since="1h", min_level="warn", limit=100)
+resets = await store.records.scan(since="1h", search="connection reset")
 more = await store.records.scan(since="1h", min_level="warn", limit=100, after=page.next)
 async for record in store.records.all(since="24h", trace_id=trace):
     ...
@@ -158,13 +161,15 @@ Built after it:
   stored value is never read as a query; a plain value in an SDK's `where` is
   equality. `NoneOf` was `not` in the proposal: it takes several values, and
   `not` is a word Python keeps for itself.
+- **Text in records**: `search` finds a record whose body or name holds the
+  text, the case ignored, through `scan` and `all`; its budget ends a page
+  early rather than failing. An index of words waits for a measurement.
 
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):
 
 - **Across series**: `by` and `without` on aggregates; `avg`, and `rate` and
   `delta` for counters.
-- **Text in records**: a substring of a body, then an index.
 - **`explain`**: what a query would open, fetch and decode, before it runs;
   and a `LimitError` naming the budget, what it used and its bound.
 - **`status` and `capabilities`**: what a server serves, asked before a call.

@@ -68,9 +68,13 @@ type Query struct {
 	// Context matches a record holding each field, by key and exact JSON
 	// spelling.
 	Context []Field
-	Newest  bool   // newest first; oldest first otherwise
-	Limit   int    // records a page returns: 1000 when zero, at most 10000
-	Budget  Budget // may only narrow Options.Budget
+	// Search matches a record whose body, or name, holds the text, its case
+	// ignored. Each record the rest of the query leaves is read for it, so a
+	// search over much text ends pages early at its Budget, never fails.
+	Search string
+	Newest bool   // newest first; oldest first otherwise
+	Limit  int    // records a page returns: 1000 when zero, at most 10000
+	Budget Budget // may only narrow Options.Budget
 }
 
 // Budget bounds one Scan before it starts: the blocks it may open, the bytes

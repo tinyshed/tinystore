@@ -194,6 +194,7 @@ class Records:
         trace_id: bytes | str | None = None,
         attrs: Fields | None = None,
         context: Fields | None = None,
+        search: str | None = None,
         newest: bool = False,
         limit: int | None = None,
         after: str | None = None,
@@ -217,6 +218,7 @@ class Records:
             "trace_id": _id(trace_id, 16, "trace"),
             "attrs": _fields(attrs),
             "context": _fields(context),
+            "search": search or None,
             "newest": True if newest else None,
             "limit": limit,
         }
@@ -243,6 +245,7 @@ class Records:
         trace_id: bytes | str | None = None,
         attrs: Fields | None = None,
         context: Fields | None = None,
+        search: str | None = None,
         newest: bool = False,
         limit: int | None = None,
     ) -> AsyncIterator[Record]:
@@ -255,6 +258,7 @@ class Records:
             "trace_id": trace_id,
             "attrs": attrs,
             "context": context,
+            "search": search,
             "newest": newest,
             "limit": limit,
         }

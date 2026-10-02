@@ -177,6 +177,36 @@ describe('logger', () => {
 	})
 })
 
+describe('search', () => {
+	test('a search finds records by their text, the case ignored, a page at a time', async () => {
+		const now = Date.now()
+		const at = (ms: number) => new Date(now - ms)
+		await store.records.append([
+			{
+				at: at(4),
+				stream: 'search',
+				name: 'log',
+				level: 'warn',
+				body: 'read: Connection reset by peer',
+			},
+			{ at: at(3), stream: 'search', name: 'log', level: 'info', body: 'all good' },
+			{ at: at(2), stream: 'search', name: 'log', level: 'info', body: 'CONNECTION RESET again' },
+			{ at: at(1), stream: 'search', name: 'user.created' },
+		])
+		const found = []
+		for await (const r of store.records.all({
+			streams: ['search'],
+			search: 'connection reset',
+			limit: 1,
+		})) {
+			found.push(r.body)
+		}
+		expect(found).toEqual(['read: Connection reset by peer', 'CONNECTION RESET again'])
+		const events = await store.records.scan({ streams: ['search'], search: 'USER.created' })
+		expect(events.items.map(r => r.name)).toEqual(['user.created'])
+	})
+})
+
 describe('metrics', () => {
 	test('a sample comes back bit for bit, -0 and a NaN payload included', async () => {
 		const now = Date.now()

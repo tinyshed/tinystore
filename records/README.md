@@ -22,6 +22,7 @@ page, err := logs.Scan(ctx, records.Query{
 	MinLevel: new(slog.LevelWarn), Newest: true, Limit: 100,
 })
 for record, err := range logs.All(ctx, records.Query{Since: 24 * time.Hour, TraceID: trace}) { … }
+resets, err := logs.Scan(ctx, records.Query{Since: time.Hour, Search: "connection reset"}) // case ignored
 
 batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor the caller keeps
 ```

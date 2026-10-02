@@ -7,6 +7,8 @@ import (
 	"iter"
 	"math"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -78,6 +80,7 @@ type checkedQuery struct {
 	first, last int64
 	streams     map[int64]bool // nil: every stream
 	levels      int64          // the level bits a block must share, zero for any
+	search      string         // Search folded to lower case
 	limit       int
 	budget      Budget
 	nothing     bool // no record can match: an empty range, or none of the streams exists
@@ -104,6 +107,7 @@ func (s *Store) checkQuery(query Query) (checkedQuery, error) {
 	if query.MinLevel != nil {
 		q.levels = levelsFrom(int64(*query.MinLevel))
 	}
+	q.search = strings.ToLower(query.Search)
 	q.streams = s.knownStreams(query.Streams)
 	q.nothing = q.first > q.last || (query.Streams != nil && len(q.streams) == 0)
 	return q, nil
@@ -130,8 +134,14 @@ func checkConditions(query Query) error {
 	if query.MinLevel != nil && (*query.MinLevel < minLevel || *query.MinLevel > maxLevel) {
 		return fmt.Errorf("%w: level %d is past 32 bits", tinystore.ErrInvalid, *query.MinLevel)
 	}
+	if len(query.Search) > maxSearch || !utf8.ValidString(query.Search) {
+		return fmt.Errorf("%w: a search is UTF-8 text of %d bytes at most", tinystore.ErrInvalid, maxSearch)
+	}
 	return nil
 }
+
+// the text a Search may look for
+const maxSearch = 1024
 
 // since resolves a query over the last Since into the From it starts at, so
 // that each page after the first continues the same range
@@ -202,6 +212,8 @@ func (q *checkedQuery) matches(r *Record) bool {
 		return false
 	case asked.TraceID != (TraceID{}) && r.TraceID != asked.TraceID:
 		return false
+	case q.search != "" && !q.holds(r):
+		return false
 	}
 	for _, want := range asked.Attrs {
 		if !slices.Contains(r.Attrs, want) {
@@ -216,11 +228,20 @@ func (q *checkedQuery) matches(r *Record) bool {
 	return true
 }
 
+// holds says whether a record's body, or its name, holds the search, case
+// ignored:
+//
+//	search "connection RESET"   body "read: Connection reset by peer"   → true
+func (q *checkedQuery) holds(r *Record) bool {
+	return r.Body != nil && strings.Contains(strings.ToLower(*r.Body), q.search) ||
+		strings.Contains(strings.ToLower(r.Name), q.search)
+}
+
 // filtersRows is a query whose conditions only a record's own values settle
 func (q *checkedQuery) filtersRows() bool {
 	asked := &q.asked
 	return len(asked.Names) > 0 || asked.MinLevel != nil || asked.TraceID != (TraceID{}) ||
-		len(asked.Attrs) > 0 || len(asked.Context) > 0
+		len(asked.Attrs) > 0 || len(asked.Context) > 0 || asked.Search != ""
 }
 
 // expectedBefore is how many of a candidate's records fall on this page's side

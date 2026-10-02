@@ -76,6 +76,7 @@ export interface LogRecord {
  *
  * ```ts
  * { since: '1h', minLevel: 'warn' }                 // the last hour's warnings
+ * { since: '1h', search: 'connection reset' }       // whose text holds it, case ignored
  * { from: start, to: end, streams: ['api'] }
  * ```
  */
@@ -95,6 +96,12 @@ export interface RecordsQuery {
 	/** each a record must hold, by key and exact JSON spelling */
 	attrs?: Fields
 	context?: Fields
+	/**
+	 * text a record's body or name holds, its case ignored: every record the
+	 * rest of the query leaves is read for it, so a search over much text ends
+	 * pages early at the budget, and next goes on
+	 */
+	search?: string
 	/** newest first; oldest first when absent */
 	newest?: boolean
 	/** the records a page holds: 1000, and 10000 at most */
@@ -240,6 +247,7 @@ function queryOf(q: RecordsQuery | undefined): Parameters<typeof QueryMessage.en
 		budgetBlocks: q?.budget?.blocks,
 		budgetBytes: q?.budget?.bytes,
 		budgetRecords: q?.budget?.records,
+		search: q?.search === '' ? undefined : q?.search,
 	}
 }
 

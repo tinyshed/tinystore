@@ -34,7 +34,17 @@ page, err := logs.Scan(ctx, records.Query{From: from, To: to,     // [From, To),
 	Newest: true, Limit: 100, Budget: records.Budget{Blocks: 64}})
 next, err := logs.Scan(ctx, page.Next)                            // when page.More
 for record, err := range logs.All(ctx, records.Query{Since: time.Hour}) { … }  // a page at a time
+resets, err := logs.Scan(ctx, records.Query{Since: time.Hour, Search: "connection reset"})
+```
 
+A search finds a record whose body, or name, holds its text, the case
+ignored. Nothing indexes the text yet: a search reads every record the rest of
+the query leaves, block by block within the range, so over much text it ends a
+page early at the budget, and the page's `Next` goes on. A word index of each
+block, which would let a search pass blocks by, waits for a measurement of
+what it costs the file.
+
+```go
 batch, err := logs.Follow(ctx, records.Cursor{Segment: s, Row: r}, 1000)
 ```
 

@@ -693,6 +693,7 @@ A query:
 | 11 | budget blocks | uint | the blocks one read may open; each budget narrows the server's |
 | 12 | budget bytes | uint | the bytes it may fetch |
 | 13 | budget records | uint | the records it may decode |
+| 14 | search | str | text a record's body or name holds, its case ignored; 1 KiB at most |
 
 A page, a read's trailer, is `{1: more, 2: from, 3: to}`: more says the limit
 or the budget ended the page before the range did, and from and to are the

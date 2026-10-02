@@ -194,6 +194,8 @@ type RecordsQuery struct {
 	Limit    uint64
 	// Budget narrows the server's.
 	Budget RecordsBudget
+	// Search is text a record's body or name holds, its case ignored.
+	Search string
 }
 
 // RecordsBudget bounds one read: the blocks it opens, the bytes it fetches
@@ -223,6 +225,7 @@ func (q RecordsQuery) Append(dst []byte) []byte {
 	optionalUint(&m, 11, q.Budget.Blocks)
 	optionalUint(&m, 12, q.Budget.Bytes)
 	optionalUint(&m, 13, q.Budget.Decoded)
+	optionalStr(&m, 14, q.Search)
 	return m.End()
 }
 
@@ -284,6 +287,8 @@ func (q *RecordsQuery) decodeTail(d *Decoder, key uint64) {
 		q.Budget.Bytes = d.Uint()
 	case 13:
 		q.Budget.Decoded = d.Uint()
+	case 14:
+		q.Search = d.Str()
 	}
 }
 

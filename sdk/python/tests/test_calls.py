@@ -202,3 +202,29 @@ async def test_conditions_find_series_beyond_equality(store: tinystore.Store) ->
     assert await hosts({"host": tinystore.prefix("api-"), "status": "200"}) == ["api-1"]
     with pytest.raises(InvalidError):
         await store.metrics.read(where={"env": tinystore.none_of("dev")})
+
+
+async def test_a_search_finds_records_by_their_text_the_case_ignored(store: tinystore.Store) -> None:
+    now = datetime.now(UTC)
+    await store.records.append(
+        {
+            "at": now - timedelta(milliseconds=4),
+            "stream": "search",
+            "name": "log",
+            "level": "warn",
+            "body": "read: Connection reset by peer",
+        },
+        {"at": now - timedelta(milliseconds=3), "stream": "search", "name": "log", "level": "info", "body": "all good"},
+        {
+            "at": now - timedelta(milliseconds=2),
+            "stream": "search",
+            "name": "log",
+            "level": "info",
+            "body": "CONNECTION RESET again",
+        },
+        {"at": now - timedelta(milliseconds=1), "stream": "search", "name": "user.created"},
+    )
+    found = [r.body async for r in store.records.all(streams=["search"], search="connection reset", limit=1)]
+    assert found == ["read: Connection reset by peer", "CONNECTION RESET again"]
+    page = await store.records.scan(streams=["search"], search="USER.created")
+    assert [r.name for r in page.items] == ["user.created"]

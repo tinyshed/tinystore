@@ -1,6 +1,7 @@
 package records
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -351,4 +352,65 @@ func TestAllWalksEveryRecordAPageAtATime(t *testing.T) {
 	if s.Stats().Queries != before+1 {
 		t.Fatalf("a walk stopped at its first record read %d pages", s.Stats().Queries-before)
 	}
+}
+
+// A search finds a record by the text of its body, or its name, its case
+// ignored, sealed or still in its head, beside the query's other conditions
+func TestASearchFindsARecordByItsTextItsCaseIgnored(t *testing.T) {
+	s := openRecords(t)
+	text := func(body string) *string { return &body }
+	warn, info := slog.LevelWarn, slog.LevelInfo
+	s.append(t,
+		Record{
+			At: testNow.Add(-3 * time.Hour), Stream: "api", Name: "log", Level: &warn,
+			Body: text("read: Connection reset by peer"),
+		},
+		Record{At: testNow.Add(-170 * time.Minute), Stream: "api", Name: "log", Level: &info, Body: text("all good")},
+	)
+	s.clock.advance(2 * time.Hour)
+	if sealed := s.maintain(t); sealed.SealedSegments == 0 {
+		t.Fatalf("nothing was sealed, so the search below reads only heads: %+v", sealed)
+	}
+	s.append(t,
+		Record{
+			At: testNow.Add(-time.Minute), Stream: "api", Name: "log", Level: &info,
+			Body: text("connection refused, CONNECTION RESET after it"),
+		},
+		Record{At: testNow.Add(-time.Second), Stream: "api", Name: "user.created"},
+	)
+
+	bodies := func(query Query) []string {
+		var found []string
+		for _, r := range s.readAll(t, query) {
+			found = append(found, cmp.Or(deref(r.Body), r.Name))
+		}
+		return found
+	}
+	if got := bodies(Query{Search: "connection RESET"}); !slices.Equal(got, []string{
+		"read: Connection reset by peer", "connection refused, CONNECTION RESET after it",
+	}) {
+		t.Errorf("connection RESET: %q", got)
+	}
+	if got := bodies(Query{Search: "reset", MinLevel: &warn}); !slices.Equal(got, []string{"read: Connection reset by peer"}) {
+		t.Errorf("reset at warn and above: %q", got)
+	}
+	if got := bodies(Query{Search: "User.Created"}); !slices.Equal(got, []string{"user.created"}) {
+		t.Errorf("an event by its name: %q", got)
+	}
+	if got := bodies(Query{Search: "timeout"}); len(got) != 0 {
+		t.Errorf("timeout: %q", got)
+	}
+	if got := bodies(Query{Search: "connection", Limit: 1}); len(got) != 2 {
+		t.Errorf("connection a page of one at a time: %q", got)
+	}
+	if _, err := s.Scan(t.Context(), Query{Search: "\xff"}); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Errorf("a search that is not UTF-8: %v", err)
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

@@ -337,6 +337,7 @@ export const RecordsQuery = message('records.query', {
 	budgetBlocks: [11, uint],
 	budgetBytes: [12, uint],
 	budgetRecords: [13, uint],
+	search: [14, str],
 })
 
 export const RecordsPage = message('records.page', {

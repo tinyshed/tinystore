@@ -91,6 +91,7 @@ log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })
 
 const page = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100 })
+const resets = await store.records.scan({ since: '1h', search: 'connection reset' }) // case ignored
 const more = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100, after: page.next })
 for await (const record of store.records.all({ since: '24h', traceId })) { … }
 
