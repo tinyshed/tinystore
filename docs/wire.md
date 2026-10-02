@@ -316,6 +316,7 @@ carry:
 
 | engine | operations | shape |
 |---|---|---|
+| the server | stop | a call |
 | kv | open, get, has, set, delete, take, touch, add, max, clear, batch, view, allow, configure | calls |
 | | scan | a download, an entry a message |
 | | watch | a download that does not end: a config's kept fields, again after each change |
@@ -339,12 +340,28 @@ carry:
 
 The values they carry:
 
+- the server's own call carries nothing, `{}` each way;
 - a kv value is nil, an integer or bin, as its row keeps it, and a version is
   an opaque bin compared only for equality;
 - a job's value is its JSON as str;
 - an SQL value is one of SQLite's five: nil, an integer, a float, str or bin;
 - a record's attribute keeps its JSON spelling as str;
 - a series' samples, and an aggregate's buckets and values, are bin columns.
+
+### the server
+
+The server's own methods take the range below the engines', `0x00xx`.
+
+| method | | request | answer |
+|---|---|---|---|
+| `0x0001` | stop | `{}` | `{}`, then the server stops as its closing does: the streams running finish, every connection is told `GOAWAY`, and a sidecar gives back `SERVE` and its directory |
+
+A stop is an admin connection's alone, `permission` to a data connection, and
+a server whose program said nothing of stopping refuses it with `permission`
+too: a program serving its own store decides when that store's server stops.
+`tinystore serve` stops at one, as it does at Ctrl+C, which is how
+`tinystore stop` ends a sidecar and how an SDK newer than the sidecar it found
+has it replaced: the next open starts that SDK's binary.
 
 ### kv
 

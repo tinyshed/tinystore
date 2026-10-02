@@ -10,6 +10,7 @@
 //	tinystore logs [dir] [-f] [--level warn]       the application's logs, as they arrive
 //	tinystore serve <dir>                          the directory's sidecar, until Ctrl+C
 //	tinystore serve --dir <dir> --stdio | --local | --listen <endpoint>
+//	tinystore stop [dir]                           the server of a directory, its streams finished
 //	tinystore mcp [dir]                            the store's tools for an AI agent, on stdin and stdout
 //	tinystore version                              the release, the Go it was built with, the platform
 //	go tool tinystore migrate [name]               what differs; writes nothing
@@ -71,6 +72,8 @@ func dispatch(ctx context.Context, args []string) error {
 		return serve(ctx, args[1:], console{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
 	case "status":
 		return status(ctx, args[1:], os.Stdout, os.Stderr)
+	case "stop":
+		return stopServing(ctx, args[1:], os.Stdout, os.Stderr)
 	case "logs":
 		return logs(ctx, args[1:], os.Stdout, os.Stderr)
 	case "mcp":

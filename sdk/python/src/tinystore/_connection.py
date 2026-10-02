@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import secrets
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -105,9 +107,16 @@ def sidecar(
     log = absolute / "server" / "serve.log"
     idling = [] if idle is None else ["--idle", f"{round(idle * 1000)}ms"]
 
+    told = False
+
     async def reach() -> Connection:
+        nonlocal told
         found = await _reach_serve(serve)
         if found is not None:
+            older = None if told else older_sidecar((await found.session.welcomed).server, _runtime.VERSION, directory)
+            told = True
+            if older is not None:
+                print(older, file=sys.stderr)
             return found
         why = ""
         for _ in range(STARTS):
@@ -133,6 +142,56 @@ def sidecar(
         raise ClosedError(f"{why} in {STARTS * WINNER_TIME:.0f} s: {_tail(log)}")
 
     return reach
+
+
+def older_sidecar(server: str, own: str, directory: str | os.PathLike[str]) -> str | None:
+    """What to tell a program whose SDK found a sidecar of an older release than its own, which runs its own binary
+    until it has been idle; None for one as new or newer, and for a build that is no release."""
+    theirs, ours = _release(server), _release(own)
+    if theirs is None or ours is None or _compare_releases(theirs, ours) >= 0:
+        return None
+    return (
+        f"tinystore: the sidecar serving {directory} is {server}, older than this SDK's {own}; it runs its own "
+        f"binary until it has been idle, or until tinystore stop {directory} lets the next open start this SDK's"
+    )
+
+
+_RELEASE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?")
+
+
+def _release(version: str) -> tuple[list[int], list[str]] | None:
+    """A release's version, its v optional: 0.2.0, v0.2.0-rc.1, as npm spells it, or PyPI's 0.2.0rc1. A development
+    copy's 0.0.0, a Go pseudo-version and (devel) are none."""
+    parts = _RELEASE.fullmatch(_npm_spelling(version))
+    if parts is None:
+        return None
+    core = [int(parts[1]), int(parts[2]), int(parts[3])]
+    if core == [0, 0, 0]:
+        return None
+    return core, [] if parts[4] is None else parts[4].split(".")
+
+
+def _npm_spelling(version: str) -> str:
+    """PyPI's 0.2.0rc1 as npm and Go spell it, 0.2.0-rc.1; any other version as it is."""
+    pre = re.fullmatch(r"(\d+\.\d+\.\d+)(a|b|rc)(\d+)", version)
+    if pre is None:
+        return version
+    return f"{pre[1]}-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[pre[2]] }.{pre[3]}"
+
+
+def _compare_releases(a: tuple[list[int], list[str]], b: tuple[list[int], list[str]]) -> int:
+    """Semantic versioning's order: a release after its pre-releases, rc.2 before rc.10."""
+    if a[0] != b[0]:
+        return -1 if a[0] < b[0] else 1
+    if not a[1] or not b[1]:
+        return len(b[1]) - len(a[1])
+    for x, y in zip(a[1], b[1], strict=False):
+        if x == y:
+            continue
+        if x.isdigit() and y.isdigit():
+            return int(x) - int(y)
+        return -1 if x < y else 1
+    return len(a[1]) - len(b[1])
 
 
 async def _reach_serve(serve: Path) -> Connection | None:
@@ -308,7 +367,5 @@ async def download(connection: Connection, method: int, body: bytes) -> Download
 
 
 def check_name(name: str, of: str) -> None:
-    import re
-
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
         raise InvalidError(f"the {of} name {name!r}: a name is [a-z0-9][a-z0-9_-]{{0,63}}")

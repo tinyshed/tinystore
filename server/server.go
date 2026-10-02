@@ -48,6 +48,12 @@ type Options struct {
 	Metrics        *metrics.Store
 	MetricsOptions metrics.Options
 
+	// Stop stops the program serving the store when an admin client asks it
+	// to, by server.stop, once the server has answered; nil refuses the
+	// request, since a program serving its own store decides when it stops.
+	// It returns at once, and the program closes the server as it would.
+	Stop func()
+
 	// SQL holds the databases the program opened, by name. A client's sql.open
 	// of one checks the migrations it carries against those the file applied,
 	// since a database opens once a store. The server opens any other name

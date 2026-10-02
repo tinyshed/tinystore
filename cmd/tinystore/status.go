@@ -81,11 +81,7 @@ func status(ctx context.Context, args []string, out io.Writer, stderr io.Writer)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(found)
 	}
-	p := paint(false)
-	if file, ok := out.(*os.File); ok {
-		p = paint(colors(file))
-	}
-	_, err = io.WriteString(out, showStatus(found, p, time.Now()))
+	_, err = io.WriteString(out, showStatus(found, painterFor(out), time.Now()))
 	return err
 }
 

@@ -336,6 +336,7 @@ var methods = []struct {
 	name   string
 	method wire.Method
 }{
+	{"server.stop", wire.ServerStop},
 	{"kv.open", wire.KVOpen},
 	{"kv.get", wire.KVGet},
 	{"kv.has", wire.KVHas},

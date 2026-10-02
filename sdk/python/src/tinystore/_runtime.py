@@ -32,7 +32,8 @@ def _version() -> str:
         return "0.0.0"
 
 
-CLIENT = f"tinystore-py/{_version()} python/{sys.version_info.major}.{sys.version_info.minor}"
+VERSION = _version()
+CLIENT = f"tinystore-py/{VERSION} python/{sys.version_info.major}.{sys.version_info.minor}"
 WINDOWS = sys.platform == "win32"
 
 

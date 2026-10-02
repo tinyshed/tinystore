@@ -29,6 +29,7 @@ type session struct {
 	writer *flow.Writer
 
 	capability wire.Capability
+	client     string // the name its HELLO gave, for the logs
 	agreed     agreed
 	credit     *flow.Credit // the connection's, client to server
 
@@ -131,6 +132,7 @@ func (s *session) handshake() error {
 	}
 
 	s.agree(hello)
+	s.client = hello.Client
 	s.server.log.Info("connected", "client", hello.Client)
 	return s.writer.Send(wire.AppendFrame(nil, wire.Header{Kind: wire.KindWelcome}, s.welcome(hello).Append(nil)))
 }

@@ -79,7 +79,7 @@ Do not describe unbuilt behaviour as though it works.
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
 | `server/reach/`      | the Go client of a directory's server, found through `SERVE` and proven, for the tool |
-| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `status`, `logs`, `mcp`, and `migrate` and `schema` for sqldb |
+| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, and `migrate` and `schema` for sqldb |
 | `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module |
 | `docs/`              | the design, the format, the engines and the wire                              |
 | `examples/`          | programs using the public API, built and tested with the module               |
@@ -764,6 +764,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | status reads a directory beside its server, for a person and with `--json`, never printing SERVE's secret | `TestStatusReadsADirectoryAndKeepsTheSecret` in `cmd/tinystore`  |
 | the command alone lists its commands, a directory before or after the flags | `TestHelpListsTheCommandsAndIsNoError`, `TestADirectoryComesBeforeOrAfterTheFlags` in `cmd/tinystore` |
 | `serve <dir>` serves the directory until Ctrl+C, never idle | `TestServeOfADirectoryServesItUntilCtrlC` |
+| a server stops at an admin's request, and only when its program said how | `TestAServerStopsAtAnAdminsRequestOnly`, `TestStopEndsTheServerOfADirectory` in `cmd/tinystore` |
+| an SDK says when the sidecar it found is of an older release than its own | `a sidecar of an older release than its SDK is told of, and only one` in `sdk/js/test/connection.test.ts`, `test_a_sidecar_of_an_older_release_than_its_sdk_is_told_of_and_only_one` in Python's |
 | a read through the tool makes no store of a directory | `TestLogsOfADirectoryWithoutAStoreMakeNone` |
 | `logs -f` prints a record sent a little late, each once and two alike twice | `TestLogsPrintTheLastRecordsAndFollowTheNext` |
 | the tool prints a record as a logger's console does | `TestAPrinterWritesARecordAsTheConsoleDoes` in `records` |

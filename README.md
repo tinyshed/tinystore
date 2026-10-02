@@ -111,6 +111,7 @@ github.com/tinyshed/tinystore/cmd/tinystore@latest` builds it.
 tinystore status ./data                            # each engine's bytes, and who serves the directory
 tinystore logs ./data -f --level warn              # the application's logs, as they arrive
 tinystore serve ./data                             # the directory's sidecar, until Ctrl+C
+tinystore stop ./data                              # its server, once its work is finished
 claude mcp add tinystore -- tinystore mcp ./data   # logs, kv, jobs and SQL for an agent, read only
 ```
 

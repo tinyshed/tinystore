@@ -34,6 +34,7 @@ var sentinels = []struct {
 	{kv.ErrOutcomeUnknown, wire.CodeOutcomeUnknown}, // every engine's, the same error
 	{errDataConnection, wire.CodePermission},
 	{errAdminOnly, wire.CodePermission},
+	{errStopsWithItsProgram, wire.CodePermission},
 	{tinystore.ErrInvalid, wire.CodeInvalid},
 	{tinystore.ErrLimit, wire.CodeLimit},
 	{tinystore.ErrClosed, wire.CodeClosed},

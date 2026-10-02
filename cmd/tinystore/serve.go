@@ -200,6 +200,9 @@ func serveLogged(ctx context.Context, asked serveFlags, streams console, logger 
 	if err != nil {
 		return err
 	}
+	ctx, stop := context.WithCancel(ctx) // an admin's server.stop ends it too
+	defer stop()
+	read.options.Stop = stop
 	closing := context.WithoutCancel(ctx) // the end of ctx is what usually closes
 	srv, err := server.New(store, read.options)
 	if err != nil {
@@ -304,10 +307,7 @@ func serveShared(ctx context.Context, srv *server.Server, read serving, logger *
 //	  apps find it through   ./data/server/SERVE
 //	  endpoint               pipe:tinystore-015ef87b270a1914
 func showServing(stderr io.Writer, dir string, endpoints []string) {
-	p := paint(false)
-	if file, ok := stderr.(*os.File); ok {
-		p = paint(colors(file))
-	}
+	p := painterFor(stderr)
 	text := fmt.Sprintf("%s serving %s %s\n  %-22s %s\n", p.in(green, "●"), p.in(bold, dir),
 		p.in(dim, "· Ctrl+C to stop"), "apps find it through", filepath.Join(dir, "server", "SERVE"))
 	for _, endpoint := range endpoints {

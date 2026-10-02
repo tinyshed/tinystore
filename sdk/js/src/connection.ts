@@ -6,6 +6,7 @@
 import { randomBytes } from 'node:crypto'
 import { join, resolve } from 'node:path'
 
+import manifest from '../package.json' with { type: 'json' }
 import { currentSignal } from './cancel.ts'
 import { ClosedError, OutcomeUnknownError, TinystoreError, UnavailableError } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
@@ -132,9 +133,17 @@ export function sidecar(
 	const serve = join(absolute, 'server', 'SERVE')
 	const log = join(absolute, 'server', 'serve.log')
 	const idling = idle === undefined ? [] : ['--idle', `${idle}ms`]
+	let told = false
 	return async () => {
 		const found = await reachServe(runtime, serve)
 		if (found !== undefined) {
+			const older = told
+				? undefined
+				: olderSidecar((await found.session.welcomed).server, manifest.version, dir)
+			told = true
+			if (older !== undefined) {
+				process.stderr.write(`${older}\n`)
+			}
 			return found
 		}
 		let why = ''
@@ -173,6 +182,64 @@ export function sidecar(
 			`${why} in ${(starts * winnerTime) / 1000} s: ${await tail(runtime, log)}`,
 		)
 	}
+}
+
+/**
+ * What to tell a program whose SDK found a sidecar of an older release than
+ * its own, which runs its own binary until it has been idle; undefined for one
+ * as new or newer, and for a build that is no release.
+ */
+export function olderSidecar(server: string, own: string, dir: string): string | undefined {
+	const theirs = release(server)
+	const ours = release(own)
+	if (theirs === undefined || ours === undefined || compareReleases(theirs, ours) >= 0) {
+		return undefined
+	}
+	return (
+		`tinystore: the sidecar serving ${dir} is ${server}, older than this SDK's ${own}; it runs its own ` +
+		`binary until it has been idle, or until tinystore stop ${dir} lets the next open start this SDK's`
+	)
+}
+
+interface Release {
+	core: number[]
+	pre: string[]
+}
+
+/**
+ * A release's version, its v optional: 0.2.0, v0.2.0-rc.1. A development copy's
+ * 0.0.0, a Go pseudo-version and (devel) are none.
+ */
+function release(version: string): Release | undefined {
+	const parts = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$/.exec(version)
+	if (parts === null) {
+		return undefined
+	}
+	const core = [Number(parts[1]), Number(parts[2]), Number(parts[3])]
+	return core.every(n => n === 0)
+		? undefined
+		: { core, pre: parts[4] === undefined ? [] : parts[4].split('.') }
+}
+
+/** Semantic versioning's order: a release after its pre-releases, rc.2 before rc.10. */
+function compareReleases(a: Release, b: Release): number {
+	for (let i = 0; i < 3; i++) {
+		if (a.core[i] !== b.core[i]) {
+			return a.core[i]! - b.core[i]!
+		}
+	}
+	if (a.pre.length === 0 || b.pre.length === 0) {
+		return b.pre.length - a.pre.length
+	}
+	for (let i = 0; i < Math.min(a.pre.length, b.pre.length); i++) {
+		const x = a.pre[i]!
+		const y = b.pre[i]!
+		const numbers = /^\d+$/.test(x) && /^\d+$/.test(y)
+		if (x !== y) {
+			return numbers ? Number(x) - Number(y) : x < y ? -1 : 1
+		}
+	}
+	return a.pre.length - b.pre.length
 }
 
 /** The sidecar SERVE names, once its proof checks; undefined on any failure. */

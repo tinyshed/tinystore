@@ -26,6 +26,7 @@ from .codec import (
 )
 
 METHODS: dict[str, int] = {
+    "server.stop": 0x0001,
     "kv.open": 0x0101,
     "kv.get": 0x0102,
     "kv.has": 0x0103,

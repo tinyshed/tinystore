@@ -257,6 +257,7 @@ tinystore                                  the commands, by what they are for
 tinystore status ./data                    what the directory holds and who serves it; --json for a script
 tinystore logs ./data -f --level warn      the application's logs, as they arrive
 tinystore serve ./data                     the directory's sidecar until Ctrl+C, never idle
+tinystore stop ./data                      the server of a directory, once its streams have finished
 tinystore mcp ./data                       the store's tools for an AI agent
 ```
 
@@ -503,12 +504,29 @@ promises what an older and a newer side do with each other.
 An SDK's `status()` says what the `WELCOME` said: the server's version, the
 protocol the connection speaks, its engines and the connection's capability.
 
+An upgrade, as an application sees it:
+
+- **An SDK's package and its binary move together**: `bun update tinystore`,
+  `npm update`, `pip install -U tinyshed-tinystore`, `go get -u`. A store's
+  files move forward as the new binary opens them, each engine's migrations
+  applied once; an older binary refuses a file a newer one migrated, and a
+  backup is the way back.
+- **A sidecar runs the binary that started it until it has been idle**, so an
+  application restarted sooner reaches the sidecar its previous version
+  started, which serves it as the rules above say. The SDK says so once an
+  open, on stderr, when the sidecar's release is older than its own, and
+  `tinystore stop <dir>` ends it at once, its streams finished: the next open
+  starts the new binary. `server.stop` is in the first release so that every
+  later SDK can have a sidecar of any release replaced.
+- **A remote server is upgraded first, its clients after**, since a server
+  answers every older client and an older server refuses only what it does
+  not have, naming its version.
+
 Not built: a list of capabilities in `WELCOME`, for a client that must choose
 before it calls rather than learn from `unimplemented`, which any release may
-add, since it is a field a client may skip; an SDK saying when the sidecar it
-found is another version than its own; and the matrix that keeps the promise,
-CI running the previous release's SDKs against the new server and the new
-SDKs against the previous server.
+add, since it is a field a client may skip; and the matrix that keeps the
+promise, CI running the previous release's SDKs against the new server and the
+new SDKs against the previous server, which waits for a previous release.
 
 ## Memory and limits
 
@@ -737,7 +755,7 @@ Where the slices stand, 29 September 2026:
 | records | built: `records.go`; the messages on wire.md |
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
-| the command for a person and an agent | built: `cmd/tinystore`'s `help.go`, `status.go`, `logs.go`, `mcp.go` and `sidecar.go`, which starts a sidecar as an SDK does; `server/reach`, the Go client a program that holds no store reaches its server through |
+| the command for a person and an agent | built: `cmd/tinystore`'s `help.go`, `status.go`, `logs.go`, `stop.go`, `mcp.go` and `sidecar.go`, which starts a sidecar as an SDK does; `server/reach`, the Go client a program that holds no store reaches its server through |
 | the JS SDK, the Python SDK | built: `sdk/js` for Bun and Node and `sdk/python`, every vector and every engine tested through a real `tinystore serve` (`task sdk`), their READMEs, and the packages a release builds of each with the binary and the `tinystore` command, published by none yet; not yet their examples, or a measurement against the prototype |
 | the measurement against the prototype | done: [rpc-server-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
 

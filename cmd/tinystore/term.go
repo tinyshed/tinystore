@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -26,6 +27,14 @@ func colors(f *os.File) bool {
 // paint writes text in the colours of a terminal that shows them, and plain
 // otherwise
 type paint bool
+
+// painterFor paints for w: in colour when it is a terminal that shows them
+func painterFor(w io.Writer) paint {
+	if file, ok := w.(*os.File); ok {
+		return paint(colors(file))
+	}
+	return false
+}
 
 const (
 	bold   = "1"

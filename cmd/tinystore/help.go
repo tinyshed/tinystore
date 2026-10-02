@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 )
 
@@ -24,6 +23,7 @@ var helpGroups = []struct {
 	}},
 	{"Run", []helpLine{
 		{"serve", "<dir>", "share the store with other processes, until Ctrl+C"},
+		{"stop", "[dir]", "stop the server of a directory, its work finished"},
 		{"mcp", "[dir]", "let an AI agent read the store"},
 	}},
 	{"Develop", []helpLine{
@@ -37,6 +37,7 @@ var commandUsages = map[string]string{
 	"status":  statusUsage,
 	"logs":    logsUsage,
 	"serve":   serveUsage,
+	"stop":    stopUsage,
 	"mcp":     mcpUsage,
 	"migrate": usage,
 	"schema":  usage,
@@ -45,10 +46,7 @@ var commandUsages = map[string]string{
 
 // printHelp prints the commands in their groups, in colour on a terminal
 func printHelp(out io.Writer) {
-	p := paint(false)
-	if file, ok := out.(*os.File); ok {
-		p = paint(colors(file))
-	}
+	p := painterFor(out)
 	var text strings.Builder
 	fmt.Fprintf(&text, "%s %s · kv, jobs, blobs, SQL, logs and metrics in one directory\n",
 		p.in(bold, "tinystore"), p.in(dim, version()))
