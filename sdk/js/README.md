@@ -86,7 +86,7 @@ never SQL.
 ## records
 
 ```ts
-const log = store.records.logger('api')                  // never waits for the server
+const log = store.records.logger('api', { redact: ['password'] }) // never waits for the server
 log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })
 await withTrace({ traceId, spanId }, async () => log.info('charged')) // the record carries the trace
@@ -102,6 +102,21 @@ for await (const chunk of child.stdout) worker.write(chunk)
 
 A logger holds 1024 lines and hands them over every second or once half of
 them wait; what does not fit is dropped and counted in `log.dropped`.
+
+Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
+object a line otherwise, the bytes Go's and Python's loggers write.
+`console: 'pretty' | 'json' | 'off'` and `stdout: true` choose; `redact`
+hides the values of fields of those names, at any depth, the case ignored, in
+the store and on the console. A program that wants the logger and not the
+records takes one without a store, and passes it, or a child, to what needs
+it:
+
+```ts
+import { logger } from 'tinystore'
+
+const log = logger('app', { redact: ['password'] })   // the console alone, nothing kept
+const db = log.with({ module: 'db' })
+```
 
 ## metrics
 

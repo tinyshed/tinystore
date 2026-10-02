@@ -268,7 +268,7 @@ async def test_a_limit_says_which_it_is_what_the_read_wanted_and_the_bound(store
 async def test_lines_and_appended_records_take_the_trace_they_were_made_in(store: tinystore.Store) -> None:
     trace_id = "0102030405060708090a0b0c0d0e0f10"
     log = logging.getLogger("traced")
-    handler = store.records.handler("traced")
+    handler = store.records.handler("traced", console="off")
     log.addHandler(handler)
     try:
         with tinystore.trace(trace_id, "0102030405060708"):
@@ -280,6 +280,26 @@ async def test_lines_and_appended_records_take_the_trace_they_were_made_in(store
         log.removeHandler(handler)
     page = await store.records.scan(streams=["traced"], trace_id=trace_id)
     assert sorted(str(r.body) if r.name == "log" else r.name for r in page.items) == ["charged", "paid"]
+
+
+async def test_a_redacted_field_is_hidden_in_the_store_at_any_depth(store: tinystore.Store) -> None:
+    log = logging.getLogger("secret")
+    log.propagate = False
+    handler = store.records.handler("secret", console="off", redact=["password", "authorization"])
+    log.addHandler(handler)
+    try:
+        log.warning(
+            "login", extra={"user": {"name": "ann", "password": "y"}, "PASSWORD": "hunter2", "req.Authorization": "x"}
+        )
+        await handler.flush_now()
+    finally:
+        log.removeHandler(handler)
+    page = await store.records.scan(streams=["secret"])
+    assert page.items[0].attrs == [
+        ("user", '{"name":"ann","password":"[redacted]"}'),
+        ("PASSWORD", '"[redacted]"'),
+        ("req.Authorization", '"[redacted]"'),
+    ]
 
 
 async def test_a_store_says_what_its_server_is(store: tinystore.Store) -> None:

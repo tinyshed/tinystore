@@ -146,7 +146,7 @@ describe('records', () => {
 
 describe('logger', () => {
 	test('a logger returns at once, keeps its context and reaches a scan once it has flushed', async () => {
-		const log = store.records.logger('app')
+		const log = store.records.logger('app', { console: 'off' })
 		log.info('server started', { port: 3000 })
 		log.with({ requestId: 'r1' }).warn('slow request', { ms: 1200 })
 		log.event('user.created', { userId: 42 })
@@ -167,7 +167,7 @@ describe('logger', () => {
 	})
 
 	test('a full logger drops and counts rather than wait, and keeps its least level', async () => {
-		const log = store.records.logger('quiet', { buffer: 2, level: 'warn' })
+		const log = store.records.logger('quiet', { buffer: 2, level: 'warn', console: 'off' })
 		log.info('below its level')
 		for (const n of ['one', 'two', 'three', 'four']) {
 			log.warn(n)
@@ -176,6 +176,26 @@ describe('logger', () => {
 		expect(log.dropped).toBe(1)
 		const { items } = await store.records.scan({ streams: ['quiet'] })
 		expect(items.map(r => r.body)).toEqual(['one', 'two', 'three'])
+	})
+
+	test('a redacted field is hidden in the store, at any depth, the case ignored', async () => {
+		const log = store.records.logger('secret', {
+			console: 'off',
+			redact: ['password', 'authorization'],
+		})
+		log
+			.with({ Authorization: 'Bearer x' })
+			.info('login', { user: { name: 'ann', password: 'y' }, PASSWORD: 'hunter2', n: 1 })
+		await log.flush()
+		const { items } = await store.records.scan({ streams: ['secret'] })
+		expect([items[0]?.context, items[0]?.attrs]).toEqual([
+			[['Authorization', '"[redacted]"']],
+			[
+				['user', '{"name":"ann","password":"[redacted]"}'],
+				['PASSWORD', '"[redacted]"'],
+				['n', '1'],
+			],
+		])
 	})
 })
 
@@ -204,7 +224,7 @@ describe('status and cancelling', () => {
 describe('trace', () => {
 	test("a logger's lines and appended records take the trace they were made in", async () => {
 		const traceId = '0102030405060708090a0b0c0d0e0f10'
-		const log = store.records.logger('traced')
+		const log = store.records.logger('traced', { console: 'off' })
 		await withTrace({ traceId, spanId: '0102030405060708' }, async () => {
 			log.info('charged')
 			await store.records.append({ stream: 'traced', name: 'paid' })

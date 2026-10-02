@@ -14,13 +14,14 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ._connection import Connection, Link, download
+from ._console import Console, ConsoleHandler, Line
 from ._page import Page
 from ._time import Duration, ms, unix_ns
+from ._trace import carried as _carried
 from ._values import to_json
 from ._wire.messages import (
     METHODS,
@@ -109,9 +110,6 @@ def _record(r: dict[str, Any]) -> Record:
         pairs(r.get("context")),
         pairs(r.get("attrs")),
     )
-
-
-_carried: ContextVar[tuple[bytes, bytes | None] | None] = ContextVar("tinystore_trace", default=None)
 
 
 @contextmanager
@@ -213,6 +211,28 @@ class Records:
             for r in records
         ]
 
+        await self._send(batch)
+
+    async def _write_lines(self, lines: Iterable[Line]) -> None:
+        """Appends a handler's lines, their fields already JSON and their traces taken as each was logged."""
+        await self._send(
+            [
+                {
+                    "at": line.at,
+                    "stream": line.stream,
+                    "name": line.event or "log",
+                    "level": line.level,
+                    "body": line.msg,
+                    "trace_id": None if line.trace_id is None else bytes.fromhex(line.trace_id),
+                    "span_id": None if line.span_id is None else bytes.fromhex(line.span_id),
+                    "context": [part for pair in line.context for part in pair] or None,
+                    "attrs": [part for pair in line.attrs for part in pair] or None,
+                }
+                for line in lines
+            ]
+        )
+
+    async def _send(self, batch: list[dict[str, Any]]) -> None:
         async def attempt(connection: Connection) -> None:
             await connection.session.call(METHODS["records.append"], RecordsBatch.encode(records=batch))
 
@@ -327,9 +347,24 @@ class Records:
             raise InvalidError("lines of no stream")
         return Lines(self._link, stream, buffer)
 
-    def handler(self, stream: str, level: int = logging.NOTSET, *, buffer: int = 1024) -> Handler:
-        """A logging.Handler whose records reach the stream once a second, never making the logger wait."""
-        handler = Handler(self._write, stream, level, buffer)
+    def handler(
+        self,
+        stream: str,
+        level: int = logging.NOTSET,
+        *,
+        buffer: int = 1024,
+        console: Console | None = None,
+        redact: Iterable[str] = (),
+        stdout: bool = False,
+    ) -> Handler:
+        """A logging.Handler whose lines reach the console as they are logged and the stream once a second.
+
+        It never makes the logger wait. console is pretty on a terminal and
+        JSON otherwise when None, "off" for none; redact hides the values of
+        fields of those names, at any depth, the case ignored, in the store
+        and on the console.
+        """
+        handler = Handler(self._write_lines, stream, level, buffer, console=console, redact=redact, stdout=stdout)
         self._handlers.append(handler)
         return handler
 
@@ -408,43 +443,40 @@ class Lines:
             await self._upload.next()
 
 
-class Handler(logging.Handler):
-    """A logging.Handler: emit only queues, and a task on the store's loop appends once a second."""
+class Handler(ConsoleHandler):
+    """A logging.Handler: emit writes the console line and queues the record, appended once a second."""
 
     def __init__(
-        self, write: Callable[[Iterable[Mapping[str, Any]]], Awaitable[None]], stream: str, level: int, most: int
+        self,
+        write: Callable[[Iterable[Line]], Awaitable[None]],
+        stream: str,
+        level: int,
+        most: int,
+        *,
+        console: Console | None,
+        redact: Iterable[str],
+        stdout: bool,
     ) -> None:
-        super().__init__(level)
-        self._write, self._stream, self._most = write, stream, most
-        self._queue: deque[dict[str, Any]] = deque()
-        self._lock = threading.Lock()
+        super().__init__(stream, level, console=console, redact=redact, stdout=stdout)
+        self._write, self._most = write, most
+        self._queue: deque[Line] = deque()
+        self._queued = threading.Lock()
         self._loop = asyncio.get_running_loop()
         self._task = self._loop.create_task(self._flushing())
         self.dropped = 0
 
     def emit(self, record: logging.LogRecord) -> None:
-        attrs = {k: v for k, v in record.__dict__.items() if k not in _STANDARD and not k.startswith("_")}
-        if record.exc_info:
-            attrs["error"] = (
-                self.formatter.formatException(record.exc_info) if self.formatter else str(record.exc_info[1])
-            )
-        entry: dict[str, Any] = {
-            "at": int(record.created * 1e9),
-            "stream": self._stream,
-            "name": "log",
-            "level": (record.levelno - 20) * 4 // 10,
-            "body": record.getMessage(),
-            "context": {"logger": record.name},
-            "attrs": attrs,
-        }
-        carried = _carried.get()
-        if carried is not None:
-            entry["trace_id"], entry["span_id"] = carried
-        with self._lock:
+        try:
+            line = self._line(record)
+            self._print(line)
+        except Exception:
+            self.handleError(record)
+            return
+        with self._queued:
             if len(self._queue) >= self._most:
                 self.dropped += 1
                 return
-            self._queue.append(entry)
+            self._queue.append(line)
 
     async def _flushing(self) -> None:
         while True:
@@ -452,7 +484,7 @@ class Handler(logging.Handler):
             await self.flush_now()
 
     async def flush_now(self) -> None:
-        with self._lock:
+        with self._queued:
             batch = list(self._queue)
             self._queue.clear()
         if batch:
@@ -464,10 +496,3 @@ class Handler(logging.Handler):
     def close(self) -> None:
         self._task.cancel()
         super().close()
-
-
-_STANDARD = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {
-    "message",
-    "asctime",
-    "taskName",
-}

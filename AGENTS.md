@@ -23,7 +23,7 @@ design document:
 | root | the directory and its lifecycle: `Open` under the lock, `Close`, `Claim`, `Attach`, `Logger`, `Now`, `Every`, the memory budget, `Snapshot` | [doc.go](doc.go) | [architecture.md](docs/architecture.md) |
 | `codec/` | 1..240 ordered samples to a checked body, every bit kept | [format.md](docs/format.md) | [design.md](docs/design.md) |
 | `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [design.md](docs/design.md) |
-| `records/` | logs and events, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
+| `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
 | `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
 | `kv/` | buckets, counters, branches, expiry, versions | [README](kv/README.md) | [kv.md](docs/kv.md) |
 | `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
@@ -72,6 +72,7 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
+| `internal/term/`     | whether a file is a terminal that shows colours, for a logger's console lines |
 | `internal/dbstat/`   | a closed file's pages divided among its tables and indexes, for measurements  |
 | `internal/release/`  | what a release makes: its tags, binaries, archives, npm packages, wheels, notes |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
@@ -173,7 +174,8 @@ default.
 **Engine logs do not loop.** Engines log through `Store.Logger(name)` into the
 application's `*slog.Logger`, never per sample. Background engine work uses
 `Store.EveryEngine` so its failures and recovery keep the same engine attribute;
-the records handler refuses its own lines. The records handler and a writer
+the records handler keeps its own lines out of the store, though they reach its
+console. The records handler and a writer
 of `Lines` never wait for their queue: they drop and count when full. An
 arbitrary application-supplied slog handler controls its own call latency.
 
@@ -457,6 +459,13 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a Bun store's close frees its directory            | `close returns once the child has exited` in `sdk/js/test/kv.test.ts`            |
 | a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`                                 |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
+| a logger's console line is the same bytes in Go, Bun and Python | `TestConsoleLinesAreTheVectors`, over `records/testdata/console.json`, which both SDKs' suites read |
+| a line reaches its console as it is logged, whole   | `TestEachLineReachesTheConsoleAsItIsLogged`, `TestConsoleLinesFromManyGoroutinesDoNotInterleave` |
+| the engine's own lines reach the console from Info up, never the store | `TestTheEnginesOwnLinesReachTheConsoleAndNotTheStore`         |
+| a redacted field is kept nowhere                    | `TestARedactedFieldIsHiddenInTheStoreAndOnTheConsole`, and in both SDKs' suites |
+| a logger keeps its lines from its level up          | `TestALevelKeepsALoggersLinesFromItUp`                                          |
+| a logger without a store writes the console alone   | `TestAHandlerWithoutAStoreWritesTheConsoleAlone`                                |
+| colours need a terminal, and not NO_COLOR           | `TestAFileIsNoTerminal`, `TestNoColorAndADumbTerminalTurnColoursOff`            |
 | a line one record holds loses no byte; a longer one is dropped and counted | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`, `TestALargeLineWriteKeepsOnlyOneBoundedPartial` |
 | a writer of lines never waits, and closes with the store | `TestLinesNeverWaitAndCloseWithTheStore`                                   |
 | a stack trace's lines make one record               | `TestLinesJoinWhatBelongsTogether`, `TestAStackTraceGoesOn`                     |

@@ -8,8 +8,9 @@ the measurements behind it are [docs/records.md](../docs/records.md).
 ```go
 logs, err := records.Open(ctx, store, records.Options{Retention: 14 * 24 * time.Hour})
 
-logger := slog.New(slog.NewMultiHandler(console, logs.Handler("notes")))
+logger := slog.New(logs.Handler("notes", records.Redact("password"))) // kept, and on stderr as it is logged
 logger.With("request_id", id).Warn("slow request", "route", "/notes", "ms", 1200)
+slog.SetDefault(slog.New(records.Handler("app")))                   // the console alone: nothing kept
 
 err = logs.Append(ctx, records.Record{
 	At: time.Now(), Stream: "web", Name: "click",
@@ -66,6 +67,22 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   attributes of `logger.With` its context, the call's its attributes, a
   group's keys written `group.key`, values spelled as `slog.JSONHandler`
   spells them.
+- A handler also writes each line to standard error as it is logged, before
+  any flush: pretty on a terminal, one JSON object a line otherwise, the bytes
+  the Bun and Python loggers write (`testdata/console.json`).
+  `ConsolePretty`, `ConsoleJSON` and `ConsoleOff` choose, and `Stdout` sends
+  the lines there instead. A pretty line shows a duration as `1.5s`; a JSON
+  line keeps the record's spelling, its time in UTC to the millisecond. The
+  engine's own lines reach the console from Info up and never the store.
+  Colours need a
+  terminal, and not `NO_COLOR` or a `TERM` of dumb.
+- `Redact(names...)` hides the values of fields with those names, in the
+  store and on the console: a key, or the part of a dotted key after its last
+  dot, the case ignored, and such a key at any depth of a JSON object. A
+  message is not searched. `Level(l)` keeps the lines from `l` up.
+- `records.Handler(stream)`, without a store, writes the console alone, for a
+  program that wants the logger and not the records; `logs.Handler(stream)`
+  in its place keeps every line too.
 - `Lines(stream)` is a writer for another program's output, a child process's
   stdout or a followed file, and never blocks as the handler never does. Each
   line becomes a record at the time it arrived; the lines of a stack trace, a

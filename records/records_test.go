@@ -210,7 +210,7 @@ func TestAnAppendOfMoreThanASegmentIsRefused(t *testing.T) {
 	if got := s.readAll(t, Query{}); len(got) != 0 {
 		t.Fatalf("a refused Append wrote %d records", len(got))
 	}
-	logger := slog.New(s.Handler("app"))
+	logger := slog.New(s.Handler("app", ConsoleOff))
 	for range lines {
 		logger.Info(body)
 	}

@@ -93,8 +93,9 @@ labels follow its Prometheus client: Go's `With(pairs...)`, Bun's
 ## Records
 
 ```go
-logger := slog.New(logs.Handler("api"))               // never waits for the file
+logger := slog.New(logs.Handler("api", records.Redact("password")))  // never waits for the file; on stderr at once
 logger.InfoContext(records.WithTrace(ctx, trace, span), "charged") // a record of that trace
+slog.SetDefault(slog.New(records.Handler("app")))     // the console alone, nothing kept
 page, err := logs.Scan(ctx, records.Query{Since: time.Hour, MinLevel: &warn, Limit: 100})
 resets, err := logs.Scan(ctx, records.Query{Since: time.Hour, Search: "connection reset"})
 next, err := logs.Scan(ctx, page.Next)                // while page.More
@@ -102,10 +103,11 @@ for record, err := range logs.All(ctx, records.Query{Since: 24 * time.Hour, Trac
 ```
 
 ```ts
-const log = store.records.logger('api')               // never waits for the server
+const log = store.records.logger('api', { redact: ['password'] })   // never waits for the server; on stderr at once
 await withTrace({ traceId, spanId }, async () => log.info('charged'))   // a record of that trace
 log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })
+const app = logger('app')                             // the console alone, nothing kept
 const page = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100 })
 const resets = await store.records.scan({ since: '1h', search: 'connection reset' })
 const more = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100, after: page.next })
@@ -113,9 +115,10 @@ for await (const record of store.records.all({ since: '24h', traceId })) { … }
 ```
 
 ```python
-logging.getLogger().addHandler(store.records.handler("api"))   # never waits for the server
+logging.getLogger().addHandler(store.records.handler("api", redact=["password"]))  # on stderr at once, kept
 with tinystore.trace(trace_id, span_id):                       # what is logged inside takes the trace
     logging.info("charged")
+logging.basicConfig(handlers=[tinystore.handler("app")], level=logging.INFO)   # the console alone
 page = await store.records.scan(since="1h", min_level="warn", limit=100)
 resets = await store.records.scan(since="1h", search="connection reset")
 more = await store.records.scan(since="1h", min_level="warn", limit=100, after=page.next)
@@ -128,6 +131,37 @@ Each language logs as it already does: Go through `slog`, Python through
 pino's or a child's, through `lines(stream)` in all three. A page's `next` is
 opaque: where the range moved, both ends absolute, so a scan `since` an hour
 continues the range it began with however late the next page is asked for.
+
+A logger is also the program's console, so that it needs no other:
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| kept and shown | `logs.Handler("api", ...)` | `store.records.logger('api', {...})` | `store.records.handler("api", ...)` |
+| shown alone | `records.Handler("app", ...)` | `logger('app', {...})` | `tinystore.handler("app", ...)` |
+| how it is shown | `records.ConsolePretty`, `ConsoleJSON`, `ConsoleOff` | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |
+| on stdout | `records.Stdout` | `stdout: true` | `stdout=True` |
+| hidden fields | `records.Redact("password")` | `redact: ['password']` | `redact=["password"]` |
+| from a level | `records.Level(slog.LevelInfo)` | `level: 'info'` | `level=logging.INFO` |
+
+A line goes to stderr as it is logged, before the store has it: pretty on a
+terminal, one JSON object a line otherwise, so that a terminal shows what a
+person reads and a container's collector gets JSON. Every language writes the
+same bytes, `records/testdata/console.json`, which all three are tested
+against:
+
+```text
+11:02:11.123 WARN  api  slow request  requestId=7f3a ms=1200
+{"time":"2026-10-02T11:02:11.123Z","level":"WARN","stream":"api","msg":"slow request","requestId":"7f3a","ms":1200}
+```
+
+Stderr rather than stdout because a library may not write into what a program
+prints: a command's answer, or a protocol spoken over stdout. Docker,
+Kubernetes and systemd keep both streams. Errors are not sent apart from the
+rest: two pipes reach a collector out of order, and a line's level says what
+it is. `redact` hides a field by its name, the case ignored, as a key, as the
+part of a dotted key after its last dot, and at any depth of an object, in the
+store and on the console; a message is not searched. A child is `With`,
+`with`, or `logging.getLogger("app.db")`, each language's own.
 
 ## kv, jobs, blobs and SQL
 
@@ -201,6 +235,12 @@ Built after it:
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.
+- **The logger as the console**: every logger writes its lines to stderr as
+  they are logged, pretty or JSON, the same bytes in every language;
+  `redact` hides fields by name in the store and on the console; and a logger
+  of the console alone, `records.Handler`, `logger()`, `tinystore.handler()`,
+  serves a program that wants the logger and not the records, so that it
+  needs no pino.
 
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):

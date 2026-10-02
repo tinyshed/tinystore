@@ -12,36 +12,102 @@ import (
 
 // Handler queues the application's log lines for stream and never blocks its
 // caller: when the buffer is full a line is dropped and counted in Stats. Lines
-// of the records engine itself are refused, or writing a log would log again.
+// of the records engine itself are kept out of the store, or writing a log
+// would log again.
 //
 // A line becomes a record named "log" whose body is the message. The
 // attributes of logger.With are its context, who is speaking, and the call's
 // are its attributes; a group's keys are written group.key, and a value is
 // spelled as slog.JSONHandler spells it, an error as its message. A line
 // logged with a context of WithTrace takes its trace and span.
-func (s *Store) Handler(stream string) slog.Handler {
-	return &handler{store: s, stream: stream}
+//
+// Each line is also written to standard error as it is logged, pretty on a
+// terminal and one JSON object a line otherwise, as the Bun and Python
+// loggers write theirs; ConsolePretty, ConsoleJSON, ConsoleOff and Stdout
+// change that. The engine's own lines reach the console from Info up, and
+// never the store.
+//
+//	slog.New(logs.Handler("api", records.ConsoleJSON, records.Redact("password", "token")))
+func (s *Store) Handler(stream string, options ...HandlerOption) slog.Handler {
+	return newHandler(s, stream, options)
+}
+
+// Handler is a logger's handler without a store: its lines go to the console
+// alone, as Store.Handler writes them there, for a program that wants the
+// logger and not the records. Opening the store later and calling its Handler
+// instead keeps every line too.
+//
+//	slog.SetDefault(slog.New(records.Handler("app", records.Redact("password"))))
+func Handler(stream string, options ...HandlerOption) slog.Handler {
+	return newHandler(nil, stream, options)
+}
+
+func newHandler(s *Store, stream string, options []HandlerOption) *handler {
+	var settings handlerSettings
+	for _, option := range options {
+		option.handlerOption(&settings)
+	}
+	return &handler{
+		store: s, stream: stream, level: settings.level,
+		echo: newEcho(settings), redact: newRedactor(settings.redact),
+	}
 }
 
 type handler struct {
-	store   *Store
-	stream  string
-	context []Field // never changed once built: WithAttrs copies it
+	store  *Store // nil for a handler of the console alone
+	stream string
+	level  slog.Leveler // nil keeps every level
+	echo   *echo        // nil writes no console line
+	redact redactor
+	// context and shown never change once built: WithAttrs copies them
+	context []Field
+	shown   []Field // the context as a pretty console line shows it; see show
 	prefix  string
 	own     bool
 }
 
-func (h *handler) Enabled(context.Context, slog.Level) bool {
-	return !h.own
+func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
+	if h.level != nil && level < h.level.Level() {
+		return false
+	}
+	if h.own {
+		return h.echo != nil && h.showsOwn(level)
+	}
+	return h.echo != nil || h.store != nil
+}
+
+// showsOwn says whether the console shows one of the engine's own lines: from
+// Info up, or from the handler's Level when it has one, since the engine
+// writes a Debug summary of its flush every second
+func (h *handler) showsOwn(level slog.Level) bool {
+	return h.level != nil || level >= slog.LevelInfo
 }
 
 func (h *handler) Handle(ctx context.Context, line slog.Record) error {
 	record, own := h.record(line)
 	record.TraceID, record.SpanID = TraceOf(ctx)
-	if !h.own && !own {
+	if h.echo != nil && (!h.own && !own || h.showsOwn(line.Level)) {
+		h.print(record, line)
+	}
+	if h.store != nil && !h.own && !own {
 		h.store.enqueue(record)
 	}
 	return nil
+}
+
+// print writes the line to the console: a JSON line as the record spells it,
+// a pretty one with its durations as a person reads them
+func (h *handler) print(record Record, line slog.Record) {
+	if h.echo.pretty {
+		record.Context = h.shown
+		record.Attrs = nil
+		line.Attrs(func(attr slog.Attr) bool {
+			record.Attrs = appendAttr(record.Attrs, h.prefix, attr, show)
+			return true
+		})
+		record.Attrs = h.redact.fields(record.Attrs)
+	}
+	h.echo.write(&record)
 }
 
 // enqueue queues a record for the next flush, or drops and counts it when it
@@ -80,17 +146,22 @@ func (s *Store) askForFlush() {
 // record maps one line, and says whether it is the records engine's own
 func (h *handler) record(line slog.Record) (Record, bool) {
 	at := line.Time
-	if at.IsZero() {
+	switch {
+	case !at.IsZero():
+	case h.store != nil:
 		at = h.store.now()
+	default:
+		at = time.Now()
 	}
 	level, message := line.Level, line.Message
-	record := Record{At: at, Stream: h.stream, Name: "log", Level: &level, Body: &message, Context: h.context}
+	record := Record{At: at, Stream: h.stream, Name: logName, Level: &level, Body: &message, Context: h.context}
 	own := false
 	line.Attrs(func(attr slog.Attr) bool {
 		own = own || isOwn(attr)
-		record.Attrs = appendAttr(record.Attrs, h.prefix, attr)
+		record.Attrs = appendAttr(record.Attrs, h.prefix, attr, spell)
 		return true
 	})
+	record.Attrs = h.redact.fields(record.Attrs)
 	return record, own
 }
 
@@ -102,10 +173,19 @@ func (s *Store) fits(r *Record) bool {
 func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	next := *h
 	next.context = slices.Clone(h.context)
+	pretty := h.echo != nil && h.echo.pretty
+	if pretty {
+		next.shown = slices.Clone(h.shown)
+	}
 	for _, attr := range attrs {
-		next.context = appendAttr(next.context, h.prefix, attr)
+		next.context = appendAttr(next.context, h.prefix, attr, spell)
+		if pretty {
+			next.shown = appendAttr(next.shown, h.prefix, attr, show)
+		}
 		next.own = next.own || isOwn(attr)
 	}
+	next.context = h.redact.fields(next.context)
+	next.shown = h.redact.fields(next.shown)
 	return &next
 }
 
@@ -125,21 +205,30 @@ func isOwn(attr slog.Attr) bool {
 
 // appendAttr adds one attribute, a group's attributes under its name; an
 // empty attribute is dropped, and an empty group's key is no prefix, as in slog
-func appendAttr(fields []Field, prefix string, attr slog.Attr) []Field {
+func appendAttr(fields []Field, prefix string, attr slog.Attr, spelling func(slog.Value) string) []Field {
 	value := attr.Value.Resolve()
 	if value.Kind() == slog.KindGroup {
 		if attr.Key != "" {
 			prefix += attr.Key + "."
 		}
 		for _, inner := range value.Group() {
-			fields = appendAttr(fields, prefix, inner)
+			fields = appendAttr(fields, prefix, inner, spelling)
 		}
 		return fields
 	}
 	if attr.Key == "" && value.Equal(slog.Value{}) {
 		return fields
 	}
-	return append(fields, Field{Key: prefix + attr.Key, Value: spell(value)})
+	return append(fields, Field{Key: prefix + attr.Key, Value: spelling(value)})
+}
+
+// show spells a value for a pretty console line: a duration as Go writes one,
+// 1.5s, where the record keeps its nanoseconds as slog.JSONHandler does
+func show(value slog.Value) string {
+	if value.Kind() == slog.KindDuration {
+		return string(appendJSONString(nil, value.Duration().String()))
+	}
+	return spell(value)
 }
 
 // spell writes a resolved value as JSON the way slog.JSONHandler does; NaN and

@@ -189,11 +189,12 @@ check the level before building their fields. The supplied `Options.Logger`
 is called synchronously: its application's handler determines logging
 latency. The built-in records handler queues or drops without waiting.
 
-Out: the records engine provides `Handler(stream) slog.Handler`, so an
-application sends its own logs to both places with the standard library:
+Out: the records engine provides `Handler(stream) slog.Handler`, which keeps
+an application's own lines and writes each to stderr as it is logged, pretty on
+a terminal and JSON otherwise, so that one handler is the program's logger:
 
 ```go
-logger := slog.New(slog.NewMultiHandler(console, events.Handler("notes")))
+logger := slog.New(events.Handler("notes", records.Redact("password")))
 ```
 
 The handler never blocks its caller: a bounded queue, flushed by background

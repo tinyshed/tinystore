@@ -3,6 +3,7 @@
 // time and by what records hold, followed in the order they were sealed.
 
 import { type Connection, download, type Link } from './connection.ts'
+import type { ConsoleLine } from './console.ts'
 import { InvalidError } from './errors.ts'
 import type { Page } from './handles.ts'
 import { type Logger, type LoggerOptions, newLogger } from './logger.ts'
@@ -265,7 +266,7 @@ export class Records {
 	 * server every second, as Go's slog handler's and Python's logging.Handler's do.
 	 */
 	logger(stream: string, options?: LoggerOptions): Logger {
-		const logger = newLogger(records => this.#write(records), stream, options)
+		const logger = newLogger(lines => this.#writeLines(lines), stream, options)
 		this.#loggers.push(logger)
 		return logger
 	}
@@ -294,22 +295,43 @@ export class Records {
 		)
 	}
 
-	/** Appends records as they are: a logger's, whose traces were taken as each line was logged. */
 	async #write(records: readonly RecordInput[]): Promise<void> {
 		const now = BigInt(Date.now()) * nsPerMs
-		const batch = records.map(r => ({
-			at: r.at === undefined ? now : nanos(r.at),
-			stream: r.stream,
-			name: r.name,
-			level: r.level === undefined ? undefined : levelOf(r.level),
-			body: r.body,
-			traceId: idOf(r.traceId, 16, 'trace'),
-			spanId: idOf(r.spanId, 8, 'span'),
-			context: fieldsOf(r.context),
-			attrs: fieldsOf(r.attrs),
-		}))
+		await this.#send(
+			records.map(r => ({
+				at: r.at === undefined ? now : nanos(r.at),
+				stream: r.stream,
+				name: r.name,
+				level: r.level === undefined ? undefined : levelOf(r.level),
+				body: r.body,
+				traceId: idOf(r.traceId, 16, 'trace'),
+				spanId: idOf(r.spanId, 8, 'span'),
+				context: fieldsOf(r.context),
+				attrs: fieldsOf(r.attrs),
+			})),
+		)
+	}
+
+	/** Appends a logger's lines, their fields already JSON and their traces taken as each was logged. */
+	async #writeLines(lines: readonly ConsoleLine[]): Promise<void> {
+		await this.#send(
+			lines.map(line => ({
+				at: nanos(line.at),
+				stream: line.stream,
+				name: line.event ?? 'log',
+				level: line.level,
+				body: line.msg,
+				traceId: idOf(line.traceId, 16, 'trace'),
+				spanId: idOf(line.spanId, 8, 'span'),
+				context: line.context.length === 0 ? undefined : [...line.context],
+				attrs: line.attrs.length === 0 ? undefined : [...line.attrs],
+			})),
+		)
+	}
+
+	async #send(records: Parameters<typeof RecordsBatch.encode>[0]['records']): Promise<void> {
 		await this.#link.run('write', connection =>
-			connection.session.call(methods['records.append'], RecordsBatch.encode({ records: batch })),
+			connection.session.call(methods['records.append'], RecordsBatch.encode({ records })),
 		)
 	}
 

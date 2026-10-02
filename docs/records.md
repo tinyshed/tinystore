@@ -22,7 +22,8 @@ reads its format and nothing will.
 ```go
 logs, err := records.Open(ctx, store, records.Options{})
 
-logger := slog.New(logs.Handler("notes"))                 // never blocks: queued, flushed each second
+logger := slog.New(logs.Handler("notes"))                 // never blocks: queued, flushed each second, on stderr at once
+console := slog.New(records.Handler("app"))                // the console alone, without a store
 cmd.Stdout = logs.Lines("worker")                          // another program's lines, stack traces joined
 err = logs.Append(ctx, records.Record{At: t, Stream: "web", Name: "click",
 	Context: []records.Field{records.String("session", sid)},
@@ -64,6 +65,13 @@ batch, err := logs.Follow(ctx, records.Cursor{Segment: s, Row: r}, 1000)
 - **The handler maps, the model does not guess.** A `slog` line is a record
   named `log`, the message its body, `logger.With` its context, the call's
   attributes its attributes.
+- **A logger's line is the same on every console.** The handler writes each
+  line to stderr as it is logged, pretty on a terminal and one JSON object a
+  line otherwise, and the Bun and Python loggers write the same bytes,
+  `records/testdata/console.json`, which all three are tested against. A
+  program may take the logger without the records: `records.Handler` writes
+  the console alone. `Redact` hides fields by name in the store and on the
+  console alike, so that a secret logged by mistake is kept nowhere.
 - **Another program's lines keep their bytes.** A writer of `Lines` makes a
   record of each line at the time it arrived and joins the lines of a stack
   trace, a traceback or a JSON value printed over lines. A record named `log`

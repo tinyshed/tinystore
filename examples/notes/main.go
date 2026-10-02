@@ -106,13 +106,13 @@ func open(ctx context.Context, dir string, out io.Writer) (*app, error) {
 		return nil, err
 	}
 	a := &app{store: store}
-	if err = a.openEngines(ctx, console); err != nil {
+	if err = a.openEngines(ctx); err != nil {
 		return nil, errors.Join(err, store.Close(ctx))
 	}
 	return a, nil
 }
 
-func (a *app) openEngines(ctx context.Context, console slog.Handler) (err error) {
+func (a *app) openEngines(ctx context.Context) (err error) {
 	if a.db, err = sqldb.Open(ctx, a.store, "app", files, schema); err != nil {
 		return err
 	}
@@ -138,7 +138,8 @@ func (a *app) openEngines(ctx context.Context, console slog.Handler) (err error)
 		return err
 	}
 
-	a.logger = slog.New(slog.NewMultiHandler(console, a.logs.Handler("notes")))
+	// each line is kept and shown at once: pretty on a terminal, JSON otherwise, on stderr
+	a.logger = slog.New(a.logs.Handler("notes"))
 	a.created = a.stats.Counter("notes_created_total")
 	a.requests = a.stats.Counter("requests_total")
 	a.stats.GaugeFunc("notes", func(ctx context.Context) (float64, error) {

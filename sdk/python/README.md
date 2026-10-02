@@ -93,7 +93,7 @@ its values arguments and never SQL. A value comes back as SQLite keeps it.
 ## records
 
 ```python
-logging.getLogger().addHandler(store.records.handler("api"))  # never waits for the server
+logging.getLogger().addHandler(store.records.handler("api", redact=["password"]))  # never waits for the server
 with tinystore.trace(trace_id, span_id):  # what is logged inside carries the trace
     logging.info("charged")
 
@@ -110,6 +110,18 @@ async for chunk in process.stdout:
 
 A handler holds 1024 records and hands them over every second; what does not
 fit is dropped and counted.
+
+Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
+object a line otherwise, the bytes Go's and Bun's loggers write.
+`console="pretty" | "json" | "off"` and `stdout=True` choose; `redact` hides
+the values of fields of those names, at any depth, the case ignored, in the
+store and on the console. A program that wants the logger and not the records
+takes a handler without a store; its children are `logging`'s own:
+
+```python
+logging.basicConfig(handlers=[tinystore.handler("app", redact=["password"])], level=logging.INFO)
+log = logging.getLogger("app.db")  # the console alone, nothing kept
+```
 
 ## metrics
 

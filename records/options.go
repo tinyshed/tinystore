@@ -2,6 +2,8 @@ package records
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -34,6 +36,59 @@ type Options struct {
 	// Budget is the most one Read may spend; a query may only narrow it.
 	Budget Budget
 }
+
+// HandlerOption changes what a Handler does beside queueing its lines.
+type HandlerOption interface{ handlerOption(*handlerSettings) }
+
+type handlerSettings struct {
+	console Console
+	stdout  bool
+	redact  []string
+	level   slog.Leveler
+	out     io.Writer // a test's, in place of the process's own stream
+}
+
+// Console says how a Handler writes its lines as they are logged. Without one
+// they are pretty on a terminal and a JSON line otherwise.
+type Console int
+
+const (
+	// ConsolePretty writes a line for a person: 11:02:11.123 INFO  api  started  port=3000
+	ConsolePretty Console = iota + 1
+	// ConsoleJSON writes one JSON object a line, for a collector.
+	ConsoleJSON
+	// ConsoleOff writes nothing: the lines go to the store alone.
+	ConsoleOff
+)
+
+func (c Console) handlerOption(s *handlerSettings) { s.console = c }
+
+// Stdout writes a Handler's console lines to standard output. They go to
+// standard error otherwise, where they never mix with what the program prints:
+// a command's answer, or the frames of a protocol spoken over stdout.
+const Stdout = toStdout(true)
+
+type toStdout bool
+
+func (t toStdout) handlerOption(s *handlerSettings) { s.stdout = bool(t) }
+
+// Redact hides the values of fields with these names, in the store and on the
+// console: a field whose key, or the part of a dotted key after its last dot,
+// is one of them, the case ignored, and such a key at any depth of a JSON
+// object. A line's message is not searched.
+func Redact(names ...string) HandlerOption {
+	return handlerFunc(func(s *handlerSettings) { s.redact = append(s.redact, names...) })
+}
+
+// Level keeps a Handler's lines from level up, in the store and on the
+// console; without it every line is kept.
+func Level(level slog.Leveler) HandlerOption {
+	return handlerFunc(func(s *handlerSettings) { s.level = level })
+}
+
+type handlerFunc func(*handlerSettings)
+
+func (f handlerFunc) handlerOption(s *handlerSettings) { f(s) }
 
 // the bounds of docs/records.md: every density and memory figure the design
 // rests on was measured with them, so they are the format's, not options

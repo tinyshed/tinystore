@@ -7,6 +7,7 @@
         await sessions.of(user_id).set(token, session)
 """
 
+from ._console import ConsoleHandler, handler
 from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
 from .errors import (
@@ -47,6 +48,7 @@ __all__ = [
     "ClosedError",
     "Condition",
     "ConflictError",
+    "ConsoleHandler",
     "CorruptError",
     "Counters",
     "Cursor",
@@ -84,6 +86,7 @@ __all__ = [
     "cron",
     "daily",
     "every",
+    "handler",
     "none_of",
     "one_of",
     "open",

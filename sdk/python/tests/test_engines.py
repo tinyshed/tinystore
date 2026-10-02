@@ -247,7 +247,7 @@ async def test_records_come_back_as_they_went_in(store: tinystore.Store) -> None
         await store.records.append({"at": time.time_ns() - 100 * 86_400 * 10**9, "stream": "web", "name": "old"})
 
     logger = logging.getLogger("tinystore-test")
-    logger.addHandler(store.records.handler("app"))
+    logger.addHandler(store.records.handler("app", console="off"))
     logger.warning("slow request", extra={"ms": 1200})
     found: list[tinystore.Record] = []
     for _ in range(60):

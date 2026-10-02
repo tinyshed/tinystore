@@ -1,5 +1,6 @@
 export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from './blobs.ts'
 export { withSignal } from './cancel.ts'
+export type { ConsoleFormat } from './console.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'
 export type {
@@ -26,7 +27,7 @@ export type {
 	Scanned,
 	WriteOptions,
 } from './kv.ts'
-export type { Logger, LoggerOptions } from './logger.ts'
+export { type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,
 	type AggregateOp,
