@@ -17,8 +17,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	await store.close()
-	await Bun.sleep(50)
-	rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+	rmSync(dir, { recursive: true, force: true })
 })
 
 async function caught(promise: Promise<unknown>): Promise<unknown> {

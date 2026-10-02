@@ -121,8 +121,9 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
 - Bun 1.4's `expect(p).rejects` does not run the loop's I/O, so a call
   answered by the server never settles in it: tests take the error with a
   `caught()` helper.
-- `records.lines` reach a read after the server's next flush, a second; a
-  private child is waited for until it exits, or asyncio warns of its pipes.
+- `records.lines` reach a read after the server's next flush, a second.
+- `close` waits for a private child until it exits, in both SDKs: until then
+  it holds the directory, and asyncio warns of its pipes.
 - `task sdk` checks and tests both, building `tinystore` from this
   repository (`test/binary.ts`, `tests/conftest.py`) unless `TINYSTORE_BIN`
   names one; it is part of `task check`, and CI runs it on Linux, Windows and

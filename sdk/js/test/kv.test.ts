@@ -13,6 +13,9 @@ import {
 	type StandardSchemaV1,
 	type Store,
 } from '../src/index.ts'
+import { bunRuntime } from '../src/runtime/bun.ts'
+import type { Runtime } from '../src/runtime.ts'
+import { openWith } from '../src/store.ts'
 
 /**
  * What a promise rejected with. Bun's expect(...).rejects waits for a
@@ -36,8 +39,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	await store.close()
-	await Bun.sleep(50)
-	rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+	rmSync(dir, { recursive: true, force: true })
 })
 
 interface Session {
@@ -255,7 +257,41 @@ describe('the directory sidecar', () => {
 		}
 		expect(await Bun.file(join(shared, 'server', 'SERVE')).exists()).toBe(false)
 		expect(await Bun.file(join(shared, 'server', 'serve.log')).text()).toContain('msg=serving')
-		await Bun.sleep(200)
-		rmSync(shared, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+		// SERVE goes first and LOCK once the sidecar's store has closed, and
+		// Bun's rmSync ignores maxRetries, so a held file is tried again here
+		for (let tried = 0; ; tried++) {
+			try {
+				rmSync(shared, { recursive: true, force: true })
+				break
+			} catch (err) {
+				if (tried === 100) {
+					throw err
+				}
+				await Bun.sleep(50)
+			}
+		}
 	}, 20_000)
+})
+
+describe('a private child', () => {
+	test('close returns once the child has exited, its directory free', async () => {
+		const own = mkdtempSync(join(tmpdir(), 'tinystore-private-'))
+		let exited = false
+		const runtime: Runtime = {
+			...bunRuntime,
+			spawnPrivate(argv, events) {
+				const child = bunRuntime.spawnPrivate(argv, events)
+				void child.exited.then(() => {
+					exited = true
+				})
+				return child
+			},
+		}
+		const opened = await openWith(runtime, own, { private: true })
+		await opened.kv.bucket<string>('notes').set('a', 'kept')
+		await opened.close()
+		expect(exited).toBe(true)
+		// on Windows a child still running holds its files, and this fails with EBUSY
+		rmSync(own, { recursive: true, force: true })
+	})
 })

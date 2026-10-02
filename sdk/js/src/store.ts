@@ -91,8 +91,9 @@ export class Store implements AsyncDisposable {
 
 	/**
 	 * Ingests the instruments' last values and hands over the loggers' lines,
-	 * then closes the connection; the directory's sidecar goes once it has been
-	 * idle.
+	 * then closes the connection. A private child is waited for until it has
+	 * exited, so that the directory is free once this returns; the directory's
+	 * sidecar goes once it has been idle.
 	 */
 	async close(): Promise<void> {
 		this.metrics.stop()
@@ -100,7 +101,7 @@ export class Store implements AsyncDisposable {
 			await this.metrics.flush().catch(() => {})
 		}
 		await this.records.stop()
-		this.#link.close()
+		await this.#link.close()
 	}
 
 	[Symbol.asyncDispose](): Promise<void> {

@@ -38,6 +38,10 @@ Each line cost a debugging session once. The fix named is the one in the code.
   and never close it (`cmd/tinystore/serve.go`).
 - **`os.Process.Signal(os.Interrupt)` is not supported on Windows**: end a
   child by closing its stdin, or kill it.
+- **A child told to leave holds its directory until it has exited**: its
+  `LOCK` everywhere, and on Windows every file it opened, so a removal right
+  after fails with `EBUSY`. Both SDKs' `close` wait for a private child's
+  exit (`Connection.overChild` in Bun, `private_child` in Python).
 - **`python3` may be the Microsoft Store's alias**, which only says Python is
   missing: run `py`, or look for `python` and check it runs.
 
@@ -92,6 +96,9 @@ Each line cost a debugging session once. The fix named is the one in the code.
   `MSYS_NO_PATHCONV=1`.
 - **The race detector needs cgo**, which Windows does not have here: run
   `-race` in the Linux container, `task race:linux`.
+- **Bun's `rmSync` ignores `maxRetries` and `retryDelay`**: on Windows a held
+  file fails it at once with `EBUSY` (Bun 1.4.2). Try again in a loop of your
+  own, as the sidecar test in `sdk/js/test/kv.test.ts` does.
 - **A long script inline in a shell command may be cut, or its quoting
   broken**, a heredoc inside the tool's own quoting above all: write the
   script to a file in the scratchpad with the file tool and run the file. A

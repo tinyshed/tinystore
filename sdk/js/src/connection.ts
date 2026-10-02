@@ -17,12 +17,19 @@ const handshakeTime = 5000
 export class Connection {
 	readonly session: Session
 	readonly #transport: Transport
+	/** what close waits for once the transport has ended: a private child's exit */
+	readonly #closing: () => Promise<unknown>
 	/** the handles this connection opened, by what they are: a bucket's name and options */
 	readonly handles = new Map<string, Promise<number>>()
 
-	constructor(session: Session, transport: Transport) {
+	constructor(
+		session: Session,
+		transport: Transport,
+		closing: () => Promise<unknown> = () => Promise.resolve(),
+	) {
 		this.session = session
 		this.#transport = transport
+		this.#closing = closing
 	}
 
 	/** Connects, shakes hands, and gives up after the handshake's time. */
@@ -55,9 +62,13 @@ export class Connection {
 		return connection
 	}
 
-	/** Shakes hands over a private child's stdin and stdout. */
+	/**
+	 * Shakes hands over a private child's stdin and stdout. Closing waits for
+	 * the child's exit, since until then it holds the directory: its LOCK, and
+	 * on Windows every file it opened, which a removal fails on.
+	 */
 	static async overChild(child: PrivateChild, session: Session): Promise<Connection> {
-		const connection = new Connection(session, child.transport)
+		const connection = new Connection(session, child.transport, () => child.exited)
 		await connection.#handshake()
 		return connection
 	}
@@ -78,9 +89,11 @@ export class Connection {
 		this.session.onEnd(() => this.#transport.close())
 	}
 
-	close(): void {
+	/** Ends the connection; a private child is waited for until it has exited. */
+	async close(): Promise<void> {
 		this.session.end(new ClosedError('the store closed'))
 		this.#transport.close()
+		await this.#closing()
 	}
 }
 
@@ -311,11 +324,11 @@ export class Link {
 	}
 
 	/** Closes the connection and every one to come. */
-	close(): void {
+	async close(): Promise<void> {
 		this.#closed = true
 		const current = this.#current
 		this.#current = undefined
-		current?.then(
+		await current?.then(
 			c => c.close(),
 			() => {},
 		)
