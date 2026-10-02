@@ -178,6 +178,12 @@ const there = await connect("tls://db.internal:7443", { token })
 
 ### SERVE: finding the directory's sidecar
 
+`tinystore status --dir <dir>` prints, as JSON, what a store's directory holds
+without opening it, so that it runs beside the server serving it: each
+engine's file and its bytes with its write-ahead log, the blobs engine's files,
+whether a `LOCK` is there, and the server `SERVE` names, its version, pid and
+endpoints, never its secret. A directory without a `LOCK` is no store's.
+
 Everything a local server publishes lives in `<dir>/server/`, which only its
 owner may enter. `SERVE` in it is a hint; the directory's `LOCK` is the
 truth.

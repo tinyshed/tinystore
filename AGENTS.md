@@ -77,7 +77,7 @@ Do not describe unbuilt behaviour as though it works.
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
-| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, and `migrate` and `schema` for sqldb |
+| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `status`, and `migrate` and `schema` for sqldb |
 | `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Python; `sdk/go.mod` keeps them out of the Go module |
 | `docs/`              | the design, the format, the engines and the wire                              |
 | `examples/`          | programs using the public API, built and tested with the module               |
@@ -721,6 +721,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a private child leaves when told, though its parent stays | `TestAPrivateChildLeavesWhenToldThoughItsParentStays`, `TestAPrivateChildServesItsParent` |
 | what serve cannot serve opens nothing                  | `TestServeRefusesWhatItCannotServe`, a file it cannot read included             |
 | the tool requires only the store and the server        | `TestTheToolRequiresOnlyTheStoreAndTheServer`                                   |
+| status reads a directory beside its server, never printing SERVE's secret | `TestStatusReadsADirectoryAndKeepsTheSecret` in `cmd/tinystore`  |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before
