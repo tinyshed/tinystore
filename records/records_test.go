@@ -91,7 +91,7 @@ func (s *testStore) readAll(t testing.TB, query Query) []Record {
 	t.Helper()
 	var all []Record
 	for range 10_000 {
-		page, err := s.Read(t.Context(), query)
+		page, err := s.Scan(t.Context(), query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -230,7 +230,7 @@ func TestAClosedStoreRefusesWork(t *testing.T) {
 	if err := s.Append(t.Context(), backendRecords(1)...); !errors.Is(err, tinystore.ErrClosed) {
 		t.Errorf("append after close: %v", err)
 	}
-	if _, err := s.Read(t.Context(), Query{}); !errors.Is(err, tinystore.ErrClosed) {
+	if _, err := s.Scan(t.Context(), Query{}); !errors.Is(err, tinystore.ErrClosed) {
 		t.Errorf("read after close: %v", err)
 	}
 }

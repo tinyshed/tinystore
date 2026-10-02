@@ -82,7 +82,7 @@ func TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals(t *testing.T) {
 		t.Fatalf("damaged %+v, stats %+v", list, s.Stats())
 	}
 
-	_, err := s.Read(t.Context(), Query{})
+	_, err := s.Scan(t.Context(), Query{})
 	var met *DamageError
 	if !errors.As(err, &met) || met.Damage.HeadRow != damaged || !errors.Is(err, tinystore.ErrCorrupt) {
 		t.Fatalf("a read over the damaged row: %v", err)
@@ -190,7 +190,7 @@ func TestChangedIndexCountsAndSizesAreDamage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = s.Read(t.Context(), Query{})
+		_, err = s.Scan(t.Context(), Query{})
 		broken, ok := errors.AsType[*DamageError](err)
 		if !ok || broken.Damage.HeadRow != id {
 			t.Fatalf("changed head index: %v", err)

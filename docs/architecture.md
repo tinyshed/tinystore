@@ -286,7 +286,7 @@ its text;
 ```go
 logger := slog.New(logs.Handler("notes"))
 err = logs.Append(ctx, records.Record{At: t, Stream: "web", Name: "click", Attrs: attrs})
-page, err := logs.Read(ctx, records.Query{From: from, Attrs: []records.Field{records.String("requestId", id)}})
+page, err := logs.Scan(ctx, records.Query{Since: time.Hour, Attrs: []records.Field{records.String("requestId", id)}})
 batch, err := logs.Follow(ctx, cursor, 1000)
 ```
 

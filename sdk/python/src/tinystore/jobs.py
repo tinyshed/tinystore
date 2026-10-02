@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from ._connection import Connection, Link, check_name, download, handle_on
+from ._page import Page
 from ._session import LostError
 from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
@@ -302,7 +303,7 @@ class Queue[V]:
         state: Literal["failed"] | None = None,
         after: str | None = None,
         limit: int | None = None,
-    ) -> tuple[list[JobEntry[V]], str | None]:
+    ) -> Page[JobEntry[V], str]:
         """A page of the jobs under a prefix in the byte order of their keys, and where the next begins."""
 
         async def attempt(connection: Connection) -> tuple[list[bytes], bytes]:
@@ -319,7 +320,8 @@ class Queue[V]:
 
         items, trailer = await self._link.run("read", attempt)
         page = JobsPage.decode(trailer)
-        return [self._entry(JobsEntry.decode(i)) for i in items], page.get("after", "") if page.get("more") else None
+        entries = [self._entry(JobsEntry.decode(i)) for i in items]
+        return Page(entries, page.get("after", "") if page.get("more") else None)
 
     async def all(
         self,

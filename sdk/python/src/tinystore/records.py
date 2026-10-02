@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -16,7 +17,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ._connection import Connection, Link, download
-from ._time import unix_ns
+from ._page import Page
+from ._time import Duration, ms, unix_ns
 from ._values import to_json
 from ._wire.messages import (
     METHODS,
@@ -107,6 +109,39 @@ def _record(r: dict[str, Any]) -> Record:
     )
 
 
+_CURSOR = re.compile(r"(-?\d*):(-?\d*)")
+
+
+def _cursor(start: int | None, end: int | None) -> str:
+    """A page's next: where the range moved, both ends as nanoseconds.
+
+    A query over the last ``since`` continues the range it started with::
+
+        from 1700000000000000000, open end   ->   "1700000000000000000:"
+    """
+    return f"{'' if start is None else start}:{'' if end is None else end}"
+
+
+def _range(
+    since: Duration | None, from_: datetime | int | None, to: datetime | int | None, after: str | None
+) -> tuple[int | None, int | None]:
+    if after is not None:
+        ends = _CURSOR.fullmatch(after)
+        if ends is None:
+            raise InvalidError(f"{after!r} is no page's next")
+        start, end = ends.groups()
+        return (int(start) if start else None), (int(end) if end else None)
+    if since is not None and from_ is not None:
+        raise InvalidError("a range starts since a span before now or from a time, not both")
+    if since is not None:
+        return time.time_ns() - ms(since) * 1_000_000, _nanos(to)
+    return _nanos(from_), _nanos(to)
+
+
+def _nanos(t: datetime | int | None) -> int | None:
+    return None if t is None else unix_ns(t)
+
+
 @dataclass(frozen=True, slots=True)
 class Cursor:
     """Where a follower stands in the sealed segments, kept by the caller between follows."""
@@ -147,9 +182,10 @@ class Records:
 
         await self._link.run("write", attempt)
 
-    async def read(
+    async def scan(
         self,
         *,
+        since: Duration | None = None,
         from_: datetime | int | None = None,
         to: datetime | int | None = None,
         streams: Iterable[str] | None = None,
@@ -160,11 +196,21 @@ class Records:
         context: Fields | None = None,
         newest: bool = False,
         limit: int | None = None,
-    ) -> tuple[list[Record], dict[str, Any] | None]:
-        """One page of the records a query matches, and the query for the rest while one ended it early."""
+        after: str | None = None,
+    ) -> Page[Record, str]:
+        """One page of the records a query matches, from one snapshot, in event-time order.
+
+        Over the last ``since``, or from ``from_`` to ``to``, in datetimes or
+        unix nanoseconds. The page's next, while a limit or a budget ended it
+        early, is passed back as ``after`` with the same query::
+
+            page = await store.records.scan(since="1h", min_level="warn")
+            more = await store.records.scan(since="1h", min_level="warn", after=page.next)
+        """
+        start, end = _range(since, from_, to, after)
         query = {
-            "from_": None if from_ is None else unix_ns(from_),
-            "to": None if to is None else unix_ns(to),
+            "from_": start,
+            "to": end,
             "streams": list(streams) if streams else None,
             "names": list(names) if names else None,
             "min_level": _level(min_level),
@@ -182,10 +228,27 @@ class Records:
         page = RecordsPage.decode(got.trailer)
         records = [_record(RecordsRecord.decode(i)) for i in got.items]
         if not page.get("more"):
-            return records, None
-        rest = {
-            "from_": from_,
-            "to": to,
+            return Page(records, None)
+        return Page(records, _cursor(page.get("from_", start), page.get("to", end)))
+
+    async def all(
+        self,
+        *,
+        since: Duration | None = None,
+        from_: datetime | int | None = None,
+        to: datetime | int | None = None,
+        streams: Iterable[str] | None = None,
+        names: Iterable[str] | None = None,
+        min_level: str | int | None = None,
+        trace_id: bytes | str | None = None,
+        attrs: Fields | None = None,
+        context: Fields | None = None,
+        newest: bool = False,
+        limit: int | None = None,
+    ) -> AsyncIterator[Record]:
+        """Every record a query matches, a page at a time."""
+        start, end = _range(since, from_, to, None)
+        query: dict[str, Any] = {
             "streams": streams,
             "names": names,
             "min_level": min_level,
@@ -195,15 +258,9 @@ class Records:
             "newest": newest,
             "limit": limit,
         }
-        rest["from_"] = page.get("from_", rest["from_"])
-        rest["to"] = page.get("to", rest["to"])
-        return records, rest
-
-    async def all(self, **query: Any) -> AsyncIterator[Record]:
-        """Every record a query matches, a page at a time."""
-        rest: dict[str, Any] | None = query
-        while rest is not None:
-            records, rest = await self.read(**rest)
+        after: str | None = _cursor(start, end)
+        while after is not None:
+            records, after = await self.scan(**query, after=after)
             for record in records:
                 yield record
 

@@ -155,7 +155,7 @@ func probeRecords(ctx context.Context, runtime *tinystore.Store) {
 	if _, err = logs.Maintain(ctx); err != nil {
 		panic(err)
 	}
-	page, err := logs.Read(ctx, records.Query{Streams: []string{"probe"}})
+	page, err := logs.Scan(ctx, records.Query{Streams: []string{"probe"}})
 	if err != nil {
 		panic(err)
 	}

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from ._connection import Connection, Link, check_name, download, handle_on
+from ._page import Page
 from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.messages import METHODS, KvBucket, KvCall, KvCalls, KvEntry, KvPage, KvResults
@@ -373,9 +374,7 @@ class Bucket[V]:
         """Removes this branch's keys and every branch under it, at once however many."""
         await self._call("kv.clear", "write")
 
-    async def scan(
-        self, *, after: Key | None = None, limit: int | None = None
-    ) -> tuple[list[Entry[V]], str | bytes | None]:
+    async def scan(self, *, after: Key | None = None, limit: int | None = None) -> Page[Entry[V], str | bytes]:
         """One page of this branch's own keys in the byte order of their text, and the key the next begins after."""
 
         async def attempt(connection: Connection) -> tuple[list[bytes], bytes]:
@@ -387,7 +386,7 @@ class Bucket[V]:
         items, trailer = await self._link.run("read", attempt)
         page = KvPage.decode(trailer)
         entries = [_entry(self.value_type, KvEntry.decode(item)) for item in items]
-        return entries, page.get("after", "") if page.get("more") else None
+        return Page(entries, page.get("after", "") if page.get("more") else None)
 
     async def all(self, *, limit: int | None = None) -> AsyncIterator[Entry[V]]:
         """Walks this branch's own keys a page at a time, holding no snapshot between pages."""

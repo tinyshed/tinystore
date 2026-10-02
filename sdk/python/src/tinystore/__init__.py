@@ -7,6 +7,7 @@
         await sessions.of(user_id).set(token, session)
 """
 
+from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
 from .errors import (
     CallCancelledError,
@@ -60,6 +61,7 @@ __all__ = [
     "JobEntry",
     "LimitError",
     "OutcomeUnknownError",
+    "Page",
     "PermissionDeniedError",
     "ProtocolError",
     "Queue",

@@ -44,9 +44,16 @@ func (e *RecordError) Error() string {
 
 func (e *RecordError) Unwrap() error { return e.Err }
 
-// Query selects the records in [From, To) that meet every condition given.
+// Query selects the records in [From, To), or over the last Since, that meet
+// every condition given.
+//
+//	Query{Since: time.Hour, MinLevel: &warn}            the last hour's warnings
+//	Query{From: start, To: end, Streams: []string{"api"}}
 type Query struct {
 	From, To time.Time
+	// Since, when it is not zero, starts the range that long before the
+	// store's clock; From then stays zero.
+	Since time.Duration
 	// Streams matches a record of any one of them.
 	Streams []string
 	// Names matches a record of any one of them.
@@ -66,7 +73,7 @@ type Query struct {
 	Budget  Budget // may only narrow Options.Budget
 }
 
-// Budget bounds one Read before it starts: the blocks it may open, the bytes
+// Budget bounds one Scan before it starts: the blocks it may open, the bytes
 // it may fetch and the records it may decode. Reaching it ends a page early
 // rather than failing the read.
 type Budget struct {

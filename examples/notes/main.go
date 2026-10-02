@@ -284,14 +284,13 @@ func (a *app) readBack(ctx context.Context, out io.Writer) error {
 		return err
 	}
 
-	now := time.Now()
 	results, err := a.stats.Read(ctx, metrics.Range{Name: "notes_created_total", Since: time.Minute})
 	if err != nil || len(results) != 1 {
 		return errors.Join(err, errors.New("notes_created_total was not flushed"))
 	}
 	fmt.Fprintf(out, "notes created: %v\n", results[0].Samples[len(results[0].Samples)-1].Value)
 
-	page, err := a.logs.Read(ctx, records.Query{From: now.Add(-time.Minute), To: now.Add(time.Minute)})
+	page, err := a.logs.Scan(ctx, records.Query{Since: time.Minute})
 	fmt.Fprintf(out, "log lines: %d\n", len(page.Records))
 	return err
 }

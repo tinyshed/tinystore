@@ -28,11 +28,12 @@ err = logs.Append(ctx, records.Record{At: t, Stream: "web", Name: "click",
 	Context: []records.Field{records.String("session", sid)},
 	Attrs:   []records.Field{records.String("element", "buy")}})     // one transaction, readable on return
 
-page, err := logs.Read(ctx, records.Query{From: from, To: to,     // [From, To), a zero end is open
+page, err := logs.Scan(ctx, records.Query{From: from, To: to,     // [From, To), a zero end is open; or Since
 	Streams: []string{"web"}, Names: []string{"click"}, MinLevel: new(slog.LevelWarn),
 	TraceID: trace, Attrs: []records.Field{records.String("requestId", id)},
 	Newest: true, Limit: 100, Budget: records.Budget{Blocks: 64}})
-next, err := logs.Read(ctx, page.Next)                            // when page.More
+next, err := logs.Scan(ctx, page.Next)                            // when page.More
+for record, err := range logs.All(ctx, records.Query{Since: time.Hour}) { … }  // a page at a time
 
 batch, err := logs.Follow(ctx, records.Cursor{Segment: s, Row: r}, 1000)
 ```

@@ -58,7 +58,7 @@ func recordsRead(c *call) error {
 	if err != nil {
 		return err
 	}
-	page, err := logs.Read(c.ctx, query)
+	page, err := logs.Scan(c.ctx, query)
 	if err != nil {
 		return err
 	}

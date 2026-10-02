@@ -483,6 +483,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a time outside its engine's window is refused       | `TestARecordOutsideItsWindowIsRefused`, `TestASampleAheadOfTheClockIsRefused`   |
 | a page never splits a timestamp nor loses one       | `TestAPageNeverSplitsATimestamp`, `TestPagesContinueWithoutLosingOrRepeating`   |
 | a budget ends a page rather than failing it         | `TestABudgetEndsAPageEarly`                                                     |
+| a records scan since a span pages on in that range  | `TestAScanSinceStartsThatLongBeforeNowAndPagesOn`, the clock moved between pages |
+| `All` walks every record a page at a time           | `TestAllWalksEveryRecordAPageAtATime`, a walk stopped early reads no further     |
 | blooms and level masks skip blocks                  | `TestBloomsAndLevelMasksSkipBlocks`                                             |
 | a read walks the time index near its range only     | `TestTheTimeIndexIsWalkedWithinEachSpan`, on the plan SQLite chooses            |
 | a read finds records in blocks of every width       | `TestReadsFindRecordsInBlocksOfEveryWidth`                                      |

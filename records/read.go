@@ -4,18 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"math"
 	"slices"
 
 	"github.com/tinyshed/tinystore"
 )
 
-// Read returns one page of the records a query selects, in event-time order:
+// Scan returns one page of the records a query selects, in event-time order:
 // oldest first, or newest first when it asks. A page ends where its limit or
 // its budget ran out, never inside one timestamp; Page.More says so, and
 // Page.Next asks for what follows. Nothing is decoded while the snapshot the
 // page was read from is held.
-func (s *Store) Read(ctx context.Context, query Query) (Page, error) {
+func (s *Store) Scan(ctx context.Context, query Query) (Page, error) {
 	release, err := s.admitTo(ctx, s.reads)
 	if err != nil {
 		return Page{}, err
@@ -46,6 +47,29 @@ func (s *Store) Read(ctx context.Context, query Query) (Page, error) {
 	return page, nil
 }
 
+// All walks every record a query selects, a page at a time, holding no
+// snapshot between pages; an error ends the walk after it is yielded.
+func (s *Store) All(ctx context.Context, query Query) iter.Seq2[Record, error] {
+	return func(yield func(Record, error) bool) {
+		for {
+			page, err := s.Scan(ctx, query)
+			if err != nil {
+				yield(Record{}, err)
+				return
+			}
+			for _, record := range page.Records {
+				if !yield(record, nil) {
+					return
+				}
+			}
+			if !page.More {
+				return
+			}
+			query = page.Next
+		}
+	}
+}
+
 // checkedQuery is a query the engine can run, its conditions resolved.
 type checkedQuery struct {
 	asked Query
@@ -60,8 +84,11 @@ type checkedQuery struct {
 }
 
 func (s *Store) checkQuery(query Query) (checkedQuery, error) {
+	query, err := s.since(query)
+	if err != nil {
+		return checkedQuery{asked: query}, err
+	}
 	q := checkedQuery{asked: query}
-	var err error
 	if q.limit, err = checkLimit(query.Limit); err != nil {
 		return q, err
 	}
@@ -104,6 +131,19 @@ func checkConditions(query Query) error {
 		return fmt.Errorf("%w: level %d is past 32 bits", tinystore.ErrInvalid, *query.MinLevel)
 	}
 	return nil
+}
+
+// since resolves a query over the last Since into the From it starts at, so
+// that each page after the first continues the same range
+func (s *Store) since(query Query) (Query, error) {
+	if query.Since == 0 {
+		return query, nil
+	}
+	if query.Since < 0 || !query.From.IsZero() {
+		return query, fmt.Errorf("%w: a range starts Since before now or at From, not both", tinystore.ErrInvalid)
+	}
+	query.From, query.Since = s.now().Add(-query.Since), 0
+	return query, nil
 }
 
 // queryRange turns [From, To) into both ends included; a zero From or To

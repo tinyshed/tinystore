@@ -122,7 +122,7 @@ func TestABackupRestoresEveryEngine(t *testing.T) {
 	if err != nil || title != "kept" {
 		t.Fatalf("sql: %q, %v", title, err)
 	}
-	page, err := restored.logs.Read(t.Context(), records.Query{From: epoch, To: epoch.Add(time.Second)})
+	page, err := restored.logs.Scan(t.Context(), records.Query{From: epoch, To: epoch.Add(time.Second)})
 	if err != nil || len(page.Records) != 1 || *page.Records[0].Body != "backed up" {
 		t.Fatalf("records: %+v, %v", page.Records, err)
 	}

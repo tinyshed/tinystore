@@ -4,7 +4,9 @@
 
 import { type Connection, download, type Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
+import type { Page } from './handles.ts'
 import type { Stream } from './session.ts'
+import { type Duration, ms } from './time.ts'
 import {
 	Empty,
 	methods,
@@ -68,7 +70,17 @@ export interface LogRecord {
 	attrs: [key: string, json: string | Uint8Array][]
 }
 
+/**
+ * The records in a range that meet every condition given.
+ *
+ * ```ts
+ * { since: '1h', minLevel: 'warn' }                 // the last hour's warnings
+ * { from: start, to: end, streams: ['api'] }
+ * ```
+ */
 export interface RecordsQuery {
+	/** the span before now the range covers: '1h', '15m', or milliseconds; or from and to */
+	since?: Duration
 	/** the range's start, included; open when absent */
 	from?: Date | bigint
 	/** the range's end, excluded; open when absent */
@@ -88,6 +100,8 @@ export interface RecordsQuery {
 	limit?: number
 	/** what one read may open, fetch and decode; each narrows the server's */
 	budget?: { blocks?: number; bytes?: number; records?: number }
+	/** a page's next, which this page continues from; the rest of the query as it was */
+	after?: string | undefined
 }
 
 /** Where a follower stands in the sealed segments: kept by the caller between follows. */
@@ -175,10 +189,45 @@ function recordOf(r: ReturnType<typeof RecordsRecord.decode>): LogRecord {
 	}
 }
 
+/**
+ * A page's next: where the range moved, both ends as nanoseconds, so that a
+ * query over the last `since` continues the range it started with.
+ *
+ *     from 1700000000000000000, open end   →   '1700000000000000000:'
+ */
+function cursorOf(from: bigint | undefined, to: bigint | undefined): string {
+	return `${from ?? ''}:${to ?? ''}`
+}
+
+function rangeOf(q: RecordsQuery | undefined): {
+	from: bigint | undefined
+	to: bigint | undefined
+} {
+	if (q?.after !== undefined) {
+		const ends = /^(-?\d*):(-?\d*)$/.exec(q.after)
+		if (ends === null) {
+			throw new InvalidError(`${JSON.stringify(q.after)} is no page's next`)
+		}
+		return {
+			from: ends[1] === '' ? undefined : BigInt(ends[1]!),
+			to: ends[2] === '' ? undefined : BigInt(ends[2]!),
+		}
+	}
+	if (q?.since !== undefined && q.from !== undefined) {
+		throw new InvalidError('a range starts since a span before now or from a time, not both')
+	}
+	const from =
+		q?.since !== undefined
+			? nanos(new Date(Date.now() - ms(q.since)))
+			: q?.from === undefined
+				? undefined
+				: nanos(q.from)
+	return { from, to: q?.to === undefined ? undefined : nanos(q.to) }
+}
+
 function queryOf(q: RecordsQuery | undefined): Parameters<typeof QueryMessage.encode>[0] {
 	return {
-		from: q?.from === undefined ? undefined : nanos(q.from),
-		to: q?.to === undefined ? undefined : nanos(q.to),
+		...rangeOf(q),
 		streams: q?.streams !== undefined && q.streams.length > 0 ? q.streams : undefined,
 		names: q?.names !== undefined && q.names.length > 0 ? q.names : undefined,
 		minLevel: q?.minLevel === undefined ? undefined : levelOf(q.minLevel),
@@ -223,38 +272,32 @@ export class Records {
 	}
 
 	/**
-	 * One page of the records a query matches, from one snapshot; next is the
-	 * query for the rest while a limit or a budget ended the page early. A
-	 * page never splits a timestamp.
+	 * One page of the records a query matches, from one snapshot, in event-time
+	 * order; next, while a limit or a budget ended the page early, is passed back
+	 * as `after` with the same query. A page never splits a timestamp.
 	 */
-	async read(
-		query?: RecordsQuery,
-	): Promise<{ records: LogRecord[]; next: RecordsQuery | undefined }> {
+	async scan(query?: RecordsQuery): Promise<Page<LogRecord, string>> {
+		const asked = queryOf(query)
 		const got = await this.#link.run('read', connection =>
-			download(connection, methods['records.read'], QueryMessage.encode(queryOf(query))),
+			download(connection, methods['records.read'], QueryMessage.encode(asked)),
 		)
 		const page = RecordsPage.decode(got.trailer)
-		const records = got.items.map(item => recordOf(RecordsRecord.decode(item)))
+		const items = got.items.map(item => recordOf(RecordsRecord.decode(item)))
 		if (page.more !== true) {
-			return { records, next: undefined }
+			return { items, next: undefined }
 		}
-		const next: RecordsQuery = { ...query }
-		if (page.from !== undefined) {
-			next.from = page.from
-		}
-		if (page.to !== undefined) {
-			next.to = page.to
-		}
-		return { records, next }
+		const moved = (end: number | bigint | undefined, sent: number | bigint | undefined) =>
+			end !== undefined ? BigInt(end) : sent !== undefined ? BigInt(sent) : undefined
+		return { items, next: cursorOf(moved(page.from, asked.from), moved(page.to, asked.to)) }
 	}
 
 	/** Every record a query matches, a page at a time. */
-	async *all(query?: RecordsQuery): AsyncGenerator<LogRecord> {
-		let next: RecordsQuery | undefined = query ?? {}
-		while (next !== undefined) {
-			const page: { records: LogRecord[]; next: RecordsQuery | undefined } = await this.read(next)
-			yield* page.records
-			next = page.next
+	async *all(query?: Omit<RecordsQuery, 'after'>): AsyncGenerator<LogRecord> {
+		let page = await this.scan(query)
+		yield* page.items
+		while (page.next !== undefined) {
+			page = await this.scan({ ...query, after: page.next })
+			yield* page.items
 		}
 	}
 

@@ -17,10 +17,11 @@ err = logs.Append(ctx, records.Record{
 	Attrs:   []records.Field{records.String("element", "buy"), records.Int("x", 812)},
 })
 
-page, err := logs.Read(ctx, records.Query{
-	From: time.Now().Add(-time.Hour), Streams: []string{"notes"},
+page, err := logs.Scan(ctx, records.Query{
+	Since: time.Hour, Streams: []string{"notes"},
 	MinLevel: new(slog.LevelWarn), Newest: true, Limit: 100,
 })
+for record, err := range logs.All(ctx, records.Query{Since: 24 * time.Hour, TraceID: trace}) { … }
 
 batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor the caller keeps
 ```
@@ -39,7 +40,7 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 
 ## Contracts
 
-- `Append` writes every record or none, in one transaction, and a `Read` sees
+- `Append` writes every record or none, in one transaction, and a `Scan` sees
   them as soon as it returns. A record the format cannot keep is refused as a
   `*RecordError` naming it: no stream or name, a value that is not JSON, a
   time past what nanoseconds hold, more than 128 fields, more than 256 KiB. So
@@ -94,7 +95,7 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   segment of their records, so that sealing every hour costs few bytes more
   than full segments do; each merged segment keeps its place in the order
   segments were sealed, and a merge is one transaction too.
-- `Read` returns one page, oldest first or newest first, from one snapshot,
+- `Scan` returns one page, oldest first or newest first, from one snapshot,
   decoded after the snapshot is released. A page never splits a timestamp; it
   ends early when its `Limit` (1000, at most 10000) or its `Budget` (the
   blocks, bytes and records it may fetch) runs out, and says so with `More`;
@@ -133,7 +134,7 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   before anything is allocated.
 - A row that no longer reads is lost, and says so once. `Maintain` logs a
   damaged head row at Error the first time it meets it, counts it in
-  `Maintenance.Damaged`, leaves it and seals the rest of its head. A `Read` or
+  `Maintenance.Damaged`, leaves it and seals the rest of its head. A `Scan` or
   a `Follow` over it fails with a `*DamageError` naming the head row, or the
   segment whose row or block it is, and the times it held. `Damaged` lists
   what this handle has met, and `Drop` removes one: a head row alone, a

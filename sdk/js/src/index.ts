@@ -1,5 +1,6 @@
 export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from './blobs.ts'
 export * from './errors.ts'
+export type { Page } from './handles.ts'
 export type {
 	ClaimedJob,
 	EnqueueOptions,

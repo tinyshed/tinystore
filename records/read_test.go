@@ -95,12 +95,12 @@ func TestAPageNeverSplitsATimestamp(t *testing.T) {
 	}
 	s.append(t, records...)
 
-	page, err := s.Read(t.Context(), Query{Limit: 6})
+	page, err := s.Scan(t.Context(), Query{Limit: 6})
 	if err != nil || len(page.Records) != 4 || !page.More {
 		t.Fatalf("a limit of 6 over times of 4, 4 and 2 records: %d records, more %v, %v",
 			len(page.Records), page.More, err)
 	}
-	if _, err = s.Read(t.Context(), Query{Limit: 3}); !errors.Is(err, tinystore.ErrLimit) {
+	if _, err = s.Scan(t.Context(), Query{Limit: 3}); !errors.Is(err, tinystore.ErrLimit) {
 		t.Fatalf("four records at one time under a limit of 3: %v", err)
 	}
 }
@@ -114,15 +114,15 @@ func TestABudgetEndsAPageEarly(t *testing.T) {
 	s.maintain(t)
 
 	query := Query{Budget: Budget{Blocks: 3}}
-	page, err := s.Read(t.Context(), query)
+	page, err := s.Scan(t.Context(), query)
 	if err != nil || !page.More || len(page.Records) == 0 || len(page.Records) > 3*maxBlockRecords {
 		t.Fatalf("three blocks' budget: %d records, more %v, %v", len(page.Records), page.More, err)
 	}
 	sameTimes(t, sortedByTime(records), s.readAll(t, query))
-	if _, err = s.Read(t.Context(), Query{Budget: Budget{Bytes: 100}}); !errors.Is(err, tinystore.ErrLimit) {
+	if _, err = s.Scan(t.Context(), Query{Budget: Budget{Bytes: 100}}); !errors.Is(err, tinystore.ErrLimit) {
 		t.Fatalf("a budget smaller than one block: %v", err)
 	}
-	if _, err = s.Read(t.Context(), Query{Budget: Budget{Blocks: 1 << 30}}); !errors.Is(err, tinystore.ErrInvalid) {
+	if _, err = s.Scan(t.Context(), Query{Budget: Budget{Blocks: 1 << 30}}); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a budget wider than the store's: %v", err)
 	}
 }
@@ -233,10 +233,10 @@ func TestBloomsAndLevelMasksSkipBlocks(t *testing.T) {
 
 func TestAQueryValueMustBeJSON(t *testing.T) {
 	s := openRecords(t)
-	if _, err := s.Read(t.Context(), Query{Attrs: []Field{{"route", "/notes"}}}); !errors.Is(err, tinystore.ErrInvalid) {
+	if _, err := s.Scan(t.Context(), Query{Attrs: []Field{{"route", "/notes"}}}); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("an unquoted string: %v", err)
 	}
-	if _, err := s.Read(t.Context(), Query{From: testNow, To: testNow.Add(-time.Second)}); !errors.Is(err, tinystore.ErrInvalid) {
+	if _, err := s.Scan(t.Context(), Query{From: testNow, To: testNow.Add(-time.Second)}); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("an inverted range: %v", err)
 	}
 }
@@ -295,5 +295,60 @@ func readEveryRecordOnce(t *testing.T, s *testStore, before int) {
 		if count := seen[strconv.Itoa(i)]; count != 1 {
 			t.Fatalf("record %d read %d times, with %d appended before the read began", i, count, before)
 		}
+	}
+}
+
+// a scan over the last Since starts that long before the store's clock, and
+// each page after the first continues that same range though the clock moved
+func TestAScanSinceStartsThatLongBeforeNowAndPagesOn(t *testing.T) {
+	s := openRecords(t)
+	for _, ago := range []time.Duration{3 * time.Hour, 50 * time.Minute, 40 * time.Minute, 30 * time.Minute} {
+		s.append(t, Record{At: testNow.Add(-ago), Stream: "web", Name: "tick"})
+	}
+
+	page, err := s.Scan(t.Context(), Query{Since: time.Hour, Limit: 2})
+	if err != nil || len(page.Records) != 2 || !page.More || page.Next.Since != 0 ||
+		!page.Next.From.Equal(testNow.Add(-30*time.Minute)) {
+		t.Fatalf("the first page of the last hour: %+v, %v", page, err)
+	}
+	s.clock.advance(time.Hour)
+	if page, err = s.Scan(t.Context(), page.Next); err != nil || len(page.Records) != 1 || page.More {
+		t.Fatalf("the next page, an hour later: %+v, %v", page, err)
+	}
+
+	for _, refused := range []Query{{Since: time.Hour, From: testNow}, {Since: -time.Hour}} {
+		if _, err = s.Scan(t.Context(), refused); !errors.Is(err, tinystore.ErrInvalid) {
+			t.Errorf("%+v: %v", refused, err)
+		}
+	}
+}
+
+// All walks every record a query selects, a page at a time, in order, and a
+// walk that stops early reads no further page
+func TestAllWalksEveryRecordAPageAtATime(t *testing.T) {
+	s := openRecords(t)
+	var written []Record
+	for i := range 25 {
+		written = append(written, Record{At: testNow.Add(time.Duration(i-30) * time.Second), Stream: "web", Name: "tick"})
+	}
+	s.append(t, written...)
+
+	var walked []time.Time
+	for record, err := range s.All(t.Context(), Query{Limit: 10}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		walked = append(walked, record.At)
+	}
+	if len(walked) != 25 || !walked[0].Equal(written[0].At) || !walked[24].Equal(written[24].At) {
+		t.Fatalf("walked %d records", len(walked))
+	}
+
+	before := s.Stats().Queries
+	for range s.All(t.Context(), Query{Limit: 10}) {
+		break
+	}
+	if s.Stats().Queries != before+1 {
+		t.Fatalf("a walk stopped at its first record read %d pages", s.Stats().Queries-before)
 	}
 }

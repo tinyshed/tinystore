@@ -238,9 +238,9 @@ async def test_records_come_back_as_they_went_in(store: tinystore.Store) -> None
             "attrs": [("x", 812), ("x", 813)],
         }
     )
-    records, rest = await store.records.read(streams=["web"])
-    assert rest is None and len(records) == 1
-    r = records[0]
+    page = await store.records.scan(streams=["web"])
+    assert page.next is None and len(page.items) == 1
+    r = page.items[0]
     assert (r.at, r.stream, r.name, r.level, r.body) == (at, "web", "click", 0, "bought")
     assert r.attrs == [("x", "812"), ("x", "813")]
     with pytest.raises(TooOldError):
@@ -251,12 +251,26 @@ async def test_records_come_back_as_they_went_in(store: tinystore.Store) -> None
     logger.warning("slow request", extra={"ms": 1200})
     found: list[tinystore.Record] = []
     for _ in range(60):
-        found, _ = await store.records.read(streams=["app"])
+        found, _ = await store.records.scan(streams=["app"])
         if found:
             break
         await asyncio.sleep(0.05)
     assert found and (found[0].body, found[0].level) == ("slow request", 4)
     assert ("ms", "1200") in found[0].attrs
+
+
+async def test_records_page_on_from_where_the_last_page_ended(store: tinystore.Store) -> None:
+    base = time.time_ns()
+    await store.records.append(
+        *({"at": base - (30 - i) * 10**9, "stream": "api", "name": "log", "body": f"line {i}"} for i in range(30))
+    )
+    first = await store.records.scan(streams=["api"], since="1m", limit=10)
+    assert len(first.items) == 10 and first.next is not None
+    second = await store.records.scan(streams=["api"], since="1m", limit=10, after=first.next)
+    assert second.items[0].body == "line 10"
+    assert [r.body async for r in store.records.all(streams=["api"], limit=7)] == [f"line {i}" for i in range(30)]
+    with pytest.raises(InvalidError):
+        await store.records.scan(after="not a page")
 
 
 async def test_samples_come_back_bit_for_bit_and_aggregate_exactly(store: tinystore.Store) -> None:

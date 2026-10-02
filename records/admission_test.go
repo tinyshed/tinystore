@@ -19,7 +19,7 @@ func TestStoreMemoryBoundsAppendReadSealAndFollow(t *testing.T) {
 	work := map[string]func(context.Context) error{
 		"append": func(ctx context.Context) error { return s.Append(ctx, records...) },
 		"read": func(ctx context.Context) error {
-			_, err := s.Read(ctx, Query{})
+			_, err := s.Scan(ctx, Query{})
 			return err
 		},
 		"seal": func(ctx context.Context) error {
@@ -65,7 +65,7 @@ func TestReadsAndAppendsWaitForTheirSlots(t *testing.T) {
 		run   func(context.Context) error
 	}{
 		"read": {s.reads, func(ctx context.Context) error {
-			_, err := s.Read(ctx, Query{})
+			_, err := s.Scan(ctx, Query{})
 			return err
 		}},
 		"follow": {s.reads, func(ctx context.Context) error {
@@ -100,7 +100,7 @@ func TestASegmentLargerThanTheStoresMemoryIsRefused(t *testing.T) {
 	if _, err := s.Maintain(t.Context()); !errors.Is(err, tinystore.ErrLimit) {
 		t.Fatalf("a 24 MiB segment in a 16 MiB store: %v", err)
 	}
-	if _, err := s.Read(t.Context(), Query{}); err != nil {
+	if _, err := s.Scan(t.Context(), Query{}); err != nil {
 		t.Fatalf("a read within the memory: %v", err)
 	}
 }

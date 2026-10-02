@@ -47,7 +47,7 @@ describe('records', () => {
 				['x', 813],
 			],
 		})
-		const { records } = await store.records.read({ streams: ['web'] })
+		const { items: records } = await store.records.scan({ streams: ['web'] })
 		expect(records.length).toBe(1)
 		const r = records[0]!
 		expect(r.at).toBe(at)
@@ -73,15 +73,16 @@ describe('records', () => {
 				attrs: { route: i % 2 === 0 ? '/notes' : '/users' },
 			})),
 		)
-		const warns = await store.records.read({ streams: ['api'], minLevel: 'warn' })
-		expect(warns.records.length).toBe(10)
-		const notes = await store.records.read({
-			streams: ['api'],
-			attrs: { route: '/notes' },
-			limit: 4,
-		})
-		expect(notes.records.length).toBe(4)
-		expect(notes.next).toBeDefined()
+		const warns = await store.records.scan({ streams: ['api'], minLevel: 'warn', since: '1m' })
+		expect(warns.items.length).toBe(10)
+		const query = { streams: ['api'], attrs: { route: '/notes' }, limit: 4 }
+		const notes = await store.records.scan(query)
+		expect(notes.items.length).toBe(4)
+		const rest = await store.records.scan({ ...query, after: notes.next })
+		expect(rest.items[0]?.body).toBe('line 8')
+		expect(await caught(store.records.scan({ ...query, after: 'not a page' }))).toBeInstanceOf(
+			InvalidError,
+		)
 		const all = []
 		for await (const r of store.records.all({
 			streams: ['api'],
@@ -91,8 +92,8 @@ describe('records', () => {
 			all.push(r.body)
 		}
 		expect(all.length).toBe(15)
-		const newest = await store.records.read({ streams: ['api'], newest: true, limit: 1 })
-		expect(newest.records[0]?.body).toBe('line 29')
+		const newest = await store.records.scan({ streams: ['api'], newest: true, limit: 1 })
+		expect(newest.items[0]?.body).toBe('line 29')
 	})
 
 	test('a record outside the store window is refused, naming it', async () => {
@@ -114,10 +115,10 @@ describe('records', () => {
 		await lines.end()
 		expect(lines.dropped).toBe(0)
 		// the server's writer hands its records to the engine at its next flush, a second at most
-		let records = (await store.records.read({ streams: ['worker'] })).records
+		let records = (await store.records.scan({ streams: ['worker'] })).items
 		for (let i = 0; i < 60 && records.length < 3; i++) {
 			await Bun.sleep(50)
-			records = (await store.records.read({ streams: ['worker'] })).records
+			records = (await store.records.scan({ streams: ['worker'] })).items
 		}
 		expect(records.map(r => r.name)).toEqual(['json', 'log', 'log'])
 		expect(records[0]?.level).toBe(4)

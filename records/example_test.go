@@ -47,7 +47,7 @@ func ExampleStore() {
 		panic(err)
 	}
 
-	page, err := logs.Read(ctx, records.Query{From: time.Now().Add(-time.Minute)})
+	page, err := logs.Scan(ctx, records.Query{Since: time.Minute})
 	if err != nil {
 		panic(err)
 	}

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 from ._connection import Connection, Link, check_name, download, handle_on
+from ._page import Page
 from ._session import LostError, Stream
 from ._time import Duration, date_of, ms, unix_ms
 from ._wire.messages import METHODS, BlobsBucket, BlobsCall, BlobsObject, BlobsPage, BlobsTotal
@@ -214,7 +215,7 @@ class BlobBucket:
 
     async def scan(
         self, *, prefix: str | None = None, after: str | None = None, limit: int | None = None
-    ) -> tuple[list[BlobObject], str | None]:
+    ) -> Page[BlobObject, str]:
         """A page of the objects under this folder in the byte order of their paths, and where the next begins."""
 
         async def attempt(connection: Connection) -> tuple[list[bytes], bytes]:
@@ -227,7 +228,8 @@ class BlobBucket:
 
         items, trailer = await self.link.run("read", attempt)
         page = BlobsPage.decode(trailer)
-        return [_object(BlobsObject.decode(i)) for i in items], page.get("after", "") if page.get("more") else None
+        objects = [_object(BlobsObject.decode(i)) for i in items]
+        return Page(objects, page.get("after", "") if page.get("more") else None)
 
     async def all(self, *, prefix: str | None = None, limit: int | None = None) -> AsyncIterator[BlobObject]:
         after: str | None = None

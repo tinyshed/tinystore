@@ -90,7 +90,7 @@ func measureReadCandidates(t *testing.T, rows int, sealed bool) {
 			return fetchErr
 		}
 		read := func() error {
-			page, readErr := s.Read(context.Background(), scenario.query)
+			page, readErr := s.Scan(context.Background(), scenario.query)
 			if readErr == nil && (len(page.Records) != 4 || !page.More) {
 				return fmt.Errorf("page has %d records, more=%t", len(page.Records), page.More)
 			}
