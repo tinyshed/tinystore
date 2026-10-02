@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"math"
-	"math/bits"
 
 	"github.com/tinyshed/tinystore/codec"
 )
@@ -16,6 +15,9 @@ const (
 	maxDirectoryBytes    = 8192
 	maxPayloadBytes      = 8200
 	maxExpandedDirectory = maxDirectoryBytes - 128
+
+	// directoryVersion is the first byte of every group directory, docs/format.md
+	directoryVersion = 4
 )
 
 type storedBlock struct {
@@ -29,13 +31,12 @@ type storedBlock struct {
 }
 
 type blockGroup struct {
-	format                             byte
-	clockID                            int64
-	clockBody                          []byte
-	modelScale                         int
-	seriesID, start, end, firstPayload int64
-	live, allocation                   uint32
-	blocks                             []storedBlock
+	clockID              int64
+	clockBody            []byte
+	modelScale           int
+	seriesID, start, end int64
+	live, allocation     uint32
+	blocks               []storedBlock
 }
 
 func slotsMask(count int) uint32 {
@@ -51,13 +52,6 @@ func (g blockGroup) isLive(slot int) bool {
 
 func (g blockGroup) isExternal(slot int) bool {
 	return g.allocation&(uint32(1)<<slot) != 0
-}
-
-func (g blockGroup) payloadID(slot int) int64 {
-	if g.format >= 3 {
-		return g.blocks[slot].payload
-	}
-	return g.firstPayload + int64(bits.OnesCount32(g.allocation&slotsMask(slot)))
 }
 
 // checksum binds a directory to its series and its time bounds, so that it

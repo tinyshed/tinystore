@@ -90,10 +90,6 @@ func storePayloads(ctx context.Context, tx *sql.Tx, group *blockGroup) error {
 	if _, err := tx.ExecContext(ctx, reservePayloadQuery, next+allocated); err != nil {
 		return fmt.Errorf("reserve payload identifiers: %w", err)
 	}
-	if group.format == 2 {
-		group.firstPayload = next
-	}
-
 	for slot := range group.blocks {
 		block := &group.blocks[slot]
 		if !group.isExternal(slot) || block.payload != 0 {

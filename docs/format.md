@@ -110,61 +110,49 @@ iterating and enforces its own budgets for bytes, blocks and series. A block
 builder enforces its own encoded-byte ceiling too: a codec result is not
 automatically below 2 KiB.
 
-## Metrics group directories, versions 2 and 3
+## Metrics group directories
 
-These versions belong to the metrics directory, independently of the codec
-version above. Version 2 was the format for newly sealed groups. Version 3
-was written when publication merged adjacent groups, retaining the payload ids
-already owned by their live slots. Both keep the same header:
+A directory belongs to the metrics engine, independently of the codec version
+above, and lists the blocks of one group. Its version is 4: nothing earlier was
+released, and no earlier directory is read.
 
 | offset | bytes | meaning |
 |---:|---:|---|
-| 0 | 1 | directory version |
+| 0 | 1 | directory version, 4 |
 | 1 | 1 | block slots, 1..32 |
 | 2 | 4 | live mask |
 | 6 | 4 | external payload mask |
-| 10 | 8 | first payload id in version 2; zero in version 3 |
-| 18 | 8 | shared clock id |
-| 26 | variable | compression mode and descriptor stream |
+| 10 | 8 | shared clock id |
+| 18 | variable | compression mode and descriptor stream |
 | end-4 | 4 | IEEE CRC32 bound to series id, start, end and preceding bytes |
 
-The stream stores each block's first value, summary prediction flags, explicit
-summary values where needed, reset count and body length. Version 2 addresses
-external bodies as `first_id + popcount(earlier allocation bits)`. Version 3
-instead follows each external body's length with its absolute payload id as an
-unsigned varint; ids are positive, below MaxInt64 and unique within a directory.
-Inline bodies follow their length directly in either version. Expired external
-slots retain their address until the directory is merged or removed.
+The stream holds, for each slot, the block's first value, its summary flags,
+the summary values that differ from their prediction, its reset count, its
+exact sum and increase when flag bit 6 says it has them, and its body length.
+An inline body follows its length; an external one is named by its payload id,
+an unsigned varint, positive, below MaxInt64 and unique within the directory.
+An expired external slot keeps its address until the directory is merged or
+removed, and a merge keeps every payload id it carries, so it rewrites the
+directory without relocating or decoding a body. Bit 7 of the flags is
+reserved.
 
-The descriptor stream is bounded to 8 KiB before and after compression. Group
-clocks, value representations and payload checksums are unchanged. Version 3
-does not cause raw values or summaries to be re-encoded. Readers accept both
-versions; earlier binaries cannot read version 3. Golden vectors cover both.
+An exact value is an integer in units of `2^-1074`: an unsigned varint
+magnitude length, then, for a nonzero length, an unsigned varint holding
+`exponent << 1 | negative` and the big-endian magnitude. Zero is one zero byte.
+A nonzero magnitude has no leading zero byte and is odd, and the decoder
+requires the whole field to equal its canonical encoding. A magnitude holds at
+most 264 bytes, and its bit length plus its exponent at most 2,106. A stored
+increase is never negative.
 
-## Metrics Group Directories, Version 4
+Only a block of finite gauge values, or of finite counter values none below
+zero, has exact sums; any other reads raw. They are exact arithmetic, not
+rounded float64 totals, and an aggregate rounds once, after every block and
+sample of its bucket. A counter's first and last values and its reset count
+carry the transitions between adjacent blocks.
 
-New sealing and directory merges write version 4. It retains version 3's
-explicit payload addresses, so merging does not relocate or decode old bodies.
-The header and checksum binding stay the same; `first payload id` is zero.
-
-Bit 6 of a block's summary flags says that exact sum and increase follow the
-reset count, before body length. Bit 7 is reserved. Bit 6 is forbidden in
-earlier versions. A carried old block has no exact fields and still reads raw.
-
-Each exact value is an integer in units of `2^-1074`: an unsigned varint
-magnitude length, then (for nonzero lengths) an unsigned varint containing
-`exponent << 1 | negative`, followed by big-endian magnitude bytes. Zero is
-one zero byte. A nonzero magnitude has no leading zero byte and is odd; the
-decoder requires the complete field to match its canonical re-encoding.
-Magnitude length is at most 264 bytes, and magnitude bit length plus exponent
-is at most 2,106. A stored increase is nonnegative.
-
-These fields exist only for finite gauges and finite, nonnegative counters.
-They store exact internal arithmetic, not rounded float64 totals. Counter
-first/last values and reset count supply transitions between adjacent blocks;
-the query rounds once after combining every contribution to its bucket.
-
-Sealing and merging keep expanded descriptors below 8 KiB with header and
-compression overhead reserved. Extreme exponent mixtures may therefore
-produce fewer than 32 blocks in a group. Raw payload and clock formats stay
-unchanged. Golden vectors cover all three supported directory versions.
+The stream is bounded to 8 KiB before and after compression. Sealing and
+merging reserve room for the header and the compression, so a mixture of
+extreme exponents may hold fewer than 32 blocks in a group. Clocks, value
+representations and payload checksums do not depend on the directory.
+`TestDirectoriesWrittenBeforeStillRead` holds a vector of each kind of block,
+inline and external, and `FuzzNewFormats` reads what it is given.

@@ -150,7 +150,7 @@ func (s *Store) expireBlocks(ctx context.Context, tx *sql.Tx, id, cutoff int64) 
 			break
 		}
 		if group.isExternal(slot) {
-			if err = deletePayload(ctx, tx, group.payloadID(slot)); err != nil {
+			if err = deletePayload(ctx, tx, block.payload); err != nil {
 				return 0, err
 			}
 		}

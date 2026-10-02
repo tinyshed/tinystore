@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/bits"
 
 	"github.com/tinyshed/tinystore/codec"
 )
@@ -17,10 +16,9 @@ func (s *Store) writeDirectory(group blockGroup) ([]byte, error) {
 	if len(raw) > maxDirectoryBytes {
 		return nil, fmt.Errorf("%w: expanded directory", ErrLimit)
 	}
-	header := []byte{group.format, byte(len(group.blocks))} //nolint:gosec // a group holds at most 32 blocks
+	header := []byte{directoryVersion, byte(len(group.blocks))} //nolint:gosec // a group holds at most 32 blocks
 	header = binary.LittleEndian.AppendUint32(header, group.live)
 	header = binary.LittleEndian.AppendUint32(header, group.allocation)
-	header = appendSigned64(header, group.firstPayload)
 	header = appendSigned64(header, group.clockID)
 	header = append(header, s.metadata.encode(raw)...)
 	if len(header)+4 > maxDirectoryBytes {
@@ -30,7 +28,8 @@ func (s *Store) writeDirectory(group blockGroup) ([]byte, error) {
 }
 
 // appendBlock writes one block's first value, its summary without the values
-// that equal their prediction, and where its body lives.
+// that equal their prediction, its exact sums when it has them, and where its
+// body lives: inline, or the payload its id names.
 func (g blockGroup) appendBlock(raw []byte, slot int, block storedBlock) []byte {
 	raw = appendFloat(raw, block.head.First)
 	summary := block.summary
@@ -39,7 +38,7 @@ func (g blockGroup) appendBlock(raw []byte, slot int, block storedBlock) []byte 
 	if summary.valid {
 		flags |= 1 << 5
 	}
-	if g.format >= 4 && summary.exactSum != nil {
+	if summary.exactSum != nil {
 		flags |= 1 << 6
 	}
 	for i, prediction := range summaryPredictions(block.head) {
@@ -59,13 +58,10 @@ func (g blockGroup) appendBlock(raw []byte, slot int, block storedBlock) []byte 
 		raw = append(raw, summary.exactIncrease...)
 	}
 	raw = appendCount(raw, block.bodyBytes)
-	switch {
-	case g.format >= 3 && g.isExternal(slot):
-		raw = appendID(raw, block.payload)
-	case !g.isExternal(slot):
-		raw = append(raw, block.body...)
+	if g.isExternal(slot) {
+		return appendID(raw, block.payload)
 	}
-	return raw
+	return append(raw, block.body...)
 }
 
 // summaryPredictions is what a summary holds when every sample equals the
@@ -85,7 +81,7 @@ func (s *Store) readDirectory(id int64, row groupRow, clock []storedBlock) (bloc
 		return group, err
 	}
 
-	plain, err := s.metadata.decode(content[26:])
+	plain, err := s.metadata.decode(content[directoryHeader:])
 	if err != nil {
 		return group, err
 	}
@@ -108,15 +104,18 @@ func (s *Store) readDirectory(id int64, row groupRow, clock []storedBlock) (bloc
 	return group, nil
 }
 
+// directoryHeader is a directory's bytes before its descriptor stream: its
+// version, slots, live and external masks and clock id
+const directoryHeader = 18
+
 // checkDirectory checks a directory's version, size, checksum and header, and
 // returns the directory without its checksum.
 func checkDirectory(id int64, row groupRow, slots int) (blockGroup, []byte, error) {
-	group := blockGroup{format: 2, seriesID: id, start: row.start, end: row.end, clockID: row.clockID}
+	group := blockGroup{seriesID: id, start: row.start, end: row.end, clockID: row.clockID}
 	data := row.data
-	if len(data) < 31 || len(data) > maxDirectoryBytes || (data[0] != 2 && data[0] != 3 && data[0] != 4) {
+	if len(data) < directoryHeader+1+4 || len(data) > maxDirectoryBytes || data[0] != directoryVersion {
 		return group, nil, fmt.Errorf("%w: directory version or size", ErrCorrupt)
 	}
-	group.format = data[0]
 	content := data[:len(data)-4]
 	if group.checksum(content) != binary.LittleEndian.Uint32(data[len(data)-4:]) {
 		return group, nil, fmt.Errorf("%w: directory checksum", ErrCorrupt)
@@ -127,26 +126,18 @@ func checkDirectory(id int64, row groupRow, slots int) (blockGroup, []byte, erro
 	}
 	group.live = binary.LittleEndian.Uint32(data[2:])
 	group.allocation = binary.LittleEndian.Uint32(data[6:])
-	group.firstPayload = signed64(data[10:])
-	if err := group.checkReferences(signed64(data[18:]), count); err != nil {
+	if err := group.checkReferences(signed64(data[10:]), count); err != nil {
 		return group, nil, err
 	}
 	return group, content, nil
 }
 
-// checkReferences refuses a directory bound to another clock, with masks
-// beyond its slots, or with payload addresses its version cannot hold.
+// checkReferences refuses a directory bound to another clock, or with masks
+// beyond its slots.
 func (g blockGroup) checkReferences(storedClock int64, count int) error {
 	beyond := ^slotsMask(count)
 	if g.clockID <= 0 || storedClock != g.clockID || g.live == 0 || g.live&beyond != 0 || g.allocation&beyond != 0 {
 		return fmt.Errorf("%w: group references or masks", ErrCorrupt)
-	}
-	allocated := int64(bits.OnesCount32(g.allocation))
-	switch {
-	case g.format >= 3 && g.firstPayload != 0,
-		g.format == 2 && allocated == 0 && g.firstPayload != 0,
-		g.format == 2 && allocated > 0 && (g.firstPayload < 1 || g.firstPayload > math.MaxInt64-allocated):
-		return fmt.Errorf("%w: group payload range", ErrCorrupt)
 	}
 	return nil
 }
@@ -156,7 +147,7 @@ func (g blockGroup) checkReferences(storedClock int64, count int) error {
 func (g *blockGroup) readBlock(reader *binaryReader, slot int, block storedBlock) (storedBlock, error) {
 	block.head.First = reader.float()
 	flags := reader.byte()
-	if flags&0x80 != 0 || g.format < 4 && flags&0x40 != 0 {
+	if flags&0x80 != 0 {
 		return block, fmt.Errorf("%w: summary flags", ErrCorrupt)
 	}
 	block.summary = readSummary(reader, block.head, flags)
@@ -181,10 +172,7 @@ func (g *blockGroup) readBlock(reader *binaryReader, slot int, block storedBlock
 	if block.bodyBytes <= inlineBytes {
 		return block, fmt.Errorf("%w: external body length", ErrCorrupt)
 	}
-	if g.format >= 3 {
-		return g.readPayloadID(reader, block)
-	}
-	return block, nil
+	return g.readPayloadID(reader, block)
 }
 
 func readSummary(reader *binaryReader, head codec.Head, flags byte) blockSummary {
@@ -202,7 +190,7 @@ func readSummary(reader *binaryReader, head codec.Head, flags byte) blockSummary
 	}
 }
 
-// readPayloadID reads a version-three block's own payload address, which no
+// readPayloadID reads an external block's own payload address, which no
 // earlier block of the group may share.
 func (g *blockGroup) readPayloadID(reader *binaryReader, block storedBlock) (storedBlock, error) {
 	id := reader.unsigned()

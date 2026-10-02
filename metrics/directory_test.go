@@ -8,82 +8,75 @@ import (
 	"errors"
 	"hash/crc32"
 	"testing"
+
+	"github.com/tinyshed/tinystore/codec"
 )
 
-func TestVersionTwoDirectoryAndClockRemainReadable(t *testing.T) {
-	const clockVector = "010100ef01f00100b9a118b1"
-	const directoryVector = "020101000000000000000000000000000000010000000000000000d0023f0000325ad605"
+// a directory is the bytes of its vectors: a block kept inline, its summary
+// predicted and its sums exact, and one whose body is the payload its id names
+func TestDirectoriesWrittenBeforeStillRead(t *testing.T) {
 	s := encodingStore(t)
-	clock, err := hex.DecodeString(clockVector)
+	clock, err := hex.DecodeString("010100ef01f00100b9a118b1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, err := hex.DecodeString(directoryVector)
+	clocks, err := decodeClockGroup(clock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks, err := decodeClockGroup(clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	group, err := s.readDirectory(7, groupRow{start: 0, end: 239, clockID: 1, data: directory}, blocks)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(group.blocks) != 1 || len(group.blocks[0].body) != 0 || group.blocks[0].summary.sum != 10080 {
-		t.Fatal("constant summary changed")
-	}
-	encoded, err := s.writeDirectory(group)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(encoded, directory) {
-		t.Fatal("version two changed")
-	}
-	points, err := s.decodeBlock(group.blocks[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(points) != 240 {
-		t.Fatal("count changed")
-	}
-	for i, point := range points {
-		if point.At != int64(i) || point.Value != 42 {
-			t.Fatal("sample changed")
+	for _, c := range []struct {
+		name     string
+		external bool
+		vector   string
+	}{
+		{"inline", false, "04010100000000000000010000000000000000d0027f0002ee10013b000096af3baf"},
+		{"external", true, "04010100000001000000010000000000000000d0027f0002ee10013b0014f0a204d6e62401"},
+	} {
+		group := constantGroup(clocks, c.external)
+		written, err := s.writeDirectory(group)
+		if err != nil || hex.EncodeToString(written) != c.vector {
+			t.Errorf("%s: written as %x, %v", c.name, written, err)
+		}
+		vector, err := hex.DecodeString(c.vector)
+		if err != nil {
+			t.Fatal(err)
+		}
+		read, err := s.readDirectory(7, groupRow{start: 0, end: 239, clockID: 1, data: vector}, clocks)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		want, got := group.blocks[0], read.blocks[0]
+		if got.payload != want.payload || got.bodyBytes != want.bodyBytes || got.summary.sum != 10080 ||
+			!bytes.Equal(got.summary.exactSum, want.summary.exactSum) {
+			t.Errorf("%s: read back as %+v", c.name, got)
+		}
+		if c.external {
+			continue
+		}
+		points, err := s.decodeBlock(got)
+		if err != nil || len(points) != 240 || points[239] != (Sample{At: 239, Value: 42}) {
+			t.Errorf("%s: decoded %d samples, %v", c.name, len(points), err)
 		}
 	}
 }
 
-func TestVersionThreeDirectoryKeepsPayloadAddresses(t *testing.T) {
-	const clockVector = "010100ef01f00100b9a118b1"
-	const directoryVector = "030101000000010000000000000000000000010000000000000000d0023f0014f0a204504d30aa"
-	s := encodingStore(t)
-	clock, err := hex.DecodeString(clockVector)
-	if err != nil {
-		t.Fatal(err)
+// constantGroup is one block of 240 samples of 42, a millisecond apart, kept
+// inline, or as the payload 70000 when external
+func constantGroup(clocks []storedBlock, external bool) blockGroup {
+	points := make([]Sample, 240)
+	for i := range points {
+		points[i] = Sample{At: int64(i), Value: 42}
 	}
-	directory, err := hex.DecodeString(directoryVector)
-	if err != nil {
-		t.Fatal(err)
+	block := clocks[0]
+	block.head = codec.Head{Start: 0, End: 239, Count: 240, First: 42}
+	block.summary = exactSummarize(points, Gauge)
+	group := blockGroup{seriesID: 7, start: 0, end: 239, clockID: 1, live: 1}
+	if external {
+		block.bodyBytes, block.payload = 20, 70000
+		group.allocation = 1
 	}
-	blocks, err := decodeClockGroup(clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	group, err := s.readDirectory(7, groupRow{start: 0, end: 239, clockID: 1, data: directory}, blocks)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if group.format != 3 || group.payloadID(0) != 70000 || group.blocks[0].bodyBytes != 20 {
-		t.Fatal("explicit payload address changed")
-	}
-	encoded, err := s.writeDirectory(group)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(encoded, directory) {
-		t.Fatal("version three changed")
-	}
+	group.blocks = []storedBlock{block}
+	return group
 }
 
 func TestDirectoryCorruptionAndRebindingAreRefused(t *testing.T) {
@@ -121,10 +114,9 @@ func FuzzNewFormats(f *testing.F) {
 	s := encodingStore(f)
 	points := []Sample{{At: 10, Value: 1}, {At: 20, Value: 2}, {At: 40, Value: 2}}
 	block := encodedTestBlock(f, s, points)
-	g := blockGroup{format: 2, seriesID: 1, start: 10, end: 40, live: 1, clockID: 1, blocks: []storedBlock{block}}
+	g := blockGroup{seriesID: 1, start: 10, end: 40, live: 1, clockID: 1, blocks: []storedBlock{block}}
 	if block.bodyBytes > inlineBytes {
-		g.allocation = 1
-		g.firstPayload = 1
+		g.allocation, g.blocks[0].payload = 1, 1
 	}
 	dir, err := s.writeDirectory(g)
 	if err != nil {
@@ -134,7 +126,7 @@ func FuzzNewFormats(f *testing.F) {
 	f.Add(byte(1), block.body)
 	f.Add(byte(2), dir)
 	f.Add(byte(3), []byte{residualSparse, 1, 1})
-	g.format, g.firstPayload, g.allocation = 3, 0, 1
+	g.allocation = 1
 	g.blocks[0].bodyBytes, g.blocks[0].payload = 20, 70000
 	dir, err = s.writeDirectory(g)
 	if err != nil {

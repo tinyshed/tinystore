@@ -153,7 +153,7 @@ func (s *Store) groupPayloads(ctx context.Context, tx *sql.Tx, id int64, row gro
 	var payloads []int64
 	for slot := range group.blocks {
 		if group.isLive(slot) && group.isExternal(slot) {
-			payloads = append(payloads, group.payloadID(slot))
+			payloads = append(payloads, group.blocks[slot].payload)
 		}
 	}
 	return payloads, nil

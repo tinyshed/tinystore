@@ -75,18 +75,12 @@ func absorb(previous, group blockGroup) (blockGroup, bool, error) {
 
 	blocks := make([]storedBlock, 0, count+len(group.blocks))
 	for slot, block := range previous.blocks {
-		if !previous.isLive(slot) {
-			continue
+		if previous.isLive(slot) {
+			blocks = append(blocks, block)
 		}
-		if previous.isExternal(slot) {
-			block.payload = previous.payloadID(slot)
-		}
-		blocks = append(blocks, block)
 	}
 
 	merged := group
-	merged.format = 4
-	merged.firstPayload = 0
 	merged.blocks = append(blocks, group.blocks...)
 	merged.start = merged.blocks[0].head.Start
 	merged.clockBody = encodeClockGroup(merged)

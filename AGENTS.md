@@ -43,8 +43,8 @@ Where the building differs from the design:
 Self-metrics are opt-in, `Options.SelfMetrics`: the store's memory budget and
 the metrics and records engines' counters, written to its metrics engine as
 ordinary series; kv, jobs, blobs and sqldb report nothing yet. An aggregate
-answers a whole block inside one bucket from its exact summary, which version
-four directories keep; a cut block, the head and older directories decode raw.
+answers a whole block inside one bucket from its exact summary; a cut block,
+the head and a block without exact sums decode raw.
 
 Not built: the SDKs' READMEs, examples and packages; a release.
 [docs/server.md](docs/server.md) "Building it" says where each server slice
@@ -336,8 +336,8 @@ golden readers. A module version is not a substitute for any of them.
 
 **Merging directories must not relocate payloads.** A preceding group is absorbed
 only when it has no more live blocks than the new group and the combination fits
-the existing group and clock bounds. Versions three and four keep explicit
-payload ids; values and summaries are neither decoded nor recomputed. Clock
+the existing group and clock bounds. A directory keeps explicit payload ids;
+values and summaries are neither decoded nor recomputed. Clock
 ownership, directory replacement and the newly sealed prefix publish atomically.
 `SealedBlocks` counts only new blocks, never the old blocks carried into a merge.
 
@@ -543,7 +543,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a whole-block summary spends no decoded-sample budget  | `TestWholeExactBlocksNeedNoDecodedSampleBudget`                                 |
 | a malformed exact summary is refused                   | `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary` |
 | exact summaries keep a directory within its bound      | `TestLargeExactSummariesStayWithinDirectoryBounds`                              |
-| a version-four directory is the bytes of its vector    | `TestVersionFourExactDirectoryGolden`                                           |
+| a directory written once still reads                   | `TestDirectoriesWrittenBeforeStillRead`, inline and external                    |
 | writes queued for the writer share a commit, fail alone | `TestGroupedWritesShareACommitAndFailAlone`                                    |
 | a commit gathers the writers its last one answered     | `TestAGroupGathersTheWritesItsLastBatchAnswered`                               |
 | a write whose caller left before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing`                             |

@@ -142,9 +142,9 @@ also available; increase requires a counter series. `Count` and `Resets` remain
 integers, `Value` is rounded once from exact finite arithmetic, and `Overflow`
 distinguishes a finite sum that rounded to infinity. An error returns no
 results. `OutputSamples` limits buckets, while `DecodedSamples` limits raw
-work. Whole version-four blocks inside one clipped bucket use checked exact
-summaries without fetching external raw payloads. Cut blocks, head samples and
-older directories are decoded and filtered;
+work. Whole blocks inside one clipped bucket use checked exact summaries
+without fetching external raw payloads. Cut blocks, head samples and blocks
+without exact sums are decoded and filtered;
 [the numerical contract](../docs/aggregate-contract.md) specifies nonfinite,
 reset and boundary behavior.
 
@@ -281,7 +281,7 @@ canonical labels, unique in the index; a digest match resolves a series only
 after its stored label ids equal the batch's.
 
 `group.go` owns slot addressing; `directory.go` owns the directory format,
-versions two and three. Think of a directory as a small list of block descriptions:
+docs/format.md's. Think of a directory as a small list of block descriptions:
 first value, statistics and where the body lives. The shared clock owns its
 time bounds and sample counts. `binary.go` contains checked binary reads and
 the bounded metadata compressor, so parsing checks are not scattered through SQL.
@@ -295,8 +295,8 @@ reserved durably and never recycled by this writer.
 The checksum binds a directory to its series, time bounds, clock id and payload
 addressing. Each nonempty encoded body also verifies its head and clock bytes.
 First values and summaries use exact storage, not SQLite REAL. Summary values
-may be derived from the first value only when their IEEE bits agree. Directory
-versions two and three have golden readers and a fuzz target.
+may be derived from the first value only when their IEEE bits agree. The
+directory has golden vectors and a fuzz target.
 
 Clock deduplication checks both SHA256 and actual bytes. Retention releases one
 clock owner per deleted group, not per deleted microblock. Query-local caching
@@ -320,9 +320,8 @@ It must not be advertised with the prototype's
 Packing starts when at least 240 safe head points are present, and publishes up
 to 32 microblocks. The time-span cap can split them sooner; clock objects are
 bounded to 64 KiB. Publication merges preceding groups with no more live blocks
-than the incoming group, up to those same bounds. Version-three directories
-keep explicit payload addresses, so merging rewrites metadata without relocating
-values. Expired slots are omitted; the new clock ownership, directory and sealed
+than the incoming group, up to those same bounds. A directory keeps explicit
+payload addresses, so merging rewrites metadata without relocating values. Expired slots are omitted; the new clock ownership, directory and sealed
 prefix commit together. `SealedBlocks` counts newly sealed blocks only. Existing
 groups merge when later samples seal; there is no background sweep over quiet
 series. Byte-aware page-packing policies remain future work.

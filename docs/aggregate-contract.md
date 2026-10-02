@@ -11,8 +11,8 @@ its half-open bounds, count, value, reset count and overflow flag, and
 `Partial` when the retention cutoff falls inside it.
 
 Existing directory `sum` and `increase` fields are ordinary float64 diagnostics
-and cannot answer the sums specified here. Version-four directories carry
-bounded exact integer summaries. Earlier directories fall back to raw.
+and cannot answer the sums specified here. A directory carries a block's
+bounded exact integer summary, which a whole block answers from.
 
 ## Range and result
 
@@ -76,17 +76,17 @@ For finite float64 values, an exact sum is an integer count of units of
 removing trailing zero bits, with the removed exponent encoded separately.
 The representation is bounded by the float64 domain and block sample ceiling;
 the decoder must check sign, exponent, magnitude length and canonical form.
-Version four stores it as a bounded, canonical signed magnitude after removing
+A directory stores it as a bounded, canonical signed magnitude after removing
 trailing zero bits, with that exponent recorded separately. At most 2,106 bits
 are permitted for a block of 240 samples. A zero has one encoding; nonzero
-magnitudes must be odd with no leading zero byte. Golden readers retain
-versions two and three; their float64 summaries never answer exact sums.
+magnitudes must be odd with no leading zero byte. A block whose values are not
+all finite, or a counter's below zero, has none and decodes raw.
 
 The [representation round](https://github.com/tinyshed/research/blob/main/tinystore/reports/aggregate-representation-2026-09-23.md)
 compares this candidate with a fixed superaccumulator and floating expansion.
 The current API has tests for cancellation after intermediate overflow,
 subnormals, signed zero, nonfinite inputs, reset transitions, clipped blocks,
-retention and reopen. Version four has a golden vector, malformed-summary
+retention and reopen. The directory has golden vectors, malformed-summary
 tests and raw/summary differential checks. Eligible whole blocks spend the
 block/directory budgets but no raw payload or decoded-sample budget. Their
 unused raw rows are not fetched or checked; `Read` and partial blocks still

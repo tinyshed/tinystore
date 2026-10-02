@@ -90,7 +90,7 @@ func (s *Store) clearReady(ctx context.Context, candidate packingCandidate) erro
 
 func (s *Store) encodeCandidate(ctx context.Context, candidate packingCandidate) (blockGroup, error) {
 	group := blockGroup{
-		format: 4, modelScale: candidate.modelScale, seriesID: candidate.seriesID,
+		modelScale: candidate.modelScale, seriesID: candidate.seriesID,
 		start: candidate.points[0].At, end: candidate.points[len(candidate.points)-1].At,
 	}
 	maxSpan := uint64(s.opts.MaxBlockSpan.Milliseconds()) //nolint:gosec // a validated positive duration

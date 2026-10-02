@@ -200,9 +200,6 @@ func (r snapshotRead) takeBlock(
 	if r.budget.blocks > r.budget.limits.Blocks {
 		return block, fmt.Errorf("%w: decoded blocks", ErrLimit)
 	}
-	if group.isExternal(slot) {
-		block.payload = group.payloadID(slot)
-	}
 	if r.aggregate != nil && r.aggregate.complete(block, r.from, r.to) {
 		block.summarized = true
 		return block, nil
