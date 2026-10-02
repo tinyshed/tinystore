@@ -69,7 +69,8 @@ func buildBinaries(ctx context.Context, s settings) ([]binary, error) {
 func buildOne(ctx context.Context, s settings, t target, path string) error {
 	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags=-s -w", "-o", path, ".")
 	build.Dir = filepath.Join(s.root, "cmd", "tinystore")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+t.goos, "GOARCH="+t.goarch, "GOWORK=off")
+	build.Env = append(os.Environ(), s.goEnv...)
+	build.Env = append(build.Env, "CGO_ENABLED=0", "GOOS="+t.goos, "GOARCH="+t.goarch, "GOWORK=off")
 	if text, err := build.CombinedOutput(); err != nil {
 		return fmt.Errorf("build %s/%s: %w\n%s", t.goos, t.goarch, err, text)
 	}

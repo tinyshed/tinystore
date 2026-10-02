@@ -1,98 +1,99 @@
 name: Release
 
-# A release is pushed as the last of its tags, cmd/tinystore/vX.Y.Z, whose
-# checkout stamps the binaries' version; the release skill has the order. Run
-# by hand, it builds a snapshot of what a release would publish and publishes
-# nothing.
+# A release is one run of this workflow, dispatched from main with its version.
+# CI runs on the commit; the three tags are made in the runner and everything
+# is built from them; nothing leaves before that has passed. Asked to publish,
+# and approved in the release environment, it pushes the tags all at once,
+# publishes npm, PyPI and the server image, and makes the GitHub release last,
+# when everything it announces is there. The release skill has the why.
 on:
-  push:
-    tags: ['cmd/tinystore/v*']
   workflow_dispatch:
     inputs:
       version:
-        description: The version the SDKs' manifests say, such as v0.1.0
+        description: The release, such as v0.1.0 or v0.1.0-rc.1
         required: true
+      publish:
+        description: Push the tags and publish; otherwise build, and keep the artifacts only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# one release at a time, never cancelled halfway
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  check:
-    name: check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: cmd/tinystore/go.mod
-          cache-dependency-path: |
-            go.sum
-            server/go.sum
-            cmd/tinystore/go.sum
-
-      - uses: oven-sh/setup-bun@v2
-
-      - uses: astral-sh/setup-uv@v10.2.0
-
-      - uses: arduino/setup-task@v3
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Test
-        env:
-          GOWORK: 'off'
-        run: |
-          go test -shuffle=on ./...
-          go -C server test -shuffle=on ./...
-          go -C cmd/tinystore test -shuffle=on ./...
-
-      - name: Test the SDKs
-        run: task sdk
+  ci:
+    uses: ./.github/workflows/ci.yml
 
   build:
     name: build
-    needs: check
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
       attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+      PUBLISH: ${{ inputs.publish }}
+      GOWORK: 'off'
     outputs:
-      version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      # every tag, so that go build finds the one it stamps
+      # every tag, so that the release tool sees what is released already
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
+      # a module cache restored from another run could hold another commit
+      # under this version
       - uses: actions/setup-go@v7
         with:
           go-version-file: cmd/tinystore/go.mod
-          cache-dependency-path: cmd/tinystore/go.sum
+          cache: false
 
       - uses: astral-sh/setup-uv@v10.2.0
 
-      - name: Version
+      - name: The version is new everywhere
         id: version
-        env:
-          ASKED: ${{ inputs.version }}
         run: |
-          version="${ASKED:-${GITHUB_REF_NAME#cmd/tinystore/}}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          case "$version" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "a release is published from main, not $GITHUB_REF"; exit 1
+          fi
+          plain="${VERSION#v}"
+          python="${plain/-alpha./a}"; python="${python/-beta./b}"; python="${python/-rc./rc}"
+          if npm view "tinystore@$plain" version >/dev/null 2>&1; then
+            echo "npm has tinystore@$plain already"; exit 1
+          fi
+          if curl -fsS -o /dev/null "https://pypi.org/pypi/tinyshed-tinystore/$python/json"; then
+            echo "PyPI has tinyshed-tinystore $python already"; exit 1
+          fi
+          case "$VERSION" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
 
-      - name: Build
-        env:
-          GOWORK: 'off'
-          SNAPSHOT: ${{ github.event_name == 'workflow_dispatch' && '-snapshot' || '' }}
-        run: go run ./internal/release -version "${{ steps.version.outputs.version }}" $SNAPSHOT
+      # the tool refuses a version already tagged or not after the newest
+      - name: Tag, in this runner only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          go run ./internal/release -version "$VERSION" -tag -worktree "$RUNNER_TEMP/release"
+
+      - name: Build from the tags
+        run: go -C "$RUNNER_TEMP/release" run ./internal/release -version "$VERSION" -out "$GITHUB_WORKSPACE/dist"
+
+      # the commit the run tested is origin's already, so the bundle holds the
+      # three tags and the two commits only their tags reach
+      - name: Keep the tags for the push
+        run: |
+          git bundle create "$RUNNER_TEMP/tags.bundle" "refs/tags/$VERSION" "refs/tags/server/$VERSION" \
+            "refs/tags/cmd/tinystore/$VERSION" --not "$GITHUB_SHA"
 
       - uses: actions/attest-build-provenance@v4
-        if: github.event_name == 'push'
+        if: inputs.publish
         with:
           subject-path: |
             dist/*.tar.gz
@@ -107,37 +108,48 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/SHA256SUMS
+            dist/NOTES.md
             dist/npm/
             dist/pypi/
           if-no-files-found: error
 
-  github:
-    name: GitHub release
-    if: github.event_name == 'push'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tags
+          path: ${{ runner.temp }}/tags.bundle
+          if-no-files-found: error
+
+  # the first step that cannot be taken back: the environment's reviewers
+  # approve it, having seen what the build made
+  tags:
+    name: push the tags
+    if: inputs.publish
     needs: build
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
+    env:
+      VERSION: ${{ inputs.version }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v8
         with:
-          name: dist
-          path: dist
+          name: tags
+          path: ${{ runner.temp }}
 
-      # the release hangs on the root's tag, the one go get names
-      - name: Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.build.outputs.version }}
-          PRERELEASE: ${{ needs.build.outputs.prerelease == 'true' && '--prerelease' || '' }}
+      - name: Push the three tags, all or none
         run: |
-          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$VERSION" \
-            --generate-notes $PRERELEASE dist/*.tar.gz dist/*.zip dist/SHA256SUMS
+          git fetch "$RUNNER_TEMP/tags.bundle" 'refs/tags/*:refs/tags/*'
+          test "$(git rev-parse "$VERSION^{commit}")" = "$GITHUB_SHA"
+          git push --atomic origin "refs/tags/$VERSION" "refs/tags/server/$VERSION" "refs/tags/cmd/tinystore/$VERSION"
 
   npm:
     name: npm
-    if: github.event_name == 'push'
-    needs: build
+    needs: [build, tags]
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -155,7 +167,9 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # the platforms first, so that tinystore never names a package not there
-      # yet; a token only until trusted publishing is set up for each package
+      # yet; one published by an earlier attempt is left as it is, since npm
+      # refuses a version twice. A token only until trusted publishing is set
+      # up for each package.
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -163,13 +177,16 @@ jobs:
         run: |
           npm install -g npm@12
           for package in dist/npm/tinyshed-tinystore-*.tgz dist/npm/tinystore-*.tgz; do
+            named=$(tar -xzOf "$package" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')
+            if npm view "$named" version >/dev/null 2>&1; then
+              echo "$named is published already"; continue
+            fi
             npm publish "$package" --access public --provenance --tag "$DIST_TAG"
           done
 
   pypi:
     name: PyPI
-    if: github.event_name == 'push'
-    needs: build
+    needs: [build, tags]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -183,3 +200,94 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/pypi/
+          skip-existing: true
+
+  image:
+    name: server image
+    needs: [build, tags]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      # the image carries the archives' own binaries, the ones attested
+      - name: The image's files
+        run: |
+          mkdir -p image/data
+          for arch in amd64 arm64; do
+            mkdir -p "image/linux-$arch"
+            tar -xzf "dist/tinystore_${VERSION#v}_linux_$arch.tar.gz" -C "image/linux-$arch" tinystore
+          done
+          cp internal/release/Dockerfile image/
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=raw,value=latest,enable=${{ needs.build.outputs.prerelease == 'false' }}
+
+      - uses: docker/build-push-action@v7
+        id: push
+        with:
+          context: image
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  # last, so that what it announces is all there; it hangs on the root's tag,
+  # the one go get names
+  github:
+    name: GitHub release
+    needs: [build, npm, pypi, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "the release $VERSION exists already"; exit 0
+          fi
+          kind=()
+          if [ "$PRERELEASE" = true ]; then kind=(--prerelease); fi
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$VERSION" \
+            --notes-file dist/NOTES.md "${kind[@]}" dist/*.tar.gz dist/*.zip dist/SHA256SUMS

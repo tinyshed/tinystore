@@ -73,7 +73,7 @@ Do not describe unbuilt behaviour as though it works.
 | `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
 | `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
 | `internal/dbstat/`   | a closed file's pages divided among its tables and indexes, for measurements  |
-| `internal/release/`  | what a release publishes: binaries, archives, npm packages, wheels            |
+| `internal/release/`  | what a release makes: its tags, binaries, archives, npm packages, wheels, notes |
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
@@ -403,6 +403,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a `//nolint` silences a named finding and says why  | `nolintlint`: no unused, unexplained or blanket directive                       |
 | a gate in this table names a test that exists       | `TestEveryGateNamesATestThatExists`, over every module's tests                  |
 | a skill's pointer says what its skill says          | `TestEverySkillHasAPointerThatMatchesIt`                                        |
+| a release's version is one every registry spells, after every release before it | `TestOnlyAPreReleaseEveryRegistrySpellsIsPublished`, `TestVersionsOrderAsSemanticVersioningSays` |
+| what a release publishes says its version, stamped as it is built | `TestTheSDKPackageCarriesTheReleasesVersion`, `TestAPyprojectIsStampedWithTheReleasesVersion` |
+| `feat` and `fix` subjects are a release's notes     | `TestNotesKeepFeaturesAndFixesUnderTheirSections`, `TestNotesBeginAfterThePreviousReleaseOfTheirKind` |
+| the workflows parse before a release needs them     | `task lint:actions`, in CI's quality job                                        |
 | the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |
 | one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
 | engines close last opened first, once               | `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`                              |
@@ -838,8 +842,10 @@ Do not commit or push unless you were asked to.
 Work lands on `main` directly. Versions are `v0.x.y` until the API stops
 moving, which in Go is not modesty but the compatibility statement the module
 system reads. A release is a tag; tag nothing before there is something to run.
-One version covers the Go modules, the binary, npm and PyPI; the `release`
-skill has the order the tags go in and what `internal/release` builds.
+One version covers the Go modules, the binary, npm, PyPI and the server image.
+A release is one run of the Release workflow, which tags and publishes and
+never writes `main`; nothing is tagged by hand. The `release` skill has how,
+and why each step is safe.
 
 The payload format's version and the schema's version are not the module's. A
 release may leave both where they are, and either may move without a release.

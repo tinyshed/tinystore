@@ -8,22 +8,29 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
-// writeWheels builds sdk/python's pure wheel and sdist with uv, then a wheel a
-// platform that carries its binary as tinystore/bin/tinystore, where the SDK
-// looks first. The pure wheel stays for a platform without its own, whose SDK
-// finds tinystore on PATH.
+// writeWheels builds sdk/python's pure wheel and sdist with uv, from a copy
+// stamped with the release's version, then a wheel a platform that carries its
+// binary as tinystore/bin/tinystore, where the SDK looks first. The pure wheel
+// stays for a platform without its own, whose SDK finds tinystore on PATH.
 func writeWheels(ctx context.Context, s settings, binaries []binary) error {
 	dir := filepath.Join(s.out, "pypi")
+	source, err := stampedPython(s)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(source) }()
 	build := exec.CommandContext(ctx, "uv", "build", "--out-dir", dir)
-	build.Dir = filepath.Join(s.root, "sdk", "python")
-	if text, err := build.CombinedOutput(); err != nil {
-		return fmt.Errorf("uv build: %w\n%s", err, text)
+	build.Dir = source
+	if text, failed := build.CombinedOutput(); failed != nil {
+		return fmt.Errorf("uv build: %w\n%s", failed, text)
 	}
 	pure, err := filepath.Glob(filepath.Join(dir, "*-py3-none-any.whl"))
 	if err != nil {
@@ -38,6 +45,72 @@ func writeWheels(ctx context.Context, s settings, binaries []binary) error {
 		}
 	}
 	return nil
+}
+
+// stampedPython copies sdk/python into a directory of its own, the version in
+// its pyproject the release's as PyPI spells it; what only development made, a
+// virtual environment and caches, stays behind.
+func stampedPython(s settings) (string, error) {
+	copied, err := os.MkdirTemp("", "tinystore-python-")
+	if err != nil {
+		return "", err
+	}
+	if err = copyStamped(filepath.Join(s.root, "sdk", "python"), copied, pythonVersion(s.version)); err != nil {
+		_ = os.RemoveAll(copied)
+		return "", err
+	}
+	return copied, nil
+}
+
+// copyStamped copies a directory's files within it, never through a link out
+// of it, the pyproject at its top stamped with version.
+func copyStamped(source, target, version string) error {
+	from, err := os.OpenRoot(source)
+	if err != nil {
+		return err
+	}
+	defer from.Close()
+	to, err := os.OpenRoot(target)
+	if err != nil {
+		return err
+	}
+	defer to.Close()
+
+	return fs.WalkDir(from.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path != "." && developmentOnly[entry.Name()] {
+				return fs.SkipDir
+			}
+			return to.MkdirAll(path, 0o755)
+		}
+		body, err := from.ReadFile(path)
+		if err == nil && path == "pyproject.toml" {
+			body, err = stampPyproject(body, version)
+		}
+		if err != nil {
+			return err
+		}
+		return to.WriteFile(path, body, 0o644)
+	})
+}
+
+// the directories of sdk/python that only its development made
+var developmentOnly = map[string]bool{
+	".venv": true, ".bin": true, "__pycache__": true, ".pytest_cache": true, ".ruff_cache": true, "dist": true,
+}
+
+// stampPyproject writes a version into a pyproject's one version line:
+//
+//	version = "0.0.0"  # a release stamps its own …   →   version = "0.1.0rc1"
+func stampPyproject(text []byte, version string) ([]byte, error) {
+	line := regexp.MustCompile(`(?m)^version = "[^"\r\n]*"[^\r\n]*`)
+	if found := len(line.FindAll(text, -1)); found != 1 {
+		return nil, fmt.Errorf("sdk/python/pyproject.toml has %d version lines, not one", found)
+	}
+	return line.ReplaceAllLiteral(text, []byte(`version = "`+version+`"`)), nil
 }
 
 // platformWheel copies the pure wheel with the binary added, WHEEL naming the

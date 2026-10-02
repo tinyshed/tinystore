@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from importlib import resources
+from importlib import metadata, resources
 from typing import TYPE_CHECKING
 
 from .errors import ClosedError
@@ -23,8 +23,16 @@ if TYPE_CHECKING:
     import ssl
     from collections.abc import Callable
 
-VERSION = "0.1.0"
-CLIENT = f"tinystore-py/{VERSION} python/{sys.version_info.major}.{sys.version_info.minor}"
+
+def _version() -> str:
+    """The installed distribution's version, which a release stamps; 0.0.0 for a copy never installed."""
+    try:
+        return metadata.version("tinyshed-tinystore")
+    except metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+CLIENT = f"tinystore-py/{_version()} python/{sys.version_info.major}.{sys.version_info.minor}"
 WINDOWS = sys.platform == "win32"
 
 

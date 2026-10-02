@@ -1,11 +1,13 @@
 name: CI
 
-# every branch, so that one pushed for review shows its checks before a merge
+# every branch, so that one pushed for review shows its checks before a merge,
+# and every release, which runs it first on the commit it tags
 on:
   push:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -121,6 +123,10 @@ jobs:
       # build tags hide each platform's files from another's lint
       - name: Lint
         run: task lint:platforms
+
+      # a release workflow that does not parse fails only when a release needs it
+      - name: Workflows
+        run: task lint:actions
 
       - name: Vulnerabilities
         run: task vuln

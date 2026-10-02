@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +30,80 @@ func TestAPreReleaseIsSpelledAsPyPIKeepsIt(t *testing.T) {
 	} {
 		if got := pythonVersion(version); got != want {
 			t.Errorf("%s: %s, want %s", version, got, want)
+		}
+	}
+}
+
+func TestAPyprojectIsStampedWithTheReleasesVersion(t *testing.T) {
+	text := "[project]\nname = \"demo\"\nversion = \"0.0.0\"  # a release stamps its own into what it builds\n" +
+		"\n[tool.ruff]\ntarget-version = \"py312\"\n"
+	want := "[project]\nname = \"demo\"\nversion = \"0.1.0rc1\"\n\n[tool.ruff]\ntarget-version = \"py312\"\n"
+	got, err := stampPyproject([]byte(text), "0.1.0rc1")
+	if err != nil || string(got) != want {
+		t.Fatalf("stamped: %q, %v\nwant %q", got, err, want)
+	}
+	if _, err = stampPyproject([]byte(text+"version = \"1\"\n"), "0.1.0"); err == nil {
+		t.Error("a pyproject with two version lines was stamped")
+	}
+}
+
+// The repository's manifest says 0.0.0; what npm gets says the release.
+func TestTheSDKPackageCarriesTheReleasesVersion(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"sdk/js/package.json": `{"name": "tinystore", "version": "0.0.0", "scripts": {"test": "bun test"},
+			"devDependencies": {"typescript": "^7.0.2"}}`,
+		"sdk/js/src/index.ts": "export {}\n",
+		"LICENSE":             "Apache-2.0\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	s := settings{tag: "v0.1.0-rc.1", version: "0.1.0-rc.1", root: root}
+	platforms := map[string]string{"@tinyshed/tinystore-linux-x64": "0.1.0-rc.1"}
+	if err := writeSDKPackage(s, out, platforms); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := packageManifest(t, filepath.Join(out, "tinystore-0.1.0-rc.1.tgz"))
+	if manifest["version"] != "0.1.0-rc.1" || manifest["scripts"] != nil || manifest["devDependencies"] != nil {
+		t.Errorf("the package's manifest: %v", manifest)
+	}
+	if optional, _ := manifest["optionalDependencies"].(map[string]any); optional["@tinyshed/tinystore-linux-x64"] != "0.1.0-rc.1" {
+		t.Errorf("the package names its platforms as %v", manifest["optionalDependencies"])
+	}
+}
+
+func packageManifest(t *testing.T, tarball string) map[string]any {
+	t.Helper()
+	file, err := os.Open(tarball)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	unzipped, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := tar.NewReader(unzipped)
+	for {
+		header, err := entries.Next()
+		if err != nil {
+			t.Fatalf("no package/package.json in %s: %v", tarball, err)
+		}
+		if header.Name == "package/package.json" {
+			var manifest map[string]any
+			if err = json.NewDecoder(entries).Decode(&manifest); err != nil {
+				t.Fatal(err)
+			}
+			return manifest
 		}
 	}
 }

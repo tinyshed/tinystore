@@ -150,7 +150,10 @@ const there = await connect("tls://db.internal:7443", { token })
   stdin ends no read waiting on it. Tests, scripts and a single Bun process
   want this.
 - **External.** Something else runs it: systemd, a container, another
-  machine. The SDK is given an endpoint and, off the machine, a token.
+  machine. The SDK is given an endpoint and, off the machine, a token. From
+  the first release, each release publishes `ghcr.io/tinyshed/tinystore`, its
+  own linux binary on distroless static, serving `/data` on `tls://` port 7443
+  with the certificate, key and tokens it finds in `/etc/tinystore`.
 - **The binary travels in the SDK's package**: per-platform optional
   dependencies on npm, per-platform wheels on PyPI. It is pure Go built with
   `CGO_ENABLED=0`, so every target builds from one machine.

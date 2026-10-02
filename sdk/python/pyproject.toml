@@ -1,6 +1,6 @@
 [project]
 name = "tinyshed-tinystore"
-version = "0.1.0"
+version = "0.0.0"  # a release stamps its own into what it builds
 description = "TinyStore for Python: kv, jobs, blobs, SQL, records and metrics in one directory, served by a sidecar"
 readme = "README.md"
 license = "Apache-2.0"

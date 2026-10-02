@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process'
 import net from 'node:net'
 
+import manifest from '../../package.json' with { type: 'json' }
 import { ClosedError } from '../errors.ts'
 import type {
 	Child,
@@ -16,10 +17,8 @@ import type {
 	TransportEvents,
 } from '../runtime.ts'
 
-const version = '0.1.0'
-
 export const bunRuntime: Runtime = {
-	client: `tinystore-js/${version} bun/${Bun.version}`,
+	client: `tinystore-js/${manifest.version} bun/${Bun.version}`,
 	windows: process.platform === 'win32',
 	connect,
 	spawnPrivate,

@@ -92,9 +92,11 @@ From the first release:
 go get github.com/tinyshed/tinystore
 bun add tinystore
 pip install tinyshed-tinystore
+docker pull ghcr.io/tinyshed/tinystore
 ```
 
-Release packages will carry the `tinystore` binary for Linux, macOS and Windows.
+Release packages will carry the `tinystore` binary for Linux, macOS and Windows,
+and the image serves a store to remote clients.
 [examples/notes](examples/notes/main.go) is a program using every engine.
 
 ## Engines

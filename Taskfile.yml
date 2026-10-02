@@ -10,6 +10,9 @@ vars:
   BIN: bin
   GOLANGCI: '{{.BIN}}/golangci-lint{{exeExt}}'
   GOVULNCHECK: '{{.BIN}}/govulncheck{{exeExt}}'
+  # run by its own module graph, since golangci-lint's in tools/ selects a yaml
+  # that actionlint does not build against
+  ACTIONLINT: github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
   # the Linux the container tasks run in; named volumes keep Go's module and
   # build caches between runs, so a second run compiles only what changed
   GO_IMAGE: golang:1.27
@@ -73,11 +76,11 @@ tasks:
     cmds:
       - go run ./internal/release -snapshot -version {{.CLI_ARGS}}
 
-  release:build:
-    # from a clean checkout of cmd/tinystore's tag, which stamps the binaries' version
-    desc: Build a release's artifacts into dist/, e.g. task release:build -- v0.1.0
+  release:tag:
+    # the Release workflow does this in its runner; here only to try it, in a scratch clone
+    desc: Make a release's three tags here, unpushed, and a worktree to build it from
     cmds:
-      - go run ./internal/release -version {{.CLI_ARGS}}
+      - go run ./internal/release -tag -version {{.CLI_ARGS}}
 
   size:
     desc: Report what importing the public API costs a cgo-free linux/amd64 binary
@@ -99,6 +102,12 @@ tasks:
       - '{{.GOLANGCI}} run ./...'
       - cd server && ../{{.GOLANGCI}} run ./...
       - cd cmd/tinystore && ../../{{.GOLANGCI}} run ./...
+
+  lint:actions:
+    # with shellcheck on PATH, as on CI's runners, it checks every run: script too
+    desc: Lint the GitHub workflows
+    cmds:
+      - go run {{.ACTIONLINT}}
 
   lint:platforms:
     # build tags hide each platform's files from another's lint
@@ -180,6 +189,7 @@ tasks:
       - task: tidy:check
       - task: fmt:check
       - task: lint:platforms
+      - task: lint:actions
       - task: test
       - task: sdk
       - task: vuln

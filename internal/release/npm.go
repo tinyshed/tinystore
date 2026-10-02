@@ -14,26 +14,6 @@ import (
 // SDK's packagedBinary looks for them
 const binaryScope = "@tinyshed/tinystore-"
 
-// checkManifests refuses a release whose SDKs' manifests name another version.
-func checkManifests(s settings) error {
-	pkg, err := readJSON(filepath.Join(s.root, "sdk", "js", "package.json"))
-	if err != nil {
-		return err
-	}
-	if pkg["version"] != s.version {
-		return fmt.Errorf("sdk/js/package.json is %v, not %s", pkg["version"], s.version)
-	}
-	pyproject, err := os.ReadFile(filepath.Join(s.root, "sdk", "python", "pyproject.toml"))
-	if err != nil {
-		return err
-	}
-	named := regexp.MustCompile(`(?m)^version = "([^"]+)"`).FindSubmatch(pyproject)
-	if named == nil || string(named[1]) != pythonVersion(s.version) {
-		return fmt.Errorf("sdk/python/pyproject.toml does not say version = %q", pythonVersion(s.version))
-	}
-	return nil
-}
-
 // pythonVersion spells a release's version as PyPI keeps it, which npm and Go
 // spell with a hyphen and dots:
 //
@@ -91,9 +71,9 @@ func writeBinaryPackage(s settings, dir, name string, b binary) error {
 	return writePackage(filepath.Join(dir, tarballName(name, s.version)), manifest, files)
 }
 
-// writeSDKPackage publishes sdk/js as it is, its version checked, with the
-// platforms' packages as optional dependencies and nothing only its
-// development needs.
+// writeSDKPackage publishes sdk/js as it is, stamped with the release's
+// version, with the platforms' packages as optional dependencies and nothing
+// only its development needs.
 func writeSDKPackage(s settings, dir string, optional map[string]string) error {
 	source := filepath.Join(s.root, "sdk", "js")
 	manifest, err := readJSON(filepath.Join(source, "package.json"))
@@ -102,6 +82,7 @@ func writeSDKPackage(s settings, dir string, optional map[string]string) error {
 	}
 	delete(manifest, "devDependencies")
 	delete(manifest, "scripts")
+	manifest["version"] = s.version
 	manifest["optionalDependencies"] = optional
 
 	files := map[string]string{"LICENSE": filepath.Join(s.root, "LICENSE")}
