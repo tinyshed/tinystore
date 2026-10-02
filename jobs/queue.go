@@ -25,12 +25,14 @@ type queueState struct {
 	kind   string
 	policy policy
 	alarm  *alarm
+	watch  *watching
 	// waiting is how many jobs the queue holds.
 	waiting  atomic.Int64
 	failures *quietLog
 	limits   *quietLog
 	panics   *quietLog
 	lost     *quietLog
+	progress *quietLog
 
 	keysAfter string // where maintenance's walk over the keys left behind goes on
 }
@@ -118,11 +120,12 @@ func (s *Store) openQueue(ctx context.Context, name, kind string, p policy) (*qu
 
 func (s *Store) registerQueue(ctx context.Context, name, kind string, p policy) (*queueState, error) {
 	state := &queueState{
-		name: name, kind: kind, policy: p, alarm: newAlarm(),
+		name: name, kind: kind, policy: p, alarm: newAlarm(), watch: newWatching(),
 		failures: newQuietLog(s.log, "jobs failed for good", name),
 		limits:   newQuietLog(s.log, "a queue past MaxWaiting refused jobs", name),
 		panics:   newQuietLog(s.log, "a handler panicked", name),
 		lost:     newQuietLog(s.log, "a Work loop lost the leases of jobs it ran", name),
+		progress: newQuietLog(s.log, "a handler's progress was dropped", name),
 	}
 	var stored string
 	var waiting int64

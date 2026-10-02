@@ -26,7 +26,7 @@ design document:
 | `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
 | `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
 | `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter | [README](kv/README.md) | [kv.md](docs/kv.md) |
-| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
+| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, a bound on those running | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
 | `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
@@ -639,7 +639,13 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an enqueue while its job runs asks for one run more    | `TestAnEnqueueWhileItsJobRunsAsksForOneRunMore`                                 |
 | `KeepDone` makes a key run once                        | `TestKeepDoneMakesAKeyRunOnce`                                                  |
 | `Update` changes only a job that still waits           | `TestUpdateChangesOnlyAWaitingJob`                                              |
-| `Cancel` says whether it came in time                  | `TestCancelSaysWhetherItCameInTime`                                             |
+| `Cancel` says whether there was a job, and stops a running one's handler | `TestCancelSaysWhetherItCameInTime`, `TestCancelStopsTheHandlerOfARunningJob` |
+| a job claimed ahead for a busy worker waits, and a cancel keeps it from starting | `TestAJobHeldForABusyWorkerWaitsAndCancelKeepsItFromStarting` |
+| `Get` says where a job is and how many jobs run before it | `TestGetSaysWhereAJobIsAndHowManyRunBeforeIt`, `TestAJobWhoseLeaseEndedWaitsAgain` |
+| a watch follows its job to its end                     | `TestAWatchFollowsItsJobToItsEnd`                                               |
+| a progress past 4 KiB is dropped in Go, refused by the SDKs | `TestAProgressPastItsBoundIsDropped`, `a progress JSON cannot write, or past 4 KiB, is refused` in `sdk/js/test/jobs.test.ts` |
+| `MaxRunning` holds a queue to its places across loops and claims | `TestMaxRunningHoldsAQueueToItsPlaces`                                |
+| a remote worker's job is watched, and its handler told of a cancel | `TestAJobWatchFollowsARemoteWorkersJob`, `a watch follows a job up its queue, through its progress, to a cancel its handler sees` in `sdk/js/test/jobs.test.ts`, `test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees` in Python's |
 | a job whose lease ended runs again                     | `TestAJobWhoseLeaseEndedRunsAgain`                                              |
 | a stale lease settles nothing                          | `TestAStaleLeaseSettlesNothing`                                                 |
 | a job that kills its process fails after its attempts  | `TestAJobThatKillsItsProcessFailsAfterItsAttempts`                              |

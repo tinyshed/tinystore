@@ -89,6 +89,7 @@ type policy struct {
 	first       time.Duration
 	longest     time.Duration
 	maxWaiting  int64
+	maxRunning  int
 	keepFailed  time.Duration
 	keepDone    time.Duration
 	err         error
@@ -229,6 +230,19 @@ func MaxWaiting(n int64) QueueOption {
 			p.err = fmt.Errorf("%w: jobs: MaxWaiting(%d)", tinystore.ErrInvalid, n)
 		}
 		p.maxWaiting = n
+	})
+}
+
+// MaxRunning is how many of the queue's jobs may run at once, across every
+// Work loop and Claim of the store; past it a claim takes nothing until a
+// job is settled. A Work loop of such a queue claims no job ahead for a busy
+// worker, so that its held jobs are the ones running.
+func MaxRunning(n int) QueueOption {
+	return forQueues(func(p *policy) {
+		if n < 1 {
+			p.err = fmt.Errorf("%w: jobs: MaxRunning(%d)", tinystore.ErrInvalid, n)
+		}
+		p.maxRunning = n
 	})
 }
 

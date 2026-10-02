@@ -47,6 +47,7 @@ export const methods = {
 	'jobs.settle': 0x0207,
 	'jobs.scan': 0x0208,
 	'jobs.work': 0x0209,
+	'jobs.watch': 0x020a,
 	'blobs.open': 0x0301,
 	'blobs.stat': 0x0302,
 	'blobs.delete': 0x0303,
@@ -185,6 +186,7 @@ export const JobsQueue = message('jobs.queue', {
 	keepFailed: [7, uint],
 	keepDone: [8, uint],
 	schedule: [9, JobsRepeat],
+	maxRunning: [10, uint],
 })
 
 const jobsJob = {
@@ -212,6 +214,8 @@ export const JobsEntry = message('jobs.entry', {
 	state: [6, uint],
 	err: [7, str],
 	repeat: [8, str],
+	ahead: [9, uint],
+	progress: [10, str],
 })
 
 export const JobsLease = message('jobs.lease', { handle: [1, uint], lease: [2, uint] })
@@ -223,6 +227,7 @@ export const JobsHeld = message('jobs.held', {
 	value: [4, str],
 	at: [5, int],
 	attempt: [6, uint],
+	cancelled: [7, bool],
 })
 
 export const JobsOutcome = message('jobs.outcome', {
@@ -231,6 +236,7 @@ export const JobsOutcome = message('jobs.outcome', {
 	err: [3, str],
 	at: [4, int],
 	after: [5, uint],
+	progress: [6, str],
 })
 
 export const JobsOutcomes = message('jobs.outcomes', { outcomes: [1, list(JobsOutcome)] })
@@ -252,6 +258,7 @@ export const JobsWorkers = message('jobs.workers', {
 	workers: [2, uint],
 	timeout: [3, uint],
 	untilIdle: [4, bool],
+	cancels: [5, bool],
 })
 
 export const BlobsBucket = message('blobs.bucket', {

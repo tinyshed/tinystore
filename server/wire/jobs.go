@@ -11,6 +11,7 @@ const (
 	JobsSettle  Method = 0x0207
 	JobsScan    Method = 0x0208
 	JobsWork    Method = 0x0209
+	JobsWatch   Method = 0x020a
 )
 
 // JobsQueue is jobs.open's request: a queue by name with its policy, or a
@@ -26,6 +27,7 @@ type JobsQueue struct {
 	KeepFailed   int64
 	KeepDone     int64
 	Schedule     *Repeat
+	MaxRunning   uint64
 }
 
 func (q JobsQueue) Append(dst []byte) []byte {
@@ -42,6 +44,7 @@ func (q JobsQueue) Append(dst []byte) []byte {
 		m.Key(9)
 		m.SetBuf(q.Schedule.Append(m.Buf()))
 	}
+	optionalUint(&m, 10, q.MaxRunning)
 	return m.End()
 }
 
@@ -68,6 +71,8 @@ func (q *JobsQueue) Decode(body []byte) error {
 		case 9:
 			q.Schedule = &Repeat{}
 			q.Schedule.decode(&d)
+		case 10:
+			q.MaxRunning = d.Uint()
 		}
 	}
 	return d.End()
@@ -249,19 +254,24 @@ func (k *JobsKey) Decode(body []byte) error {
 	return d.End()
 }
 
-// JobsEntry is a job as its queue holds it: get's answer and a scan's item.
+// JobsEntry is a job as its queue holds it: get's answer, a scan's item and
+// a watch's.
 type JobsEntry struct {
 	Found   bool
 	Key     string
 	Value   string
 	At      int64
 	Attempt uint64
-	// State is 1 waiting, 2 leased or 3 failed.
+	// State is 1 waiting, 2 running, 3 failed, 4 done or 5 cancelled.
 	State uint64
 	// Err is the job's last failure.
 	Err string
 	// Repeat is a repeating job's cron text and zone.
 	Repeat string
+	// Ahead counts the jobs that run before a waiting one, up to 10,000.
+	Ahead uint64
+	// Progress is what a running job's handler last reported, as JSON.
+	Progress string
 }
 
 func (e JobsEntry) Append(dst []byte) []byte {
@@ -276,6 +286,8 @@ func (e JobsEntry) Append(dst []byte) []byte {
 	optionalUint(&m, 6, e.State)
 	optionalStr(&m, 7, e.Err)
 	optionalStr(&m, 8, e.Repeat)
+	optionalUint(&m, 9, e.Ahead)
+	optionalStr(&m, 10, e.Progress)
 	return m.End()
 }
 
@@ -299,6 +311,10 @@ func (e *JobsEntry) Decode(body []byte) error {
 			e.Err = d.Str()
 		case 8:
 			e.Repeat = d.Str()
+		case 9:
+			e.Ahead = d.Uint()
+		case 10:
+			e.Progress = d.Str()
 		}
 	}
 	return d.End()
@@ -341,6 +357,10 @@ type JobsHeld struct {
 	Value   string
 	At      int64
 	Attempt uint64
+	// Cancelled, on a work stream whose workers take cancels, names a job in
+	// the client's hands that Cancel took: its handler should stop, and its
+	// outcome settles nothing.
+	Cancelled bool
 }
 
 func (h JobsHeld) Append(dst []byte) []byte {
@@ -353,6 +373,9 @@ func (h JobsHeld) Append(dst []byte) []byte {
 	optionalStr(&m, 4, h.Value)
 	optionalInt(&m, 5, h.At)
 	optionalUint(&m, 6, h.Attempt)
+	if h.Cancelled {
+		m.Bool(7, true)
+	}
 	return m.End()
 }
 
@@ -372,6 +395,8 @@ func (h *JobsHeld) Decode(body []byte) error {
 			h.At = d.Int()
 		case 6:
 			h.Attempt = d.Uint()
+		case 7:
+			h.Cancelled = d.Bool()
 		}
 	}
 	return d.End()
@@ -379,11 +404,12 @@ func (h *JobsHeld) Decode(body []byte) error {
 
 // How a worker settles a job, a JobsOutcome's How.
 const (
-	JobAck    = 1 // done
-	JobRetry  = 2 // this attempt failed: again after the backoff, or At or After
-	JobFail   = 3 // failed for good
-	JobSnooze = 4 // again at At or After, the attempt not counted
-	JobExtend = 5 // the lease runs After from now
+	JobAck      = 1 // done
+	JobRetry    = 2 // this attempt failed: again after the backoff, or At or After
+	JobFail     = 3 // failed for good
+	JobSnooze   = 4 // again at At or After, the attempt not counted
+	JobExtend   = 5 // the lease runs After from now
+	JobProgress = 6 // what the handler reports of the job, which stays in its hands
 )
 
 // JobsOutcome settles a job a worker held: a settlement's item, and what a
@@ -397,6 +423,8 @@ type JobsOutcome struct {
 	// HasAfter says the outcome carries After, 0 included: a retry after
 	// nothing runs now, where one without a time waits its backoff.
 	HasAfter bool
+	// Progress is a progress outcome's report, as JSON.
+	Progress string
 }
 
 func (o JobsOutcome) Append(dst []byte) []byte {
@@ -413,6 +441,7 @@ func (o JobsOutcome) appendFields(m *Map) {
 	if o.After != 0 || o.HasAfter {
 		m.Int(5, o.After)
 	}
+	optionalStr(m, 6, o.Progress)
 }
 
 func (o *JobsOutcome) Decode(body []byte) error {
@@ -434,6 +463,8 @@ func (o *JobsOutcome) decode(d *Decoder) {
 			o.At = d.Int()
 		case 5:
 			o.After, o.HasAfter = d.Duration(), true
+		case 6:
+			o.Progress = d.Str()
 		}
 	}
 }
@@ -590,6 +621,9 @@ type JobsWorkers struct {
 	// UntilIdle ends the loop once no job is due and none runs, as a test
 	// wants it.
 	UntilIdle bool
+	// Cancels asks for a cancelled held item when Cancel takes a job in the
+	// client's hands, which a client that stops its handler wants.
+	Cancels bool
 }
 
 func (w JobsWorkers) Append(dst []byte) []byte {
@@ -599,6 +633,9 @@ func (w JobsWorkers) Append(dst []byte) []byte {
 	optionalInt(&m, 3, w.Timeout)
 	if w.UntilIdle {
 		m.Bool(4, true)
+	}
+	if w.Cancels {
+		m.Bool(5, true)
 	}
 	return m.End()
 }
@@ -615,6 +652,8 @@ func (w *JobsWorkers) Decode(body []byte) error {
 			w.Timeout = d.Duration()
 		case 4:
 			w.UntilIdle = d.Bool()
+		case 5:
+			w.Cancels = d.Bool()
 		}
 	}
 	return d.End()

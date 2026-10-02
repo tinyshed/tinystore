@@ -4,9 +4,9 @@ Work an application must do later, or now but outside the request that asked
 for it, in `jobs.db` inside a `tinystore.Store`: a reminder at six, a message
 sent at nine, a push to each member of a group, an account deleted thirty days
 after its owner asked, a purge every night. Typed queues keep their jobs in the
-order of their time, lease each to a worker, retry, repeat by cron text, and run
-every job at least once. The design and the measurements behind it are
-[docs/jobs.md](../docs/jobs.md).
+order of their time, lease each to a worker, retry, repeat by cron text, run
+every job at least once, and say where each one is. The design and the
+measurements behind it are [docs/jobs.md](../docs/jobs.md).
 
 ```go
 queues, err := jobs.Open(ctx, store, jobs.Options{}) // data/jobs.db
@@ -14,17 +14,29 @@ queues, err := jobs.Open(ctx, store, jobs.Options{}) // data/jobs.db
 reminders, err := jobs.OpenQueue[Reminder](ctx, queues, "reminders")
 later, err := jobs.OpenQueue[Draft](ctx, queues, "send-later", jobs.MaxAttempts(20))
 pushes, err := jobs.OpenQueue[Push](ctx, queues, "pushes", jobs.KeepDone(time.Hour))
+videos, err := jobs.OpenQueue[Video](ctx, queues, "videos", jobs.MaxRunning(2))
 purge, err := jobs.OpenSchedule(ctx, queues, "purge-deleted", jobs.Daily("03:10", moscow))
 
 err = reminders.Enqueue(ctx, Reminder{User: 42, Text: "call mom"}, jobs.At(evening))
 err = later.Enqueue(ctx, draft, jobs.At(nine), jobs.Key("chat:42:"+draft.ID))
 page, err := later.Scan(ctx, jobs.Query{Prefix: "chat:42:"}) // "3 scheduled messages"
-cancelled, err := later.Cancel(ctx, "chat:42:"+draft.ID)     // false: too late
+cancelled, err := later.Cancel(ctx, "chat:42:"+draft.ID)     // false: sent already
 
 go reminders.Work(ctx, remind, jobs.Workers(4)) // until ctx ends or the store closes
 
 func remind(ctx context.Context, job jobs.Job[Reminder]) error {
 	return push(ctx, job.Value.User, job.Value.Text) // nil acknowledges, an error retries
+}
+
+for entry, err := range videos.Watch(ctx, video.ID) { // waiting, 3 ahead … running, 0.4 … done
+	if err != nil {
+		return err
+	}
+	send(entry.State, entry.Ahead, entry.Progress)
+}
+
+func transcode(ctx context.Context, job jobs.Job[Video]) error {
+	return ffmpeg(ctx, job.Value, func(done float64) { job.Progress(done) })
 }
 ```
 
@@ -65,7 +77,7 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
 - **A job runs when it is due and a worker is free**, in the order of its
   time, equal times in the order they were enqueued. A time in the past runs
   now. `Workers(1)`, the default, is the one order a queue promises.
-- **A key names one job**, 1 to 1024 bytes of text, waiting, leased or failed.
+- **A key names one job**, 1 to 1024 bytes of text, waiting, running or failed.
   An `Enqueue` under a key whose job waits adds nothing and can bring it
   forward, never back; under one whose job runs it asks for one run more after
   this one; under a failed one it starts the job again, its attempts from zero.
@@ -73,9 +85,14 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   `Enqueue` under one of them adds nothing: a key runs once. Without it a key
   is forgotten when its job is done.
 - **`Update` changes a job that waits or failed**, its value and, when the
-  options say, its time or repeat; `Cancel` removes one and says whether it
-  did. A leased job, one done or cancelled, or an absent key is
-  `tinystore.ErrConflict` for `Update` and `false` for `Cancel`.
+  options say, its time or repeat. A job a worker holds, one done or
+  cancelled, or an absent key is `tinystore.ErrConflict`.
+- **`Cancel` takes the job under a key**, whether it waits, runs or failed,
+  and says whether there was one. A running job's handler sees its context end
+  with `jobs.ErrCancelled`, and what it returns settles nothing, as a `Claim`'s
+  caller's settlement is then `ErrConflict` wrapping `ErrCancelled`; what the
+  handler did before it stopped stays done. A job a `Work` loop holds for a
+  busy worker never starts, and a repeating job stops repeating.
 - **A value is JSON.** `encoding/json` writes it and reads it back into `V`,
   so that another language reads what Go wrote; a `[]byte` or
   `json.RawMessage` is kept as it is. A value JSON cannot write is
@@ -108,9 +125,9 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   job itself is left as it settled it. It holds two jobs a worker, the one
   the worker runs and its next, and claims what it lacks, 1,000 at most, in
   one write with the settlements of the jobs its workers finished since. A job
-  claimed ahead is leased: `Update` and `Cancel` find it too late, and a crash
-  counts its attempt though it never ran. It extends a held job's lease every
-  half lease;
+  claimed ahead is leased, though it waits: `Update` finds it too late, `Cancel`
+  keeps it from starting, and a crash counts its attempt though it never ran.
+  It extends a held job's lease every half lease;
   `Timeout(d)`, a minute unless it says, is the deadline of the handler's
   context. A lease lost while its handler runs, because a stall let it end
   and another claim took the job, is let go and logged once a quiet period.
@@ -123,12 +140,38 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
 - **`Claim` does not wait**: it leases the next due job, or says there is
   none. A `Job` from `Claim` is settled by `Ack`, `Retry`, `Fail`, `Snooze` or
   `Extend`; copies of a `Job` share its lease.
+- **`MaxRunning(n)` bounds the jobs that run at once**, across every `Work`
+  loop and `Claim` of the store: past it a claim takes nothing until a job is
+  settled or its lease ends, and a settlement wakes the loops waiting for a
+  place. A `Work` loop of such a queue claims no job ahead for a busy worker,
+  so that the jobs it holds are the ones running.
+- **`Get` says where a job is.** Its `State` is `Waiting` until a handler, or
+  a `Claim`'s caller, has it, `Running` while one does, `Failed` when it failed
+  for good, and `Done` while `KeepDone` keeps its key; a job a `Work` loop
+  holds for a busy worker waits, none ahead of it. `Ahead` counts the jobs that
+  run before a waiting one, the rows before it less those running, up to
+  10,000, so that a `Get` reads at most that many keys of the queue's order;
+  `Scan` leaves it zero.
+- **Progress lives in memory.** `Job.Progress(v)` keeps `v` as JSON until the
+  attempt is settled, and `Get` and `Watch` show it as `Entry.Progress`. It is
+  not written to the file, since an attempt a restart ends runs again from its
+  start. A value JSON cannot write, or one past 4 KiB, is dropped and logged
+  once a quiet period.
+- **`Watch` follows a job to its end.** It yields the job under a key as it
+  is, then again when its state, place, attempt, time, progress or error
+  changes, until the job is done, failed or `Cancelled`, a state only a watcher
+  sees, which is the last entry; a later job under the key is another's. A key
+  that names no job yields nothing. It reads the job at most five times a
+  second, so that a watcher behind a busy queue sees the latest, and ends when
+  its context does or the store closes.
 - **`Scan` walks keys under a prefix** in the byte order of their text, a page
-  at a time, waiting, leased and failed jobs alike; with `State: jobs.Failed`
-  and no prefix it lists the failed jobs, the last failed first. A page holds
-  `Limit` jobs, 100 unless it says and 1,000 at most, and ends before the
-  value that would take it past 4 MiB, a spilled value counted as a row's is. `All` walks the same pages without a
-  snapshot between them. A prefix is text: `"chat:4"` meets chat 42 too.
+  at a time, waiting, running and failed jobs alike, or the ones `State` names;
+  with `State: jobs.Failed` and no prefix it lists the failed jobs, the last
+  failed first. A page holds `Limit` jobs, 100 unless it says and 1,000 at
+  most, and ends before the value that would take it past 4 MiB, a spilled
+  value counted as a row's is; since memory says which held job runs, a page
+  of waiting or running jobs may hold fewer. `All` walks the same pages without
+  a snapshot between them. A prefix is text: `"chat:4"` meets chat 42 too.
 - **Nothing polls.** Each queue knows the time of its next job and a waiting
   `Work` sleeps until it, or until an `Enqueue` or a settlement brings it
   earlier; a million jobs due next week cost their rows and nothing else.
@@ -184,5 +227,4 @@ _, err = queues.Maintain(ctx)                       // removes failed jobs and d
 ## Not in the first version
 
 What [docs/jobs.md](../docs/jobs.md) leaves for later: priority within a
-queue, cancelling a job that runs, a rate a queue may not pass, workers in
-another process or language through a server, a job's history in records.
+queue, a rate a queue may not pass, a job's history in records.

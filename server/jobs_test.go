@@ -406,3 +406,78 @@ func TestAWireClientAndAGoProgramShareAQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// a watcher follows a job a remote worker runs: its place, its progress as
+// the worker reports it, and a Cancel that the worker is told of and that
+// ends the watch; MaxRunning holds the next job until the first is settled
+func TestAJobWatchFollowsARemoteWorkersJob(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	watcher, worker := ts.dial(t, wire.Hello{}), ts.dial(t, wire.Hello{})
+	videos := openQueue(t, watcher, wire.JobsQueue{Name: "videos", MaxRunning: 1})
+	working := openQueue(t, worker, wire.JobsQueue{Name: "videos", MaxRunning: 1})
+	if err := enqueueJobs(t, watcher, videos, wire.JobsJob{Value: `1`, Key: "a"}, wire.JobsJob{Value: `2`, Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	watch, err := watcher.Open(t.Context(), wire.JobsWatch, wire.JobsKey{Handle: videos, Key: "b"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = watch.Response(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	expectWatched(t, watch, jobs.Waiting, 1, "")
+
+	work, err := worker.Open(t.Context(), wire.JobsWork, wire.JobsWorkers{Handle: working, Workers: 2, Cancels: true}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = work.Response(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	first := nextHeld(t, work)
+	expectWatched(t, watch, jobs.Waiting, 0, "")
+	sendOutcome(t, work, wire.JobsOutcome{Job: first.Job, How: wire.JobProgress, Progress: `{"done":1}`}, false)
+	deadline := time.Now().Add(5 * time.Second)
+	for got := fetchJob(t, watcher, videos, "a"); got.Progress != `{"done":1}`; got = fetchJob(t, watcher, videos, "a") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the worker's progress did not reach the job: %+v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sendOutcome(t, work, wire.JobsOutcome{Job: first.Job, How: wire.JobAck}, false)
+	second := nextHeld(t, work)
+	expectWatched(t, watch, jobs.Running, 0, "")
+	body, err := watcher.Call(t.Context(), wire.JobsCancel, wire.JobsKey{Handle: videos, Key: "b"})
+	var cancelled wire.JobsEntry
+	if err == nil {
+		err = cancelled.Decode(body)
+	}
+	if err != nil || !cancelled.Found {
+		t.Fatalf("a running job's cancel: %+v, %v", cancelled, err)
+	}
+	if told := nextHeld(t, work); told.Job != second.Job || !told.Cancelled {
+		t.Fatalf("the worker was told %+v", told)
+	}
+	expectWatched(t, watch, jobs.Cancelled, 0, "")
+	if _, last, err := watch.Next(t.Context()); err != nil || !last {
+		t.Fatalf("the watch's end: last %v, %v", last, err)
+	}
+	sendOutcome(t, work, wire.JobsOutcome{Job: second.Job, How: wire.JobAck}, true)
+	if _, last, err := work.Next(t.Context()); err != nil || !last {
+		t.Fatalf("the work stream's end: last %v, %v", last, err)
+	}
+}
+
+func expectWatched(t *testing.T, st *client.Stream, state jobs.State, ahead uint64, progress string) {
+	t.Helper()
+	body, last, err := st.Next(t.Context())
+	var entry wire.JobsEntry
+	if err == nil {
+		err = entry.Decode(body)
+	}
+	if err != nil || last || entry.State != uint64(state) || entry.Ahead != ahead || entry.Progress != progress {
+		t.Fatalf("the watch sent %+v, last %v, %v; want %s, %d ahead, progress %q", entry, last, err, state, ahead,
+			progress)
+	}
+}

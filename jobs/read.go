@@ -3,6 +3,8 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"strconv"
@@ -17,21 +19,32 @@ import (
 type State int
 
 const (
-	Waiting State = iota + 1 // until its time, or due and not yet claimed
-	Leased                   // claimed, its lease running
-	Failed                   // failed for good, kept KeepFailed
+	Waiting   State = iota + 1 // until its time, or due and no handler has it yet
+	Running                    // a handler, or the caller of Claim, has it
+	Failed                     // failed for good, kept KeepFailed
+	Done                       // acknowledged; Get finds it while KeepDone keeps its key
+	Cancelled                  // taken by Cancel; only a watcher sees it
 )
 
 func (s State) String() string {
 	switch s {
 	case Waiting:
 		return "waiting"
-	case Leased:
-		return "leased"
+	case Running:
+		return "running"
 	case Failed:
 		return "failed"
+	case Done:
+		return "done"
+	case Cancelled:
+		return "cancelled"
 	}
 	return "any"
+}
+
+// ended says the job has left its queue, or failed for good
+func (s State) ended() bool {
+	return s == Failed || s == Done || s == Cancelled
 }
 
 // Entry is a job as the queue holds it.
@@ -43,6 +56,13 @@ type Entry[V any] struct {
 	// Attempt counts the job's attempts, a running one included.
 	Attempt int
 	State   State
+	// Ahead counts the jobs that run before a waiting one, up to 10,000, so
+	// that 10,000 reads as that many or more. Get and Watch count it; Scan
+	// leaves it zero.
+	Ahead int
+	// Progress is what the handler of a running job last reported of it, as
+	// JSON, until the attempt is settled.
+	Progress json.RawMessage
 	// Err is the job's last failure.
 	Err string
 	// Repeat is a repeating job's repeat as jobs.db keeps it: cron text and
@@ -57,7 +77,7 @@ type Entry[V any] struct {
 // failed first, keyed or not.
 type Query struct {
 	Prefix string
-	// State narrows either listing.
+	// State narrows either listing to Waiting, Running or Failed jobs.
 	State State
 	// After is where the page before ended. Page.Next carries it.
 	After string
@@ -125,12 +145,31 @@ const (
 	getWaiting   = `select ` + keyedColumns + ` where k.queue = ?1 and k.key = ?2`
 	getFailed    = `select ` + failedColumns + ` where f.queue = ?1 and f.key = ?2`
 	valueSpilled = `select value from _tinystore_jobs_spilled where id = ?1`
+	// the rows before a job in the order the queue runs them, at most ?4
+	rowsBefore = `select count(*) from (select 1 from _tinystore_jobs
+		where queue = ?1 and (next, id) < (?2, ?3) limit cast(?4 as integer))`
 )
 
-// Get reads the job under key from one snapshot: waiting, leased or failed.
+// Get reads the job under key from one snapshot: waiting, running or failed,
+// or done while KeepDone keeps its key.
 func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) {
-	var entry Entry[V]
-	var there bool
+	s, err := q.sight(ctx, key)
+	return s.entry, s.found, q.fail(key, err)
+}
+
+// sighting is what one read of a key found: its job's entry and id, and for a
+// running job when its lease ends, at which a watcher reads again
+type sighting[V any] struct {
+	entry Entry[V]
+	found bool
+	id    int64
+	until int64
+}
+
+// sight reads the job under key from one snapshot, counting the jobs ahead of
+// a waiting one
+func (q *Queue[V]) sight(ctx context.Context, key string) (sighting[V], error) {
+	var s sighting[V]
 	err := q.read(ctx, maxValue, func(r sqlite.Reader) error {
 		// each statement is given the parameters it has, up to the highest it names
 		for _, lookup := range []struct {
@@ -151,13 +190,41 @@ func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) 
 				}
 				continue
 			}
-			there = true
-			entry, err = q.entryOf(ctx, r, jobs[0])
+			s.found, s.id = true, jobs[0].id
+			if s.entry, s.until, err = q.entryOf(ctx, r, jobs[0]); err == nil && s.entry.State == Waiting {
+				s.entry.Ahead, err = q.ahead(ctx, r, jobs[0])
+			}
 			return err
 		}
-		return nil
+		return q.sightDone(ctx, r, key, &s)
 	})
-	return entry, there, q.fail(key, err)
+	return s, err
+}
+
+// sightDone finds a key KeepDone keeps, which names a job that was done
+func (q *Queue[V]) sightDone(ctx context.Context, r sqlite.Reader, key string, s *sighting[V]) error {
+	if q.state.policy.keepDone == 0 {
+		return nil
+	}
+	var one int
+	err := sqlite.QueryRowByKey(ctx, r, doneKey, q.state.id, key, q.store.clock()).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	s.entry, s.found = Entry[V]{Key: key, State: Done}, err == nil
+	return err
+}
+
+// ahead counts the jobs that run before a waiting one: the rows before it, at
+// most maxAhead past those a handler runs, which wait before nothing
+func (q *Queue[V]) ahead(ctx context.Context, r sqlite.Reader, job found) (int, error) {
+	if job.leased.Valid {
+		return 0, nil // held for a busy worker, which runs it next
+	}
+	running := q.state.watch.runningBefore(job.time, job.id, q.store.clock())
+	var rows int
+	err := sqlite.QueryRow(ctx, r, rowsBefore, q.state.id, job.time, job.id, maxAhead+running).Scan(&rows)
+	return min(max(rows-running, 0), maxAhead), err
 }
 
 // the pages of a Scan: keys under a prefix, both tables merged in key order,
@@ -165,7 +232,7 @@ func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error) 
 const (
 	scanKeys = `select * from (
 			select ` + keyedColumns + ` where k.queue = ?1 and k.key > ?2 and k.key >= ?3 and (?4 is null or k.key < ?4)
-				and (?5 = 0 or (?5 = 1 and l.attempt is null) or (?5 = 2 and l.attempt is not null))
+				and (?5 = 0 or ?5 = 1 or (?5 = 2 and l.attempt is not null))
 			union all
 			select ` + failedColumns + ` where f.queue = ?1 and f.key > ?2 and f.key >= ?3
 				and (?4 is null or f.key < ?4)
@@ -264,6 +331,10 @@ func (q *Queue[V]) scanRows(ctx context.Context, r sqlite.Reader, query Query, l
 // pageOf makes the entries of a page, ending it before the value that would
 // take it past 4 MiB, a spilled value's bytes counted as a row's are. The first
 // entry is taken whatever its size, so that every page moves on.
+//
+// Whether a held job runs is memory's to say, so a listing of waiting or
+// running jobs leaves out the rows it read that turn out the other, and its
+// page may hold fewer than its limit.
 func (q *Queue[V]) pageOf(ctx context.Context, r sqlite.Reader, query Query, jobs []found, limit int) (Page[V], error) {
 	page := Page[V]{Next: query}
 	bytes := 0
@@ -272,13 +343,16 @@ func (q *Queue[V]) pageOf(ctx context.Context, r sqlite.Reader, query Query, job
 			page.More = true
 			break
 		}
-		entry, err := q.entryOf(ctx, r, job)
+		page.Next.After = cursorOf(query, job)
+		if (query.State == Waiting || query.State == Running) && q.stateOf(job) != query.State {
+			continue
+		}
+		entry, _, err := q.entryOf(ctx, r, job)
 		if err != nil {
 			return page, err
 		}
 		page.Entries = append(page.Entries, entry)
 		bytes += job.size
-		page.Next.After = cursorOf(query, job)
 	}
 	return page, nil
 }
@@ -337,29 +411,44 @@ func scanFound(rows *sql.Rows) ([]found, error) {
 	return jobs, err
 }
 
-func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Entry[V], error) {
-	entry := Entry[V]{
-		Key: job.key.String, At: time.UnixMilli(job.at), Attempt: int(job.attempt), State: Waiting,
-		Err: job.failure.String, Repeat: job.repeat.String,
-	}
+// stateOf is where a job is: a row a lease holds runs once its handler, or a
+// Claim's caller, has it, and until then waits in a Work loop for a busy worker
+func (q *Queue[V]) stateOf(job found) State {
 	switch {
 	case job.failed:
-		entry.State = Failed
+		return Failed
 	case job.leased.Valid:
-		entry.State, entry.Attempt = Leased, int(job.leased.Int64)
+		if runs, _, _ := q.state.watch.view(job.id, job.leased.Int64); runs {
+			return Running
+		}
+	}
+	return Waiting
+}
+
+// entryOf makes a row an entry, and says when the lease of a running job ends
+func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Entry[V], int64, error) {
+	entry := Entry[V]{
+		Key: job.key.String, At: time.UnixMilli(job.at), Attempt: int(job.attempt), State: q.stateOf(job),
+		Err: job.failure.String, Repeat: job.repeat.String,
+	}
+	var until int64
+	if entry.State == Running {
+		_, entry.Progress, until = q.state.watch.view(job.id, job.leased.Int64)
+		entry.Attempt = int(job.leased.Int64)
 	}
 	encoded := job.value
 	if job.spill.Valid {
 		if err := sqlite.QueryRowByKey(ctx, r, valueSpilled, job.spill.Int64).Scan(&encoded); err != nil {
-			return entry, fmt.Errorf("%w: jobs: the value spilled by a job is gone: %w", tinystore.ErrCorrupt, err)
+			return entry, until, fmt.Errorf("%w: jobs: the value spilled by a job is gone: %w", tinystore.ErrCorrupt,
+				err)
 		}
 	}
 	value, err := q.codec.decode(encoded)
 	entry.Value = value
 	if err != nil {
-		return entry, fmt.Errorf("%w: jobs: %w", tinystore.ErrCorrupt, err)
+		return entry, until, fmt.Errorf("%w: jobs: %w", tinystore.ErrCorrupt, err)
 	}
-	return entry, nil
+	return entry, until, nil
 }
 
 // read runs work on one snapshot of jobs.db: inside the handle's transaction,

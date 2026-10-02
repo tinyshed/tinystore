@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -40,8 +41,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
     from datetime import datetime
 
-_ACK, _RETRY, _FAIL, _SNOOZE, _EXTEND = 1, 2, 3, 4, 5
-_STATES: dict[int, str] = {1: "waiting", 2: "leased", 3: "failed"}
+_ACK, _RETRY, _FAIL, _SNOOZE, _EXTEND, _PROGRESS = 1, 2, 3, 4, 5, 6
+_STATES: dict[int, str] = {1: "waiting", 2: "running", 3: "failed", 4: "done", 5: "cancelled"}
+_REPORT_EVERY = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,8 @@ class Enqueue[V]:
 
 @dataclass(frozen=True, slots=True)
 class JobEntry[V]:
+    """A job as its queue holds it; state is waiting, running, failed, done or cancelled."""
+
     key: str
     value: V
     at: datetime | None
@@ -92,17 +96,85 @@ class JobEntry[V]:
     state: str
     error: str | None
     repeat: str | None
+    ahead: int = 0
+    """the jobs that run before a waiting one, up to 10,000; get and watch count it, scan leaves it 0"""
+    progress: Any = None
+    """what a running job's handler last reported with job.progress"""
+
+
+def _progress_text(progress: object) -> str:
+    """The JSON a handler reports of its job, at most 4 KiB of it."""
+    try:
+        text = json.dumps(progress, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as err:
+        raise InvalidError(f"a job's progress JSON cannot write: {err}") from err
+    if len(text.encode()) > 4096:
+        raise InvalidError("a job's progress is past 4 KiB of JSON")
+    return text
+
+
+class _Reporter:
+    """Sends what a handler reports of its job: the latest, one send at a time and at most one each 100 ms.
+
+    A handler reporting each chunk it reads then costs the connection ten
+    frames a second.
+    """
+
+    def __init__(self, send: Callable[[str], Awaitable[None]]) -> None:
+        self._send = send
+        self._latest: str | None = None
+        self._sent = 0.0
+        self._stopping = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    def report(self, text: str) -> None:
+        self._latest = text
+        if self._task is None:
+            self._task = asyncio.get_running_loop().create_task(self._sending())
+
+    async def _sending(self) -> None:
+        loop = asyncio.get_running_loop()
+        while self._latest is not None and not self._stopping.is_set():
+            wait = self._sent + _REPORT_EVERY - loop.time()
+            if wait > 0:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._stopping.wait(), wait)
+                continue
+            text, self._latest = self._latest, None
+            self._sent = loop.time()
+            with contextlib.suppress(Exception):
+                await self._send(text)
+        self._task = None
+
+    async def stop(self) -> None:
+        """Drops what waits and lets what is being sent finish, before the job's outcome follows it."""
+        self._stopping.set()
+        if self._task is not None:
+            await self._task
 
 
 @dataclass
 class Job[V]:
-    """A job in a work loop's handler; retry, fail or snooze decide how it settles instead of its return."""
+    """A job in a work loop's handler; retry, fail or snooze decide how it settles instead of its return.
+
+    A cancel that takes the job while it runs cancels the handler's task.
+    """
 
     key: str
     value: V
     at: datetime | None
     attempt: int
     settlement: dict[str, Any] | None = field(default=None, repr=False)
+    _reporter: _Reporter | None = field(default=None, repr=False)
+
+    def progress(self, progress: object) -> None:
+        """Reports how far the job got, any JSON within 4 KiB, which get and watch show until it is settled.
+
+        It does not wait for the server.
+        """
+        text = _progress_text(progress)
+        if self._reporter is not None:
+            self._reporter.report(text)
 
     def retry(self, error: object = None, *, at: datetime | None = None, after: Duration | None = None) -> None:
         self.settlement = {"how": _RETRY, "err": _reason(error), **_timing(at, after)}
@@ -142,6 +214,10 @@ class ClaimedJob[V]:
         """Holds the job this much longer from now."""
         await self._settle({"job": self._job, "how": _EXTEND, "after": ms(d)})
 
+    async def progress(self, progress: object) -> None:
+        """Reports how far the job got, any JSON within 4 KiB, which get and watch show until it is settled."""
+        await self._settle({"job": self._job, "how": _PROGRESS, "progress": _progress_text(progress)})
+
 
 def _reason(error: object) -> str:
     return "the handler gave no reason" if error is None else str(error)
@@ -169,10 +245,15 @@ class Jobs:
         max_waiting: int | None = None,
         keep_failed: Duration | None = None,
         keep_done: Duration | None = None,
+        max_running: int | None = None,
     ) -> Queue[V]:
-        """A queue of JSON values of one type; its policy is the options' and the server's defaults."""
+        """A queue of JSON values of one type; its policy is the options' and the server's defaults.
+
+        max_running bounds the jobs that run at once across every worker of
+        the store.
+        """
         check_name(name, "queue")
-        fields = _policy(lease, max_attempts, backoff, max_waiting, keep_failed, keep_done)
+        fields = _policy(lease, max_attempts, backoff, max_waiting, keep_failed, keep_done, max_running)
         return Queue(self._link, name, JobsQueue.encode(name=name, **fields), of)
 
     def schedule(self, name: str, repeat: Repeat, /, **options: Any) -> Queue[None]:
@@ -189,6 +270,7 @@ def _policy(
     max_waiting: int | None = None,
     keep_failed: Duration | None = None,
     keep_done: Duration | None = None,
+    max_running: int | None = None,
 ) -> dict[str, Any]:
     return {
         "lease": None if lease is None else ms(lease),
@@ -198,6 +280,7 @@ def _policy(
         "max_waiting": max_waiting,
         "keep_failed": None if keep_failed is None else ms(keep_failed),
         "keep_done": None if keep_done is None else ms(keep_done),
+        "max_running": max_running,
     }
 
 
@@ -251,7 +334,7 @@ class Queue[V]:
         after: Duration | None = None,
         repeat: Repeat | None = None,
     ) -> None:
-        """Changes a job that waits or failed; one leased, done or absent is ConflictError."""
+        """Changes a job that waits or failed; one a worker holds, done or absent is ConflictError."""
         change = {
             "value": to_json(value),
             "key": key,
@@ -266,7 +349,10 @@ class Queue[V]:
         await self._link.run("write", attempt)
 
     async def cancel(self, key: str) -> bool:
-        """Removes a job that waits or failed, and says whether it came in time."""
+        """Removes the job under key, whether it waits, runs or failed, and says whether there was one.
+
+        A running job's handler task is cancelled, and what it returns settles nothing.
+        """
 
         async def attempt(connection: Connection) -> bool:
             handle = await self._handle(connection)
@@ -276,6 +362,8 @@ class Queue[V]:
         return await self._link.run("write", attempt)
 
     async def get(self, key: str) -> JobEntry[V] | None:
+        """The job a key names, waiting, running or failed, or done while keep_done keeps its key."""
+
         async def attempt(connection: Connection) -> dict[str, Any]:
             handle = await self._handle(connection)
             return JobsEntry.decode(
@@ -286,15 +374,59 @@ class Queue[V]:
         return self._entry(entry) if entry.get("found") else None
 
     def _entry(self, e: dict[str, Any]) -> JobEntry[V]:
+        state = _STATES.get(e.get("state", 1), "waiting")
+        progress = e.get("progress")
+        value: Any = None if state == "done" and "value" not in e else self._decode(e.get("value", "null"))
         return JobEntry(
             e.get("key", ""),
-            self._decode(e.get("value", "null")),
+            value,
             date_of(e.get("at")),
             e.get("attempt", 0),
-            _STATES.get(e.get("state", 1), "waiting"),
+            state,
             e.get("err"),
             e.get("repeat"),
+            e.get("ahead", 0),
+            None if progress is None else json.loads(progress),
         )
+
+    async def watch(self, key: str) -> AsyncIterator[JobEntry[V]]:
+        """Yields the job under key as it is, then at each change, until it ends: done, failed or cancelled.
+
+        A change is of its state, place, attempt, time, progress or error, and
+        the last entry is the one that ended it. A key that names no job yields
+        nothing. Leaving the loop ends the watch; a connection lost is
+        connected again, and the watch goes on from the job as it is then.
+
+            async for s in videos.watch(video_id):
+                await send(s.state, s.ahead, s.progress)
+        """
+        last: tuple[object, ...] | None = None
+        while True:
+
+            async def attempt(connection: Connection) -> Any:
+                handle = await self._handle(connection)
+                opened = await connection.session.open(
+                    METHODS["jobs.watch"], JobsKey.encode(handle=handle, key=key), True
+                )
+                await opened.next()
+                return opened
+
+            stream = await self._link.run("read", attempt)
+            try:
+                while True:
+                    event = await stream.next()
+                    stream.consumed(len(event.body))
+                    if event.end:
+                        return
+                    entry = self._entry(JobsEntry.decode(event.body))
+                    seen = (entry.state, entry.ahead, entry.attempt, entry.at, json.dumps(entry.progress), entry.error)
+                    if seen != last:
+                        last = seen
+                        yield entry
+            except LostError:
+                continue
+            finally:
+                stream.cancel()
 
     async def scan(
         self,
@@ -402,10 +534,12 @@ class Queue[V]:
                 workers=workers,
                 timeout=round(limit * 1000),
                 until_idle=until_idle or None,
+                cancels=True,
             ),
             False,
         )
         in_hand: set[asyncio.Task[None]] = set()
+        by_number: dict[int, tuple[asyncio.Task[None], _Taken]] = {}
         try:
             await stream.next()
             while True:
@@ -413,9 +547,20 @@ class Queue[V]:
                 stream.consumed(len(event.body))
                 if event.end:
                     return
-                task = asyncio.ensure_future(self._run(stream, JobsHeld.decode(event.body), handler, limit))
+                held = JobsHeld.decode(event.body)
+                number = held.get("job", 0)
+                if held.get("cancelled"):
+                    running = by_number.get(number)
+                    if running is not None:
+                        running[1].taken = True
+                        running[0].cancel()
+                    continue
+                taken = _Taken()
+                task = asyncio.ensure_future(self._run(stream, held, handler, limit, taken))
                 in_hand.add(task)
+                by_number[number] = (task, taken)
                 task.add_done_callback(in_hand.discard)
+                task.add_done_callback(lambda _, n=number: by_number.pop(n, None))
         except asyncio.CancelledError:
             for task in in_hand:
                 task.cancel()
@@ -430,14 +575,21 @@ class Queue[V]:
         held: dict[str, Any],
         handler: Callable[[Job[V]], Awaitable[None]],
         limit: float,
+        taken: _Taken,
     ) -> None:
         number = held.get("job", 0)
+
+        async def report(progress: str) -> None:
+            await stream.send(JobsOutcome.encode(job=number, how=_PROGRESS, progress=progress), False)
+
+        reporter = _Reporter(report)
         try:
             job = Job(
                 held.get("key", ""),
                 self._decode(held.get("value", "null")),
                 date_of(held.get("at")),
                 held.get("attempt", 0),
+                _reporter=reporter,
             )
         except Exception as err:
             outcome: dict[str, Any] = {
@@ -450,6 +602,11 @@ class Queue[V]:
                 await asyncio.wait_for(handler(job), limit)
                 outcome = {"job": number, "how": _ACK, **(job.settlement or {})}
             except asyncio.CancelledError:
+                await reporter.stop()
+                if taken.taken:
+                    # a cancel took the job: what the handler leaves settles nothing
+                    asyncio.current_task().uncancel()  # type: ignore[union-attr]
+                    return
                 # stopped by the loop's end: given back without counting the attempt
                 outcome = {"job": number, "how": _SNOOZE, "at": held.get("at")}
                 with contextlib.suppress(Exception):
@@ -464,5 +621,14 @@ class Queue[V]:
                 }
                 if job.settlement is not None:
                     outcome = {"job": number, **job.settlement}
+        await reporter.stop()
+        if taken.taken:
+            return
         with contextlib.suppress(Exception):
             await stream.send(JobsOutcome.encode(outcome), False)
+
+
+class _Taken:
+    """Whether a cancel took a job in a work loop's hands, whose handler's task it cancels."""
+
+    taken = False

@@ -37,7 +37,11 @@ func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]
 	if err != nil {
 		return q.fail("", err)
 	}
-	return q.work(ctx, handle, settings, settings.workers*claimAhead)
+	hold := settings.workers * claimAhead
+	if q.state.policy.maxRunning > 0 {
+		hold = settings.workers
+	}
+	return q.work(ctx, handle, settings, hold)
 }
 
 // work runs a Work loop that holds at most hold jobs: running, or claimed for
@@ -204,7 +208,10 @@ func (l *workLoop[V]) stopped(ctx context.Context) error {
 func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settlement {
 	claimed.memory.releaseRow()
 	job := claimed.job
-	if handlers.Err() != nil {
+	switch {
+	case job.lease.wasCancelled():
+		return settlement{lease: job.lease}
+	case handlers.Err() != nil:
 		return settlement{lease: job.lease, how: givenBack}
 	}
 	reserved, err := l.q.store.reserve(handlers, claimed.row.size)
@@ -216,8 +223,13 @@ func (l *workLoop[V]) runOne(handlers context.Context, claimed handed[V]) settle
 		return unstarted(handlers, job, err)
 	}
 
-	ctx, cancel := context.WithTimeout(handlers, l.settings.timeout)
+	cancellable, stop := context.WithCancelCause(handlers)
+	defer stop(nil)
+	ctx, cancel := context.WithTimeout(cancellable, l.settings.timeout)
 	defer cancel()
+	if !l.q.state.watch.started(job.lease, stop) {
+		return settlement{lease: job.lease} // Cancel took it before it started
+	}
 	err = l.call(ctx, job)
 	switch {
 	case job.lease.isSettled():
@@ -326,11 +338,11 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 	}
 	c := claiming{
 		queue: l.q.state.id, now: now, until: now + l.q.state.policy.lease.Milliseconds(), limit: want,
-		maxAttempts: l.q.state.policy.maxAttempts,
+		maxAttempts: l.q.state.policy.maxAttempts, maxRunning: l.q.state.policy.maxRunning,
 	}
 	var result claimResult
 	var done []settled
-	abandoned := 0
+	var abandoned []int64
 	var reserved *tinystore.Reservation
 	if want > 0 {
 		var reserveErr error
@@ -341,15 +353,15 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 	}
 	err := l.q.store.file.UpdateGrouped(ctx, 0, func(w sqlite.Writer) error {
 		var err error
-		result, abandoned = claimResult{}, 0
+		result, abandoned = claimResult{}, nil
 		if done, err = settleAll(ctx, w, l.pending, now); err != nil || want == 0 {
 			return err
 		}
 		if result.claimed, abandoned, err = claimRows(ctx, w, c); err != nil {
 			return err
 		}
-		if result.full = len(result.claimed)+abandoned == want; !result.full {
-			result.next, err = nextTime(ctx, w, c.queue, now)
+		if result.full = len(result.claimed)+len(abandoned) == want; !result.full {
+			result.next, err = nextClaim(ctx, w, c)
 		}
 		return err
 	})
@@ -392,18 +404,26 @@ func settleAll(ctx context.Context, w sqlite.Writer, pending []settlement, now i
 // settled follows in memory what the written settlements changed.
 //
 // A lease lost while its handler runs is let go and no longer extended, but it
-// still holds its worker until the handler returns.
+// still holds its worker until the handler returns. One lost to a Cancel is no
+// news to log.
 func (l *workLoop[V]) settled(done []settled) {
+	room := false
 	for i, s := range l.pending {
+		done[i].lost = done[i].lost && !s.lease.wasCancelled()
 		done[i].apply(l.q.state)
 		done[i].applyLease(s.lease)
 		switch {
 		case s.how != extended:
 			s.lease.markSettled()
 			delete(l.holding, s.lease)
+			l.q.state.watch.settled(s.lease, done[i].ended, done[i].failed)
+			room = true
 		case done[i].lost:
 			s.lease.markLost()
 		}
+	}
+	if room {
+		l.q.state.roomMade(l.q.store.clock())
 	}
 	l.pending = l.pending[:0]
 }
@@ -413,6 +433,7 @@ func (l *workLoop[V]) dispatch(result claimResult) {
 	for _, row := range result.claimed {
 		job := l.q.jobOf(row)
 		l.holding[job.lease] = struct{}{}
+		l.q.state.watch.holding(job.lease)
 		l.hand <- handed[V]{job: job, row: row, memory: result.memory}
 	}
 }

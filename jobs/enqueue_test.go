@@ -163,13 +163,20 @@ func TestCancelSaysWhetherItCameInTime(t *testing.T) {
 
 	mustEnqueue(t, queue, "draft", Key("m2"))
 	job := mustClaim(t, queue)
-	if cancelled, err := queue.Cancel(t.Context(), "m2"); err != nil || cancelled {
+	if cancelled, err := queue.Cancel(t.Context(), "m2"); err != nil || !cancelled {
 		t.Fatalf("a running job's Cancel: %v, %v", cancelled, err)
 	}
-	if err := job.Ack(t.Context()); err != nil {
-		t.Fatalf("the worker's Ack after a late Cancel: %v", err)
+	if err := job.Ack(t.Context()); !errors.Is(err, tinystore.ErrConflict) || !errors.Is(err, ErrCancelled) {
+		t.Fatalf("the worker's Ack after a Cancel: %v", err)
 	}
-	if cancelled, err := queue.Cancel(t.Context(), "m2"); err != nil || cancelled {
+	queues.clock.advance(time.Hour) // past its lease: it does not come back
+	nothingDue(t, queue)
+
+	mustEnqueue(t, queue, "draft", Key("m3"))
+	if err := mustClaim(t, queue).Ack(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled, err := queue.Cancel(t.Context(), "m3"); err != nil || cancelled {
 		t.Fatalf("a done job's Cancel: %v, %v", cancelled, err)
 	}
 }

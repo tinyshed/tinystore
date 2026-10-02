@@ -3,11 +3,12 @@
 // first call; a work loop is the server's own Work, its jobs handed over the
 // connection and settled by what the handler returns.
 
+import { currentSignal } from './cancel.ts'
 import { type Connection, download, type Link } from './connection.ts'
-import { CorruptError, errorOf, InvalidError } from './errors.ts'
+import { CancelledError, CorruptError, errorOf, InvalidError } from './errors.ts'
 import { checkName, handleOn, type Page } from './handles.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
-import { LostError } from './session.ts'
+import { LostError, watch } from './session.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import {
 	JobsBatch,
@@ -39,6 +40,8 @@ export interface QueueOptions {
 	keepFailed?: Duration
 	/** remembers a done job's key this long, so that enqueuing it again adds nothing */
 	keepDone?: Duration
+	/** the jobs that may run at once, across every worker of the store: no bound */
+	maxRunning?: number
 }
 
 /** When a job runs again: cron text in a zone by its name, a daily time, or every so often. */
@@ -57,7 +60,8 @@ export interface EnqueueOptions {
 	repeat?: Repeat
 }
 
-export type JobState = 'waiting' | 'leased' | 'failed'
+/** done while keepDone keeps its key; cancelled only a watcher sees */
+export type JobState = 'waiting' | 'running' | 'failed' | 'done' | 'cancelled'
 
 export interface JobEntry<T> {
 	key: string
@@ -67,6 +71,10 @@ export interface JobEntry<T> {
 	/** its attempts, a running one included */
 	attempt: number
 	state: JobState
+	/** the jobs that run before a waiting one, up to 10,000; get and watch count it, scan leaves it 0 */
+	ahead: number
+	/** what a running job's handler last reported with job.progress */
+	progress: unknown
 	/** its last failure */
 	error: string | undefined
 	/** a repeating job's cron text and zone */
@@ -90,7 +98,77 @@ type Settlement =
 	| { how: 'fail'; error: string }
 	| { how: 'snooze'; at?: Time; after?: Duration }
 
-const how = { ack: 1, retry: 2, fail: 3, snooze: 4, extend: 5 } as const
+const how = { ack: 1, retry: 2, fail: 3, snooze: 4, extend: 5, progress: 6 } as const
+
+/** the JSON a handler reports of its job, at most 4 KiB of it */
+function progressText(progress: unknown): string {
+	let text: string | undefined
+	try {
+		text = JSON.stringify(progress)
+	} catch (err) {
+		throw new InvalidError(`a job's progress JSON cannot write: ${(err as Error).message}`)
+	}
+	if (text === undefined) {
+		throw new InvalidError("a job's progress JSON cannot write: undefined, a function or a symbol")
+	}
+	if (new TextEncoder().encode(text).length > 4096) {
+		throw new InvalidError("a job's progress is past 4 KiB of JSON")
+	}
+	return text
+}
+
+/**
+ * Sends what a handler reports of its job: the latest, one send at a time
+ * and at most one each 100 ms, so that a handler reporting each chunk it
+ * reads costs the connection ten frames a second.
+ */
+class Reporter {
+	readonly #send: (text: string) => Promise<void>
+	#latest: string | undefined
+	#sending: Promise<void> | undefined
+	#timer: ReturnType<typeof setTimeout> | undefined
+	#sent = 0
+	#stopped = false
+
+	constructor(send: (text: string) => Promise<void>) {
+		this.#send = send
+	}
+
+	report(text: string): void {
+		this.#latest = text
+		this.#flush()
+	}
+
+	#flush(): void {
+		if (this.#stopped || this.#sending !== undefined || this.#latest === undefined) {
+			return
+		}
+		const wait = this.#sent + 100 - Date.now()
+		if (wait > 0) {
+			this.#timer ??= setTimeout(() => {
+				this.#timer = undefined
+				this.#flush()
+			}, wait)
+			return
+		}
+		const text = this.#latest
+		this.#latest = undefined
+		this.#sent = Date.now()
+		this.#sending = this.#send(text)
+			.catch(() => {})
+			.finally(() => {
+				this.#sending = undefined
+				this.#flush()
+			})
+	}
+
+	/** Drops what waits and lets what is being sent finish, before the job's outcome follows it. */
+	async stop(): Promise<void> {
+		this.#stopped = true
+		clearTimeout(this.#timer)
+		await this.#sending
+	}
+}
 
 /**
  * A job in a work loop's handler. Returning acknowledges it and throwing
@@ -104,16 +182,38 @@ export class Job<T> {
 	readonly at: Date
 	/** its attempts, this one included */
 	readonly attempt: number
-	/** aborts when the job's timeout passes or its loop stops: the handler should stop too */
+	/**
+	 * aborts when the job's timeout passes, its loop stops, or cancel takes it,
+	 * whose reason is then a CancelledError: the handler should stop too
+	 */
 	readonly signal: AbortSignal
 	settlement: Settlement | undefined
+	readonly #reporter: Reporter | undefined
 
-	constructor(key: string, value: T, at: Date, attempt: number, signal: AbortSignal) {
+	constructor(
+		key: string,
+		value: T,
+		at: Date,
+		attempt: number,
+		signal: AbortSignal,
+		reporter?: Reporter,
+	) {
 		this.key = key
 		this.value = value
 		this.at = at
 		this.attempt = attempt
 		this.signal = signal
+		this.#reporter = reporter
+	}
+
+	/**
+	 * Reports how far the job got, any JSON within 4 KiB: get and watch show
+	 * the latest until the job is settled. It does not wait for the server.
+	 *
+	 *     await transcode({ signal: job.signal, onProgress: p => job.progress(p) })
+	 */
+	progress(progress: unknown): void {
+		this.#reporter?.report(progressText(progress))
 	}
 
 	/** Fails this attempt: the job runs again after its backoff, or at the time given. */
@@ -174,6 +274,11 @@ export class ClaimedJob<T> {
 	/** Holds the job this much longer from now. */
 	extend(d: Duration): Promise<void> {
 		return this.#settle({ job: this.#job, how: how.extend, after: ms(d) })
+	}
+
+	/** Reports how far the job got, any JSON within 4 KiB, which get and watch show until it is settled. */
+	progress(progress: unknown): Promise<void> {
+		return this.#settle({ job: this.#job, how: how.progress, progress: progressText(progress) })
 	}
 }
 
@@ -306,10 +411,17 @@ function queueFields(
 		maxWaiting: options?.maxWaiting,
 		keepFailed: options?.keepFailed === undefined ? undefined : ms(options.keepFailed),
 		keepDone: options?.keepDone === undefined ? undefined : ms(options.keepDone),
+		maxRunning: options?.maxRunning,
 	}
 }
 
-const states: Record<number, JobState> = { 1: 'waiting', 2: 'leased', 3: 'failed' }
+const states: Record<number, JobState> = {
+	1: 'waiting',
+	2: 'running',
+	3: 'failed',
+	4: 'done',
+	5: 'cancelled',
+}
 
 export class Queue<T> {
 	readonly name: string
@@ -353,7 +465,8 @@ export class Queue<T> {
 
 	/**
 	 * Changes a job that waits or failed: its value and, when the options
-	 * say, its time or repeat. A job leased, done or absent is ConflictError.
+	 * say, its time or repeat. A job a worker holds, done or absent is
+	 * ConflictError.
 	 */
 	async update(key: string, value: T, options?: Omit<EnqueueOptions, 'key'>): Promise<void> {
 		const change = {
@@ -372,7 +485,11 @@ export class Queue<T> {
 		})
 	}
 
-	/** Removes a job that waits or failed, and says whether it came in time. */
+	/**
+	 * Removes the job under key, whether it waits, runs or failed, and says
+	 * whether there was one. A running job's handler sees job.signal abort,
+	 * and what it returns settles nothing.
+	 */
 	cancel(key: string): Promise<boolean> {
 		return this.#link.run('write', async connection => {
 			const handle = await this.#handle(connection)
@@ -384,7 +501,10 @@ export class Queue<T> {
 		})
 	}
 
-	/** The job a key names, waiting, leased or failed; undefined when none is. */
+	/**
+	 * The job a key names, waiting, running or failed, or done while keepDone
+	 * keeps its key; undefined when none is.
+	 */
 	async get(key: string): Promise<JobEntry<T> | undefined> {
 		const entry = await this.#link.run('read', async connection => {
 			const handle = await this.#handle(connection)
@@ -396,14 +516,75 @@ export class Queue<T> {
 	}
 
 	async #entryOf(entry: ReturnType<typeof JobsEntry.decode>): Promise<JobEntry<T>> {
+		const state = states[entry.state ?? 1] ?? 'waiting'
 		return {
 			key: entry.key ?? '',
-			value: await this.#values.decode(entry.value ?? 'null'),
+			value:
+				state === 'done' && entry.value === undefined
+					? (undefined as T)
+					: await this.#values.decode(entry.value ?? 'null'),
 			at: new Date(entry.at ?? 0),
 			attempt: entry.attempt ?? 0,
-			state: states[entry.state ?? 1] ?? 'waiting',
+			state,
+			ahead: entry.ahead ?? 0,
+			progress: entry.progress === undefined ? undefined : JSON.parse(entry.progress),
 			error: entry.err,
 			repeat: entry.repeat,
+		}
+	}
+
+	/**
+	 * Yields the job under key as it is, then again each time its state,
+	 * place, attempt, time, progress or error changes, until it ends: done,
+	 * failed or cancelled, the last entry it yields. A key that names no job
+	 * yields nothing. Leaving the loop ends the watch; a connection lost is
+	 * connected again, and the watch goes on from the job as it is then.
+	 *
+	 *     for await (const s of videos.watch(id)) send(s.state, s.ahead, s.progress)
+	 */
+	async *watch(key: string): AsyncGenerator<JobEntry<T>> {
+		let last: string | undefined
+		for (;;) {
+			const stream = await this.#link.run('read', async connection => {
+				const handle = await this.#handle(connection)
+				const opened = await connection.session.open(
+					methods['jobs.watch'],
+					JobsKey.encode({ handle, key }),
+					true,
+				)
+				await opened.next()
+				return opened
+			})
+			const unwatch = watch(currentSignal(), stream)
+			try {
+				for (;;) {
+					const event = await stream.next()
+					stream.consumed(event.body.length)
+					if (event.end) {
+						return
+					}
+					const entry = await this.#entryOf(JobsEntry.decode(event.body))
+					const seen = JSON.stringify([
+						entry.state,
+						entry.ahead,
+						entry.attempt,
+						entry.at,
+						entry.progress,
+						entry.error,
+					])
+					if (seen !== last) {
+						last = seen
+						yield entry
+					}
+				}
+			} catch (err) {
+				if (!(err instanceof LostError)) {
+					throw err
+				}
+			} finally {
+				unwatch()
+				stream.cancel()
+			}
 		}
 	}
 
@@ -523,6 +704,7 @@ export class Queue<T> {
 				workers: options.workers,
 				timeout,
 				untilIdle: options.untilIdle || undefined,
+				cancels: true,
 			}),
 			false,
 		)
@@ -530,6 +712,7 @@ export class Queue<T> {
 		const stop = () => stopping.abort()
 		options.signal?.addEventListener('abort', stop, { once: true })
 		const inHand = new Set<Promise<void>>()
+		const cancels = new Map<number, AbortController>()
 		let ended = false
 		const endOurSide = async () => {
 			if (!ended) {
@@ -547,13 +730,21 @@ export class Queue<T> {
 				if (event.end) {
 					return
 				}
+				const held = JobsHeld.decode(event.body)
+				if (held.cancelled === true) {
+					cancels.get(held.job ?? 0)?.abort(new CancelledError('cancel took the job while it ran'))
+					continue
+				}
+				const cancel = new AbortController()
+				cancels.set(held.job ?? 0, cancel)
 				const running = this.#run(
 					stream,
-					JobsHeld.decode(event.body),
+					held,
 					handler,
 					timeout,
 					stopping.signal,
-				)
+					cancel.signal,
+				).finally(() => cancels.delete(held.job ?? 0))
 				inHand.add(running)
 				running.finally(() => inHand.delete(running))
 			}
@@ -564,16 +755,21 @@ export class Queue<T> {
 	}
 
 	// runs one job's handler and sends the outcome it settled by; a handler
-	// stopped by the loop's end gives its job back without counting the attempt
+	// stopped by the loop's end gives its job back without counting the
+	// attempt, and one cancel took settles nothing, so it sends nothing
 	async #run(
 		stream: Awaited<ReturnType<Connection['session']['open']>>,
 		held: ReturnType<typeof JobsHeld.decode>,
 		handler: (job: Job<T>) => void | Promise<void>,
 		timeout: number,
 		stopping: AbortSignal,
+		cancelled: AbortSignal,
 	): Promise<void> {
-		const signal = AbortSignal.any([stopping, AbortSignal.timeout(timeout)])
+		const signal = AbortSignal.any([stopping, AbortSignal.timeout(timeout), cancelled])
 		const number = held.job ?? 0
+		const reporter = new Reporter(progress =>
+			stream.send(JobsOutcome.encode({ job: number, how: how.progress, progress }), false),
+		)
 		let outcome: Parameters<typeof JobsOutcome.encode>[0]
 		try {
 			const job = new Job(
@@ -582,6 +778,7 @@ export class Queue<T> {
 				new Date(held.at ?? 0),
 				held.attempt ?? 0,
 				signal,
+				reporter,
 			)
 			try {
 				await handler(job)
@@ -595,7 +792,10 @@ export class Queue<T> {
 		} catch (err) {
 			outcome = { job: number, how: how.fail, err: `the value no longer reads: ${reasonOf(err)}` }
 		}
-		await stream.send(JobsOutcome.encode(outcome), false).catch(() => {})
+		await reporter.stop()
+		if (!cancelled.aborted) {
+			await stream.send(JobsOutcome.encode(outcome), false).catch(() => {})
+		}
 	}
 }
 

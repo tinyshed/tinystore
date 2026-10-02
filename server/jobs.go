@@ -30,6 +30,7 @@ type heldJob interface {
 	Fail(ctx context.Context, cause error) error
 	Snooze(ctx context.Context, options ...jobs.SettleOption) error
 	Extend(ctx context.Context, d time.Duration) error
+	Progress(v any)
 }
 
 func (s *Server) jobsMethods(methods map[wire.Method]handler) {
@@ -42,6 +43,7 @@ func (s *Server) jobsMethods(methods map[wire.Method]handler) {
 	methods[wire.JobsSettle] = jobsSettle
 	methods[wire.JobsScan] = jobsScan
 	methods[wire.JobsWork] = jobsWork
+	methods[wire.JobsWatch] = jobsWatch
 }
 
 func jobsOpen(c *call) error {
@@ -89,6 +91,9 @@ func queueOptions(ask wire.JobsQueue) []jobs.QueueOption {
 	}
 	if ask.KeepDone > 0 {
 		options = append(options, jobs.KeepDone(durationOf(ask.KeepDone)))
+	}
+	if ask.MaxRunning > 0 {
+		options = append(options, jobs.MaxRunning(int(min(ask.MaxRunning, 1<<31-1))))
 	}
 	return options
 }
@@ -288,8 +293,52 @@ func entryOfJob[V any](entry jobs.Entry[V], found bool) (wire.JobsEntry, error) 
 	value, err := jsonOf(entry.Value)
 	return wire.JobsEntry{
 		Found: found, Key: entry.Key, Value: value, At: entry.At.UnixMilli(), Attempt: uint64(max(entry.Attempt, 0)),
-		State: uint64(max(entry.State, 0)), Err: entry.Err, Repeat: entry.Repeat,
+		State: uint64(max(entry.State, 0)), Err: entry.Err, Repeat: entry.Repeat, Ahead: uint64(max(entry.Ahead, 0)),
+		Progress: string(entry.Progress),
 	}, err
+}
+
+// jobsWatch follows the job under a key: a download of its entry now and at
+// each change, ended by the last, done, failed or cancelled; a key that names
+// no job ends it at once. It also ends when its client cancels or leaves.
+func jobsWatch(c *call) error {
+	var ask wire.JobsKey
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	handle, err := c.session.jobsHandles.get(ask.Handle)
+	if err != nil {
+		return err
+	}
+	c.follow()
+	if err = begin(c, wire.Empty{}); err != nil {
+		return err
+	}
+	if handle.schedule != nil {
+		err = watchJob(c, handle.schedule, ask.Key)
+	} else {
+		err = watchJob(c, handle.queue, ask.Key)
+	}
+	if err != nil {
+		return err
+	}
+	return trailer(c, wire.Empty{})
+}
+
+func watchJob[V any](c *call, queue *jobs.Queue[V], key string) error {
+	for entry, err := range queue.Watch(c.ctx, key) {
+		if err != nil {
+			return err
+		}
+		answer, err := entryOfJob(entry, true)
+		if err == nil {
+			err = item(c, answer)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return context.Cause(c.ctx)
 }
 
 func jsonOf[V any](value V) (string, error) {
@@ -367,7 +416,7 @@ func jobsSettle(c *call) error {
 				answer.Errors[i] = failure(c.ctx, err)
 				return
 			}
-			if outcome.How != wire.JobExtend {
+			if outcome.How != wire.JobExtend && outcome.How != wire.JobProgress {
 				c.session.claims.remove(outcome.Job)
 			}
 		})
@@ -388,8 +437,23 @@ func settle(ctx context.Context, held heldJob, outcome wire.JobsOutcome) error {
 		return held.Snooze(ctx, timing(outcome)...)
 	case wire.JobExtend:
 		return held.Extend(ctx, durationOf(outcome.After))
+	case wire.JobProgress:
+		progress, err := progressOf(outcome)
+		if err == nil {
+			held.Progress(progress)
+		}
+		return err
 	}
-	return fmt.Errorf("%w: jobs: an outcome %d, not 1 to 5", tinystore.ErrInvalid, outcome.How)
+	return fmt.Errorf("%w: jobs: an outcome %d, not 1 to 6", tinystore.ErrInvalid, outcome.How)
+}
+
+// progressOf is a progress outcome's report, which must be JSON
+func progressOf(outcome wire.JobsOutcome) (json.RawMessage, error) {
+	if !json.Valid([]byte(outcome.Progress)) {
+		return nil, fmt.Errorf("%w: jobs: a progress of %d bytes that are not JSON", tinystore.ErrInvalid,
+			len(outcome.Progress))
+	}
+	return json.RawMessage(outcome.Progress), nil
 }
 
 func causeOf(outcome wire.JobsOutcome) error {

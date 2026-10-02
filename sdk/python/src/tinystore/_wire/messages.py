@@ -51,6 +51,7 @@ METHODS: dict[str, int] = {
     "jobs.settle": 0x0207,
     "jobs.scan": 0x0208,
     "jobs.work": 0x0209,
+    "jobs.watch": 0x020A,
     "blobs.open": 0x0301,
     "blobs.stat": 0x0302,
     "blobs.delete": 0x0303,
@@ -170,6 +171,7 @@ JobsQueue = message(
     keep_failed=(7, uint),
     keep_done=(8, uint),
     schedule=(9, JobsRepeat),
+    max_running=(10, uint),
 )
 
 _jobs_job = {
@@ -195,6 +197,8 @@ JobsEntry = message(
     state=(6, uint),
     err=(7, str_),
     repeat=(8, str_),
+    ahead=(9, uint),
+    progress=(10, str_),
 )
 
 JobsLease = message("jobs.lease", handle=(1, uint), lease=(2, uint))
@@ -207,6 +211,7 @@ JobsHeld = message(
     value=(4, str_),
     at=(5, int_),
     attempt=(6, uint),
+    cancelled=(7, bool_),
 )
 
 JobsOutcome = message(
@@ -216,6 +221,7 @@ JobsOutcome = message(
     err=(3, str_),
     at=(4, int_),
     after=(5, uint),
+    progress=(6, str_),
 )
 
 JobsOutcomes = message("jobs.outcomes", outcomes=(1, list_(JobsOutcome)))
@@ -238,6 +244,7 @@ JobsWorkers = message(
     workers=(2, uint),
     timeout=(3, uint),
     until_idle=(4, bool_),
+    cancels=(5, bool_),
 )
 
 BlobsBucket = message("blobs.bucket", name=(1, str_), default_ttl=(2, uint), max_size=(3, uint))

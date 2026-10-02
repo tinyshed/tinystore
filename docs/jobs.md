@@ -58,8 +58,9 @@ go reminders.Work(ctx, a.remind, jobs.Workers(4)) // until ctx ends or the store
 // Queue[V]: enqueuing and finding
 Enqueue(ctx, value, opts...) error                     // jobs.At, jobs.After, jobs.Key, a repeat
 Update(ctx, key, value, opts...) error                  // a job that still waits takes a new value or time
-Cancel(ctx, key) (bool, error)                          // true: removed before it ran
-Get(ctx, key) (jobs.Entry[V], bool, error)
+Cancel(ctx, key) (bool, error)                          // true: taken, a running one's handler stopped
+Get(ctx, key) (jobs.Entry[V], bool, error)              // waiting and how many ahead, running and its progress
+Watch(ctx, key) iter.Seq2[jobs.Entry[V], error]        // the same now and at each change, until the job ends
 Scan(ctx, jobs.Query) (jobs.Page[V], error)             // keys under a prefix, or the failed jobs
 All(ctx, jobs.Query) iter.Seq2[jobs.Entry[V], error]   // the same, a page at a time
 WithTx(tx *jobs.Tx) *jobs.Queue[V]                      // inside queues.Tx: several enqueues, one commit
@@ -74,35 +75,36 @@ Retry(ctx, err, opts...) error                          // an attempt failed: ag
 Fail(ctx, err) error                                    // failed for good, no more attempts
 Snooze(ctx, opts...) error                              // not yet: again at jobs.At or jobs.After, no attempt counted
 Extend(ctx, d) error                                    // the lease runs d from now
+Progress(v)                                             // how far it got, which Get and Watch show
 ```
 
 ## The same in another language
 
-A server that serves `jobs.db` to other programs is a module of its own and is
-not built; the embedded API is shaped so that it can be. Every call above is
-one operation of the protocol, and what is not an operation, `Work` and `All`,
-is a loop over operations that any SDK repeats.
+The server, a module of its own, serves `jobs.db` to other programs, and
+[the protocol's jobs methods](wire.md#jobs) are the calls above: every call is
+one operation, and what is not one, `All`, is a loop over operations that any
+SDK repeats. A remote `work` is the engine's own `Work` loop, handing each job
+over the connection, and a `watch` is a download that ends with its job.
 
 ```text
 enqueue   queue, [value, at?, key?, repeat?]…       → ok
 update    queue, key, value, at?, repeat?           → ok | conflict
-cancel    queue, key                                → cancelled
+cancel    queue, key                                → there was a job
 get       queue, key                                → entry?
+watch     queue, key                                → entries, until the job ends
 scan      queue, prefix? | state, after?, limit     → page
-claim     queue, max, lease?, wait?                 → jobs, each with its lease
-extend    job, lease, for                           → until
-ack       [job, lease]…                             → ok | conflict
-retry     job, lease, error, at?                    → ok | conflict
-fail      job, lease, error                         → ok | conflict
-snooze    job, lease, at                            → ok | conflict
+claim     queue, lease?                             → a job, with its lease
+settle    [job, ack | retry | fail | snooze | extend | progress]… → ok | conflict, each
+work      queue, workers, timeout                   → jobs out, outcomes back
 ```
 
 - **Nothing that cannot travel.** A value is JSON, a key is text, a time is
   unix milliseconds, a repeat is the text of a cron expression and a zone's
   name. No callback is stored and no Go type is on the wire.
-- **Enqueues, claims and acks carry many.** A remote worker claims up to `max`
-  jobs and acknowledges several at once, and a program enqueues a batch in one
-  call, as `Tx` does here, or the protocol pays a commit a job.
+- **Enqueues and settlements carry many.** A program enqueues a batch in one
+  call, as `Tx` does here, and settles several claimed jobs at once, or the
+  protocol pays a commit a job; a remote `work` settles in the loop's own
+  writes.
 
 ```ts
 const reminders = store.jobs.queue<Reminder>("reminders")
@@ -144,7 +146,7 @@ key := "chat:42:" + draft.ID
 err = later.Enqueue(ctx, draft, jobs.At(nine), jobs.Key(key))
 page, err := later.Scan(ctx, jobs.Query{Prefix: "chat:42:"})  // "3 scheduled messages"
 err = later.Update(ctx, key, edited, jobs.At(ten))            // ErrConflict: it is being sent, or was
-cancelled, err := later.Cancel(ctx, key)                       // false: too late
+cancelled, err := later.Cancel(ctx, key)                       // false: sent already
 
 func (a *app) sendLater(ctx context.Context, job jobs.Job[Draft]) error {
 	d := job.Value
@@ -243,7 +245,7 @@ err = digests.Enqueue(ctx, Digest{User: id}, jobs.Key(fmt.Sprint("user:", id)), 
 
 - **A key is text** of 1 to 1024 bytes, `jobs.Key(k)`; a job without one is
   found by nothing but its turn.
-- **A key names a job's next run**, one job of a queue, waiting, leased or
+- **A key names a job's next run**, one job of a queue, waiting, running or
   failed. `Enqueue` under a key whose job waits adds nothing but can bring its
   time forward, never back, and keeps its value. Under a key whose job runs it
   asks for one more run after this one, no later than the time it gives, so
@@ -265,11 +267,15 @@ none        a new job at 9:00                   —
   not run twice when its caller retries it after it ran.
 - **`Update` changes a job that still waits** or has failed: its value, its
   time if `jobs.At` or `jobs.After` says one, its repeat if one is given. A
-  leased job, one acknowledged or cancelled, or an absent key is
+  job a worker holds, one acknowledged or cancelled, or an absent key is
   `ErrConflict`: too late to edit what is being sent, or was. Two updates race
   as two writes do, the last one kept.
-- **`Cancel` removes a job that waits or failed** and says whether it did; a
-  leased job is left to its worker.
+- **`Cancel` takes the job under a key**, whether it waits, runs or failed,
+  and says whether there was one. A running job's handler sees its context
+  end with `jobs.ErrCancelled`, and what it returns settles nothing; a job a
+  `Work` loop holds for a busy worker never starts. A cancel cannot take back
+  what a handler did before it stopped: a message being sent may be sent, so
+  a handler whose effect a cancel must prevent checks its context before it.
 - **`Scan` walks keys under a prefix** in the byte order of their text, a page
   at a time, and with `State: jobs.Failed` and no prefix the failed jobs, the
   last failed first, keyed or not. A prefix is text like any other: end it
@@ -309,12 +315,13 @@ none        a new job at 9:00                   —
        Enqueue
           │
           ▼
-┌──►  waiting (until At) ──── Cancel ──► gone
+┌──►  waiting (until At) ──── Cancel ──► gone: cancelled to a watcher
 │         │ Claim: leased until now + Lease, attempt + 1
 │         ▼
-│     leased ── Extend ──► leased until now + d
-│      │  │  └─ Fail, or Retry past MaxAttempts ──► failed (kept KeepFailed, found by Scan)
-│      │  └──── Ack ──► gone
+│     running ── Extend ──► running until now + d
+│      │  │  │  └─ Cancel: its handler's context ends ──► gone: cancelled to a watcher
+│      │  │  └──── Fail, or Retry past MaxAttempts ──► failed (kept KeepFailed, found by Scan)
+│      │  └─────── Ack ──► gone: done, while KeepDone keeps its key
 └─ Retry, Snooze, or the lease ends
 ```
 
@@ -342,6 +349,57 @@ none        a new job at 9:00                   —
   no attempt: a provider that asks for a minute, a row that says later.
 - **A failed job is kept** `KeepFailed`, seven days by default, with the last
   error, and `Scan`, `Get`, `Update` and `Cancel` find it.
+
+## Where a job is
+
+A page that shows a user their video in a queue asks the queue, not a table
+of statuses the handler keeps:
+
+```go
+videos, err := jobs.OpenQueue[Video](ctx, queues, "videos", jobs.MaxRunning(2))
+err = videos.Enqueue(ctx, video, jobs.Key(video.ID))
+
+entry, found, err := videos.Get(ctx, video.ID)         // waiting, 17 ahead
+for entry, err := range videos.Watch(ctx, video.ID) {  // waiting 17 … 3 … running 0.4 … done
+	if err != nil {
+		return err
+	}
+	stream(entry.State, entry.Ahead, entry.Progress)
+}
+
+func (a *app) transcode(ctx context.Context, job jobs.Job[Video]) error {
+	return a.ffmpeg(ctx, job.Value, func(done float64) { job.Progress(done) })
+}
+```
+
+- **A state is where the job is.** `Waiting` until a handler, or a `Claim`'s
+  caller, has it; `Running` while one does; `Failed` when it failed for good;
+  `Done` while `KeepDone` keeps its key; `Cancelled`, which only a watcher
+  sees, since a cancelled job leaves nothing behind. A job a `Work` loop
+  claimed ahead for a busy worker is leased but waits, none ahead of it: it
+  runs next, and a cancel keeps it from starting.
+- **`Ahead` counts the jobs that run before a waiting one**: the rows before
+  it in the order the queue runs them, less those running. It counts to
+  10,000, so that a `Get` reads at most that many keys of the queue's order
+  and a job further back reads as 10,000. `Scan` leaves it zero.
+- **Progress lives in the store's memory.** `Job.Progress(v)` keeps `v` as
+  JSON, 4 KiB at most, until the attempt is settled; past the bound it is
+  dropped and logged once a quiet period. It is not written to the file: an
+  attempt a restart ends runs again from its start, and a progress written
+  each time a handler reports it would cost a write a report.
+- **`Watch` follows a job, not a key.** It yields the entry as it is, then
+  again when its state, place, attempt, time, progress or error changes, until
+  the job is done, failed or cancelled, the last entry; a later job under the
+  key is another watch's. A key that names nothing yields nothing. The queue
+  wakes its watchers at each enqueue, claim, settlement and cancel, and a
+  watcher reads its job at most five times a second, so one behind a busy
+  queue reads the latest rather than every change.
+- **`MaxRunning(n)` bounds the jobs that run at once** across every `Work`
+  loop and `Claim` of the store. The writer counts the live leases as it
+  claims, so no two claims both take the last place; a claim past the bound
+  takes nothing until a settlement or a lease's end makes room, and a
+  settlement wakes the loops waiting for it. A loop of such a queue claims no
+  job ahead for a busy worker, so that the jobs it holds are the ones running.
 
 ## Repeats
 
@@ -395,8 +453,9 @@ if found {
   what it lacks in one transaction with the settlements of the jobs its
   workers finished since, a finished worker counted free in that same write,
   so that a queue under load commits once for many jobs and a worker never
-  waits for a commit to start its next. A job claimed ahead is leased:
-  `Update` and `Cancel` find it too late, and a crash counts its attempt.
+  waits for a commit to start its next. A job claimed ahead is leased, though
+  it waits: `Update` finds it too late, `Cancel` keeps it from starting, and a
+  crash counts its attempt.
 - **A handler stopped by its caller's context or by `Close`** gives its job
   back, and that attempt is not counted, when it returns that cancellation.
   What a handler returned decides, not whether `Work` has ended since: the
@@ -414,7 +473,7 @@ if found {
 
 **Memory does not grow with the queue.** What waits is rows in `jobs.db`; a
 queue holds in memory the time of its next job, the jobs its workers have in
-hand and the settlements not yet written. A million jobs cost their rows,
+hand with what their handlers reported, and the settlements not yet written. A million jobs cost their rows,
 about three hundred bytes each in the probe that preceded this design, and
 nothing else.
 
@@ -466,7 +525,7 @@ Neither polls, and neither needs a sweep that repairs what a crash left.
 |---|---|
 | `ErrInvalid` | a key empty or over 1 KiB, a value JSON cannot write, a repeat without a key, a cron expression that does not parse or never runs, a zone without a name, a queue opened as another kind, an option of another kind |
 | `ErrLimit` | a value over 1 MiB, a job past `MaxWaiting` |
-| `ErrConflict` | settling a job whose lease another claim has taken since, `Update` of a job that no longer waits |
+| `ErrConflict` | settling a job whose lease another claim has taken since, or that `Cancel` took, which wraps `jobs.ErrCancelled`; `Update` of a job that no longer waits |
 | `ErrClosed` | the store closed, or a `WithTx` handle used after its callback |
 | `ErrCorrupt` | a row that no longer decodes |
 
@@ -535,6 +594,10 @@ meta      name | value                              the high-water mark of job i
 | A handler's deadline | 1 min by default |
 | A `Scan` page | 1000 jobs, 4 MiB of values |
 | Jobs a claim takes | one a `Claim`, the free workers of a `Work`, 1,000 at most |
+| Jobs running at once | `MaxRunning`, unbounded by default |
+| A job's progress | 4 KiB of JSON |
+| The jobs `Ahead` counts | 10,000 |
+| A watcher's reads | five a second |
 
 ## Gates
 
@@ -548,7 +611,12 @@ The five cases are the gates' workloads.
 | an enqueue while its key's job runs asks for one run more | `TestAnEnqueueWhileItsJobRunsAsksForOneRunMore` |
 | `KeepDone` makes a key run once | `TestKeepDoneMakesAKeyRunOnce` |
 | `Update` changes only a job that still waits | `TestUpdateChangesOnlyAWaitingJob` |
-| `Cancel` says whether it came in time | `TestCancelSaysWhetherItCameInTime` |
+| `Cancel` says whether there was a job, and takes a running one | `TestCancelSaysWhetherItCameInTime`, `TestCancelStopsTheHandlerOfARunningJob` |
+| a job claimed ahead for a busy worker waits, and a cancel keeps it from starting | `TestAJobHeldForABusyWorkerWaitsAndCancelKeepsItFromStarting` |
+| `Get` says where a job is and how many run before it | `TestGetSaysWhereAJobIsAndHowManyRunBeforeIt`, `TestAJobWhoseLeaseEndedWaitsAgain` |
+| a watch follows its job to its end | `TestAWatchFollowsItsJobToItsEnd` |
+| a progress past its bound is dropped | `TestAProgressPastItsBoundIsDropped` |
+| `MaxRunning` holds a queue to its places | `TestMaxRunningHoldsAQueueToItsPlaces` |
 | a job whose lease ended runs again | `TestAJobWhoseLeaseEndedRunsAgain` |
 | a stale lease settles nothing | `TestAStaleLeaseSettlesNothing` |
 | a job that kills its process fails after its attempts | `TestAJobThatKillsItsProcessFailsAfterItsAttempts` |
@@ -592,9 +660,8 @@ Each waits for a workload that needs it and a measurement that pays for it.
 
 - Priority within a queue: the jobs are kept in the order of their time, and a
   second order beside it is a second queue.
-- Cancelling a job that runs, through its handler's context.
-- A rate a queue may not pass; `Workers` bounds how many run at once.
-- Remote workers, through the server of their own.
+- A rate a queue may not pass; `MaxRunning` bounds how many run at once, not
+  how many start a second.
 - Writing a job's history to records: the application logs what it does, and
   the engine logs failures once a quiet period.
 

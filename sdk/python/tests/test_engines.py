@@ -339,3 +339,58 @@ async def test_a_second_open_finds_the_sidecar_the_first_started(tmp_path: Path)
         await asyncio.sleep(0.05)
     assert not serve.exists()
     assert "msg=serving" in (tmp_path / "shared" / "server" / "serve.log").read_text()
+
+
+async def test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees(
+    store: tinystore.Store,
+) -> None:
+    q = store.jobs.queue("videos", str, max_running=1)
+    await q.enqueue("a", key="a")
+    await q.enqueue("b", key="b")
+    seen: list[str] = []
+
+    async def watching() -> None:
+        async for s in q.watch("b"):
+            # each entry as it comes, which the test waits for, not the list once the watch ends
+            seen.append(f"{s.state} {s.ahead}" + ("" if s.progress is None else f" {s.progress}"))  # noqa: PERF401
+
+    async def until(holds: object, what: str) -> None:
+        for _ in range(500):
+            if callable(holds) and holds():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"waited five seconds for {what}")
+
+    watcher = asyncio.ensure_future(watching())
+    await until(lambda: "waiting 1" in seen, "b waiting behind a")
+    release = asyncio.Event()
+    cancelled: list[str] = []
+
+    async def handle(job: tinystore.Job[str]) -> None:
+        if job.key == "a":
+            await release.wait()
+            return
+        job.progress({"done": 1})
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.append(job.key)
+            raise
+
+    loop = asyncio.ensure_future(q.work(handle, workers=2))
+    await until(lambda: "waiting 0" in seen, "a running, b next")
+    b = await q.get("b")
+    assert b is not None and b.state == "waiting"  # max_running holds it though a worker is free
+    release.set()
+    await until(lambda: "running 0 {'done': 1}" in seen, "b's progress")
+    assert await q.cancel("b")
+    await asyncio.wait_for(watcher, 5)
+    assert seen[-1] == "cancelled 0"
+    await until(lambda: cancelled == ["b"], "the handler's task to be cancelled")
+    loop.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await loop
+    assert await q.get("b") is None
+    assert [s async for s in q.watch("b")] == []
+    with pytest.raises(InvalidError):
+        tinystore.Job("k", "v", None, 1).progress(object())

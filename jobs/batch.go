@@ -113,6 +113,7 @@ func (c *enqueuedJob) Done(err error) {
 			c.state.waiting.Add(1)
 		}
 		c.state.alarm.lower(c.e.at)
+		c.state.watch.change()
 	}
 	if c.leave != nil {
 		c.leave()

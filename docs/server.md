@@ -382,7 +382,10 @@ truth.
 - **`jobs.work` is the engine's own Work loop.** The server calls `Work`
   with a handler that hands each job to the client and settles it by the
   frame that answers. Claiming ahead, settling in the write of the next claim
-  and extending leases stay the engine's, and nothing polls:
+  and extending leases stay the engine's, and nothing polls. A progress the
+  client reports reaches the engine's `Job.Progress` without settling the
+  job, and a cancel that ends a handler's context is sent to a client that
+  asked for cancels, so that its own handler stops:
 
 ```go
 // work hands the engine's Work loop to a remote worker: it claims ahead,
@@ -664,7 +667,7 @@ Where the slices stand, 29 September 2026:
 | `server/wire` | built: frames, profile, handshake, errors; vectors in `server/wire/testdata/vectors.json` |
 | a session with its transports | built: `session.go`, `stream.go`, `workers.go`, `internal/flow`, Unix, TCP, TLS, `internal/pipe` |
 | kv | built: `kv.go`, `kv.Raw` in the engine, a config through `kv.RawConfig` and its `watch`, a limiter's `allow`; the Go client is `server/internal/client`, a test's and a measurement's |
-| jobs | built: `jobs.go`, `jobs_work.go`; the messages on wire.md |
+| jobs | built: `jobs.go`, `jobs_work.go`, a job's `watch`, a worker's progress and the cancels it is told of; the messages on wire.md |
 | blobs | built: `blobs.go`; the messages on wire.md |
 | sql | built: `sql.go`, the data connection's check in `sqltokens.go` and `datasql.go`; the messages on wire.md |
 | records | built: `records.go`; the messages on wire.md |

@@ -109,6 +109,7 @@ var schema = map[string][]field{
 		{7, "keep failed", "uint"},
 		{8, "keep done", "uint"},
 		{9, "schedule", "jobs.repeat"},
+		{10, "max running", "uint"},
 	},
 	"jobs.repeat": {{1, "cron", "str"}, {2, "zone", "str"}, {3, "every", "uint"}},
 	"jobs.job":    jobsJob,
@@ -124,6 +125,8 @@ var schema = map[string][]field{
 		{6, "state", "uint"},
 		{7, "err", "str"},
 		{8, "repeat", "str"},
+		{9, "ahead", "uint"},
+		{10, "progress", "str"},
 	},
 	"jobs.lease": {{1, "handle", "uint"}, {2, "lease", "uint"}},
 	"jobs.held": {
@@ -133,9 +136,15 @@ var schema = map[string][]field{
 		{4, "value", "str"},
 		{5, "at", "int"},
 		{6, "attempt", "uint"},
+		{7, "cancelled", "bool"},
 	},
 	"jobs.outcome": {
-		{1, "job", "uint"}, {2, "how", "uint"}, {3, "err", "str"}, {4, "at", "int"}, {5, "after", "uint"},
+		{1, "job", "uint"},
+		{2, "how", "uint"},
+		{3, "err", "str"},
+		{4, "at", "int"},
+		{5, "after", "uint"},
+		{6, "progress", "str"},
 	},
 	"jobs.outcomes": {{1, "outcomes", "[]jobs.outcome"}},
 	"jobs.settled":  {{1, "settled", "[]error?"}},
@@ -146,8 +155,14 @@ var schema = map[string][]field{
 		{4, "after", "str"},
 		{5, "limit", "uint"},
 	},
-	"jobs.page":    {{1, "more", "bool"}, {2, "after", "str"}},
-	"jobs.workers": {{1, "handle", "uint"}, {2, "workers", "uint"}, {3, "timeout", "uint"}, {4, "until idle", "bool"}},
+	"jobs.page": {{1, "more", "bool"}, {2, "after", "str"}},
+	"jobs.workers": {
+		{1, "handle", "uint"},
+		{2, "workers", "uint"},
+		{3, "timeout", "uint"},
+		{4, "until idle", "bool"},
+		{5, "cancels", "bool"},
+	},
 
 	"blobs.bucket": {{1, "name", "str"}, {2, "default ttl", "uint"}, {3, "max size", "uint"}},
 	"blobs.call": {
@@ -334,6 +349,7 @@ var methods = []struct {
 	{"jobs.settle", wire.JobsSettle},
 	{"jobs.scan", wire.JobsScan},
 	{"jobs.work", wire.JobsWork},
+	{"jobs.watch", wire.JobsWatch},
 	{"blobs.open", wire.BlobsOpen},
 	{"blobs.stat", wire.BlobsStat},
 	{"blobs.delete", wire.BlobsDelete},
@@ -511,7 +527,7 @@ func jobsExamples() []example {
 	return []example{
 		of("a queue naming its whole policy", "jobs.queue", wire.JobsQueue{
 			Name: "sends", Lease: 30_000, MaxAttempts: 20, BackoffFirst: 1000, BackoffMost: 3_600_000,
-			MaxWaiting: 1_000_000, KeepFailed: 7 * 86_400_000, KeepDone: 3_600_000,
+			MaxWaiting: 1_000_000, KeepFailed: 7 * 86_400_000, KeepDone: 3_600_000, MaxRunning: 4,
 		}),
 		of("a schedule by cron in a zone", "jobs.queue", wire.JobsQueue{
 			Name: "purge", Schedule: &wire.Repeat{Cron: "10 3 * * *", Zone: "Europe/Moscow"},
@@ -530,6 +546,13 @@ func jobsExamples() []example {
 			Found: true, Key: "call:42", Value: `{"user":42}`, At: at, Attempt: 3, State: 3, Err: "smtp: refused",
 			Repeat: "10 3 * * * Europe/Moscow",
 		}),
+		of("a waiting job with jobs ahead of it", "jobs.entry", wire.JobsEntry{
+			Found: true, Key: "video:7", Value: `{"video":7}`, At: at, State: 1, Ahead: 17,
+		}),
+		of("a running job and what its handler reported", "jobs.entry", wire.JobsEntry{
+			Found: true, Key: "video:7", Value: `{"video":7}`, At: at, Attempt: 1, State: 2,
+			Progress: `{"done":21,"total":100}`,
+		}),
 		of("jobs.claim for a minute", "jobs.lease", wire.JobsLease{Handle: 1, Lease: 60_000}),
 		of("a held job", "jobs.held", wire.JobsHeld{
 			Found: true, Job: 12, Key: "call:42", Value: `{"user":42}`, At: at, Attempt: 1,
@@ -545,6 +568,8 @@ func jobsExamples() []example {
 			Job: 1, How: wire.JobRetry, Err: "busy",
 			At: at,
 		}),
+		of("a work stream's progress", "jobs.outcome", wire.JobsOutcome{Job: 1, How: wire.JobProgress, Progress: "0.4"}),
+		of("a work stream's cancel of a job in the client's hands", "jobs.held", wire.JobsHeld{Job: 1, Cancelled: true}),
 		of("a settlement, one refused", "jobs.settled", wire.JobsSettled{Errors: []*wire.Error{
 			nil, {Code: wire.CodeConflict, Message: "the lease ended", What: map[string]string{
 				"queue": "sends", "key": "call:42",
@@ -554,8 +579,8 @@ func jobsExamples() []example {
 			Handle: 1, Prefix: "chat:42:", State: 3, After: "chat:42:a", Limit: 50,
 		}),
 		of("a page of jobs", "jobs.page", wire.JobsPage{More: true, After: "chat:42:z"}),
-		of("jobs.work of eight workers until idle", "jobs.workers", wire.JobsWorkers{
-			Handle: 1, Workers: 8, Timeout: 60_000, UntilIdle: true,
+		of("jobs.work of eight workers until idle, which stop a cancelled job", "jobs.workers", wire.JobsWorkers{
+			Handle: 1, Workers: 8, Timeout: 60_000, UntilIdle: true, Cancels: true,
 		}),
 	}
 }

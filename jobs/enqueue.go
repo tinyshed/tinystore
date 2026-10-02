@@ -48,14 +48,16 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 			q.state.waiting.Add(1)
 		}
 		q.state.alarm.lower(e.at)
+		q.state.watch.change()
 	})
 	return nil
 }
 
 // Update gives a job that still waits, or failed, a new value, and a new time
 // or repeat when options name one. A failed job waits again with its attempts
-// from zero, now unless they name a time. A job that runs, ran or was
-// cancelled, or a key that names none, is tinystore.ErrConflict.
+// from zero, now unless they name a time. A job a worker holds, running or
+// claimed ahead for a busy one, a job that ran or was cancelled, or a key that
+// names none, is tinystore.ErrConflict.
 func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...EnqueueOption) error {
 	e, err := q.prepare(append(options, Key(key)))
 	if err == nil {
@@ -81,30 +83,39 @@ func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...E
 			q.state.waiting.Add(1)
 		}
 		q.state.alarm.lower(next)
+		q.state.watch.change()
 	})
 	return nil
 }
 
-// Cancel removes a job that waits or failed and says whether it did; one that
-// runs is left to its worker, and false says it is too late.
+// Cancel removes the job under key, whether it waits, runs or failed, and says
+// whether there was one. A running job's handler sees its context end with
+// ErrCancelled and what it returns settles nothing; one a Work loop keeps for
+// a busy worker never starts. A repeating job stops repeating.
 func (q *Queue[V]) Cancel(ctx context.Context, key string) (bool, error) {
 	if key == "" || len(key) > maxKey {
 		return false, q.fail(key, fmt.Errorf("%w: jobs: a key of %d bytes, not 1 to 1024", tinystore.ErrInvalid,
 			len(key)))
 	}
-	now := q.store.clock()
-	var waited, failed bool
+	var taken int64 // the id of the job taken from the queue's rows
+	var failed bool
 	err := q.write(ctx, 0, func(w sqlite.Writer) (writeErr error) {
-		waited, failed, writeErr = cancel(ctx, w, q.state.id, key, now)
+		taken, failed, writeErr = cancel(ctx, w, q.state.id, key)
 		return writeErr
 	})
 	if err != nil {
 		return false, q.fail(key, err)
 	}
-	if waited {
-		q.committed(func() { q.state.waiting.Add(-1) })
-	}
-	return waited || failed, nil
+	q.committed(func() {
+		if taken != 0 {
+			q.state.waiting.Add(-1)
+			q.state.watch.cancelled(taken, key)
+			q.state.roomMade(q.store.clock())
+			return
+		}
+		q.state.watch.change()
+	})
+	return taken != 0 || failed, nil
 }
 
 // enqueued is an Enqueue's or an Update's facts, gathered before it waits for
@@ -195,9 +206,8 @@ const (
 	updateWaiting = `update _tinystore_jobs
 		set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat)
 		where queue = ?1 and next = ?2 and id = ?3`
-	cancelWaiting = `delete from _tinystore_jobs where (queue, next, id) in (
+	cancelJob = `delete from _tinystore_jobs where (queue, next, id) in (
 			select k.queue, k.next, k.id from _tinystore_jobs_keys k where k.queue = ?1 and k.key = ?2)
-		and not exists (select 1 from _tinystore_jobs_leases l where l.id = _tinystore_jobs.id and l.until > ?3)
 		returning id, spill`
 	dropLeaseOf = `delete from _tinystore_jobs_leases where id = ?1`
 )
@@ -329,26 +339,25 @@ func requeue(ctx context.Context, w sqlite.Writer, e enqueued) (int64, bool, err
 	return e.at, true, insertRow(ctx, w, e)
 }
 
-// cancel deletes the waiting or failed job under a key, with the lease an
-// ended claim left, the value it spilled and its key
-func cancel(ctx context.Context, w sqlite.Writer, queue int64, key string, now int64) (waited, failed bool, err error) {
-	var id int64
+// cancel deletes the job under a key, waiting or running, with its lease, the
+// value it spilled and its key, and answers its id; or the failed job under it
+func cancel(ctx context.Context, w sqlite.Writer, queue int64, key string) (taken int64, failed bool, err error) {
 	var spill sql.NullInt64
-	err = sqlite.QueryRowByKey(ctx, w, cancelWaiting, queue, key, now).Scan(&id, &spill)
+	err = sqlite.QueryRowByKey(ctx, w, cancelJob, queue, key).Scan(&taken, &spill)
 	switch {
 	case err == nil:
-		if _, err = w.ExecContext(ctx, dropLeaseOf, id); err == nil {
+		if _, err = w.ExecContext(ctx, dropLeaseOf, taken); err == nil {
 			err = dropSpilled(ctx, w, spill)
 		}
 		if err == nil {
 			_, err = w.ExecContext(ctx, dropKey, queue, key)
 		}
-		return true, false, err
+		return taken, false, err
 	case !errors.Is(err, sql.ErrNoRows):
-		return false, false, err
+		return 0, false, err
 	}
 	failed, err = dropFailedJob(ctx, w, queue, key)
-	return false, failed, err
+	return 0, failed, err
 }
 
 func insertRow(ctx context.Context, w sqlite.Writer, e enqueued) error {

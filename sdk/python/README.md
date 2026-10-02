@@ -86,6 +86,29 @@ A handler's return acknowledges its job and an exception retries it, waiting
 longer each time; `job.retry`, `job.fail` and `job.snooze` say otherwise.
 Cancelled, `work` gives back the jobs its handlers did not finish, uncounted.
 
+```python
+videos = store.jobs.queue("videos", Video, max_running=2)
+await videos.enqueue(video, key=video.id)
+async for s in videos.watch(video.id):  # waiting 3 … running 0.4 … done
+    await send(s.state, s.ahead, s.progress)
+
+
+async def transcode(job: tinystore.Job[Video]) -> None:
+    await encode(job.value, on_progress=job.progress)
+
+
+await videos.work(transcode)
+```
+
+`get` says where a job is: `waiting`, with how many jobs run `ahead` of it,
+`running`, with the `progress` its handler last reported, `failed`, or `done`
+while `keep_done` keeps its key; `watch` yields it again at each change until
+it ends, `cancelled` included. `job.progress` takes any JSON within 4 KiB and
+sends the latest at most ten times a second. `cancel` takes a running job too:
+its handler's task is cancelled, and what it leaves settles nothing.
+`max_running` bounds the jobs running at once across every worker of the
+store.
+
 ## blobs
 
 ```python

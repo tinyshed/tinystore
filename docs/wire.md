@@ -321,6 +321,7 @@ carry:
 | | watch | a download that does not end: a config's kept fields, again after each change |
 | jobs | open, enqueue of many, update, cancel, get, claim, settle of many | calls |
 | | scan | a download, an entry a message |
+| | watch | a download that ends with its job: its entry, again after each change |
 | | work | both ways: jobs out, their outcomes back |
 | blobs | open, stat, delete, copy, move, usage, clear | calls |
 | | scan | a download, an object a message |
@@ -458,12 +459,13 @@ A job's value is its JSON as str, checked before it is kept; a schedule's is
 | `0x0201` | open | a queue | a handle |
 | `0x0202` | enqueue | a batch: jobs one transaction adds, all or none | `{}`; `what` names a refused job as `call` |
 | `0x0203` | update | a change: a job by its key, a new value, time or repeat | `{}` |
-| `0x0204` | cancel | a key | an entry: found says it came in time |
+| `0x0204` | cancel | a key | an entry: found says there was a job, which a running one's handler is told |
 | `0x0205` | get | a key | an entry |
 | `0x0206` | claim | a lease | a held job, found false when none was due |
 | `0x0207` | settle | outcomes of claimed jobs, written in one group | settled: nil or an error each |
 | `0x0208` | scan | a query | a download: `{}`, an entry a `DATA`, a page |
 | `0x0209` | work | workers | both ways: `{}`, then held jobs out and outcomes back, `DATA`·END each side |
+| `0x020a` | watch | a key | a download: `{}`, then an entry a `DATA`, now and after each change, until the job ends |
 
 A queue:
 
@@ -478,6 +480,7 @@ A queue:
 | 7 | keep failed | uint | milliseconds; seven days when absent |
 | 8 | keep done | uint | milliseconds; absent forgets a key when its job is done |
 | 9 | schedule | a repeat | a schedule rather than a queue |
+| 10 | max running | uint | the jobs that may run at once, across every worker of the store; absent bounds none |
 
 A repeat is `{1: cron, 2: zone}`, five cron fields and the zone's name, or
 `{3: every}`, milliseconds, at least a second. A job, a batch's item:
@@ -500,40 +503,66 @@ handle under key 6; a key is `{1: handle, 2: key}`. An entry:
 | 3 | value | str | |
 | 4 | at | int | unix milliseconds: the time it runs for |
 | 5 | attempt | uint | its attempts, a running one included |
-| 6 | state | uint | 1 waiting, 2 leased, 3 failed |
+| 6 | state | uint | 1 waiting, 2 running, 3 failed, 4 done while keep done keeps its key, 5 cancelled, which only a watch sends |
 | 7 | err | str | its last failure |
 | 8 | repeat | str | a repeating job's cron text and zone, as jobs.db keeps it |
+| 9 | ahead | uint | the jobs that run before a waiting one, up to 10,000; get and watch alone |
+| 10 | progress | str | what a running job's worker last reported, as JSON |
 
-A lease is `{1: handle, 2: lease}`, milliseconds, the queue's when absent. A
-held job is `{1: found, 2: job, 3: key, 4: value, 5: at, 6: attempt}`, job
-being the number its outcome names: a claim's lives on its connection until
-it is settled, and a work stream's on its stream. An outcome:
+A job a work loop claimed ahead for a busy worker is waiting, 0 ahead, until
+a worker has it. A lease is `{1: handle, 2: lease}`, milliseconds, the
+queue's when absent. A held job is `{1: found, 2: job, 3: key, 4: value, 5:
+at, 6: attempt, 7: cancelled}`, job being the number its outcome names: a
+claim's lives on its connection until it is settled, and a work stream's on
+its stream. An outcome:
 
 | key | field | type | |
 |---|---|---|---|
 | 1 | job | uint | |
-| 2 | how | uint | 1 ack, 2 retry, 3 fail for good, 4 snooze, 5 extend |
+| 2 | how | uint | 1 ack, 2 retry, 3 fail for good, 4 snooze, 5 extend, 6 progress |
 | 3 | err | str | why a retry or a failure |
 | 4 | at | int | unix milliseconds: when a retry or a snooze runs again |
 | 5 | after | uint | milliseconds: the same from now, or how long an extend holds; written when given, 0 too, which runs a retry or a snooze now where one without a time waits its backoff |
+| 6 | progress | str | a progress's report, any JSON, which get and watch show until the job is settled |
 
-Outcomes are `{1: [outcome…]}` and settled `{1: [nil or error…]}`. A query
-is `{1: handle, 2: prefix, 3: state, 4: after, 5: limit}` and a page `{1:
-more, 2: after}`, as `jobs.Query` and `jobs.Page` are.
+A progress settles nothing: the job stays in its worker's hands, claimed or on
+a work stream, and a report that is not JSON is `invalid`. The server keeps
+the last one in memory, 4 KiB of JSON at most, a larger one dropped and
+logged, so the SDKs refuse one past it before it leaves.
 
-Workers are `{1: handle, 2: workers, 3: timeout, 4: until idle}`: the
-queue's own Work loop runs for the stream, `workers` at once, 1 when absent
-and at most the streams in flight, each job `timeout` milliseconds in the
-client's hands, a minute when absent, and with `until idle` only until no job
-is due and none runs, as a test wants it. Each job it hands a handler goes
+Outcomes are `{1: [outcome…]}` and settled `{1: [nil or error…]}`; settling a
+claimed job a cancel took is `conflict`. A query is `{1: handle, 2: prefix, 3:
+state, 4: after, 5: limit}`, state 1, 2 or 3, and a page `{1: more, 2:
+after}`, as `jobs.Query` and `jobs.Page` are.
+
+Workers are `{1: handle, 2: workers, 3: timeout, 4: until idle, 5: cancels}`:
+the queue's own Work loop runs for the stream, `workers` at once, 1 when
+absent and at most the streams in flight, each job `timeout` milliseconds in
+the client's hands, a minute when absent, and with `until idle` only until no
+job is due and none runs, as a test wants it. Each job it hands a handler goes
 out as a held job; the client settles it by sending its outcome as `DATA` on
 the same stream, and ends its side with `DATA`·END once it takes no more. An
 extend is not one of those outcomes: the loop extends its leases itself, and
-ends the stream `invalid` on one rather than take it as an ack. When that side ends, or the
-client cancels or leaves, the jobs in its hands fail that attempt, as a
-worker whose process died fails it, and only after their handlers return
-does the loop stop, so that the jobs it claimed ahead and never handed over
-go back uncounted. The server's `DATA`·END, `{}`, follows.
+ends the stream `invalid` on one rather than take it as an ack. A progress is,
+and leaves the job in the client's hands. When that side ends, or the client
+cancels or leaves, the jobs in its hands fail that attempt, as a worker whose
+process died fails it, and only after their handlers return does the loop
+stop, so that the jobs it claimed ahead and never handed over go back
+uncounted. The server's `DATA`·END, `{}`, follows.
+
+A cancel that takes a job in the client's hands sends it again as `{2: job,
+7: true}` on a stream that asked with `cancels`, so that its handler stops; a
+stream that did not ask is told nothing. Either way the outcome the client
+sends for that job settles nothing, and the stream goes on.
+
+`jobs.watch` answers `{}`, then the job under the key as an entry a `DATA`,
+now and each time its state, place, attempt, time, progress or error changes,
+and ends after the entry in which the job ended: done, failed or cancelled. A
+key that names no job ends it at once. A watcher behind a busy queue is sent
+the latest entry, read at most five times a second, never every change. It
+follows the job it found, so a later job under the key is another watch's,
+and it also ends when the client cancels it, when the client's side of the
+connection ends, or with the server.
 
 ### blobs
 

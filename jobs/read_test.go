@@ -58,7 +58,7 @@ func TestScanFindsOnlyTheKeysUnderAPrefixNoRuneEnds(t *testing.T) {
 }
 
 // Scan walks the keys under a prefix in the byte order of their text, a page
-// at a time, waiting, leased and failed jobs alike, and All meets each once
+// at a time, waiting, running and failed jobs alike, and All meets each once
 func TestScanWalksTheKeysUnderAPrefixAPageAtATime(t *testing.T) {
 	queues := openTestQueues(t, t.TempDir())
 	queue := openTestQueue[string](t, queues, "later", MaxAttempts(1))
@@ -70,7 +70,7 @@ func TestScanWalksTheKeysUnderAPrefixAPageAtATime(t *testing.T) {
 	if err := failing.Fail(t.Context(), errors.New("the chat is gone")); err != nil {
 		t.Fatal(err)
 	}
-	leased := mustClaim(t, queue)
+	running := mustClaim(t, queue)
 
 	page, err := queue.Scan(t.Context(), Query{Prefix: "chat:42:", Limit: 2})
 	if err != nil || !page.More || keysOf(page.Entries) != "chat:42:a chat:42:b" {
@@ -88,13 +88,17 @@ func TestScanWalksTheKeysUnderAPrefixAPageAtATime(t *testing.T) {
 		}
 		states[entry.Key] = entry.State
 	}
-	if len(states) != 6 || states[failing.Key] != Failed || states[leased.Key] != Leased {
+	if len(states) != 6 || states[failing.Key] != Failed || states[running.Key] != Running {
 		t.Fatalf("All under chat:4 met %v", states)
 	}
 
-	page, err = queue.Scan(t.Context(), Query{Prefix: "chat:42:", State: Leased})
-	if err != nil || keysOf(page.Entries) != leased.Key {
-		t.Fatalf("the leased jobs: %v, %v", keysOf(page.Entries), err)
+	page, err = queue.Scan(t.Context(), Query{Prefix: "chat:42:", State: Running})
+	if err != nil || keysOf(page.Entries) != running.Key {
+		t.Fatalf("the running jobs: %v, %v", keysOf(page.Entries), err)
+	}
+	page, err = queue.Scan(t.Context(), Query{Prefix: "chat:42:", State: Waiting})
+	if err != nil || keysOf(page.Entries) != "chat:42:b chat:42:d" {
+		t.Fatalf("the waiting jobs: %v, %v", keysOf(page.Entries), err)
 	}
 }
 

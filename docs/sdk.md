@@ -235,6 +235,45 @@ A variable is named by the field's path in upper snake case after the prefix,
 | a rate | `kv.Rate(100, time.Second)` | `rate: '100/s'` | `rate="100/s"` |
 | retry after | `time.Duration` | milliseconds | seconds |
 
+## Where a job is
+
+```go
+videos, err := jobs.OpenQueue[Video](ctx, queues, "videos", jobs.MaxRunning(2))
+entry, found, err := videos.Get(ctx, id)                // Waiting, 17 Ahead
+for entry, err := range videos.Watch(ctx, id) { … }     // waiting 17 … 3 … running 0.4 … done
+job.Progress(0.4)                                       // in the handler
+```
+
+```ts
+const videos = store.jobs.queue<Video>('videos', { maxRunning: 2 })
+const entry = await videos.get(id)                      // { state: 'waiting', ahead: 17, … }
+for await (const s of videos.watch(id)) send(s.state, s.ahead, s.progress)
+job.progress(0.4)                                       // in the handler
+```
+
+```python
+videos = store.jobs.queue("videos", Video, max_running=2)
+entry = await videos.get(video_id)  # JobEntry(state="waiting", ahead=17, …)
+async for s in videos.watch(video_id):
+    await send(s.state, s.ahead, s.progress)
+job.progress(0.4)  # in the handler
+```
+
+A job is waiting, with how many jobs run ahead of it, up to 10,000; running,
+with the JSON its handler last reported; failed for good; done while the
+queue's keep done keeps its key; and cancelled, which only a watch yields, as
+its last entry. A watch yields the job again at each change, until it ends,
+and nothing for a key that names no job. A progress lives in the store
+process's memory until the attempt is settled, never in the file, and the
+SDKs send the latest at most ten times a second.
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| at most n at once | `jobs.MaxRunning(2)` | `maxRunning: 2` | `max_running=2` |
+| a state | `jobs.Waiting`, `Running`, `Failed`, `Done`, `Cancelled` | `'waiting'`, `'running'`, `'failed'`, `'done'`, `'cancelled'` | the same strings |
+| a progress past 4 KiB | dropped and logged | `InvalidError` | `InvalidError` |
+| a running job's cancel, in its handler | the context ends, its cause `jobs.ErrCancelled` | `job.signal` aborts, its reason a `CancelledError` | the handler's task is cancelled |
+
 ## Cancellation
 
 Each language's own: a `context.Context` in Go, a task's cancellation in
@@ -308,6 +347,12 @@ Built after it:
   of the console alone, `records.Handler`, `logger()`, `tinystore.handler()`,
   serves a program that wants the logger and not the records, so that it
   needs no pino.
+- **Jobs a program can show**: `get` says where a job is and how many run
+  ahead of it, `watch` follows it to its end, a handler reports its progress,
+  `cancel` stops a running job's handler, and a queue's `maxRunning` bounds
+  the jobs running at once across every worker. The status and the watch are
+  the queue's, named by the job's key, rather than a handle of the job
+  `enqueue` would answer.
 
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):

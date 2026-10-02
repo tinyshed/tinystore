@@ -79,6 +79,25 @@ A handler's return acknowledges its job and a throw retries it, waiting longer
 each time; `job.retry`, `job.fail` and `job.snooze` say otherwise. `work` runs
 until its signal aborts; the jobs in hand finish first.
 
+```ts
+const videos = store.jobs.queue<Video>('videos', { maxRunning: 2 })
+await videos.enqueue(video, { key: video.id })
+for await (const s of videos.watch(video.id)) send(s.state, s.ahead, s.progress) // waiting 3 … running 0.4 … done
+
+await videos.work(async job => {
+	await transcode(job.value, { signal: job.signal, onProgress: p => job.progress(p) })
+})
+```
+
+`get` says where a job is: `waiting`, with how many jobs run `ahead` of it,
+`running`, with the `progress` its handler last reported, `failed`, or `done`
+while `keepDone` keeps its key; `watch` yields it again at each change until
+it ends, `cancelled` included. `job.progress` takes any JSON within 4 KiB and
+sends the latest at most ten times a second. `cancel` takes a running job too:
+its `job.signal` aborts with a `CancelledError`, and what the handler returns
+settles nothing. `maxRunning` bounds the jobs running at once across every
+worker of the store.
+
 ## blobs
 
 ```ts

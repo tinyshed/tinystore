@@ -89,10 +89,11 @@ type lease struct {
 	repeat  string
 	spill   sql.NullInt64
 
-	mu      sync.Mutex
-	until   int64
-	settled bool
-	lost    bool // another claim, or a Cancel, took the job after the lease ended
+	mu        sync.Mutex
+	until     int64
+	settled   bool
+	lost      bool // another claim, or a Cancel, took the job after the lease ended
+	cancelled bool // Cancel took the job while the lease held it
 }
 
 type outcome int
@@ -118,6 +119,9 @@ func (l *lease) settleNow(ctx context.Context, s settlement) error {
 	if l == nil {
 		return errNotClaimed
 	}
+	if l.wasCancelled() {
+		return fmt.Errorf("%w: %w", tinystore.ErrConflict, ErrCancelled)
+	}
 	if settled, lost := l.state(); lost {
 		return errLeaseLost
 	} else if settled {
@@ -140,6 +144,8 @@ func (l *lease) settleNow(ctx context.Context, s settlement) error {
 	}
 	if s.how != extended {
 		l.markSettled()
+		l.queue.watch.settled(l, done.ended, done.failed)
+		l.queue.roomMade(l.store.clock())
 	}
 	done.applyLease(l)
 	done.apply(l.queue)
@@ -169,9 +175,24 @@ func (l *lease) markLost() {
 	l.settled, l.lost = true, true
 }
 
+// markCancelled says Cancel took the job: its lease settles nothing, and its
+// losing it is no news to log
+func (l *lease) markCancelled() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.settled, l.lost, l.cancelled = true, true, true
+}
+
+func (l *lease) wasCancelled() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.cancelled
+}
+
 // settled is what a settlement changed that memory follows once it commits
 type settled struct {
 	gone   bool  // the job left the queue's rows
+	ended  State // how it left them: Done or Failed
 	due    int64 // when it is due again, zero when it is not
 	failed string
 	lost   bool  // the lease was no longer the settlement's: nothing was written
@@ -349,7 +370,7 @@ func (l *lease) forget(ctx context.Context, w sqlite.Writer, spill sql.NullInt64
 			return settled{}, err
 		}
 	}
-	return settled{gone: true}, nil
+	return settled{gone: true, ended: Done}, nil
 }
 
 // retry moves the job to its next attempt's time, or fails it past its attempts
@@ -377,7 +398,7 @@ func (l *lease) fail(ctx context.Context, w sqlite.Writer, h heldRow, now int64,
 		return settled{}, err
 	}
 	_, err := w.ExecContext(ctx, dropJobRow, l.queue.id, l.next, l.id)
-	return settled{gone: true, failed: cause}, err
+	return settled{gone: true, ended: Failed, failed: cause}, err
 }
 
 // nextRun is when a settled job runs again without a retry.
@@ -460,6 +481,7 @@ const (
 		and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
 		order by next, id limit 1`
 	earliestLease = `select min(until) from _tinystore_jobs_leases where queue = ?1 and until > ?2`
+	liveLeases    = `select count(*) from _tinystore_jobs_leases where queue = ?1 and until > ?2`
 )
 
 // claimedRow is a due job a claim leased. It carries the value when the row
@@ -477,6 +499,7 @@ type claimedRow struct {
 type claiming struct {
 	queue, now, until  int64
 	limit, maxAttempts int
+	maxRunning         int // the jobs the queue's leases may hold at once, none when zero
 }
 
 // claimRows leases up to limit due jobs until until, leaving the values they
@@ -484,11 +507,17 @@ type claiming struct {
 //
 // A job whose attempts all ended without a settlement, its process dead or its
 // worker gone each time, fails for good instead of running again. abandoned
-// counts them.
-func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []claimedRow, abandoned int, err error) {
+// names them.
+//
+// A queue with MaxRunning leases no more than its room, the writer counting
+// the live leases so that no two claims both see the last place free.
+func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []claimedRow, abandoned []int64, err error) {
+	if c.limit, err = c.room(ctx, w); err != nil || c.limit == 0 {
+		return nil, nil, err
+	}
 	rows, err := w.QueryContext(ctx, claimJobs, c.queue, c.now, c.limit) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	var due []claimedRow
 	err = sqlite.EachRow(rows, "due jobs", func(rows *sql.Rows) error {
@@ -507,13 +536,36 @@ func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []clai
 		if leased, err = leaseRow(ctx, w, c, &due[i]); leased {
 			claimed = append(claimed, due[i])
 		} else if err == nil {
-			abandoned++
+			abandoned = append(abandoned, due[i].id)
 		}
 	}
 	return claimed, abandoned, err
 }
 
 const dropLeaseRow = `delete from _tinystore_jobs_leases where id = ?1`
+
+// room is how many jobs the claim may lease: its limit, and for a queue with
+// MaxRunning no more than the places its live leases leave
+func (c claiming) room(ctx context.Context, w sqlite.Writer) (int, error) {
+	if c.maxRunning == 0 || c.limit == 0 {
+		return c.limit, nil
+	}
+	var held int
+	if err := sqlite.QueryRow(ctx, w, liveLeases, c.queue, c.now).Scan(&held); err != nil {
+		return 0, err
+	}
+	return max(min(c.limit, c.maxRunning-held), 0), nil
+}
+
+// full says a claim of a queue with MaxRunning found every place taken, so
+// that only a settlement or a lease's end makes room
+func (c claiming) full(ctx context.Context, w sqlite.Writer) (bool, error) {
+	if c.maxRunning == 0 {
+		return false, nil
+	}
+	room, err := claiming{queue: c.queue, now: c.now, limit: 1, maxRunning: c.maxRunning}.room(ctx, w)
+	return room == 0, err
+}
 
 // leaseRow leases one due job, or fails it for good when this would be an
 // attempt past the queue's MaxAttempts
@@ -540,6 +592,19 @@ func abandon(ctx context.Context, w sqlite.Writer, c claiming, row claimedRow) e
 	}
 	_, err := w.ExecContext(ctx, dropJobRow, c.queue, row.next, row.id)
 	return err
+}
+
+// nextClaim is when the queue next needs a claim: nextTime, or for a queue
+// whose MaxRunning places are all taken the first live lease's end, since only
+// that or a settlement, which wakes the loops itself, makes room
+func nextClaim(ctx context.Context, w sqlite.Writer, c claiming) (int64, error) {
+	full, err := c.full(ctx, w)
+	if err != nil || !full {
+		return nextTime(ctx, w, c.queue, c.now)
+	}
+	var until sql.NullInt64
+	err = sqlite.QueryRow(ctx, w, earliestLease, c.queue, c.now).Scan(&until)
+	return until.Int64, err
 }
 
 // nextTime is when the queue next needs a claim: its first due job no live
@@ -579,8 +644,11 @@ func (q *Queue[V]) Claim(ctx context.Context, options ...ClaimOption) (Job[V], b
 
 		job := q.jobOf(row)
 		job.Value, err = q.valueHeld(ctx, row)
-		if err == nil {
+		if err == nil && q.state.watch.started(job.lease, nil) {
 			return job, true, nil
+		}
+		if err == nil {
+			continue // Cancel took it as it was claimed
 		}
 		if !errors.Is(err, errUnreadable) {
 			return Job[V]{}, false, q.fail(job.Key, err)
@@ -597,7 +665,7 @@ func (q *Queue[V]) claimOne(ctx context.Context, lease time.Duration) (claimedRo
 	for {
 		c := q.claiming(1, lease)
 		var claimed []claimedRow
-		abandoned := 0
+		var abandoned []int64
 		err := q.write(ctx, claimRowMemory, func(w sqlite.Writer) (writeErr error) {
 			claimed, abandoned, writeErr = claimRows(ctx, w, c)
 			return writeErr
@@ -610,7 +678,7 @@ func (q *Queue[V]) claimOne(ctx context.Context, lease time.Duration) (claimedRo
 			q.state.alarm.lower(c.until)
 			return claimed[0], true, nil
 		}
-		if abandoned == 0 {
+		if len(abandoned) == 0 {
 			return claimedRow{}, false, nil
 		}
 	}
@@ -659,17 +727,26 @@ func (q *Queue[V]) claiming(limit int, lease time.Duration) claiming {
 	now := q.store.clock()
 	return claiming{
 		queue: q.state.id, now: now, until: now + lease.Milliseconds(), limit: limit,
-		maxAttempts: q.state.policy.maxAttempts,
+		maxAttempts: q.state.policy.maxAttempts, maxRunning: q.state.policy.maxRunning,
+	}
+}
+
+// roomMade wakes the Work loops of a queue with MaxRunning once a settlement
+// has given a place back, since a claim that found none waits for that
+func (q *queueState) roomMade(now int64) {
+	if q.policy.maxRunning > 0 {
+		q.alarm.lower(now)
 	}
 }
 
 // abandoned follows in memory the jobs a claim failed for good
-func (q *queueState) abandoned(count int) {
-	if count == 0 {
+func (q *queueState) abandoned(ids []int64) {
+	if len(ids) == 0 {
 		return
 	}
-	q.waiting.Add(-int64(count))
-	for range count {
+	q.waiting.Add(-int64(len(ids)))
+	for range ids {
 		q.failures.observe(time.Now(), "its attempts ended without a settlement")
 	}
+	q.watch.forget(ids)
 }

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { ConflictError, InvalidError, open, type Store } from '../src/index.ts'
+import { CancelledError, ConflictError, InvalidError, open, type Store } from '../src/index.ts'
 
 let dir: string
 let store: Store
@@ -25,6 +25,16 @@ async function caught(promise: Promise<unknown>): Promise<unknown> {
 		() => undefined,
 		(err: unknown) => err,
 	)
+}
+
+async function until(holds: () => boolean, what: string): Promise<void> {
+	const deadline = Date.now() + 5000
+	while (!holds()) {
+		if (Date.now() > deadline) {
+			throw new Error(`waited five seconds for ${what}`)
+		}
+		await Bun.sleep(10)
+	}
 }
 
 interface Reminder {
@@ -144,9 +154,74 @@ describe('a work loop', () => {
 		await q.enqueue('x', { key: 'k' })
 		const job = await q.claim({ lease: '1m' })
 		expect([job?.key, job?.value, job?.attempt]).toEqual(['k', 'x', 1])
-		expect((await q.get('k'))?.state).toBe('leased')
+		await job?.progress({ done: 1 })
+		const running = await q.get('k')
+		expect([running?.state, running?.progress]).toEqual(['running', { done: 1 }])
 		await job?.ack()
 		expect(await q.get('k')).toBeUndefined()
+	})
+
+	test('a watch follows a job up its queue, through its progress, to a cancel its handler sees', async () => {
+		const q = store.jobs.queue<string>('videos', { maxRunning: 1 })
+		await q.enqueueAll([
+			{ value: 'a', key: 'a' },
+			{ value: 'b', key: 'b' },
+		])
+		const seen: string[] = []
+		const watching = (async () => {
+			for await (const s of q.watch('b')) {
+				seen.push(
+					`${s.state} ${s.ahead}${s.progress === undefined ? '' : ` ${JSON.stringify(s.progress)}`}`,
+				)
+			}
+		})()
+		await until(() => seen.includes('waiting 1'), 'b waiting behind a')
+
+		const stop = new AbortController()
+		let release = () => {}
+		const released = new Promise<void>(resolve => {
+			release = resolve
+		})
+		const reasons: unknown[] = []
+		const loop = q.work(
+			async job => {
+				if (job.key === 'a') {
+					await released
+					return
+				}
+				job.progress({ done: 1 })
+				await new Promise(resolve => job.signal.addEventListener('abort', resolve, { once: true }))
+				reasons.push(job.signal.reason)
+				throw job.signal.reason
+			},
+			{ workers: 2, signal: stop.signal },
+		)
+		await until(() => seen.includes('waiting 0'), 'a running, b next')
+		expect((await q.get('b'))?.state).toBe('waiting') // maxRunning holds it though a worker is free
+		release()
+		await until(() => seen.includes('running 0 {"done":1}'), "b's progress")
+		expect(await q.cancel('b')).toBe(true)
+		await watching
+		expect(seen.at(-1)).toBe('cancelled 0')
+		await until(() => reasons.length === 1, 'the handler to see its signal')
+		expect(reasons[0]).toBeInstanceOf(CancelledError)
+		stop.abort()
+		await loop
+		expect(await q.get('b')).toBeUndefined()
+		const none: unknown[] = []
+		for await (const s of q.watch('b')) {
+			none.push(s)
+		}
+		expect(none).toEqual([])
+	})
+
+	test('a progress JSON cannot write, or past 4 KiB, is refused', async () => {
+		const q = store.jobs.queue<string>('reports')
+		await q.enqueue('x', { key: 'k' })
+		const job = await q.claim()
+		expect(() => job?.progress(() => {})).toThrow(InvalidError)
+		expect(() => job?.progress('x'.repeat(4096))).toThrow(InvalidError)
+		await job?.ack()
 	})
 
 	test('a retry after nothing runs now, as After(0) does in Go, not after its backoff', async () => {
