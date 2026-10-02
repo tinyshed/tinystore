@@ -374,6 +374,12 @@ export const MetricsSeries = message('metrics.series', {
 
 export const MetricsBatch = message('metrics.batch', { series: [1, list(MetricsSeries)] })
 
+export const MetricsCondition = message('metrics.condition', {
+	label: [1, str],
+	kind: [2, str],
+	values: [3, list(str)],
+})
+
 export const MetricsRange = message('metrics.range', {
 	matchers: [1, names(str)],
 	from: [2, int64],
@@ -385,6 +391,7 @@ export const MetricsRange = message('metrics.range', {
 	limitAnswered: [8, uint],
 	width: [9, uint],
 	op: [10, str],
+	where: [11, list(MetricsCondition)],
 })
 
 export const MetricsBuckets = message('metrics.buckets', {
@@ -460,6 +467,7 @@ export const messages = {
 	'metrics.series': MetricsSeries,
 	'metrics.batch': MetricsBatch,
 	'metrics.range': MetricsRange,
+	'metrics.condition': MetricsCondition,
 	'metrics.buckets': MetricsBuckets,
 	'metrics.labels': MetricsLabels,
 	'metrics.dropped': MetricsDropped,

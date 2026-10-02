@@ -46,7 +46,7 @@ func (s *Store) fetchSnapshot(ctx context.Context, query rangeQuery) ([]seriesRe
 	var reads []seriesRead
 	budget := queryBudget{limits: query.limits}
 	err := s.file.ViewPrepared(ctx, func(tx sqlite.Reader) error {
-		matched, err := matchSeries(ctx, tx, query.matchers, &budget)
+		matched, err := matchSeries(ctx, tx, query.matchers, query.conditions, &budget)
 		if err != nil {
 			return err
 		}

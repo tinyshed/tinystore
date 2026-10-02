@@ -143,14 +143,14 @@ const matchShape = `select id,kind,length(label_ids),case when length(label_ids)
 ) order by id limit cast(? as integer)`
 
 func matchSeries(
-	ctx context.Context, tx sqlite.Reader, matchers []label, budget *queryBudget,
+	ctx context.Context, tx sqlite.Reader, matchers []label, conditions []condition, budget *queryBudget,
 ) ([]registeredSeries, error) {
-	ranked, possible, err := rankMatchers(ctx, tx, matchers)
+	filter, filterArguments, possible, err := matchFilter(ctx, tx, matchers, conditions)
 	if err != nil || !possible {
 		return nil, err
 	}
 
-	matched, err := readMatchedSeries(ctx, tx, ranked, budget)
+	matched, err := readMatchedSeries(ctx, tx, filter, filterArguments, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -161,12 +161,33 @@ func matchSeries(
 	return matched, nil
 }
 
+// matchFilter is the SQL that finds a match's series ids. A match of pairs
+// alone keeps the path that ranks them at once; conditions resolve their sets
+// first.
+func matchFilter(
+	ctx context.Context, tx sqlite.Reader, matchers []label, conditions []condition,
+) (string, []any, bool, error) {
+	if len(conditions) == 0 {
+		ranked, possible, err := rankMatchers(ctx, tx, matchers)
+		if err != nil || !possible {
+			return "", nil, false, err
+		}
+		filter, arguments := postingsFilter(ranked)
+		return filter, arguments, true, nil
+	}
+	finding, leaving, possible, err := resolveSelection(ctx, tx, matchers, conditions)
+	if err != nil || !possible {
+		return "", nil, false, err
+	}
+	filter, arguments := selectionFilter(finding, leaving)
+	return filter, arguments, true, nil
+}
+
 // readMatchedSeries charges each series' encoded label ids to the budget before
 // decoding them, and refuses the first series past the budget's count.
 func readMatchedSeries(
-	ctx context.Context, tx sqlite.Reader, ranked []matcherPosting, budget *queryBudget,
+	ctx context.Context, tx sqlite.Reader, filter string, filterArguments []any, budget *queryBudget,
 ) ([]registeredSeries, error) {
-	filter, filterArguments := postingsFilter(ranked)
 	query := strings.Replace(matchShape, ":postings", filter, 1)
 	arguments := append([]any{budget.limits.PayloadBytes - budget.bytes}, filterArguments...)
 	arguments = append(arguments, budget.limits.Series+1)

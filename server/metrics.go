@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -55,7 +56,11 @@ func metricsRead(c *call) error {
 	if err != nil {
 		return err
 	}
-	results, err := store.Read(c.ctx, rangeOf(ask))
+	request, err := rangeOf(ask)
+	if err != nil {
+		return err
+	}
+	results, err := store.Read(c.ctx, request)
 	if err != nil {
 		return err
 	}
@@ -102,8 +107,15 @@ func metricsAggregate(c *call) error {
 		return fmt.Errorf("%w: metrics: buckets %d milliseconds wide, past what a duration holds",
 			tinystore.ErrInvalid, ask.Width)
 	}
+	selected, err := rangeOf(ask)
+	if err != nil {
+		return err
+	}
+	if ask.Op != "" && !slices.Contains(aggregateOps, metrics.AggregateOp(ask.Op)) {
+		return unknownKind("an aggregate operation", "op", ask.Op)
+	}
 	request := metrics.AggregateRequest{
-		Range: rangeOf(ask), Width: time.Duration(ask.Width) * time.Millisecond, Op: metrics.AggregateOp(ask.Op),
+		Range: selected, Width: time.Duration(ask.Width) * time.Millisecond, Op: metrics.AggregateOp(ask.Op),
 	}
 	results, err := store.Aggregate(c.ctx, request)
 	if err != nil {
@@ -177,16 +189,67 @@ func inPieces[T any](items []T, n int, send func([]T) error) error {
 }
 
 // rangeOf is a range as the engine takes it; a limit of zero is the server's
-func rangeOf(sent wire.MetricsRange) metrics.Range {
+func rangeOf(sent wire.MetricsRange) (metrics.Range, error) {
 	matched := seriesOf(sent.Matchers, "")
+	where, err := whereOf(sent.Where)
+	if err != nil {
+		return metrics.Range{}, err
+	}
 	return metrics.Range{
-		Name: matched.Name, Match: matched.Labels, From: sent.From, To: sent.To,
+		Name: matched.Name, Match: matched.Labels, Where: where, From: sent.From, To: sent.To,
 		Limits: metrics.Limits{
 			Series: limitOf(sent.Limits.Series), Blocks: limitOf(sent.Limits.Blocks),
 			PayloadBytes: limitOf(sent.Limits.PayloadBytes), DecodedSamples: limitOf(sent.Limits.DecodedSamples),
 			OutputSamples: limitOf(sent.Limits.OutputSamples),
 		},
+	}, nil
+}
+
+// the operations an aggregate may ask for; another is a newer client's
+var aggregateOps = []metrics.AggregateOp{
+	metrics.AggregateCount, metrics.AggregateSum, metrics.AggregateMin, metrics.AggregateMax, metrics.AggregateIncrease,
+}
+
+// unknownKind refuses a value of a known field that this server does not have,
+// a newer client's, as it refuses a field it does not know: answering without
+// it would answer another question.
+//
+//	unknownKind("an aggregate operation", "op", "median")
+//	  → unimplemented: metrics: an aggregate operation "median", which this server does not have
+func unknownKind(what, field, kind string) error {
+	return &wire.Error{
+		Code: wire.CodeUnimplemented, What: map[string]string{field: kind},
+		Message: fmt.Sprintf("metrics: %s %q, which this server does not have", what, kind),
 	}
+}
+
+// whereOf is the wire's conditions as the engine takes them, a kind it does
+// not have refused, since skipping it would answer another question
+func whereOf(sent []wire.MetricsCondition) (metrics.Where, error) {
+	if len(sent) == 0 {
+		return nil, nil
+	}
+	where := make(metrics.Where, len(sent))
+	for _, condition := range sent {
+		name := condition.Label
+		if _, twice := where[name]; twice {
+			return nil, fmt.Errorf("%w: metrics: label %q has two conditions", tinystore.ErrInvalid, name)
+		}
+		switch condition.Kind {
+		case "one_of":
+			where[name] = metrics.OneOf(condition.Values...)
+		case "none_of":
+			where[name] = metrics.NoneOf(condition.Values...)
+		case "prefix":
+			if len(condition.Values) != 1 {
+				return nil, fmt.Errorf("%w: metrics: label %q: a prefix is one value", tinystore.ErrInvalid, name)
+			}
+			where[name] = metrics.Prefix(condition.Values[0])
+		default:
+			return nil, unknownKind("a condition of kind", "condition", condition.Kind)
+		}
+	}
+	return where, nil
 }
 
 func limitOf(limit uint64) int {

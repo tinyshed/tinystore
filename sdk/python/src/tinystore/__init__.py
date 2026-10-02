@@ -31,7 +31,7 @@ from .errors import (
 )
 from .jobs import ClaimedJob, Enqueue, Job, JobEntry, Queue, Repeat, cron, daily, every
 from .kv import Batch, Bucket, Counters, Entry
-from .metrics import Aggregate, Series
+from .metrics import Aggregate, Condition, Series, none_of, one_of, prefix
 from .records import Cursor, Record
 from .sql import Database, Done
 from .store import Store, connect, open
@@ -45,6 +45,7 @@ __all__ = [
     "CallCancelledError",
     "ClaimedJob",
     "ClosedError",
+    "Condition",
     "ConflictError",
     "CorruptError",
     "Counters",
@@ -81,5 +82,8 @@ __all__ = [
     "cron",
     "daily",
     "every",
+    "none_of",
+    "one_of",
     "open",
+    "prefix",
 ]

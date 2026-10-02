@@ -116,6 +116,7 @@ store.metrics.gauge("queue_depth").set(12)
 
 await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"}, "samples": [(now, 0.42)]})
 series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")
+failing = await store.metrics.read(name="http_requests_total", since="1h", where={"status": tinystore.one_of("500", "502")})
 buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
 ```
 

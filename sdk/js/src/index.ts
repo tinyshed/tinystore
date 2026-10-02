@@ -26,18 +26,22 @@ export type {
 	WriteOptions,
 } from './kv.ts'
 export type { Logger, LoggerOptions } from './logger.ts'
-export type {
-	Aggregate,
-	AggregateOp,
-	Bucket as MetricsBucket,
-	Counter,
-	Gauge,
-	Labels,
-	Metrics,
-	Range,
-	Series,
-	SeriesInput,
-	SeriesKind,
+export {
+	type Aggregate,
+	type AggregateOp,
+	type Bucket as MetricsBucket,
+	Condition,
+	type Counter,
+	type Gauge,
+	type Labels,
+	type Metrics,
+	noneOf,
+	oneOf,
+	prefix,
+	type Range,
+	type Series,
+	type SeriesInput,
+	type SeriesKind,
 } from './metrics.ts'
 export type {
 	Cursor,

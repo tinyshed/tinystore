@@ -87,7 +87,17 @@ web1, err := store.Read(ctx, metrics.Range{
     Match: metrics.Labels{"host": "web-1"},       // every series of web-1, whatever its name
     From:  from.UnixMilli(), To: to.UnixMilli(),  // To excluded; zero is the open end
 })
+failing, err := store.Read(ctx, metrics.Range{
+    Name:  "http_requests_total", Since: time.Hour,
+    Where: metrics.Where{"status": metrics.OneOf("500", "502"), "env": metrics.NoneOf("dev"), "host": metrics.Prefix("api-")},
+})
 ```
+
+`Where` takes a label beyond equality: `OneOf` its values, `NoneOf` them,
+which a series without the label is too, or a `Prefix`. A range finds its
+series by a name, a `Match`, a `OneOf` or a `Prefix`; `NoneOf` only leaves
+series out, and a range of it alone is refused, since it would scan every
+series.
 
 A series is its name and its labels. The store keeps the name as the label
 `__name__`, as Prometheus does, and so a label of the application's may not

@@ -5,7 +5,16 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { InvalidError, open, type Store, TooOldError } from '../src/index.ts'
+import {
+	type Condition,
+	InvalidError,
+	noneOf,
+	oneOf,
+	open,
+	prefix,
+	type Store,
+	TooOldError,
+} from '../src/index.ts'
 
 let dir: string
 let store: Store
@@ -232,6 +241,34 @@ describe('metrics', () => {
 		expect(posts?.labels).toEqual({ route: '/notes', method: 'POST' })
 		const [depth] = await store.metrics.read({ name: 'queue_depth', since: '1m' })
 		expect(depth?.values[0]).toBe(7)
+	})
+
+	test('conditions find series beyond equality, and noneOf alone is refused', async () => {
+		const at = new Date()
+		for (const [host, status, env] of [
+			['api-1', '200', 'prod'],
+			['api-2', '502', 'dev'],
+			['web-1', '500', 'prod'],
+			['web-2', '500', undefined],
+		] as const) {
+			const labels: Record<string, string> = { host, status }
+			if (env !== undefined) {
+				labels.env = env
+			}
+			await store.metrics.ingest({ name: 'requests', kind: 'counter', labels, samples: [[at, 1]] })
+		}
+		const hosts = async (where: Record<string, Condition | string>) =>
+			(await store.metrics.read({ name: 'requests', where })).map(s => s.labels.host).sort()
+		expect(await hosts({ status: oneOf('500', '502') })).toEqual(['api-2', 'web-1', 'web-2'])
+		expect(await hosts({ env: noneOf('dev') })).toEqual(['api-1', 'web-1', 'web-2'])
+		expect(await hosts({ host: prefix('api-'), status: '200' })).toEqual(['api-1'])
+		expect(await hosts({ status: oneOf('418') })).toEqual([])
+		expect(await caught(store.metrics.read({ where: { env: noneOf('dev') } }))).toBeInstanceOf(
+			InvalidError,
+		)
+		expect(
+			await caught(store.metrics.read({ name: 'requests', where: { env: prefix('') } })),
+		).toBeInstanceOf(InvalidError)
 	})
 
 	test('a drop removes a series', async () => {

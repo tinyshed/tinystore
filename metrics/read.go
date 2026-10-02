@@ -87,6 +87,7 @@ func (s *Store) readEach(ctx context.Context, request Range, yield func(Result) 
 // was asked for.
 type rangeQuery struct {
 	matchers         []label
+	conditions       []condition
 	limits           Limits
 	origin, from, to int64
 	aggregate        *aggregateSelection
@@ -97,14 +98,21 @@ func (s *Store) checkRange(request Range) (rangeQuery, error) {
 	if err != nil {
 		return rangeQuery{}, err
 	}
-	if request.Name == "" && len(request.Match) == 0 {
-		return rangeQuery{}, fmt.Errorf("%w: a range names a series or a label to match", ErrInvalid)
+	if request.Name == "" && len(request.Match) == 0 && !finds(request.Where) {
+		return rangeQuery{}, fmt.Errorf("%w: a range names a series, a label to match, or a OneOf or a Prefix",
+			ErrInvalid)
 	}
 	kept, err := keptLabels(request.Name, request.Match)
 	if err != nil {
 		return rangeQuery{}, err
 	}
-	matchers, err := orderedLabels(kept, false)
+	var matchers []label
+	if len(kept) > 0 {
+		if matchers, err = orderedLabels(kept, false); err != nil {
+			return rangeQuery{}, err
+		}
+	}
+	conditions, err := checkWhere(request.Where, matchers)
 	if err != nil {
 		return rangeQuery{}, err
 	}
@@ -112,7 +120,10 @@ func (s *Store) checkRange(request Range) (rangeQuery, error) {
 	if err != nil {
 		return rangeQuery{}, err
 	}
-	return rangeQuery{matchers: matchers, limits: limits, origin: origin, from: max(origin, s.cutoff()), to: to}, nil
+	return rangeQuery{
+		matchers: matchers, conditions: conditions, limits: limits,
+		origin: origin, from: max(origin, s.cutoff()), to: to,
+	}, nil
 }
 
 // bounds is a range's [from, to) in unix milliseconds: Since back from the

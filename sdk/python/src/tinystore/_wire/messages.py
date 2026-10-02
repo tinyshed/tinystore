@@ -366,6 +366,8 @@ MetricsSeries = message(
 
 MetricsBatch = message("metrics.batch", series=(1, list_(MetricsSeries)))
 
+MetricsCondition = message("metrics.condition", label=(1, str_), kind=(2, str_), values=(3, list_(str_)))
+
 MetricsRange = message(
     "metrics.range",
     matchers=(1, names(str_)),
@@ -378,6 +380,7 @@ MetricsRange = message(
     limit_answered=(8, uint),
     width=(9, uint),
     op=(10, str_),
+    where=(11, list_(MetricsCondition)),
 )
 
 MetricsBuckets = message(
@@ -451,6 +454,7 @@ MESSAGES: dict[str, Message] = {
         MetricsSeries,
         MetricsBatch,
         MetricsRange,
+        MetricsCondition,
         MetricsBuckets,
         MetricsLabels,
         MetricsDropped,

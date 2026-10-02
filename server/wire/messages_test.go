@@ -246,7 +246,9 @@ var schema = map[string][]field{
 		{8, "limit answered", "uint"},
 		{9, "width", "uint"},
 		{10, "op", "str"},
+		{11, "where", "[]metrics.condition"},
 	},
+	"metrics.condition": {{1, "label", "str"}, {2, "kind", "str"}, {3, "values", "[]str"}},
 	"metrics.buckets": {
 		{1, "labels", "names"},
 		{2, "kind", "str"},
@@ -632,6 +634,14 @@ func metricsExamples() []example {
 		of("metrics.read to the open end, within limits of its own", "metrics.range", wire.MetricsRange{
 			Matchers: cpu, From: at, To: math.MaxInt64, Limits: wire.MetricsLimits{
 				Series: 100, Blocks: 1000, PayloadBytes: 1 << 20, DecodedSamples: 100_000, OutputSamples: 10_000,
+			},
+		}),
+		of("metrics.read of the api hosts' 5xx, but not in dev", "metrics.range", wire.MetricsRange{
+			Matchers: map[string]string{"__name__": "http_requests_total"}, From: at, To: math.MaxInt64,
+			Where: []wire.MetricsCondition{
+				{Label: "env", Kind: "none_of", Values: []string{"dev"}},
+				{Label: "host", Kind: "prefix", Values: []string{"api-"}},
+				{Label: "status", Kind: "one_of", Values: []string{"500", "502"}},
 			},
 		}),
 		of("metrics.aggregate of an hour's increase", "metrics.range", wire.MetricsRange{

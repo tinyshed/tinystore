@@ -6,6 +6,7 @@
 import { download, type Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
+import { byCodePoint } from './wire/codec.ts'
 import {
 	MetricsBatch,
 	MetricsBuckets,
@@ -54,10 +55,45 @@ export interface Series {
  * { match: { host: 'web-1' }, from: start, to: end }   // every series of web-1
  * ```
  */
+/**
+ * What a label's value must be beyond equality, made by oneOf, noneOf or
+ * prefix: an object of the SDK's own, so that a stored value is never read as
+ * a query.
+ */
+export class Condition {
+	readonly kind: 'one_of' | 'none_of' | 'prefix'
+	readonly values: readonly string[]
+
+	constructor(kind: Condition['kind'], values: readonly string[]) {
+		this.kind = kind
+		this.values = values
+	}
+}
+
+/** The label is one of the values. */
+export function oneOf(...values: string[]): Condition {
+	return new Condition('one_of', values)
+}
+
+/** The label is none of the values, or the series has none. */
+export function noneOf(...values: string[]): Condition {
+	return new Condition('none_of', values)
+}
+
+/** The label's value begins with the prefix. */
+export function prefix(start: string): Condition {
+	return new Condition('prefix', [start])
+}
+
 export interface Range {
 	name?: string
 	/** labels a series holds, each exactly */
 	match?: Labels
+	/**
+	 * labels under a condition: `{ status: oneOf('500', '502'), env: noneOf('dev'), host: prefix('api-') }`;
+	 * a plain value is equality. A range of noneOf alone is refused, since it would scan every series.
+	 */
+	where?: Record<string, Condition | string>
 	/** the span before now the range covers: '1h', '15m', or milliseconds */
 	since?: Duration
 	/** the range's start, included; the oldest sample kept when absent */
@@ -123,8 +159,9 @@ function rangeOf(
 	r: Range,
 	extra?: { width?: number; op?: AggregateOp },
 ): Parameters<typeof MetricsRange.encode>[0] {
-	if (r.name === undefined && Object.keys(r.match ?? {}).length === 0) {
-		throw new InvalidError('a range names a series or a label to match')
+	const { match, where } = conditionsOf(r)
+	if (r.name === undefined && Object.keys(match).length === 0 && !where.some(finds)) {
+		throw new InvalidError('a range names a series, a label to match, or a oneOf or a prefix')
 	}
 	if (r.since !== undefined && r.from !== undefined) {
 		throw new InvalidError('a range starts since a span before now or from a time, not both')
@@ -132,7 +169,8 @@ function rangeOf(
 	const from =
 		r.since !== undefined ? Date.now() - ms(r.since) : r.from === undefined ? 0 : unixMs(r.from)
 	return {
-		matchers: wireLabels(r.name, r.match),
+		matchers: wireLabels(r.name, match),
+		where: where.length > 0 ? where : undefined,
 		from: BigInt(from),
 		to: r.to === undefined ? openEnd : BigInt(unixMs(r.to)),
 		limitSeries: r.limits?.series,
@@ -142,6 +180,34 @@ function rangeOf(
 		limitAnswered: r.limits?.answered,
 		...extra,
 	}
+}
+
+/** A range's equality, plain values of where included, and its conditions in the order of their labels. */
+function conditionsOf(r: Range): {
+	match: Labels
+	where: { label: string; kind: Condition['kind']; values: string[] }[]
+} {
+	const match: Labels = { ...r.match }
+	const where = []
+	for (const [label, condition] of Object.entries(r.where ?? {}).sort(([a], [b]) =>
+		byCodePoint(a, b),
+	)) {
+		if (label in match) {
+			throw new InvalidError(`label ${label} is matched and has a condition`)
+		}
+		if (typeof condition === 'string') {
+			match[label] = condition
+		} else if (condition instanceof Condition) {
+			where.push({ label, kind: condition.kind, values: [...condition.values] })
+		} else {
+			throw new InvalidError(`label ${label}: a condition is made by oneOf, noneOf or prefix`)
+		}
+	}
+	return { match, where }
+}
+
+function finds(condition: { kind: Condition['kind'] }): boolean {
+	return condition.kind !== 'none_of'
 }
 
 function columnsOf(samples: SeriesInput['samples']): {

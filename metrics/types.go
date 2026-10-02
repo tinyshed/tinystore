@@ -79,15 +79,18 @@ type Batch struct {
 	Samples []Sample
 }
 
-// Range selects the series of a name, of labels, or of both, each matched
-// exactly, and their samples in [From, To) or over the last Since; a To of
-// zero is the open end. Limits may only narrow the store's.
+// Range selects the series of a name, of labels matched exactly, of labels
+// under conditions, or of any of them together, and their samples in
+// [From, To) or over the last Since; a To of zero is the open end. Limits may
+// only narrow the store's.
 //
 //	Range{Name: "cpu", Since: time.Hour}                   the last hour of every cpu series
 //	Range{Match: Labels{"host": "web-1"}, From: f, To: t}  every series of web-1, f to t
+//	Range{Name: "http_requests_total", Where: Where{"status": OneOf("500", "502")}, Since: time.Hour}
 type Range struct {
 	Name     string
 	Match    Labels
+	Where    Where
 	Since    time.Duration
 	From, To int64 // unix milliseconds
 	Limits   Limits

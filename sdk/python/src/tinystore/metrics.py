@@ -90,17 +90,63 @@ def _named(spelled: Mapping[str, str]) -> tuple[str, dict[str, str]]:
     return labels.pop(_WIRE_NAME, ""), labels
 
 
+@dataclass(frozen=True, slots=True)
+class Condition:
+    """What a label's value must be beyond equality, made by one_of, none_of or prefix.
+
+    An object of the SDK's own, so that a stored value is never read as a query.
+    """
+
+    kind: Literal["one_of", "none_of", "prefix"]
+    values: tuple[str, ...]
+
+
+def one_of(*values: str) -> Condition:
+    """The label is one of the values."""
+    return Condition("one_of", values)
+
+
+def none_of(*values: str) -> Condition:
+    """The label is none of the values, or the series has none."""
+    return Condition("none_of", values)
+
+
+def prefix(start: str) -> Condition:
+    """The label's value begins with start."""
+    return Condition("prefix", (start,))
+
+
+def _conditions(
+    match: Mapping[str, str] | None, where: Mapping[str, Condition | str] | None
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    """A range's equality, plain values of where included, and its conditions in the order of their labels."""
+    equal = dict(match or {})
+    conditions: list[dict[str, Any]] = []
+    for label, condition in sorted((where or {}).items()):
+        if label in equal:
+            raise InvalidError(f"label {label} is matched and has a condition")
+        if isinstance(condition, str):
+            equal[label] = condition
+        elif isinstance(condition, Condition):  # pyright: ignore[reportUnnecessaryIsInstance]
+            conditions.append({"label": label, "kind": condition.kind, "values": list(condition.values)})
+        else:
+            raise InvalidError(f"label {label}: a condition is made by one_of, none_of or prefix")
+    return equal, conditions
+
+
 def _range(
     name: str | None,
     match: Mapping[str, str] | None,
+    where: Mapping[str, Condition | str] | None,
     since: Duration | None,
     from_: datetime | int | None,
     to: datetime | int | None,
     limits: Mapping[str, int] | None,
     **extra: Any,
 ) -> bytes:
-    if name is None and not match:
-        raise InvalidError("a range names a series or a label to match")
+    equal, conditions = _conditions(match, where)
+    if name is None and not equal and all(c["kind"] == "none_of" for c in conditions):
+        raise InvalidError("a range names a series, a label to match, or a one_of or a prefix")
     if since is not None and from_ is not None:
         raise InvalidError("a range starts since a span before now or from a time, not both")
 
@@ -109,7 +155,8 @@ def _range(
 
     start = time.time_ns() // 1_000_000 - ms(since) if since is not None else 0 if from_ is None else millis(from_)
     return MetricsRange.encode(
-        matchers=_wire_labels(name, match),
+        matchers=_wire_labels(name, equal),
+        where=conditions or None,
         from_=start,
         to=_OPEN_END if to is None else millis(to),
         **{f"limit_{k}": v for k, v in (limits or {}).items()},
@@ -155,6 +202,7 @@ class Metrics:
         *,
         name: str | None = None,
         match: Mapping[str, str] | None = None,
+        where: Mapping[str, Condition | str] | None = None,
         since: Duration | None = None,
         from_: datetime | int | None = None,
         to: datetime | int | None = None,
@@ -169,7 +217,7 @@ class Metrics:
             await store.metrics.read(name="cpu", since="1h")
             await store.metrics.read(match={"host": "web-1"}, from_=start, to=end)
         """
-        body = _range(name, match, since, from_, to, limits)
+        body = _range(name, match, where, since, from_, to, limits)
 
         async def attempt(connection: Connection) -> Any:
             return await download(connection, METHODS["metrics.read"], body)
@@ -192,13 +240,14 @@ class Metrics:
         op: Op,
         name: str | None = None,
         match: Mapping[str, str] | None = None,
+        where: Mapping[str, Condition | str] | None = None,
         since: Duration | None = None,
         from_: datetime | int | None = None,
         to: datetime | int | None = None,
         limits: Mapping[str, int] | None = None,
     ) -> list[Aggregate]:
         """Buckets of a width from the range's start, each computed exactly: an increase counts resets."""
-        body = _range(name, match, since, from_, to, limits, width=ms(width), op=op)
+        body = _range(name, match, where, since, from_, to, limits, width=ms(width), op=op)
 
         async def attempt(connection: Connection) -> Any:
             return await download(connection, METHODS["metrics.aggregate"], body)

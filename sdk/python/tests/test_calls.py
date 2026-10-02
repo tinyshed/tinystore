@@ -186,3 +186,19 @@ async def test_an_address_nobody_listens_on_is_closed() -> None:
         port = probe.getsockname()[1]
     with pytest.raises(tinystore.ClosedError, match=f"cannot reach tcp://127.0.0.1:{port}"):
         await tinystore.connect(f"tcp://127.0.0.1:{port}", token="unused")
+
+
+async def test_conditions_find_series_beyond_equality(store: tinystore.Store) -> None:
+    at = datetime.now(UTC)
+    for host, status, env in [("api-1", "200", "prod"), ("api-2", "502", "dev"), ("web-1", "500", None)]:
+        labels = {"host": host, "status": status} | ({"env": env} if env else {})
+        await store.metrics.ingest({"name": "requests", "kind": "counter", "labels": labels, "samples": [(at, 1)]})
+
+    async def hosts(where: dict[str, tinystore.Condition | str]) -> list[str]:
+        return sorted(s.labels["host"] for s in await store.metrics.read(name="requests", where=where))
+
+    assert await hosts({"status": tinystore.one_of("500", "502")}) == ["api-2", "web-1"]
+    assert await hosts({"env": tinystore.none_of("dev")}) == ["api-1", "web-1"]
+    assert await hosts({"host": tinystore.prefix("api-"), "status": "200"}) == ["api-1"]
+    with pytest.raises(InvalidError):
+        await store.metrics.read(where={"env": tinystore.none_of("dev")})

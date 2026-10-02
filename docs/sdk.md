@@ -57,6 +57,7 @@ err := store.Ingest(ctx, []metrics.Batch{{
 	Samples: []metrics.Sample{{At: time.Now().UnixMilli(), Value: 1}},
 }})
 results, err := store.Read(ctx, metrics.Range{Name: "cpu", Match: metrics.Labels{"host": "web-1"}, Since: time.Hour})
+failing, err := store.Read(ctx, metrics.Range{Name: "http_requests_total", Since: time.Hour, Where: metrics.Where{"status": metrics.OneOf("500", "502"), "host": metrics.Prefix("api-")}})
 buckets, err := store.Aggregate(ctx, metrics.AggregateRequest{
 	Range: metrics.Range{Name: "http_requests_total", Since: 24 * time.Hour}, Width: time.Hour, Op: metrics.AggregateIncrease,
 })
@@ -66,6 +67,7 @@ store.Counter("http_requests_total").With("route", "/users").Inc()
 ```ts
 await store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { host: 'web-1' }, samples: [[new Date(), 0.42]] })
 const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' }, since: '1h' })
+const failing = await store.metrics.read({ name: 'http_requests_total', since: '1h', where: { status: oneOf('500', '502'), host: prefix('api-') } })
 const buckets = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'increase' })
 store.metrics.counter('http_requests_total').with({ route: '/users' }).inc()
 ```
@@ -73,6 +75,7 @@ store.metrics.counter('http_requests_total').with({ route: '/users' }).inc()
 ```python
 await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"}, "samples": [(now, 0.42)]})
 series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")
+failing = await store.metrics.read(name="http_requests_total", since="1h", where={"status": one_of("500", "502"), "host": prefix("api-")})
 buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
 store.metrics.counter("http_requests_total").labels(route="/users").inc()
 ```
@@ -147,14 +150,18 @@ Built on the branch that brought this file:
 - spelled durations in Python as in Bun;
 - every value as SQLite keeps it (the driver no longer reads a time into text).
 
+Built after it:
+
+- **Conditions beyond equality**, `where` beside `match`: `OneOf`, `NoneOf`
+  and `Prefix` in Go, `oneOf`, `noneOf` and `prefix` in Bun, `one_of`,
+  `none_of` and `prefix` in Python, each an object of the SDK's own so that a
+  stored value is never read as a query; a plain value in an SDK's `where` is
+  equality. `NoneOf` was `not` in the proposal: it takes several values, and
+  `not` is a word Python keeps for itself.
+
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):
 
-- **Conditions beyond equality.** A plain value stays equality; a typed helper
-  is the rest, an object of the SDK's own so that a stored value is never read
-  as a query: `where: { status: oneOf('500', '502'), env: not('dev'), host:
-  prefix('api-') }`, Python `one_of`, `not_`, Go `metrics.In`, `metrics.NotEq`.
-  No `$` operators, no tuple arrays, no boolean algebra until a query needs it.
 - **Across series**: `by` and `without` on aggregates; `avg`, and `rate` and
   `delta` for counters.
 - **Text in records**: a substring of a body, then an index.

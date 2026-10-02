@@ -769,7 +769,7 @@ A range:
 
 | key | field | type | |
 |---|---|---|---|
-| 1 | matchers | a map of names | the labels a series has, exactly, its name as `__name__`; one at least |
+| 1 | matchers | a map of names | the labels a series has, exactly, its name as `__name__` |
 | 2, 3 | from, to | int | unix milliseconds, to excluded; both required, 2^63−1 the open end |
 | 4 | limit series | uint | the series it matches; each limit narrows the server's |
 | 5 | limit blocks | uint | the blocks it decodes |
@@ -778,6 +778,19 @@ A range:
 | 8 | limit answered | uint | the samples or buckets it answers |
 | 9 | width | uint | aggregate's: milliseconds, the buckets starting at from |
 | 10 | op | str | aggregate's: `count`, `sum`, `min`, `max` or `increase`, a counter's alone |
+| 11 | where | array of conditions | labels beyond equality, each label once, in the byte order of its name |
+
+A condition:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | label | str | the label's name |
+| 2 | kind | str | `one_of` its values, `none_of` them, which a series without the label is too, or `prefix`, its one value |
+| 3 | values | array of str | one at least, a thousand at most |
+
+A range finds its series by a matcher, a `one_of` or a `prefix`: a range of
+`none_of` alone is invalid, since it would scan every series. A condition of a
+kind the server does not have is `unimplemented`, `what` naming it.
 
 The server reads a range whole, within its limits, before the first series
 leaves, so that a slow client holds none of the engine's readers; a read or an

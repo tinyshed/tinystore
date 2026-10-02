@@ -177,9 +177,44 @@ func TestAggregateOverTheWire(t *testing.T) {
 			t.Errorf("increase in buckets %d ms wide: %+v, %v", c.width, buckets, err)
 		}
 	}
+	// an operation a newer client asks for is unimplemented, named, as an
+	// unknown field is, rather than refused as a mistake
 	ask.Op = "median"
-	if _, err := aggregate(t, conn, ask); failureOf(err).Code != wire.CodeInvalid {
-		t.Errorf("an operation nobody knows: %v", err)
+	if _, err := aggregate(t, conn, ask); failureOf(err).Code != wire.CodeUnimplemented ||
+		failureOf(err).What["op"] != "median" {
+		t.Errorf("an operation this server does not have: %v", err)
+	}
+}
+
+// A read's conditions travel beside its matchers, and a condition of a kind
+// this server does not have is unimplemented, named, never skipped: a read
+// without it would answer another question.
+func TestConditionsOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	now := time.Now().UnixMilli()
+	for _, status := range []string{"200", "500", "502"} {
+		series := wire.MetricsSeries{
+			Labels: map[string]string{"__name__": "requests", "status": status}, Kind: "counter",
+			Times: []int64{now - 1000}, Values: []float64{1},
+		}
+		if err := ingest(t, conn, series); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask := wire.MetricsRange{
+		Matchers: map[string]string{"__name__": "requests"}, From: now - time.Hour.Milliseconds(), To: now + 1,
+		Where: []wire.MetricsCondition{{Label: "status", Kind: "one_of", Values: []string{"500", "502"}}},
+	}
+	found, _, err := readSeries(t, conn, ask)
+	if err != nil || len(found) != 2 {
+		t.Fatalf("one_of 500 and 502: %d series, %v", len(found), err)
+	}
+
+	ask.Where[0].Kind = "regex"
+	if _, _, err = readSeries(t, conn, ask); failureOf(err).Code != wire.CodeUnimplemented ||
+		failureOf(err).What["condition"] != "regex" {
+		t.Fatalf("a condition this server does not have: %v", err)
 	}
 }
 

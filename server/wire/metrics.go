@@ -162,6 +162,37 @@ type MetricsRange struct {
 	Limits   MetricsLimits
 	Width    int64
 	Op       string // count, sum, min, max or increase
+	Where    []MetricsCondition
+}
+
+// MetricsCondition is what a label's value must be beyond equality: one_of
+// or none_of its values, or the prefix that is its one value.
+type MetricsCondition struct {
+	Label  string
+	Kind   string
+	Values []string
+}
+
+func (c MetricsCondition) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	m.Str(1, c.Label)
+	m.Str(2, c.Kind)
+	m.Key(3)
+	m.SetBuf(appendStrs(m.Buf(), c.Values))
+	return m.End()
+}
+
+func (c *MetricsCondition) decode(d *Decoder) {
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			c.Label = d.Str()
+		case 2:
+			c.Kind = d.Str()
+		case 3:
+			c.Values = d.Strs()
+		}
+	}
 }
 
 // MetricsLimits bound one read or aggregate: the series it matches, the blocks
@@ -183,6 +214,14 @@ func (r MetricsRange) Append(dst []byte) []byte {
 	optionalUint(&m, 8, r.Limits.OutputSamples)
 	optionalInt(&m, 9, r.Width)
 	optionalStr(&m, 10, r.Op)
+	if len(r.Where) > 0 {
+		m.Key(11)
+		buf := AppendArray(m.Buf(), len(r.Where))
+		for _, condition := range r.Where {
+			buf = condition.Append(buf)
+		}
+		m.SetBuf(buf)
+	}
 	return m.End()
 }
 
@@ -200,6 +239,12 @@ func (r *MetricsRange) Decode(body []byte) error {
 			r.Width = d.Duration()
 		case 10:
 			r.Op = d.Str()
+		case 11:
+			for range d.Items() {
+				var condition MetricsCondition
+				condition.decode(&d)
+				r.Where = append(r.Where, condition)
+			}
 		default:
 			r.decodeLimit(&d, key)
 		}
