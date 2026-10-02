@@ -28,7 +28,7 @@ export type {
 	Scanned,
 	WriteOptions,
 } from './kv.ts'
-export type { Allowance, Limiter, LimiterOptions } from './limiter.ts'
+export type { Allowance, Limiter, LimiterOptions, Rate } from './limiter.ts'
 export { type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,
@@ -82,6 +82,6 @@ export {
 	type Status,
 	Store,
 } from './store.ts'
-export type { Duration, Time } from './time.ts'
+export type { Duration, DurationText, Time } from './time.ts'
 export { type Trace, withTrace } from './trace.ts'
 export type { Key } from './wire/codec.ts'

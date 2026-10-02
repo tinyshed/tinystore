@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { envName } from '../src/config.ts'
-import { InvalidError, open, type StandardSchemaV1, type Store } from '../src/index.ts'
+import { InvalidError, open, type Rate, type StandardSchemaV1, type Store } from '../src/index.ts'
 
 async function caught(promise: Promise<unknown>): Promise<unknown> {
 	return promise.then(
@@ -148,8 +148,10 @@ describe('a limiter', () => {
 		expect(await caught(tenant.allow('user-2', 3))).toBeInstanceOf(InvalidError)
 	})
 
-	test('refuses a rate it cannot read', () => {
+	test('refuses a rate it cannot read, its type before its call', () => {
+		// @ts-expect-error: 'fast' spells no rate, which the type sees as it is written
 		expect(() => store.kv.limiter('bad', { rate: 'fast' })).toThrow(InvalidError)
+		expect(() => store.kv.limiter('bad', { rate: '100/5x' as Rate })).toThrow(InvalidError)
 		expect(() => store.kv.limiter('bad', { rate: '5/10s', burst: 0 })).toThrow(InvalidError)
 	})
 })

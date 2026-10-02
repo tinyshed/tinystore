@@ -5,13 +5,19 @@
 import type { Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
 import { checkName, handleOn, ownerText } from './handles.ts'
-import { ms } from './time.ts'
+import { ms, type Unit } from './time.ts'
 import type { Key } from './wire/codec.ts'
 import { KvAllowance, KvBucket, KvCall, methods } from './wire/messages.ts'
 
+/**
+ * How many pass a span: '100/s', '5/10s', '1000/h', '300/7d', a span of one
+ * unit leaving out its 1. The type checks it as it is written.
+ */
+export type Rate = `${number}/${Unit}` | `${number}/${number}${Unit}`
+
 export interface LimiterOptions {
-	/** how many requests pass a span, each key on its own: '100/s', '5/10s', '1000/h' */
-	rate: string
+	/** how many requests pass a span, each key on its own */
+	rate: Rate
 	/** how many may pass at once before the rate holds the next; the rate's count when absent */
 	burst?: number
 }

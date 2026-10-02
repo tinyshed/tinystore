@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import {
 	ConflictError,
 	CorruptError,
+	type Duration,
 	InvalidError,
 	open,
 	type StandardSchemaV1,
@@ -182,6 +183,21 @@ describe('kinds', () => {
 		const err = await checked.get('bad').catch(e => e)
 		expect(err).toBeInstanceOf(CorruptError)
 		expect(err.message).toContain('n: n must be positive')
+	})
+})
+
+describe('durations', () => {
+	test('a duration misspelled does not compile, and text from elsewhere is checked at its call', () => {
+		store.kv.bucket('spelled', { defaultTtl: '1h30m' })
+		store.kv.bucket('spelled', { sliding: '2w3d4h5m6s7ms' })
+		// @ts-expect-error: '1hr' spells no duration, which the type sees as it is written
+		expect(() => store.kv.bucket('typos', { defaultTtl: '1hr' })).toThrow(InvalidError)
+		// @ts-expect-error: a unit is written once, largest first
+		expect(() => store.kv.bucket('typos', { defaultTtl: '30m1h' })).toThrow(InvalidError)
+		const fromEnvironment = '90mins'
+		expect(() => store.kv.bucket('typos', { defaultTtl: fromEnvironment as Duration })).toThrow(
+			InvalidError,
+		)
 	})
 })
 

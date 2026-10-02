@@ -1,10 +1,34 @@
 import { InvalidError } from './errors.ts'
 
+/** A duration's units, largest first, in the order its text writes them. */
+type Units = ['w', 'd', 'h', 'm', 's', 'ms']
+
+/** One of a duration's units: weeks, days, hours, minutes, seconds, milliseconds. */
+export type Unit = Units[number]
+
 /**
- * A length of time: milliseconds, or text such as '30d', '1h30m', '15m', '1s'
- * and '250ms'.
+ * Every spelling of units each written once, largest first: a number and its
+ * unit, then the same of the units after it, or none.
+ *
+ *     ['s', 'ms'] → `${number}s${number}ms` | `${number}s` | `${number}ms`
  */
-export type Duration = number | string
+type Spelled<U extends readonly string[]> = U extends readonly [
+	infer First extends string,
+	...infer Rest extends string[],
+]
+	? `${number}${First}${Spelled<Rest> | ''}` | Spelled<Rest>
+	: never
+
+/**
+ * A duration's text, '30d', '1h30m', '15m', '1s' or '250ms', which the type
+ * checks as it is written, so that '1hr' or '90mins' does not compile. Text
+ * from elsewhere, an environment's, is cast as Duration and checked when the
+ * call runs.
+ */
+export type DurationText = Spelled<Units>
+
+/** A length of time: milliseconds, or the text of one, such as '1h30m'. */
+export type Duration = number | DurationText
 
 /** A moment: a Date, or unix milliseconds. */
 export type Time = Date | number
@@ -18,8 +42,11 @@ const units: Record<string, number> = {
 	w: 604_800_000,
 }
 
-/** A duration's milliseconds; each unit once, largest first: 1h30m, not 90m30m. */
-export function ms(d: Duration): number {
+/**
+ * A duration's milliseconds; each unit once, largest first: 1h30m, not
+ * 90m30m. It takes any text, since text cast as a Duration reaches it too.
+ */
+export function ms(d: Duration | string): number {
 	if (typeof d === 'number') {
 		if (!Number.isFinite(d) || d < 0) {
 			throw new InvalidError(`a duration of ${d} milliseconds`)

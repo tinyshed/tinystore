@@ -45,6 +45,11 @@ A spelled duration is each unit once, largest first: `30d`, `1h30m`, `15m`,
 `1s`, `250ms`. Python's bare number is seconds, as `asyncio` and `time.sleep`
 take one; Bun's is milliseconds, as `setTimeout` takes one.
 
+In Bun the type is the spelling: `Duration` is every text the rule allows, and
+a rate, `'100/s'` or `'300/7d'`, is a `Rate`, so `'1hr'` or `'100/5x'` does not
+compile. Text from elsewhere, an environment variable's, is cast, `env.TTL as
+Duration`, and checked when the call runs, as Python checks every spelling.
+
 ## Metrics
 
 A series is a name, a kind and labels. The store keeps the name as the label

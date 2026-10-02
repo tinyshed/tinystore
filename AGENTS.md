@@ -459,6 +459,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
 | a Bun logger's line never waits for the server     | `a full logger drops and counts rather than wait` in `sdk/js/test/records.test.ts` |
 | a Bun call under an aborted signal is refused      | `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts` |
+| a Bun duration or rate misspelled does not compile | `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts` |
 | a Bun store's close frees its directory            | `close returns once the child has exited` in `sdk/js/test/kv.test.ts`            |
 | a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`                                 |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
