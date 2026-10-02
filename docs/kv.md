@@ -75,6 +75,12 @@ Delete(ctx, key) error
 Clear(ctx) error
 Of(owners ...any) *kv.Counters
 WithTx(tx *kv.Tx) *kv.Counters
+
+// Once[V]
+Run(ctx, key, fn) (V, error)                                      // the answer kept, or fn's, kept
+Get(ctx, key) (V, bool, error)
+Delete(ctx, key) error                                            // the next Run runs again
+Of(owners ...any) *kv.Once[V]
 ```
 
 ## Five cases
@@ -306,6 +312,31 @@ Times live in the memory `LoseAtMost` counters use, so an `Allow` takes no
 write, and reach the file every second: a crash lets at most one burst more
 through. A key whose time has come is absent, and expiry deletes its row.
 
+## Once
+
+```go
+charges, err := kv.OpenOnce[Receipt](ctx, state, "charges")
+
+key := r.Header.Get("Idempotency-Key")
+receipt, err := charges.Run(ctx, key, func(ctx context.Context) (Receipt, error) {
+	return pay.Charge(ctx, order, key) // the provider is given the key too
+})
+```
+
+`Run` returns the answer kept under a key without running anything, or runs
+the function and keeps what it returns, a day unless `DefaultTTL` says. One
+`Run` of a key runs its function at a time in the store's process, the
+server's clients included, so a request sent twice at once waits for the
+first and gets its answer. An error keeps nothing and the next `Run` runs
+again: a declined card the program wants answered the same way twice is a
+value, not an error. An answer is kept even when its caller's context ends
+after the function returned, since its work is done.
+
+A claim on a key lives in memory as long as its `Run`, so a process that dies,
+or a client that leaves, lets the next `Run` run again. An effect outside the
+store therefore carries the key too: the limit the webhook claims above name,
+which `Once` keeps in one call, with the answer.
+
 ## Transactions and snapshots
 
 ```go
@@ -517,6 +548,9 @@ The five cases are the gates' workloads.
 | a limiter lets its burst through, then its rate | `TestALimiterLetsABurstThroughThenItsRate`, `TestAllowNTakesAllOrNoneAndNeverPastTheBurst` |
 | a limiter's times outlive a reopen, and a quiet key is forgotten | `TestALimiterKeepsItsTimesAcrossAReopen`, `TestAQuietKeyIsForgottenOnceItsTimeHasCome` |
 | requests racing for a key pass no more than the burst | `TestRequestsRacingForAKeyPassNoMoreThanTheBurst` |
+| a key's function runs once and its answer is kept | `TestARunKeepsItsAnswerAndRunsAKeyOnce` |
+| an error keeps nothing, and the next `Run` runs again | `TestAnErrorKeepsNothingAndTheNextRunRunsAgain` |
+| a `Run` of a key waits for the one running it, until its context ends | `TestARunWaitsForTheRunOfItsKey`, `TestAWaitingRunEndsWithItsContextAndAnAnswerOutlivesIt` |
 
 ## Not in the first version
 

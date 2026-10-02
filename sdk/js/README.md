@@ -64,6 +64,17 @@ list `a.com,b.com` or JSON read as the default's kind, and one that does not
 is `InvalidError` at open, naming it. `env: { dbUrl: 'DATABASE_URL' }` names a
 variable itself; `secret` fields are never kept; `schema` checks each change.
 
+```ts
+const charges = store.kv.once<Receipt>('charges')               // answers kept a day
+const receipt = await charges.run(requestId, () => pay.charge(order, requestId))
+```
+
+`run` returns the answer kept under a key, or runs the function and keeps
+its answer: a call of the key meanwhile, from any client, waits for it and
+gets the same answer, and a throw keeps nothing, so the next call runs again.
+The function runs once a key while its call lives; an effect outside the
+store, a charge, carries the key too.
+
 ## jobs
 
 ```ts

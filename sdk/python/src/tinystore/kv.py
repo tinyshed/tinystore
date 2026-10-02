@@ -12,6 +12,7 @@ Python read each other's buckets::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 import typing
 from dataclasses import dataclass
@@ -19,18 +20,20 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 from ._connection import Connection, Link, check_name, download, handle_on, owner_text
 from ._page import Page
+from ._session import LostError
 from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.messages import METHODS, KvBucket, KvCall, KvCalls, KvEntry, KvPage, KvResults
 from .config import Config
-from .errors import CorruptError, InvalidError
+from .errors import CorruptError, InvalidError, OutcomeUnknownError
 from .limiter import Limiter, limiter_open
 
 if TYPE_CHECKING:
     import os
-    from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
     from datetime import datetime
 
+    from ._session import Stream
     from ._wire.codec import Key, Raw
 
 _MISSING: Any = object()
@@ -159,6 +162,12 @@ class Kv:
     def limiter(self, name: str, /, *, rate: str, burst: int | None = None) -> Limiter:
         """A limiter of requests by key: `store.kv.limiter("api", rate="100/s", burst=20)`."""
         return Limiter(self._link, name, limiter_open(name, rate, burst), ())
+
+    def once[V](self, name: str, of: type[V], /, *, default_ttl: Duration | None = None) -> Once[V]:
+        """The answers a function gives once a key, of one type, kept a day unless default_ttl says."""
+        check_name(name, "once")
+        open_body = KvBucket.encode(name=name, once=True, default_ttl=None if default_ttl is None else ms(default_ttl))
+        return Once(self._link, name, open_body, of, ())
 
     def stop(self) -> None:
         """Stops following configs, as the store does when it closes."""
@@ -518,3 +527,89 @@ class Counters:
 
     async def clear(self) -> None:
         await self._call("kv.clear", None)
+
+
+class Once[V]:
+    """Answers kept once a key, as Go's kv.Once keeps them: open them with `store.kv.once(name, Receipt)`.
+
+    The server lets one call of a key run its function at a time, every client of the store included,
+    and keeps what it returned, so that a request sent again is answered as the first was.
+    """
+
+    def __init__(self, link: Link, name: str, open_body: bytes, of: Any, owners: tuple[str | bytes, ...]) -> None:
+        self._link, self.name, self._open, self._of, self._owners = link, name, open_body, of, owners
+
+    def of(self, *owners: Key) -> Once[V]:
+        """The answers of a branch, each key apart from the same key elsewhere."""
+        return Once(self._link, self.name, self._open, self._of, (*self._owners, *map(owner_text, owners)))
+
+    async def run(self, key: Key, fn: Callable[[], Awaitable[V]]) -> V:
+        """The answer kept under key, or fn's, which is kept.
+
+        A call of a key another call is running waits for it and gets its answer; an exception of
+        fn keeps nothing and is raised, so the next call runs fn again. A connection lost after fn
+        returned and before its answer was kept is OutcomeUnknownError::
+
+            receipt = await charges.run(request_id, lambda: pay.charge(order, request_id))
+        """
+        stream, kept = await self._claim(key)
+        if stream is None:
+            return _decode(self._of, kept)
+        try:
+            answer = await fn()
+            body = KvEntry.encode(found=True, value=_encode(self._of, answer))
+        except Exception:
+            with contextlib.suppress(Exception):
+                await _end(stream, KvEntry.encode())
+            raise
+        except BaseException:
+            stream.cancel()
+            raise
+        await _end(stream, body)
+        return answer
+
+    async def get(self, key: Key) -> V | None:
+        """The answer kept under key, None when none is."""
+        e = await self._call("kv.get", "read", key)
+        return _decode(self._of, e.get("value")) if e.get("found") else None
+
+    async def delete(self, key: Key) -> None:
+        """Forgets the answer kept under key, so that the next run runs again."""
+        await self._call("kv.delete", "write", key)
+
+    async def _claim(self, key: Key) -> tuple[Stream | None, Raw]:
+        """The answer kept under key, or the stream the server handed the run on; a lost connection asks again."""
+
+        async def attempt(connection: Connection) -> tuple[Stream | None, Raw]:
+            handle = await handle_on(connection, METHODS["kv.open"], self._open)
+            body = KvCall.encode(handle=handle, owners=list(self._owners) or None, key=key)
+            stream = await connection.session.open(METHODS["kv.run"], body, False)
+            try:
+                first = await stream.next()
+            except BaseException:
+                stream.cancel()
+                raise
+            if first.end:
+                return None, KvEntry.decode(first.body).get("value")
+            return stream, None
+
+        return await self._link.run("read", attempt)
+
+    async def _call(self, method: str, idempotence: Literal["read", "write"], key: Key) -> dict[str, Any]:
+        async def attempt(connection: Connection) -> dict[str, Any]:
+            handle = await handle_on(connection, METHODS["kv.open"], self._open)
+            body = KvCall.encode(handle=handle, owners=list(self._owners) or None, key=key)
+            return KvEntry.decode(await connection.session.call(METHODS[method], body))
+
+        return await self._link.run(idempotence, attempt)
+
+
+async def _end(stream: Stream, body: bytes) -> None:
+    """Sends what a run keeps as the stream's last DATA, and waits for the server's, which comes once it is kept."""
+    try:
+        await stream.send(body, True)
+        await stream.next()
+    except LostError as lost:
+        raise OutcomeUnknownError(
+            f"the connection was lost before the answer was kept; the next run may run again: {lost}"
+        ) from lost

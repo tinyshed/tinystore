@@ -510,3 +510,91 @@ func TestAWatchEndsWithItsClientsSide(t *testing.T) {
 		t.Fatal("the connection stayed open for its watch")
 	}
 }
+
+// a key's run goes to one client at a time: a second client's kv.run waits
+// for the first and is answered what it kept; a run that failed keeps
+// nothing, nor does one whose client left, so the next kv.run runs again
+func TestAOnceRunsAKeyOnceOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	first, second := ts.dial(t, wire.Hello{}), ts.dial(t, wire.Hello{})
+	answers := openKV(t, first, wire.KVBucket{Name: "charges", Once: true})
+	others := openKV(t, second, wire.KVBucket{Name: "charges", Once: true})
+	key := wire.KVCall{Handle: answers, Key: "req-7"}
+
+	running := openRun(t, first, key, false)
+	waiting, err := second.Open(t.Context(), wire.KVRun, wire.KVCall{Handle: others, Key: "req-7"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	early, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err = waiting.Response(early); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a second run of the key while the first runs: %v", err)
+	}
+	keepAnswer(t, running, wire.KVEntry{Found: true, Value: text("receipt 1")})
+	if answer := runResponse(t, waiting); !answer.Found || string(answer.Value.Bytes) != "receipt 1" {
+		t.Fatalf("the waiting run was answered %+v", answer)
+	}
+	if got := mustKV(t, first, wire.KVGet, key); string(got.Value.Bytes) != "receipt 1" {
+		t.Fatalf("the kept answer: %+v", got)
+	}
+
+	failing := wire.KVCall{Handle: answers, Key: "req-8"}
+	keepAnswer(t, openRun(t, first, failing, false), wire.KVEntry{})
+	if got := mustKV(t, first, wire.KVGet, failing); got.Found {
+		t.Fatalf("a failed run kept %+v", got)
+	}
+	leaving := openRun(t, first, failing, false)
+	if err = leaving.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	keepAnswer(t, openRun(t, second, wire.KVCall{Handle: others, Key: "req-8"}, false), wire.KVEntry{
+		Found: true, Value: text("receipt 2"),
+	})
+
+	mustKV(t, first, wire.KVDelete, key)
+	if err = openRun(t, first, key, false).Cancel(); err != nil { // a deleted answer runs again
+		t.Fatal(err)
+	}
+	if _, err = kvDo(t, first, wire.KVSet, wire.KVCall{Handle: answers, Key: "x", Value: text("y")}); codeOfError(
+		err) != wire.CodeInvalid {
+		t.Fatalf("a set of once's answers: %v", err)
+	}
+}
+
+// openRun opens a kv.run that the client is handed, and checks that it is
+func openRun(t *testing.T, conn *client.Conn, ask wire.KVCall, found bool) *client.Stream {
+	t.Helper()
+	st, err := conn.Open(t.Context(), wire.KVRun, ask, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer := runResponse(t, st); answer.Found != found {
+		t.Fatalf("kv.run of %q answered %+v", ask.Key, answer)
+	}
+	return st
+}
+
+func runResponse(t *testing.T, st *client.Stream) wire.KVEntry {
+	t.Helper()
+	body, err := st.Response(t.Context())
+	var answer wire.KVEntry
+	if err == nil {
+		err = answer.Decode(body)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return answer
+}
+
+// keepAnswer sends a run's answer and waits for the server's last DATA
+func keepAnswer(t *testing.T, st *client.Stream, answer wire.KVEntry) {
+	t.Helper()
+	if err := st.Send(t.Context(), answer.Append(nil), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, last, err := st.Next(t.Context()); err != nil || !last {
+		t.Fatalf("the run's end: last %v, %v", last, err)
+	}
+}

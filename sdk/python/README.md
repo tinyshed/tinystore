@@ -68,6 +68,17 @@ does not is `InvalidError` at open, naming it. `env={"db_url":
 "DATABASE_URL"}` names a variable itself; `secret` fields are never kept;
 `validate` checks each change.
 
+```python
+charges = store.kv.once("charges", Receipt)  # answers kept a day
+receipt = await charges.run(request_id, lambda: pay.charge(order, request_id))
+```
+
+`run` returns the answer kept under a key, or runs the function and keeps its
+answer: a call of the key meanwhile, from any client, waits for it and gets
+the same answer, and an exception keeps nothing, so the next call runs again.
+The function runs once a key while its call lives; an effect outside the
+store, a charge, carries the key too.
+
 ## jobs
 
 ```python

@@ -50,6 +50,7 @@ export {
 	type SeriesKind,
 	type Timer,
 } from './metrics.ts'
+export type { Once, OnceOptions } from './once.ts'
 export type {
 	Cursor,
 	Damage,

@@ -47,6 +47,7 @@ type Store struct {
 	counters map[string]openCounters
 	configs  map[string]*configHub
 	renewals renewals
+	runs     onceRuns
 	leave    func() // gate.Leave, bound once rather than at every call
 }
 

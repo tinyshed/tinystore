@@ -96,6 +96,46 @@ async def test_counters_clear_scan_batch_and_view(store: tinystore.Store) -> Non
     assert (await a, await none) == (10, False)
 
 
+@dataclass
+class Receipt:
+    receipt: str
+
+
+async def test_a_once_key_runs_once_and_a_call_meanwhile_waits_for_its_answer(store: tinystore.Store) -> None:
+    charges = store.kv.once("charges", Receipt)
+    ran, started, release = [0], asyncio.Event(), asyncio.Event()
+
+    async def charge() -> Receipt:
+        ran[0] += 1
+        started.set()
+        await release.wait()
+        return Receipt(f"r_{ran[0]}")
+
+    first = asyncio.ensure_future(charges.run("req-7", charge))
+    await started.wait()
+    second = asyncio.ensure_future(charges.run("req-7", charge))
+    await asyncio.sleep(0.05)
+    assert ran[0] == 1
+    release.set()
+    assert await first == await second == Receipt("r_1")
+    assert await charges.get("req-7") == Receipt("r_1")
+
+    async def decline() -> Receipt:
+        raise LookupError("the card was declined")
+
+    with pytest.raises(LookupError):
+        await charges.run("req-8", decline)
+    assert await charges.get("req-8") is None
+
+    async def receipt_8() -> Receipt:
+        return Receipt("r_8")
+
+    assert await charges.run("req-8", receipt_8) == Receipt("r_8")
+    await charges.delete("req-7")
+    assert await charges.run("req-7", charge) == Receipt("r_2")
+    assert await charges.of("tenant-7").run("req-7", charge) == Receipt("r_3")
+
+
 async def test_a_queue_waits_changes_cancels_and_works(store: tinystore.Store) -> None:
     later = store.jobs.queue("send-later", dict[str, int])
     await later.enqueue({"user": 42}, key="chat:42:a", after=3600)

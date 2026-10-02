@@ -42,6 +42,7 @@ METHODS: dict[str, int] = {
     "kv.allow": 0x010E,
     "kv.configure": 0x010F,
     "kv.watch": 0x0110,
+    "kv.run": 0x0111,
     "jobs.open": 0x0201,
     "jobs.enqueue": 0x0202,
     "jobs.update": 0x0203,
@@ -123,6 +124,7 @@ KvBucket = message(
     rate=(7, uint),
     per=(8, uint),
     burst=(9, uint),
+    once=(10, bool_),
 )
 
 _kv_call = {

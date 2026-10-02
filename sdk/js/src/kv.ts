@@ -7,6 +7,7 @@ import type { Connection, Link } from './connection.ts'
 import { CorruptError, InvalidError } from './errors.ts'
 import { checkName, handleOn, ownerText, type Page } from './handles.ts'
 import { Limiter, type LimiterOptions, limiterOpen } from './limiter.ts'
+import { Once, type OnceOptions } from './once.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf } from './wire/codec.ts'
@@ -75,7 +76,7 @@ export interface Scanned<V> extends Entry<V> {
 }
 
 /** Encodes a bucket's values into what a row keeps, and back. */
-interface Values<V> {
+export interface Values<V> {
 	encode(value: V): Raw | Promise<Raw>
 	decode(raw: Raw): V | Promise<V>
 }
@@ -119,6 +120,33 @@ export class Kv {
 	/** A limiter of requests by key: `store.kv.limiter('api', { rate: '100/s', burst: 20 })`. */
 	limiter(name: string, options: LimiterOptions): Limiter {
 		return new Limiter(this.#link, name, limiterOpen(name, options), [])
+	}
+
+	/**
+	 * The answers a function gives once a key, JSON values of type T kept a
+	 * day unless defaultTtl says: `store.kv.once<Receipt>('charges')`.
+	 */
+	once<T = unknown>(name: string, options?: OnceOptions): Once<T>
+	/** Answers each read is checked by, zod's, valibot's or another Standard Schema. */
+	once<S extends StandardSchemaV1>(
+		name: string,
+		schema: S,
+		options?: OnceOptions,
+	): Once<StandardSchemaV1.InferOutput<S>>
+	once(name: string, of?: StandardSchemaV1 | OnceOptions, options?: OnceOptions): Once<unknown> {
+		checkName(name, 'once')
+		let values: Values<unknown> = jsonValues
+		if (isSchema(of)) {
+			values = schemaValues(of)
+		} else if (of !== undefined) {
+			options = of
+		}
+		const open = KvBucket.encode({
+			name,
+			once: true,
+			defaultTtl: options?.defaultTtl === undefined ? undefined : ms(options.defaultTtl),
+		})
+		return new Once(this.#link, name, open, values, [])
 	}
 
 	/** Stops following configs, as the store does when it closes. */

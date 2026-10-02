@@ -82,6 +82,7 @@ var schema = map[string][]field{
 		{7, "rate", "uint"},
 		{8, "per", "uint"},
 		{9, "burst", "uint"},
+		{10, "once", "bool"},
 	},
 	"kv.call":      kvCall,
 	"kv.operation": append([]field{{0, "method", "uint"}}, kvCall...),
@@ -340,6 +341,7 @@ var methods = []struct {
 	{"kv.allow", wire.KVAllow},
 	{"kv.configure", wire.KVConfigure},
 	{"kv.watch", wire.KVWatch},
+	{"kv.run", wire.KVRun},
 	{"jobs.open", wire.JobsOpen},
 	{"jobs.enqueue", wire.JobsEnqueue},
 	{"jobs.update", wire.JobsUpdate},
@@ -509,6 +511,9 @@ func kvExamples() []example {
 		of("a limiter of 100 a second, 20 at once", "kv.bucket", wire.KVBucket{
 			Name: "api", Rate: 100, Per: 1000, Burst: 20,
 		}),
+		of("once's answers, kept an hour", "kv.bucket", wire.KVBucket{Name: "charges", DefaultTTL: 3_600_000, Once: true}),
+		of("kv.run of a request's key", "kv.call", wire.KVCall{Handle: 6, Key: "req-7"}),
+		of("a run's answer to keep", "kv.entry", wire.KVEntry{Found: true, Value: raw(`{"receipt":"r_1"}`)}),
 		of("kv.allow of 2 requests of a key under an owner", "kv.call", wire.KVCall{
 			Handle: 4, Owners: []string{"tenant-7"}, Key: "user-1", N: 2,
 		}),

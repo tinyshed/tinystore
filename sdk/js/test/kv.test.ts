@@ -203,6 +203,49 @@ describe('counters', () => {
 	})
 })
 
+describe('once', () => {
+	test('a key runs once: a call meanwhile waits for its answer, and a throw keeps nothing', async () => {
+		const charges = store.kv.once<{ receipt: string }>('charges')
+		let ran = 0
+		let release = () => {}
+		const released = new Promise<void>(resolve => {
+			release = resolve
+		})
+		const charge = async () => {
+			ran++
+			await released
+			return { receipt: `r_${ran}` }
+		}
+		const first = charges.run('req-7', charge)
+		for (const deadline = Date.now() + 5000; ran === 0 && Date.now() < deadline; ) {
+			await Bun.sleep(5)
+		}
+		const second = charges.run('req-7', charge)
+		await Bun.sleep(50)
+		expect(ran).toBe(1)
+		release()
+		expect(await first).toEqual({ receipt: 'r_1' })
+		expect(await second).toEqual({ receipt: 'r_1' })
+		expect(await charges.get('req-7')).toEqual({ receipt: 'r_1' })
+
+		const declined = new Error('the card was declined')
+		expect(
+			await caught(
+				charges.run('req-8', () => {
+					throw declined
+				}),
+			),
+		).toBe(declined)
+		expect(await charges.get('req-8')).toBeUndefined()
+		expect(await charges.run('req-8', () => ({ receipt: 'r_8' }))).toEqual({ receipt: 'r_8' })
+
+		await charges.delete('req-7')
+		expect(await charges.run('req-7', charge)).toEqual({ receipt: 'r_2' })
+		expect(await charges.of('tenant-7').run('req-7', charge)).toEqual({ receipt: 'r_3' })
+		expect(await caught(store.kv.bucket('charges').get('req-7'))).toBeInstanceOf(InvalidError)
+	})
+})
+
 describe('batches', () => {
 	test('a batch writes every call or none', async () => {
 		const accounts = store.kv.bucket<number>('accounts')

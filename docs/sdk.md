@@ -235,6 +235,31 @@ A variable is named by the field's path in upper snake case after the prefix,
 | a rate | `kv.Rate(100, time.Second)` | `rate: '100/s'` | `rate="100/s"` |
 | retry after | `time.Duration` | milliseconds | seconds |
 
+## Once
+
+```go
+charges, err := kv.OpenOnce[Receipt](ctx, state, "charges")
+receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, error) { return charge(ctx) })
+```
+
+```ts
+const charges = store.kv.once<Receipt>('charges')
+const receipt = await charges.run(requestId, () => charge())
+```
+
+```python
+charges = store.kv.once("charges", Receipt)
+receipt = await charges.run(request_id, charge)
+```
+
+The function runs once a key and its answer is kept, a day unless `DefaultTTL`,
+`defaultTtl` or `default_ttl` says; a call of the key meanwhile, from any
+client, waits for it and gets its answer, and a throw or an error keeps
+nothing. In Bun and Python the function runs in the client: the server hands
+it the key's run, and the answer travels back to be kept. A connection lost
+between the function's return and its answer's keeping is
+`OutcomeUnknownError`.
+
 ## Where a job is
 
 ```go
@@ -353,6 +378,10 @@ Built after it:
   the jobs running at once across every worker. The status and the watch are
   the queue's, named by the job's key, rather than a handle of the job
   `enqueue` would answer.
+- **Once**, from a second outside list on 2 October 2026: a function run once
+  a key, its answer kept for the requests sent again, in every language; the
+  claim lives as long as its call, so an effect outside the store carries the
+  key too. Sessions from that list were left to kv's buckets.
 
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):

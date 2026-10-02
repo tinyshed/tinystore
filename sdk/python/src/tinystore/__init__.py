@@ -32,7 +32,7 @@ from .errors import (
     UnimplementedError,
 )
 from .jobs import ClaimedJob, Enqueue, Job, JobEntry, Queue, Repeat, cron, daily, every
-from .kv import Batch, Bucket, Counters, Entry
+from .kv import Batch, Bucket, Counters, Entry, Once
 from .limiter import Allowance, Limiter
 from .metrics import Aggregate, Condition, Plan, Series, none_of, one_of, prefix
 from .records import Cursor, Record, trace
@@ -68,6 +68,7 @@ __all__ = [
     "JobEntry",
     "LimitError",
     "Limiter",
+    "Once",
     "OutcomeUnknownError",
     "Page",
     "PermissionDeniedError",

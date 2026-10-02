@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -15,14 +16,15 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// kvHandle is a bucket of values, counters, a config or a limiter a session
-// opened: one of the four is set
+// kvHandle is a bucket of values, counters, a config, a limiter or once's
+// answers a session opened: one of the five is set
 type kvHandle struct {
 	name     string
 	values   *kv.Bucket[kv.Raw]
 	counters *kv.Counters
 	config   *kv.RawConfig
 	limiter  *kv.Limiter
+	once     *kv.Once[kv.Raw]
 	state    *kv.Store
 }
 
@@ -40,6 +42,7 @@ func (s *Server) kvMethods(methods map[wire.Method]handler) {
 	methods[wire.KVAllow] = kvAllow
 	methods[wire.KVConfigure] = kvConfigure
 	methods[wire.KVWatch] = kvWatch
+	methods[wire.KVRun] = kvRun
 }
 
 func kvOpen(c *call) error {
@@ -54,7 +57,7 @@ func kvOpen(c *call) error {
 	opened := &kvHandle{name: ask.Name, state: state}
 	switch {
 	case kinds(ask) > 1:
-		err = fmt.Errorf("%w: kv: %q opened as more than one of counters, a config and a limiter",
+		err = fmt.Errorf("%w: kv: %q opened as more than one of counters, a config, a limiter and once's answers",
 			tinystore.ErrInvalid, ask.Name)
 	case ask.Counters:
 		opened.counters, err = kv.OpenCounters(c.ctx, state, ask.Name, counterOptions(ask)...)
@@ -62,6 +65,8 @@ func kvOpen(c *call) error {
 		opened.config, err = kv.OpenRawConfig(c.ctx, state, ask.Name)
 	case ask.Rate > 0:
 		opened.limiter, err = kv.OpenLimiter(c.ctx, state, ask.Name, limiterOptions(ask)...)
+	case ask.Once:
+		opened.once, err = kv.OpenOnce[kv.Raw](c.ctx, state, ask.Name, bucketOptions(ask)...)
 	default:
 		opened.values, err = kv.OpenBucket[kv.Raw](c.ctx, state, ask.Name, bucketOptions(ask)...)
 	}
@@ -71,10 +76,11 @@ func kvOpen(c *call) error {
 	return respond(c, wire.Handle{Handle: c.session.kvHandles.add(opened)})
 }
 
-// kinds is how many of counters, a config and a limiter a bucket asks to be
+// kinds is how many of counters, a config, a limiter and once's answers a
+// bucket asks to be
 func kinds(ask wire.KVBucket) int {
 	n := 0
-	for _, asked := range []bool{ask.Counters, ask.Config, ask.Rate > 0} {
+	for _, asked := range []bool{ask.Counters, ask.Config, ask.Rate > 0, ask.Once} {
 		if asked {
 			n++
 		}
@@ -135,6 +141,9 @@ func kvOne(c *call, method wire.Method) error {
 func (h *kvHandle) run(ctx context.Context, tx *kv.Tx, method wire.Method, ask wire.KVCall) (wire.KVEntry, error) {
 	if err := h.only("values or counters"); err != nil {
 		return wire.KVEntry{}, err
+	}
+	if h.once != nil {
+		return runOnce(ctx, tx, h.once.Of(owners(ask.Owners)...), method, ask)
 	}
 	if h.counters != nil {
 		counters := h.counters.Of(owners(ask.Owners)...)
@@ -426,6 +435,84 @@ func (h *kvHandle) only(what string) error {
 			tinystore.ErrInvalid, h.name, what)
 	}
 	return nil
+}
+
+// runOnce is a call on once's answers: get reads the answer a key keeps, and
+// delete forgets it, outside any batch, since a run joins no transaction
+func runOnce(ctx context.Context, tx *kv.Tx, once *kv.Once[kv.Raw], method wire.Method, ask wire.KVCall) (
+	wire.KVEntry, error,
+) {
+	switch {
+	case tx != nil:
+		return wire.KVEntry{}, fmt.Errorf("%w: once's answers join no batch or view", tinystore.ErrInvalid)
+	case method == wire.KVGet:
+		answer, found, err := once.Get(ctx, ask.Key)
+		if !found {
+			return wire.KVEntry{}, err
+		}
+		return wire.KVEntry{Found: true, Value: valueOf(answer)}, err
+	case method == wire.KVDelete:
+		return wire.KVEntry{}, once.Delete(ctx, ask.Key)
+	}
+	return wire.KVEntry{}, fmt.Errorf("%w: %#04x on once's answers, which take run, get and delete",
+		tinystore.ErrInvalid, uint16(method))
+}
+
+// kvRun answers the answer kept under a key, ending the stream, or hands the
+// key's run to the client: it answers not found, the client runs its function
+// and sends what to keep as the stream's last DATA, and the server's last
+// DATA, {}, follows once it is kept. The engine lets one run of a key go at a
+// time, so another client's kv.run of the key waits for this one's.
+func kvRun(c *call) error {
+	var ask wire.KVCall
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	handle, err := c.session.kvHandles.get(ask.Handle)
+	if err != nil {
+		return err
+	}
+	if handle.once == nil {
+		return fmt.Errorf("%w: kv: %q is not once's answers, which run keeps", tinystore.ErrInvalid, handle.name)
+	}
+	ran := false
+	answer, err := handle.once.Of(owners(ask.Owners)...).Run(c.ctx, ask.Key, func(context.Context) (kv.Raw, error) {
+		ran = true
+		if beginErr := begin(c, wire.KVEntry{}); beginErr != nil {
+			return kv.Raw{}, beginErr
+		}
+		return clientAnswer(c)
+	})
+	switch {
+	case err != nil && !errors.Is(err, errNothingKept):
+		return err
+	case !ran:
+		return respond(c, wire.KVEntry{Found: true, Value: valueOf(answer)})
+	}
+	return trailer(c, wire.Empty{})
+}
+
+var errNothingKept = errors.New("server: the client's run failed and keeps nothing")
+
+// clientAnswer is what the client's run keeps: the stream's last DATA, an
+// entry found with its value, or not found when the run failed
+func clientAnswer(c *call) (kv.Raw, error) {
+	body, last, err := c.receive()
+	if err != nil {
+		return kv.Raw{}, err
+	}
+	defer c.consumed(body)
+	var answer wire.KVEntry
+	if err = answer.Decode(body); err == nil && !last {
+		err = fmt.Errorf("%w: a run's answer is the last DATA its client sends", wire.ErrMessage)
+	}
+	switch {
+	case err != nil:
+		return kv.Raw{}, err
+	case !answer.Found:
+		return kv.Raw{}, errNothingKept
+	}
+	return rawOf(answer.Value), nil
 }
 
 // kvAllow asks a limiter for n requests of a key, one when n is absent

@@ -1,8 +1,8 @@
 # kv
 
 An application's current state, in `kv.db` inside a `tinystore.Store`:
-sessions, one-time codes, claims, drafts, flags, settings, a cache of another
-service's answers. Buckets hold values of one type by key, keys sit in
+sessions, one-time codes, claims, the answers of requests sent twice, drafts,
+flags, settings, a cache of another service's answers. Buckets hold values of one type by key, keys sit in
 branches, expiry runs on the store's clock and a version never repeats. The
 design and the measurements behind it are [docs/kv.md](../docs/kv.md).
 
@@ -32,6 +32,11 @@ for s := range settings.Watch(ctx) { server.SetRate(s.Limits.RPS) }
 
 limit, err := kv.OpenLimiter(ctx, state, "api", kv.Rate(100, time.Second), kv.Burst(20))
 allowed, err := limit.Of(tenant).Allow(ctx, userID) // allowed.OK, allowed.Left, allowed.RetryAfter
+
+charges, err := kv.OpenOnce[Receipt](ctx, state, "charges")         // answers kept a day
+receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, error) {
+	return pay.Charge(ctx, order, requestID) // runs once; the same request again gets this receipt
+})
 ```
 
 [example_test.go](example_test.go) runs the five cases of
@@ -180,6 +185,25 @@ allowed, err := limit.Of(tenant).Allow(ctx, userID) // allowed.OK, allowed.Left,
   second and on `Close`, so a crash forgets at most a second and lets at most
   one burst more through. A key whose time has come is as one never seen, and
   maintenance deletes its row.
+
+## Once
+
+- **A key's function runs once and its answer is kept.** `Run` returns the
+  answer kept under a key without running anything, or runs the function and
+  keeps what it returns, `DefaultTTL` long, a day unless it says. `Get` reads
+  an answer and `Delete` forgets it, so that the next `Run` runs again.
+- **One `Run` of a key at a time.** A `Run` of a key another is running, in
+  the store's process or through its server, waits for it and returns its
+  answer, until its own context ends; one after a `Run` that failed runs its
+  own function.
+- **An error keeps nothing.** The function's error is returned and the next
+  `Run` runs again; an answer meant to be kept, a declined card, is a value.
+  An answer is kept even when the caller's context ends after the function
+  returned, and an error keeping it is returned beside it.
+- **A claim lives as long as its `Run`.** It is held in memory: a process that
+  dies, or a client that leaves, lets the next `Run` run again, so an effect
+  outside the store carries the key too, as a payment provider's own
+  idempotency key does.
 
 ## Testing without waiting
 

@@ -319,6 +319,7 @@ carry:
 | kv | open, get, has, set, delete, take, touch, add, max, clear, batch, view, allow, configure | calls |
 | | scan | a download, an entry a message |
 | | watch | a download that does not end: a config's kept fields, again after each change |
+| | run | both ways: the answer a key keeps, or the key's run handed over and its answer back |
 | jobs | open, enqueue of many, update, cancel, get, claim, settle of many | calls |
 | | scan | a download, an entry a message |
 | | watch | a download that ends with its job: its entry, again after each change |
@@ -346,8 +347,8 @@ The values they carry:
 
 ### kv
 
-`kv.open` answers a handle on a bucket of values, on counters, on a config or
-on a limiter, and every other call carries it. A handle holds `kv.Raw` values, so the server reads
+`kv.open` answers a handle on a bucket of values, on counters, on a config, on
+a limiter or on once's answers, and every other call carries it. A handle holds `kv.Raw` values, so the server reads
 what any bucket wrote.
 
 | method | | request | answer |
@@ -368,6 +369,7 @@ what any bucket wrote.
 | `0x010e` | allow | a call on a limiter: a key, and n requests, 1 when absent | an allowance |
 | `0x010f` | configure | a config's fields to keep and paths to forget | `{}` |
 | `0x0110` | watch | a call on a config | a download that does not end: `{}`, then the kept fields a `DATA`, now and after each change |
+| `0x0111` | run | a call on once's answers, whose REQUEST leaves the client's side open | the answer kept, found, which ends the stream; or not found, the run handed over: the client's last `DATA` is the entry to keep, and the server's, `{}`, follows once it is kept |
 
 A bucket:
 
@@ -382,6 +384,7 @@ A bucket:
 | 7 | rate | uint | a limiter's requests every per; a bucket with a rate is a limiter |
 | 8 | per | uint | milliseconds |
 | 9 | burst | uint | the requests a limiter lets through at once; rate when absent |
+| 10 | once | bool | the answers `kv.run` keeps, a day unless default ttl says; get and delete read and forget one |
 
 A handle is `{1: uint}`. A call:
 
@@ -424,6 +427,14 @@ since the types are the client's. `kv.watch` answers `{}`, then `{1: changes,
 change, whoever made it: a watcher behind is sent the latest fields, never a
 state the config did not have. It ends when the client cancels it, when the
 client's side of the connection ends, or with the server.
+
+`kv.run` lets one run of a key go at a time, every client's: another
+`kv.run` of the key waits until that run ends, then is answered what it kept,
+or is handed the run when it kept nothing. The client that is handed a run,
+`{}` as its RESPONSE, runs its function and sends an entry as its last
+`DATA`: found with the value to keep, or not found when the function failed,
+which keeps nothing. A client that cancels or leaves keeps nothing either,
+and the next run of the key is handed over again.
 
 A page, a scan's trailer, is `{1: more, 2: after}`: more says the limit or
 the page's 4 MiB of values ended it before the branch did, and after is the

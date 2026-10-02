@@ -24,11 +24,12 @@ const (
 	KVAllow     Method = 0x010e
 	KVConfigure Method = 0x010f
 	KVWatch     Method = 0x0110
+	KVRun       Method = 0x0111
 )
 
-// KVBucket is kv.open's request: a bucket of values, counters, a config or a
-// limiter, by name, with its handle's options. A duration is milliseconds,
-// zero for none; a limiter is a bucket with a rate.
+// KVBucket is kv.open's request: a bucket of values, counters, a config, a
+// limiter or once's answers, by name, with its handle's options. A duration is
+// milliseconds, zero for none; a limiter is a bucket with a rate.
 type KVBucket struct {
 	Name       string
 	Counters   bool
@@ -39,6 +40,7 @@ type KVBucket struct {
 	Rate       uint64 // a limiter's requests every Per
 	Per        int64
 	Burst      uint64
+	Once       bool // the answers kv.run keeps
 }
 
 func (b KVBucket) Append(dst []byte) []byte {
@@ -68,6 +70,9 @@ func (b KVBucket) Append(dst []byte) []byte {
 	if b.Burst != 0 {
 		m.Uint(9, b.Burst)
 	}
+	if b.Once {
+		m.Bool(10, true)
+	}
 	return m.End()
 }
 
@@ -93,6 +98,8 @@ func (b *KVBucket) Decode(body []byte) error {
 			b.Per = d.Duration()
 		case 9:
 			b.Burst = d.Uint()
+		case 10:
+			b.Once = d.Bool()
 		}
 	}
 	return d.End()

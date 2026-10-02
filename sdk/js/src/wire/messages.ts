@@ -38,6 +38,7 @@ export const methods = {
 	'kv.allow': 0x010e,
 	'kv.configure': 0x010f,
 	'kv.watch': 0x0110,
+	'kv.run': 0x0111,
 	'jobs.open': 0x0201,
 	'jobs.enqueue': 0x0202,
 	'jobs.update': 0x0203,
@@ -122,6 +123,7 @@ export const KvBucket = message('kv.bucket', {
 	rate: [7, uint],
 	per: [8, uint],
 	burst: [9, uint],
+	once: [10, bool],
 })
 
 const kvCall = {
