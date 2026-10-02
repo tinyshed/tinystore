@@ -160,8 +160,10 @@ SDKs in one change):
 - **Text in records**: a substring of a body, then an index.
 - **`explain`**: what a query would open, fetch and decode, before it runs;
   and a `LimitError` naming the budget, what it used and its bound.
-- **`status` and `capabilities`**: what a server serves, for a client newer or
-  older than it (`server.md`).
+- **`status` and `capabilities`**: what a server serves, asked before a call.
+  A client newer than its server is told already: a field or a method the
+  server does not know is `UnimplementedError`, naming the field and the
+  server's version (`server.md` "Versions").
 - **Trace correlation**: a record taking its trace and span from the caller's
   context, without a dependency on OpenTelemetry.
 - **Cancellation on every Bun call**, through an `AbortSignal` option.

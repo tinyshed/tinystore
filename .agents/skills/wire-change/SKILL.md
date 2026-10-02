@@ -29,6 +29,22 @@ Nothing is released yet, so a field may still be repurposed, as `HELLO`'s field
 6 went from the instance to the challenge; after a release a message never
 changes meaning and a new field is added instead.
 
+What an older side does with a newer one is `docs/server.md` "Versions", and
+each change keeps it:
+
+- A new request field is left out at its zero value, so a client using
+  nothing new still talks to an older server, which refuses the field as
+  `unimplemented` when it is sent. A field the Go message never reads, in a
+  switch case that can leave it unread, is refused the same way: read it, or
+  give it no number.
+- A new answer field is one an older client may skip and still read the
+  answer right; anything else is answered only to a client that asked for it
+  with a request field.
+- A new method takes a new number; an old number is never given a new meaning.
+- A new protocol number is for what a field cannot carry, frames, the
+  handshake, credit, and the server keeps speaking the old one while
+  `OldestProtocol` says it does.
+
 ## The profile's rules
 
 - A body is a MessagePack map with small integer keys, written canonically:

@@ -68,10 +68,34 @@ func (s *session) handle(c *call) {
 	}()
 	run := s.server.methods[c.method]
 	if run == nil {
-		err = &wire.Error{Code: wire.CodeUnimplemented, Message: fmt.Sprintf("method %#04x", uint16(c.method))}
+		err = &wire.Error{
+			Code:    wire.CodeUnimplemented,
+			Message: fmt.Sprintf("method %#04x, which %s does not have", uint16(c.method), s.server.named()),
+		}
 		return
 	}
 	err = run(c)
+	var unknown *wire.UnknownFieldsError
+	if errors.As(err, &unknown) {
+		fields := "field"
+		if len(unknown.Keys) > 1 {
+			fields = "fields"
+		}
+		err = &wire.Error{
+			Code: wire.CodeUnimplemented, What: map[string]string{"field": unknown.List()},
+			Message: fmt.Sprintf("the request's %s %s, which %s does not know",
+				fields, unknown.List(), s.server.named()),
+		}
+	}
+}
+
+// named is the server as an unimplemented error names it, with the version it
+// was built as, so that a client newer than its server learns which to upgrade
+func (s *Server) named() string {
+	if s.options.Version == "" || s.options.Version == "(devel)" {
+		return "this server"
+	}
+	return "this server, " + s.options.Version + ","
 }
 
 // settle sends the final frame a handler did not, and gives back the request

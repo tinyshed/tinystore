@@ -657,6 +657,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the blobs engine links no net/http                     | `TestBlobsImportsNoHTTP`                                                        |
 | a frame past its agreed size is refused unread         | `TestAFrameLargerThanAgreedIsRefusedUnread`, `FuzzFrames` in `server/wire`      |
 | a body the profile does not allow is refused           | `FuzzMessages`, a refused vector for each rule                                  |
+| a request is understood whole or refused, naming the field and the server's version | `TestARequestWithAFieldTheServerDoesNotKnowIsRefused`, `TestAMessageReadsWhatItKnowsAndNamesWhatItDoesNot` |
+| a client newer than its server speaks the server's protocol | `TestAClientOfANewerProtocolIsWelcomedInTheServers`                    |
 | the vectors are the bytes                              | `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`     |
 | every message is a vector, every field by its name     | `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one |
 | the largest kv or jobs value travels in one body       | `TestTheLargestValueTravelsInOneBody`                                           |

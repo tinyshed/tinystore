@@ -1,7 +1,13 @@
 package wire
 
-// Protocol is the version of this protocol a HELLO and a WELCOME name.
-const Protocol = 1
+// Protocol is the newest version of this protocol a HELLO and a WELCOME name,
+// and OldestProtocol the oldest a server still speaks. A connection speaks the
+// older of its client's newest and its server's, so that a client newer than
+// its server speaks the server's protocol rather than none.
+const (
+	Protocol       = 1
+	OldestProtocol = 1
+)
 
 // DefaultStreamCredit is the DATA a server sends on a stream before its client
 // grants more, when the client's HELLO does not say: at least the largest body,

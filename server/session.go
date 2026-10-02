@@ -115,12 +115,12 @@ func (s *session) handshake() error {
 			h.Kind))
 	}
 	var hello wire.Hello
-	if err := hello.Decode(body); err != nil {
+	if err := wire.SkipUnknown(hello.Decode(body)); err != nil {
 		return s.refuse(wire.CodeProtocol, err)
 	}
-	if hello.Protocol != wire.Protocol {
-		return s.refuse(wire.CodeProtocol, fmt.Errorf("%w: this server speaks protocol %d, not %d", wire.ErrProtocol,
-			wire.Protocol, hello.Protocol))
+	if hello.Protocol < wire.OldestProtocol {
+		return s.refuse(wire.CodeProtocol, fmt.Errorf("%w: this server speaks protocols %d to %d, not %d",
+			wire.ErrProtocol, wire.OldestProtocol, wire.Protocol, hello.Protocol))
 	}
 	if hello.Challenge != nil && len(hello.Challenge) != wire.ChallengeSize {
 		return s.refuse(wire.CodeProtocol, fmt.Errorf("%w: a challenge of %d bytes, not %d", wire.ErrProtocol,
@@ -168,7 +168,7 @@ func (s *session) agree(hello wire.Hello) {
 // remote client, whose server TLS proves, has no SERVE to check
 func (s *session) welcome(hello wire.Hello) wire.Welcome {
 	welcome := wire.Welcome{
-		Protocol: wire.Protocol, Server: s.server.options.Version, Instance: s.server.instance,
+		Protocol: min(hello.Protocol, wire.Protocol), Server: s.server.options.Version, Instance: s.server.instance,
 		Capability: s.capability, MaxBody: s.agreed.maxBody, InFlight: s.agreed.inFlight,
 		ConnectionCredit: s.server.limits.connectionCredit, StreamCredit: s.agreed.streamCredit,
 		Engines: s.server.engines(), Now: s.server.store.Now().UnixMilli(),

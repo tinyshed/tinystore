@@ -403,6 +403,41 @@ func (s *session) work(ctx context.Context, st *stream, queue *jobs.Queue[json.R
 - **The store's clock travels.** `WELCOME` carries it, and an SDK warns when
   its own is outside the engines' window of it.
 
+## Versions
+
+One version names a release of everything, but a server and its clients
+upgrade apart: a remote server deployed once while the applications' SDKs
+move on, or a sidecar still serving a directory after its application's SDK
+was updated, since it leaves only once it has been idle. So the protocol
+promises what an older and a newer side do with each other.
+
+- **A connection speaks the older protocol of its two sides.** `HELLO` says
+  the newest the client speaks and `WELCOME` the one the connection speaks; a
+  server refuses only a client older than the oldest it still speaks. A
+  protocol moves only for what a field cannot carry: frames, the handshake,
+  credit.
+- **Within a protocol, a message grows by fields, and a request is understood
+  whole or refused.** A field the server does not know is `unimplemented`,
+  naming the field and the server's version: a newer client using something
+  new learns which server to upgrade, rather than reading an answer to
+  another question, as a read whose condition the server skipped would be. A
+  client leaves a field out at its zero value, so one using nothing new talks
+  to any server of its protocol.
+- **An answer grows only by what a client may skip.** A client skips an
+  answer's field it does not know; one whose meaning a client must know is
+  answered only to a client that asked for it with a field of its request,
+  which an older server refuses.
+- **A method is added, never repurposed.** An older server answers a newer
+  method `unimplemented`, naming its version. After the first release a
+  message never changes meaning and a field's number is never reused.
+
+Not built: a list of capabilities in `WELCOME`, for a client that must choose
+before it calls rather than learn from `unimplemented`, which any release may
+add, since it is a field a client may skip; an SDK saying when the sidecar it
+found is another version than its own; and the matrix that keeps the promise,
+CI running the previous release's SDKs against the new server and the new
+SDKs against the previous server.
+
 ## Memory and limits
 
 A connection holds at most what the server granted it, so the server's
@@ -508,6 +543,8 @@ Each promise above is a test once its code exists; those marked built pass:
 | the server module requires only the root | built: `TestTheServerRequiresOnlyTheRoot` |
 | `server/wire` imports only the standard library | built: `TestWireImportsOnlyTheStandardLibrary` |
 | engines import neither `server` nor `server/wire` | built: `TestEnginesDoNotImportEachOther`, extended |
+| a client newer than its server speaks the server's protocol | built: `TestAClientOfANewerProtocolIsWelcomedInTheServers` |
+| a request is understood whole or refused, naming the field and the server's version | built: `TestARequestWithAFieldTheServerDoesNotKnowIsRefused`, `TestAMessageReadsWhatItKnowsAndNamesWhatItDoesNot` |
 
 ## Not in the first version
 

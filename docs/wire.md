@@ -73,7 +73,10 @@ A `HELLO` from Bun:
 
 1. The client sends `HELLO`, and the server answers `WELCOME`, or `GOAWAY`
    and closes. Nothing comes before them, and the server waits five seconds
-   for `HELLO`.
+   for `HELLO`. The connection speaks the older of the client's newest
+   protocol and the server's, which `WELCOME` names: a client newer than its
+   server speaks the server's protocol, or closes when it no longer does, and
+   only a client older than the oldest protocol the server speaks is refused.
 2. The client opens streams with `REQUEST`, as many at once as `WELCOME`
    allows.
 3. Either side may send `PING`; the other answers `PONG` with the same eight
@@ -88,7 +91,7 @@ A `HELLO` from Bun:
 
 | key | field | type | |
 |---|---|---|---|
-| 1 | protocol | uint | 1 |
+| 1 | protocol | uint | the newest the client speaks, 1 |
 | 2 | client | str | a name and version, for logs |
 | 3 | token | str | required on TCP |
 | 4 | max body | uint | the largest body the client takes; the server's when absent |
@@ -103,7 +106,7 @@ credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
 
 | key | field | type | |
 |---|---|---|---|
-| 1 | protocol | uint | 1 |
+| 1 | protocol | uint | the one this connection speaks |
 | 2 | server | str | its version |
 | 3 | instance | bin | 16 random bytes a start |
 | 4 | capability | str | `admin` or `data` |
@@ -226,9 +229,17 @@ value: a map from small unsigned integer keys to values, under these rules.
   the other.
 - **Keys.** A message's keys are unsigned integers; a field that is a map of
   names, an error's `what` or a series' labels, says so and has str keys. A
-  key twice is invalid. A key the decoder does not know is skipped, its value
-  still well formed and within bounds; an absent key is the field's default,
-  and nil stands only where a field allows it.
+  key twice is invalid. A key the reader does not know is read past, its value
+  still well formed and within bounds, and then it depends on the reader. A
+  server refuses a request carrying one, `unimplemented` naming the field,
+  since a field it skipped could change what the client asked, and the answer
+  would be to another question. A client reading an answer, and a server
+  reading `HELLO`, skip it. So a client leaves out a field at its zero value,
+  and an older server takes everything a newer client sends that it would
+  have sent anyway; and a server adds an answer field only where a client
+  that skips it still reads the answer right, or else answers it only to a
+  client that asked for it in a field of its request. An absent key is the
+  field's default, and nil stands only where a field allows it.
 - **Bounds come before allocation.** A length or a count past the bytes left
   in the body is invalid, since every element takes at least a byte; nesting
   deeper than 8 is invalid; a body is at most the agreed maximum.
@@ -274,7 +285,7 @@ An error is the final frame of its stream, with ERROR set:
 | `suspended` | a series in quarantine | after its repair |
 | `outcome_unknown` | a commit whose result is unknown | after reading what it wrote |
 | `permission` | the connection's capability does not allow it | no |
-| `unimplemented` | a method this server does not have | no |
+| `unimplemented` | a method, or a field of a request, this server does not have: `what` names the field, the message the server's version | no |
 | `cancelled` | the client cancelled it | — |
 | `unavailable` | the server is closing | on another connection |
 | `internal` | a fault of the server's | — |

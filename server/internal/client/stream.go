@@ -108,7 +108,7 @@ func failed(f frame) ([]byte, error) {
 		return f.body, nil
 	}
 	var failure wire.Error
-	if err := failure.Decode(f.body); err != nil {
+	if err := wire.SkipUnknown(failure.Decode(f.body)); err != nil {
 		return nil, err
 	}
 	return nil, &failure

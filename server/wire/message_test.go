@@ -47,7 +47,10 @@ func TestAnErrorKeepsANameThatIsNotUTF8(t *testing.T) {
 	}
 }
 
-func TestAMessageSkipsKeysItDoesNotKnowAndTakesAnyOrder(t *testing.T) {
+// A reader takes its fields in any order and names those it does not know, so
+// that a server refuses them in a request and a client may skip them in an
+// answer, as SkipUnknown does.
+func TestAMessageReadsWhatItKnowsAndNamesWhatItDoesNot(t *testing.T) {
 	body := wire.AppendMap(nil, 4)
 	body = wire.AppendStr(wire.AppendUint(body, 2), "tinystore-bun/0.2")
 	body = wire.AppendMap(wire.AppendUint(body, 40), 1)
@@ -57,11 +60,21 @@ func TestAMessageSkipsKeysItDoesNotKnowAndTakesAnyOrder(t *testing.T) {
 	body = wire.AppendBin(wire.AppendUint(body, 700), []byte{1, 2})
 
 	var hello wire.Hello
-	if err := hello.Decode(body); err != nil {
-		t.Fatal(err)
+	err := hello.Decode(body)
+	var unknown *wire.UnknownFieldsError
+	if !errors.As(err, &unknown) || !errors.Is(err, wire.ErrUnknownField) || unknown.List() != "40,700" {
+		t.Fatalf("decoded with %v", err)
+	}
+	if wire.SkipUnknown(err) != nil {
+		t.Fatalf("skipping the unknown fields left %v", wire.SkipUnknown(err))
 	}
 	if hello.Protocol != 1 || hello.Client != "tinystore-bun/0.2" || hello.MaxBody != 0 {
 		t.Fatalf("read as %+v", hello)
+	}
+
+	broken := append(body[:len(body):len(body)], 0xc1)
+	if err = wire.SkipUnknown(hello.Decode(broken)); !errors.Is(err, wire.ErrMessage) {
+		t.Fatalf("a body that does not decode, its unknown fields skipped: %v", err)
 	}
 }
 

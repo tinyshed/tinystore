@@ -136,10 +136,10 @@ func (c *Conn) welcome() error {
 	}
 	switch h.Kind {
 	case wire.KindWelcome:
-		return c.Welcome.Decode(body)
+		return wire.SkipUnknown(c.Welcome.Decode(body))
 	case wire.KindGoAway:
 		var goAway wire.GoAway
-		if err := goAway.Decode(body); err != nil {
+		if err := wire.SkipUnknown(goAway.Decode(body)); err != nil {
 			return err
 		}
 		return &wire.Error{Code: goAway.Code, Message: goAway.Message}
@@ -298,7 +298,7 @@ func (c *Conn) frame(h wire.Header, body []byte) error {
 		return c.writer.Post(wire.AppendFrame(nil, wire.Header{Kind: wire.KindPong}, body))
 	case wire.KindGoAway:
 		var goAway wire.GoAway
-		if err := goAway.Decode(body); err != nil {
+		if err := wire.SkipUnknown(goAway.Decode(body)); err != nil {
 			return err
 		}
 		c.mu.Lock()

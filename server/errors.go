@@ -43,6 +43,7 @@ var sentinels = []struct {
 	{tinystore.ErrTooOld, wire.CodeTooOld},
 	{tinystore.ErrTooNew, wire.CodeTooNew},
 	{tinystore.ErrSuspended, wire.CodeSuspended},
+	{wire.ErrUnknownField, wire.CodeUnimplemented},
 	{wire.ErrMessage, wire.CodeInvalid},
 }
 
@@ -66,6 +67,10 @@ func codeOf(ctx context.Context, err error) wire.Code {
 
 // whatOf is the item an engine's error names, and the call of a batch it failed
 func whatOf(err error) map[string]string {
+	var unknown *wire.UnknownFieldsError
+	if errors.As(err, &unknown) {
+		return map[string]string{"field": unknown.List()}
+	}
 	var op *opError
 	if errors.As(err, &op) {
 		return op.what()

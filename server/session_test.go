@@ -125,16 +125,61 @@ func TestAHelloTheServerCannotTakeIsAGoAway(t *testing.T) {
 		t.Errorf("a PING first: %+v", goAway)
 	}
 
-	later := ts.raw(t, ts.endpoint)
-	later.send(wire.Header{Kind: wire.KindHello}, wire.Hello{Protocol: 2}.Append(nil))
-	if goAway := later.goneAway(); goAway.Code != wire.CodeProtocol || !strings.Contains(goAway.Message, "protocol 1") {
-		t.Errorf("protocol 2: %+v", goAway)
+	older := ts.raw(t, ts.endpoint)
+	older.send(wire.Header{Kind: wire.KindHello}, wire.Hello{Protocol: wire.OldestProtocol - 1}.Append(nil))
+	if goAway := older.goneAway(); goAway.Code != wire.CodeProtocol || !strings.Contains(goAway.Message, "protocols 1 to") {
+		t.Errorf("a protocol older than the oldest: %+v", goAway)
 	}
 
 	garbled := ts.raw(t, ts.endpoint)
 	garbled.send(wire.Header{Kind: wire.KindHello}, []byte{0xc1})
 	if goAway := garbled.goneAway(); goAway.Code != wire.CodeProtocol {
 		t.Errorf("a HELLO that is not a message: %+v", goAway)
+	}
+}
+
+// A client newer than its server speaks the server's protocol: the server
+// answers a HELLO of a newer protocol with its own newest, which the client
+// speaks too or closes, rather than refusing a connection both could have had.
+func TestAClientOfANewerProtocolIsWelcomedInTheServers(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	welcome := ts.raw(t, ts.endpoint).hello(wire.Hello{Protocol: wire.Protocol + 1, Client: "tomorrow"})
+	if welcome.Protocol != wire.Protocol {
+		t.Fatalf("a client of protocol %d welcomed in %d", wire.Protocol+1, welcome.Protocol)
+	}
+}
+
+// A request is understood whole or refused. A field the server skipped could
+// change what the client asked, as a newer client's condition on a read would,
+// so the server answers unimplemented, naming the field and its own version,
+// rather than an answer to another question.
+func TestARequestWithAFieldTheServerDoesNotKnowIsRefused(t *testing.T) {
+	ts := startTestServer(t, Options{Version: "v0.0.1"})
+	raw := ts.raw(t, ts.endpoint)
+	raw.hello(wire.Hello{Client: "tomorrow"})
+
+	m := wire.BeginMap(nil)
+	m.Str(1, "notes")
+	m.Uint(99, 1)
+	raw.send(wire.Header{Kind: wire.KindRequest, Flags: wire.FlagEnd, Method: wire.KVOpen, Stream: 1}, m.End())
+	h, body, err := raw.next()
+	if err != nil || h.Flags&wire.FlagError == 0 {
+		t.Fatalf("%+v answered a request with field 99: %v", h, err)
+	}
+	var failed wire.Error
+	if err = failed.Decode(body); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Code != wire.CodeUnimplemented || failed.What["field"] != "99" || !strings.Contains(failed.Message, "v0.0.1") {
+		t.Fatalf("refused as %+v", failed)
+	}
+
+	opened := ts.raw(t, ts.endpoint)
+	opened.hello(wire.Hello{Client: "today"})
+	opened.send(wire.Header{Kind: wire.KindRequest, Flags: wire.FlagEnd, Method: wire.KVOpen, Stream: 1},
+		wire.KVBucket{Name: "notes"}.Append(nil))
+	if h, _, err = opened.next(); err != nil || h.Flags&wire.FlagError != 0 {
+		t.Fatalf("the same request without field 99: %+v, %v", h, err)
 	}
 }
 

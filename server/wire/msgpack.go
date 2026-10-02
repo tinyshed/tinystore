@@ -7,6 +7,8 @@ import (
 	"iter"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -226,6 +228,48 @@ func (m *Map) End() []byte {
 // message its frame and method ask for.
 var ErrMessage = errors.New("invalid message")
 
+// ErrUnknownField is a message carrying a field its reader does not know.
+//
+// A server refuses such a request: a field it skipped could change what the
+// client asked, so answering would answer another question. A client reading
+// an answer, and a server reading a HELLO, skip it, since a newer peer adds
+// only what an older one may skip there.
+var ErrUnknownField = errors.New("a field this reader does not know")
+
+// UnknownFieldsError names the fields a message carried that its reader does
+// not know; every other field was read.
+type UnknownFieldsError struct {
+	Keys []uint64
+}
+
+func (e *UnknownFieldsError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrUnknownField, e.List())
+}
+
+func (e *UnknownFieldsError) Unwrap() error {
+	return ErrUnknownField
+}
+
+// List is the fields' keys as an error's what names them: 9, or 9,40.
+func (e *UnknownFieldsError) List() string {
+	keys := make([]string, len(e.Keys))
+	for i, key := range e.Keys {
+		keys[i] = strconv.FormatUint(key, 10)
+	}
+	return strings.Join(keys, ",")
+}
+
+// SkipUnknown is a decode's error with the fields it did not know forgiven,
+// for a reader a newer peer may add to: a client reading an answer, or a
+// server reading a HELLO.
+func SkipUnknown(err error) error {
+	var unknown *UnknownFieldsError
+	if errors.As(err, &unknown) {
+		return nil
+	}
+	return err
+}
+
 // Type is the kind of the next value a Decoder holds.
 type Type uint8
 
@@ -278,10 +322,11 @@ func typeOf(b byte) Type {
 // decoder reads each field and asks End once. What it returns of the body
 // aliases the body.
 type Decoder struct {
-	body  []byte
-	at    int
-	depth int
-	err   error
+	body    []byte
+	at      int
+	depth   int
+	err     error
+	unknown []uint64 // the fields the reader left unread, which End names
 }
 
 func NewDecoder(body []byte) Decoder {
@@ -292,11 +337,15 @@ func (d *Decoder) Err() error {
 	return d.err
 }
 
-// End is the message's error, or one when bytes follow its value: a message
-// is one value.
+// End is the message's error, or one when bytes follow its value, since a
+// message is one value; then an UnknownFieldsError when the reader left a
+// field unread, every other field read.
 func (d *Decoder) End() error {
 	if d.err == nil && d.at != len(d.body) {
 		d.fail("%d bytes after the message", len(d.body)-d.at)
+	}
+	if d.err == nil && len(d.unknown) > 0 {
+		return &UnknownFieldsError{Keys: d.unknown}
 	}
 	return d.err
 }
@@ -571,7 +620,8 @@ func (d *Decoder) enter(kind Type) bool {
 
 // Fields reads a map with unsigned keys, a message or a field of one,
 // yielding each key with its value next: the loop reads the value, or leaves
-// it to be skipped, well formed and within bounds. A key twice is invalid.
+// it to be skipped, well formed and within bounds, and named by End as a
+// field the reader does not know. A key twice is invalid.
 func (d *Decoder) Fields() iter.Seq[uint64] {
 	return func(yield func(uint64) bool) {
 		n := d.count(TypeMap, fixMap, mpMap16, mpMap32, 2)
@@ -593,6 +643,7 @@ func (d *Decoder) Fields() iter.Seq[uint64] {
 				return
 			}
 			if d.at == at {
+				d.unknown = append(d.unknown, key)
 				d.Skip()
 			}
 		}
