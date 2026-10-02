@@ -104,7 +104,24 @@ export interface Range {
 	limits?: { series?: number; blocks?: number; bytes?: number; decoded?: number; answered?: number }
 }
 
-export type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'increase'
+/**
+ * Each computed exactly and rounded once, a group's too: avg is the mean of
+ * every sample, rate a counter's increase a second, delta a gauge's last
+ * sample less its first.
+ */
+export type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate' | 'delta'
+
+/**
+ * An aggregate's buckets and, to join series, what groups them: by these
+ * labels, or without them, each group one result. `by: []` joins every series
+ * of a name. A group never joins two names or two kinds.
+ */
+export interface AggregateRange extends Range {
+	width: Duration
+	op: AggregateOp
+	by?: string[]
+	without?: string[]
+}
 
 export interface Bucket {
 	from: Date
@@ -157,7 +174,12 @@ function namedSeries(spelled: Labels | undefined): { name: string; labels: Label
 
 function rangeOf(
 	r: Range,
-	extra?: { width?: number; op?: AggregateOp },
+	extra?: {
+		width?: number
+		op?: AggregateOp
+		by?: string[] | undefined
+		without?: string[] | undefined
+	},
 ): Parameters<typeof MetricsRange.encode>[0] {
 	const { match, where } = conditionsOf(r)
 	if (r.name === undefined && Object.keys(match).length === 0 && !where.some(finds)) {
@@ -309,12 +331,16 @@ export class Metrics {
 	}
 
 	/** Buckets of a width from the range's start, each computed exactly: a counter's increase counts its resets. */
-	async aggregate(range: Range & { width: Duration; op: AggregateOp }): Promise<Aggregate[]> {
+	async aggregate(range: AggregateRange): Promise<Aggregate[]> {
+		if (range.by !== undefined && range.without !== undefined) {
+			throw new InvalidError('an aggregate groups by labels or without them, not both')
+		}
+		const grouping = { by: range.by, without: range.without }
 		const got = await this.#link.run('read', connection =>
 			download(
 				connection,
 				methods['metrics.aggregate'],
-				MetricsRange.encode(rangeOf(range, { width: ms(range.width), op: range.op })),
+				MetricsRange.encode(rangeOf(range, { width: ms(range.width), op: range.op, ...grouping })),
 			),
 		)
 		const pieces = got.items.map(item => {

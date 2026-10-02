@@ -68,18 +68,33 @@ func (b *bucketAccumulator) mergeSummary(block storedBlock, op AggregateOp) erro
 		b.maximum = math.Max(b.maximum, summary.max)
 	}
 	switch op {
-	case AggregateSum:
+	case AggregateSum, AggregateAvg:
 		if err := exactValue(summary.exactSum, &b.current); err != nil {
 			return err
 		}
 		b.exact.Add(&b.exact, &b.current)
-	case AggregateIncrease:
+	case AggregateIncrease, AggregateRate:
 		if err := b.mergeIncrease(block); err != nil {
+			return err
+		}
+	case AggregateDelta:
+		if err := b.mergeEnds(block); err != nil {
 			return err
 		}
 	}
 	b.count += block.head.Count
 	return nil
+}
+
+// mergeEnds keeps a delta's ends: the bucket's first sample, its first
+// block's, and its last, each block's in turn.
+func (b *bucketAccumulator) mergeEnds(block storedBlock) error {
+	if b.count == 0 {
+		if err := finiteUnits(block.head.First, &b.first); err != nil {
+			return err
+		}
+	}
+	return finiteUnits(block.summary.last, &b.previous)
 }
 
 func (b *bucketAccumulator) mergeIncrease(block storedBlock) error {

@@ -121,6 +121,7 @@ failing = await store.metrics.read(
     name="http_requests_total", since="1h", where={"status": tinystore.one_of("500", "502")}
 )
 buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
+routes = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="rate", by=["route"])
 ```
 
 A sample comes back bit for bit, `-0.0` and a NaN's payload included; a range

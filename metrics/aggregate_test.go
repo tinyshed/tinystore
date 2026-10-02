@@ -303,3 +303,111 @@ func TestExactAccumulatorMatchesRationalOracle(t *testing.T) {
 		}
 	}
 }
+
+// groupedStore holds three counters of one name, two routes, and two gauges.
+func groupedStore(t *testing.T) *Store {
+	t.Helper()
+	store, _ := openTestStore(t, Options{Retention: time.Hour})
+	ingest := func(series Series, values ...float64) {
+		samples := make([]Sample, len(values))
+		for i, value := range values {
+			samples[i] = Sample{At: testEpoch + int64(i)*1000, Value: value}
+		}
+		if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: samples}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requests := func(route, host string) Series {
+		return Series{Name: "http_requests_total", Kind: Counter, Labels: Labels{"route": route, "host": host}}
+	}
+	ingest(requests("/a", "1"), 10, 15, 5, 8) // an increase of 5 + 8 after its reset
+	ingest(requests("/a", "2"), 0, 2, 4, 6)
+	ingest(requests("/b", "1"), 100, 100, 101, 103)
+	ingest(Series{Name: "temperature", Kind: Gauge, Labels: Labels{"room": "a"}}, 0.1, 0.2, 0.3, 0.7)
+	ingest(Series{Name: "temperature", Kind: Gauge, Labels: Labels{"room": "b"}}, 1, 2)
+	return store
+}
+
+func aggregateOnce(t *testing.T, store *Store, name string, op AggregateOp, by, without []string) []AggregateResult {
+	t.Helper()
+	results, err := store.Aggregate(t.Context(), AggregateRequest{
+		Range: Range{Name: name, From: testEpoch, To: testEpoch + 4000}, Width: 4 * time.Second, Op: op,
+		By: by, Without: without,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return results
+}
+
+// A grouped aggregate joins its series' exact accumulators bucket by bucket and
+// rounds once, so a group's increase counts each series' resets and its average
+// weighs every sample.
+func TestAGroupJoinsItsSeriesExactlyAndRoundsOnce(t *testing.T) {
+	store := groupedStore(t)
+
+	byRoute := aggregateOnce(t, store, "http_requests_total", AggregateIncrease, []string{"route"}, nil)
+	if len(byRoute) != 2 || byRoute[0].Series.String() != `http_requests_total{route="/a"}` ||
+		byRoute[0].Buckets[0].Value != 5+8+6 || byRoute[0].Buckets[0].Resets != 1 ||
+		byRoute[1].Series.String() != `http_requests_total{route="/b"}` || byRoute[1].Buckets[0].Value != 3 {
+		t.Fatalf("increase by route: %+v", byRoute)
+	}
+	withoutHost := aggregateOnce(t, store, "http_requests_total", AggregateIncrease, nil, []string{"host"})
+	if len(withoutHost) != 2 || withoutHost[0].Buckets[0].Value != byRoute[0].Buckets[0].Value {
+		t.Fatalf("increase without host is not increase by route: %+v", withoutHost)
+	}
+	total := aggregateOnce(t, store, "http_requests_total", AggregateCount, []string{}, nil)
+	if len(total) != 1 || len(total[0].Series.Labels) != 0 || total[0].Buckets[0].Value != 12 {
+		t.Fatalf("a count by nothing joins every series of the name: %+v", total)
+	}
+
+	// (0.1+0.2+0.3+0.7+1+2)/6, exact over every sample, rounded once
+	avg := aggregateOnce(t, store, "temperature", AggregateAvg, []string{}, nil)
+	sum := new(big.Rat)
+	for _, value := range []float64{0.1, 0.2, 0.3, 0.7, 1, 2} {
+		sum.Add(sum, new(big.Rat).SetFloat64(value))
+	}
+	want, _ := new(big.Rat).Quo(sum, big.NewRat(6, 1)).Float64()
+	if len(avg) != 1 || math.Float64bits(avg[0].Buckets[0].Value) != math.Float64bits(want) {
+		t.Fatalf("the average of every sample: %+v, want %v", avg, want)
+	}
+}
+
+// rate is a counter's exact increase over its bucket's seconds; delta is a
+// gauge's last sample less its first, each a series' own, then joined
+//
+//	increase 5+8 over a bucket of 4 s  →  rate 3.25
+//	room a 0.1 → 0.7, room b 1 → 2     →  delta 0.6 and 1, by nothing 1.6
+func TestRateAndDeltaAreExactPerSeriesThenJoined(t *testing.T) {
+	store := groupedStore(t)
+	rates := aggregateOnce(t, store, "http_requests_total", AggregateRate, nil, nil)
+	if len(rates) != 3 || rates[0].Buckets[0].Value != 13.0/4 {
+		t.Fatalf("rate of each series: %+v", rates)
+	}
+	deltas := aggregateOnce(t, store, "temperature", AggregateDelta, nil, nil)
+	if len(deltas) != 2 || deltas[0].Buckets[0].Value != 0.6 || deltas[1].Buckets[0].Value != 1 {
+		t.Fatalf("delta of each gauge: %+v", deltas)
+	}
+	sum, _ := new(big.Rat).Add(new(big.Rat).Sub(new(big.Rat).SetFloat64(0.7), new(big.Rat).SetFloat64(0.1)),
+		big.NewRat(1, 1)).Float64()
+	joined := aggregateOnce(t, store, "temperature", AggregateDelta, []string{}, nil)
+	if len(joined) != 1 || joined[0].Buckets[0].Value != sum {
+		t.Fatalf("delta joined exactly: %+v, want %v", joined, sum)
+	}
+}
+
+func TestAGroupingOrOperationTheSeriesCannotTakeIsRefused(t *testing.T) {
+	store := groupedStore(t)
+	for _, request := range []AggregateRequest{
+		{Range: Range{Name: "temperature"}, Op: AggregateRate},
+		{Range: Range{Name: "http_requests_total"}, Op: AggregateDelta},
+		{Range: Range{Name: "temperature"}, Op: AggregateSum, By: []string{"room"}, Without: []string{"host"}},
+		{Range: Range{Name: "temperature"}, Op: AggregateSum, By: []string{"__name__"}},
+		{Range: Range{Name: "temperature"}, Op: AggregateSum, Without: []string{""}},
+	} {
+		request.Range.From, request.Range.To, request.Width = testEpoch, testEpoch+4000, time.Second
+		if _, err := store.Aggregate(t.Context(), request); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%v by %v without %v: %v, want ErrInvalid", request.Op, request.By, request.Without, err)
+		}
+	}
+}

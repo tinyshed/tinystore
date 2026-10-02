@@ -69,6 +69,35 @@ complete blocks contribute their internal increases, their exact `first` and
 sample. A reset across that boundary adds the new block's first value and one
 reset. A partial block is decoded before its transitions are counted.
 
+## Averages, rates and deltas
+
+`avg` is the exact sum of the bucket's samples over their count, rounded once.
+`rate` is a counter's exact increase, as above, over the bucket's own width in
+seconds, rounded once: the last bucket of a range that ends inside it is
+narrower, and a bucket retention cut is `Partial` and divides by its whole
+width. `delta` is a gauge's last sample in the bucket less its first, exact,
+rounded once; it takes no transition from outside the bucket, as an increase
+takes none, and a counter's is its increase.
+
+## Groups
+
+`By` keeps the labels it names and `Without` all but those, and the series that
+share a name, a kind and the labels kept are one group: a group never joins two
+names or two kinds. An empty `By` joins every series of a name. Each series'
+bucket is closed exactly as above, then joined into its group's bucket of the
+same start: counts and resets add, the exact sums, increases and deltas add,
+`min` and `max` take the least and the greatest. Only then is the group's
+bucket rounded, once, so a group's answer is independent of how many series it
+joined and in which order:
+
+```text
+avg over a group   the exact sum of every sample of its series over their count
+rate over a group  the exact sum of each series' increase over the bucket's seconds
+```
+
+A group's `avg` weighs every sample, not every series. The output limit counts
+a group's buckets, not its series'.
+
 ## Summary representation gate
 
 For finite float64 values, an exact sum is an integer count of units of

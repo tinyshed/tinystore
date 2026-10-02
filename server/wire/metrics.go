@@ -161,8 +161,11 @@ type MetricsRange struct {
 	From, To int64
 	Limits   MetricsLimits
 	Width    int64
-	Op       string // count, sum, min, max or increase
+	Op       string // count, sum, min, max, avg, increase, rate or delta
 	Where    []MetricsCondition
+	// By and Without group an aggregate's series; an empty one, not nil, is
+	// sent and groups by no label.
+	By, Without []string
 }
 
 // MetricsCondition is what a label's value must be beyond equality: one_of
@@ -222,6 +225,14 @@ func (r MetricsRange) Append(dst []byte) []byte {
 		}
 		m.SetBuf(buf)
 	}
+	if r.By != nil {
+		m.Key(12)
+		m.SetBuf(appendStrs(m.Buf(), r.By))
+	}
+	if r.Without != nil {
+		m.Key(13)
+		m.SetBuf(appendStrs(m.Buf(), r.Without))
+	}
 	return m.End()
 }
 
@@ -245,6 +256,10 @@ func (r *MetricsRange) Decode(body []byte) error {
 				condition.decode(&d)
 				r.Where = append(r.Where, condition)
 			}
+		case 12:
+			r.By = append([]string{}, d.Strs()...)
+		case 13:
+			r.Without = append([]string{}, d.Strs()...)
 		default:
 			r.decodeLimit(&d, key)
 		}

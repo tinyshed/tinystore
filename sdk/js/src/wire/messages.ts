@@ -393,6 +393,8 @@ export const MetricsRange = message('metrics.range', {
 	width: [9, uint],
 	op: [10, str],
 	where: [11, list(MetricsCondition)],
+	by: [12, list(str)],
+	without: [13, list(str)],
 })
 
 export const MetricsBuckets = message('metrics.buckets', {

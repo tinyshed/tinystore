@@ -147,8 +147,12 @@ the callback returning.
 Op: metrics.AggregateSum})` returns one result per matched series and one value
 per nonempty bucket. Buckets start at `r.From`; retention clips contributing
 samples without shifting them, and the bucket it cuts reports `Partial`.
-`AggregateCount`, `AggregateMin`, `AggregateMax` and `AggregateIncrease` are
-also available; increase requires a counter series. `Count` and `Resets` remain
+`AggregateCount`, `AggregateMin`, `AggregateMax`, `AggregateAvg`,
+`AggregateIncrease`, `AggregateRate` and `AggregateDelta` are also available;
+increase and rate require a counter series, delta a gauge. `By` and `Without`
+join series into groups, one result each, `By: []string{}` every series of a
+name; [the contract](../docs/aggregate-contract.md) has the arithmetic, which
+rounds a group's bucket once. `Count` and `Resets` remain
 integers, `Value` is rounded once from exact finite arithmetic, and `Overflow`
 distinguishes a finite sum that rounded to infinity. An error returns no
 results. `OutputSamples` limits buckets, while `DecodedSamples` limits raw

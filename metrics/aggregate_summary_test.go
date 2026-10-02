@@ -83,8 +83,11 @@ func TestSummaryAndRawAggregatesAgreeAtEveryBoundary(t *testing.T) {
 			values[500], values[501] = math.Copysign(0, -1), 0
 		}
 		store, series := sealedAggregateStore(t, kind, values)
-		for _, op := range []AggregateOp{AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateIncrease} {
-			if op == AggregateIncrease && kind != Counter {
+		for _, op := range []AggregateOp{
+			AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateAvg, AggregateIncrease, AggregateRate,
+			AggregateDelta,
+		} {
+			if (op == AggregateIncrease || op == AggregateRate) && kind != Counter || op == AggregateDelta && kind != Gauge {
 				continue
 			}
 			for _, bounds := range [][3]int64{{0, 1441, 2000}, {1, 1440, 480}, {240, 1200, 240}, {239, 1201, 481}, {0, 961, 500}} {

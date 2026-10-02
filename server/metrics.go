@@ -116,6 +116,7 @@ func metricsAggregate(c *call) error {
 	}
 	request := metrics.AggregateRequest{
 		Range: selected, Width: time.Duration(ask.Width) * time.Millisecond, Op: metrics.AggregateOp(ask.Op),
+		By: ask.By, Without: ask.Without,
 	}
 	results, err := store.Aggregate(c.ctx, request)
 	if err != nil {
@@ -207,7 +208,8 @@ func rangeOf(sent wire.MetricsRange) (metrics.Range, error) {
 
 // the operations an aggregate may ask for; another is a newer client's
 var aggregateOps = []metrics.AggregateOp{
-	metrics.AggregateCount, metrics.AggregateSum, metrics.AggregateMin, metrics.AggregateMax, metrics.AggregateIncrease,
+	metrics.AggregateCount, metrics.AggregateSum, metrics.AggregateMin, metrics.AggregateMax, metrics.AggregateAvg,
+	metrics.AggregateIncrease, metrics.AggregateRate, metrics.AggregateDelta,
 }
 
 // unknownKind refuses a value of a known field that this server does not have,

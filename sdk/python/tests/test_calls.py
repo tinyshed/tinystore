@@ -228,3 +228,27 @@ async def test_a_search_finds_records_by_their_text_the_case_ignored(store: tiny
     assert found == ["read: Connection reset by peer", "CONNECTION RESET again"]
     page = await store.records.scan(streams=["search"], search="USER.created")
     assert [r.name for r in page.items] == ["user.created"]
+
+
+async def test_an_aggregate_joins_series_by_a_label_exactly(store: tinystore.Store) -> None:
+    start = datetime.now(UTC) - timedelta(minutes=1)
+    for route, host, values in [
+        ("/a", "1", [10, 15, 5, 8]),
+        ("/a", "2", [0, 2, 4, 6]),
+        ("/b", "1", [100, 100, 101, 103]),
+    ]:
+        samples = [(start + timedelta(seconds=i), v) for i, v in enumerate(values)]
+        labels = {"route": route, "host": host}
+        await store.metrics.ingest({"name": "hits", "kind": "counter", "labels": labels, "samples": samples})
+    end = start + timedelta(seconds=4)
+    by_route = await store.metrics.aggregate(name="hits", from_=start, to=end, width=4, op="increase", by=["route"])
+    assert [(g.labels["route"], g.buckets[0].value, g.buckets[0].resets) for g in by_route] == [
+        ("/a", 19, 1),
+        ("/b", 3, 0),
+    ]
+    [everything] = await store.metrics.aggregate(name="hits", from_=start, to=end, width=4, op="count", by=[])
+    assert everything.labels == {} and everything.buckets[0].value == 12
+    rates = await store.metrics.aggregate(name="hits", from_=start, to=end, width=4, op="rate", without=["host"])
+    assert [g.buckets[0].value for g in rates] == [19 / 4, 3 / 4]
+    with pytest.raises(InvalidError):
+        await store.metrics.aggregate(name="hits", from_=start, to=end, width=4, op="delta", by=["route"])

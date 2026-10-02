@@ -778,8 +778,9 @@ A range:
 | 7 | limit decoded | uint | the samples it decodes |
 | 8 | limit answered | uint | the samples or buckets it answers |
 | 9 | width | uint | aggregate's: milliseconds, the buckets starting at from |
-| 10 | op | str | aggregate's: `count`, `sum`, `min`, `max` or `increase`, a counter's alone |
+| 10 | op | str | aggregate's: `count`, `sum`, `min`, `max`, `avg`, `increase` or `rate`, a counter's alone, or `delta`, a gauge's |
 | 11 | where | array of conditions | labels beyond equality, each label once, in the byte order of its name |
+| 12, 13 | by, without | array of str | aggregate's: the labels a group keeps, or all but these; an empty `by` is sent and joins every series of a name |
 
 A condition:
 
@@ -791,7 +792,8 @@ A condition:
 
 A range finds its series by a matcher, a `one_of` or a `prefix`: a range of
 `none_of` alone is invalid, since it would scan every series. A condition of a
-kind the server does not have is `unimplemented`, `what` naming it.
+kind the server does not have is `unimplemented`, `what` naming it, as is an
+operation, `what` naming it as `op`.
 
 The server reads a range whole, within its limits, before the first series
 leaves, so that a slow client holds none of the engine's readers; a read or an

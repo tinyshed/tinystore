@@ -112,6 +112,7 @@ await store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { host: 'web-1'
 const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' }, since: '1h' })
 const failing = await store.metrics.read({ name: 'http_requests_total', since: '1h', where: { status: oneOf('500', '502') } })
 const buckets = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'increase' })
+const routes = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'rate', by: ['route'] })
 ```
 
 A sample comes back bit for bit, `-0` and a NaN's payload included; a range is

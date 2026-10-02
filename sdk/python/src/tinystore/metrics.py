@@ -28,11 +28,11 @@ from ._wire.messages import (
 from .errors import InvalidError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
     from datetime import datetime
 
 type Kind = Literal["gauge", "counter"]
-type Op = Literal["count", "sum", "min", "max", "increase"]
+type Op = Literal["count", "sum", "min", "max", "avg", "increase", "rate", "delta"]
 _OPEN_END = (1 << 63) - 1
 _FLUSH_EVERY = 15.0
 
@@ -245,9 +245,22 @@ class Metrics:
         from_: datetime | int | None = None,
         to: datetime | int | None = None,
         limits: Mapping[str, int] | None = None,
+        by: Iterable[str] | None = None,
+        without: Iterable[str] | None = None,
     ) -> list[Aggregate]:
-        """Buckets of a width from the range's start, each computed exactly: an increase counts resets."""
-        body = _range(name, match, where, since, from_, to, limits, width=ms(width), op=op)
+        """Buckets of a width from the range's start, each computed exactly and rounded once.
+
+        avg is the mean of every sample, rate a counter's increase a second,
+        delta a gauge's last sample less its first. by groups the series by
+        those labels, without by every label but those, each group one
+        result; ``by=[]`` joins every series of a name::
+
+            await store.metrics.aggregate(name="http_requests_total", since="1d", width="1h", op="rate", by=["route"])
+        """
+        if by is not None and without is not None:
+            raise InvalidError("an aggregate groups by labels or without them, not both")
+        grouping = {"by": None if by is None else list(by), "without": None if without is None else list(without)}
+        body = _range(name, match, where, since, from_, to, limits, width=ms(width), op=op, **grouping)
 
         async def attempt(connection: Connection) -> Any:
             return await download(connection, METHODS["metrics.aggregate"], body)

@@ -61,6 +61,10 @@ failing, err := store.Read(ctx, metrics.Range{Name: "http_requests_total", Since
 buckets, err := store.Aggregate(ctx, metrics.AggregateRequest{
 	Range: metrics.Range{Name: "http_requests_total", Since: 24 * time.Hour}, Width: time.Hour, Op: metrics.AggregateIncrease,
 })
+routes, err := store.Aggregate(ctx, metrics.AggregateRequest{
+	Range: metrics.Range{Name: "http_requests_total", Since: 24 * time.Hour}, Width: time.Hour, Op: metrics.AggregateRate,
+	By: []string{"route"},
+})
 store.Counter("http_requests_total").With("route", "/users").Inc()
 ```
 
@@ -69,6 +73,7 @@ await store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { host: 'web-1'
 const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' }, since: '1h' })
 const failing = await store.metrics.read({ name: 'http_requests_total', since: '1h', where: { status: oneOf('500', '502'), host: prefix('api-') } })
 const buckets = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'increase' })
+const routes = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'rate', by: ['route'] })
 store.metrics.counter('http_requests_total').with({ route: '/users' }).inc()
 ```
 
@@ -77,6 +82,7 @@ await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "
 series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")
 failing = await store.metrics.read(name="http_requests_total", since="1h", where={"status": one_of("500", "502"), "host": prefix("api-")})
 buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
+routes = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="rate", by=["route"])
 store.metrics.counter("http_requests_total").labels(route="/users").inc()
 ```
 
@@ -161,6 +167,9 @@ Built after it:
   stored value is never read as a query; a plain value in an SDK's `where` is
   equality. `NoneOf` was `not` in the proposal: it takes several values, and
   `not` is a word Python keeps for itself.
+- **Across series**: `by` and `without` on aggregates, one result a group,
+  `by: []` every series of a name; and `avg`, `rate` for counters, `delta` for
+  gauges, each exact and rounded once, a group's too (`aggregate-contract.md`).
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.
@@ -168,8 +177,6 @@ Built after it:
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):
 
-- **Across series**: `by` and `without` on aggregates; `avg`, and `rate` and
-  `delta` for counters.
 - **`explain`**: what a query would open, fetch and decode, before it runs;
   and a `LimitError` naming the budget, what it used and its bound.
 - **`status` and `capabilities`**: what a server serves, asked before a call.

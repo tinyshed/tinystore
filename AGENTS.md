@@ -555,6 +555,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |
 | exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |
 | a whole block's summary answers as its samples do      | `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`, every operation, kind and boundary |
+| a group joins its series exactly and rounds once       | `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined` |
 | a whole-block summary spends no decoded-sample budget  | `TestWholeExactBlocksNeedNoDecodedSampleBudget`                                 |
 | a malformed exact summary is refused                   | `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary` |
 | exact summaries keep a directory within its bound      | `TestLargeExactSummariesStayWithinDirectoryBounds`                              |

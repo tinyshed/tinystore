@@ -301,6 +301,36 @@ describe('metrics', () => {
 		).toBeInstanceOf(InvalidError)
 	})
 
+	test('an aggregate joins series by a label, exactly, and rates and deltas each', async () => {
+		const start = Date.now() - 60_000
+		const at = (s: number) => new Date(start + s * 1000)
+		for (const [route, host, values] of [
+			['/a', '1', [10, 15, 5, 8]],
+			['/a', '2', [0, 2, 4, 6]],
+			['/b', '1', [100, 100, 101, 103]],
+		] as const) {
+			await store.metrics.ingest({
+				name: 'hits',
+				kind: 'counter',
+				labels: { route, host },
+				samples: values.map((v, i) => [at(i), v] as [Date, number]),
+			})
+		}
+		const range = { name: 'hits', from: at(0), to: at(4), width: 4000 } as const
+		const byRoute = await store.metrics.aggregate({ ...range, op: 'increase', by: ['route'] })
+		expect(byRoute.map(g => [g.labels.route, g.buckets[0]?.value, g.buckets[0]?.resets])).toEqual([
+			['/a', 19, 1],
+			['/b', 3, 0],
+		])
+		const all = await store.metrics.aggregate({ ...range, op: 'count', by: [] })
+		expect(all.map(g => [g.labels, g.buckets[0]?.value])).toEqual([[{}, 12]])
+		const rates = await store.metrics.aggregate({ ...range, op: 'rate', without: ['host'] })
+		expect(rates.map(g => g.buckets[0]?.value)).toEqual([19 / 4, 3 / 4])
+		expect(
+			await caught(store.metrics.aggregate({ ...range, op: 'delta', by: ['route'] })),
+		).toBeInstanceOf(InvalidError)
+	})
+
 	test('a drop removes a series', async () => {
 		expect(await store.metrics.drop({ name: 'cpu', labels: { host: 'web-1' } })).toEqual({
 			found: true,

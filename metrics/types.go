@@ -103,18 +103,34 @@ type Result struct {
 
 type AggregateOp string
 
+// Each operation is computed exactly and rounded once, a group's too:
+//
+//	avg       the mean of the bucket's samples, every series of a group weighed by them
+//	increase  a counter's rise, its resets counted
+//	rate      a counter's increase a second of the bucket
+//	delta     a gauge's last sample less its first
 const (
 	AggregateCount    AggregateOp = "count"
 	AggregateSum      AggregateOp = "sum"
 	AggregateMin      AggregateOp = "min"
 	AggregateMax      AggregateOp = "max"
+	AggregateAvg      AggregateOp = "avg"
 	AggregateIncrease AggregateOp = "increase"
+	AggregateRate     AggregateOp = "rate"
+	AggregateDelta    AggregateOp = "delta"
 )
 
+// AggregateRequest asks for a Range's buckets Width long. By groups the
+// matched series by the values of these labels, Without by every label but
+// these, each group one result; neither keeps every series apart. A group
+// never joins two names or two kinds:
+//
+//	Op: AggregateIncrease, By: []string{"route"}   http_requests_total{route="/a"}, …{route="/b"}
 type AggregateRequest struct {
-	Range Range
-	Width time.Duration
-	Op    AggregateOp
+	Range       Range
+	Width       time.Duration
+	Op          AggregateOp
+	By, Without []string
 }
 
 // AggregateBucket keeps the edges it was asked for.

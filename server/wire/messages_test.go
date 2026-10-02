@@ -248,6 +248,8 @@ var schema = map[string][]field{
 		{9, "width", "uint"},
 		{10, "op", "str"},
 		{11, "where", "[]metrics.condition"},
+		{12, "by", "[]str"},
+		{13, "without", "[]str"},
 	},
 	"metrics.condition": {{1, "label", "str"}, {2, "kind", "str"}, {3, "values", "[]str"}},
 	"metrics.buckets": {
@@ -648,6 +650,18 @@ func metricsExamples() []example {
 		of("metrics.aggregate of an hour's increase", "metrics.range", wire.MetricsRange{
 			Matchers: map[string]string{"__name__": "http_requests_total"}, From: at, To: at + 86_400_000,
 			Width: 3_600_000, Op: "increase",
+		}),
+		of("metrics.aggregate of each route's rate, every host joined", "metrics.range", wire.MetricsRange{
+			Matchers: map[string]string{"__name__": "http_requests_total"}, From: at, To: at + 86_400_000,
+			Width: 3_600_000, Op: "rate", By: []string{"route"},
+		}),
+		of("metrics.aggregate of a gauge's delta, every series of its name joined", "metrics.range", wire.MetricsRange{
+			Matchers: map[string]string{"__name__": "temperature"}, From: at, To: at + 86_400_000,
+			Width: 3_600_000, Op: "delta", By: []string{},
+		}),
+		of("metrics.aggregate of the mean without a host", "metrics.range", wire.MetricsRange{
+			Matchers: map[string]string{"__name__": "temperature"}, From: at, To: at + 86_400_000,
+			Width: 3_600_000, Op: "avg", Without: []string{"host"},
 		}),
 		of("an aggregate's buckets, one cut by retention and one overflowed", "metrics.buckets", wire.MetricsBuckets{
 			Labels: map[string]string{"__name__": "http_requests_total"}, Kind: "counter",

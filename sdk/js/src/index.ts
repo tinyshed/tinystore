@@ -29,6 +29,7 @@ export type { Logger, LoggerOptions } from './logger.ts'
 export {
 	type Aggregate,
 	type AggregateOp,
+	type AggregateRange,
 	type Bucket as MetricsBucket,
 	Condition,
 	type Counter,
