@@ -1,9 +1,11 @@
 name: CI
 
+# every branch, so that one pushed for review shows its checks before a merge
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -57,6 +59,40 @@ jobs:
           go -C server test -race -shuffle=on ./...
           go -C cmd/tinystore test -race -shuffle=on ./...
 
+  sdk:
+    name: sdk (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/tinystore/go.mod
+          cache-dependency-path: |
+            go.sum
+            server/go.sum
+            cmd/tinystore/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - uses: arduino/setup-task@v3
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # each platform reaches its server another way: a named pipe on
+      # Windows, a Unix socket elsewhere
+      - name: Check and test the SDKs
+        run: task sdk
+
   quality:
     name: quality
     runs-on: ubuntu-latest
@@ -82,8 +118,9 @@ jobs:
       - name: Formatting
         run: task fmt:check
 
+      # build tags hide each platform's files from another's lint
       - name: Lint
-        run: task lint
+        run: task lint:platforms
 
       - name: Vulnerabilities
         run: task vuln

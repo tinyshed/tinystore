@@ -10,6 +10,10 @@ vars:
   BIN: bin
   GOLANGCI: '{{.BIN}}/golangci-lint{{exeExt}}'
   GOVULNCHECK: '{{.BIN}}/govulncheck{{exeExt}}'
+  # the Linux the container tasks run in; named volumes keep Go's module and
+  # build caches between runs, so a second run compiles only what changed
+  GO_IMAGE: golang:1.27
+  GO_CACHES: -v tinystore-race-cache:/go -v tinystore-gocache:/root/.cache/go-build
 
 tasks:
   default:
@@ -47,6 +51,15 @@ tasks:
       - go test -race -shuffle=on ./...
       - go -C server test -race -shuffle=on ./...
       - go -C cmd/tinystore test -race -shuffle=on ./...
+
+  race:linux:
+    # for a host without cgo, Windows here: CI runs the same on Linux and macOS
+    desc: Test every module with the race detector in a Linux container
+    cmds:
+      - >-
+        docker run --rm -v '{{.ROOT_DIR}}:/src' {{.GO_CACHES}} -e GOWORK=off -e CGO_ENABLED=1 -w /src {{.GO_IMAGE}}
+        sh -c 'go test -race -shuffle=on ./... && go -C server test -race -shuffle=on ./...
+        && go -C cmd/tinystore test -race -shuffle=on ./...'
 
   test:cover:
     desc: Run tests and write a coverage profile to coverage.out
@@ -87,6 +100,13 @@ tasks:
       - cd server && ../{{.GOLANGCI}} run ./...
       - cd cmd/tinystore && ../../{{.GOLANGCI}} run ./...
 
+  lint:platforms:
+    # build tags hide each platform's files from another's lint
+    desc: Lint every module as Linux, macOS and Windows build it
+    cmds:
+      - for: [linux, darwin, windows]
+        cmd: GOOS={{.ITEM}} task lint
+
   fmt:
     desc: Format code (gofumpt + goimports via golangci-lint)
     deps: [setup]
@@ -117,11 +137,24 @@ tasks:
       - '{{.GOVULNCHECK}} -C cmd/tinystore ./...'
 
   sdk:
-    # needs bun and uv; not in check until CI installs them
+    # needs bun and uv
     desc: Check and test both SDKs against a tinystore built from this repository
     cmds:
       - cd sdk/js && bun install --frozen-lockfile && bun run check && bun test
       - cd sdk/python && uv sync --frozen && uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest -q --cov
+
+  sdk:linux:
+    # the repository is copied in, so the host's node_modules and .venv stay its own
+    desc: Check and test both SDKs in a Linux container, as task sdk does
+    cmds:
+      - docker build -q -t tinystore-sdk-test -f sdk/test.Dockerfile sdk
+      - >-
+        docker run --rm -v '{{.ROOT_DIR}}:/src:ro' {{.GO_CACHES}} -v tinystore-sdk-cache:/root/.cache/sdk
+        -e UV_CACHE_DIR=/root/.cache/sdk/uv -e UV_PYTHON_INSTALL_DIR=/root/.cache/sdk/python
+        -e BUN_INSTALL_CACHE_DIR=/root/.cache/sdk/bun -e GOWORK=off -w /work tinystore-sdk-test
+        sh -c 'tar -C /src --exclude=./.git --exclude=./go.work* --exclude=node_modules --exclude=.venv --exclude=./bin
+        --exclude=./dist -cf - .
+        | tar -xf - && go -C tools build -o /usr/local/bin/task github.com/go-task/task/v3/cmd/task && task sdk'
 
   tidy:
     desc: Tidy every module file CI checks
@@ -146,8 +179,9 @@ tasks:
     cmds:
       - task: tidy:check
       - task: fmt:check
-      - task: lint
+      - task: lint:platforms
       - task: test
+      - task: sdk
       - task: vuln
       - task: size
 

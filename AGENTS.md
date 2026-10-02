@@ -871,7 +871,11 @@ task fix              # go fix modernizers
 task vuln             # govulncheck
 task size             # what importing this costs a binary
 task check            # everything CI gates on
-task tidy             # both module files
+task tidy             # every module file
+task lint:platforms   # golangci-lint as Linux, macOS and Windows build the code
+task sdk              # both SDKs' checks and suites, against a tinystore built here
+task race:linux       # the race detector in a Linux container, for a host without cgo
+task sdk:linux        # both SDKs' suites in a Linux container
 ```
 
 Install Task with `go -C tools install github.com/go-task/task/v3/cmd/task`;
