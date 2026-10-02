@@ -401,6 +401,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | importing this stays cheap                          | `task size` links a cgo-free linux/amd64 probe and reports what it cost         |
 | a program may link another SQLite driver beside it  | `TestTheExampleRegistersNoSQLDriver` in `examples/notes`: no name registered    |
 | a `//nolint` silences a named finding and says why  | `nolintlint`: no unused, unexplained or blanket directive                       |
+| a gate in this table names a test that exists       | `TestEveryGateNamesATestThatExists`, over every module's tests                  |
+| a skill's pointer says what its skill says          | `TestEverySkillHasAPointerThatMatchesIt`                                        |
 | the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |
 | one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
 | engines close last opened first, once               | `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`                              |
