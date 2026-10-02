@@ -336,6 +336,38 @@ SDKs send the latest at most ten times a second.
 | a running job's cancel, in its handler | the context ends, its cause `jobs.ErrCancelled` | `job.signal` aborts, its reason a `CancelledError` | the handler's task is cancelled |
 | the last run | `Ran time.Time`, `Took time.Duration`, zero before one | `ran: Date`, `took` milliseconds, undefined before one | `ran: datetime`, `took` seconds, `None` before one |
 
+## Steps of a run
+
+```go
+hits, err := jobs.Step(ctx, job, "search", func(ctx context.Context) ([]Hit, error) {
+	return search(ctx, job.Value.Text)
+})
+```
+
+```ts
+const hits = await job.step('search', () => search(job.value.text))
+```
+
+```python
+hits = await job.step("search", lambda: search(job.value.text))
+```
+
+A step runs once in its job's run: its answer is kept, as JSON, and the
+attempt after a retry, a lost lease or a restart gets it back without running
+the step again. A step whose attempt ends before its answer is kept runs again,
+so what it does outside the store should bear doing twice. A name is the
+step's within the run, which a loop numbers: `model:1`, `tool:1`, `model:2`.
+A run that ends takes its steps along, and a repeat's next run starts without
+them. A work loop's job and a claimed one both have it; in Go it is a function,
+since a method cannot take a type of its own.
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| a step | `jobs.Step(ctx, job, name, fn)` | `await job.step(name, fn)` | `await job.step(name, fn)` |
+| what fn is | `func(ctx) (T, error)` | a function, async or not | a function, async or not |
+| an answer JSON cannot write | `ErrInvalid` | `InvalidError` | `InvalidError` |
+| an answer that no longer reads | `ErrInvalid` | as `JSON.parse` reads it | as `json.loads` reads it |
+
 ## Cancellation
 
 Each language's own: a `context.Context` in Go, a task's cancellation in

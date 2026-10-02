@@ -56,6 +56,8 @@ METHODS: dict[str, int] = {
     "jobs.scan": 0x0208,
     "jobs.work": 0x0209,
     "jobs.watch": 0x020A,
+    "jobs.step": 0x020B,
+    "jobs.keep": 0x020C,
     "blobs.open": 0x0301,
     "blobs.stat": 0x0302,
     "blobs.delete": 0x0303,
@@ -203,6 +205,8 @@ JobsJob = Message("jobs.job", _jobs_job)
 JobsBatch = message("jobs.batch", handle=(1, uint), jobs=(2, list_(JobsJob)))
 JobsChange = Message("jobs.change", {**_jobs_job, "handle": (6, uint)})
 JobsKey = message("jobs.key", handle=(1, uint), key=(2, str_))
+JobsAnswer = message("jobs.answer", job=(1, uint), name=(2, str_), answer=(3, str_))
+JobsKept = message("jobs.kept", found=(1, bool_), answer=(2, str_))
 
 JobsEntry = message(
     "jobs.entry",
@@ -478,6 +482,8 @@ MESSAGES: dict[str, Message] = {
         JobsBatch,
         JobsChange,
         JobsKey,
+        JobsAnswer,
+        JobsKept,
         JobsEntry,
         JobsLease,
         JobsHeld,

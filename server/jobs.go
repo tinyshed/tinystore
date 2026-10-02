@@ -23,7 +23,7 @@ type jobsHandle struct {
 }
 
 // heldJob is a job a claim leased, of either value type: what its settlement
-// needs of it
+// and its steps need of it
 type heldJob interface {
 	Ack(ctx context.Context) error
 	Retry(ctx context.Context, cause error, options ...jobs.SettleOption) error
@@ -31,7 +31,26 @@ type heldJob interface {
 	Snooze(ctx context.Context, options ...jobs.SettleOption) error
 	Extend(ctx context.Context, d time.Duration) error
 	Progress(v any)
+	Kept(ctx context.Context, name string) (json.RawMessage, bool, error)
+	Keep(ctx context.Context, name string, answer json.RawMessage) error
 }
+
+// errSettledOnItsStream refuses jobs.settle a job a work stream handed over,
+// whose outcome its stream carries
+var errSettledOnItsStream = fmt.Errorf("%w: jobs: a job a work stream handed over settles on its stream",
+	tinystore.ErrInvalid)
+
+// streamed is a job a work stream handed over, in the session's claims for
+// jobs.step and jobs.keep alone, under the number its stream gave it
+type streamed struct{ heldJob }
+
+func (streamed) Ack(context.Context) error { return errSettledOnItsStream }
+func (streamed) Retry(context.Context, error, ...jobs.SettleOption) error {
+	return errSettledOnItsStream
+}
+func (streamed) Fail(context.Context, error) error                  { return errSettledOnItsStream }
+func (streamed) Snooze(context.Context, ...jobs.SettleOption) error { return errSettledOnItsStream }
+func (streamed) Extend(context.Context, time.Duration) error        { return errSettledOnItsStream }
 
 func (s *Server) jobsMethods(methods map[wire.Method]handler) {
 	methods[wire.JobsOpen] = jobsOpen
@@ -43,6 +62,8 @@ func (s *Server) jobsMethods(methods map[wire.Method]handler) {
 	methods[wire.JobsSettle] = jobsSettle
 	methods[wire.JobsScan] = jobsScan
 	methods[wire.JobsWork] = jobsWork
+	methods[wire.JobsStep] = jobsStep
+	methods[wire.JobsKeep] = jobsKeep
 	methods[wire.JobsWatch] = jobsWatch
 }
 
@@ -423,6 +444,43 @@ func jobsSettle(c *call) error {
 	}
 	settling.Wait()
 	return respond(c, answer)
+}
+
+// jobsStep reads the answer a held job's run kept under a step's name
+func jobsStep(c *call) error {
+	var ask wire.JobsAnswer
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	if ask.Answer != "" {
+		return fmt.Errorf("%w: jobs: jobs.step looks a step up and carries no answer; jobs.keep keeps one",
+			tinystore.ErrInvalid)
+	}
+	held, err := c.session.claims.get(ask.Job)
+	if err != nil {
+		return err
+	}
+	answer, found, err := held.Kept(c.ctx, ask.Name)
+	if err != nil {
+		return err
+	}
+	return respond(c, wire.JobsKept{Found: found, Answer: string(answer)})
+}
+
+// jobsKeep keeps what a step of a held job's run answered, once it is written
+func jobsKeep(c *call) error {
+	var ask wire.JobsAnswer
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	held, err := c.session.claims.get(ask.Job)
+	if err != nil {
+		return err
+	}
+	if err = held.Keep(c.ctx, ask.Name, json.RawMessage(ask.Answer)); err != nil {
+		return err
+	}
+	return respond(c, wire.Empty{})
 }
 
 func settle(ctx context.Context, held heldJob, outcome wire.JobsOutcome) error {

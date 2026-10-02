@@ -132,6 +132,9 @@ its handler's task is cancelled, and what it leaves settles nothing.
 `max_running` bounds the jobs running at once across every worker of the
 store.
 
+A step of a job's run keeps its answer, so that the attempt after a failure
+does not run it again: `hits = await job.step("search", lambda: search(q))`.
+
 ## blobs
 
 ```python

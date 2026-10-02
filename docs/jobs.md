@@ -476,6 +476,51 @@ if found {
 - **`Claim` does not wait**: it leases the next due job, or says there is
   none. `jobs.Lease(d)` gives the lease, the queue's by default, 30 seconds.
 
+## Steps
+
+```go
+err = agents.Work(ctx, func(ctx context.Context, job jobs.Job[Question]) error {
+	hits, err := jobs.Step(ctx, job, "search", func(ctx context.Context) ([]Hit, error) {
+		return search(ctx, job.Value.Text)
+	})
+	if err != nil {
+		return err
+	}
+	answer, err := jobs.Step(ctx, job, "answer", func(ctx context.Context) (string, error) {
+		return model.Answer(ctx, job.Value.Text, hits)
+	})
+	if err != nil {
+		return err // a retry, which runs the answer again and not the search
+	}
+	return reply(ctx, job.Value.Chat, answer)
+})
+```
+
+A job that calls a model and its tools is several steps, each slow or paid
+for, and an attempt that dies between them should not pay for the first again.
+What every agent framework rebuilds by hand is a checkpoint a step: the answers
+so far, kept with the job, and a handler that runs from the top and skips what
+is kept.
+
+- **A step's answer is a row beside its job**, `(job, name)` to its JSON, in
+  the job's file, so that a queue `In` a database keeps its steps with its
+  rows. `Step` reads the row first, by its key, and runs the step only when
+  there is none.
+- **Only the attempt that holds the job keeps a step.** The row is written in
+  a grouped commit with a condition on the lease row, the attempt being the
+  lease's token, so an attempt whose lease ended and another claim took
+  writes nothing, as its settlement would not. The step then runs again in the
+  attempt that holds the job: at least once a step, as at least once a job.
+- **A step belongs to its run.** A trigger on the job's row takes its steps
+  along when the job leaves the queue, done, failed for good or cancelled, and
+  a run that ends while its job stays, for a repeat or an `Enqueue` that asked
+  for another, drops them as it moves the job, so the next run starts without
+  them. A retry, a snooze and a lost lease keep them: those are the same run.
+- **Over the wire** a remote worker asks `jobs.step` for a step's kept answer
+  and sends `jobs.keep` once it has run it, naming the job by the number its
+  claim or its work stream gave it, so that a worker in Bun or Python keeps
+  its steps as Go's does: `await job.step('search', () => search(q))`.
+
 ## Under a flood
 
 **Memory does not grow with the queue.** What waits is rows in `jobs.db`; a

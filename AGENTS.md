@@ -26,7 +26,7 @@ design document:
 | `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
 | `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
 | `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, quotas of several windows, answers kept once a key | [README](kv/README.md) | [kv.md](docs/kv.md) |
-| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
+| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running, steps a run keeps across its attempts | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
 | `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
@@ -657,6 +657,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a job keeps its last run, over the wire too, and a run given back records none | `TestAJobKeepsItsLastRun`, `TestAJobsLastRunOverTheWire`, `a job keeps its last run: when it began and how long it took` in `sdk/js/test/jobs.test.ts`, `test_a_job_keeps_its_last_run` in Python's |
 | a remote worker's job is watched, and its handler told of a cancel | `TestAJobWatchFollowsARemoteWorkersJob`, `a watch follows a job up its queue, through its progress, to a cancel its handler sees` in `sdk/js/test/jobs.test.ts`, `test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees` in Python's |
 | a job whose lease ended runs again                     | `TestAJobWhoseLeaseEndedRunsAgain`                                              |
+| a step runs once in a run, across its attempts and a worker that died, and a lost lease keeps none | `TestAStepRunsOnceAcrossTheAttemptsOfARun`, `TestAStepOfALostLeaseKeepsNothing` |
+| a run that ends takes its steps along, and a repeat's next run starts without them | `TestStepsGoWithTheirRun`, `TestAStepsNameAndAnswerAreBounded` |
+| a remote worker's steps are kept across a run's attempts, claimed or on a work stream | `TestAJobsStepsOverTheWire`, `a step runs once in a run: the attempt after a failure gets its kept answer` in `sdk/js/test/jobs.test.ts`, `test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer` in Python's |
 | a stale lease settles nothing                          | `TestAStaleLeaseSettlesNothing`                                                 |
 | a job that kills its process fails after its attempts  | `TestAJobThatKillsItsProcessFailsAfterItsAttempts`                              |
 | a retry waits longer each time, then fails for good    | `TestARetryWaitsLongerEachTimeThenFailsForGood`                                 |

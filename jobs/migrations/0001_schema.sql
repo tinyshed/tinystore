@@ -98,6 +98,22 @@ create table _tinystore_jobs_done (
 
 create index _tinystore_jobs_done_by_time on _tinystore_jobs_done (until);
 
+-- a step a job's handler finished, its answer kept for the job's later attempts
+-- of the same run: name: the handler's for it; answer: its JSON; at: when it was
+-- kept, unix milliseconds. A job that leaves the queue takes its steps along,
+-- and one that runs again for its repeat starts without them.
+create table _tinystore_jobs_steps (
+    job    integer not null,
+    name   text    not null,
+    answer blob    not null,
+    at     integer not null,
+    primary key (job, name)
+) strict, without rowid;
+
+create trigger _tinystore_jobs_steps_go after delete on _tinystore_jobs begin
+    delete from _tinystore_jobs_steps where job = old.id;
+end;
+
 -- ids: the high-water mark of job ids, reserved a block at a time, never repeated
 create table _tinystore_jobs_meta (
     name  text    primary key,

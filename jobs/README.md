@@ -161,6 +161,18 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   not written to the file, since an attempt a restart ends runs again from its
   start. A value JSON cannot write, or one past 4 KiB, is dropped and logged
   once a quiet period.
+- **A step runs once in a run.** `jobs.Step(ctx, job, "search", fn)` runs
+  `fn` and keeps what it answered, as JSON in the job's file, so that the
+  attempt after a retry, a lost lease or a restart gets the answer back
+  without running `fn` again, and runs only the steps left. A step whose
+  attempt ends before its answer is kept runs again, so what `fn` does outside
+  the store should bear doing twice. A name is a step's within its run, 1 to
+  256 bytes, which a loop numbers (`model:1`, `tool:1`), and an answer at most
+  1 MiB of JSON. Only the attempt holding the job's lease keeps a step; one
+  whose lease another claim took keeps nothing. A run that ends, done, failed
+  for good or cancelled, takes its steps along, and a repeating job's next run
+  starts without them. `Job.Kept` and `Job.Keep` are what `Step` is made of,
+  for a worker in another process.
 - **`Watch` follows a job to its end.** It yields the job under a key as it
   is, then again when its state, place, attempt, time, progress or error
   changes, until the job is done, failed or `Cancelled`, a state only a watcher

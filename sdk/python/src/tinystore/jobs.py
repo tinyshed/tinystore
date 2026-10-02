@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ._connection import Connection, Link, check_name, download, handle_on
 from ._page import Page
@@ -21,10 +22,12 @@ from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.messages import (
     METHODS,
+    JobsAnswer,
     JobsBatch,
     JobsChange,
     JobsEntry,
     JobsHeld,
+    JobsKept,
     JobsKey,
     JobsLease,
     JobsOutcome,
@@ -157,6 +160,28 @@ class _Reporter:
             await self._task
 
 
+class _Steps:
+    """The steps of a held job's run, which the server keeps under the number the job was held by."""
+
+    def __init__(self, call: Callable[[int, bytes], Awaitable[bytes]], job: int) -> None:
+        self._call = call
+        self._job = job
+
+    async def run[R](self, name: str, fn: Callable[[], Awaitable[R] | R]) -> R:
+        kept = JobsKept.decode(await self._call(METHODS["jobs.step"], JobsAnswer.encode(job=self._job, name=name)))
+        if kept.get("found"):
+            return cast("R", json.loads(kept.get("answer", "null")))
+        answer = fn()
+        if inspect.isawaitable(answer):
+            answer = await answer
+        try:
+            text = json.dumps(answer)
+        except (TypeError, ValueError) as err:
+            raise InvalidError(f"step {name} answered what JSON cannot write: {err}") from err
+        await self._call(METHODS["jobs.keep"], JobsAnswer.encode(job=self._job, name=name, answer=text))
+        return cast("R", answer)
+
+
 @dataclass
 class Job[V]:
     """A job in a work loop's handler; retry, fail or snooze decide how it settles instead of its return.
@@ -170,6 +195,23 @@ class Job[V]:
     attempt: int
     settlement: dict[str, Any] | None = field(default=None, repr=False)
     _reporter: _Reporter | None = field(default=None, repr=False)
+    _steps: _Steps | None = field(default=None, repr=False)
+
+    async def step[R](self, name: str, fn: Callable[[], Awaitable[R] | R]) -> R:
+        """Runs fn once in the job's run and keeps what it answers, as JSON.
+
+        An attempt after a retry, a lost lease or a restart gets the kept
+        answer back without running fn again. A step whose attempt ends before
+        its answer is kept runs again, so what fn does outside the store should
+        bear doing twice. A name is the step's within the run, which a loop
+        numbers: "model:1", "tool:1", "model:2". An answer is at most 1 MiB of
+        JSON.
+
+            hits = await job.step("search", lambda: search(job.value["query"]))
+        """
+        if self._steps is None:
+            raise InvalidError("a job no work loop handed over keeps no steps")
+        return await self._steps.run(name, fn)
 
     def progress(self, progress: object) -> None:
         """Reports how far the job got, any JSON within 4 KiB, which get and watch show until it is settled.
@@ -194,13 +236,24 @@ class Job[V]:
 class ClaimedJob[V]:
     """A job a claim leased, which its caller settles before the lease ends, on the claim's connection."""
 
-    def __init__(self, held: dict[str, Any], value: V, settle: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        held: dict[str, Any],
+        value: V,
+        settle: Callable[[dict[str, Any]], Awaitable[None]],
+        call: Callable[[int, bytes], Awaitable[bytes]],
+    ) -> None:
         self.key: str = held.get("key", "")
         self.value = value
         self.at = date_of(held.get("at"))
         self.attempt: int = held.get("attempt", 0)
         self._job: int = held.get("job", 0)
         self._settle = settle
+        self._steps = _Steps(call, self._job)
+
+    async def step[R](self, name: str, fn: Callable[[], Awaitable[R] | R]) -> R:
+        """Runs fn once in the job's run and keeps its answer, as a work loop's job.step does."""
+        return await self._steps.run(name, fn)
 
     async def ack(self) -> None:
         await self._settle({"job": self._job, "how": _ACK})
@@ -496,7 +549,7 @@ class Queue[V]:
                         refused.get("what"),
                     )
 
-            return ClaimedJob(held, self._decode(held.get("value", "null")), settle)
+            return ClaimedJob(held, self._decode(held.get("value", "null")), settle, connection.session.call)
 
         return await self._link.run("write", attempt)
 
@@ -562,7 +615,8 @@ class Queue[V]:
                         running[0].cancel()
                     continue
                 taken = _Taken()
-                task = asyncio.ensure_future(self._run(stream, held, handler, limit, taken))
+                steps = _Steps(connection.session.call, number)
+                task = asyncio.ensure_future(self._run(stream, held, steps, handler, limit, taken))
                 in_hand.add(task)
                 by_number[number] = (task, taken)
                 task.add_done_callback(in_hand.discard)
@@ -579,6 +633,7 @@ class Queue[V]:
         self,
         stream: Any,
         held: dict[str, Any],
+        steps: _Steps,
         handler: Callable[[Job[V]], Awaitable[None]],
         limit: float,
         taken: _Taken,
@@ -596,6 +651,7 @@ class Queue[V]:
                 date_of(held.get("at")),
                 held.get("attempt", 0),
                 _reporter=reporter,
+                _steps=steps,
             )
         except Exception as err:
             outcome: dict[str, Any] = {

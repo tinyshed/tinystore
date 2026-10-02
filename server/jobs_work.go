@@ -79,7 +79,10 @@ func workRemotely[V any](remote *remoteWork, queue *jobs.Queue[V], options []job
 	stop := remote.listen()
 	defer stop()
 	err := queue.Work(remote.ctx, func(ctx context.Context, job jobs.Job[V]) error {
-		number, answer, inHand := remote.expect(job.Progress)
+		claims := &remote.call.session.claims
+		number := claims.add(streamed{job}) // a number of the session's, which jobs.step and jobs.keep take
+		defer claims.remove(number)
+		answer, inHand := remote.expect(number, job.Progress)
 		if !inHand {
 			<-ctx.Done() // never handed over: the loop's end gives it back uncounted
 			return ctx.Err()
@@ -119,8 +122,7 @@ type remoteWork struct {
 	inHand  sync.WaitGroup // jobs handed over whose handlers have not returned
 
 	mu      sync.Mutex
-	last    uint64
-	waiting map[uint64]handedOver
+	waiting map[uint64]handedOver // by the number the session's claims gave the job
 	gone    error
 	goneNow chan struct{}
 	refused error // an outcome the client sent that no job can take, which ends the stream
@@ -188,19 +190,18 @@ func (w *remoteWork) readOutcomes() error {
 	}
 }
 
-// expect counts a job into the client's hands and names it, unless the
+// expect counts a job into the client's hands under its number, unless the
 // client is gone; progress keeps what the client reports of it
-func (w *remoteWork) expect(progress func(any)) (number uint64, answer chan wire.JobsOutcome, inHand bool) {
+func (w *remoteWork) expect(number uint64, progress func(any)) (answer chan wire.JobsOutcome, inHand bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.gone != nil {
-		return 0, nil, false
+		return nil, false
 	}
 	w.inHand.Add(1)
-	w.last++
 	answer = make(chan wire.JobsOutcome, 1)
-	w.waiting[w.last] = handedOver{answer: answer, progress: progress}
-	return w.last, answer, true
+	w.waiting[number] = handedOver{answer: answer, progress: progress}
+	return answer, true
 }
 
 func (w *remoteWork) done(number uint64) {

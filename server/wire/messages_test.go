@@ -126,6 +126,8 @@ var schema = map[string][]field{
 	"jobs.batch":  {{1, "handle", "uint"}, {2, "jobs", "[]jobs.job"}},
 	"jobs.change": append(slices.Clone(jobsJob), field{6, "handle", "uint"}),
 	"jobs.key":    {{1, "handle", "uint"}, {2, "key", "str"}},
+	"jobs.answer": {{1, "job", "uint"}, {2, "name", "str"}, {3, "answer", "str"}},
+	"jobs.kept":   {{1, "found", "bool"}, {2, "answer", "str"}},
 	"jobs.entry": {
 		{1, "found", "bool"},
 		{2, "key", "str"},
@@ -366,6 +368,8 @@ var methods = []struct {
 	{"jobs.scan", wire.JobsScan},
 	{"jobs.work", wire.JobsWork},
 	{"jobs.watch", wire.JobsWatch},
+	{"jobs.step", wire.JobsStep},
+	{"jobs.keep", wire.JobsKeep},
 	{"blobs.open", wire.BlobsOpen},
 	{"blobs.stat", wire.BlobsStat},
 	{"blobs.delete", wire.BlobsDelete},
@@ -571,6 +575,10 @@ func jobsExamples() []example {
 			Handle: 1, JobsJob: wire.JobsJob{Value: `{"user":43}`, Key: "call:42", At: at + 60_000},
 		}),
 		of("a job by its key", "jobs.key", wire.JobsKey{Handle: 1, Key: "call:42"}),
+		of("a step of a held job, looked up", "jobs.answer", wire.JobsAnswer{Job: 1, Name: "search"}),
+		of("a step's answer, kept", "jobs.answer", wire.JobsAnswer{Job: 1, Name: "search", Answer: `["a file"]`}),
+		of("a step's kept answer", "jobs.kept", wire.JobsKept{Found: true, Answer: `["a file"]`}),
+		of("a step not yet kept", "jobs.kept", wire.JobsKept{}),
 		of("a failed job", "jobs.entry", wire.JobsEntry{
 			Found: true, Key: "call:42", Value: `{"user":42}`, At: at, Attempt: 3, State: 3, Err: "smtp: refused",
 			Repeat: "10 3 * * * Europe/Moscow",

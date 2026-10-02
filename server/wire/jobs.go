@@ -12,6 +12,8 @@ const (
 	JobsScan    Method = 0x0208
 	JobsWork    Method = 0x0209
 	JobsWatch   Method = 0x020a
+	JobsStep    Method = 0x020b
+	JobsKeep    Method = 0x020c
 )
 
 // JobsQueue is jobs.open's request: a queue by name with its policy, or a
@@ -249,6 +251,68 @@ func (k *JobsKey) Decode(body []byte) error {
 			k.Handle = d.Uint()
 		case 2:
 			k.Key = d.Str()
+		}
+	}
+	return d.End()
+}
+
+// JobsAnswer names a step of a held job's run: jobs.step's request, for the
+// answer the run kept under it, and jobs.keep's, with the answer to keep. Job
+// is the number the job was held under, by a claim or a work stream.
+type JobsAnswer struct {
+	Job  uint64
+	Name string
+	// Answer is jobs.keep's: the step's answer as JSON.
+	Answer string
+}
+
+func (a JobsAnswer) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	m.Uint(1, a.Job)
+	m.Str(2, a.Name)
+	optionalStr(&m, 3, a.Answer)
+	return m.End()
+}
+
+func (a *JobsAnswer) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			a.Job = d.Uint()
+		case 2:
+			a.Name = d.Str()
+		case 3:
+			a.Answer = d.Str()
+		}
+	}
+	return d.End()
+}
+
+// JobsKept is jobs.step's answer: the answer a step kept, found false for a
+// step its run has not kept.
+type JobsKept struct {
+	Found  bool
+	Answer string
+}
+
+func (k JobsKept) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	if k.Found {
+		m.Bool(1, true)
+	}
+	optionalStr(&m, 2, k.Answer)
+	return m.End()
+}
+
+func (k *JobsKept) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			k.Found = d.Bool()
+		case 2:
+			k.Answer = d.Str()
 		}
 	}
 	return d.End()

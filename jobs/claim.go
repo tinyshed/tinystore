@@ -373,6 +373,9 @@ func (s settlement) apply(ctx context.Context, w sqlite.Writer, h heldRow, now i
 // run again, to its next time
 func (l *lease) ack(ctx context.Context, w sqlite.Writer, h heldRow, now int64) (settled, error) {
 	if next, again := l.nextRun(h, now); again {
+		if err := l.runEnded(ctx, w); err != nil {
+			return settled{}, err
+		}
 		return settled{due: next}, l.move(ctx, w, l.withRun(moved{next: next, at: next}, now))
 	}
 	var spill sql.NullInt64
@@ -416,6 +419,9 @@ func (l *lease) retry(ctx context.Context, w sqlite.Writer, h heldRow, now int64
 func (l *lease) fail(ctx context.Context, w sqlite.Writer, h heldRow, now int64, cause string) (settled, error) {
 	failure := sql.NullString{String: cause, Valid: true}
 	if next, again := l.nextRun(h, now); again {
+		if err := l.runEnded(ctx, w); err != nil {
+			return settled{}, err
+		}
 		return settled{due: next}, l.move(ctx, w, l.withRun(moved{next: next, at: next, failure: failure}, now))
 	}
 	ran, took := l.lastRun(now)

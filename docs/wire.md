@@ -322,7 +322,7 @@ carry:
 | | watch | a download that does not end: a config's kept fields, again after each change |
 | | run | both ways: the answer a key keeps, or the key's run handed over and its answer back |
 | | usage, refund | calls on a quota, which allow uses |
-| jobs | open, enqueue of many, update, cancel, get, claim, settle of many | calls |
+| jobs | open, enqueue of many, update, cancel, get, claim, settle of many, step, keep | calls |
 | | scan | a download, an entry a message |
 | | watch | a download that ends with its job: its entry, again after each change |
 | | work | both ways: jobs out, their outcomes back |
@@ -505,6 +505,8 @@ A job's value is its JSON as str, checked before it is kept; a schedule's is
 | `0x0208` | scan | a query | a download: `{}`, an entry a `DATA`, a page |
 | `0x0209` | work | workers | both ways: `{}`, then held jobs out and outcomes back, `DATA`·END each side |
 | `0x020a` | watch | a key | a download: `{}`, then an entry a `DATA`, now and after each change, until the job ends |
+| `0x020b` | step | an answer's job and name | kept: the answer the job's run kept under the name, found false for none |
+| `0x020c` | keep | an answer | `{}` once the answer is written, the attempt holding the job's lease |
 
 A queue:
 
@@ -595,6 +597,24 @@ A cancel that takes a job in the client's hands sends it again as `{2: job,
 7: true}` on a stream that asked with `cancels`, so that its handler stops; a
 stream that did not ask is told nothing. Either way the outcome the client
 sends for that job settles nothing, and the stream goes on.
+
+A held job's number is its connection's, the same for a claim's and a work
+stream's, so that `jobs.step` and `jobs.keep` name either; a work stream's job
+is settled on its stream alone, and `jobs.settle` of one is `invalid`. An
+answer names a step of the held job's run:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | job | uint | the held job's number |
+| 2 | name | str | the step's, 1 to 256 bytes, within the run |
+| 3 | answer | str | jobs.keep's: the step's answer as JSON, at most 1 MiB; jobs.step carries none |
+
+and kept is `{1: found, 2: answer}`. A step kept by an attempt whose lease
+another claim took is `conflict`, and nothing is kept; a run that ends takes
+its steps along, and a repeating job's next run starts without them. A worker
+asks `jobs.step` before it runs a step and sends `jobs.keep` once it has, so
+that the attempt after a retry or a lost worker gets the answer back without
+running the step again.
 
 `jobs.watch` answers `{}`, then the job under the key as an entry a `DATA`,
 now and each time its state, place, attempt, time, progress or error changes,

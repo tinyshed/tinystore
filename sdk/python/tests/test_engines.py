@@ -199,6 +199,42 @@ async def test_a_queue_waits_changes_cancels_and_works(store: tinystore.Store) -
     assert await claimed.get("k") is None
 
 
+async def test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer(
+    store: tinystore.Store,
+) -> None:
+    q = store.jobs.queue("agent", dict[str, str], backoff=(0.001, 0.001))
+    await q.enqueue({"question": "what is a store?"}, key="run")
+    searches, asks, answers = 0, 0, list[str]()
+
+    async def search() -> list[str]:
+        nonlocal searches
+        searches += 1
+        return ["a file", "a lock"]
+
+    async def handle(job: tinystore.Job[dict[str, str]]) -> None:
+        hits = await job.step("search", search)
+
+        def ask() -> str:
+            nonlocal asks
+            asks += 1
+            if asks == 1:
+                raise RuntimeError("the model is down")
+            return " and ".join(hits)
+
+        answers.append(await job.step("answer", ask))
+
+    await q.work(handle, until_idle=True)
+    assert (searches, asks, answers) == (1, 2, ["a file and a lock"])
+
+    await q.enqueue({"question": "claimed"}, key="claimed")
+    first = await q.claim(lease=60)
+    assert first is not None and await first.step("count", lambda: 7) == 7
+    await first.retry("later", after=0)
+    second = await q.claim()
+    assert second is not None and await second.step("count", lambda: 8) == 7
+    await second.ack()
+
+
 async def test_a_job_keeps_its_last_run(store: tinystore.Store) -> None:
     q = store.jobs.queue("last-run", str)
     await q.enqueue("x", key="k")

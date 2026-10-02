@@ -11,10 +11,12 @@ import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { LostError, watch } from './session.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import {
+	JobsAnswer,
 	JobsBatch,
 	JobsChange,
 	JobsEntry,
 	JobsHeld,
+	JobsKept,
 	JobsKey,
 	JobsLease,
 	JobsOutcome,
@@ -174,6 +176,46 @@ class Reporter {
 	}
 }
 
+/** Calls a method on the connection a job is held on, answering its body. */
+type Call = (method: number, body: Uint8Array) => Promise<Uint8Array>
+
+/**
+ * The steps of a held job's run, which the server keeps under the number the
+ * job was held by: a step's kept answer, or the step run and its answer kept.
+ */
+class Steps {
+	readonly #call: Call
+	readonly #job: number
+
+	constructor(call: Call, job: number) {
+		this.#call = call
+		this.#job = job
+	}
+
+	async run<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
+		const kept = JobsKept.decode(
+			await this.#call(methods['jobs.step'], JobsAnswer.encode({ job: this.#job, name })),
+		)
+		if (kept.found === true) {
+			return JSON.parse(kept.answer ?? 'null') as R
+		}
+		const answer = await fn()
+		let text: string
+		try {
+			text = JSON.stringify(answer) ?? 'null'
+		} catch (err) {
+			throw new InvalidError(
+				`step ${name} answered what JSON cannot write: ${(err as Error).message}`,
+			)
+		}
+		await this.#call(
+			methods['jobs.keep'],
+			JobsAnswer.encode({ job: this.#job, name, answer: text }),
+		)
+		return answer
+	}
+}
+
 /**
  * A job in a work loop's handler. Returning acknowledges it and throwing
  * retries it, unless the handler said otherwise with retry, fail or snooze;
@@ -193,6 +235,7 @@ export class Job<T> {
 	readonly signal: AbortSignal
 	settlement: Settlement | undefined
 	readonly #reporter: Reporter | undefined
+	readonly #steps: Steps | undefined
 
 	constructor(
 		key: string,
@@ -201,6 +244,7 @@ export class Job<T> {
 		attempt: number,
 		signal: AbortSignal,
 		reporter?: Reporter,
+		steps?: Steps,
 	) {
 		this.key = key
 		this.value = value
@@ -208,6 +252,24 @@ export class Job<T> {
 		this.attempt = attempt
 		this.signal = signal
 		this.#reporter = reporter
+		this.#steps = steps
+	}
+
+	/**
+	 * Runs fn once in the job's run and keeps what it answers, as JSON: an
+	 * attempt after a retry, a lost lease or a restart gets the kept answer
+	 * back without running fn again. A step whose attempt ends before its
+	 * answer is kept runs again, so what fn does outside the store should bear
+	 * doing twice. A name is the step's within the run, which a loop numbers:
+	 * 'model:1', 'tool:1', 'model:2'. An answer is at most 1 MiB of JSON.
+	 *
+	 *     const hits = await job.step('search', () => search(job.value.query))
+	 */
+	step<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
+		if (this.#steps === undefined) {
+			return Promise.reject(new InvalidError('a job no work loop handed over keeps no steps'))
+		}
+		return this.#steps.run(name, fn)
 	}
 
 	/**
@@ -244,11 +306,13 @@ export class ClaimedJob<T> {
 	readonly attempt: number
 	readonly #settle: (outcome: Parameters<typeof JobsOutcome.encode>[0]) => Promise<void>
 	readonly #job: number
+	readonly #steps: Steps
 
 	constructor(
 		held: ReturnType<typeof JobsHeld.decode>,
 		value: T,
 		settle: (outcome: Parameters<typeof JobsOutcome.encode>[0]) => Promise<void>,
+		call: Call,
 	) {
 		this.key = held.key ?? ''
 		this.value = value
@@ -256,6 +320,12 @@ export class ClaimedJob<T> {
 		this.attempt = held.attempt ?? 0
 		this.#job = held.job ?? 0
 		this.#settle = settle
+		this.#steps = new Steps(call, this.#job)
+	}
+
+	/** Runs fn once in the job's run and keeps its answer, as a work loop's job.step does. */
+	step<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
+		return this.#steps.run(name, fn)
 	}
 
 	/** The job is done. */
@@ -653,16 +723,21 @@ export class Queue<T> {
 				return undefined
 			}
 			const value = await this.#values.decode(held.value ?? 'null')
-			return new ClaimedJob(held, value, async outcome => {
-				const body = await connection.session.call(
-					methods['jobs.settle'],
-					JobsOutcomes.encode({ outcomes: [outcome] }),
-				)
-				const refused = JobsSettled.decode(body).settled?.[0]
-				if (refused !== undefined && refused !== null) {
-					throw errorOf(refused.code ?? 'internal', refused.message ?? '', refused.what ?? {})
-				}
-			})
+			return new ClaimedJob(
+				held,
+				value,
+				async outcome => {
+					const body = await connection.session.call(
+						methods['jobs.settle'],
+						JobsOutcomes.encode({ outcomes: [outcome] }),
+					)
+					const refused = JobsSettled.decode(body).settled?.[0]
+					if (refused !== undefined && refused !== null) {
+						throw errorOf(refused.code ?? 'internal', refused.message ?? '', refused.what ?? {})
+					}
+				},
+				(method, body) => connection.session.call(method, body),
+			)
 		})
 	}
 
@@ -743,9 +818,14 @@ export class Queue<T> {
 				}
 				const cancel = new AbortController()
 				cancels.set(held.job ?? 0, cancel)
+				const steps = new Steps(
+					(method, body) => connection.session.call(method, body),
+					held.job ?? 0,
+				)
 				const running = this.#run(
 					stream,
 					held,
+					steps,
 					handler,
 					timeout,
 					stopping.signal,
@@ -766,6 +846,7 @@ export class Queue<T> {
 	async #run(
 		stream: Awaited<ReturnType<Connection['session']['open']>>,
 		held: ReturnType<typeof JobsHeld.decode>,
+		steps: Steps,
 		handler: (job: Job<T>) => void | Promise<void>,
 		timeout: number,
 		stopping: AbortSignal,
@@ -785,6 +866,7 @@ export class Queue<T> {
 				held.attempt ?? 0,
 				signal,
 				reporter,
+				steps,
 			)
 			try {
 				await handler(job)

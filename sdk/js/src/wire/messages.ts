@@ -52,6 +52,8 @@ export const methods = {
 	'jobs.scan': 0x0208,
 	'jobs.work': 0x0209,
 	'jobs.watch': 0x020a,
+	'jobs.step': 0x020b,
+	'jobs.keep': 0x020c,
 	'blobs.open': 0x0301,
 	'blobs.stat': 0x0302,
 	'blobs.delete': 0x0303,
@@ -221,6 +223,14 @@ export const JobsBatch = message('jobs.batch', { handle: [1, uint], jobs: [2, li
 export const JobsChange = message('jobs.change', { ...jobsJob, handle: [6, uint] })
 
 export const JobsKey = message('jobs.key', { handle: [1, uint], key: [2, str] })
+
+export const JobsAnswer = message('jobs.answer', {
+	job: [1, uint],
+	name: [2, str],
+	answer: [3, str],
+})
+
+export const JobsKept = message('jobs.kept', { found: [1, bool], answer: [2, str] })
 
 export const JobsEntry = message('jobs.entry', {
 	found: [1, bool],
@@ -501,6 +511,8 @@ export const messages = {
 	'jobs.batch': JobsBatch,
 	'jobs.change': JobsChange,
 	'jobs.key': JobsKey,
+	'jobs.answer': JobsAnswer,
+	'jobs.kept': JobsKept,
 	'jobs.entry': JobsEntry,
 	'jobs.lease': JobsLease,
 	'jobs.held': JobsHeld,

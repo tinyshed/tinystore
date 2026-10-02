@@ -247,6 +247,40 @@ describe('a work loop', () => {
 		expect([again?.key, again?.attempt]).toEqual(['k', 2])
 	})
 
+	test('a step runs once in a run: the attempt after a failure gets its kept answer', async () => {
+		const q = store.jobs.queue<{ question: string }>('agent', { backoff: { first: 1, most: 1 } })
+		await q.enqueue({ question: 'what is a store?' }, { key: 'run' })
+		let searches = 0
+		let asks = 0
+		const answers: string[] = []
+		await q.work(
+			async job => {
+				const hits = await job.step('search', async () => {
+					searches++
+					return ['a file', 'a lock']
+				})
+				const answer = await job.step('answer', () => {
+					asks++
+					if (asks === 1) {
+						throw new Error('the model is down')
+					}
+					return hits.join(' and ')
+				})
+				answers.push(answer)
+			},
+			{ untilIdle: true },
+		)
+		expect([searches, asks, answers]).toEqual([1, 2, ['a file and a lock']])
+
+		await q.enqueue({ question: 'claimed' }, { key: 'claimed' })
+		const first = await q.claim({ lease: '1m' })
+		expect(await first?.step('count', () => 7)).toBe(7)
+		await first?.retry('later', { after: 0 })
+		const second = await q.claim()
+		expect(await second?.step('count', () => 8)).toBe(7)
+		await second?.ack()
+	})
+
 	test('a schedule is a queue of one repeating job under its name', async () => {
 		const purge = store.jobs.schedule('purge', { daily: '03:10', zone: 'Europe/Moscow' })
 		const job = await purge.get('purge')

@@ -121,6 +121,9 @@ its `job.signal` aborts with a `CancelledError`, and what the handler returns
 settles nothing. `maxRunning` bounds the jobs running at once across every
 worker of the store.
 
+A step of a job's run keeps its answer, so that the attempt after a failure
+does not run it again: `const hits = await job.step('search', () => search(q))`.
+
 ## blobs
 
 ```ts

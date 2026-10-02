@@ -503,3 +503,79 @@ func TestAJobsLastRunOverTheWire(t *testing.T) {
 		t.Fatalf("a run that took 20 ms: %+v", ran)
 	}
 }
+
+// lookStep asks the server for the answer a held job's run kept under a step
+func lookStep(t *testing.T, conn *client.Conn, job uint64, name string) wire.JobsKept {
+	t.Helper()
+	body, err := conn.Call(t.Context(), wire.JobsStep, wire.JobsAnswer{Job: job, Name: name})
+	var kept wire.JobsKept
+	if err == nil {
+		err = kept.Decode(body)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kept
+}
+
+func keepStep(t *testing.T, conn *client.Conn, job uint64, name, answer string) {
+	t.Helper()
+	if _, err := conn.Call(t.Context(), wire.JobsKeep, wire.JobsAnswer{Job: job, Name: name, Answer: answer}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A remote worker's steps are kept across the attempts of a run, for a job a
+// claim leased and for one a work stream handed over, which only its stream
+// settles; a look-up carrying an answer is refused.
+func TestAJobsStepsOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	agent := openQueue(t, conn, wire.JobsQueue{Name: "agent", BackoffFirst: 1, BackoffMost: 1})
+	if err := enqueueJobs(t, conn, agent, wire.JobsJob{Value: `"claimed"`, Key: "claimed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	first := claim(t, conn, agent)
+	if kept := lookStep(t, conn, first.Job, "search"); kept.Found {
+		t.Fatalf("a step no run kept: %+v", kept)
+	}
+	keepStep(t, conn, first.Job, "search", `["a file"]`)
+	settleJobs(t, conn, wire.JobsOutcome{Job: first.Job, How: wire.JobRetry, Err: "the model is down", HasAfter: true})
+	second := claim(t, conn, agent)
+	if kept := lookStep(t, conn, second.Job, "search"); !kept.Found || kept.Answer != `["a file"]` {
+		t.Fatalf("the second attempt's step: %+v", kept)
+	}
+	_, err := conn.Call(t.Context(), wire.JobsStep, wire.JobsAnswer{Job: second.Job, Name: "search", Answer: "1"})
+	if failureOf(err).Code != wire.CodeInvalid {
+		t.Errorf("a look-up carrying an answer: %v", err)
+	}
+	settleJobs(t, conn, wire.JobsOutcome{Job: second.Job, How: wire.JobAck})
+
+	if err = enqueueJobs(t, conn, agent, wire.JobsJob{Value: `"streamed"`, Key: "streamed"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := conn.Open(t.Context(), wire.JobsWork, wire.JobsWorkers{Handle: agent, Workers: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Response(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	held := nextHeld(t, st)
+	keepStep(t, conn, held.Job, "search", `"kept on a stream"`)
+	if kept := lookStep(t, conn, held.Job, "search"); kept.Answer != `"kept on a stream"` {
+		t.Fatalf("a streamed job's step: %+v", kept)
+	}
+	if settled := settleJobs(t, conn, wire.JobsOutcome{Job: held.Job, How: wire.JobAck}); settled.Errors[0] == nil ||
+		settled.Errors[0].Code != wire.CodeInvalid {
+		t.Fatalf("jobs.settle of a job a stream holds: %+v", settled.Errors)
+	}
+	sendOutcome(t, st, wire.JobsOutcome{Job: held.Job, How: wire.JobAck}, true)
+	if _, last, err := st.Next(t.Context()); err != nil || !last {
+		t.Fatalf("the work stream's end: %v %v", last, err)
+	}
+	if left := fetchJob(t, conn, agent, "streamed"); left.Found {
+		t.Fatalf("the streamed job stayed: %+v", left)
+	}
+}
