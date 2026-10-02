@@ -747,6 +747,21 @@ handle.
 | `0x0602` | read | a range | a download: `{}`, a series a `DATA`, then `{}` |
 | `0x0603` | aggregate | a range with a width and an operation | a download: `{}`, a series' buckets a `DATA`, then `{}` |
 | `0x0604` | drop | labels | `{1: found, 2: unreadable groups}` |
+| `0x0605` | explain | a range; with an operation, the aggregate's | a plan |
+
+A plan is what a read, or an aggregate when the range names an operation,
+would spend, found in one snapshot from the series, their block directories
+and their heads, with no payload fetched and no sample decoded:
+
+| key | field | type | |
+|---|---|---|---|
+| 1 | series | uint | the series it matches |
+| 2 | blocks | uint | the blocks it opens |
+| 3 | summarized | uint | the blocks an aggregate answers from their summaries |
+| 4 | bytes | uint | the bytes it fetches |
+| 5 | decoded | uint | the samples it decodes |
+| 6 to 10 | limit series, blocks, bytes, decoded, answered | uint | the limits it runs under |
+| 11 | stops | an error | the `limit` it would end with, `what` naming it; absent when it fits |
 
 A series:
 

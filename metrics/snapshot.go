@@ -32,6 +32,8 @@ type snapshotRead struct {
 	// end.
 	deferPayloads bool
 	aggregate     *aggregateSelection
+	// planOnly charges every block to the budget and fetches no payload: a Plan.
+	planOnly bool
 }
 
 // smaller matches keep one query per series, as tinyshed/research's
@@ -41,6 +43,13 @@ const batchedSeries = 16
 // fetchSnapshot copies everything a query needs out of one read transaction,
 // which ends before anything is decoded.
 func (s *Store) fetchSnapshot(ctx context.Context, query rangeQuery) ([]seriesRead, error) {
+	reads, _, err := s.fetchSnapshotSpending(ctx, query)
+	return reads, err
+}
+
+// fetchSnapshotSpending is fetchSnapshot and what it spent of its budget,
+// which a plan reports.
+func (s *Store) fetchSnapshotSpending(ctx context.Context, query rangeQuery) ([]seriesRead, queryBudget, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.SnapshotTimeout)
 	defer cancel()
 	var reads []seriesRead
@@ -50,7 +59,10 @@ func (s *Store) fetchSnapshot(ctx context.Context, query rangeQuery) ([]seriesRe
 		if err != nil {
 			return err
 		}
-		snapshot := snapshotRead{tx: tx, from: query.from, to: query.to, budget: &budget, aggregate: query.aggregate}
+		snapshot := snapshotRead{
+			tx: tx, from: query.from, to: query.to, budget: &budget,
+			aggregate: query.aggregate, planOnly: query.planOnly,
+		}
 		if len(matched) >= batchedSeries {
 			snapshot.deferPayloads = true
 			reads, err = s.fetchBatched(ctx, snapshot, matched)
@@ -60,9 +72,9 @@ func (s *Store) fetchSnapshot(ctx context.Context, query rangeQuery) ([]seriesRe
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read metrics snapshot: %w", err)
+		return nil, budget, fmt.Errorf("read metrics snapshot: %w", err)
 	}
-	return reads, nil
+	return reads, budget, nil
 }
 
 // fetchBatched reads the heads, the group directories and the payloads of
@@ -89,6 +101,9 @@ func (s *Store) fetchBatched(
 		reads = append(reads, seriesRead{series: series, blocks: blocks, head: heads[i]})
 	}
 
+	if snapshot.planOnly {
+		return reads, nil
+	}
 	if err = fetchPayloads(ctx, snapshot.tx, reads); err != nil {
 		return nil, err
 	}
@@ -202,6 +217,7 @@ func (r snapshotRead) takeBlock(
 	}
 	if r.aggregate != nil && r.aggregate.complete(block, r.from, r.to) {
 		block.summarized = true
+		r.budget.summarized++
 		return block, nil
 	}
 	if err := r.budget.takeSamples(block.head.Count); err != nil {
@@ -213,7 +229,7 @@ func (r snapshotRead) takeBlock(
 	if err := r.budget.takeBytes(block.bodyBytes); err != nil {
 		return block, err
 	}
-	if r.deferPayloads {
+	if r.deferPayloads || r.planOnly {
 		return block, nil
 	}
 	return block, readPayload(ctx, r.tx, &block)

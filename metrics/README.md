@@ -120,6 +120,14 @@ call. A still damaged series will be suspended again on the next pass, and
 ingestion into a suspended series returns `ErrSuspended`. A suspended series
 stays out of retention until it is retried or dropped.
 
+`ExplainRead(ctx, r)` and `ExplainAggregate(ctx, request)` say what the call
+would spend before it runs: the series it matches, the blocks it opens, those
+an aggregate answers from their summaries, the bytes it fetches and the
+samples it decodes, beside its `Limits`, and `Stops`, the `*LimitError` it would
+end with. A plan reads the series, their directories and heads in one
+snapshot and fetches no payload; the samples a read answers are not counted,
+since only decoding knows them.
+
 `DropSeries(ctx, name, labels)` removes one series and everything it holds in one
 transaction, whether its data still reads or not, and waits for a running
 `Maintain`. A group whose directory or clock no longer reads is removed without

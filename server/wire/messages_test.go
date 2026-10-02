@@ -264,6 +264,19 @@ var schema = map[string][]field{
 	},
 	"metrics.labels":  {{1, "labels", "names"}},
 	"metrics.dropped": {{1, "found", "bool"}, {2, "unreadable groups", "uint"}},
+	"metrics.plan": {
+		{1, "series", "uint"},
+		{2, "blocks", "uint"},
+		{3, "summarized", "uint"},
+		{4, "bytes", "uint"},
+		{5, "decoded", "uint"},
+		{6, "limit series", "uint"},
+		{7, "limit blocks", "uint"},
+		{8, "limit bytes", "uint"},
+		{9, "limit decoded", "uint"},
+		{10, "limit answered", "uint"},
+		{11, "stops", "error?"},
+	},
 }
 
 var kvCall = []field{
@@ -335,6 +348,7 @@ var methods = []struct {
 	{"metrics.read", wire.MetricsRead},
 	{"metrics.aggregate", wire.MetricsAggregate},
 	{"metrics.drop", wire.MetricsDrop},
+	{"metrics.explain", wire.MetricsExplain},
 }
 
 var codes = []wire.Code{
@@ -672,6 +686,16 @@ func metricsExamples() []example {
 		}),
 		of("metrics.drop of a series", "metrics.labels", wire.MetricsLabels{Labels: cpu}),
 		of("what a drop removed", "metrics.dropped", wire.MetricsDropped{Found: true, UnreadableGroups: 1}),
+		of("a plan that stops at its decoded samples", "metrics.plan", wire.MetricsPlan{
+			Series: 3, Blocks: 40, Summarized: 36, Bytes: 12288, Decoded: 960,
+			Limits: wire.MetricsLimits{
+				Series: 10000, Blocks: 10000, PayloadBytes: 64 << 20, DecodedSamples: 500, OutputSamples: 100000,
+			},
+			Stops: &wire.Error{
+				Code: wire.CodeLimit, Message: "resource limit: decoded samples: 960 past 500",
+				What: map[string]string{"limit": "decoded samples", "wanted": "960", "bound": "500"},
+			},
+		}),
 	}
 }
 

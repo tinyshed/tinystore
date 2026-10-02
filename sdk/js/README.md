@@ -117,7 +117,8 @@ const routes = await store.metrics.aggregate({ name: 'http_requests_total', sinc
 ```
 
 A sample comes back bit for bit, `-0` and a NaN's payload included; a range is
-`since`, or `from` and `to` in unix milliseconds.
+`since`, or `from` and `to` in unix milliseconds. `metrics.explain(range)` says
+what a read or an aggregate would spend of its limits before it runs.
 
 ## Errors and cancellation
 

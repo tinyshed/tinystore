@@ -551,6 +551,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | streaming owns each result and exposes partial failure | `TestStreamOwnsResultsAndReportsPartialFailure`                         |
 | an error about one series carries its labels           | `TestIngestRefusalNamesItsSeries` and `TestIngestValidationNamesItsSeries` |
 | a limit names which, what the call wanted and the bound | `TestALimitErrorNamesItsBoundAndIsItsKind`, `TestWholeExactBlocksNeedNoDecodedSampleBudget` |
+| a metrics plan is what the call then spends            | `TestAPlanSaysWhatTheCallThenSpends`, no payload fetched                         |
 | a series is its name and its labels, `__` the store's  | `TestASeriesIsItsNameAndItsLabels`, `TestIngestIsAtomicAndLastMutableValueWins` |
 | a range over the last Since starts that long before now | `TestARangeSinceStartsThatLongBeforeNow`, a To of zero the open end            |
 | a condition finds series beyond equality, NoneOf alone refused | `TestConditionsFindSeriesBeyondEquality`, `TestAConditionThatFindsNothingOrCannotBeTakenIsRefused`, `TestConditionsOverTheWire` |

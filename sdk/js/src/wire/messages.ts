@@ -68,6 +68,7 @@ export const methods = {
 	'metrics.read': 0x0602,
 	'metrics.aggregate': 0x0603,
 	'metrics.drop': 0x0604,
+	'metrics.explain': 0x0605,
 } as const
 
 export type Method = keyof typeof methods
@@ -375,6 +376,20 @@ export const MetricsSeries = message('metrics.series', {
 
 export const MetricsBatch = message('metrics.batch', { series: [1, list(MetricsSeries)] })
 
+export const MetricsPlan = message('metrics.plan', {
+	series: [1, uint],
+	blocks: [2, uint],
+	summarized: [3, uint],
+	bytes: [4, uint],
+	decoded: [5, uint],
+	limitSeries: [6, uint],
+	limitBlocks: [7, uint],
+	limitBytes: [8, uint],
+	limitDecoded: [9, uint],
+	limitAnswered: [10, uint],
+	stops: [11, nullable(Failure)],
+})
+
 export const MetricsCondition = message('metrics.condition', {
 	label: [1, str],
 	kind: [2, str],
@@ -471,6 +486,7 @@ export const messages = {
 	'metrics.batch': MetricsBatch,
 	'metrics.range': MetricsRange,
 	'metrics.condition': MetricsCondition,
+	'metrics.plan': MetricsPlan,
 	'metrics.buckets': MetricsBuckets,
 	'metrics.labels': MetricsLabels,
 	'metrics.dropped': MetricsDropped,

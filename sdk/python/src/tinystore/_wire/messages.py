@@ -72,6 +72,7 @@ METHODS: dict[str, int] = {
     "metrics.read": 0x0602,
     "metrics.aggregate": 0x0603,
     "metrics.drop": 0x0604,
+    "metrics.explain": 0x0605,
 }
 
 Hello = message(
@@ -367,6 +368,21 @@ MetricsSeries = message(
 
 MetricsBatch = message("metrics.batch", series=(1, list_(MetricsSeries)))
 
+MetricsPlan = message(
+    "metrics.plan",
+    series=(1, uint),
+    blocks=(2, uint),
+    summarized=(3, uint),
+    bytes=(4, uint),
+    decoded=(5, uint),
+    limit_series=(6, uint),
+    limit_blocks=(7, uint),
+    limit_bytes=(8, uint),
+    limit_decoded=(9, uint),
+    limit_answered=(10, uint),
+    stops=(11, nullable(Failure)),
+)
+
 MetricsCondition = message("metrics.condition", label=(1, str_), kind=(2, str_), values=(3, list_(str_)))
 
 MetricsRange = message(
@@ -458,6 +474,7 @@ MESSAGES: dict[str, Message] = {
         MetricsBatch,
         MetricsRange,
         MetricsCondition,
+        MetricsPlan,
         MetricsBuckets,
         MetricsLabels,
         MetricsDropped,

@@ -285,3 +285,15 @@ async def test_lines_and_appended_records_take_the_trace_they_were_made_in(store
 async def test_a_store_says_what_its_server_is(store: tinystore.Store) -> None:
     status = await store.status()
     assert status.protocol == 1 and "records" in status.engines and status.capability == "admin"
+
+
+async def test_a_plan_says_what_a_read_would_spend_and_where_it_would_stop(store: tinystore.Store) -> None:
+    now = datetime.now(UTC)
+    samples = [(now - timedelta(seconds=s), float(s)) for s in (3, 2, 1)]
+    await store.metrics.ingest({"name": "planned", "kind": "gauge", "samples": samples})
+    plan = await store.metrics.explain(name="planned", since="1m")
+    assert (plan.series, plan.decoded, plan.stops) == (1, 3, None)
+    tight = await store.metrics.explain(name="planned", since="1m", limits={"decoded": 1})
+    assert tight.stops is not None and (tight.stops.limit, tight.stops.bound) == ("decoded samples", 1)
+    buckets = await store.metrics.explain(name="planned", since="1m", width="1m", op="sum")
+    assert buckets.series == 1

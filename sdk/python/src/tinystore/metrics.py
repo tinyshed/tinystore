@@ -22,10 +22,11 @@ from ._wire.messages import (
     MetricsBuckets,
     MetricsDropped,
     MetricsLabels,
+    MetricsPlan,
     MetricsRange,
     MetricsSeries,
 )
-from .errors import InvalidError
+from .errors import InvalidError, LimitError, error_of
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -88,6 +89,19 @@ def _named(spelled: Mapping[str, str]) -> tuple[str, dict[str, str]]:
     """A series as the wire spelled it: its name apart from its labels."""
     labels = dict(spelled)
     return labels.pop(_WIRE_NAME, ""), labels
+
+
+@dataclass(frozen=True, slots=True)
+class Plan:
+    """What a read or an aggregate would spend, each use beside its limit; stops is the limit it would reach."""
+
+    series: int
+    blocks: int
+    summarized: int
+    bytes: int
+    decoded: int
+    limits: dict[str, int]
+    stops: LimitError | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +311,55 @@ class Metrics:
 
         dropped = MetricsDropped.decode(await self._link.run("write", attempt))
         return bool(dropped.get("found")), dropped.get("unreadable_groups", 0)
+
+    async def explain(
+        self,
+        *,
+        name: str | None = None,
+        match: Mapping[str, str] | None = None,
+        where: Mapping[str, Condition | str] | None = None,
+        since: Duration | None = None,
+        from_: datetime | int | None = None,
+        to: datetime | int | None = None,
+        limits: Mapping[str, int] | None = None,
+        width: Duration | None = None,
+        op: Op | None = None,
+        by: Iterable[str] | None = None,
+        without: Iterable[str] | None = None,
+    ) -> Plan:
+        """What read, or aggregate when op is given, would spend of its limits, without reading a sample.
+
+        The series, the blocks, those an aggregate answers from their
+        summaries, the bytes and the samples, beside the limits; stops is the
+        LimitError the call would end with, None when it fits.
+        """
+        extra: dict[str, Any] = {}
+        if op is not None:
+            extra = {
+                "width": ms(width or 0),
+                "op": op,
+                "by": None if by is None else list(by),
+                "without": None if without is None else list(without),
+            }
+        body = _range(name, match, where, since, from_, to, limits, **extra)
+
+        async def attempt(connection: Connection) -> bytes:
+            return await connection.session.call(METHODS["metrics.explain"], body)
+
+        p = MetricsPlan.decode(await self._link.run("read", attempt))
+        stops = p.get("stops")
+        refused = None
+        if stops is not None:
+            refused = error_of(stops.get("code", "limit"), stops.get("message", ""), stops.get("what"))
+        return Plan(
+            series=p.get("series", 0),
+            blocks=p.get("blocks", 0),
+            summarized=p.get("summarized", 0),
+            bytes=p.get("bytes", 0),
+            decoded=p.get("decoded", 0),
+            limits={k: p.get(f"limit_{k}", 0) for k in ("series", "blocks", "bytes", "decoded", "answered")},
+            stops=refused if isinstance(refused, LimitError) else None,
+        )
 
     def counter(self, name: str) -> Counter:
         """A counter: its total since this process started, ingested every flush; a restart is a reset."""

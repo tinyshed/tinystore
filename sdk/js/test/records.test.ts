@@ -394,6 +394,38 @@ describe('metrics', () => {
 		expect(limit.wanted).toBeGreaterThan(1)
 	})
 
+	test('a plan says what a read would spend, and where it would stop', async () => {
+		const now = Date.now()
+		await store.metrics.ingest({
+			name: 'planned',
+			kind: 'gauge',
+			samples: [
+				[new Date(now - 3000), 1],
+				[new Date(now - 2000), 2],
+				[new Date(now - 1000), 3],
+			],
+		})
+		const plan = await store.metrics.explain({ name: 'planned', since: '1m' })
+		expect([plan.series, plan.decoded, plan.stops]).toEqual([1, 3, undefined])
+		const tight = await store.metrics.explain({
+			name: 'planned',
+			since: '1m',
+			limits: { decoded: 1 },
+		})
+		expect([tight.stops?.limit, tight.stops?.bound, tight.limits.decoded]).toEqual([
+			'decoded samples',
+			1,
+			1,
+		])
+		const buckets = await store.metrics.explain({
+			name: 'planned',
+			since: '1m',
+			width: '1m',
+			op: 'sum',
+		})
+		expect(buckets.series).toBe(1)
+	})
+
 	test('a drop removes a series', async () => {
 		expect(await store.metrics.drop({ name: 'cpu', labels: { host: 'web-1' } })).toEqual({
 			found: true,

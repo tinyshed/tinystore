@@ -31,7 +31,7 @@ from .errors import (
 )
 from .jobs import ClaimedJob, Enqueue, Job, JobEntry, Queue, Repeat, cron, daily, every
 from .kv import Batch, Bucket, Counters, Entry
-from .metrics import Aggregate, Condition, Series, none_of, one_of, prefix
+from .metrics import Aggregate, Condition, Plan, Series, none_of, one_of, prefix
 from .records import Cursor, Record, trace
 from .sql import Database, Done
 from .store import Status, Store, connect, open
@@ -64,6 +64,7 @@ __all__ = [
     "OutcomeUnknownError",
     "Page",
     "PermissionDeniedError",
+    "Plan",
     "ProtocolError",
     "Queue",
     "Record",

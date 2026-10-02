@@ -39,6 +39,7 @@ export {
 	type Metrics,
 	noneOf,
 	oneOf,
+	type Plan,
 	prefix,
 	type Range,
 	type Series,

@@ -127,7 +127,8 @@ routes = await store.metrics.aggregate(name="http_requests_total", since="24h", 
 ```
 
 A sample comes back bit for bit, `-0.0` and a NaN's payload included; a range
-is `since`, or `from_` and `to`.
+is `since`, or `from_` and `to`. `metrics.explain(...)` says what a read or an
+aggregate would spend of its limits before it runs.
 
 ## Durations, errors and cancellation
 

@@ -190,6 +190,10 @@ Built after it:
   in Go, `withTrace({ traceId, spanId }, fn)` in Bun over AsyncLocalStorage,
   `with tinystore.trace(trace_id, span_id):` in Python over contextvars. No
   dependency on OpenTelemetry, whose ids are the same bytes.
+- **`explain`** for metrics: what a read or an aggregate would spend of its
+  limits, and the `LimitError` it would stop at, found without a payload
+  fetched or a sample decoded: `ExplainRead`/`ExplainAggregate` in Go,
+  `metrics.explain(range)` in both SDKs, an aggregate's when it names an op.
 - **`status()`** in both SDKs: the server's version, the protocol the
   connection speaks, its engines and the connection's capability, as its
   `WELCOME` said them.
@@ -201,7 +205,7 @@ Built after it:
 Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):
 
-- **`explain`**: what a query would open, fetch and decode, before it runs.
+- **`explain` for records**: what a records scan would open, fetch and decode.
 - **`capabilities`**: what a server serves beyond its version, asked before a
   call. A client newer than its server is told already: a field or a method
   the server does not know is `UnimplementedError`, naming the field and the

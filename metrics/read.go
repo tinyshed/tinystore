@@ -11,6 +11,7 @@ type queryBudget struct {
 	clockOrder                     []int64
 	limits                         Limits
 	bytes, decoded, blocks, groups int
+	series, summarized             int // what a plan reports
 }
 
 func (b *queryBudget) takeBytes(size int) error {
@@ -88,6 +89,7 @@ func (s *Store) readEach(ctx context.Context, request Range, yield func(Result) 
 type rangeQuery struct {
 	matchers         []label
 	conditions       []condition
+	planOnly         bool // a Plan: no payload fetched, nothing decoded
 	limits           Limits
 	origin, from, to int64
 	aggregate        *aggregateSelection

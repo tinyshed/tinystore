@@ -12,6 +12,7 @@ const (
 	MetricsRead      Method = 0x0602
 	MetricsAggregate Method = 0x0603
 	MetricsDrop      Method = 0x0604
+	MetricsExplain   Method = 0x0605
 )
 
 // MetricsSeries is a series and samples of it: an item of ingest's request and
@@ -390,6 +391,73 @@ func (l *MetricsLabels) Decode(body []byte) error {
 		}
 	}
 	return d.End()
+}
+
+// MetricsPlan is metrics.explain's answer: what the read, or the aggregate
+// when the range names an operation, would spend, each beside its limit, and
+// the limit it would stop at, an error of code limit naming it.
+type MetricsPlan struct {
+	Series, Blocks, Summarized, Bytes, Decoded uint64
+	Limits                                     MetricsLimits
+	Stops                                      *Error
+}
+
+func (p MetricsPlan) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	optionalUint(&m, 1, p.Series)
+	optionalUint(&m, 2, p.Blocks)
+	optionalUint(&m, 3, p.Summarized)
+	optionalUint(&m, 4, p.Bytes)
+	optionalUint(&m, 5, p.Decoded)
+	optionalUint(&m, 6, p.Limits.Series)
+	optionalUint(&m, 7, p.Limits.Blocks)
+	optionalUint(&m, 8, p.Limits.PayloadBytes)
+	optionalUint(&m, 9, p.Limits.DecodedSamples)
+	optionalUint(&m, 10, p.Limits.OutputSamples)
+	if p.Stops != nil {
+		m.Key(11)
+		m.SetBuf(p.Stops.Append(m.Buf()))
+	}
+	return m.End()
+}
+
+func (p *MetricsPlan) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			p.Series = d.Uint()
+		case 2:
+			p.Blocks = d.Uint()
+		case 3:
+			p.Summarized = d.Uint()
+		case 4:
+			p.Bytes = d.Uint()
+		case 5:
+			p.Decoded = d.Uint()
+		case 11:
+			p.Stops = &Error{}
+			p.Stops.decode(&d)
+		default:
+			p.decodeLimit(&d, key)
+		}
+	}
+	return d.End()
+}
+
+func (p *MetricsPlan) decodeLimit(d *Decoder, key uint64) {
+	switch key {
+	case 6:
+		p.Limits.Series = d.Uint()
+	case 7:
+		p.Limits.Blocks = d.Uint()
+	case 8:
+		p.Limits.PayloadBytes = d.Uint()
+	case 9:
+		p.Limits.DecodedSamples = d.Uint()
+	case 10:
+		p.Limits.OutputSamples = d.Uint()
+	}
 }
 
 // MetricsDropped answers drop: whether the series was there, and the groups

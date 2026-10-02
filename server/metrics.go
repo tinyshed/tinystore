@@ -17,6 +17,7 @@ func (s *Server) metricsMethods(methods map[wire.Method]handler) {
 	methods[wire.MetricsRead] = metricsRead
 	methods[wire.MetricsAggregate] = metricsAggregate
 	methods[wire.MetricsDrop] = metricsDrop
+	methods[wire.MetricsExplain] = metricsExplain
 }
 
 // metricsIngest stores its series' samples, all or none
@@ -103,20 +104,9 @@ func metricsAggregate(c *call) error {
 	if err != nil {
 		return err
 	}
-	if ask.Width > math.MaxInt64/int64(time.Millisecond) {
-		return fmt.Errorf("%w: metrics: buckets %d milliseconds wide, past what a duration holds",
-			tinystore.ErrInvalid, ask.Width)
-	}
-	selected, err := rangeOf(ask)
+	request, err := aggregateOf(ask)
 	if err != nil {
 		return err
-	}
-	if ask.Op != "" && !slices.Contains(aggregateOps, metrics.AggregateOp(ask.Op)) {
-		return unknownKind("an aggregate operation", "op", ask.Op)
-	}
-	request := metrics.AggregateRequest{
-		Range: selected, Width: time.Duration(ask.Width) * time.Millisecond, Op: metrics.AggregateOp(ask.Op),
-		By: ask.By, Without: ask.Without,
 	}
 	results, err := store.Aggregate(c.ctx, request)
 	if err != nil {
@@ -204,6 +194,74 @@ func rangeOf(sent wire.MetricsRange) (metrics.Range, error) {
 			OutputSamples: limitOf(sent.Limits.OutputSamples),
 		},
 	}, nil
+}
+
+// aggregateOf is an aggregate as the engine takes it: its range, its buckets'
+// width, an operation this server has, and its grouping
+func aggregateOf(ask wire.MetricsRange) (metrics.AggregateRequest, error) {
+	if ask.Width > math.MaxInt64/int64(time.Millisecond) {
+		return metrics.AggregateRequest{}, fmt.Errorf("%w: metrics: buckets %d milliseconds wide, past what a "+
+			"duration holds", tinystore.ErrInvalid, ask.Width)
+	}
+	selected, err := rangeOf(ask)
+	if err != nil {
+		return metrics.AggregateRequest{}, err
+	}
+	if ask.Op != "" && !slices.Contains(aggregateOps, metrics.AggregateOp(ask.Op)) {
+		return metrics.AggregateRequest{}, unknownKind("an aggregate operation", "op", ask.Op)
+	}
+	return metrics.AggregateRequest{
+		Range: selected, Width: time.Duration(ask.Width) * time.Millisecond, Op: metrics.AggregateOp(ask.Op),
+		By: ask.By, Without: ask.Without,
+	}, nil
+}
+
+// metricsExplain answers what a read, or an aggregate when the range names an
+// operation, would spend, without a payload fetched or a sample decoded
+func metricsExplain(c *call) error {
+	var ask wire.MetricsRange
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	store, err := c.session.server.metricsStore(c.ctx)
+	if err != nil {
+		return err
+	}
+	var plan metrics.Plan
+	if ask.Op == "" {
+		selected, rangeErr := rangeOf(ask)
+		if rangeErr != nil {
+			return rangeErr
+		}
+		plan, err = store.ExplainRead(c.ctx, selected)
+	} else {
+		request, requestErr := aggregateOf(ask)
+		if requestErr != nil {
+			return requestErr
+		}
+		plan, err = store.ExplainAggregate(c.ctx, request)
+	}
+	if err != nil {
+		return err
+	}
+	sent := wire.MetricsPlan{
+		Series: counted(plan.Series), Blocks: counted(plan.Blocks), Summarized: counted(plan.Summarized),
+		Bytes: counted(plan.PayloadBytes), Decoded: counted(plan.DecodedSamples),
+		Limits: wire.MetricsLimits{
+			Series: counted(plan.Limits.Series), Blocks: counted(plan.Limits.Blocks),
+			PayloadBytes: counted(plan.Limits.PayloadBytes), DecodedSamples: counted(plan.Limits.DecodedSamples),
+			OutputSamples: counted(plan.Limits.OutputSamples),
+		},
+	}
+	if plan.Stops != nil {
+		sent.Stops = failure(c.ctx, plan.Stops)
+	}
+	return respond(c, sent)
+}
+
+// counted is a count as the wire carries it, never below zero
+func counted(n int) uint64 {
+	return uint64(max(n, 0))
 }
 
 // the operations an aggregate may ask for; another is a newer client's

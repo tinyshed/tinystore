@@ -4,7 +4,7 @@
 // every flush.
 
 import { download, type Link } from './connection.ts'
-import { InvalidError } from './errors.ts'
+import { errorOf, InvalidError, type LimitError } from './errors.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { byCodePoint } from './wire/codec.ts'
 import {
@@ -12,6 +12,7 @@ import {
 	MetricsBuckets,
 	MetricsDropped,
 	MetricsLabels,
+	MetricsPlan,
 	MetricsRange,
 	MetricsSeries,
 	methods,
@@ -83,6 +84,19 @@ export function noneOf(...values: string[]): Condition {
 /** The label's value begins with the prefix. */
 export function prefix(start: string): Condition {
 	return new Condition('prefix', [start])
+}
+
+/** What a read or an aggregate would spend, each use beside its limit. */
+export interface Plan {
+	series: number
+	blocks: number
+	/** the blocks an aggregate answers from their summaries, decoding none of their samples */
+	summarized: number
+	bytes: number
+	decoded: number
+	limits: { series: number; blocks: number; bytes: number; decoded: number; answered: number }
+	/** the limit the call would reach, which it would end with; undefined when it fits */
+	stops: LimitError | undefined
 }
 
 export interface Range {
@@ -364,6 +378,48 @@ export class Metrics {
 		return joined(pieces, (into, piece) => {
 			into.buckets.push(...piece.buckets)
 		})
+	}
+
+	/**
+	 * What read(range), or aggregate(range) when it names an op, would spend
+	 * of its limits, found without a payload fetched or a sample decoded: the
+	 * series, the blocks, those an aggregate answers from their summaries, the
+	 * bytes and the samples, beside the limits; stops is the LimitError the
+	 * call would end with, undefined when it fits.
+	 */
+	async explain(
+		range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without'>>,
+	): Promise<Plan> {
+		const extra =
+			range.op === undefined
+				? {}
+				: { width: ms(range.width ?? 0), op: range.op, by: range.by, without: range.without }
+		const body = await this.#link.run('read', connection =>
+			connection.session.call(
+				methods['metrics.explain'],
+				MetricsRange.encode(rangeOf(range, extra)),
+			),
+		)
+		const p = MetricsPlan.decode(body)
+		const stops = p.stops === undefined || p.stops === null ? undefined : p.stops
+		return {
+			series: Number(p.series ?? 0),
+			blocks: Number(p.blocks ?? 0),
+			summarized: Number(p.summarized ?? 0),
+			bytes: Number(p.bytes ?? 0),
+			decoded: Number(p.decoded ?? 0),
+			limits: {
+				series: Number(p.limitSeries ?? 0),
+				blocks: Number(p.limitBlocks ?? 0),
+				bytes: Number(p.limitBytes ?? 0),
+				decoded: Number(p.limitDecoded ?? 0),
+				answered: Number(p.limitAnswered ?? 0),
+			},
+			stops:
+				stops === undefined
+					? undefined
+					: (errorOf(stops.code ?? 'limit', stops.message ?? '', stops.what ?? {}) as LimitError),
+		}
 	}
 
 	/** Removes one series and everything it holds, whether it still reads or not. */
