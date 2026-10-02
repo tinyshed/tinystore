@@ -99,6 +99,18 @@ Release packages will carry the `tinystore` binary for Linux, macOS and Windows,
 and the image serves a store to remote clients.
 [examples/notes](examples/notes/main.go) is a program using every engine.
 
+## Looking at a store
+
+The same binary shows a person, and an AI agent, what a store holds while its
+application runs:
+
+```sh
+tinystore status ./data                            # each engine's bytes, and who serves the directory
+tinystore logs ./data -f --level warn              # the application's logs, as they arrive
+tinystore serve ./data                             # the directory's sidecar, until Ctrl+C
+claude mcp add tinystore -- tinystore mcp ./data   # logs, kv, jobs and SQL for an agent, read only
+```
+
 ## Engines
 
 | | |

@@ -331,6 +331,46 @@ func (p silentParent) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
+// serve <dir> is a person's: the directory's sidecar until Ctrl+C, never
+// idle, telling them where apps find it
+func TestServeOfADirectoryServesItUntilCtrlC(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		args []string
+		idle time.Duration
+	}{
+		{[]string{dir}, 0},
+		{[]string{"--dir", dir}, 0},
+		{[]string{dir, "--idle", "1m"}, time.Minute},
+	} {
+		asked, err := parseServe(c.args, &lockedBuffer{})
+		if err != nil || !asked.local || !asked.foreground || asked.idle != c.idle {
+			t.Fatalf("serve %q: %+v, %v", c.args, asked, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stderr := &lockedBuffer{}
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(ctx, []string{dir}, console{stdin: strings.NewReader(""), stdout: stderr, stderr: stderr})
+	}()
+	handshake(t, waitServe(t, dir, "", done))
+	cancel()
+	if err := ended(t, done); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"serving " + dir, "Ctrl+C to stop", "apps find it through",
+		filepath.Join(dir, "server", "SERVE"), "endpoint",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("serve <dir> told its person:\n%s\nwithout %q", stderr, want)
+		}
+	}
+	mustRelease(t, dir)
+}
+
 // what serve cannot do is refused before it opens anything, a file it cannot
 // read included
 func TestServeRefusesWhatItCannotServe(t *testing.T) {
@@ -342,7 +382,6 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"--stdio"},
-		{"--dir", dir},
 		{"--dir", dir, "--stdio", "--local"},
 		{"--dir", dir, "--listen", "tcp://127.0.0.1:0"},
 		{"--dir", dir, "--listen", "tcp://127.0.0.1:0", "--tokens", missing},

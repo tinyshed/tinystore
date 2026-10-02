@@ -131,6 +131,7 @@ func (s *session) handshake() error {
 	}
 
 	s.agree(hello)
+	s.server.log.Info("connected", "client", hello.Client)
 	return s.writer.Send(wire.AppendFrame(nil, wire.Header{Kind: wire.KindWelcome}, s.welcome(hello).Append(nil)))
 }
 

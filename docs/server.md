@@ -178,12 +178,6 @@ const there = await connect("tls://db.internal:7443", { token })
 
 ### SERVE: finding the directory's sidecar
 
-`tinystore status --dir <dir>` prints, as JSON, what a store's directory holds
-without opening it, so that it runs beside the server serving it: each
-engine's file and its bytes with its write-ahead log, the blobs engine's files,
-whether a `LOCK` is there, and the server `SERVE` names, its version, pid and
-endpoints, never its secret. A directory without a `LOCK` is no store's.
-
 Everything a local server publishes lives in `<dir>/server/`, which only its
 owner may enter. `SERVE` in it is a hint; the directory's `LOCK` is the
 truth.
@@ -255,6 +249,72 @@ truth.
   Python client without asyncio needs overlapped I/O too, through `_winapi` as
   `multiprocessing` does, and is built and measured with the Python SDK. No
   local endpoint takes a token: its permission is the file system's.
+
+## The command, for a person and an agent
+
+```text
+tinystore                                  the commands, by what they are for
+tinystore status ./data                    what the directory holds and who serves it; --json for a script
+tinystore logs ./data -f --level warn      the application's logs, as they arrive
+tinystore serve ./data                     the directory's sidecar until Ctrl+C, never idle
+tinystore mcp ./data                       the store's tools for an AI agent
+```
+
+- **A directory comes before the flags, after them or as `--dir`**, and is
+  the current one when none is given; `serve` alone needs one named, so that
+  no store is made wherever a person happened to stand.
+- **`status` reads the directory without opening it**, so that it runs
+  beside the server serving it: each engine's file and its bytes with its
+  write-ahead log, the blobs engine's files, whether a `LOCK` is there, and the
+  server `SERVE` names, its version, pid, endpoints and how long it has served,
+  never its secret, with whether it proves itself within a second. A
+  directory without a `LOCK` is no store's.
+- **`logs` and `mcp` read through the server serving the directory**, and
+  start its sidecar when none answers, as an SDK does: a detached
+  `serve --local --log <dir>/server/serve.log`, which leaves once idle. They
+  start one only beside a `LOCK`, so a read never makes a store of a
+  directory. The tool's `HELLO` names it `tinystore-cli/<version>`; a server
+  logs every connection's client at Info.
+- **`logs` prints the last `-n` records, oldest first**, as a logger's
+  console prints them, through `records.NewPrinter`: pretty on a terminal and
+  one JSON object a line otherwise, or with `--json`. `-f` asks every second
+  for what arrived, from ten seconds behind the newest record printed, so that
+  a record another process sent a little late is printed too, and passes over
+  what it printed, counting records by their bytes, so that two alike print
+  twice. It prints nothing older than the first record it printed, nor a
+  record more than ten seconds late, which the records engine counts as late
+  too; `Follow` would find that one, but only once it is sealed, up to an
+  hour later.
+- **`serve <dir>` is a person's**: the directory's sidecar in the foreground,
+  published in `SERVE` as `--local` publishes it, never idle unless `--idle`
+  says, its log pretty on a terminal, and first where apps find it:
+
+  ```text
+  ● serving ./data · Ctrl+C to stop
+    apps find it through   data/server/SERVE
+    endpoint               pipe:tinystore-015ef87b270a1914
+  ```
+
+- **`mcp` is the Model Context Protocol on stdin and stdout**, a JSON-RPC
+  message a line, versions 2024-11-05 to 2025-11-25, with tools and nothing
+  else. `claude mcp add tinystore -- tinystore mcp ./data` adds it to Claude
+  Code.
+
+  | tool | reads |
+  |---|---|
+  | `status` | the directory, as `status --json` prints it |
+  | `logs` | records from a level up, since a span, holding a text, of a stream; 1000 at most |
+  | `kv_get`, `kv_scan` | a bucket's keys in a branch, a counter's too, a value as JSON, text or base64 with its expiry |
+  | `jobs_get`, `jobs_scan` | where a job is, how many run before it, its progress, its error and its last run |
+  | `sql_query` | the rows of one statement, from one read snapshot |
+
+  An agent writes nothing: `sql_query` runs as a read batch, in which SQLite
+  refuses a write, no other tool calls one, and a tool reading an engine
+  whose file the store does not have is refused, since the server would make
+  the file as it opened the engine. A tool's failure is its answer marked
+  `isError`, which the agent reads, rather than a JSON-RPC error. `sql_query` reads a database the server has open, which a client
+  opened with its migrations: a sidecar the tool started itself has none
+  open until the application connects.
 
 ## What a connection may do
 
@@ -673,6 +733,7 @@ Where the slices stand, 29 September 2026:
 | records | built: `records.go`; the messages on wire.md |
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
+| the command for a person and an agent | built: `cmd/tinystore`'s `help.go`, `status.go`, `logs.go`, `mcp.go` and `sidecar.go`, which starts a sidecar as an SDK does; `server/reach`, the Go client a program that holds no store reaches its server through |
 | the JS SDK, the Python SDK | built: `sdk/js` and `sdk/python`, every vector and every engine tested through a real `tinystore serve` (`task sdk`); not yet their READMEs, examples, packages of the binary, or a measurement against the prototype |
 | the measurement against the prototype | done: [rpc-server-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
 

@@ -1,15 +1,24 @@
 // Command tinystore is TinyStore's one executable. It serves a store to other
-// processes, and its sqldb commands each find the test that checks a
-// database, run it, and print what it answered, so that the comparison and the
-// migration it writes come from the sqldb the application pinned, never from
-// this tool's own.
+// processes, shows a person what a store holds and what its application
+// logged, lets an AI agent read it over MCP, and its sqldb commands each find
+// the test that checks a database, run it, and print what it answered, so
+// that the comparison and the migration it writes come from the sqldb the
+// application pinned, never from this tool's own.
 //
+//	tinystore                                      the commands, by what they are for
+//	tinystore status [dir] [--json]                what a store's directory holds, and who serves it
+//	tinystore logs [dir] [-f] [--level warn]       the application's logs, as they arrive
+//	tinystore serve <dir>                          the directory's sidecar, until Ctrl+C
 //	tinystore serve --dir <dir> --stdio | --local | --listen <endpoint>
-//	tinystore status --dir <dir>                   what a store's directory holds, as JSON
+//	tinystore mcp [dir]                            the store's tools for an AI agent, on stdin and stdout
 //	tinystore version                              the release, the Go it was built with, the platform
 //	go tool tinystore migrate [name]               what differs; writes nothing
 //	go tool tinystore migrate [name] new <what>    write the next migration from the difference
 //	go tool tinystore schema [name]                the schema's SQL
+//
+// logs and mcp read a store through the server serving it, starting the
+// directory's sidecar when none does, as an SDK would; a directory that holds
+// no store is refused rather than made one.
 //
 // A database's name is the one sqldb.Open takes and sqldbtest.CheckSchema is
 // given; it is needed only when the module checks more than one.
@@ -34,29 +43,45 @@ import (
 // the environment variable sqldbtest.CheckSchema reads a request from
 const requestVariable = "TINYSTORE_SQLDB"
 
-const usage = `usage:
-  tinystore serve --dir <dir> ...        serve the store in dir to other processes; tinystore serve -h says how
-  tinystore migrate [name]               what differs between a schema and its migrations; writes nothing
-  tinystore migrate [name] new <what>    write the next migration from the difference
-  tinystore schema [name]                print the schema's SQL
-  tinystore status --dir <dir>           what a store's directory holds, as JSON, beside its server
-  tinystore version                      print the release, the Go it was built with and the platform`
+const usage = `usage, a name being the one sqldb.Open takes, needed when the module checks more than one:
+  go tool tinystore migrate [name]               what differs between a schema and its migrations; writes nothing
+  go tool tinystore migrate [name] new <what>    write the next migration from the difference
+  go tool tinystore schema [name]                print the schema's SQL`
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		err := serve(ctx, os.Args[2:], console{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
-		stop()
-		exit(err)
+	args := os.Args[1:]
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		exit(help(nil, os.Stdout))
 	}
-	if len(os.Args) > 1 && os.Args[1] == "status" {
-		exit(status(os.Args[2:], os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := dispatch(ctx, args)
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		err = nil // Ctrl+C, which is how a person ends logs -f
 	}
-	if len(os.Args) == 2 && os.Args[1] == "version" {
-		fmt.Printf("tinystore %s (%s %s/%s)\n", version(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
-		os.Exit(0)
+	stop()
+	exit(err)
+}
+
+// dispatch runs what the arguments name; ctx ends at Ctrl+C
+func dispatch(ctx context.Context, args []string) error {
+	switch args[0] {
+	case "help":
+		return help(args[1:], os.Stdout)
+	case "serve":
+		return serve(ctx, args[1:], console{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
+	case "status":
+		return status(ctx, args[1:], os.Stdout, os.Stderr)
+	case "logs":
+		return logs(ctx, args[1:], os.Stdout, os.Stderr)
+	case "mcp":
+		return mcp(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "version":
+		_, err := fmt.Printf("tinystore %s (%s %s/%s)\n", version(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		return err
+	case "migrate", "schema":
+		return run(context.WithoutCancel(ctx), args, os.Stdout)
 	}
-	exit(run(context.Background(), os.Args[1:], os.Stdout))
+	return fmt.Errorf("no command %q: tinystore lists them", args[0])
 }
 
 // exit ends the process as err says.

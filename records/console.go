@@ -55,6 +55,35 @@ func newEcho(settings handlerSettings) *echo {
 	return c
 }
 
+// Printer writes records as a Handler's console writes its lines: pretty for
+// a person at a terminal, its levels in colour where the terminal shows them,
+// and one JSON object a line otherwise, unless console says which. The
+// tinystore command prints a store's records with one.
+type Printer struct {
+	echo *echo // nil prints nothing
+}
+
+// NewPrinter prints to w, which is a terminal only when it is a file that is
+// one. ConsoleOff prints nothing.
+func NewPrinter(w io.Writer, console Console) *Printer {
+	if console == ConsoleOff {
+		return &Printer{}
+	}
+	c := &echo{out: w, zone: time.Local, pretty: console == ConsolePretty}
+	if file, ok := w.(*os.File); ok {
+		c.pretty = c.pretty || console == 0 && term.IsTerminal(file)
+		c.color = c.pretty && term.Colors(file)
+	}
+	return &Printer{echo: c}
+}
+
+// Print writes a record, a whole line a write.
+func (p *Printer) Print(r Record) {
+	if p.echo != nil {
+		p.echo.write(&r)
+	}
+}
+
 // write prints a record; a console that refuses a line loses that line, never
 // the record the handler queues
 func (c *echo) write(r *Record) {

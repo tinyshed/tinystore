@@ -29,7 +29,7 @@ design document:
 | `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
-| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
+| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
 | `sdk/js`, `sdk/python` | the Bun and Python clients, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md](docs/sdk.md), [server.md](docs/server.md) |
 
 Where the building differs from the design:
@@ -78,7 +78,8 @@ Do not describe unbuilt behaviour as though it works.
 | `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
-| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `status`, and `migrate` and `schema` for sqldb |
+| `server/reach/`      | the Go client of a directory's server, found through `SERVE` and proven, for the tool |
+| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `status`, `logs`, `mcp`, and `migrate` and `schema` for sqldb |
 | `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Python; `sdk/go.mod` keeps them out of the Go module |
 | `docs/`              | the design, the format, the engines and the wire                              |
 | `examples/`          | programs using the public API, built and tested with the module               |
@@ -759,7 +760,13 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a private child leaves when told, though its parent stays | `TestAPrivateChildLeavesWhenToldThoughItsParentStays`, `TestAPrivateChildServesItsParent` |
 | what serve cannot serve opens nothing                  | `TestServeRefusesWhatItCannotServe`, a file it cannot read included             |
 | the tool requires only the store and the server        | `TestTheToolRequiresOnlyTheStoreAndTheServer`                                   |
-| status reads a directory beside its server, never printing SERVE's secret | `TestStatusReadsADirectoryAndKeepsTheSecret` in `cmd/tinystore`  |
+| status reads a directory beside its server, for a person and with `--json`, never printing SERVE's secret | `TestStatusReadsADirectoryAndKeepsTheSecret` in `cmd/tinystore`  |
+| the command alone lists its commands, a directory before or after the flags | `TestHelpListsTheCommandsAndIsNoError`, `TestADirectoryComesBeforeOrAfterTheFlags` in `cmd/tinystore` |
+| `serve <dir>` serves the directory until Ctrl+C, never idle | `TestServeOfADirectoryServesItUntilCtrlC` |
+| a read through the tool makes no store of a directory | `TestLogsOfADirectoryWithoutAStoreMakeNone` |
+| `logs -f` prints a record sent a little late, each once and two alike twice | `TestLogsPrintTheLastRecordsAndFollowTheNext` |
+| the tool prints a record as a logger's console does | `TestAPrinterWritesARecordAsTheConsoleDoes` in `records` |
+| an agent over MCP writes nothing, nor makes an engine's file | `TestAnAgentReadsTheStoreOverMCP`, `TestAnAgentMakesNoEnginesFile` |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

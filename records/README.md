@@ -82,7 +82,8 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   message is not searched. `Level(l)` keeps the lines from `l` up.
 - `records.Handler(stream)`, without a store, writes the console alone, for a
   program that wants the logger and not the records; `logs.Handler(stream)`
-  in its place keeps every line too.
+  in its place keeps every line too. `NewPrinter(w, console)` prints records
+  read back as that console prints its lines, which `tinystore logs` does.
 - `Lines(stream)` is a writer for another program's output, a child process's
   stdout or a followed file, and never blocks as the handler never does. Each
   line becomes a record at the time it arrived; the lines of a stack trace, a

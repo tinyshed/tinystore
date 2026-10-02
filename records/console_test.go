@@ -146,3 +146,27 @@ func decodeHex(t *testing.T, text string) []byte {
 	}
 	return decoded
 }
+
+// a Printer writes a record as a Handler's console writes its line: one JSON
+// object a line, or the pretty line, and nothing when its console is off
+func TestAPrinterWritesARecordAsTheConsoleDoes(t *testing.T) {
+	level, body := slog.LevelWarn, "slow request"
+	record := Record{
+		At: time.Date(2026, 10, 2, 11, 2, 11, 123_000_000, time.UTC), Stream: "api", Name: logName,
+		Level: &level, Body: &body, Attrs: []Field{{Key: "ms", Value: "1200"}},
+	}
+	for _, c := range []struct {
+		console Console
+		want    []byte
+	}{
+		{ConsoleJSON, appendJSONLine(nil, &record)},
+		{ConsolePretty, appendPretty(nil, &record, false, time.Local)},
+		{ConsoleOff, nil},
+	} {
+		var printed bytes.Buffer
+		NewPrinter(&printed, c.console).Print(record)
+		if !bytes.Equal(printed.Bytes(), c.want) {
+			t.Fatalf("console %d printed %q, want %q", c.console, printed.Bytes(), c.want)
+		}
+	}
+}

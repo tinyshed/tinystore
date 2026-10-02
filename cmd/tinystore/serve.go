@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/records"
 	"github.com/tinyshed/tinystore/server"
 )
 
 const serveUsage = `usage:
+  tinystore serve <dir>                               the directory's sidecar until Ctrl+C, found through SERVE
   tinystore serve --dir <dir> --stdio                 a private child: frames on stdin and stdout
   tinystore serve --dir <dir> --local [--idle 30s]    the directory's shared sidecar, published in <dir>/server/SERVE
   tinystore serve --dir <dir> --listen tls://<host:port> --tls-cert <file> --tls-key <file> --tokens <file>
@@ -50,6 +52,7 @@ type console struct {
 type serveFlags struct {
 	dir, listen, tlsCert, tlsKey, tokens, log string
 	stdio, local                              bool
+	foreground                                bool // serve <dir>: a person's, until Ctrl+C, rather than a client's
 	idle                                      time.Duration
 	memory                                    int64
 }
@@ -69,16 +72,25 @@ func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
 	flags.StringVar(&asked.tokens, "tokens", "", "")
 	flags.Int64Var(&asked.memory, "memory", 0, "")
 	flags.StringVar(&asked.log, "log", "", "")
-	if err := flags.Parse(args); err != nil {
+	dir, err := parseWithDir(flags, args, &asked.dir)
+	if err != nil {
 		return serveFlags{}, err
 	}
+	if dir == "." && asked.dir == "" {
+		return serveFlags{}, errors.New(serveUsage) // a store made in whatever directory a person stood in
+	}
+	asked.dir = dir
 	if asked.listen != "" && !given(flags, "memory") {
 		asked.memory = remoteMemory
 	}
+	if !asked.stdio && !asked.local && asked.listen == "" {
+		asked.local, asked.foreground = true, true
+		if !given(flags, "idle") {
+			asked.idle = 0
+		}
+	}
 	overTLS := strings.HasPrefix(asked.listen, "tls://")
 	switch {
-	case asked.dir == "" || flags.NArg() > 0:
-		return serveFlags{}, errors.New(serveUsage)
 	case asked.stdio == (asked.local || asked.listen != ""):
 		return serveFlags{}, fmt.Errorf("serve --stdio alone, or --local, --listen or both\n%s", serveUsage)
 	case asked.listen != "" && asked.tokens == "":
@@ -104,6 +116,7 @@ type serving struct {
 	serveFlags
 	options server.Options
 	tls     *tls.Config // a tls:// listener's certificate
+	stderr  io.Writer   // where a foreground serve tells its person where apps find it
 }
 
 func readServing(asked serveFlags) (serving, error) {
@@ -142,6 +155,9 @@ func serve(ctx context.Context, args []string, streams console) error {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
+	if file, ok := logs.(*os.File); ok && asked.foreground && isTerminal(file) {
+		logger = slog.New(records.Handler("serve", records.ConsolePretty))
+	}
 	err = serveLogged(ctx, asked, streams, logger)
 	if err != nil && asked.log != "" {
 		logger.Error("serve ended", "err", err)
@@ -192,6 +208,7 @@ func serveLogged(ctx context.Context, asked serveFlags, streams console, logger 
 	if asked.stdio {
 		err = servePrivate(ctx, srv, streams)
 	} else {
+		read.stderr = streams.stderr
 		err = serveShared(ctx, srv, read, logger)
 	}
 	return errors.Join(err, closeServer(closing, srv), store.Close(closing))
@@ -273,8 +290,30 @@ func serveShared(ctx context.Context, srv *server.Server, read serving, logger *
 		endpoints = append(endpoints, l.Addr())
 		go func() { failed <- srv.Serve(context.WithoutCancel(ctx), l) }()
 	}
-	logger.Info("serving", "endpoints", strings.Join(endpoints, " "), "pid", os.Getpid())
+	if read.foreground {
+		showServing(read.stderr, read.dir, endpoints)
+	} else {
+		logger.Info("serving", "endpoints", strings.Join(endpoints, " "), "pid", os.Getpid())
+	}
 	return waitShared(ctx, srv, read.serveFlags, failed)
+}
+
+// showServing tells the person who started serve where apps find it:
+//
+//	● serving ./data · Ctrl+C to stop
+//	  apps find it through   ./data/server/SERVE
+//	  endpoint               pipe:tinystore-015ef87b270a1914
+func showServing(stderr io.Writer, dir string, endpoints []string) {
+	p := paint(false)
+	if file, ok := stderr.(*os.File); ok {
+		p = paint(colors(file))
+	}
+	text := fmt.Sprintf("%s serving %s %s\n  %-22s %s\n", p.in(green, "●"), p.in(bold, dir),
+		p.in(dim, "· Ctrl+C to stop"), "apps find it through", filepath.Join(dir, "server", "SERVE"))
+	for _, endpoint := range endpoints {
+		text += fmt.Sprintf("  %-22s %s\n", "endpoint", endpoint)
+	}
+	_, _ = io.WriteString(stderr, text+"\n") //nolint:errcheck // a terminal that refuses has nobody to tell
 }
 
 func listenRemote(ctx context.Context, read serving) (server.Listener, error) {

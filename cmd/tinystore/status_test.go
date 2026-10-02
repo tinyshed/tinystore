@@ -10,7 +10,8 @@ import (
 )
 
 // status reads a directory as a store left it, its server beside it, and
-// prints each engine's bytes and the server SERVE names, never its secret.
+// prints each engine's bytes and the server SERVE names, never its secret: for
+// a person, and with --json for a script.
 func TestStatusReadsADirectoryAndKeepsTheSecret(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
@@ -34,7 +35,20 @@ func TestStatusReadsADirectoryAndKeepsTheSecret(t *testing.T) {
 	}
 
 	var out, stderr bytes.Buffer
-	if err := status([]string{"--dir", dir}, &out, &stderr); err != nil {
+	if err := status(t.Context(), []string{dir}, &out, &stderr); err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	for _, want := range []string{"SERVE names pid 42, which does not answer", "kv ", "sql/app", "blobs", "total"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "the-secret-of-this-directory") {
+		t.Fatalf("status printed SERVE's secret: %s", out.String())
+	}
+
+	out.Reset()
+	if err := status(t.Context(), []string{"--dir", dir, "--json"}, &out, &stderr); err != nil {
 		t.Fatal(err, stderr.String())
 	}
 	if strings.Contains(out.String(), "the-secret-of-this-directory") {
@@ -51,10 +65,10 @@ func TestStatusReadsADirectoryAndKeepsTheSecret(t *testing.T) {
 		t.Fatalf("status: %s", out.String())
 	}
 
-	if err := status(nil, &out, &stderr); err == nil {
-		t.Error("status without a directory ran")
+	if err := status(t.Context(), []string{t.TempDir()}, &out, &stderr); err == nil {
+		t.Error("status of an empty directory ran")
 	}
-	if err := status([]string{"--dir", t.TempDir()}, &out, &stderr); err == nil {
+	if err := status(t.Context(), []string{"--dir", t.TempDir()}, &out, &stderr); err == nil {
 		t.Error("status of a directory no store made ran")
 	}
 }
