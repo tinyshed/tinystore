@@ -11,11 +11,12 @@ import (
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Append writes every record or none, in one transaction, and a Read sees them
+// Append writes every record or none, in one transaction, and a Scan sees them
 // as soon as it returns. A record the format cannot keep, or whose time is past
 // retention or more than ClockSkew ahead of the store's clock, is a
-// *RecordError naming it.
+// *RecordError naming it. A record of no trace takes ctx's, from WithTrace.
 func (s *Store) Append(ctx context.Context, batch ...Record) error {
+	batch = traced(ctx, batch)
 	if err := checkBatch(batch, s.window(s.now())); err != nil {
 		return err
 	}

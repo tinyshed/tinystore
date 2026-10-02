@@ -17,7 +17,8 @@ import (
 // A line becomes a record named "log" whose body is the message. The
 // attributes of logger.With are its context, who is speaking, and the call's
 // are its attributes; a group's keys are written group.key, and a value is
-// spelled as slog.JSONHandler spells it, an error as its message.
+// spelled as slog.JSONHandler spells it, an error as its message. A line
+// logged with a context of WithTrace takes its trace and span.
 func (s *Store) Handler(stream string) slog.Handler {
 	return &handler{store: s, stream: stream}
 }
@@ -34,8 +35,9 @@ func (h *handler) Enabled(context.Context, slog.Level) bool {
 	return !h.own
 }
 
-func (h *handler) Handle(_ context.Context, line slog.Record) error {
+func (h *handler) Handle(ctx context.Context, line slog.Record) error {
 	record, own := h.record(line)
+	record.TraceID, record.SpanID = TraceOf(ctx)
 	if !h.own && !own {
 		h.store.enqueue(record)
 	}

@@ -94,6 +94,8 @@ its values arguments and never SQL. A value comes back as SQLite keeps it.
 
 ```python
 logging.getLogger().addHandler(store.records.handler("api"))  # never waits for the server
+with tinystore.trace(trace_id, span_id):  # what is logged inside carries the trace
+    logging.info("charged")
 
 page = await store.records.scan(since="1h", min_level="warn", limit=100)
 resets = await store.records.scan(since="1h", search="connection reset")  # case ignored

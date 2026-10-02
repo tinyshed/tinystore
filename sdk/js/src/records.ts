@@ -8,6 +8,7 @@ import type { Page } from './handles.ts'
 import { type Logger, type LoggerOptions, newLogger } from './logger.ts'
 import type { Stream } from './session.ts'
 import { type Duration, ms } from './time.ts'
+import { currentTrace } from './trace.ts'
 import {
 	Empty,
 	methods,
@@ -48,9 +49,9 @@ export interface RecordInput {
 	/** absent is none, which an empty body is not */
 	body?: string | Uint8Array
 	/** sixteen bytes, or their 32 hex digits */
-	traceId?: Uint8Array | string
+	traceId?: Uint8Array | string | undefined
 	/** eight bytes, or their 16 hex digits */
-	spanId?: Uint8Array | string
+	spanId?: Uint8Array | string | undefined
 	/** who produced it */
 	context?: Fields
 	/** what happened */
@@ -264,7 +265,7 @@ export class Records {
 	 * server every second, as Go's slog handler's and Python's logging.Handler's do.
 	 */
 	logger(stream: string, options?: LoggerOptions): Logger {
-		const logger = newLogger(records => this.append(records), stream, options)
+		const logger = newLogger(records => this.#write(records), stream, options)
 		this.#loggers.push(logger)
 		return logger
 	}
@@ -276,11 +277,27 @@ export class Records {
 
 	/**
 	 * Appends records in one transaction, all or none; a refused one names
-	 * itself as `call`, with its stream and name. A read sees them at once.
+	 * itself as `call`, with its stream and name. A read sees them at once. A
+	 * record of no trace of its own takes the one withTrace runs the call in.
 	 */
 	async append(records: RecordInput | readonly RecordInput[]): Promise<void> {
+		const carried = currentTrace()
+		const list = Array.isArray(records) ? records : [records as RecordInput]
+		return this.#write(
+			carried === undefined
+				? list
+				: list.map(r =>
+						r.traceId === undefined
+							? { ...r, traceId: carried.traceId, spanId: carried.spanId }
+							: r,
+					),
+		)
+	}
+
+	/** Appends records as they are: a logger's, whose traces were taken as each line was logged. */
+	async #write(records: readonly RecordInput[]): Promise<void> {
 		const now = BigInt(Date.now()) * nsPerMs
-		const batch = (Array.isArray(records) ? records : [records as RecordInput]).map(r => ({
+		const batch = records.map(r => ({
 			at: r.at === undefined ? now : nanos(r.at),
 			stream: r.stream,
 			name: r.name,

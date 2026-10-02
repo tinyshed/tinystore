@@ -32,7 +32,7 @@ from .errors import (
 from .jobs import ClaimedJob, Enqueue, Job, JobEntry, Queue, Repeat, cron, daily, every
 from .kv import Batch, Bucket, Counters, Entry
 from .metrics import Aggregate, Condition, Series, none_of, one_of, prefix
-from .records import Cursor, Record
+from .records import Cursor, Record, trace
 from .sql import Database, Done
 from .store import Store, connect, open
 
@@ -86,4 +86,5 @@ __all__ = [
     "one_of",
     "open",
     "prefix",
+    "trace",
 ]

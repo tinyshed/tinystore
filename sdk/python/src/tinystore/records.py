@@ -13,6 +13,8 @@ import re
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +37,7 @@ from ._wire.messages import (
 from .errors import InvalidError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Mapping, Sequence
     from datetime import datetime
 
     from ._session import Stream
@@ -109,6 +111,29 @@ def _record(r: dict[str, Any]) -> Record:
     )
 
 
+_carried: ContextVar[tuple[bytes, bytes | None] | None] = ContextVar("tinystore_trace", default=None)
+
+
+@contextmanager
+def trace(trace_id: bytes | str, span_id: bytes | str | None = None) -> Generator[None]:
+    """Runs a block in a trace, as Go's records.WithTrace carries one in a context.
+
+    A handler's lines, and records appended without a trace_id of their own,
+    inside the block and in the tasks it starts, take its trace and span::
+
+        with tinystore.trace(trace_id, span_id):
+            log.info("charged")  # a record of that trace and span
+    """
+    carried = _id(trace_id, 16, "trace")
+    if carried is None:
+        raise InvalidError("a trace of no id")
+    token = _carried.set((carried, _id(span_id, 8, "span")))
+    try:
+        yield
+    finally:
+        _carried.reset(token)
+
+
 _CURSOR = re.compile(r"(-?\d*):(-?\d*)")
 
 
@@ -160,7 +185,18 @@ class Records:
 
         A record is a mapping of at (a datetime or unix nanoseconds, now when
         absent), stream, name, level, body, trace_id, span_id, context, attrs.
+        A record of no trace_id takes the trace the call runs in, from trace().
         """
+        carried = _carried.get()
+        if carried is not None:
+            records = tuple(
+                {**r, "trace_id": carried[0], "span_id": carried[1]} if r.get("trace_id") is None else r
+                for r in records
+            )
+        await self._write(records)
+
+    async def _write(self, records: Iterable[Mapping[str, Any]]) -> None:
+        """Appends records as they are: a handler's, whose traces were taken as each line was logged."""
         now = time.time_ns()
         batch = [
             {
@@ -293,7 +329,7 @@ class Records:
 
     def handler(self, stream: str, level: int = logging.NOTSET, *, buffer: int = 1024) -> Handler:
         """A logging.Handler whose records reach the stream once a second, never making the logger wait."""
-        handler = Handler(self, stream, level, buffer)
+        handler = Handler(self._write, stream, level, buffer)
         self._handlers.append(handler)
         return handler
 
@@ -375,9 +411,11 @@ class Lines:
 class Handler(logging.Handler):
     """A logging.Handler: emit only queues, and a task on the store's loop appends once a second."""
 
-    def __init__(self, records: Records, stream: str, level: int, most: int) -> None:
+    def __init__(
+        self, write: Callable[[Iterable[Mapping[str, Any]]], Awaitable[None]], stream: str, level: int, most: int
+    ) -> None:
         super().__init__(level)
-        self._records, self._stream, self._most = records, stream, most
+        self._write, self._stream, self._most = write, stream, most
         self._queue: deque[dict[str, Any]] = deque()
         self._lock = threading.Lock()
         self._loop = asyncio.get_running_loop()
@@ -390,7 +428,7 @@ class Handler(logging.Handler):
             attrs["error"] = (
                 self.formatter.formatException(record.exc_info) if self.formatter else str(record.exc_info[1])
             )
-        entry = {
+        entry: dict[str, Any] = {
             "at": int(record.created * 1e9),
             "stream": self._stream,
             "name": "log",
@@ -399,6 +437,9 @@ class Handler(logging.Handler):
             "context": {"logger": record.name},
             "attrs": attrs,
         }
+        carried = _carried.get()
+        if carried is not None:
+            entry["trace_id"], entry["span_id"] = carried
         with self._lock:
             if len(self._queue) >= self._most:
                 self.dropped += 1
@@ -416,7 +457,7 @@ class Handler(logging.Handler):
             self._queue.clear()
         if batch:
             try:
-                await self._records.append(*batch)
+                await self._write(batch)
             except Exception:
                 self.dropped += len(batch)
 

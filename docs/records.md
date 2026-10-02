@@ -37,6 +37,11 @@ for record, err := range logs.All(ctx, records.Query{Since: time.Hour}) { … } 
 resets, err := logs.Scan(ctx, records.Query{Since: time.Hour, Search: "connection reset"})
 ```
 
+A context of `WithTrace` carries a trace and a span: a line logged with it
+through the handler, `logger.InfoContext(ctx, …)`, and a record appended with
+it that names no trace of its own take both. Nothing depends on a tracing
+library: OpenTelemetry's ids are the same bytes.
+
 A search finds a record whose body, or name, holds its text, the case
 ignored. Nothing indexes the text yet: a search reads every record the rest of
 the query leaves, block by block within the range, so over much text it ends a

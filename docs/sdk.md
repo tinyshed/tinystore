@@ -94,6 +94,7 @@ labels follow its Prometheus client: Go's `With(pairs...)`, Bun's
 
 ```go
 logger := slog.New(logs.Handler("api"))               // never waits for the file
+logger.InfoContext(records.WithTrace(ctx, trace, span), "charged") // a record of that trace
 page, err := logs.Scan(ctx, records.Query{Since: time.Hour, MinLevel: &warn, Limit: 100})
 resets, err := logs.Scan(ctx, records.Query{Since: time.Hour, Search: "connection reset"})
 next, err := logs.Scan(ctx, page.Next)                // while page.More
@@ -102,6 +103,7 @@ for record, err := range logs.All(ctx, records.Query{Since: 24 * time.Hour, Trac
 
 ```ts
 const log = store.records.logger('api')               // never waits for the server
+await withTrace({ traceId, spanId }, async () => log.info('charged'))   // a record of that trace
 log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })
 const page = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100 })
@@ -112,6 +114,8 @@ for await (const record of store.records.all({ since: '24h', traceId })) { … }
 
 ```python
 logging.getLogger().addHandler(store.records.handler("api"))   # never waits for the server
+with tinystore.trace(trace_id, span_id):                       # what is logged inside takes the trace
+    logging.info("charged")
 page = await store.records.scan(since="1h", min_level="warn", limit=100)
 resets = await store.records.scan(since="1h", search="connection reset")
 more = await store.records.scan(since="1h", min_level="warn", limit=100, after=page.next)
@@ -173,6 +177,11 @@ Built after it:
 - **A limit says which**: `LimitError` names the bound, what the call would
   have taken of it and the bound, `limit`, `wanted` and `bound` in both SDKs,
   `Name`, `Wanted` and `Bound` in Go.
+- **Trace correlation**: a line logged, and a record appended without a trace
+  of its own, take the trace the caller runs in: `records.WithTrace(ctx, …)`
+  in Go, `withTrace({ traceId, spanId }, fn)` in Bun over AsyncLocalStorage,
+  `with tinystore.trace(trace_id, span_id):` in Python over contextvars. No
+  dependency on OpenTelemetry, whose ids are the same bytes.
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.
@@ -185,8 +194,6 @@ SDKs in one change):
   A client newer than its server is told already: a field or a method the
   server does not know is `UnimplementedError`, naming the field and the
   server's version (`server.md` "Versions").
-- **Trace correlation**: a record taking its trace and span from the caller's
-  context, without a dependency on OpenTelemetry.
 - **Cancellation on every Bun call**, through an `AbortSignal` option.
 
 Declined:

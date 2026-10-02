@@ -69,4 +69,5 @@ export type {
 } from './sql.ts'
 export { type ConnectOptions, connect, type OpenOptions, open, Store } from './store.ts'
 export type { Duration, Time } from './time.ts'
+export { type Trace, withTrace } from './trace.ts'
 export type { Key } from './wire/codec.ts'

@@ -89,6 +89,7 @@ never SQL.
 const log = store.records.logger('api')                  // never waits for the server
 log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })
+await withTrace({ traceId, spanId }, async () => log.info('charged')) // the record carries the trace
 
 const page = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100 })
 const resets = await store.records.scan({ since: '1h', search: 'connection reset' }) // case ignored

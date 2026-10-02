@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -262,3 +263,20 @@ async def test_a_limit_says_which_it_is_what_the_read_wanted_and_the_bound(store
         await store.metrics.read(name="bounded", since="1m", limits={"decoded": 1})
     assert (refused.value.limit, refused.value.bound) == ("decoded samples", 1)
     assert refused.value.wanted is not None and refused.value.wanted > 1
+
+
+async def test_lines_and_appended_records_take_the_trace_they_were_made_in(store: tinystore.Store) -> None:
+    trace_id = "0102030405060708090a0b0c0d0e0f10"
+    log = logging.getLogger("traced")
+    handler = store.records.handler("traced")
+    log.addHandler(handler)
+    try:
+        with tinystore.trace(trace_id, "0102030405060708"):
+            log.warning("charged")
+            await store.records.append({"stream": "traced", "name": "paid"})
+        log.warning("outside")
+        await handler.flush_now()
+    finally:
+        log.removeHandler(handler)
+    page = await store.records.scan(streams=["traced"], trace_id=trace_id)
+    assert sorted(str(r.body) if r.name == "log" else r.name for r in page.items) == ["charged", "paid"]

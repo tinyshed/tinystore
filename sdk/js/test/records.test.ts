@@ -15,6 +15,7 @@ import {
 	prefix,
 	type Store,
 	TooOldError,
+	withTrace,
 } from '../src/index.ts'
 
 let dir: string
@@ -175,6 +176,24 @@ describe('logger', () => {
 		expect(log.dropped).toBe(1)
 		const { items } = await store.records.scan({ streams: ['quiet'] })
 		expect(items.map(r => r.body)).toEqual(['one', 'two', 'three'])
+	})
+})
+
+describe('trace', () => {
+	test("a logger's lines and appended records take the trace they were made in", async () => {
+		const traceId = '0102030405060708090a0b0c0d0e0f10'
+		const log = store.records.logger('traced')
+		await withTrace({ traceId, spanId: '0102030405060708' }, async () => {
+			log.info('charged')
+			await store.records.append({ stream: 'traced', name: 'paid' })
+		})
+		log.info('outside')
+		await log.flush()
+		const found = await store.records.scan({ streams: ['traced'], traceId })
+		expect(found.items.map(r => (r.name === 'log' ? r.body : r.name)).sort()).toEqual([
+			'charged',
+			'paid',
+		])
 	})
 })
 

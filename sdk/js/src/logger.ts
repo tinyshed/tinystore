@@ -5,6 +5,7 @@
 
 import { InvalidError } from './errors.ts'
 import type { Fields, Level, RecordInput } from './records.ts'
+import { currentTrace } from './trace.ts'
 
 export interface LoggerOptions {
 	/** the lines held between writes; past it a line is dropped and counted: 1024 */
@@ -171,7 +172,12 @@ export class Logger {
 			shared.dropped++
 			return
 		}
-		shared.waiting.push({ at: new Date(), ...record })
+		const carried = record.traceId === undefined ? currentTrace() : undefined
+		shared.waiting.push(
+			carried === undefined
+				? { at: new Date(), ...record }
+				: { at: new Date(), ...record, traceId: carried.traceId, spanId: carried.spanId },
+		)
 		if (shared.timer === undefined) {
 			shared.timer = setInterval(() => void this.flush(), flushEvery)
 			shared.timer.unref?.()
