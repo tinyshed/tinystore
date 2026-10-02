@@ -101,6 +101,7 @@ export class Store implements AsyncDisposable {
 			await this.metrics.flush().catch(() => {})
 		}
 		await this.records.stop()
+		this.kv.stop()
 		await this.#link.close()
 	}
 

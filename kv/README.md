@@ -23,6 +23,15 @@ userID, found, err := codes.Take(ctx, digest(code)) // read and burn
 claim, first, err := seen.SetEntryIfAbsent(ctx, event.ID, struct{}{}, kv.TTL(10*time.Minute))
 err = seen.Set(ctx, event.ID, struct{}{}, kv.IfVersion(claim.Version), kv.TTL(7*24*time.Hour))
 n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and from 1 again fifteen minutes on
+
+settings, err := kv.OpenConfig[Settings](ctx, state, "app",
+	kv.Defaults(Settings{Port: 8080}), kv.Defaults(fromYAML), kv.FromEnv("APP", ".env"))
+port := settings.Get().Port                                            // from memory
+err = settings.Update(ctx, func(s *Settings) { s.Limits.RPS = 200 }) // kept; every handle sees it at once
+for s := range settings.Watch(ctx) { server.SetRate(s.Limits.RPS) }
+
+limit, err := kv.OpenLimiter(ctx, state, "api", kv.Rate(100, time.Second), kv.Burst(20))
+allowed, err := limit.Of(tenant).Allow(ctx, userID) // allowed.OK, allowed.Left, allowed.RetryAfter
 ```
 
 [example_test.go](example_test.go) runs the five cases of
@@ -131,6 +140,47 @@ n, err := attempts.Of("ip").Add(ctx, clientIP, 1) // in memory: 1, 2, 3…, and 
   finds the store's sentinel in it. A bucket name is `[a-z0-9][a-z0-9_-]{0,63}`
   and keeps its kind: a name holding counters does not open for values.
 
+## Config
+
+- **Layers, each over the one before**: the `Defaults` given, a `T`, which
+  sets every field, or a map, as a JSON or YAML library reads a file, which
+  sets the fields it names; then `FromEnv`, the `.env` files and the process's
+  own environment over them; then what `Update` kept. `Reset` gives a field,
+  or a struct of them, back to the layers under it.
+- **A field is its path and its variable.** A path is the JSON names of a
+  field and the structs above it, `limits.rps`; its variable is the prefix and
+  the path in upper snake case, `APP_LIMITS_RPS`, or its `env:"NAME"` tag. A
+  variable is read by its field's type: a number, `true`, a duration `1h30m`,
+  a list `a.com,b.com` or JSON. One that does not read is `ErrInvalid` at
+  `OpenConfig`, naming it. A field tagged `secret:"true"` comes from the
+  defaults or the environment alone: `Update` refuses it, `Sources` hides it.
+- **What changes is kept field by field**, in `kv.db`, so that a default the
+  code changes later still reaches a field nobody changed. A change is checked
+  by `Validate` and by its fields' types before anything is written, and
+  refused whole. A kept value that no longer fits its field, after the program
+  changed, is left out and logged, and `Sources` says why; one that makes a
+  config `Validate` refuses leaves all of them out.
+- **Every handle sees a change at once.** The store's one process makes every
+  change, so it tells every handle on the config, `Watch` included, and the
+  server's watchers, without reading the file again. `Get` reads memory: it
+  builds the config once a change, and a watcher behind skips to the latest.
+- **Bounds.** A path is at most 256 bytes, a value 16 KiB of JSON and a
+  config's kept fields 256 KiB, which reach a watcher in one message.
+
+## Limiter
+
+- **The generic cell rate algorithm**: a key holds one time, when its next
+  request is due, so there is no window whose edge lets twice the rate
+  through, and a key costs one `int64`. `Rate(n, per)` lets n requests through
+  every `per`, `Burst(b)` lets b at once, n when not given. `AllowN` takes
+  requests together or not at all; more than the burst is `ErrInvalid`.
+- **An answer, not an error.** `Allowance.OK` says whether the request passes,
+  `Left` how many more would now, and `RetryAfter` how long until it would.
+- **In memory, as `LoseAtMost` counters are**: a key's time is written every
+  second and on `Close`, so a crash forgets at most a second and lets at most
+  one burst more through. A key whose time has come is as one never seen, and
+  maintenance deletes its row.
+
 ## Testing without waiting
 
 A Manual store with a clock the test moves runs no background work, so
@@ -151,5 +201,5 @@ _, err = state.Maintain(ctx)             // writes counters and renewals, delete
 ## Not in the first version
 
 What [docs/kv.md](../docs/kv.md) leaves for later: a bucket held in memory, a
-filter that answers a miss without SQLite, history and watching, a rate
-limiter, listing a branch's branches.
+filter that answers a miss without SQLite, history, watching a bucket of
+values, `AddWithin` for quotas, listing a branch's branches.

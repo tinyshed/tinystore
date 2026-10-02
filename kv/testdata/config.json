@@ -1,0 +1,26 @@
+{
+  "about": "A config's variables and .env files, which Go's kv.Config and the Python SDK read alike; Bun reads .env itself. names: [prefix, path, variable]. dotenv: a file's text and the variables it sets, or the line it refuses.",
+  "names": [
+    ["", "port", "PORT"],
+    ["APP", "port", "APP_PORT"],
+    ["", "dbUrl", "DB_URL"],
+    ["", "DBURL", "DBURL"],
+    ["", "HTTPServer", "HTTP_SERVER"],
+    ["APP", "limits.maxRps", "APP_LIMITS_MAX_RPS"],
+    ["", "max_conns", "MAX_CONNS"],
+    ["", "v2Api", "V2_API"],
+    ["", "api-key", "API_KEY"],
+    ["", "Limits.RPS", "LIMITS_RPS"]
+  ],
+  "dotenv": [
+    {"name": "names and values, a blank and a comment", "text": "PORT=3000\n\n# a comment\nDB_URL=postgres://localhost/app\n", "want": {"PORT": "3000", "DB_URL": "postgres://localhost/app"}},
+    {"name": "export, spaces around =, a comment after a space", "text": "export  NAME = ann   # who\nHASH=a#b\n", "want": {"NAME": "ann", "HASH": "a#b"}},
+    {"name": "double quotes read escapes, single quotes nothing", "text": "A=\"two\\nlines \\\"q\\\" \\\\\"\nB='$x\\n'\n", "want": {"A": "two\nlines \"q\" \\", "B": "$x\\n"}},
+    {"name": "a quoted value over lines", "text": "KEY=\"-----BEGIN\nabc\n-----END\"\nNEXT=1\n", "want": {"KEY": "-----BEGIN\nabc\n-----END", "NEXT": "1"}},
+    {"name": "an empty value and a later name winning", "text": "EMPTY=\nX=1\nX=2\n", "want": {"EMPTY": "", "X": "2"}},
+    {"name": "CRLF lines", "text": "A=1\r\nB=\"x\"\r\n", "want": {"A": "1", "B": "x"}},
+    {"name": "a line that is no assignment", "text": "PORT=3000\nnot one\n", "refused": 2},
+    {"name": "a name that is no variable's", "text": "1PORT=3000\n", "refused": 1},
+    {"name": "a quote never closed", "text": "A=1\nB=\"open\n", "refused": 2}
+  ]
+}

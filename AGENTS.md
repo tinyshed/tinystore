@@ -25,7 +25,7 @@ design document:
 | `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [design.md](docs/design.md) |
 | `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
 | `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
-| `kv/` | buckets, counters, branches, expiry, versions | [README](kv/README.md) | [kv.md](docs/kv.md) |
+| `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter | [README](kv/README.md) | [kv.md](docs/kv.md) |
 | `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
@@ -617,6 +617,17 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a key read in its last minute is renewed at once       | `TestAReadNearItsExpiryRenewsAtOnce`                                            |
 | kv's All holds no snapshot between its pages           | `TestAllWalksEveryKeyAPageAtATime`                                              |
 | a kv page ends before the value that passes its bytes  | `TestAPageEndsBeforeTheValueThatPassesItsBytes`                                 |
+| a config is its defaults, its environment, then what was kept, across a restart | `TestAConfigIsItsDefaultsThenItsEnvironmentThenWhatWasKept`, in both SDKs' suites too |
+| a config change reaches every handle and watcher at once | `TestAChangeIsSeenByEveryHandleAtOnce`, `TestAConfigChangeReachesEveryWatcher` over the wire |
+| a config change that fails its check, or sets a secret, keeps nothing | `TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing`                    |
+| a kept value that no longer fits its field is left out and named | `TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed`                       |
+| a variable is read by its field's type, or refused naming it | `TestAVariableIsReadByItsFieldsType`                                       |
+| a config keeps only JSON within its bounds             | `TestARawConfigKeepsOnlyJSONWithinItsBounds`                                    |
+| variables and `.env` files read alike in every language | `TestVariablesAndDotenvFilesAreTheVectors`, over `kv/testdata/config.json`, which both SDKs' suites read |
+| a watch ends with its client's side                    | `TestAWatchEndsWithItsClientsSide`                                              |
+| a limiter lets its burst through, then its rate        | `TestALimiterLetsABurstThroughThenItsRate`, `TestAllowNTakesAllOrNoneAndNeverPastTheBurst`, `TestALimiterOverTheWire` |
+| a limiter's times outlive a reopen, a quiet key is forgotten | `TestALimiterKeepsItsTimesAcrossAReopen`, `TestAQuietKeyIsForgottenOnceItsTimeHasCome` |
+| requests racing for a key pass no more than the burst  | `TestRequestsRacingForAKeyPassNoMoreThanTheBurst`                               |
 | an Enqueue that returned survives an abrupt exit       | `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once           |
 | a job runs at its time and not before                  | `TestAJobRunsAtItsTimeAndNotBefore`                                             |
 | a write during a Work loop's read is not lost, nor keeps it awake | `TestAWriteDuringAnAlarmReadCannotBeLost`, `TestALaterWriteDuringAnAlarmReadLetsTheLoopSleep` |

@@ -39,6 +39,9 @@ METHODS: dict[str, int] = {
     "kv.batch": 0x010B,
     "kv.view": 0x010C,
     "kv.scan": 0x010D,
+    "kv.allow": 0x010E,
+    "kv.configure": 0x010F,
+    "kv.watch": 0x0110,
     "jobs.open": 0x0201,
     "jobs.enqueue": 0x0202,
     "jobs.update": 0x0203,
@@ -115,6 +118,10 @@ KvBucket = message(
     default_ttl=(3, uint),
     sliding=(4, uint),
     lose_at_most=(5, uint),
+    config=(6, bool_),
+    rate=(7, uint),
+    per=(8, uint),
+    burst=(9, uint),
 )
 
 _kv_call = {
@@ -146,6 +153,9 @@ KvEntry = message(
 
 KvResults = message("kv.results", entries=(1, list_(KvEntry)))
 KvPage = message("kv.page", more=(1, bool_), after=(2, key))
+KvAllowance = message("kv.allowance", ok=(1, bool_), left=(2, uint), retry_after=(3, uint))
+KvConfigure = message("kv.configure", handle=(1, uint), set=(2, list_(str_)), reset=(3, list_(str_)))
+KvKept = message("kv.kept", changes=(1, uint), fields=(2, list_(str_)))
 
 JobsRepeat = message("jobs.repeat", cron=(1, str_), zone=(2, str_), every=(3, uint))
 
@@ -433,6 +443,9 @@ MESSAGES: dict[str, Message] = {
         KvEntry,
         KvResults,
         KvPage,
+        KvAllowance,
+        KvConfigure,
+        KvKept,
         JobsQueue,
         JobsRepeat,
         JobsJob,

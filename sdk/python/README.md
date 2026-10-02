@@ -49,6 +49,25 @@ async for entry in sessions.all():
 A bucket's type is given once, where it opens: `str`, `bytes`, `int`,
 `float`, `bool`, or a dataclass, a `TypedDict` or anything else JSON holds.
 
+```python
+cfg = await store.kv.config("app", Settings, file=tomllib.load(f), env_file=".env")
+cfg.value.port  # PORT=3000 in .env makes it 3000
+await cfg.update({"port": 4000})  # kept: 4000 after a restart too, at once in every process
+await cfg.reset("port")  # back to .env's 3000
+cfg.watch(lambda c: server.set_port(c.port))
+
+limit = store.kv.limiter("api", rate="100/s", burst=20)
+ok, left, retry_after = await limit.of(tenant).allow(user_id)
+```
+
+A config is a dataclass or a model whose defaults are its own: a file's
+values, then the environment, then what `update` kept go over them, a variable
+named by its field, `db_url` as `DB_URL`, after `prefix` when given. A number,
+`true`, a list `a.com,b.com` or JSON read as the default's kind, and one that
+does not is `InvalidError` at open, naming it. `env={"db_url":
+"DATABASE_URL"}` names a variable itself; `secret` fields are never kept;
+`validate` checks each change.
+
 ## jobs
 
 ```python

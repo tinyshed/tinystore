@@ -1,5 +1,6 @@
 import type { Connection } from './connection.ts'
 import { InvalidError } from './errors.ts'
+import type { Key } from './wire/codec.ts'
 import { Handle } from './wire/messages.ts'
 
 /**
@@ -36,4 +37,15 @@ export interface Page<T, After> {
 	items: T[]
 	/** the place the next page begins after; undefined once the scan has ended */
 	next: After | undefined
+}
+
+/** A key's owners, each its text: an integer is its decimal spelling, as Go's Of takes it. */
+export function ownerText(owner: Key): string | Uint8Array {
+	if (typeof owner === 'number' || typeof owner === 'bigint') {
+		if (typeof owner === 'number' && !Number.isSafeInteger(owner)) {
+			throw new InvalidError(`the owner ${owner} is not an integer; an owner is text or an integer`)
+		}
+		return String(owner)
+	}
+	return owner
 }

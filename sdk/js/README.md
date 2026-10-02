@@ -44,6 +44,26 @@ A bucket's type is given once, where it opens: JSON of `T`, a kind
 (`'string'`, `'bytes'`, `'bigint'`, …) or a Standard Schema such as zod's,
 which checks every read.
 
+```ts
+import file from './config.yaml'
+
+const cfg = await store.kv.config('app', { port: 8080, dbUrl: '', origins: ['localhost'] }, { file })
+cfg.value.port                       // PORT=3000 in .env makes it 3000
+await cfg.update({ port: 4000 })     // kept: 4000 after a restart too, at once in every process
+await cfg.reset('port')              // back to .env's 3000
+cfg.watch(c => server.setPort(c.port))
+
+const limit = store.kv.limiter('api', { rate: '100/s', burst: 20 })
+const { ok, retryAfter } = await limit.of(tenant).allow(userId)
+```
+
+A config is shaped and typed by its defaults: a file's values, then the
+environment, then what `update` kept go over them, a variable named by its
+field, `dbUrl` as `DB_URL`, after `prefix` when given. A number, `true`, a
+list `a.com,b.com` or JSON read as the default's kind, and one that does not
+is `InvalidError` at open, naming it. `env: { dbUrl: 'DATABASE_URL' }` names a
+variable itself; `secret` fields are never kept; `schema` checks each change.
+
 ## jobs
 
 ```ts

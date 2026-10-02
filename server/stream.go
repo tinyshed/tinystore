@@ -24,6 +24,9 @@ type stream struct {
 	upload *inbox          // the DATA the client sends; nil when its REQUEST ended its side
 	sends  *flow.Allowance // what the server may still send, once a download began; under session.mu
 	lost   error           // why no DATA or CREDIT will come; under session.mu
+	// follows is a stream that runs until its client leaves, as a watch does;
+	// under session.mu
+	follows bool
 }
 
 var errCancelled = errors.New("the client cancelled the stream")
@@ -47,20 +50,39 @@ func (st *stream) receive(body []byte, end bool) error {
 	return st.upload.push(st.id, body, end)
 }
 
-// lose tells the stream that no DATA or CREDIT will come
+// lose tells the stream that no DATA or CREDIT will come, and ends one that
+// follows: what it would send next no client can read
 func (st *stream) lose(err error) {
 	s := st.session
 	s.mu.Lock()
 	if st.lost == nil {
 		st.lost = err
 	}
-	sends := st.sends
+	sends, follows := st.sends, st.follows
 	s.mu.Unlock()
 	if st.upload != nil {
 		st.upload.fail(err)
 	}
 	if sends != nil {
 		sends.End(err)
+	}
+	if follows {
+		st.cancel(err)
+	}
+}
+
+// follow marks a stream that runs until its client leaves. A clean end of the
+// client's side lets every other call finish, which a watch never would: so
+// such a stream ends once its client can send nothing more, here when that
+// has happened already.
+func (st *stream) follow() {
+	s := st.session
+	s.mu.Lock()
+	st.follows = true
+	lost := st.lost
+	s.mu.Unlock()
+	if lost != nil {
+		st.cancel(lost)
 	}
 }
 

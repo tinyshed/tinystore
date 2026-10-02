@@ -316,8 +316,9 @@ carry:
 
 | engine | operations | shape |
 |---|---|---|
-| kv | open, get, has, set, delete, take, touch, add, max, clear, batch, view | calls |
+| kv | open, get, has, set, delete, take, touch, add, max, clear, batch, view, allow, configure | calls |
 | | scan | a download, an entry a message |
+| | watch | a download that does not end: a config's kept fields, again after each change |
 | jobs | open, enqueue of many, update, cancel, get, claim, settle of many | calls |
 | | scan | a download, an entry a message |
 | | work | both ways: jobs out, their outcomes back |
@@ -344,8 +345,8 @@ The values they carry:
 
 ### kv
 
-`kv.open` answers a handle on a bucket of values or on counters, and every
-other call carries it. A handle holds `kv.Raw` values, so the server reads
+`kv.open` answers a handle on a bucket of values, on counters, on a config or
+on a limiter, and every other call carries it. A handle holds `kv.Raw` values, so the server reads
 what any bucket wrote.
 
 | method | | request | answer |
@@ -363,6 +364,9 @@ what any bucket wrote.
 | `0x010b` | batch | calls, in one transaction | results; a call that fails fails them all, and `what` names it as `call` |
 | `0x010c` | view | calls, get and has, from one snapshot | results |
 | `0x010d` | scan | a call naming a branch, after and limit | a download: `{}`, an entry a `DATA` with its key, a page |
+| `0x010e` | allow | a call on a limiter: a key, and n requests, 1 when absent | an allowance |
+| `0x010f` | configure | a config's fields to keep and paths to forget | `{}` |
+| `0x0110` | watch | a call on a config | a download that does not end: `{}`, then the kept fields a `DATA`, now and after each change |
 
 A bucket:
 
@@ -373,6 +377,10 @@ A bucket:
 | 3 | default ttl | uint | milliseconds |
 | 4 | sliding | uint | milliseconds; values alone |
 | 5 | lose at most | uint | milliseconds; counters alone |
+| 6 | config | bool | a config rather than values |
+| 7 | rate | uint | a limiter's requests every per; a bucket with a rate is a limiter |
+| 8 | per | uint | milliseconds |
+| 9 | burst | uint | the requests a limiter lets through at once; rate when absent |
 
 A handle is `{1: uint}`. A call:
 
@@ -401,6 +409,20 @@ when it is not UTF-8. An entry:
 | 3 | version | bin | |
 | 4 | expires | int | unix milliseconds; absent for a key that never expires |
 | 5 | key | a key | a scan's item alone |
+
+A limiter answers `kv.allow` with an allowance, `{1: ok, 2: left, 3: retry
+after}`: whether the requests pass, how many more would pass now, and how many
+milliseconds until they would, rounded up, when they do not. More requests
+than the burst at once are `invalid`.
+
+`kv.configure` is `{1: handle, 2: set, 3: reset}`, set an array of str, a path
+and its JSON each, and reset the paths to forget; the server keeps both in one
+transaction, checking only that a value is JSON within the config's bounds,
+since the types are the client's. `kv.watch` answers `{}`, then `{1: changes,
+2: fields}` a `DATA`, fields a path and its JSON each, now and after each
+change, whoever made it: a watcher behind is sent the latest fields, never a
+state the config did not have. It ends when the client cancels it, when the
+client's side of the connection ends, or with the server.
 
 A page, a scan's trailer, is `{1: more, 2: after}`: more says the limit or
 the page's 4 MiB of values ended it before the branch did, and after is the

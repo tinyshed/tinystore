@@ -69,6 +69,7 @@ class Store:
         """Ingests the instruments' last values, then closes the connection."""
         await self.metrics.stop()
         await self.records.stop()
+        self.kv.stop()
         await self._link.close()
 
     async def __aenter__(self) -> Self:

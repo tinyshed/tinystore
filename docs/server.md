@@ -662,7 +662,7 @@ Where the slices stand, 29 September 2026:
 |---|---|
 | `server/wire` | built: frames, profile, handshake, errors; vectors in `server/wire/testdata/vectors.json` |
 | a session with its transports | built: `session.go`, `stream.go`, `workers.go`, `internal/flow`, Unix, TCP, TLS, `internal/pipe` |
-| kv | built: `kv.go`, `kv.Raw` in the engine; the Go client is `server/internal/client`, a test's and a measurement's |
+| kv | built: `kv.go`, `kv.Raw` in the engine, a config through `kv.RawConfig` and its `watch`, a limiter's `allow`; the Go client is `server/internal/client`, a test's and a measurement's |
 | jobs | built: `jobs.go`, `jobs_work.go`; the messages on wire.md |
 | blobs | built: `blobs.go`; the messages on wire.md |
 | sql | built: `sql.go`, the data connection's check in `sqltokens.go` and `datasql.go`; the messages on wire.md |

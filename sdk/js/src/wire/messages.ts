@@ -35,6 +35,9 @@ export const methods = {
 	'kv.batch': 0x010b,
 	'kv.view': 0x010c,
 	'kv.scan': 0x010d,
+	'kv.allow': 0x010e,
+	'kv.configure': 0x010f,
+	'kv.watch': 0x0110,
 	'jobs.open': 0x0201,
 	'jobs.enqueue': 0x0202,
 	'jobs.update': 0x0203,
@@ -114,6 +117,10 @@ export const KvBucket = message('kv.bucket', {
 	defaultTtl: [3, uint],
 	sliding: [4, uint],
 	loseAtMost: [5, uint],
+	config: [6, bool],
+	rate: [7, uint],
+	per: [8, uint],
+	burst: [9, uint],
 })
 
 const kvCall = {
@@ -147,6 +154,20 @@ export const KvEntry = message('kv.entry', {
 export const KvResults = message('kv.results', { entries: [1, list(KvEntry)] })
 
 export const KvPage = message('kv.page', { more: [1, bool], after: [2, key] })
+
+export const KvAllowance = message('kv.allowance', {
+	ok: [1, bool],
+	left: [2, uint],
+	retryAfter: [3, uint],
+})
+
+export const KvConfigure = message('kv.configure', {
+	handle: [1, uint],
+	set: [2, list(str)],
+	reset: [3, list(str)],
+})
+
+export const KvKept = message('kv.kept', { changes: [1, uint], fields: [2, list(str)] })
 
 export const JobsRepeat = message('jobs.repeat', {
 	cron: [1, str],
@@ -445,6 +466,9 @@ export const messages = {
 	'kv.entry': KvEntry,
 	'kv.results': KvResults,
 	'kv.page': KvPage,
+	'kv.allowance': KvAllowance,
+	'kv.configure': KvConfigure,
+	'kv.kept': KvKept,
 	'jobs.queue': JobsQueue,
 	'jobs.repeat': JobsRepeat,
 	'jobs.job': JobsJob,

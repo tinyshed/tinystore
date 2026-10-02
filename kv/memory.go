@@ -79,10 +79,26 @@ func (m *memory) shardOf(path []byte) *shard {
 // A counter it finds absent or expired starts from zero with the expiry
 // created, 0 for never.
 func (m *memory) change(ctx context.Context, c call, created int64, next func(held int64) (int64, error)) (
-	value int64, err error,
+	int64, error,
 ) {
+	return m.step(ctx, c, func(held, expires int64, live bool) (int64, int64, bool, error) {
+		if !live {
+			expires = created
+		}
+		value, err := next(held)
+		return value, expires, true, err
+	})
+}
+
+// stepFunc is one change of a counter in memory: given what it holds and its
+// expiry, zero for an absent or expired one, it says what to hold and until
+// when, or keep false to leave it as it was
+type stepFunc func(held, expires int64, live bool) (value, expiresNext int64, keep bool, err error)
+
+// step applies next to the counter at c's path and returns what it holds now
+func (m *memory) step(ctx context.Context, c call, next stepFunc) (value int64, err error) {
 	err = m.withRoom(ctx, func() (full bool, err error) {
-		value, full, err = m.tryChange(ctx, c, created, next)
+		value, full, err = m.tryStep(ctx, c, next)
 		return full, err
 	})
 	return value, err
@@ -108,16 +124,14 @@ func (m *memory) withRoom(ctx context.Context, try func() (full bool, err error)
 	}
 }
 
-// tryChange is change while memory has room for a counter it has to add; full
+// tryStep is step while memory has room for a counter it has to add; full
 // says that it had none and changed nothing
-func (m *memory) tryChange(ctx context.Context, c call, created int64, next func(int64) (int64, error)) (
-	value int64, full bool, err error,
-) {
+func (m *memory) tryStep(ctx context.Context, c call, next stepFunc) (value int64, full bool, err error) {
 	m.gate.RLock()
 	defer m.gate.RUnlock()
 
 	target := m.shardOf(c.path)
-	if changed, held, changeErr := target.change(c.path, c.now, created, next); held {
+	if changed, held, changeErr := target.step(c.path, c.now, next); held {
 		return changed, false, changeErr
 	}
 	if !m.takeRoom() {
@@ -131,7 +145,7 @@ func (m *memory) tryChange(ctx context.Context, c call, created int64, next func
 		return 0, false, err
 	}
 
-	value, _, err = target.change(c.path, c.now, created, next)
+	value, _, err = target.step(c.path, c.now, next)
 	return value, false, err
 }
 
@@ -189,23 +203,26 @@ func (s *shard) keep(path []byte, loaded counter) bool {
 	return true
 }
 
-// change applies next to the counter at path when the shard holds it, and
-// says whether it does
-func (s *shard) change(path []byte, now, created int64, next func(int64) (int64, error)) (
-	value int64, held bool, err error,
-) {
+// step applies next to the counter at path when the shard holds it, and says
+// whether it does
+func (s *shard) step(path []byte, now int64, next stepFunc) (value int64, held bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, held := s.counters[string(path)]
 	if !held {
 		return 0, false, nil
 	}
-	current, expires := int64(0), created
-	if entry.live(now) {
+	live := entry.live(now)
+	current, expires := int64(0), int64(0)
+	if live {
 		current, expires = entry.value, entry.expires
 	}
-	if value, err = next(current); err != nil {
+	value, expires, keep, err := next(current, expires, live)
+	switch {
+	case err != nil:
 		return 0, true, err
+	case !keep:
+		return current, true, nil
 	}
 	*entry = counter{value: value, expires: expires, dirty: true}
 	return value, true, nil

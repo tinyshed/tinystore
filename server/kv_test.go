@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -370,5 +371,142 @@ func TestAWireClientAndAGoProgramReadEachOthersBuckets(t *testing.T) {
 	mustKV(t, conn, wire.KVSet, wire.KVCall{Handle: shared, Key: "count", Value: wire.KVValue{Kind: wire.KVInt, Int: 41}})
 	if n, found, err := counts.Get(ctx, "count"); n != 41 || !found || err != nil {
 		t.Fatalf("the wire's integer in Go: %d %v %v", n, found, err)
+	}
+}
+
+func allow(t *testing.T, conn *client.Conn, ask wire.KVCall) wire.KVAllowance {
+	t.Helper()
+	body, err := conn.Call(t.Context(), wire.KVAllow, ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var allowance wire.KVAllowance
+	if err = allowance.Decode(body); err != nil {
+		t.Fatal(err)
+	}
+	return allowance
+}
+
+// a limiter over the wire lets its burst through, then says how long to wait,
+// each key and each branch on its own
+func TestALimiterOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	limiter := openKV(t, conn, wire.KVBucket{Name: "api", Rate: 2, Per: time.Minute.Milliseconds()})
+	key := wire.KVCall{Handle: limiter, Owners: []string{"tenant-7"}, Key: "user-1"}
+
+	if got := allow(t, conn, key); !got.OK || got.Left != 1 {
+		t.Fatalf("the first: %+v", got)
+	}
+	if got := allow(t, conn, key); !got.OK || got.Left != 0 {
+		t.Fatalf("the second: %+v", got)
+	}
+	if got := allow(t, conn, key); got.OK || got.RetryAfter < 29_000 || got.RetryAfter > 30_000 {
+		t.Fatalf("past the burst: %+v; want to wait about 30 s", got)
+	}
+	other := key
+	other.Owners = nil
+	if got := allow(t, conn, other); !got.OK {
+		t.Fatalf("the same key in another branch: %+v", got)
+	}
+
+	many := key
+	many.Key, many.N = "user-2", 3
+	if _, err := conn.Call(t.Context(), wire.KVAllow, many); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("three past a burst of two: %v", err)
+	}
+	if _, err := kvDo(t, conn, wire.KVGet, key); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("a get of a limiter: %v", err)
+	}
+	if _, err := conn.Call(t.Context(), wire.KVOpen, wire.KVBucket{Name: "both", Counters: true, Rate: 1, Per: 1000}); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("counters and a limiter at once: %v", err)
+	}
+}
+
+// a config changed through one connection reaches a watcher on another at
+// once: the kept fields first, then after each change, until it cancels
+func TestAConfigChangeReachesEveryWatcher(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	watcher, changer := ts.dial(t, wire.Hello{}), ts.dial(t, wire.Hello{})
+	watched := openKV(t, watcher, wire.KVBucket{Name: "app", Config: true})
+	changed := openKV(t, changer, wire.KVBucket{Name: "app", Config: true})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	st, err := watcher.Open(ctx, wire.KVWatch, wire.KVCall{Handle: watched}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Response(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if first := nextKept(t, st); len(first.Fields) != 0 {
+		t.Fatalf("a new config keeps %v", first.Fields)
+	}
+
+	change := wire.KVConfigChange{Handle: changed, Set: []string{"port", "4000", "limits.rps", "50"}}
+	if _, err = changer.Call(t.Context(), wire.KVConfigure, change); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextKept(t, st); !slices.Equal(got.Fields, []string{"limits.rps", "50", "port", "4000"}) {
+		t.Fatalf("after the change the watcher holds %v", got.Fields)
+	}
+	reset := wire.KVConfigChange{Handle: changed, Reset: []string{"port"}}
+	if _, err = changer.Call(t.Context(), wire.KVConfigure, reset); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextKept(t, st); !slices.Equal(got.Fields, []string{"limits.rps", "50"}) {
+		t.Fatalf("after the reset the watcher holds %v", got.Fields)
+	}
+
+	notJSON := wire.KVConfigChange{Handle: changed, Set: []string{"port", "{"}}
+	if _, err = changer.Call(t.Context(), wire.KVConfigure, notJSON); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("a value that is not JSON: %v", err)
+	}
+	if err = st.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = st.Next(ctx); codeOfError(err) != wire.CodeCancelled {
+		t.Fatalf("a cancelled watch ended with %v", err)
+	}
+}
+
+func nextKept(t *testing.T, st *client.Stream) wire.KVKept {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	body, last, err := st.Next(ctx)
+	if err != nil || last {
+		t.Fatalf("a watch ended: %v", err)
+	}
+	var kept wire.KVKept
+	if err = kept.Decode(body); err != nil {
+		t.Fatal(err)
+	}
+	return kept
+}
+
+// a watch runs until its client leaves: the end of what the client sends, as
+// a parent closing a private child's stdin, ends it, so that the connection
+// closes rather than wait for a change nobody would read
+func TestAWatchEndsWithItsClientsSide(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	handle := openKV(t, conn, wire.KVBucket{Name: "app", Config: true})
+	st, err := conn.Open(t.Context(), wire.KVWatch, wire.KVCall{Handle: handle}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Response(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	nextKept(t, st)
+	if err = conn.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection stayed open for its watch")
 	}
 }

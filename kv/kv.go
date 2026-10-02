@@ -45,6 +45,7 @@ type Store struct {
 
 	opened   sync.Mutex
 	counters map[string]openCounters
+	configs  map[string]*configHub
 	renewals renewals
 	leave    func() // gate.Leave, bound once rather than at every call
 }
@@ -88,6 +89,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
 		clearBound: clearAtOnce, expireBound: expiryBatch, counters: map[string]openCounters{},
+		configs:  map[string]*configHub{},
 		renewals: renewals{waiting: map[renewed]renewal{}},
 	}
 	state.maintenance <- struct{}{}

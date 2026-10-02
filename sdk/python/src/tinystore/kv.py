@@ -17,15 +17,18 @@ import typing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from ._connection import Connection, Link, check_name, download, handle_on
+from ._connection import Connection, Link, check_name, download, handle_on, owner_text
 from ._page import Page
 from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.messages import METHODS, KvBucket, KvCall, KvCalls, KvEntry, KvPage, KvResults
+from .config import Config
 from .errors import CorruptError, InvalidError
+from .limiter import Limiter, limiter_open
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    import os
+    from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
     from datetime import datetime
 
     from ._wire.codec import Key, Raw
@@ -114,15 +117,53 @@ def _entry(of: Any, e: dict[str, Any]) -> Entry[Any]:
     return Entry(_decode(of, e.get("value")), version, date_of(e.get("expires")), e.get("key", ""))
 
 
-def _owner(owner: Key) -> str | bytes:
-    if isinstance(owner, bool):
-        raise InvalidError(f"the owner {owner!r}: an owner is text or an integer")
-    return str(owner) if isinstance(owner, int) else owner
-
-
 class Kv:
     def __init__(self, link: Link) -> None:
         self._link = link
+        self._configs: list[Config[Any]] = []
+
+    async def config[T](
+        self,
+        name: str,
+        of: type[T],
+        /,
+        *,
+        file: Mapping[str, Any] | None = None,
+        prefix: str = "",
+        env: Mapping[str, str] | bool = True,
+        env_file: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None = None,
+        secret: Iterable[str] = (),
+        validate: Callable[[T], object] | None = None,
+    ) -> Config[T]:
+        """The config name, of a type whose defaults are its own: a dataclass, or a model.
+
+        A file's values, then the environment, then what update kept go over the defaults, each over
+        the one before. It returns once the server's state is read, and follows every change from
+        then on, whoever makes it, until the store closes::
+
+            cfg = await store.kv.config("app", Settings, env_file=".env")
+            cfg.value.port                     # PORT=3000 in .env makes it 3000
+            await cfg.update({"port": 4000})   # kept: 4000 after a restart too
+        """
+        config = Config(
+            self._link, name, of, file=file, prefix=prefix, env=env, env_file=env_file, secret=secret, validate=validate
+        )
+        self._configs.append(config)
+        try:
+            await config.start()
+        except BaseException:
+            self._configs.remove(config)
+            raise
+        return config
+
+    def limiter(self, name: str, /, *, rate: str, burst: int | None = None) -> Limiter:
+        """A limiter of requests by key: `store.kv.limiter("api", rate="100/s", burst=20)`."""
+        return Limiter(self._link, name, limiter_open(name, rate, burst), ())
+
+    def stop(self) -> None:
+        """Stops following configs, as the store does when it closes."""
+        for config in self._configs:
+            config.stop()
 
     @overload
     def bucket(
@@ -271,7 +312,7 @@ class Bucket[V]:
 
     def of(self, *owners: Key) -> Bucket[V]:
         """The branch below this one that the owners name."""
-        return Bucket(self._link, self.name, self.open_body, self.value_type, (*self.owners, *map(_owner, owners)))
+        return Bucket(self._link, self.name, self.open_body, self.value_type, (*self.owners, *map(owner_text, owners)))
 
     def with_tx(self, tx: Batch) -> BucketTx[V]:
         """This bucket's calls inside a batch or a view."""
@@ -449,7 +490,7 @@ class Counters:
         self._link, self.name, self._open, self._owners = link, name, open_body, owners
 
     def of(self, *owners: Key) -> Counters:
-        return Counters(self._link, self.name, self._open, (*self._owners, *map(_owner, owners)))
+        return Counters(self._link, self.name, self._open, (*self._owners, *map(owner_text, owners)))
 
     async def _call(self, method: str, key: Key | None, n: int | None = None) -> int:
         async def attempt(connection: Connection) -> dict[str, Any]:

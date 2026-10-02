@@ -20,16 +20,25 @@ const (
 	KVBatch  Method = 0x010b
 	KVView   Method = 0x010c
 	KVScan   Method = 0x010d
+
+	KVAllow     Method = 0x010e
+	KVConfigure Method = 0x010f
+	KVWatch     Method = 0x0110
 )
 
-// KVBucket is kv.open's request: a bucket of values, or counters, by name,
-// with its handle's options. A duration is milliseconds, zero for none.
+// KVBucket is kv.open's request: a bucket of values, counters, a config or a
+// limiter, by name, with its handle's options. A duration is milliseconds,
+// zero for none; a limiter is a bucket with a rate.
 type KVBucket struct {
 	Name       string
 	Counters   bool
 	DefaultTTL int64
 	Sliding    int64
 	LoseAtMost int64
+	Config     bool
+	Rate       uint64 // a limiter's requests every Per
+	Per        int64
+	Burst      uint64
 }
 
 func (b KVBucket) Append(dst []byte) []byte {
@@ -46,6 +55,18 @@ func (b KVBucket) Append(dst []byte) []byte {
 	}
 	if b.LoseAtMost != 0 {
 		m.Int(5, b.LoseAtMost)
+	}
+	if b.Config {
+		m.Bool(6, true)
+	}
+	if b.Rate != 0 {
+		m.Uint(7, b.Rate)
+	}
+	if b.Per != 0 {
+		m.Int(8, b.Per)
+	}
+	if b.Burst != 0 {
+		m.Uint(9, b.Burst)
 	}
 	return m.End()
 }
@@ -64,6 +85,14 @@ func (b *KVBucket) Decode(body []byte) error {
 			b.Sliding = d.Duration()
 		case 5:
 			b.LoseAtMost = d.Duration()
+		case 6:
+			b.Config = d.Bool()
+		case 7:
+			b.Rate = d.Uint()
+		case 8:
+			b.Per = d.Duration()
+		case 9:
+			b.Burst = d.Uint()
 		}
 	}
 	return d.End()
@@ -466,6 +495,119 @@ func (Empty) Append(dst []byte) []byte {
 func (*Empty) Decode(body []byte) error {
 	d := NewDecoder(body)
 	for range d.Fields() {
+	}
+	return d.End()
+}
+
+// KVAllowance is kv.allow's answer: whether the requests pass, how many more
+// would pass now, and, when they do not, how many milliseconds until they
+// would, rounded up.
+type KVAllowance struct {
+	OK         bool
+	Left       uint64
+	RetryAfter uint64
+}
+
+func (a KVAllowance) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	if a.OK {
+		m.Bool(1, true)
+	}
+	if a.Left != 0 {
+		m.Uint(2, a.Left)
+	}
+	if a.RetryAfter != 0 {
+		m.Uint(3, a.RetryAfter)
+	}
+	return m.End()
+}
+
+func (a *KVAllowance) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			a.OK = d.Bool()
+		case 2:
+			a.Left = d.Uint()
+		case 3:
+			a.RetryAfter = d.Uint()
+		}
+	}
+	return d.End()
+}
+
+// KVConfigChange is kv.configure's request: the fields a config keeps, a path and
+// its JSON each, and the paths it forgets, in one transaction.
+type KVConfigChange struct {
+	Handle uint64
+	Set    []string // path, JSON, path, JSON…
+	Reset  []string
+}
+
+func (c KVConfigChange) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	m.Uint(1, c.Handle)
+	if len(c.Set) > 0 {
+		m.Key(2)
+		m.SetBuf(appendStrs(m.Buf(), c.Set))
+	}
+	if len(c.Reset) > 0 {
+		m.Key(3)
+		m.SetBuf(appendStrs(m.Buf(), c.Reset))
+	}
+	return m.End()
+}
+
+func (c *KVConfigChange) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			c.Handle = d.Uint()
+		case 2:
+			c.Set = d.Strs()
+		case 3:
+			c.Reset = d.Strs()
+		}
+	}
+	if len(c.Set)%2 != 0 {
+		d.Fail("set holds %d strings, not a path and its JSON each", len(c.Set))
+	}
+	return d.End()
+}
+
+// KVKept is an item of kv.watch: a config's kept fields, a path and its JSON
+// each, and how many changes the server's process has made to them.
+type KVKept struct {
+	Changes uint64
+	Fields  []string
+}
+
+func (k KVKept) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	if k.Changes != 0 {
+		m.Uint(1, k.Changes)
+	}
+	if len(k.Fields) > 0 {
+		m.Key(2)
+		m.SetBuf(appendStrs(m.Buf(), k.Fields))
+	}
+	return m.End()
+}
+
+func (k *KVKept) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			k.Changes = d.Uint()
+		case 2:
+			k.Fields = d.Strs()
+		}
+	}
+	if len(k.Fields)%2 != 0 {
+		d.Fail("fields holds %d strings, not a path and its JSON each", len(k.Fields))
 	}
 	return d.End()
 }

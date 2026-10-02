@@ -2,9 +2,11 @@
 // buckets of one value type by key, keys in branches, expiry by the store's
 // clock, versions that never repeat. A handle opens with its first call.
 
+import { Config, type ConfigOptions } from './config.ts'
 import type { Connection, Link } from './connection.ts'
 import { CorruptError, InvalidError } from './errors.ts'
-import { checkName, handleOn, type Page } from './handles.ts'
+import { checkName, handleOn, ownerText, type Page } from './handles.ts'
+import { Limiter, type LimiterOptions, limiterOpen } from './limiter.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf } from './wire/codec.ts'
@@ -80,9 +82,50 @@ interface Values<V> {
 
 export class Kv {
 	readonly #link: Link
+	readonly #configs = new Set<Config<object>>()
 
 	constructor(link: Link) {
 		this.#link = link
+	}
+
+	/**
+	 * The config name, shaped and typed as its defaults: then a file's values,
+	 * then the environment, then what update kept, each over the one before.
+	 * It resolves once the server's state is read, and follows every change
+	 * from then on, whoever makes it, until the store closes.
+	 *
+	 * ```ts
+	 * const cfg = await store.kv.config('app', { port: 8080, origins: ['localhost'] })
+	 * cfg.value.port                    // PORT=3000 in .env makes it 3000
+	 * await cfg.update({ port: 4000 })  // kept: 4000 after a restart too
+	 * ```
+	 */
+	async config<T extends object>(
+		name: string,
+		defaults: T,
+		options: ConfigOptions<T> = {},
+	): Promise<Config<T>> {
+		const config = new Config(this.#link, name, defaults, options)
+		this.#configs.add(config as unknown as Config<object>)
+		try {
+			await config.start()
+		} catch (err) {
+			this.#configs.delete(config as unknown as Config<object>)
+			throw err
+		}
+		return config
+	}
+
+	/** A limiter of requests by key: `store.kv.limiter('api', { rate: '100/s', burst: 20 })`. */
+	limiter(name: string, options: LimiterOptions): Limiter {
+		return new Limiter(this.#link, name, limiterOpen(name, options), [])
+	}
+
+	/** Stops following configs, as the store does when it closes. */
+	stop(): void {
+		for (const config of this.#configs) {
+			config.stop()
+		}
 	}
 
 	/** A bucket of JSON values of type T. */
@@ -275,17 +318,6 @@ function writeFields(options: WriteOptions | undefined) {
 		expireAt: options?.expireAt === undefined ? undefined : unixMs(options.expireAt),
 		ifVersion: options?.ifVersion === undefined ? undefined : versionBytes(options.ifVersion),
 	}
-}
-
-/** A key's owners, each its text: an integer is its decimal spelling, as Go's Of takes it. */
-function ownerText(owner: Key): string | Uint8Array {
-	if (typeof owner === 'number' || typeof owner === 'bigint') {
-		if (typeof owner === 'number' && !Number.isSafeInteger(owner)) {
-			throw new InvalidError(`the owner ${owner} is not an integer; an owner is text or an integer`)
-		}
-		return String(owner)
-	}
-	return owner
 }
 
 /**

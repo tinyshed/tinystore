@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     import ssl
     from collections.abc import Awaitable, Callable
 
+    from ._wire.codec import Key
+
 HANDSHAKE_TIME = 5.0
 WINNER_TIME = 5.0
 STARTS = 3
@@ -255,6 +257,13 @@ class Link:
         current, self._current = self._current, None
         if current is not None and current.done() and not current.cancelled() and current.exception() is None:
             await current.result().close()
+
+
+def owner_text(owner: Key) -> str | bytes:
+    """An owner of a branch as its text: an integer is its decimal spelling, as Go's Of takes it."""
+    if isinstance(owner, bool):
+        raise InvalidError(f"the owner {owner!r}: an owner is text or an integer")
+    return str(owner) if isinstance(owner, int) else owner
 
 
 async def handle_on(connection: Connection, method: int, open_body: bytes) -> int:

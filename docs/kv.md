@@ -260,6 +260,52 @@ update cells set expires = :until where bucket = ?1 and path = ?2 and version = 
   interval, or without `LoseAtMost`, is `ErrInvalid`, since one handle would
   read the file while another holds newer numbers.
 
+## Configs
+
+An application's settings are kv's too: a `Config[T]` is the defaults given,
+then a file's values, then the environment, then what `Update` kept, each
+over the one before, read from memory.
+
+```go
+settings, err := kv.OpenConfig[Settings](ctx, state, "app",
+	kv.Defaults(Settings{Port: 8080}), kv.Defaults(fromYAML), kv.FromEnv("APP", ".env"),
+	kv.Validate(func(s Settings) error { … }))
+s := settings.Get()                                              // memory, rebuilt once a change
+err = settings.Update(ctx, func(s *Settings) { s.Port = 4000 }) // checked, kept, seen by every handle
+err = settings.Reset(ctx, "port")                                // back to .env's 3000
+for s := range settings.Watch(ctx) { … }                         // now and after each change
+```
+
+- **Kept field by field.** A change keeps the fields it changed, a row each in
+  a bucket of the kind `config`, a path its key and the field's JSON its
+  value, so that a default the code changes later still reaches every field
+  nobody changed, and `Reset` forgets one field. The layers under what is kept
+  live in the program, never in the file: a restart reads them again.
+- **One process sees every change.** Whoever changes a config, a handle here
+  or a client of the server, does it in the process that holds the store, so
+  that process tells every handle and watcher once the change commits: no
+  watcher reads the file or waits for an interval. A watcher behind skips to
+  the latest; a client that lost its connection reads the whole config again
+  and watches on.
+- **A kept value can outlive the type it was written for.** One that no longer
+  fits its field is left out, logged and named by `Sources`, rather than
+  failing the program's start; the program's own defaults and environment
+  that do not fit are `ErrInvalid` at open.
+- **Secrets are never kept.** A field tagged `secret:"true"` comes from the
+  defaults or the environment: `Update` refuses to change it.
+
+## Limiter
+
+`kv.OpenLimiter(ctx, state, "api", kv.Rate(100, time.Second), kv.Burst(20))`
+answers `Allow(ctx, key)` with whether the request passes, how many more would
+now and how long until the next would. It is the generic cell rate algorithm:
+a key holds the time its next request is due, `max(due, now) + n·interval`
+after a request passes, and a request passes while that stays within a burst
+of now. A fixed window lets twice its rate through at its edge; this cannot.
+Times live in the memory `LoseAtMost` counters use, so an `Allow` takes no
+write, and reach the file every second: a crash lets at most one burst more
+through. A key whose time has come is absent, and expiry deletes its row.
+
 ## Transactions and snapshots
 
 ```go
@@ -461,6 +507,16 @@ The five cases are the gates' workloads.
 | a refused write fails alone in its group | `TestGroupedWritesShareACommitAndFailAlone` |
 | a caller cancelled before its turn writes nothing | `TestACallerCancelledBeforeItsTurnWritesNothing` |
 | a value over 512 bytes reads back from `spilled` | `TestALargeValueSpillsAndReadsBack` |
+| a config is its defaults, then its environment, then what was kept, across a restart | `TestAConfigIsItsDefaultsThenItsEnvironmentThenWhatWasKept` |
+| a config change is seen by every handle and watcher at once | `TestAChangeIsSeenByEveryHandleAtOnce` |
+| a change that fails its check, or sets a secret, keeps nothing | `TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing` |
+| a kept value that no longer fits is left out and named | `TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed` |
+| a variable is read by its field's type, or refused naming it | `TestAVariableIsReadByItsFieldsType` |
+| a config keeps only JSON within its bounds | `TestARawConfigKeepsOnlyJSONWithinItsBounds` |
+| variables and `.env` files read as every language reads them | `TestVariablesAndDotenvFilesAreTheVectors`, over `kv/testdata/config.json` |
+| a limiter lets its burst through, then its rate | `TestALimiterLetsABurstThroughThenItsRate`, `TestAllowNTakesAllOrNoneAndNeverPastTheBurst` |
+| a limiter's times outlive a reopen, and a quiet key is forgotten | `TestALimiterKeepsItsTimesAcrossAReopen`, `TestAQuietKeyIsForgottenOnceItsTimeHasCome` |
+| requests racing for a key pass no more than the burst | `TestRequestsRacingForAKeyPassNoMoreThanTheBurst` |
 
 ## Not in the first version
 
@@ -469,8 +525,9 @@ Each waits for a workload that needs it and a measurement that pays for it.
 - `KeepInMemory(max)`: a bucket held whole in memory, a `Set` past `max`
   refused, nothing evicted. A cache budget for the whole file comes first.
 - A filter that answers a miss without SQLite.
-- `History`, with `At(t)` and `ErrTooOld` before its window, and `Watch`.
-- A GCRA limiter, one `int64` a key, and `AddWithin` for quotas.
+- `History`, with `At(t)` and `ErrTooOld` before its window, and `Watch` of a
+  bucket of values; a config's watch is built.
+- `AddWithin` for quotas, beside the limiter.
 - Listing a branch's branches; secondary indexes.
 
 ## What was measured

@@ -177,6 +177,49 @@ These were alike from the start, and stay so:
 | every item | `All(ctx)` | `all()` | `all()` |
 | SQL | `sqldb.All[Note](ctx, db, q, args...)` | ``app.all<Note>`select … ${id}` `` | `app.all(Note, "select … ?", id)`, or a `t"…"` template |
 
+## Configs and limiters
+
+```go
+settings, err := kv.OpenConfig[Settings](ctx, state, "app", kv.Defaults(Settings{Port: 8080}), kv.FromEnv("APP", ".env"))
+err = settings.Update(ctx, func(s *Settings) { s.Port = 4000 })   // kept, seen by every handle at once
+for s := range settings.Watch(ctx) { server.SetPort(s.Port) }
+limit, err := kv.OpenLimiter(ctx, state, "api", kv.Rate(100, time.Second), kv.Burst(20))
+allowed, err := limit.Allow(ctx, userID)                          // OK, Left, RetryAfter
+```
+
+```ts
+const cfg = await store.kv.config('app', { port: 8080, origins: ['localhost'] }, { prefix: 'APP' })
+await cfg.update({ port: 4000 })
+cfg.watch(c => server.setPort(c.port))
+const limit = store.kv.limiter('api', { rate: '100/s', burst: 20 })
+const { ok, left, retryAfter } = await limit.allow(userId)
+```
+
+```python
+cfg = await store.kv.config("app", Settings, prefix="APP", env_file=".env")
+await cfg.update({"port": 4000})
+cfg.watch(lambda c: server.set_port(c.port))
+limit = store.kv.limiter("api", rate="100/s", burst=20)
+ok, left, retry_after = await limit.allow(user_id)
+```
+
+A config is its defaults, then a file's values, then the environment, then
+what `update` kept, each over the one before; the server keeps the changed
+fields and sends every change to every watcher, so `value` is read from memory.
+A variable is named by the field's path in upper snake case after the prefix,
+`APP_LIMITS_RPS`, by `kv/testdata/config.json`'s rule in every language.
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| shape and defaults | a struct `T` and `kv.Defaults` | the defaults object | a dataclass or model, its own defaults |
+| a file's values | `kv.Defaults(fromYAML)` | `file: fromYAML` | `file=from_yaml` |
+| the environment | `kv.FromEnv("APP", ".env")` | read unless `env: false`; Bun loads `.env` itself | read unless `env=False`; `env_file=".env"` |
+| a variable of its own | `env:"DATABASE_URL"` | `env: { dbUrl: 'DATABASE_URL' }` | `env={"db_url": "DATABASE_URL"}` |
+| never kept | `secret:"true"` | `secret: ['dbUrl']` | `secret=["db_url"]` |
+| a check | `kv.Validate(fn)` | `schema` | `validate=fn` |
+| a rate | `kv.Rate(100, time.Second)` | `rate: '100/s'` | `rate="100/s"` |
+| retry after | `time.Duration` | milliseconds | seconds |
+
 ## Cancellation
 
 Each language's own: a `context.Context` in Go, a task's cancellation in
@@ -232,6 +275,10 @@ Built after it:
   connection speaks, its engines and the connection's capability, as its
   `WELCOME` said them.
 - **Cancellation on every Bun call**: `withSignal(signal, fn)`.
+- **Configs and a limiter**, in kv: a config of defaults, a file, the
+  environment and kept changes, hot in every process watching it; a GCRA
+  limiter of requests by key. `Watch` of a bucket of values, `AddWithin` for
+  quotas and history wait.
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.

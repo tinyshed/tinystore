@@ -10,6 +10,7 @@
 from ._console import ConsoleHandler, handler
 from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
+from .config import Config, Source
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -32,6 +33,7 @@ from .errors import (
 )
 from .jobs import ClaimedJob, Enqueue, Job, JobEntry, Queue, Repeat, cron, daily, every
 from .kv import Batch, Bucket, Counters, Entry
+from .limiter import Allowance, Limiter
 from .metrics import Aggregate, Condition, Plan, Series, none_of, one_of, prefix
 from .records import Cursor, Record, trace
 from .sql import Database, Done
@@ -39,6 +41,7 @@ from .store import Status, Store, connect, open
 
 __all__ = [
     "Aggregate",
+    "Allowance",
     "Batch",
     "BlobBucket",
     "BlobObject",
@@ -47,6 +50,7 @@ __all__ = [
     "ClaimedJob",
     "ClosedError",
     "Condition",
+    "Config",
     "ConflictError",
     "ConsoleHandler",
     "CorruptError",
@@ -63,6 +67,7 @@ __all__ = [
     "Job",
     "JobEntry",
     "LimitError",
+    "Limiter",
     "OutcomeUnknownError",
     "Page",
     "PermissionDeniedError",
@@ -72,6 +77,7 @@ __all__ = [
     "Record",
     "Repeat",
     "Series",
+    "Source",
     "Status",
     "Store",
     "SuspendedError",

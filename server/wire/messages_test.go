@@ -78,6 +78,10 @@ var schema = map[string][]field{
 		{3, "default ttl", "uint"},
 		{4, "sliding", "uint"},
 		{5, "lose at most", "uint"},
+		{6, "config", "bool"},
+		{7, "rate", "uint"},
+		{8, "per", "uint"},
+		{9, "burst", "uint"},
 	},
 	"kv.call":      kvCall,
 	"kv.operation": append([]field{{0, "method", "uint"}}, kvCall...),
@@ -89,8 +93,11 @@ var schema = map[string][]field{
 		{4, "expires", "int"},
 		{5, "key", "key"},
 	},
-	"kv.results": {{1, "entries", "[]kv.entry"}},
-	"kv.page":    {{1, "more", "bool"}, {2, "after", "key"}},
+	"kv.results":   {{1, "entries", "[]kv.entry"}},
+	"kv.page":      {{1, "more", "bool"}, {2, "after", "key"}},
+	"kv.allowance": {{1, "ok", "bool"}, {2, "left", "uint"}, {3, "retry after", "uint"}},
+	"kv.configure": {{1, "handle", "uint"}, {2, "set", "[]str"}, {3, "reset", "[]str"}},
+	"kv.kept":      {{1, "changes", "uint"}, {2, "fields", "[]str"}},
 
 	"jobs.queue": {
 		{1, "name", "str"},
@@ -315,6 +322,9 @@ var methods = []struct {
 	{"kv.batch", wire.KVBatch},
 	{"kv.view", wire.KVView},
 	{"kv.scan", wire.KVScan},
+	{"kv.allow", wire.KVAllow},
+	{"kv.configure", wire.KVConfigure},
+	{"kv.watch", wire.KVWatch},
 	{"jobs.open", wire.JobsOpen},
 	{"jobs.enqueue", wire.JobsEnqueue},
 	{"jobs.update", wire.JobsUpdate},
@@ -479,6 +489,21 @@ func kvExamples() []example {
 		of("a batch's results", "kv.results", wire.KVResults{Entries: []wire.KVEntry{
 			{Found: true, Version: []byte("9")}, {},
 		}}),
+		of("a config", "kv.bucket", wire.KVBucket{Name: "app", Config: true}),
+		of("a limiter of 100 a second, 20 at once", "kv.bucket", wire.KVBucket{
+			Name: "api", Rate: 100, Per: 1000, Burst: 20,
+		}),
+		of("kv.allow of 2 requests of a key under an owner", "kv.call", wire.KVCall{
+			Handle: 4, Owners: []string{"tenant-7"}, Key: "user-1", N: 2,
+		}),
+		of("an allowance that passes", "kv.allowance", wire.KVAllowance{OK: true, Left: 18}),
+		of("an allowance that waits", "kv.allowance", wire.KVAllowance{RetryAfter: 50}),
+		of("kv.configure keeping two fields and forgetting one", "kv.configure", wire.KVConfigChange{
+			Handle: 5, Set: []string{"port", "4000", "origins", `["a.com","b.com"]`}, Reset: []string{"limits.rps"},
+		}),
+		of("a watch's kept fields after three changes", "kv.kept", wire.KVKept{
+			Changes: 3, Fields: []string{"origins", `["a.com","b.com"]`, "port", "4000"},
+		}),
 	}
 }
 

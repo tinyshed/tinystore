@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -12,11 +15,14 @@ import (
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// kvHandle is a bucket of values, or counters, a session opened
+// kvHandle is a bucket of values, counters, a config or a limiter a session
+// opened: one of the four is set
 type kvHandle struct {
 	name     string
 	values   *kv.Bucket[kv.Raw]
 	counters *kv.Counters
+	config   *kv.RawConfig
+	limiter  *kv.Limiter
 	state    *kv.Store
 }
 
@@ -31,6 +37,9 @@ func (s *Server) kvMethods(methods map[wire.Method]handler) {
 	methods[wire.KVBatch] = kvBatch
 	methods[wire.KVView] = kvView
 	methods[wire.KVScan] = kvScan
+	methods[wire.KVAllow] = kvAllow
+	methods[wire.KVConfigure] = kvConfigure
+	methods[wire.KVWatch] = kvWatch
 }
 
 func kvOpen(c *call) error {
@@ -43,15 +52,44 @@ func kvOpen(c *call) error {
 		return err
 	}
 	opened := &kvHandle{name: ask.Name, state: state}
-	if ask.Counters {
+	switch {
+	case kinds(ask) > 1:
+		err = fmt.Errorf("%w: kv: %q opened as more than one of counters, a config and a limiter",
+			tinystore.ErrInvalid, ask.Name)
+	case ask.Counters:
 		opened.counters, err = kv.OpenCounters(c.ctx, state, ask.Name, counterOptions(ask)...)
-	} else {
+	case ask.Config:
+		opened.config, err = kv.OpenRawConfig(c.ctx, state, ask.Name)
+	case ask.Rate > 0:
+		opened.limiter, err = kv.OpenLimiter(c.ctx, state, ask.Name, limiterOptions(ask)...)
+	default:
 		opened.values, err = kv.OpenBucket[kv.Raw](c.ctx, state, ask.Name, bucketOptions(ask)...)
 	}
 	if err != nil {
 		return err
 	}
 	return respond(c, wire.Handle{Handle: c.session.kvHandles.add(opened)})
+}
+
+// kinds is how many of counters, a config and a limiter a bucket asks to be
+func kinds(ask wire.KVBucket) int {
+	n := 0
+	for _, asked := range []bool{ask.Counters, ask.Config, ask.Rate > 0} {
+		if asked {
+			n++
+		}
+	}
+	return n
+}
+
+func limiterOptions(ask wire.KVBucket) []kv.LimiterOption {
+	options := []kv.LimiterOption{
+		kv.Rate(int64(min(ask.Rate, math.MaxInt64)), time.Duration(ask.Per)*time.Millisecond),
+	}
+	if ask.Burst > 0 {
+		options = append(options, kv.Burst(int64(min(ask.Burst, math.MaxInt64))))
+	}
+	return options
 }
 
 func bucketOptions(ask wire.KVBucket) []kv.BucketOption {
@@ -95,6 +133,9 @@ func kvOne(c *call, method wire.Method) error {
 
 // run is one call on a handle, inside tx when it is not nil
 func (h *kvHandle) run(ctx context.Context, tx *kv.Tx, method wire.Method, ask wire.KVCall) (wire.KVEntry, error) {
+	if err := h.only("values or counters"); err != nil {
+		return wire.KVEntry{}, err
+	}
 	if h.counters != nil {
 		counters := h.counters.Of(owners(ask.Owners)...)
 		if tx != nil {
@@ -244,7 +285,7 @@ func kvScan(c *call) error {
 		return err
 	}
 	if handle.values == nil {
-		return fmt.Errorf("%w: counters %q are read a key at a time", tinystore.ErrInvalid, handle.name)
+		return fmt.Errorf("%w: kv: %q is not a bucket of values, which scan reads", tinystore.ErrInvalid, handle.name)
 	}
 	query := kv.Query{After: ask.After, Limit: int(min(ask.Limit, math.MaxInt32))}
 	page, err := handle.values.Of(owners(ask.Owners)...).Scan(c.ctx, query)
@@ -371,4 +412,94 @@ func (e *opError) what() map[string]string {
 	}
 	what["call"] = strconv.Itoa(e.index)
 	return what
+}
+
+// only refuses a call that a config or a limiter does not take: a config is
+// changed by configure and read by watch, and a limiter answers allow alone
+func (h *kvHandle) only(what string) error {
+	switch {
+	case h.config != nil:
+		return fmt.Errorf("%w: kv: %q is a config, which takes configure and watch, not a call of %s",
+			tinystore.ErrInvalid, h.name, what)
+	case h.limiter != nil:
+		return fmt.Errorf("%w: kv: %q is a limiter, which takes allow, not a call of %s",
+			tinystore.ErrInvalid, h.name, what)
+	}
+	return nil
+}
+
+// kvAllow asks a limiter for n requests of a key, one when n is absent
+func kvAllow(c *call) error {
+	var ask wire.KVCall
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	handle, err := c.session.kvHandles.get(ask.Handle)
+	if err != nil {
+		return err
+	}
+	if handle.limiter == nil {
+		return fmt.Errorf("%w: kv: %q is not a limiter, which allow asks", tinystore.ErrInvalid, handle.name)
+	}
+	allowance, err := handle.limiter.Of(owners(ask.Owners)...).AllowN(c.ctx, ask.Key, max(ask.N, 1))
+	if err != nil {
+		return err
+	}
+	wait := (allowance.RetryAfter + time.Millisecond - 1) / time.Millisecond
+	return respond(c, wire.KVAllowance{
+		OK: allowance.OK, Left: uint64(allowance.Left), RetryAfter: uint64(wait), //nolint:gosec // never negative
+	})
+}
+
+// kvConfigure keeps and forgets a config's fields in one transaction
+func kvConfigure(c *call) error {
+	var ask wire.KVConfigChange
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	handle, err := c.session.kvHandles.get(ask.Handle)
+	if err != nil {
+		return err
+	}
+	if handle.config == nil {
+		return fmt.Errorf("%w: kv: %q is not a config, which configure changes", tinystore.ErrInvalid, handle.name)
+	}
+	set := make(map[string]json.RawMessage, len(ask.Set)/2)
+	for i := 0; i+1 < len(ask.Set); i += 2 {
+		set[ask.Set[i]] = json.RawMessage(ask.Set[i+1])
+	}
+	if err = handle.config.Change(c.ctx, set, ask.Reset); err != nil {
+		return err
+	}
+	return respond(c, wire.Empty{})
+}
+
+// kvWatch sends a config's kept fields now and after each change, until the
+// client cancels the stream or the server closes
+func kvWatch(c *call) error {
+	var ask wire.KVCall
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	handle, err := c.session.kvHandles.get(ask.Handle)
+	if err != nil {
+		return err
+	}
+	if handle.config == nil {
+		return fmt.Errorf("%w: kv: %q is not a config, which watch follows", tinystore.ErrInvalid, handle.name)
+	}
+	c.follow()
+	if err = begin(c, wire.Empty{}); err != nil {
+		return err
+	}
+	for kept, changes := range handle.config.Watch(c.ctx) {
+		fields := make([]string, 0, 2*len(kept))
+		for _, path := range slices.Sorted(maps.Keys(kept)) {
+			fields = append(fields, path, string(kept[path]))
+		}
+		if err = item(c, wire.KVKept{Changes: uint64(changes), Fields: fields}); err != nil { //nolint:gosec // a count
+			return err
+		}
+	}
+	return context.Cause(c.ctx)
 }
