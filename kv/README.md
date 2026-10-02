@@ -15,8 +15,8 @@ seen, err := kv.OpenBucket[struct{}](ctx, state, "stripe-events") // a set
 attempts, err := kv.OpenCounters(ctx, state, "login-attempts",
 	kv.DefaultTTL(15*time.Minute), kv.LoseAtMost(time.Second))
 
-err = sessions.Of(user.ID).Set(ctx, token, Session{Device: device})
-s, found, err := sessions.Of(user.ID).Get(ctx, token) // and thirty more days from now, once a day
+err = sessions.Of(user.ID).Set(ctx, digest(token), Session{Device: device}) // a copy of the file signs nobody in
+s, found, err := sessions.Of(user.ID).Get(ctx, digest(token))               // and thirty more days from now, once a day
 err = sessions.Of(user.ID).Clear(ctx)                 // signed out everywhere
 for entry, err := range sessions.Of(user.ID).All(ctx) { … }
 userID, found, err := codes.Take(ctx, digest(code)) // read and burn

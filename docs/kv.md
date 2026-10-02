@@ -95,19 +95,34 @@ Of(owners ...any) *kv.Once[V]
 
 They are the API's examples, the gates' workloads and the round's.
 
-**Sessions.** The cookie carries the user's id and a token.
+**Sessions.** The cookie carries the user's id and a token; the bucket keeps
+a digest of the token, as the sign-in link below keeps one of its code, so
+that a copy of the file signs nobody in.
 
 ```go
 sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.Sliding(30*24*time.Hour))
 
 token := rand.Text()
-err = sessions.Of(user.ID).Set(ctx, token, Session{Device: r.UserAgent(), Since: time.Now()})
+err = sessions.Of(user.ID).Set(ctx, digest(token), Session{Device: r.UserAgent(), Since: time.Now()})
 
-s, found, err := sessions.Of(c.UserID).Get(ctx, c.Token)           // an expired session is not found
-err = sessions.Of(c.UserID).Delete(ctx, c.Token)                  // sign out here
+s, found, err := sessions.Of(c.UserID).Get(ctx, digest(c.Token)) // an expired session is not found
+err = sessions.Of(c.UserID).Delete(ctx, digest(c.Token))          // sign out here
 err = sessions.Of(c.UserID).Clear(ctx)                            // and everywhere
 page, err := sessions.Of(c.UserID).Scan(ctx, kv.Query{Limit: 20}) // "signed in on 3 devices"
+
+fresh := rand.Text() // after a password change: the old token stops as the new one starts
+err = state.Tx(ctx, func(tx *kv.Tx) error {
+	session, there, err := sessions.WithTx(tx).Of(c.UserID).Take(ctx, digest(c.Token))
+	if err != nil || !there {
+		return err
+	}
+	return sessions.WithTx(tx).Of(c.UserID).Set(ctx, digest(fresh), session)
+})
 ```
+
+The users, their passwords and their providers are the application's: kv
+keeps what a request must remember until the next, and no sessions API sits
+above the bucket.
 
 **A sign-in link.** The code lives fifteen minutes and works once.
 

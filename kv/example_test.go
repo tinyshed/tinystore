@@ -47,8 +47,10 @@ type Session struct {
 	Device string
 }
 
-// Sessions live thirty days from their last request, a user sees where they
-// are signed in, and signs out everywhere at once.
+// Sessions live thirty days from their last request and are kept by a digest
+// of their token, so that a copy of kv.db signs nobody in. A token is rotated
+// in one write, a user sees where they are signed in, and signs out
+// everywhere at once.
 func Example_sessions() {
 	ctx := context.Background()
 	state, clock, done := exampleState()
@@ -56,27 +58,40 @@ func Example_sessions() {
 	sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.Sliding(30*24*time.Hour))
 	check(err)
 
-	check(sessions.Of(42).Set(ctx, "t1", Session{Device: "phone"}))
-	check(sessions.Of(42).Set(ctx, "t2", Session{Device: "laptop"}))
+	check(sessions.Of(42).Set(ctx, digest("t1"), Session{Device: "phone"}))
+	check(sessions.Of(42).Set(ctx, digest("t2"), Session{Device: "laptop"}))
 
 	clock.advance(20 * 24 * time.Hour)
-	s, found, err := sessions.Of(42).Get(ctx, "t1") // and thirty more days from now
+	s, found, err := sessions.Of(42).Get(ctx, digest("t1")) // and thirty more days from now
 	check(err)
 	fmt.Println(s.Device, found)
 
+	// after a password change: a new token in the old one's place, in one write
+	check(state.Tx(ctx, func(tx *kv.Tx) error {
+		session, there, takeErr := sessions.WithTx(tx).Of(42).Take(ctx, digest("t1"))
+		if takeErr != nil || !there {
+			return takeErr
+		}
+		return sessions.WithTx(tx).Of(42).Set(ctx, digest("t3"), session)
+	}))
+	_, found, err = sessions.Of(42).Get(ctx, digest("t1"))
+	check(err)
+	fmt.Println("the old token signs in:", found)
+
 	for entry, err := range sessions.Of(42).All(ctx) {
 		check(err)
-		fmt.Println("signed in:", entry.Key, entry.Value.Device)
+		fmt.Println("signed in:", entry.Value.Device)
 	}
 
 	check(sessions.Of(42).Clear(ctx))
-	_, found, err = sessions.Of(42).Get(ctx, "t2")
+	_, found, err = sessions.Of(42).Get(ctx, digest("t3"))
 	check(err)
 	fmt.Println(found)
-	// Output:
+	// Unordered output:
 	// phone true
-	// signed in: t1 phone
-	// signed in: t2 laptop
+	// the old token signs in: false
+	// signed in: phone
+	// signed in: laptop
 	// false
 }
 
