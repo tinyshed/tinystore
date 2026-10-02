@@ -34,7 +34,7 @@ from .kv import Batch, Bucket, Counters, Entry
 from .metrics import Aggregate, Condition, Series, none_of, one_of, prefix
 from .records import Cursor, Record, trace
 from .sql import Database, Done
-from .store import Store, connect, open
+from .store import Status, Store, connect, open
 
 __all__ = [
     "Aggregate",
@@ -69,6 +69,7 @@ __all__ = [
     "Record",
     "Repeat",
     "Series",
+    "Status",
     "Store",
     "SuspendedError",
     "TinystoreError",

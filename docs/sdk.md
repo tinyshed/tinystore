@@ -146,8 +146,16 @@ These were alike from the start, and stay so:
 ## Cancellation
 
 Each language's own: a `context.Context` in Go, a task's cancellation in
-Python, an `AbortSignal` in Bun where a call takes one (`work`, and a blob's
-`put` and `get`, today). All end in one `CANCEL` on the wire.
+Python, and in Bun an `AbortSignal` every call inside `withSignal(signal, fn)`
+runs under, carried as AsyncLocalStorage carries a trace; `work`, and a blob's
+`put` and `get`, also take a signal of their own. All end in one `CANCEL` on
+the wire.
+
+```ts
+await withSignal(AbortSignal.timeout(2000), async () => {
+	const notes = await app.all`select * from notes`   // rejects once two seconds pass
+})
+```
 
 ## The proposals, decided
 
@@ -182,6 +190,10 @@ Built after it:
   in Go, `withTrace({ traceId, spanId }, fn)` in Bun over AsyncLocalStorage,
   `with tinystore.trace(trace_id, span_id):` in Python over contextvars. No
   dependency on OpenTelemetry, whose ids are the same bytes.
+- **`status()`** in both SDKs: the server's version, the protocol the
+  connection speaks, its engines and the connection's capability, as its
+  `WELCOME` said them.
+- **Cancellation on every Bun call**: `withSignal(signal, fn)`.
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.
@@ -190,11 +202,10 @@ Designed, waiting for engine work (each needs the engine, the wire and both
 SDKs in one change):
 
 - **`explain`**: what a query would open, fetch and decode, before it runs.
-- **`status` and `capabilities`**: what a server serves, asked before a call.
-  A client newer than its server is told already: a field or a method the
-  server does not know is `UnimplementedError`, naming the field and the
+- **`capabilities`**: what a server serves beyond its version, asked before a
+  call. A client newer than its server is told already: a field or a method
+  the server does not know is `UnimplementedError`, naming the field and the
   server's version (`server.md` "Versions").
-- **Cancellation on every Bun call**, through an `AbortSignal` option.
 
 Declined:
 

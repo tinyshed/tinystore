@@ -6,6 +6,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
+import { currentSignal } from './cancel.ts'
 import {
 	CancelledError,
 	ClosedError,
@@ -199,7 +200,16 @@ export class Stream {
 		for (const w of this.#creditWaiters.splice(0)) {
 			w.resolve()
 		}
+		this.#unwatch?.()
+		this.#unwatch = undefined
 	}
+
+	/** Cancels the stream when the signal aborts, until the stream finishes. */
+	watchSignal(signal: AbortSignal): void {
+		this.#unwatch = watch(signal, this)
+	}
+
+	#unwatch: (() => void) | undefined
 }
 
 /** A frame waiting for the connection's credit, in the order it was asked for. */
@@ -298,6 +308,8 @@ export class Session {
 	 * waits while the streams in flight are all in use.
 	 */
 	async open(method: number, body: Uint8Array, end: boolean): Promise<Stream> {
+		const signal = currentSignal()
+		signal?.throwIfAborted()
 		const agreed = await this.welcomed
 		if (body.length > agreed.maxBody) {
 			throw new LimitError(
@@ -319,6 +331,9 @@ export class Session {
 			counted: body.length,
 			request: true,
 		})
+		if (signal !== undefined) {
+			stream.watchSignal(signal)
+		}
 		return stream
 	}
 

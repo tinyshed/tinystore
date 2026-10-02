@@ -123,5 +123,8 @@ A sample comes back bit for bit, `-0` and a NaN's payload included; a range is
 
 Every error is its code's class, a `TinystoreError`: `InvalidError`,
 `ConflictError`, `LimitError`, `TooOldError` and the rest, each carrying what it
-names. `work`, `put` and `get` of blobs take an `AbortSignal`; an abort is one
-`CANCEL` on the wire.
+names; a `LimitError` names the bound, what the call wanted and the bound.
+Every call inside `withSignal(signal, fn)` ends when the signal aborts, one
+`CANCEL` on the wire; `work`, `put` and `get` of blobs also take a signal of
+their own. `await store.status()` says what the server is: its version, its
+protocol, its engines.

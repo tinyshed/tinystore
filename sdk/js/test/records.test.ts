@@ -15,6 +15,7 @@ import {
 	prefix,
 	type Store,
 	TooOldError,
+	withSignal,
 	withTrace,
 } from '../src/index.ts'
 
@@ -176,6 +177,28 @@ describe('logger', () => {
 		expect(log.dropped).toBe(1)
 		const { items } = await store.records.scan({ streams: ['quiet'] })
 		expect(items.map(r => r.body)).toEqual(['one', 'two', 'three'])
+	})
+})
+
+describe('status and cancelling', () => {
+	test('a store says what its server is', async () => {
+		const status = await store.status()
+		expect(status.protocol).toBe(1)
+		expect(status.engines).toContain('records')
+		expect(status.capability).toBe('admin')
+	})
+
+	test('every call under an aborted signal is refused, and one aborted midway rejects', async () => {
+		const stopped = new AbortController()
+		stopped.abort()
+		expect(await caught(withSignal(stopped.signal, () => store.records.scan({})))).toBeDefined()
+		expect(
+			await caught(withSignal(stopped.signal, () => store.kv.bucket('signals').get('k'))),
+		).toBeDefined()
+		const fine = await withSignal(new AbortController().signal, () =>
+			store.kv.bucket('signals').get('k'),
+		)
+		expect(fine).toBeUndefined()
 	})
 })
 

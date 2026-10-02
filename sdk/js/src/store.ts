@@ -26,6 +26,17 @@ export interface OpenOptions {
 	idle?: Duration
 }
 
+/** What a server is, as its WELCOME said it to this store's connection. */
+export interface Status {
+	/** its version: v0.1.0, or (devel) for one built from a checkout */
+	server: string
+	protocol: number
+	/** the engines it serves */
+	engines: string[]
+	/** admin may change a schema and drop records; data reads and writes */
+	capability: 'admin' | 'data'
+}
+
 export interface ConnectOptions {
 	/** a line of the server's tokens file, admin or data */
 	token: string
@@ -51,6 +62,22 @@ export class Store implements AsyncDisposable {
 		this.blobs = new Blobs(link)
 		this.records = new Records(link)
 		this.metrics = new Metrics(link)
+	}
+
+	/**
+	 * What the server this store reaches is: its version, the protocol the
+	 * connection speaks, the engines it serves and what the connection may do.
+	 * A client newer than its server learns here what it may ask for; a call
+	 * past it is UnimplementedError, naming the server's version.
+	 */
+	async status(): Promise<Status> {
+		const agreed = await (await this.#link.connection()).session.welcomed
+		return {
+			server: agreed.server,
+			protocol: Number(agreed.protocol),
+			engines: [...agreed.engines],
+			capability: agreed.capability === 'admin' ? 'admin' : 'data',
+		}
 	}
 
 	/**

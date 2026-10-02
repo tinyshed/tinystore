@@ -1,4 +1,5 @@
 export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from './blobs.ts'
+export { withSignal } from './cancel.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'
 export type {
@@ -67,7 +68,14 @@ export type {
 	SqlValue,
 	Statement,
 } from './sql.ts'
-export { type ConnectOptions, connect, type OpenOptions, open, Store } from './store.ts'
+export {
+	type ConnectOptions,
+	connect,
+	type OpenOptions,
+	open,
+	type Status,
+	Store,
+} from './store.ts'
 export type { Duration, Time } from './time.ts'
 export { type Trace, withTrace } from './trace.ts'
 export type { Key } from './wire/codec.ts'

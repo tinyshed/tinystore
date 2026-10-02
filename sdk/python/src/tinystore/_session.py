@@ -58,6 +58,7 @@ class Agreed:
     """What a WELCOME agreed."""
 
     server: str
+    protocol: int
     instance: bytes
     capability: str
     max_body: int
@@ -413,6 +414,7 @@ class Session:
             raise ProtocolError("the server cannot prove it read SERVE: another process holds its endpoint")
         self.agreed = Agreed(
             server=w.get("server", ""),
+            protocol=w.get("protocol", PROTOCOL),
             instance=w.get("instance", b""),
             capability=w.get("capability", "data"),
             max_body=w.get("max_body", 0),

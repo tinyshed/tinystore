@@ -431,6 +431,9 @@ promises what an older and a newer side do with each other.
   method `unimplemented`, naming its version. After the first release a
   message never changes meaning and a field's number is never reused.
 
+An SDK's `status()` says what the `WELCOME` said: the server's version, the
+protocol the connection speaks, its engines and the connection's capability.
+
 Not built: a list of capabilities in `WELCOME`, for a client that must choose
 before it calls rather than learn from `unimplemented`, which any release may
 add, since it is a field a client may skip; an SDK saying when the sidecar it

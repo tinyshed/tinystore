@@ -6,6 +6,7 @@
 import { randomBytes } from 'node:crypto'
 import { join, resolve } from 'node:path'
 
+import { currentSignal } from './cancel.ts'
 import { ClosedError, OutcomeUnknownError, TinystoreError, UnavailableError } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
 import { LostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
@@ -290,7 +291,7 @@ export class Link {
 		signal?: AbortSignal,
 	): Promise<T> {
 		for (let tries = 0; ; tries++) {
-			signal?.throwIfAborted()
+			;(signal ?? currentSignal())?.throwIfAborted()
 			const connection = await this.connection()
 			try {
 				return await attempt(connection)

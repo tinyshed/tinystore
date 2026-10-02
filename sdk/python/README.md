@@ -133,5 +133,7 @@ is `since`, or `from_` and `to`.
 
 A duration is a `timedelta`, seconds, or text such as `"1h30m"`. Every error
 is its code's class, a `TinystoreError`: `InvalidError`, `ConflictError`,
-`LimitError`, `TooOldError` and the rest, each carrying what it names. A
-cancelled task cancels its call, one `CANCEL` on the wire.
+`LimitError`, `TooOldError` and the rest, each carrying what it names; a
+`LimitError` names the bound, what the call wanted and the bound. A cancelled
+task cancels its call, one `CANCEL` on the wire. `await store.status()` says
+what the server is: its version, its protocol, its engines.

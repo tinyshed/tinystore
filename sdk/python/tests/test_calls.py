@@ -280,3 +280,8 @@ async def test_lines_and_appended_records_take_the_trace_they_were_made_in(store
         log.removeHandler(handler)
     page = await store.records.scan(streams=["traced"], trace_id=trace_id)
     assert sorted(str(r.body) if r.name == "log" else r.name for r in page.items) == ["charged", "paid"]
+
+
+async def test_a_store_says_what_its_server_is(store: tinystore.Store) -> None:
+    status = await store.status()
+    assert status.protocol == 1 and "records" in status.engines and status.capability == "admin"

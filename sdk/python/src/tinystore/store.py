@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from ._connection import Link, private_child, remote, sidecar
 from ._runtime import find_binary
@@ -22,6 +23,16 @@ if TYPE_CHECKING:
     from ._connection import Connection
 
 
+@dataclass(frozen=True, slots=True)
+class Status:
+    """What a server is: its version, v0.1.0 or (devel), the protocol, its engines, the connection's capability."""
+
+    server: str
+    protocol: int
+    engines: tuple[str, ...]
+    capability: Literal["admin", "data"]
+
+
 class Store:
     """The store: its engines, and one close. Opened by open or connect."""
 
@@ -32,6 +43,19 @@ class Store:
         self.blobs = Blobs(link)
         self.records = Records(link)
         self.metrics = Metrics(link)
+
+    async def status(self) -> Status:
+        """What the server this store reaches is, as its WELCOME said it.
+
+        Its version, the protocol the connection speaks, the engines it serves
+        and what the connection may do. A client newer than its server learns
+        here what it may ask for; a call past it is UnimplementedError, naming
+        the server's version.
+        """
+        connection = await self._link.connection()
+        agreed = await connection.session.welcomed
+        capability: Literal["admin", "data"] = "admin" if agreed.capability == "admin" else "data"
+        return Status(agreed.server, agreed.protocol, tuple(agreed.engines), capability)
 
     async def sql(self, name: str, *, migrations: Migrations | None = None) -> Database:
         """A database of the application's own, sql/<name>.db.
