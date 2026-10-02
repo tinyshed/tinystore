@@ -30,7 +30,7 @@ design document:
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
 | `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
-| `sdk/js`, `sdk/python` | the Bun and Python clients, tested against every vector and a real `tinystore serve` (`task sdk`) | | [server.md](docs/server.md) |
+| `sdk/js`, `sdk/python` | the Bun and Python clients, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md](docs/sdk.md), [server.md](docs/server.md) |
 
 Where the building differs from the design:
 
@@ -46,7 +46,7 @@ ordinary series; kv, jobs, blobs and sqldb report nothing yet. An aggregate
 answers a whole block inside one bucket from its exact summary; a cut block,
 the head and a block without exact sums decode raw.
 
-Not built: the SDKs' READMEs, examples and packages; a release.
+Not built: the SDKs' examples and published packages; a release.
 [docs/server.md](docs/server.md) "Building it" says where each server slice
 stands.
 
@@ -376,6 +376,7 @@ changing something, not to look something up.
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
 | [docs/server.md](docs/server.md)             | the server and sidecar: modes, discovery, capabilities, limits   |
 | [docs/wire.md](docs/wire.md)                 | the wire protocol's bytes: frames, credit, MessagePack, errors   |
+| [docs/sdk.md](docs/sdk.md)                   | the API in Go, Bun and Python side by side, and the rules for it |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
 | [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions |
 

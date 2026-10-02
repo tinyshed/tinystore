@@ -79,7 +79,7 @@ async def main() -> None:
         await drafts.set("note/1", "hello")
 
         reminders = store.jobs.queue("reminders", dict[str, int])
-        await reminders.enqueue({"note": 1}, after=3600)
+        await reminders.enqueue({"note": 1}, after="1h")
 
 asyncio.run(main())
 ```

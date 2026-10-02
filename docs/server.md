@@ -517,9 +517,11 @@ Each promise above is a test once its code exists; those marked built pass:
 
 ## SDKs
 
-Being built after the server, in `sdk/js`, for Bun and later Node, and
+Built after the server, in `sdk/js`, for Bun and later Node, and
 `sdk/python`: `tinystore` on npm, and `tinyshed-tinystore` on PyPI, imported
-as `tinystore`, since PyPI's `tinystore` is another project's.
+as `tinystore`, since PyPI's `tinystore` is another project's. What a program
+sees, side by side with Go, and the rules that keep the three alike are
+[sdk.md](sdk.md); this section is how they reach the server.
 
 ```ts
 import { ConflictError, open } from 'tinystore'
