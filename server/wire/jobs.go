@@ -272,6 +272,10 @@ type JobsEntry struct {
 	Ahead uint64
 	// Progress is what a running job's handler last reported, as JSON.
 	Progress string
+	// Ran is when the last run a handler finished began, unix milliseconds,
+	// and Took how many milliseconds it took.
+	Ran  int64
+	Took uint64
 }
 
 func (e JobsEntry) Append(dst []byte) []byte {
@@ -288,6 +292,8 @@ func (e JobsEntry) Append(dst []byte) []byte {
 	optionalStr(&m, 8, e.Repeat)
 	optionalUint(&m, 9, e.Ahead)
 	optionalStr(&m, 10, e.Progress)
+	optionalInt(&m, 11, e.Ran)
+	optionalUint(&m, 12, e.Took)
 	return m.End()
 }
 
@@ -315,6 +321,10 @@ func (e *JobsEntry) Decode(body []byte) error {
 			e.Ahead = d.Uint()
 		case 10:
 			e.Progress = d.Str()
+		case 11:
+			e.Ran = d.Int()
+		case 12:
+			e.Took = d.Uint()
 		}
 	}
 	return d.End()

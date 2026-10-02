@@ -14,7 +14,8 @@ create table _tinystore_jobs_queues (
 -- next: unix milliseconds, when the job is due; at: the time it runs for;
 -- attempt: the attempts counted before its lease's; again: the earliest time an
 -- Enqueue asked of the job while it ran; repeat: a repeating job's cron text
--- and zone; error: the last attempt's failure
+-- and zone; error: the last attempt's failure; ran and took: when the last run
+-- a handler finished began, unix milliseconds, and its milliseconds
 create table _tinystore_jobs (
     queue   integer not null,
     next    integer not null,
@@ -27,6 +28,8 @@ create table _tinystore_jobs (
     error   text,
     value   blob,
     spill   integer,
+    ran     integer,
+    took    integer,
     primary key (queue, next, id)
 ) strict, without rowid;
 
@@ -72,6 +75,8 @@ create table _tinystore_jobs_failed (
     error    text    not null,
     value    blob,
     spill    integer,
+    ran      integer,
+    took     integer,
     primary key (queue, id)
 ) strict, without rowid;
 

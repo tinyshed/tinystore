@@ -232,6 +232,8 @@ export const JobsEntry = message('jobs.entry', {
 	repeat: [8, str],
 	ahead: [9, uint],
 	progress: [10, str],
+	ran: [11, int],
+	took: [12, uint],
 })
 
 export const JobsLease = message('jobs.lease', { handle: [1, uint], lease: [2, uint] })

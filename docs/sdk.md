@@ -333,6 +333,7 @@ SDKs send the latest at most ten times a second.
 | a state | `jobs.Waiting`, `Running`, `Failed`, `Done`, `Cancelled` | `'waiting'`, `'running'`, `'failed'`, `'done'`, `'cancelled'` | the same strings |
 | a progress past 4 KiB | dropped and logged | `InvalidError` | `InvalidError` |
 | a running job's cancel, in its handler | the context ends, its cause `jobs.ErrCancelled` | `job.signal` aborts, its reason a `CancelledError` | the handler's task is cancelled |
+| the last run | `Ran time.Time`, `Took time.Duration`, zero before one | `ran: Date`, `took` milliseconds, undefined before one | `ran: datetime`, `took` seconds, `None` before one |
 
 ## Cancellation
 

@@ -118,6 +118,7 @@ func (w *watching) started(l *lease, stop context.CancelCauseFunc) bool {
 		return false
 	}
 	w.held[l.id] = &heldJob{lease: l, started: true, stop: stop}
+	l.begin(l.store.clock())
 	w.wake()
 	return true
 }

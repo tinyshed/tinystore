@@ -199,6 +199,23 @@ async def test_a_queue_waits_changes_cancels_and_works(store: tinystore.Store) -
     assert await claimed.get("k") is None
 
 
+async def test_a_job_keeps_its_last_run(store: tinystore.Store) -> None:
+    q = store.jobs.queue("last-run", str)
+    await q.enqueue("x", key="k")
+    fresh = await q.get("k")
+    assert fresh is not None and (fresh.ran, fresh.took) == (None, None)
+    before = time.time()
+    job = await q.claim()
+    assert job is not None
+    await asyncio.sleep(0.02)
+    await job.retry("busy", after="1h")
+    entry = await q.get("k")
+    assert entry is not None and entry.ran is not None and entry.took is not None
+    assert entry.ran.timestamp() >= before - 0.005
+    assert entry.took >= 0.02
+    assert entry.error == "busy"
+
+
 async def test_a_cancelled_work_loop_gives_its_jobs_back_uncounted(store: tinystore.Store) -> None:
     q = store.jobs.queue("slow", int)
     await q.enqueue(1, key="one")

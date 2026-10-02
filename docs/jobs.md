@@ -382,6 +382,13 @@ func (a *app) transcode(ctx context.Context, job jobs.Job[Video]) error {
   it in the order the queue runs them, less those running. It counts to
   10,000, so that a `Get` reads at most that many keys of the queue's order
   and a job further back reads as 10,000. `Scan` leaves it zero.
+- **A job keeps its last run.** `Ran` is when the run a handler last finished
+  began, acknowledged, retried, failed or snoozed, and `Took` how long it
+  took; `Err` beside them says why it failed, empty when it did not. A run
+  given back, its loop stopped, records none, and a job failed for good keeps
+  the run that failed it. A schedule's entry is so its whole state: `At` the
+  next run, `Ran`, `Took` and `Err` the last, which is what a page of cron jobs
+  shows.
 - **Progress lives in the store's memory.** `Job.Progress(v)` keeps `v` as
   JSON, 4 KiB at most, until the attempt is settled; past the bound it is
   dropped and logged once a quiet period. It is not written to the file: an
@@ -541,11 +548,11 @@ their own.
 
 ```text
 queues    id | name | kind | waiting                a queue or a schedule; its exact job count
-jobs      queue | next | id | key | at | attempt | again | repeat | error | value | spill
+jobs      queue | next | id | key | at | attempt | again | repeat | error | value | spill | ran | took
           without rowid, primary key (queue, next, id)
 keys      queue | key | next | id                   where a keyed job lies; left behind when it leaves
 leases    id | queue | next | attempt | until       a claimed job's lease; attempt is its token
-failed    queue | id | key | at | attempt | failed | error | value | spill   kept KeepFailed
+failed    queue | id | key | at | attempt | failed | error | value | spill | ran | took   kept KeepFailed
 spilled   id | value                                values past 512 bytes
 done      queue | key | until                       keys KeepDone remembers
 meta      name | value                              the high-water mark of job ids
@@ -617,6 +624,7 @@ The five cases are the gates' workloads.
 | a watch follows its job to its end | `TestAWatchFollowsItsJobToItsEnd` |
 | a progress past its bound is dropped | `TestAProgressPastItsBoundIsDropped` |
 | `MaxRunning` holds a queue to its places | `TestMaxRunningHoldsAQueueToItsPlaces` |
+| a job keeps its last run, and a run given back records none | `TestAJobKeepsItsLastRun` |
 | a job whose lease ended runs again | `TestAJobWhoseLeaseEndedRunsAgain` |
 | a stale lease settles nothing | `TestAStaleLeaseSettlesNothing` |
 | a job that kills its process fails after its attempts | `TestAJobThatKillsItsProcessFailsAfterItsAttempts` |

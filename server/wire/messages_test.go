@@ -137,6 +137,8 @@ var schema = map[string][]field{
 		{8, "repeat", "str"},
 		{9, "ahead", "uint"},
 		{10, "progress", "str"},
+		{11, "ran", "int"},
+		{12, "took", "uint"},
 	},
 	"jobs.lease": {{1, "handle", "uint"}, {2, "lease", "uint"}},
 	"jobs.held": {
@@ -578,6 +580,10 @@ func jobsExamples() []example {
 		of("a running job and what its handler reported", "jobs.entry", wire.JobsEntry{
 			Found: true, Key: "video:7", Value: `{"video":7}`, At: at, Attempt: 1, State: 2,
 			Progress: `{"done":21,"total":100}`,
+		}),
+		of("a schedule's next run beside its last, which failed", "jobs.entry", wire.JobsEntry{
+			Found: true, Key: "purge", Value: `{}`, At: at + 86_400_000, State: 1, Err: "the disk is full",
+			Repeat: "10 3 * * * Europe/Moscow", Ran: at, Took: 4_200,
 		}),
 		of("jobs.claim for a minute", "jobs.lease", wire.JobsLease{Handle: 1, Lease: 60_000}),
 		of("a held job", "jobs.held", wire.JobsHeld{

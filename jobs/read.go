@@ -65,6 +65,11 @@ type Entry[V any] struct {
 	Progress json.RawMessage
 	// Err is the job's last failure.
 	Err string
+	// Ran is when the last run a handler finished began, and Took how long it
+	// took: acknowledged, retried, failed or snoozed. Both are zero before a
+	// handler finished one, and a run given back records none.
+	Ran  time.Time
+	Took time.Duration
 	// Repeat is a repeating job's repeat as jobs.db keeps it: cron text and
 	// zone, or an interval.
 	Repeat string
@@ -127,6 +132,8 @@ type found struct {
 	value    []byte
 	spill    sql.NullInt64
 	size     int // the value's bytes, in the row or spilled
+	ran      sql.NullInt64
+	took     sql.NullInt64
 }
 
 // A job is found through its key, whose row names where the job lies. A key a
@@ -136,11 +143,13 @@ type found struct {
 // column takes it from the row's header and leaves its overflow pages alone.
 const (
 	keyedColumns = `j.key, j.next, j.id, j.at, j.attempt, l.attempt, 0, j.repeat, j.error, j.value, j.spill,
-			coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0)
+			coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0),
+			j.ran, j.took
 		from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
 		left join _tinystore_jobs_leases l on l.id = j.id and l.until > ?9`
 	failedColumns = `f.key, f.failed, f.id, f.at, f.attempt, null, 1, null, f.error, f.value, f.spill,
-			coalesce(length(f.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = f.spill), 0)
+			coalesce(length(f.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = f.spill), 0),
+			f.ran, f.took
 		from _tinystore_jobs_failed f`
 	getWaiting   = `select ` + keyedColumns + ` where k.queue = ?1 and k.key = ?2`
 	getFailed    = `select ` + failedColumns + ` where f.queue = ?1 and f.key = ?2`
@@ -403,7 +412,7 @@ func scanFound(rows *sql.Rows) ([]found, error) {
 		var job found
 		var failed int
 		err := rows.Scan(&job.key, &job.time, &job.id, &job.at, &job.attempt, &job.leased, &failed, &job.repeat,
-			&job.failure, &job.value, &job.spill, &job.size)
+			&job.failure, &job.value, &job.spill, &job.size, &job.ran, &job.took)
 		job.failed = failed == 1
 		jobs = append(jobs, job)
 		return err
@@ -429,7 +438,10 @@ func (q *Queue[V]) stateOf(job found) State {
 func (q *Queue[V]) entryOf(ctx context.Context, r sqlite.Reader, job found) (Entry[V], int64, error) {
 	entry := Entry[V]{
 		Key: job.key.String, At: time.UnixMilli(job.at), Attempt: int(job.attempt), State: q.stateOf(job),
-		Err: job.failure.String, Repeat: job.repeat.String,
+		Err: job.failure.String, Repeat: job.repeat.String, Took: time.Duration(job.took.Int64) * time.Millisecond,
+	}
+	if job.ran.Valid {
+		entry.Ran = time.UnixMilli(job.ran.Int64)
 	}
 	var until int64
 	if entry.State == Running {

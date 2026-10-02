@@ -91,6 +91,7 @@ type lease struct {
 
 	mu        sync.Mutex
 	until     int64
+	began     int64 // when a handler, or a Claim's caller, began the job; zero until one did
 	settled   bool
 	lost      bool // another claim, or a Cancel, took the job after the lease ended
 	cancelled bool // Cancel took the job while the lease held it
@@ -189,6 +190,25 @@ func (l *lease) wasCancelled() bool {
 	return l.cancelled
 }
 
+// begin says a handler, or a Claim's caller, began the job at now
+func (l *lease) begin(now int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.began = now
+}
+
+// lastRun is the run a settlement at now records: when it began and how long
+// it took, none when nothing began it
+func (l *lease) lastRun(now int64) (ran, took sql.NullInt64) {
+	l.mu.Lock()
+	began := l.began
+	l.mu.Unlock()
+	if began == 0 {
+		return sql.NullInt64{}, sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: began, Valid: true}, sql.NullInt64{Int64: max(now-began, 0), Valid: true}
+}
+
 // settled is what a settlement changed that memory follows once it commits
 type settled struct {
 	gone   bool  // the job left the queue's rows
@@ -233,12 +253,13 @@ const (
 	deleteDone  = `delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
 		and again is null and repeat is null
 		returning spill`
-	moveJob = `update _tinystore_jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7
+	moveJob = `update _tinystore_jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7,
+			ran = coalesce(?8, ran), took = coalesce(?9, took)
 		where queue = ?1 and next = ?2 and id = ?3`
 	keepDoneKey = `insert into _tinystore_jobs_done (queue, key, until) values (?1, ?2, ?3)
 		on conflict (queue, key) do update set until = excluded.until`
-	failJob = `insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill)
-		select queue, id, key, at, ?4, ?5, ?6, value, spill from _tinystore_jobs
+	failJob = `insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill, ran, took)
+		select queue, id, key, at, ?4, ?5, ?6, value, spill, coalesce(?7, ran), coalesce(?8, took) from _tinystore_jobs
 		where queue = ?1 and next = ?2 and id = ?3`
 	dropJobRow = `delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3`
 )
@@ -339,9 +360,11 @@ func (s settlement) apply(ctx context.Context, w sqlite.Writer, h heldRow, now i
 		return l.fail(ctx, w, h, now, describe(s.cause))
 	case snoozed:
 		due := earliest(when(s.timing.at, s.timing.after, true, now, now), h.again)
-		return settled{due: due}, l.move(ctx, w, due, l.at, h.attempt, h.failure)
+		to := moved{next: due, at: l.at, attempt: h.attempt, failure: h.failure}
+		return settled{due: due}, l.move(ctx, w, l.withRun(to, now))
 	case givenBack:
-		return settled{due: now}, l.move(ctx, w, earliest(l.next, h.again), l.at, h.attempt, h.failure)
+		to := moved{next: earliest(l.next, h.again), at: l.at, attempt: h.attempt, failure: h.failure}
+		return settled{due: now}, l.move(ctx, w, to)
 	}
 	return settled{}, fmt.Errorf("jobs: an outcome of %d", s.how)
 }
@@ -350,7 +373,7 @@ func (s settlement) apply(ctx context.Context, w sqlite.Writer, h heldRow, now i
 // run again, to its next time
 func (l *lease) ack(ctx context.Context, w sqlite.Writer, h heldRow, now int64) (settled, error) {
 	if next, again := l.nextRun(h, now); again {
-		return settled{due: next}, l.move(ctx, w, next, next, 0, sql.NullString{})
+		return settled{due: next}, l.move(ctx, w, l.withRun(moved{next: next, at: next}, now))
 	}
 	var spill sql.NullInt64
 	if err := sqlite.QueryRowByKey(ctx, w, deleteJob, l.queue.id, l.next, l.id).Scan(&spill); err != nil {
@@ -384,7 +407,8 @@ func (l *lease) retry(ctx context.Context, w sqlite.Writer, h heldRow, now int64
 		due = min(due, next)
 	}
 	failure := sql.NullString{String: cause, Valid: true}
-	return settled{due: due}, l.move(ctx, w, due, l.at, l.attempt, failure)
+	to := moved{next: due, at: l.at, attempt: l.attempt, failure: failure}
+	return settled{due: due}, l.move(ctx, w, l.withRun(to, now))
 }
 
 // fail keeps the job as failed for good. A job that repeats, or that an Enqueue
@@ -392,9 +416,10 @@ func (l *lease) retry(ctx context.Context, w sqlite.Writer, h heldRow, now int64
 func (l *lease) fail(ctx context.Context, w sqlite.Writer, h heldRow, now int64, cause string) (settled, error) {
 	failure := sql.NullString{String: cause, Valid: true}
 	if next, again := l.nextRun(h, now); again {
-		return settled{due: next}, l.move(ctx, w, next, next, 0, failure)
+		return settled{due: next}, l.move(ctx, w, l.withRun(moved{next: next, at: next, failure: failure}, now))
 	}
-	if _, err := w.ExecContext(ctx, failJob, l.queue.id, l.next, l.id, l.attempt, now, cause); err != nil {
+	ran, took := l.lastRun(now)
+	if _, err := w.ExecContext(ctx, failJob, l.queue.id, l.next, l.id, l.attempt, now, cause, ran, took); err != nil {
 		return settled{}, err
 	}
 	_, err := w.ExecContext(ctx, dropJobRow, l.queue.id, l.next, l.id)
@@ -422,10 +447,27 @@ func (l *lease) nextRun(h heldRow, now int64) (int64, bool) {
 	return next, next != 0
 }
 
-func (l *lease) move(ctx context.Context, w sqlite.Writer, next, at, attempt int64, failure sql.NullString) error {
-	_, err := w.ExecContext(ctx, moveJob, l.queue.id, l.next, l.id, next, at, attempt, failure)
-	if err == nil && next != l.next {
-		err = moveKeyTo(ctx, w, l.queue.id, l.key, next)
+// moved is where a settlement moves a job's row: its next time and the time
+// it runs for, the attempts counted, its error, and the run it records, none
+// for a job given back, which keeps the one before
+type moved struct {
+	next, at, attempt int64
+	failure           sql.NullString
+	ran, took         sql.NullInt64
+}
+
+// withRun is a move that records the run the lease began, as a settlement at
+// now finishes it
+func (l *lease) withRun(to moved, now int64) moved {
+	to.ran, to.took = l.lastRun(now)
+	return to
+}
+
+func (l *lease) move(ctx context.Context, w sqlite.Writer, to moved) error {
+	_, err := w.ExecContext(ctx, moveJob, l.queue.id, l.next, l.id, to.next, to.at, to.attempt, to.failure, to.ran,
+		to.took)
+	if err == nil && to.next != l.next {
+		err = moveKeyTo(ctx, w, l.queue.id, l.key, to.next)
 	}
 	return err
 }
@@ -587,10 +629,11 @@ func abandon(ctx context.Context, w sqlite.Writer, c claiming, row claimedRow) e
 	if _, err := w.ExecContext(ctx, dropLeaseRow, row.id); err != nil {
 		return err
 	}
-	if _, err := w.ExecContext(ctx, failJob, c.queue, row.next, row.id, row.attempt-1, c.now, cause); err != nil {
+	_, err := w.ExecContext(ctx, failJob, c.queue, row.next, row.id, row.attempt-1, c.now, cause, nil, nil)
+	if err != nil {
 		return err
 	}
-	_, err := w.ExecContext(ctx, dropJobRow, c.queue, row.next, row.id)
+	_, err = w.ExecContext(ctx, dropJobRow, c.queue, row.next, row.id)
 	return err
 }
 

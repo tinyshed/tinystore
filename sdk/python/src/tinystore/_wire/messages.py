@@ -215,6 +215,8 @@ JobsEntry = message(
     repeat=(8, str_),
     ahead=(9, uint),
     progress=(10, str_),
+    ran=(11, int_),
+    took=(12, uint),
 )
 
 JobsLease = message("jobs.lease", handle=(1, uint), lease=(2, uint))

@@ -119,7 +119,9 @@ await videos.work(transcode)
 `get` says where a job is: `waiting`, with how many jobs run `ahead` of it,
 `running`, with the `progress` its handler last reported, `failed`, or `done`
 while `keep_done` keeps its key; `watch` yields it again at each change until
-it ends, `cancelled` included. `job.progress` takes any JSON within 4 KiB and
+it ends, `cancelled` included, and `ran` and `took` say when the last run a
+handler finished began and how many seconds it took: a schedule's last run
+beside its next, `at`. `job.progress` takes any JSON within 4 KiB and
 sends the latest at most ten times a second. `cancel` takes a running job too:
 its handler's task is cancelled, and what it leaves settles nothing.
 `max_running` bounds the jobs running at once across every worker of the

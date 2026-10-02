@@ -100,6 +100,10 @@ class JobEntry[V]:
     """the jobs that run before a waiting one, up to 10,000; get and watch count it, scan leaves it 0"""
     progress: Any = None
     """what a running job's handler last reported with job.progress"""
+    ran: datetime | None = None
+    """when the last run a handler finished began: acknowledged, retried, failed or snoozed"""
+    took: float | None = None
+    """how many seconds that run took"""
 
 
 def _progress_text(progress: object) -> str:
@@ -387,6 +391,8 @@ class Queue[V]:
             e.get("repeat"),
             e.get("ahead", 0),
             None if progress is None else json.loads(progress),
+            date_of(e.get("ran")),
+            None if "ran" not in e else e.get("took", 0) / 1000,
         )
 
     async def watch(self, key: str) -> AsyncIterator[JobEntry[V]]:

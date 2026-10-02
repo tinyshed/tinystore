@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -171,4 +172,75 @@ func TestAScheduleTakesTheProgramsRepeat(t *testing.T) {
 	if _, err = OpenQueue[string](t.Context(), queues.Store, "purge"); !errors.Is(err, tinystore.ErrInvalid) {
 		t.Fatalf("a schedule opened as a queue: %v", err)
 	}
+}
+
+// a job keeps its last run: when the run a handler finished began and how
+// long it took, beside its error and its next time; a run given back records
+// nothing, and a job that failed for good keeps the run that failed it
+func TestAJobKeepsItsLastRun(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	purge, err := OpenSchedule(t.Context(), queues.Store, "purge", Every(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectRun(t, purge, "purge", time.Time{}, 0, "")
+	queues.clock.advance(time.Hour)
+	began := queues.clock.Now()
+	job := mustClaim(t, purge)
+	queues.clock.advance(3 * time.Second)
+	if err = job.Ack(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if entry := expectRun(t, purge, "purge", began, 3*time.Second, ""); !entry.At.Equal(began.Add(time.Hour)) {
+		t.Fatalf("the next run is for %v", entry.At)
+	}
+
+	queues.clock.advance(time.Hour)
+	failing := queues.clock.Now()
+	job = mustClaim(t, purge)
+	queues.clock.advance(2 * time.Second)
+	if err = job.Fail(t.Context(), errors.New("the disk is full")); err != nil {
+		t.Fatal(err)
+	}
+	expectRun(t, purge, "purge", failing, 2*time.Second, "the disk is full")
+
+	queues.clock.advance(time.Hour)
+	stop := working(t, purge, func(ctx context.Context, _ Job[struct{}]) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	waitForState(t, purge, "purge", Running)
+	stop()
+	expectRun(t, purge, "purge", failing, 2*time.Second, "the disk is full")
+
+	once := openTestQueue[string](t, queues, "once", MaxAttempts(1))
+	mustEnqueue(t, once, "x", Key("k"))
+	gone := queues.clock.Now()
+	job2 := mustClaim(t, once)
+	queues.clock.advance(time.Second)
+	if err = job2.Fail(t.Context(), errors.New("no")); err != nil {
+		t.Fatal(err)
+	}
+	if entry := expectRun(t, once, "k", gone, time.Second, "no"); entry.State != Failed {
+		t.Fatalf("the failed job is %s", entry.State)
+	}
+}
+
+func expectRun[V any](t *testing.T, queue *Queue[V], key string, ran time.Time, took time.Duration, err string) Entry[V] {
+	t.Helper()
+	entry, found, getErr := queue.Get(t.Context(), key)
+	if getErr != nil || !found || !entry.Ran.Equal(ran) || entry.Took != took || entry.Err != err {
+		t.Fatalf("%s: %+v, %v, %v; want ran %v, took %v, error %q", key, entry, found, getErr, ran, took, err)
+	}
+	return entry
+}
+
+func waitForState[V any](t *testing.T, queue *Queue[V], key string, state State) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if entry, _, err := queue.Get(t.Context(), key); err == nil && entry.State == state {
+			return
+		}
+	}
+	t.Fatalf("%s did not become %s in five seconds", key, state)
 }

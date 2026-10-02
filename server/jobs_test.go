@@ -481,3 +481,25 @@ func expectWatched(t *testing.T, st *client.Stream, state jobs.State, ahead uint
 			progress)
 	}
 }
+
+// a job's last run travels with its entry: when the run a worker finished
+// began and how long it took, beside its error
+func TestAJobsLastRunOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	later := openQueue(t, conn, wire.JobsQueue{Name: "later"})
+	if err := enqueueJobs(t, conn, later, wire.JobsJob{Value: `1`, Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if fresh := fetchJob(t, conn, later, "a"); fresh.Ran != 0 || fresh.Took != 0 {
+		t.Fatalf("a job never run: %+v", fresh)
+	}
+	before := time.Now().UnixMilli()
+	held := claim(t, conn, later)
+	time.Sleep(20 * time.Millisecond)
+	settleJobs(t, conn, wire.JobsOutcome{Job: held.Job, How: wire.JobRetry, Err: "busy", After: 3_600_000})
+	ran := fetchJob(t, conn, later, "a")
+	if ran.Ran < before || ran.Ran > time.Now().UnixMilli() || ran.Took < 20 || ran.Err != "busy" {
+		t.Fatalf("a run that took 20 ms: %+v", ran)
+	}
+}

@@ -215,6 +215,21 @@ describe('a work loop', () => {
 		expect(none).toEqual([])
 	})
 
+	test('a job keeps its last run: when it began and how long it took', async () => {
+		const q = store.jobs.queue<string>('last-run')
+		await q.enqueue('x', { key: 'k' })
+		const fresh = await q.get('k')
+		expect([fresh?.ran, fresh?.took]).toEqual([undefined, undefined])
+		const before = Date.now()
+		const job = await q.claim()
+		await Bun.sleep(20)
+		await job?.retry('busy', { after: '1h' })
+		const entry = await q.get('k')
+		expect(entry?.ran?.getTime()).toBeGreaterThanOrEqual(before - 5)
+		expect(entry?.took).toBeGreaterThanOrEqual(20)
+		expect(entry?.error).toBe('busy')
+	})
+
 	test('a progress JSON cannot write, or past 4 KiB, is refused', async () => {
 		const q = store.jobs.queue<string>('reports')
 		await q.enqueue('x', { key: 'k' })

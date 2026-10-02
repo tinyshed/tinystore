@@ -530,6 +530,8 @@ handle under key 6; a key is `{1: handle, 2: key}`. An entry:
 | 8 | repeat | str | a repeating job's cron text and zone, as jobs.db keeps it |
 | 9 | ahead | uint | the jobs that run before a waiting one, up to 10,000; get and watch alone |
 | 10 | progress | str | what a running job's worker last reported, as JSON |
+| 11 | ran | int | unix milliseconds: when the last run a worker finished began |
+| 12 | took | uint | milliseconds: how long that run took |
 
 A job a work loop claimed ahead for a busy worker is waiting, 0 ahead, until
 a worker has it. A lease is `{1: handle, 2: lease}`, milliseconds, the

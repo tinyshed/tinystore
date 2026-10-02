@@ -23,6 +23,7 @@ page, err := later.Scan(ctx, jobs.Query{Prefix: "chat:42:"}) // "3 scheduled mes
 cancelled, err := later.Cancel(ctx, "chat:42:"+draft.ID)     // false: sent already
 
 go reminders.Work(ctx, remind, jobs.Workers(4)) // until ctx ends or the store closes
+entry, found, err := purge.Get(ctx, "purge-deleted") // At: the next run; Ran, Took and Err: the last
 
 func remind(ctx context.Context, job jobs.Job[Reminder]) error {
 	return push(ctx, job.Value.User, job.Value.Text) // nil acknowledges, an error retries
@@ -151,7 +152,10 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   holds for a busy worker waits, none ahead of it. `Ahead` counts the jobs that
   run before a waiting one, the rows before it less those running, up to
   10,000, so that a `Get` reads at most that many keys of the queue's order;
-  `Scan` leaves it zero.
+  `Scan` leaves it zero. `Ran` and `Took` say when the last run a handler
+  finished began and how long it took, acknowledged, retried, failed or
+  snoozed, beside `Err`; a run given back records none, and a schedule's `At`
+  is its next run.
 - **Progress lives in memory.** `Job.Progress(v)` keeps `v` as JSON until the
   attempt is settled, and `Get` and `Watch` show it as `Entry.Progress`. It is
   not written to the file, since an attempt a restart ends runs again from its

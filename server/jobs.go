@@ -294,7 +294,7 @@ func entryOfJob[V any](entry jobs.Entry[V], found bool) (wire.JobsEntry, error) 
 	return wire.JobsEntry{
 		Found: found, Key: entry.Key, Value: value, At: entry.At.UnixMilli(), Attempt: uint64(max(entry.Attempt, 0)),
 		State: uint64(max(entry.State, 0)), Err: entry.Err, Repeat: entry.Repeat, Ahead: uint64(max(entry.Ahead, 0)),
-		Progress: string(entry.Progress),
+		Progress: string(entry.Progress), Ran: unixMillis(entry.Ran), Took: uint64(max(entry.Took.Milliseconds(), 0)),
 	}, err
 }
 

@@ -9,7 +9,7 @@ import { CancelledError, CorruptError, errorOf, InvalidError } from './errors.ts
 import { checkName, handleOn, type Page } from './handles.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { LostError, watch } from './session.ts'
-import { type Duration, ms, type Time, unixMs } from './time.ts'
+import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import {
 	JobsBatch,
 	JobsChange,
@@ -75,6 +75,10 @@ export interface JobEntry<T> {
 	ahead: number
 	/** what a running job's handler last reported with job.progress */
 	progress: unknown
+	/** when the last run a handler finished began: acknowledged, retried, failed or snoozed */
+	ran: Date | undefined
+	/** how many milliseconds that run took */
+	took: number | undefined
 	/** its last failure */
 	error: string | undefined
 	/** a repeating job's cron text and zone */
@@ -528,6 +532,8 @@ export class Queue<T> {
 			state,
 			ahead: entry.ahead ?? 0,
 			progress: entry.progress === undefined ? undefined : JSON.parse(entry.progress),
+			ran: dateOf(entry.ran),
+			took: entry.ran === undefined ? undefined : (entry.took ?? 0),
 			error: entry.err,
 			repeat: entry.repeat,
 		}
