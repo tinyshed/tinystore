@@ -1,7 +1,8 @@
 # The SDKs' vocabulary
 
-One product in three languages. Go embeds the engines; Bun and Python reach the
-same directory through `tinystore serve`. A program moving between them should
+One product in three languages. Go embeds the engines; Bun, Node and Python
+reach the same directory through `tinystore serve`, Bun and Node through one
+package whose samples here say Bun. A program moving between them should
 find the same entities, the same names and the same meanings, each written as
 its own language writes it, not three products that happen to share a binary.
 

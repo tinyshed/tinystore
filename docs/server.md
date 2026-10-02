@@ -629,9 +629,13 @@ Each promise above is a test once its code exists; those marked built pass:
 
 ## SDKs
 
-Built after the server, in `sdk/js`, for Bun and later Node, and
-`sdk/python`: `tinystore` on npm, and `tinyshed-tinystore` on PyPI, imported
-as `tinystore`, since PyPI's `tinystore` is another project's. What a program
+Built after the server, in `sdk/js`, for Bun and Node, and `sdk/python`:
+`tinystore` on npm, and `tinyshed-tinystore` on PyPI, imported as
+`tinystore`, since PyPI's `tinystore` is another project's. The JS SDK is one
+file of runtime for each, `runtime/bun.ts` and `runtime/node.ts`, chosen as it
+loads, and plain TypeScript otherwise: Bun imports its source, and Node the
+JavaScript a release compiles into `dist`, since Node strips no types in a
+package it installed. What a program
 sees, side by side with Go, and the rules that keep the three alike are
 [sdk.md](sdk.md); this section is how they reach the server.
 

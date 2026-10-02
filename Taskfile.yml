@@ -71,7 +71,7 @@ tasks:
       - go tool cover -func=coverage.out | tail -1
 
   release:snapshot:
-    # needs uv; e.g. task release:snapshot -- v0.1.0
+    # needs uv and bun; e.g. task release:snapshot -- v0.1.0
     desc: Build every release artifact into dist/ from the working tree, to try them
     cmds:
       - go run ./internal/release -snapshot -version {{.CLI_ARGS}}
@@ -146,10 +146,12 @@ tasks:
       - '{{.GOVULNCHECK}} -C cmd/tinystore ./...'
 
   sdk:
-    # needs bun and uv
+    # needs bun, node 22.18 or later, and uv
     desc: Check and test both SDKs against a tinystore built from this repository
     cmds:
       - cd sdk/js && bun install --frozen-lockfile && bun run check && bun test
+      # the same SDK under Node, which runs its TypeScript as it is, and the JavaScript npm gets for Node
+      - cd sdk/js && node --test test/under-node.ts && bun run build
       - cd sdk/python && uv sync --frozen && uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest -q --cov
 
   sdk:linux:

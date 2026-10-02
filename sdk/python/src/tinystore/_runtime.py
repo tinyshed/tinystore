@@ -160,12 +160,15 @@ def spawn_detached(argv: list[str]) -> subprocess.Popen[bytes]:
     )
 
 
+def packaged_binary() -> str | None:
+    """The binary this platform's wheel carries; None in a wheel without one."""
+    packaged = resources.files("tinystore") / "bin" / ("tinystore.exe" if WINDOWS else "tinystore")
+    return str(packaged) if packaged.is_file() else None
+
+
 def find_binary(given: str | None) -> str:
     """The tinystore binary: the one given, TINYSTORE_BIN, this platform's wheel's, or PATH's."""
-    found = given or os.environ.get("TINYSTORE_BIN")
-    if not found:
-        packaged = resources.files("tinystore") / "bin" / ("tinystore.exe" if WINDOWS else "tinystore")
-        found = str(packaged) if packaged.is_file() else shutil.which("tinystore")
+    found = given or os.environ.get("TINYSTORE_BIN") or packaged_binary() or shutil.which("tinystore")
     if not found:
         raise ClosedError(
             "no tinystore binary: install this platform's wheel, put tinystore on PATH, or set TINYSTORE_BIN"

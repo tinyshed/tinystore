@@ -1,4 +1,4 @@
-# TinyStore for Bun
+# TinyStore for Bun and Node
 
 kv, jobs, blobs, SQL, records and metrics in one directory, served by a
 sidecar the SDK starts. A Go program embeds the same engines;
@@ -10,7 +10,12 @@ bun add tinystore
 
 The package for this platform, an optional dependency, carries the
 `tinystore` binary. `TINYSTORE_BIN`, `open`'s `binary` or `PATH` name another.
-Bun 1.4 or later.
+Bun 1.4 or later, or Node 22 or later, with one API: Bun runs the package's
+TypeScript, and Node the JavaScript it carries.
+
+The binary is the `tinystore` command too: `bunx tinystore status ./data`,
+`bunx tinystore logs ./data -f`, and for an AI agent
+`claude mcp add tinystore -- bunx tinystore mcp ./data`.
 
 ## Open
 

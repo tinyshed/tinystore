@@ -1,7 +1,7 @@
 {
 	"name": "tinystore",
 	"version": "0.0.0",
-	"description": "TinyStore for Bun: kv, jobs, blobs, SQL, records and metrics in one directory, served by a sidecar",
+	"description": "TinyStore for Bun and Node: kv, jobs, blobs, SQL, records and metrics in one directory, served by a sidecar",
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -10,16 +10,27 @@
 	},
 	"type": "module",
 	"engines": {
-		"bun": ">=1.4"
+		"bun": ">=1.4",
+		"node": ">=22"
 	},
 	"exports": {
-		".": "./src/index.ts"
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"bin": {
+		"tinystore": "bin/tinystore.js"
 	},
 	"files": [
 		"src",
+		"dist",
+		"bin",
 		"README.md"
 	],
 	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
 		"check": "biome check . && tsc --noEmit",
 		"check:write": "biome check --write .",
 		"format": "biome format --write .",

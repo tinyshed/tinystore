@@ -20,7 +20,7 @@ contract from the documents, not from the Go client in
   methods' numbers and the errors' codes.
 
 One commit changes the protocol, the server, both SDKs and the vectors. The
-SDKs live in `sdk/js` (Bun, and Node later) and `sdk/python`, and `sdk/go.mod`
+SDKs live in `sdk/js` (Bun and Node) and `sdk/python`, and `sdk/go.mod`
 keeps them out of the Go module's zip. What they look like to an application,
 beside Go, is `docs/sdk.md`, whose rules every call follows; a change to what a
 program writes is the `api-change` skill, since it reaches all three.
@@ -111,7 +111,7 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
 ## What building them taught
 
 - Each SDK's layers carry the same names: `wire/` (codec, frames, messages),
-  a session without I/O, a runtime file (Bun's; asyncio's), a connection
+  a session without I/O, a runtime file (Bun's and Node's; asyncio's), a connection
   with its `Link` that dials again, a store, an engine a file. A message's
   fields are wire.md's names, camelCase or snake_case, so the vector tests
   are one loop.
@@ -126,6 +126,18 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
   answered by the server never settles in it: tests take the error with a
   `caught()` helper.
 - `records.lines` reach a read after the server's next flush, a second.
+- The JS SDK touches Bun or Node only in `src/runtime/bun.ts` and
+  `src/runtime/node.ts`, which `store.ts` picks as it loads; both load under
+  Node, so `bun.ts` reads `Bun` only inside a call. Bun imports `src`; Node
+  the `dist` that `bun run build` compiles and a release packs, since Node
+  strips no types in `node_modules`. `test/under-node.ts` runs the SDK under
+  Node through its own runtime (`node --test`, Node 22.18 or later); the Bun
+  suite stays Bun's. A package's `exports` conditions are tried in order:
+  `bun`, then `types`, then `default`, last.
+- Both packages install the binary as the `tinystore` command:
+  `sdk/js/bin/tinystore.js`, plain JavaScript that Bun and Node both run, and
+  `tinystore._cli` as a console script. Neither looks on PATH, where it may
+  find itself.
 - `close` waits for a private child until it exits, in both SDKs: until then
   it holds the directory, and asyncio warns of its pipes.
 - `task sdk` checks and tests both, building `tinystore` from this

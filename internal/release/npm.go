@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -32,6 +37,24 @@ func pythonVersion(version string) string {
 		return version // not a pre-release PyPI knows; the check says so
 	}
 	return release + short + number
+}
+
+// buildJS compiles sdk/js into its dist, which its files names: the
+// JavaScript and the declarations Node imports, since Node strips no types in
+// a package it installed, while Bun imports the TypeScript itself.
+func buildJS(ctx context.Context, s settings) error {
+	source := filepath.Join(s.root, "sdk", "js")
+	if err := os.RemoveAll(filepath.Join(source, "dist")); err != nil {
+		return err
+	}
+	for _, args := range [][]string{{"install", "--frozen-lockfile"}, {"run", "build"}} {
+		bun := exec.CommandContext(ctx, "bun", args...)
+		bun.Dir = source
+		if text, err := bun.CombinedOutput(); err != nil {
+			return fmt.Errorf("bun %s in sdk/js: %w\n%s", strings.Join(args, " "), err, text)
+		}
+	}
+	return nil
 }
 
 // writeNPMPackages writes the package of each platform's binary and the SDK's
@@ -73,52 +96,151 @@ func writeBinaryPackage(s settings, dir, name string, b binary) error {
 
 // writeSDKPackage publishes sdk/js as it is, stamped with the release's
 // version, with the platforms' packages as optional dependencies and nothing
-// only its development needs.
+// only its development needs: the files its manifest's files names, as npm
+// pack takes them.
 func writeSDKPackage(s settings, dir string, optional map[string]string) error {
 	source := filepath.Join(s.root, "sdk", "js")
-	manifest, err := readJSON(filepath.Join(source, "package.json"))
+	manifest, err := readManifest(filepath.Join(source, "package.json"))
 	if err != nil {
 		return err
 	}
-	delete(manifest, "devDependencies")
-	delete(manifest, "scripts")
-	manifest["version"] = s.version
-	manifest["optionalDependencies"] = optional
+	manifest.remove("devDependencies")
+	manifest.remove("scripts")
+	err = errors.Join(manifest.set("version", s.version), manifest.set("optionalDependencies", optional))
+	if err != nil {
+		return err
+	}
 
 	files := map[string]string{"LICENSE": filepath.Join(s.root, "LICENSE")}
-	err = filepath.WalkDir(filepath.Join(source, "src"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	var listed []string
+	if err = manifest.get("files", &listed); err != nil {
+		return fmt.Errorf("sdk/js/package.json's files, without which npm would pack the whole directory: %w", err)
+	}
+	for _, path := range listed {
+		if err = addFiles(files, source, path); err != nil {
 			return err
 		}
-		relative, err := filepath.Rel(source, path)
-		files[filepath.ToSlash(relative)] = path
-		return err
-	})
-	if err != nil {
-		return err
 	}
-	if _, err = os.Stat(filepath.Join(source, "README.md")); err == nil {
-		files["README.md"] = filepath.Join(source, "README.md")
-	}
-	name, ok := manifest["name"].(string)
-	if !ok {
-		return fmt.Errorf("sdk/js/package.json names no package")
+	var name string
+	if err = manifest.get("name", &name); err != nil {
+		return fmt.Errorf("sdk/js/package.json's name: %w", err)
 	}
 	return writePackage(filepath.Join(dir, tarballName(name, s.version)), manifest, files)
 }
 
-// writePackage writes a tarball as npm pack does: every file under package/,
-// the manifest as package/package.json.
-func writePackage(path string, manifest map[string]any, files map[string]string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+// manifest is a package.json whose keys keep their order, since npm reads
+// some of them in order: the conditions of exports are tried one after
+// another, the first that matches winning, so default stays last.
+type manifest struct {
+	keys   []string
+	fields map[string]json.RawMessage
+}
+
+func readManifest(path string) (*manifest, error) {
+	text, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	body, err := json.MarshalIndent(manifest, "", "  ")
+	decoder := json.NewDecoder(bytes.NewReader(text))
+	open, err := decoder.Token()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if open != json.Delim('{') {
+		return nil, fmt.Errorf("%s is not a JSON object", path)
+	}
+	m := &manifest{fields: map[string]json.RawMessage{}}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		key, _ := token.(string) //nolint:errcheck // an object's member begins with its name, a string
+		var value json.RawMessage
+		if err = decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", path, key, err)
+		}
+		if _, seen := m.fields[key]; !seen {
+			m.keys = append(m.keys, key)
+		}
+		m.fields[key] = value
+	}
+	return m, nil
+}
+
+func (m *manifest) get(key string, value any) error {
+	raw, ok := m.fields[key]
+	if !ok {
+		return fmt.Errorf("no %s", key)
+	}
+	return json.Unmarshal(raw, value)
+}
+
+// set replaces a field where it stands, or adds it after the others
+func (m *manifest) set(key string, value any) error {
+	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
+	if _, ok := m.fields[key]; !ok {
+		m.keys = append(m.keys, key)
+	}
+	m.fields[key] = raw
+	return nil
+}
+
+func (m *manifest) remove(key string) {
+	delete(m.fields, key)
+	m.keys = slices.DeleteFunc(m.keys, func(k string) bool { return k == key })
+}
+
+func (m *manifest) MarshalJSON() ([]byte, error) {
+	object := []byte{'{'}
+	for i, key := range m.keys {
+		if i > 0 {
+			object = append(object, ',')
+		}
+		name, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		object = append(append(append(object, name...), ':'), m.fields[key]...)
+	}
+	return append(object, '}'), nil
+}
+
+// addFiles adds the file a package's files names, or every file under the
+// directory it names, by its path in the package
+func addFiles(files map[string]string, source, listed string) error {
+	return filepath.WalkDir(filepath.Join(source, filepath.FromSlash(listed)),
+		func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return fmt.Errorf("sdk/js/package.json's files names %s: %w", listed, err)
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			relative, err := filepath.Rel(source, path)
+			files[filepath.ToSlash(relative)] = path
+			return err
+		})
+}
+
+// writePackage writes a tarball as npm pack does: every file under package/,
+// the manifest as package/package.json, its >= left as it is spelled.
+func writePackage(path string, manifest any, files map[string]string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(manifest); err != nil {
+		return err
+	}
 	staged := filepath.Join(filepath.Dir(path), ".package.json")
-	if err = os.WriteFile(staged, append(body, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(staged, body.Bytes(), 0o644); err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(staged) }() // written again by the next package
@@ -145,16 +267,4 @@ func repository(directory string) map[string]string {
 		"url":       "git+https://github.com/tinyshed/tinystore.git",
 		"directory": directory,
 	}
-}
-
-func readJSON(path string) (map[string]any, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var parsed map[string]any
-	if err = json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return parsed, nil
 }

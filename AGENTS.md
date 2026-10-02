@@ -30,7 +30,7 @@ design document:
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
 | `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
-| `sdk/js`, `sdk/python` | the Bun and Python clients, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md](docs/sdk.md), [server.md](docs/server.md) |
+| `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md](docs/sdk.md), [server.md](docs/server.md) |
 
 Where the building differs from the design:
 
@@ -80,7 +80,7 @@ Do not describe unbuilt behaviour as though it works.
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
 | `server/reach/`      | the Go client of a directory's server, found through `SERVE` and proven, for the tool |
 | `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `status`, `logs`, `mcp`, and `migrate` and `schema` for sqldb |
-| `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Python; `sdk/go.mod` keeps them out of the Go module |
+| `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module |
 | `docs/`              | the design, the format, the engines and the wire                              |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
@@ -462,6 +462,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a Bun call under an aborted signal is refused      | `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts` |
 | a Bun duration or rate misspelled does not compile | `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts` |
 | a Bun store's close frees its directory            | `close returns once the child has exited` in `sdk/js/test/kv.test.ts`            |
+| the JS SDK runs under Node: its sidecar, a private child, TCP and TLS checked | `a remote server is reached over TLS, its certificate checked, under Node` and the rest of `sdk/js/test/under-node.ts`, run by `node --test` |
 | a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`                                 |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
 | a logger's console line is the same bytes in Go, Bun and Python | `TestConsoleLinesAreTheVectors`, over `records/testdata/console.json`, which both SDKs' suites read |
@@ -767,6 +768,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | `logs -f` prints a record sent a little late, each once and two alike twice | `TestLogsPrintTheLastRecordsAndFollowTheNext` |
 | the tool prints a record as a logger's console does | `TestAPrinterWritesARecordAsTheConsoleDoes` in `records` |
 | an agent over MCP writes nothing, nor makes an engine's file | `TestAnAgentReadsTheStoreOverMCP`, `TestAnAgentMakesNoEnginesFile` |
+| the SDK packages install the `tinystore` command, the binary's output and exit code its own | `the tinystore command runs the binary, with its output and its exit code` in `sdk/js/test/command.test.ts`, under Bun and Node, `test_the_tinystore_command_runs_the_binary_its_output_and_exit_code_the_binarys` in Python's |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before

@@ -85,10 +85,14 @@ another version than the one it was published as.
 - Install from `dist/` into an empty project, with no `TINYSTORE_BIN` and no
   `tinystore` on `PATH`, and open a store privately and through its sidecar:
   `bun add dist/npm/tinystore-<v>.tgz dist/npm/tinyshed-tinystore-<os>-<cpu>-<v>.tgz`,
-  and `uv pip install --no-index --find-links dist/pypi tinyshed-tinystore`,
-  which also shows that the platform's wheel is the one chosen. Do it on
-  Windows, in `debian:stable-slim` and in `python:3.12-alpine`, and run
-  `uvx twine check dist/pypi/*`.
+  the same two with `npm install` under Node, whose program imports the
+  compiled `dist`, a TypeScript project under Node that `tsc` checks against
+  the package's types, and `uv pip install --no-index --find-links dist/pypi
+  tinyshed-tinystore`, which also shows that the platform's wheel is the one
+  chosen. Run `bunx tinystore version`, `npx tinystore version` and the
+  wheel's `tinystore version` too. Do it on Windows, in `node:24-slim`,
+  `oven/bun`, `python:3.12-slim` and `python:3.12-alpine`, and run `uvx twine
+  check dist/pypi/*`.
 - The image: `linux-amd64/tinystore` and an empty `data/` beside
   `internal/release/Dockerfile`, `docker build`, then run
   `serve --dir /data --listen tcp://0.0.0.0:7443 --tokens /etc/tinystore/tokens`

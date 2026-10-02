@@ -13,6 +13,11 @@ Then `import tinystore`. This platform's wheel carries the `tinystore` binary;
 `TINYSTORE_BIN`, `open`'s `binary` or `PATH` name another. Python 3.12 or
 later, asyncio.
 
+The wheel installs the binary as the `tinystore` command too:
+`tinystore logs ./data -f`, or without installing anything
+`uvx --from tinyshed-tinystore tinystore status ./data`, and for an AI agent
+`claude mcp add tinystore -- uvx --from tinyshed-tinystore tinystore mcp ./data`.
+
 ## Open
 
 ```python

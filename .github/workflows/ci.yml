@@ -83,6 +83,11 @@ jobs:
         with:
           bun-version: 1.4.2
 
+      # the JS SDK runs under Node too, which strips its types itself from 22.18
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
       - uses: astral-sh/setup-uv@v10.2.0
 
       - uses: arduino/setup-task@v3

@@ -1,24 +1,19 @@
 // The runtime of Bun: sockets through Bun.connect, a Windows named pipe
-// through node:net, which Bun implements, a private child through Bun.spawn,
-// and a detached one through node:child_process, since Bun.spawn starts no
-// process that outlives a Ctrl-C of its parent's group.
+// through node:net, which Bun implements, and a private child through
+// Bun.spawn. Nothing here touches Bun until it is called, so that Node can
+// load this file beside its own.
 
-import { spawn } from 'node:child_process'
 import net from 'node:net'
 
 import manifest from '../../package.json' with { type: 'json' }
 import { ClosedError } from '../errors.ts'
-import type {
-	Child,
-	PrivateChild,
-	Runtime,
-	TlsOptions,
-	Transport,
-	TransportEvents,
-} from '../runtime.ts'
+import type { PrivateChild, Runtime, TlsOptions, Transport, TransportEvents } from '../runtime.ts'
+import { address, exitedWith, spawnDetached, stderrKept } from './shared.ts'
 
 export const bunRuntime: Runtime = {
-	client: `tinystore-js/${manifest.version} bun/${Bun.version}`,
+	get client() {
+		return `tinystore-js/${manifest.version} bun/${Bun.version}`
+	},
 	windows: process.platform === 'win32',
 	connect,
 	spawnPrivate,
@@ -36,27 +31,6 @@ export const bunRuntime: Runtime = {
 	},
 	which: name => Bun.which(name) ?? undefined,
 	packagedBinary,
-}
-
-/** Where an endpoint named in SERVE, or given to connect, is. */
-export type Address =
-	| { kind: 'unix'; path: string }
-	| { kind: 'pipe'; path: string }
-	| { kind: 'tcp' | 'tls'; host: string; port: number }
-
-export function address(endpoint: string): Address {
-	if (endpoint.startsWith('unix://')) {
-		return { kind: 'unix', path: endpoint.slice('unix://'.length) }
-	}
-	if (endpoint.startsWith('pipe:')) {
-		return { kind: 'pipe', path: `\\\\.\\pipe\\${endpoint.slice('pipe:'.length)}` }
-	}
-	const remote = /^(tcp|tls):\/\/(\[[^\]]+\]|[^:/]+):(\d+)$/.exec(endpoint)
-	if (remote === null) {
-		throw new ClosedError(`no transport for the endpoint ${endpoint}`)
-	}
-	const host = remote[2]!.replace(/^\[|\]$/g, '')
-	return { kind: remote[1] as 'tcp' | 'tls', host, port: Number(remote[3]) }
 }
 
 async function connect(
@@ -168,9 +142,6 @@ function connectPipe(path: string, events: TransportEvents): Promise<Transport> 
 	})
 }
 
-/** How much of a child's stderr is kept, its last lines, to say why it ended. */
-const stderrKept = 16 << 10
-
 function spawnPrivate(argv: string[], events: TransportEvents): PrivateChild {
 	const proc = Bun.spawn(argv, { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', windowsHide: true })
 	let kept = ''
@@ -188,12 +159,7 @@ function spawnPrivate(argv: string[], events: TransportEvents): PrivateChild {
 			}
 		} finally {
 			await draining.catch(() => {})
-			const code = await proc.exited
-			events.end(
-				new ClosedError(
-					`the private server exited with ${code}${kept === '' ? '' : `: ${lastLines(kept)}`}`,
-				),
-			)
+			events.end(exitedWith(await proc.exited, kept))
 		}
 	})()
 	return {
@@ -212,20 +178,6 @@ function spawnPrivate(argv: string[], events: TransportEvents): PrivateChild {
 	}
 }
 
-function spawnDetached(argv: string[]): Child {
-	const child = spawn(argv[0]!, argv.slice(1), {
-		detached: true,
-		stdio: 'ignore',
-		windowsHide: true,
-	})
-	const exited = new Promise<number>(resolve => {
-		child.once('exit', code => resolve(code ?? -1))
-		child.once('error', () => resolve(-1))
-	})
-	child.unref()
-	return { exited, kill: () => child.kill() }
-}
-
 /** The platform's package of the server binary, installed beside this one. */
 function packagedBinary(): string | undefined {
 	const name = `@tinyshed/tinystore-${process.platform}-${process.arch}`
@@ -235,8 +187,4 @@ function packagedBinary(): string | undefined {
 	} catch {
 		return undefined
 	}
-}
-
-export function lastLines(text: string, n = 5): string {
-	return text.trimEnd().split('\n').slice(-n).join('\n')
 }

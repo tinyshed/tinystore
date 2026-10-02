@@ -67,6 +67,9 @@ func run(ctx context.Context) error {
 	if err = writeArchives(s, binaries); err != nil {
 		return err
 	}
+	if err = buildJS(ctx, s); err != nil {
+		return err
+	}
 	if err = writeNPMPackages(s, binaries); err != nil {
 		return err
 	}

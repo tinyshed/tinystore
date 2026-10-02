@@ -24,7 +24,7 @@
 
 TinyStore gives an application SQL, key-value state, durable jobs, files,
 metrics and logs in one directory, with one lifecycle, one memory budget and
-one backup. Go programs embed it. Bun and Python programs reach the same
+one backup. Go programs embed it. Bun, Node and Python programs reach the same
 directory through `tinystore serve`, a sidecar their SDK starts, and the same
 protocol serves remote clients.
 
@@ -102,7 +102,10 @@ and the image serves a store to remote clients.
 ## Looking at a store
 
 The same binary shows a person, and an AI agent, what a store holds while its
-application runs:
+application runs. Both SDK packages install it as the `tinystore` command:
+`bunx tinystore …` and `uvx --from tinyshed-tinystore tinystore …` run it with
+nothing else installed, and `go install
+github.com/tinyshed/tinystore/cmd/tinystore@latest` builds it.
 
 ```sh
 tinystore status ./data                            # each engine's bytes, and who serves the directory

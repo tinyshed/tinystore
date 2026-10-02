@@ -6,6 +6,7 @@ import { Kv } from './kv.ts'
 import { Metrics } from './metrics.ts'
 import { Records } from './records.ts'
 import { bunRuntime } from './runtime/bun.ts'
+import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import { type Database, openDatabase, type SqlOptions } from './sql.ts'
 import { type Duration, ms } from './time.ts'
@@ -110,13 +111,16 @@ export class Store implements AsyncDisposable {
 	}
 }
 
+/** Bun's own runtime under Bun, and Node's under Node. */
+const runtime: Runtime = typeof Bun === 'undefined' ? nodeRuntime : bunRuntime
+
 /**
  * Opens the store in a directory through its sidecar, found through SERVE or
  * started, or through a private child when asked. It returns once the server
  * has answered, so that a directory that cannot be served fails here.
  */
 export async function open(dir: string, options: OpenOptions = {}): Promise<Store> {
-	return openWith(bunRuntime, dir, options)
+	return openWith(runtime, dir, options)
 }
 
 export async function openWith(
@@ -141,7 +145,7 @@ export async function openWith(
  * operator trusts.
  */
 export async function connect(url: string, options: ConnectOptions): Promise<Store> {
-	const link = new Link(remote(bunRuntime, url, options.token, options.tls))
+	const link = new Link(remote(runtime, url, options.token, options.tls))
 	await link.connection()
 	return new Store(link)
 }
