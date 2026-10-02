@@ -88,8 +88,10 @@ func releaseNotes(tag, previous string, subjects []string) string {
 	version := strings.TrimPrefix(tag, "v")
 	fmt.Fprintf(&notes, "## Install\n\n| | |\n|---|---|\n")
 	fmt.Fprintf(&notes, "| Go | `go get %s@%s` |\n", module, tag)
-	fmt.Fprintf(&notes, "| Bun | `bun add tinystore@%s` |\n", version)
+	fmt.Fprintf(&notes, "| Bun, Node | `bun add tinystore@%s`, `npm install tinystore@%[1]s` |\n", version)
 	fmt.Fprintf(&notes, "| Python | `pip install tinyshed-tinystore==%s` |\n", pythonVersion(version))
+	fmt.Fprintf(&notes, "| the command | `bunx tinystore@%s`, `uvx --from tinyshed-tinystore==%s tinystore`, "+
+		"`go install %s/cmd/tinystore@%s` |\n", version, pythonVersion(version), module, tag)
 	fmt.Fprintf(&notes, "| a server | `docker pull ghcr.io/tinyshed/tinystore:%s` |\n", version)
 	fmt.Fprintf(&notes, "| the binary | an archive below, checked against `SHA256SUMS` |\n")
 	if previous != "" {

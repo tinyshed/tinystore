@@ -738,7 +738,7 @@ Where the slices stand, 29 September 2026:
 | metrics | built: `metrics.go`; the messages on wire.md |
 | `tinystore serve` with `SERVE` | built: `local.go`, `WaitIdle` in `server.go`, `internal/private`; `cmd/tinystore/serve.go` |
 | the command for a person and an agent | built: `cmd/tinystore`'s `help.go`, `status.go`, `logs.go`, `mcp.go` and `sidecar.go`, which starts a sidecar as an SDK does; `server/reach`, the Go client a program that holds no store reaches its server through |
-| the JS SDK, the Python SDK | built: `sdk/js` and `sdk/python`, every vector and every engine tested through a real `tinystore serve` (`task sdk`); not yet their READMEs, examples, packages of the binary, or a measurement against the prototype |
+| the JS SDK, the Python SDK | built: `sdk/js` for Bun and Node and `sdk/python`, every vector and every engine tested through a real `tinystore serve` (`task sdk`), their READMEs, and the packages a release builds of each with the binary and the `tinystore` command, published by none yet; not yet their examples, or a measurement against the prototype |
 | the measurement against the prototype | done: [rpc-server-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-server-2026-09-29.md), at depth 68 to 78 % of the prototype's best sidecar, much of the rest a point read's context; again with statements that start no goroutine for their contexts, [rpc-contexts-2026-09-29](https://github.com/tinyshed/research/blob/main/tinystore/reports/rpc-contexts-2026-09-29.md): 84 to 87 % on Windows, the container waiting for Docker |
 
 Every slice built passes `go test`, `-race` in the `golang:1.27` container
