@@ -30,7 +30,10 @@ func TestJobsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 		{wire.JobsLease{Handle: 4, Lease: 1000}, &wire.JobsLease{}},
 		{wire.JobsHeld{Found: true, Job: 9, Key: "k", Value: `[]`, At: 5, Attempt: 1}, &wire.JobsHeld{}},
 		{
-			wire.JobsOutcomes{Outcomes: []wire.JobsOutcome{{Job: 9, How: wire.JobRetry, Err: "later", After: 100}}},
+			wire.JobsOutcomes{Outcomes: []wire.JobsOutcome{
+				{Job: 9, How: wire.JobRetry, Err: "later", After: 100, HasAfter: true},
+				{Job: 10, How: wire.JobRetry, Err: "now", HasAfter: true},
+			}},
 			&wire.JobsOutcomes{},
 		},
 		{wire.JobsSettled{Errors: []*wire.Error{nil, {Code: wire.CodeConflict, Message: "lost"}}}, &wire.JobsSettled{}},

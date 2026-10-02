@@ -493,7 +493,7 @@ it is settled, and a work stream's on its stream. An outcome:
 | 2 | how | uint | 1 ack, 2 retry, 3 fail for good, 4 snooze, 5 extend |
 | 3 | err | str | why a retry or a failure |
 | 4 | at | int | unix milliseconds: when a retry or a snooze runs again |
-| 5 | after | uint | milliseconds: the same from now, or how long an extend holds |
+| 5 | after | uint | milliseconds: the same from now, or how long an extend holds; written when given, 0 too, which runs a retry or a snooze now where one without a time waits its backoff |
 
 Outcomes are `{1: [outcome…]}` and settled `{1: [nil or error…]}`. A query
 is `{1: handle, 2: prefix, 3: state, 4: after, 5: limit}` and a page `{1:

@@ -403,7 +403,7 @@ func timing(outcome wire.JobsOutcome) []jobs.SettleOption {
 	switch {
 	case outcome.At != 0:
 		return []jobs.SettleOption{jobs.At(time.UnixMilli(outcome.At))}
-	case outcome.After > 0:
+	case outcome.HasAfter || outcome.After > 0:
 		return []jobs.SettleOption{jobs.After(durationOf(outcome.After))}
 	}
 	return nil

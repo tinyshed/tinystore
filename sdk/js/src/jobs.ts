@@ -192,10 +192,7 @@ function timing(when: { at?: Time; after?: Duration } | undefined): {
 		return { at: unixMs(when.at) }
 	}
 	if (when?.after !== undefined) {
-		const wait = ms(when.after)
-		// a wait of nothing is now, as Go's After(0) is: a field at zero is left
-		// out, and a retry without a time waits its backoff
-		return wait > 0 ? { after: wait } : { at: Date.now() }
+		return { after: ms(when.after) }
 	}
 	return {}
 }

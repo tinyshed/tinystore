@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -151,12 +150,7 @@ def _reason(error: object) -> str:
 def _timing(at: datetime | None, after: Duration | None) -> dict[str, Any]:
     if at is not None:
         return {"at": unix_ms(at)}
-    if after is None:
-        return {}
-    # a wait of nothing is now, as Go's After(0) is: a field at zero is left
-    # out, and a retry without a time waits its backoff
-    wait = ms(after)
-    return {"after": wait} if wait > 0 else {"at": time.time_ns() // 1_000_000}
+    return {} if after is None else {"after": ms(after)}
 
 
 class Jobs:

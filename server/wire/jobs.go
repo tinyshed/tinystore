@@ -394,6 +394,9 @@ type JobsOutcome struct {
 	Err   string
 	At    int64 // unix milliseconds
 	After int64 // milliseconds
+	// HasAfter says the outcome carries After, 0 included: a retry after
+	// nothing runs now, where one without a time waits its backoff.
+	HasAfter bool
 }
 
 func (o JobsOutcome) Append(dst []byte) []byte {
@@ -407,7 +410,9 @@ func (o JobsOutcome) appendFields(m *Map) {
 	m.Uint(2, o.How)
 	optionalStr(m, 3, o.Err)
 	optionalInt(m, 4, o.At)
-	optionalInt(m, 5, o.After)
+	if o.After != 0 || o.HasAfter {
+		m.Int(5, o.After)
+	}
 }
 
 func (o *JobsOutcome) Decode(body []byte) error {
@@ -428,7 +433,7 @@ func (o *JobsOutcome) decode(d *Decoder) {
 		case 4:
 			o.At = d.Int()
 		case 5:
-			o.After = d.Duration()
+			o.After, o.HasAfter = d.Duration(), true
 		}
 	}
 }
