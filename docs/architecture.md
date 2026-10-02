@@ -233,9 +233,9 @@ counters, and a reporter reads counters without running SQL or writing data.
   same everywhere. `metrics` keeps its own messages, and each of its errors
   wraps the root's.
 - An error about one item names it. An `Ingest` refused because of one series
-  returns a `*metrics.SeriesError` carrying that series' labels (`errors.As`),
-  and `DropSeries(ctx, labels)` removes a series that cannot be repaired; a
-  records `Append` refused because of one record returns a
+  returns a `*metrics.SeriesError` carrying that series' name and labels
+  (`errors.As`), and `DropSeries(ctx, name, labels)` removes a series that
+  cannot be repaired; a records `Append` refused because of one record returns a
   `*records.RecordError`, and a read over a row that no longer reads a
   `*records.DamageError`, whose `Damage` is what `Drop` removes.
 

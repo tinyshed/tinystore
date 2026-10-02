@@ -69,7 +69,7 @@ func weighRecords(found []records.Record) int64 {
 func weighSeries(results []metrics.Result) int64 {
 	total := int64(0)
 	for _, result := range results {
-		total += weighLabels(result.Series.Labels) + int64(len(result.Samples))*overhead
+		total += weighSeriesName(result.Series) + int64(len(result.Samples))*overhead
 	}
 	return total
 }
@@ -77,15 +77,16 @@ func weighSeries(results []metrics.Result) int64 {
 func weighBuckets(results []metrics.AggregateResult) int64 {
 	total := int64(0)
 	for _, result := range results {
-		total += weighLabels(result.Series.Labels) + int64(len(result.Buckets))*3*overhead
+		total += weighSeriesName(result.Series) + int64(len(result.Buckets))*3*overhead
 	}
 	return total
 }
 
-func weighLabels(labels []metrics.Label) int64 {
-	total := int64(overhead)
-	for _, label := range labels {
-		total += int64(len(label.Name)+len(label.Value)) + overhead
+// weighSeriesName weighs what names a series in an answer: its name and labels
+func weighSeriesName(series metrics.Series) int64 {
+	total := int64(len(series.Name)) + 2*overhead
+	for name, value := range series.Labels {
+		total += int64(len(name)+len(value)) + overhead
 	}
 	return total
 }

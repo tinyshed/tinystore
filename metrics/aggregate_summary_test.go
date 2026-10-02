@@ -35,7 +35,7 @@ func TestWholeExactBlocksNeedNoDecodedSampleBudget(t *testing.T) {
 	}
 	store, series := sealedAggregateStore(t, Gauge, values)
 	request := AggregateRequest{Range: Range{
-		Matchers: series.Labels, From: testEpoch, To: testEpoch + 961,
+		Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 961,
 		Limits: Limits{DecodedSamples: 1},
 	}, Width: time.Second, Op: AggregateSum}
 	got, err := store.Aggregate(t.Context(), request)
@@ -62,7 +62,7 @@ func TestWholeSummarySkipsPayloadButPartialBlocksCheckIt(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	request := AggregateRequest{Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 481}, Width: time.Second, Op: AggregateSum}
+	request := AggregateRequest{Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 481}, Width: time.Second, Op: AggregateSum}
 	if _, err := store.Aggregate(t.Context(), request); err != nil {
 		t.Fatalf("summary fetched unused raw: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSummaryAndRawAggregatesAgreeAtEveryBoundary(t *testing.T) {
 			}
 			for _, bounds := range [][3]int64{{0, 1441, 2000}, {1, 1440, 480}, {240, 1200, 240}, {239, 1201, 481}, {0, 961, 500}} {
 				request := AggregateRequest{
-					Range: Range{Matchers: series.Labels, From: testEpoch + bounds[0], To: testEpoch + bounds[1]},
+					Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch + bounds[0], To: testEpoch + bounds[1]},
 					Width: time.Duration(bounds[2]) * time.Millisecond, Op: op,
 				}
 				got, err := store.Aggregate(t.Context(), request)
@@ -153,7 +153,7 @@ func TestLargeExactSummariesStayWithinDirectoryBounds(t *testing.T) {
 		}
 	}
 	request := AggregateRequest{
-		Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 9000},
+		Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 9000},
 		Width: 9 * time.Second, Op: AggregateSum,
 	}
 	got, err := store.Aggregate(t.Context(), request)

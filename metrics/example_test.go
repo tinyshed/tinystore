@@ -28,7 +28,7 @@ func ExampleStore() {
 		panic(err)
 	}
 
-	series := metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "web-1"}}}
+	series := metrics.Series{Name: "cpu", Kind: metrics.Gauge, Labels: metrics.Labels{"host": "web-1"}}
 	start := time.Now().UnixMilli()
 	points := make([]metrics.Sample, 241)
 	for i := range points {
@@ -56,7 +56,7 @@ func ExampleStore() {
 	if err != nil {
 		panic(err)
 	}
-	result, err := cpu.Read(ctx, metrics.Range{Matchers: series.Labels, From: start + 237, To: start + 241})
+	result, err := cpu.Read(ctx, metrics.Range{Name: "cpu", Match: metrics.Labels{"host": "web-1"}, From: start + 237, To: start + 241})
 	if err != nil {
 		panic(err)
 	}

@@ -30,7 +30,7 @@ func TestAggregateRoundsExactSumAcrossSealedBlocks(t *testing.T) {
 		t.Fatalf("seal sum blocks: %+v: %v", sealed, err)
 	}
 	result, err := store.Aggregate(t.Context(), AggregateRequest{
-		Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 481},
+		Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 481},
 		Width: 481 * time.Millisecond, Op: AggregateSum,
 	})
 	if err != nil || len(result) != 1 || len(result[0].Buckets) != 1 {
@@ -61,14 +61,14 @@ func TestAggregateCounterIncludesBlockTransitionButNotBucketTransition(t *testin
 		t.Fatalf("seal counter block: %+v: %v", sealed, err)
 	}
 	all, err := store.Aggregate(t.Context(), AggregateRequest{
-		Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 242},
+		Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 242},
 		Width: 242 * time.Millisecond, Op: AggregateIncrease,
 	})
 	if err != nil || len(all) != 1 || len(all[0].Buckets) != 1 || all[0].Buckets[0].Value != 40 || all[0].Buckets[0].Resets != 1 {
 		t.Fatalf("counter transition: %+v: %v", all, err)
 	}
 	split, err := store.Aggregate(t.Context(), AggregateRequest{
-		Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 242},
+		Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 242},
 		Width: 240 * time.Millisecond, Op: AggregateIncrease,
 	})
 	if err != nil || len(split) != 1 || len(split[0].Buckets) != 2 {
@@ -86,7 +86,7 @@ func TestAggregatePreservesSignedZeroAndRejectsInvalidInputs(t *testing.T) {
 	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
 		t.Fatal(err)
 	}
-	request := AggregateRequest{Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 2}, Width: 2 * time.Millisecond}
+	request := AggregateRequest{Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 2}, Width: 2 * time.Millisecond}
 	for _, test := range []struct {
 		op   AggregateOp
 		bits uint64
@@ -124,7 +124,7 @@ func TestAggregateOutputBudgetCountsBuckets(t *testing.T) {
 	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
 		t.Fatal(err)
 	}
-	rangeRequest := Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 100}
+	rangeRequest := Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 100}
 	if _, err := store.Read(t.Context(), rangeRequest); !errors.Is(err, ErrLimit) {
 		t.Fatalf("raw output limit: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestAggregateClipsRetentionBeforeSummingSealedEdges(t *testing.T) {
 	}
 	store.now = func() time.Time { return time.UnixMilli(testEpoch + 1200) }
 	result, err := store.Aggregate(t.Context(), AggregateRequest{
-		Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 481},
+		Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 481},
 		Width: 481 * time.Millisecond, Op: AggregateSum,
 	})
 	if err != nil || len(result) != 1 || len(result[0].Buckets) != 1 {
@@ -202,7 +202,7 @@ func TestAggregateMarksOnlyTheBucketRetentionCut(t *testing.T) {
 		{"range after the cutoff", 250, 100, []bucket{{250, 100, false}, {350, 100, false}, {450, 31, false}}},
 	} {
 		result, err := store.Aggregate(t.Context(), AggregateRequest{
-			Range: Range{Matchers: series.Labels, From: testEpoch + test.from, To: testEpoch + 481},
+			Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch + test.from, To: testEpoch + 481},
 			Width: time.Duration(test.width) * time.Millisecond, Op: AggregateCount,
 		})
 		if err != nil || len(result) != 1 || len(result[0].Buckets) != len(test.want) {
@@ -228,7 +228,7 @@ func TestAggregateHandlesCancellationOfOverflowAndSubnormals(t *testing.T) {
 	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
 		t.Fatal(err)
 	}
-	request := AggregateRequest{Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + int64(len(points))}, Width: time.Duration(len(points)) * time.Millisecond, Op: AggregateSum}
+	request := AggregateRequest{Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + int64(len(points))}, Width: time.Duration(len(points)) * time.Millisecond, Op: AggregateSum}
 	result, err := store.Aggregate(t.Context(), request)
 	if err != nil || len(result) != 1 || len(result[0].Buckets) != 1 {
 		t.Fatalf("canceled overflow: %+v: %v", result, err)
@@ -265,14 +265,14 @@ func TestAggregateCounterRejectsNegativeValuesAfterReopen(t *testing.T) {
 	}
 	defer reopened.Close(context.Background())
 	reopened.now = func() time.Time { return time.UnixMilli(testEpoch + 900) }
-	_, err = reopened.Aggregate(t.Context(), AggregateRequest{Range: Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 2}, Width: 2 * time.Millisecond, Op: AggregateIncrease})
+	_, err = reopened.Aggregate(t.Context(), AggregateRequest{Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 2}, Width: 2 * time.Millisecond, Op: AggregateIncrease})
 	if !errors.Is(err, ErrCounterValue) {
 		t.Fatalf("negative counter aggregate after reopen: %v", err)
 	}
 	if writeErr := reopened.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: testEpoch + 2, Value: math.Float64frombits(0x7ff8000000001234)}}}}); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	_, err = reopened.Aggregate(t.Context(), AggregateRequest{Range: Range{Matchers: series.Labels, From: testEpoch + 2, To: testEpoch + 3}, Width: time.Millisecond, Op: AggregateCount})
+	_, err = reopened.Aggregate(t.Context(), AggregateRequest{Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch + 2, To: testEpoch + 3}, Width: time.Millisecond, Op: AggregateCount})
 	if !errors.Is(err, ErrCounterValue) {
 		t.Fatalf("nonfinite counter aggregate: %v", err)
 	}

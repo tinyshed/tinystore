@@ -98,7 +98,7 @@ func (s *Store) ingestReservation(batches []Batch) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		labels, err := reservedMultiple(len(batch.Series.Labels), 64)
+		labels, err := reservedMultiple(len(batch.Series.Labels)+1, 64)
 		if err != nil {
 			return 0, err
 		}
@@ -106,17 +106,12 @@ func (s *Store) ingestReservation(batches []Batch) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		for _, label := range batch.Series.Labels {
-			name, sizeErr := reservedMultiple(len(label.Name), 4)
-			if sizeErr != nil {
-				return 0, sizeErr
-			}
-			value, sizeErr := reservedMultiple(len(label.Value), 4)
-			if sizeErr != nil {
-				return 0, sizeErr
-			}
-			input, err = reservation(input, name, value)
-			if err != nil {
+		input, err = reserveLabel(input, metricName, batch.Series.Name)
+		if err != nil {
+			return 0, err
+		}
+		for labelName, value := range batch.Series.Labels {
+			if input, err = reserveLabel(input, labelName, value); err != nil {
 				return 0, err
 			}
 		}
@@ -130,4 +125,17 @@ func (s *Store) maintenanceReservation() (int64, error) {
 		return 0, err
 	}
 	return reservation(int64(s.opts.MaxHeadBytes)*2, publicationBatchBytes, points, 512<<10)
+}
+
+// reserveLabel adds what one label of an ingested series holds while it is checked
+func reserveLabel(input int64, name, value string) (int64, error) {
+	nameBytes, err := reservedMultiple(len(name), 4)
+	if err != nil {
+		return 0, err
+	}
+	valueBytes, err := reservedMultiple(len(value), 4)
+	if err != nil {
+		return 0, err
+	}
+	return reservation(input, nameBytes, valueBytes)
 }

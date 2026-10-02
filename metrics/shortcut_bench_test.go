@@ -52,9 +52,7 @@ func aggregateBenchmarkStore(b *testing.B, operation AggregateOp) (*Store, Aggre
 		if operation == AggregateIncrease {
 			kind = Counter
 		}
-		series := Series{Kind: kind, Labels: []Label{
-			{Name: "__name__", Value: "bench"}, {Name: "group", Value: "bench"}, {Name: "id", Value: fmt.Sprint(id)},
-		}}
+		series := Series{Kind: kind, Name: "bench", Labels: Labels{"group": "bench", "id": fmt.Sprint(id)}}
 		points := make([]Sample, 4801)
 		for i := range points {
 			points[i] = Sample{At: testEpoch + int64(i), Value: float64((i*17+id)%997) / 10}
@@ -68,8 +66,8 @@ func aggregateBenchmarkStore(b *testing.B, operation AggregateOp) (*Store, Aggre
 		b.Fatal(err)
 	}
 	request := AggregateRequest{Range: Range{
-		Matchers: []Label{{Name: "group", Value: "bench"}},
-		From:     testEpoch, To: testEpoch + 4801,
+		Match: Labels{"group": "bench"},
+		From:  testEpoch, To: testEpoch + 4801,
 	}, Width: 5 * time.Second, Op: operation}
 	return store, request
 }

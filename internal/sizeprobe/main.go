@@ -56,7 +56,7 @@ func main() {
 		panic(err)
 	}
 	at := time.Now().UnixMilli()
-	series := metrics.Series{Labels: []metrics.Label{{Name: "__name__", Value: "probe"}}}
+	series := metrics.Series{Name: "probe", Kind: metrics.Gauge}
 	batch := metrics.Batch{Series: series, Samples: []metrics.Sample{{At: at, Value: 1}}}
 	if err = store.Ingest(ctx, []metrics.Batch{batch}); err != nil {
 		panic(err)
@@ -64,7 +64,7 @@ func main() {
 	if _, err = store.Maintain(ctx); err != nil {
 		panic(err)
 	}
-	result, err := store.Read(ctx, metrics.Range{Matchers: series.Labels, From: at, To: at + 1})
+	result, err := store.Read(ctx, metrics.Range{Name: "probe", From: at, To: at + 1})
 	if err != nil {
 		panic(err)
 	}

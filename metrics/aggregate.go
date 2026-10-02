@@ -127,7 +127,7 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 	if query.from >= query.to {
 		return []AggregateResult{}, nil
 	}
-	query.aggregate = &aggregateSelection{origin: request.Range.From, width: request.Width.Milliseconds()}
+	query.aggregate = &aggregateSelection{origin: query.origin, width: request.Width.Milliseconds()}
 
 	unreserve, err := s.reserve(ctx, func() (int64, error) { return aggregateReservation(query.limits) })
 	if err != nil {
@@ -141,7 +141,7 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 	}
 
 	aggregation := aggregation{
-		store: s, op: request.Op, origin: request.Range.From, width: request.Width.Milliseconds(),
+		store: s, op: request.Op, origin: query.origin, width: request.Width.Milliseconds(),
 		from: query.from, to: query.to, limit: query.limits.OutputSamples,
 	}
 	results, err := aggregation.fold(ctx, reads)
@@ -154,8 +154,8 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 
 func (s *Store) checkAggregate(request AggregateRequest) (rangeQuery, error) {
 	width := request.Width
-	if request.Range.To < request.Range.From || width < time.Millisecond || width%time.Millisecond != 0 {
-		return rangeQuery{}, fmt.Errorf("%w: aggregate range or bucket width", ErrInvalid)
+	if width < time.Millisecond || width%time.Millisecond != 0 {
+		return rangeQuery{}, fmt.Errorf("%w: aggregate bucket width", ErrInvalid)
 	}
 	switch request.Op {
 	case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateIncrease:
@@ -208,8 +208,9 @@ func (a *aggregation) fold(ctx context.Context, reads []seriesRead) ([]Aggregate
 			return nil, err
 		}
 		if len(series.buckets) > 0 {
-			labelled := Series{Labels: read.series.labels, Kind: read.series.kind}
-			results = append(results, AggregateResult{Series: labelled, Buckets: series.buckets})
+			results = append(results, AggregateResult{
+				Series: publicSeries(read.series.labels, read.series.kind), Buckets: series.buckets,
+			})
 		}
 	}
 	return results, nil

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"slices"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -35,8 +34,7 @@ func metricsIngest(c *call) error {
 		for j := range samples {
 			samples[j] = metrics.Sample{At: sent.Times[j], Value: sent.Values[j]}
 		}
-		series := metrics.Series{Labels: labelsOf(sent.Labels), Kind: metrics.Kind(sent.Kind)}
-		batches[i] = metrics.Batch{Series: series, Samples: samples}
+		batches[i] = metrics.Batch{Series: seriesOf(sent.Labels, sent.Kind), Samples: samples}
 	}
 	if err = store.Ingest(c.ctx, batches); err != nil {
 		return err
@@ -71,7 +69,7 @@ func metricsRead(c *call) error {
 		return err
 	}
 	for _, result := range results {
-		labels, kind := labelMapOf(result.Series.Labels), string(result.Series.Kind)
+		labels, kind := wireLabels(result.Series), string(result.Series.Kind)
 		err = inPieces(result.Samples, c.itemsInABody(8+8), func(samples []metrics.Sample) error {
 			sent := wire.MetricsSeries{
 				Labels: labels, Kind: kind, Times: make([]int64, len(samples)),
@@ -121,7 +119,7 @@ func metricsAggregate(c *call) error {
 		return err
 	}
 	for _, result := range results {
-		labels, kind := labelMapOf(result.Series.Labels), string(result.Series.Kind)
+		labels, kind := wireLabels(result.Series), string(result.Series.Kind)
 		err = inPieces(result.Buckets, c.itemsInABody(5*8+1), func(buckets []metrics.AggregateBucket) error {
 			sent := wire.MetricsBuckets{Labels: labels, Kind: kind, Buckets: make([]wire.MetricsBucket, len(buckets))}
 			for i, bucket := range buckets {
@@ -149,7 +147,8 @@ func metricsDrop(c *call) error {
 	if err != nil {
 		return err
 	}
-	dropped, err := store.DropSeries(c.ctx, labelsOf(ask.Labels))
+	series := seriesOf(ask.Labels, "")
+	dropped, err := store.DropSeries(c.ctx, series.Name, series.Labels)
 	if err != nil {
 		return err
 	}
@@ -179,8 +178,9 @@ func inPieces[T any](items []T, n int, send func([]T) error) error {
 
 // rangeOf is a range as the engine takes it; a limit of zero is the server's
 func rangeOf(sent wire.MetricsRange) metrics.Range {
+	matched := seriesOf(sent.Matchers, "")
 	return metrics.Range{
-		Matchers: labelsOf(sent.Matchers), From: sent.From, To: sent.To,
+		Name: matched.Name, Match: matched.Labels, From: sent.From, To: sent.To,
 		Limits: metrics.Limits{
 			Series: limitOf(sent.Limits.Series), Blocks: limitOf(sent.Limits.Blocks),
 			PayloadBytes: limitOf(sent.Limits.PayloadBytes), DecodedSamples: limitOf(sent.Limits.DecodedSamples),
@@ -193,19 +193,28 @@ func limitOf(limit uint64) int {
 	return int(min(limit, math.MaxInt32))
 }
 
-// labelsOf is a map of labels as the engine takes them, ordered by name
-func labelsOf(labels map[string]string) []metrics.Label {
-	ordered := make([]metrics.Label, 0, len(labels))
-	for _, name := range slices.Sorted(maps.Keys(labels)) {
-		ordered = append(ordered, metrics.Label{Name: name, Value: labels[name]})
+// wireName is the label the wire carries a series' name as, beside its
+// labels, as the store keeps it
+const wireName = "__name__"
+
+// seriesOf is a series as the wire spells it, its name among its labels
+func seriesOf(labels map[string]string, kind string) metrics.Series {
+	series := metrics.Series{Name: labels[wireName], Kind: metrics.Kind(kind)}
+	series.Labels = make(metrics.Labels, len(labels))
+	for name, value := range labels {
+		if name != wireName {
+			series.Labels[name] = value
+		}
 	}
-	return ordered
+	return series
 }
 
-func labelMapOf(labels []metrics.Label) map[string]string {
-	named := make(map[string]string, len(labels))
-	for _, label := range labels {
-		named[label.Name] = label.Value
+// wireLabels is a series' name and labels as the wire spells them
+func wireLabels(series metrics.Series) map[string]string {
+	spelled := make(map[string]string, len(series.Labels)+1)
+	maps.Copy(spelled, series.Labels)
+	if series.Name != "" {
+		spelled[wireName] = series.Name
 	}
-	return named
+	return spelled
 }

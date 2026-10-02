@@ -9,7 +9,7 @@ import (
 // preparedBatch is one series' samples from one call: checked, sorted, unique.
 type preparedBatch struct {
 	identity string
-	labels   []Label
+	labels   []label
 	kind     Kind
 	samples  []Sample
 }
@@ -67,9 +67,13 @@ func (in *ingestInput) add(batch Batch) error {
 	}
 	in.samples += len(batch.Samples)
 
-	labels, identity, err := canonicalLabels(batch.Series.Labels, true)
+	kept, err := keptLabels(batch.Series.Name, batch.Series.Labels)
 	if err != nil {
-		return seriesError(batch.Series.Labels, err)
+		return refusedSeries(batch.Series, err)
+	}
+	labels, identity, err := canonicalLabels(kept, true)
+	if err != nil {
+		return refusedSeries(batch.Series, err)
 	}
 	kind, err := seriesKind(batch.Series.Kind)
 	if err != nil {
@@ -93,7 +97,7 @@ func (in *ingestInput) add(batch Batch) error {
 	return nil
 }
 
-func (in *ingestInput) seriesFor(identity string, labels []Label, kind Kind) (*pendingSeries, error) {
+func (in *ingestInput) seriesFor(identity string, labels []label, kind Kind) (*pendingSeries, error) {
 	series, found := in.series[identity]
 	if !found {
 		series = &pendingSeries{batch: preparedBatch{identity: identity, labels: labels, kind: kind}}

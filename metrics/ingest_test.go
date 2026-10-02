@@ -5,8 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"math"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +58,7 @@ func TestLongPackedHeadAppendKeepsExactBitsAndFrontier(t *testing.T) {
 	}
 	want := append(seed, incoming)
 	assertRead := func() {
-		results, err := store.Read(t.Context(), Range{Matchers: series.Labels, From: testEpoch, To: incoming.At + 1})
+		results, err := store.Read(t.Context(), Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: incoming.At + 1})
 		if err != nil || len(results) != 1 || len(results[0].Samples) != len(want) {
 			t.Fatalf("read appended head: results=%d error=%v", len(results), err)
 		}
@@ -86,8 +86,8 @@ func TestCanceledIngestDoesNotCreateASeries(t *testing.T) {
 
 func TestIngestRefusalNamesItsSeries(t *testing.T) {
 	store, _ := openTestStore(t, Options{})
-	broken := Series{Labels: []Label{{Name: "host", Value: "b"}, {Name: "__name__", Value: "cpu"}}}
-	healthy := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "a"}}}
+	broken := Series{Name: "cpu", Labels: Labels{"host": "b"}}
+	healthy := Series{Name: "cpu", Labels: Labels{"host": "a"}}
 	for _, series := range []Series{broken, healthy} {
 		if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: testEpoch, Value: 1}}}}); err != nil {
 			t.Fatal(err)
@@ -106,12 +106,12 @@ func TestIngestRefusalNamesItsSeries(t *testing.T) {
 	if !errors.As(err, &named) || !errors.Is(err, ErrSuspended) {
 		t.Fatalf("refusal: %v", err)
 	}
-	want := []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "b"}}
-	if !slices.Equal(named.Labels, want) || !strings.Contains(err.Error(), `series cpu{host="b"}: `) {
-		t.Fatalf("named %v in %q", named.Labels, err)
+	if named.Name != "cpu" || !maps.Equal(named.Labels, Labels{"host": "b"}) ||
+		!strings.Contains(err.Error(), `series cpu{host="b"}: `) {
+		t.Fatalf("named %s %v in %q", named.Name, named.Labels, err)
 	}
 
-	results, err := store.Read(t.Context(), Range{Matchers: healthy.Labels, From: testEpoch, To: testEpoch + 10})
+	results, err := store.Read(t.Context(), Range{Name: healthy.Name, Match: healthy.Labels, From: testEpoch, To: testEpoch + 10})
 	if err != nil || len(results) != 1 || len(results[0].Samples) != 1 {
 		t.Fatalf("the refused call wrote its healthy series: %v, %v", results, err)
 	}
@@ -122,13 +122,13 @@ func TestIngestValidationNamesItsSeries(t *testing.T) {
 	expired := Sample{At: testEpoch - (31 * 24 * time.Hour).Milliseconds(), Value: 1}
 	err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: []Sample{expired}}})
 	var named *SeriesError
-	if !errors.As(err, &named) || !errors.Is(err, ErrTooOld) || formatLabels(named.Labels) != `cpu{host="one"}` {
+	if !errors.As(err, &named) || !errors.Is(err, ErrTooOld) || formatSeries(named.Name, named.Labels) != `cpu{host="one"}` {
 		t.Fatalf("expired sample: %v", err)
 	}
 
-	unnamed := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "", Value: "web-1"}}}
+	unnamed := Series{Name: "cpu", Labels: Labels{"": "web-1"}}
 	err = store.Ingest(t.Context(), []Batch{{Series: unnamed, Samples: testSamples(1)}})
-	if !errors.As(err, &named) || !errors.Is(err, ErrInvalid) || formatLabels(named.Labels) != `cpu{="web-1"}` {
+	if !errors.As(err, &named) || !errors.Is(err, ErrInvalid) || formatSeries(named.Name, named.Labels) != `cpu{="web-1"}` {
 		t.Fatalf("a label without a name: %v", err)
 	}
 }

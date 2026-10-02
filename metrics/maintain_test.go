@@ -7,8 +7,8 @@ import (
 
 func TestMaintenanceRotatesReadySeries(t *testing.T) {
 	s, _ := openTestStore(t, Options{MaintenanceSeries: 1})
-	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}
-	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
+	a := Series{Name: "a"}
+	b := Series{Name: "b"}
 	points := testSamples(481)
 	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: points[:241]}, {Series: b, Samples: points[:241]}}); err != nil {
 		t.Fatal(err)

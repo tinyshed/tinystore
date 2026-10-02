@@ -105,7 +105,7 @@ func TestDirectoryCorruptionAndRebindingAreRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := store.Read(t.Context(), Range{Matchers: testSeries().Labels, From: testEpoch, To: testEpoch + 500}); !errors.Is(err, ErrCorrupt) || result != nil {
+	if result, err := store.Read(t.Context(), Range{Name: testSeries().Name, Match: testSeries().Labels, From: testEpoch, To: testEpoch + 500}); !errors.Is(err, ErrCorrupt) || result != nil {
 		t.Fatalf("corruption: %v %#v", err, result)
 	}
 }

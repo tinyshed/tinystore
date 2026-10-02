@@ -52,9 +52,13 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 			if len(row.Values) != len(row.Times) || len(row.Values) == 0 {
 				t.Fatal("corpus lengths")
 			}
-			series := Series{Kind: Gauge}
+			series := Series{Kind: Gauge, Labels: Labels{}}
 			for name, value := range row.Metric {
-				series.Labels = append(series.Labels, Label{Name: name, Value: value})
+				if name == metricName {
+					series.Name = value
+				} else {
+					series.Labels[name] = value
+				}
 			}
 			points := make([]Sample, len(row.Values))
 			for i, value := range row.Values {
@@ -119,7 +123,7 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 	begin = time.Now()
 	aggregatesChecked := 0
 	walk(func(series Series, points []Sample) {
-		result, readErr := reopened.Read(t.Context(), Range{Matchers: series.Labels, From: points[0].At, To: points[len(points)-1].At + 1})
+		result, readErr := reopened.Read(t.Context(), Range{Name: series.Name, Match: series.Labels, From: points[0].At, To: points[len(points)-1].At + 1})
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
@@ -130,7 +134,7 @@ func TestCorpusThroughPublicStore(t *testing.T) {
 		if aggregatesChecked < 64 {
 			width := time.Duration(points[len(points)-1].At-points[0].At+1) * time.Millisecond
 			aggregated, aggregateErr := reopened.Aggregate(t.Context(), AggregateRequest{
-				Range: Range{Matchers: series.Labels, From: points[0].At, To: points[len(points)-1].At + 1},
+				Range: Range{Name: series.Name, Match: series.Labels, From: points[0].At, To: points[len(points)-1].At + 1},
 				Width: width, Op: AggregateSum,
 			})
 			if aggregateErr != nil || len(aggregated) != 1 || len(aggregated[0].Buckets) != 1 {

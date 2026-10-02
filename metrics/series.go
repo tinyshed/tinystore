@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -28,7 +29,46 @@ const (
 	dictionaryChunk    = 256
 )
 
-func canonicalLabels(labels []Label, requireMetric bool) ([]Label, string, error) {
+// metricName is the label a series' name is kept as beside its labels, and
+// why a label of the application's may not begin with __
+const metricName = "__name__"
+
+// label is one name and value of a series as the store keeps it
+type label struct{ Name, Value string }
+
+// keptLabels is a series' name and labels as the store keeps them, the name a
+// label among the others:
+//
+//	http_requests_total{route="/users"}  →  __name__=http_requests_total, route=/users
+func keptLabels(name string, labels Labels) ([]label, error) {
+	kept := make([]label, 0, len(labels)+1)
+	if name != "" {
+		kept = append(kept, label{Name: metricName, Value: name})
+	}
+	for labelName, value := range labels {
+		if strings.HasPrefix(labelName, "__") {
+			return nil, fmt.Errorf("%w: label %q: a name beginning with __ is the store's own", ErrInvalid, labelName)
+		}
+		kept = append(kept, label{Name: labelName, Value: value})
+	}
+	return kept, nil
+}
+
+// publicSeries is kept labels as the application names a series: its name
+// apart from its labels
+func publicSeries(kept []label, kind Kind) Series {
+	series := Series{Kind: kind, Labels: make(Labels, len(kept))}
+	for _, pair := range kept {
+		if pair.Name == metricName {
+			series.Name = pair.Value
+		} else {
+			series.Labels[pair.Name] = pair.Value
+		}
+	}
+	return series
+}
+
+func canonicalLabels(labels []label, requireMetric bool) ([]label, string, error) {
 	ordered, err := orderedLabels(labels, requireMetric)
 	if err != nil {
 		return nil, "", err
@@ -44,12 +84,12 @@ func canonicalLabels(labels []Label, requireMetric bool) ([]Label, string, error
 	return ordered, string(encoded), nil
 }
 
-func orderedLabels(labels []Label, requireMetric bool) ([]Label, error) {
+func orderedLabels(labels []label, requireMetric bool) ([]label, error) {
 	if len(labels) == 0 || len(labels) > maxLabels {
 		return nil, fmt.Errorf("%w: expected 1..%d labels", ErrInvalid, maxLabels)
 	}
 	ordered := slices.Clone(labels)
-	slices.SortFunc(ordered, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(ordered, func(a, b label) int { return strings.Compare(a.Name, b.Name) })
 	bytes, hasMetric := 0, false
 	for i, label := range ordered {
 		if len(label.Name) > maxLabelNameBytes || len(label.Value) > maxLabelValueBytes {
@@ -63,42 +103,47 @@ func orderedLabels(labels []Label, requireMetric bool) ([]Label, error) {
 		if i > 0 && ordered[i-1].Name == label.Name {
 			return nil, fmt.Errorf("%w: duplicate label %q", ErrInvalid, label.Name)
 		}
-		if label.Name == "__name__" {
+		if label.Name == metricName {
 			hasMetric = label.Value != ""
 		}
 	}
 	if requireMetric && !hasMetric {
-		return nil, fmt.Errorf("%w: a nonempty __name__ label is required", ErrInvalid)
+		return nil, fmt.Errorf("%w: a series needs a name", ErrInvalid)
 	}
 	return ordered, nil
 }
 
-// formatLabels prints a series the way Prometheus does:
+// formatSeries prints a series the way Prometheus does:
 //
-//	{__name__="cpu", host="web-1", zone="a"}  →  cpu{host="web-1",zone="a"}
-//	{__name__="up"}                            →  up
-func formatLabels(labels []Label) string {
-	var name strings.Builder
-	var rest []string
-	for _, label := range labels {
-		if label.Name == "__name__" {
-			name.WriteString(label.Value)
-			continue
-		}
-		rest = append(rest, label.Name+"="+strconv.Quote(label.Value))
+//	cpu, {host: web-1, zone: a}  →  cpu{host="web-1",zone="a"}
+//	up                           →  up
+func formatSeries(name string, labels Labels) string {
+	if len(labels) == 0 {
+		return name
 	}
-	if len(rest) == 0 && name.Len() > 0 {
-		return name.String()
+	pairs := make([]string, 0, len(labels))
+	for _, labelName := range slices.Sorted(maps.Keys(labels)) {
+		pairs = append(pairs, labelName+"="+strconv.Quote(labels[labelName]))
 	}
-	return name.String() + "{" + strings.Join(rest, ",") + "}"
+	return name + "{" + strings.Join(pairs, ",") + "}"
+}
+
+// formatLabels prints kept labels as formatSeries prints their series
+func formatLabels(kept []label) string {
+	series := publicSeries(kept, "")
+	return formatSeries(series.Name, series.Labels)
 }
 
 // seriesError names the series a refusal belongs to. A cancelled call or a
 // failing file is not the series' doing and keeps its own error.
-func seriesError(labels []Label, err error) error {
+func seriesError(kept []label, err error) error {
+	return refusedSeries(publicSeries(kept, ""), err)
+}
+
+func refusedSeries(series Series, err error) error {
 	for _, refusal := range []error{ErrInvalid, ErrLimit, ErrTooOld, ErrTooNew, ErrConflict, ErrCorrupt, ErrSuspended} {
 		if errors.Is(err, refusal) {
-			return &SeriesError{Labels: slices.Clone(labels), Err: err}
+			return &SeriesError{Name: series.Name, Labels: maps.Clone(series.Labels), Err: err}
 		}
 	}
 	return err
@@ -106,7 +151,7 @@ func seriesError(labels []Label, err error) error {
 
 type registeredSeries struct {
 	id     int64
-	labels []Label
+	labels []label
 	ids    []int64
 	kind   Kind
 }
@@ -161,7 +206,7 @@ const labelPairsQuery = `select id from label_values where (name,value) in (valu
 
 // lookupLabelIDs asks for every pair at once; a short answer means the
 // dictionary does not hold them all yet
-func lookupLabelIDs(ctx context.Context, tx sqlite.Writer, labels []Label) ([]int64, bool, error) {
+func lookupLabelIDs(ctx context.Context, tx sqlite.Writer, labels []label) ([]int64, bool, error) {
 	query := labelPairsQuery + placeholders("(?,?)", len(labels)) + `)`
 	arguments := make([]any, 0, 2*len(labels))
 	for _, label := range labels {
@@ -189,7 +234,7 @@ func lookupLabelIDs(ctx context.Context, tx sqlite.Writer, labels []Label) ([]in
 
 const registerLabelQuery = `insert into label_values(name,value) values(?,?) on conflict(name,value) do nothing`
 
-func registerLabels(ctx context.Context, tx sqlite.Writer, labels []Label) ([]int64, error) {
+func registerLabels(ctx context.Context, tx sqlite.Writer, labels []label) ([]int64, error) {
 	ids, complete, err := lookupLabelIDs(ctx, tx, labels)
 	if err != nil {
 		return nil, err

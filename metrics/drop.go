@@ -13,7 +13,7 @@ import (
 // whether its data still reads or not, including a suspended series. A group
 // whose directory or clock no longer reads is removed without the payload rows
 // it named: they stay in the file, and UnreadableGroups counts such groups.
-func (s *Store) DropSeries(ctx context.Context, labels []Label) (DroppedSeries, error) {
+func (s *Store) DropSeries(ctx context.Context, name string, labels Labels) (DroppedSeries, error) {
 	if err := s.enter(ctx); err != nil {
 		return DroppedSeries{}, err
 	}
@@ -25,7 +25,11 @@ func (s *Store) DropSeries(ctx context.Context, labels []Label) (DroppedSeries, 
 	}
 	defer release()
 
-	ordered, identity, err := canonicalLabels(labels, true)
+	kept, err := keptLabels(name, labels)
+	if err != nil {
+		return DroppedSeries{}, err
+	}
+	ordered, identity, err := canonicalLabels(kept, true)
 	if err != nil {
 		return DroppedSeries{}, err
 	}

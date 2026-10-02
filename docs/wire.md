@@ -740,10 +740,14 @@ A series:
 
 | key | field | type | |
 |---|---|---|---|
-| 1 | labels | a map of names | `__name__` among them, required on ingest; names unique, every text UTF-8 |
+| 1 | labels | a map of names | the series' name as `__name__` among them, required on ingest; names unique, every text UTF-8 |
 | 2 | kind | str | `gauge` or `counter` |
 | 3 | times | bin | unix milliseconds, a little-endian int64 each |
 | 4 | values | bin | a little-endian float64 each, its bits the data: -0 and a NaN's payload come back as they went |
+
+The wire carries a series' name as the store keeps it, its label `__name__`;
+the Go API and every SDK give it apart from the labels, as `name`, and refuse a
+label of the application's beginning with `__`.
 
 The two columns hold as many values each. A series longer than half a body
 holds comes in several `DATA`, one after another, each with its labels and
@@ -754,7 +758,7 @@ A range:
 
 | key | field | type | |
 |---|---|---|---|
-| 1 | matchers | a map of names | the labels a series has, exactly; one at least |
+| 1 | matchers | a map of names | the labels a series has, exactly, its name as `__name__`; one at least |
 | 2, 3 | from, to | int | unix milliseconds, to excluded; both required, 2^63−1 the open end |
 | 4 | limit series | uint | the series it matches; each limit narrows the server's |
 | 5 | limit blocks | uint | the blocks it decodes |

@@ -39,8 +39,9 @@ _FLUSH_EVERY = 15.0
 
 @dataclass(frozen=True, slots=True)
 class Series:
-    labels: dict[str, str]
+    name: str
     kind: str
+    labels: dict[str, str]
     times: list[int]
     """unix milliseconds, in time order"""
     values: array[float]
@@ -49,8 +50,8 @@ class Series:
 
 @dataclass(frozen=True, slots=True)
 class Bucket:
-    start: datetime | None
-    end: datetime | None
+    from_: datetime | None
+    to: datetime | None
     count: int
     resets: int
     value: float
@@ -61,22 +62,57 @@ class Bucket:
 
 @dataclass(frozen=True, slots=True)
 class Aggregate:
-    labels: dict[str, str]
+    name: str
     kind: str
+    labels: dict[str, str]
     buckets: list[Bucket]
 
 
-def _range(match: Mapping[str, str], start: datetime | int, end: datetime | int | None, **extra: Any) -> bytes:
-    if not match:
-        raise InvalidError("a range matches one label at least")
+_WIRE_NAME = "__name__"
+"""The label the wire carries a series' name as, the store's own spelling."""
+
+
+def _wire_labels(name: str | None, labels: Mapping[str, str] | None) -> dict[str, str]:
+    """A series' name and labels as the wire spells them, its name among its labels."""
+    spelled: dict[str, str] = {}
+    for key, value in (labels or {}).items():
+        if key.startswith("__"):
+            raise InvalidError(f"the label {key}: a name beginning with __ is the store's own")
+        spelled[key] = value
+    if name is not None:
+        spelled[_WIRE_NAME] = name
+    return spelled
+
+
+def _named(spelled: Mapping[str, str]) -> tuple[str, dict[str, str]]:
+    """A series as the wire spelled it: its name apart from its labels."""
+    labels = dict(spelled)
+    return labels.pop(_WIRE_NAME, ""), labels
+
+
+def _range(
+    name: str | None,
+    match: Mapping[str, str] | None,
+    since: Duration | None,
+    from_: datetime | int | None,
+    to: datetime | int | None,
+    limits: Mapping[str, int] | None,
+    **extra: Any,
+) -> bytes:
+    if name is None and not match:
+        raise InvalidError("a range names a series or a label to match")
+    if since is not None and from_ is not None:
+        raise InvalidError("a range starts since a span before now or from a time, not both")
 
     def millis(t: datetime | int) -> int:
         return t if isinstance(t, int) else unix_ms(t)
 
+    start = time.time_ns() // 1_000_000 - ms(since) if since is not None else 0 if from_ is None else millis(from_)
     return MetricsRange.encode(
-        matchers=dict(match),
-        from_=millis(start),
-        to=_OPEN_END if end is None else millis(end),
+        matchers=_wire_labels(name, match),
+        from_=start,
+        to=_OPEN_END if to is None else millis(to),
+        **{f"limit_{k}": v for k, v in (limits or {}).items()},
         **extra,
     )
 
@@ -90,8 +126,11 @@ class Metrics:
     async def ingest(self, *series: Mapping[str, Any]) -> None:
         """Stores series and their samples, all or none; a refused series is named by its labels.
 
-        A series is labels (__name__ among them), kind, and samples as
-        (time, value) pairs, or times in unix milliseconds and values.
+        A series is a name, a kind, labels when it has any, and samples as
+        (time, value) pairs, or times in unix milliseconds and values::
+
+            await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"},
+                                        "samples": [(datetime.now(UTC), 0.42)]})
         """
         batch: list[dict[str, Any]] = []
         for s in series:
@@ -101,7 +140,8 @@ class Metrics:
                 values = array("d", (v for _, v in pairs))
             else:
                 times, values = array("q", s["times"]), array("d", s["values"])
-            batch.append({"labels": dict(s["labels"]), "kind": s["kind"], "times": times, "values": values})
+            labels = _wire_labels(s["name"], s.get("labels"))
+            batch.append({"labels": labels, "kind": s["kind"], "times": times, "values": values})
         await self._send(batch)
 
     async def _send(self, batch: list[dict[str, Any]]) -> None:
@@ -112,13 +152,24 @@ class Metrics:
 
     async def read(
         self,
-        match: Mapping[str, str],
-        start: datetime | int,
-        end: datetime | int | None = None,
-        **limits: int,
+        *,
+        name: str | None = None,
+        match: Mapping[str, str] | None = None,
+        since: Duration | None = None,
+        from_: datetime | int | None = None,
+        to: datetime | int | None = None,
+        limits: Mapping[str, int] | None = None,
     ) -> list[Series]:
-        """Every sample of the series a range matches, exactly; start and end in unix milliseconds or datetimes."""
-        body = _range(match, start, end, **{f"limit_{k}": v for k, v in limits.items()})
+        """Every sample of the series a range matches, exactly.
+
+        The series of a name, of labels, or of both, each matched exactly; over
+        the last ``since``, or from ``from_`` to ``to``, in datetimes or unix
+        milliseconds, ``to`` open when absent::
+
+            await store.metrics.read(name="cpu", since="1h")
+            await store.metrics.read(match={"host": "web-1"}, from_=start, to=end)
+        """
+        body = _range(name, match, since, from_, to, limits)
 
         async def attempt(connection: Connection) -> Any:
             return await download(connection, METHODS["metrics.read"], body)
@@ -126,26 +177,28 @@ class Metrics:
         joined: list[Series] = []
         for item in (await self._link.run("read", attempt)).items:
             s = MetricsSeries.decode(item)
-            labels, kind = s.get("labels", {}), s.get("kind", "gauge")
-            if joined and joined[-1].labels == labels:
+            (series_name, labels), kind = _named(s.get("labels", {})), s.get("kind", "gauge")
+            if joined and (joined[-1].name, joined[-1].labels) == (series_name, labels):
                 joined[-1].times.extend(s.get("times", []))
                 joined[-1].values.extend(s.get("values", array("d")))
             else:
-                joined.append(Series(labels, kind, list(s.get("times", [])), s.get("values", array("d"))))
+                joined.append(Series(series_name, kind, labels, list(s.get("times", [])), s.get("values", array("d"))))
         return joined
 
     async def aggregate(
         self,
-        match: Mapping[str, str],
-        start: datetime | int,
-        end: datetime | int | None,
+        *,
         width: Duration,
         op: Op,
-        **limits: int,
+        name: str | None = None,
+        match: Mapping[str, str] | None = None,
+        since: Duration | None = None,
+        from_: datetime | int | None = None,
+        to: datetime | int | None = None,
+        limits: Mapping[str, int] | None = None,
     ) -> list[Aggregate]:
         """Buckets of a width from the range's start, each computed exactly: an increase counts resets."""
-        extra = {f"limit_{k}": v for k, v in limits.items()}
-        body = _range(match, start, end, width=ms(width), op=op, **extra)
+        body = _range(name, match, since, from_, to, limits, width=ms(width), op=op)
 
         async def attempt(connection: Connection) -> Any:
             return await download(connection, METHODS["metrics.aggregate"], body)
@@ -166,18 +219,19 @@ class Metrics:
                 )
                 for i, v in enumerate(b.get("values", []))
             ]
-            labels = b.get("labels", {})
-            if joined and joined[-1].labels == labels:
+            series_name, labels = _named(b.get("labels", {}))
+            if joined and (joined[-1].name, joined[-1].labels) == (series_name, labels):
                 joined[-1].buckets.extend(buckets)
             else:
-                joined.append(Aggregate(labels, b.get("kind", "gauge"), buckets))
+                joined.append(Aggregate(series_name, b.get("kind", "gauge"), labels, buckets))
         return joined
 
-    async def drop(self, labels: Mapping[str, str]) -> tuple[bool, int]:
+    async def drop(self, name: str, labels: Mapping[str, str] | None = None) -> tuple[bool, int]:
         """Removes one series and everything it holds: whether it was there, and the unreadable groups removed."""
+        spelled = _wire_labels(name, labels)
 
         async def attempt(connection: Connection) -> bytes:
-            return await connection.session.call(METHODS["metrics.drop"], MetricsLabels.encode(labels=dict(labels)))
+            return await connection.session.call(METHODS["metrics.drop"], MetricsLabels.encode(labels=spelled))
 
         dropped = MetricsDropped.decode(await self._link.run("write", attempt))
         return bool(dropped.get("found")), dropped.get("unreadable_groups", 0)
@@ -224,7 +278,7 @@ class Metrics:
             for labels, value in instrument.series.values():
                 batch.append(
                     {
-                        "labels": {**labels, "__name__": instrument.name},
+                        "labels": {**labels, _WIRE_NAME: instrument.name},
                         "kind": instrument.kind,
                         "times": array("q", [now]),
                         "values": array("d", [value]),

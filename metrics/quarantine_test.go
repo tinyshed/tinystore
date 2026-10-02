@@ -12,8 +12,8 @@ import (
 
 func TestCorruptSeriesDoesNotStopOtherMaintenance(t *testing.T) {
 	s, path := openTestStore(t, Options{MaintenanceSeries: 2})
-	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}
-	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
+	a := Series{Name: "a"}
+	b := Series{Name: "b"}
 	points := testSamples(241)
 	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: points}, {Series: b, Samples: points}}); err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestCorruptSeriesDoesNotStopOtherMaintenance(t *testing.T) {
 
 func TestSuspendedLimitCanRecoverAfterReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), fileName)
-	series := Series{Labels: []Label{{Name: "__name__", Value: "limited"}}}
+	series := Series{Name: "limited"}
 	open := func(maxHeadSamples int) *Store {
 		t.Helper()
 		s, err := openAt(t, path, Options{MaxHeadSamples: maxHeadSamples, MaintenanceSeries: 1})
@@ -116,8 +116,8 @@ func TestSuspendedLimitCanRecoverAfterReopen(t *testing.T) {
 
 func TestMaintenanceFailurePagesAndRetryStayBounded(t *testing.T) {
 	s, path := openTestStore(t, Options{MaintenanceSeries: 1})
-	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}
-	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
+	a := Series{Name: "a"}
+	b := Series{Name: "b"}
 	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: testSamples(1)}, {Series: b, Samples: testSamples(1)}}); err != nil {
 		t.Fatal(err)
 	}

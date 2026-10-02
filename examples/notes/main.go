@@ -285,10 +285,7 @@ func (a *app) readBack(ctx context.Context, out io.Writer) error {
 	}
 
 	now := time.Now()
-	results, err := a.stats.Read(ctx, metrics.Range{
-		Matchers: []metrics.Label{{Name: "__name__", Value: "notes_created_total"}},
-		From:     now.Add(-time.Minute).UnixMilli(), To: now.Add(time.Minute).UnixMilli(),
-	})
+	results, err := a.stats.Read(ctx, metrics.Range{Name: "notes_created_total", Since: time.Minute})
 	if err != nil || len(results) != 1 {
 		return errors.Join(err, errors.New("notes_created_total was not flushed"))
 	}

@@ -128,10 +128,9 @@ async def test_gauges_and_their_functions(store: tinystore.Store) -> None:
 
     store.metrics.gauge_func("depth", depth)
     await store.metrics.flush()
-    now = datetime.now(UTC)
-    [g] = await store.metrics.read({"__name__": "inflight"}, now - timedelta(minutes=1))
-    assert g.values[0] == 4
-    [d] = await store.metrics.read({"__name__": "depth"}, now - timedelta(minutes=1))
+    [g] = await store.metrics.read(name="inflight", since=timedelta(minutes=1))
+    assert (g.values[0], g.labels) == (4, {"route": "/x"})
+    [d] = await store.metrics.read(name="depth", since="1m")
     assert d.values[0] == 7
     with pytest.raises(InvalidError):
         store.metrics.counter("inflight")

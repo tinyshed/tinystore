@@ -57,7 +57,7 @@ func BenchmarkIngestScrapeOfHundredSeries(b *testing.B) {
 	store := openBenchStore(b)
 	batches := make([]Batch, 100)
 	for i := range batches {
-		batches[i].Series = Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "core", Value: fmt.Sprint(i)}}}
+		batches[i].Series = Series{Name: "cpu", Labels: Labels{"core": fmt.Sprint(i)}}
 		batches[i].Samples = testSamples(240)
 	}
 	if err := store.Ingest(context.Background(), batches); err != nil {

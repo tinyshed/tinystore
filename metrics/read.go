@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"math"
 )
 
 type queryBudget struct {
@@ -82,19 +83,28 @@ func (s *Store) readEach(ctx context.Context, request Range, yield func(Result) 
 }
 
 // rangeQuery is a checked request: exact matchers, the limits it may spend and
-// its range, whose start retention may have moved forward.
+// its range, whose start retention may have moved forward from the origin it
+// was asked for.
 type rangeQuery struct {
-	matchers  []Label
-	limits    Limits
-	from, to  int64
-	aggregate *aggregateSelection
+	matchers         []label
+	limits           Limits
+	origin, from, to int64
+	aggregate        *aggregateSelection
 }
 
 func (s *Store) checkRange(request Range) (rangeQuery, error) {
-	if request.To < request.From {
-		return rangeQuery{}, fmt.Errorf("%w: inverted time range", ErrInvalid)
+	origin, to, err := s.bounds(request)
+	if err != nil {
+		return rangeQuery{}, err
 	}
-	matchers, err := orderedLabels(request.Matchers, false)
+	if request.Name == "" && len(request.Match) == 0 {
+		return rangeQuery{}, fmt.Errorf("%w: a range names a series or a label to match", ErrInvalid)
+	}
+	kept, err := keptLabels(request.Name, request.Match)
+	if err != nil {
+		return rangeQuery{}, err
+	}
+	matchers, err := orderedLabels(kept, false)
 	if err != nil {
 		return rangeQuery{}, err
 	}
@@ -102,7 +112,29 @@ func (s *Store) checkRange(request Range) (rangeQuery, error) {
 	if err != nil {
 		return rangeQuery{}, err
 	}
-	return rangeQuery{matchers: matchers, limits: limits, from: max(request.From, s.cutoff()), to: request.To}, nil
+	return rangeQuery{matchers: matchers, limits: limits, origin: origin, from: max(origin, s.cutoff()), to: to}, nil
+}
+
+// bounds is a range's [from, to) in unix milliseconds: Since back from the
+// store's clock, or From as given, to To, whose zero is the open end
+//
+//	now 12:00, Since 1h            →  [11:00, open)
+//	From 09:00, To 10:00           →  [09:00, 10:00)
+func (s *Store) bounds(request Range) (from, to int64, err error) {
+	from, to = request.From, request.To
+	if request.Since != 0 {
+		if request.Since < 0 || request.From != 0 {
+			return 0, 0, fmt.Errorf("%w: a range starts Since before now or at From, not both", ErrInvalid)
+		}
+		from = earlier(s.now().UnixMilli(), request.Since.Milliseconds())
+	}
+	if to == 0 {
+		to = math.MaxInt64
+	}
+	if to < from {
+		return 0, 0, fmt.Errorf("%w: inverted time range", ErrInvalid)
+	}
+	return from, to, nil
 }
 
 // yieldResults hands each nonempty series to yield, with its samples inside
@@ -112,7 +144,7 @@ func (s *Store) yieldResults(
 ) error {
 	output := 0
 	for _, read := range reads {
-		result := Result{Series: Series{Labels: read.series.labels, Kind: read.series.kind}}
+		result := Result{Series: publicSeries(read.series.labels, read.series.kind)}
 		err := s.eachSample(ctx, read, func(point Sample) error {
 			if point.At < query.from || point.At >= query.to {
 				return nil

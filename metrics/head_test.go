@@ -239,12 +239,12 @@ func TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum(t *testing.
 		t.Fatal(err)
 	}
 	last := points[len(points)-1]
-	request := Range{Matchers: testSeries().Labels, From: last.At, To: last.At + 1, Limits: Limits{DecodedSamples: 1, OutputSamples: 1}}
+	request := Range{Name: testSeries().Name, Match: testSeries().Labels, From: last.At, To: last.At + 1, Limits: Limits{DecodedSamples: 1, OutputSamples: 1}}
 	read, err := s.Read(t.Context(), request)
 	if err != nil || len(read) != 1 || len(read[0].Samples) != 1 || math.Float64bits(read[0].Samples[0].Value) != math.Float64bits(last.Value) {
 		t.Fatalf("narrow last chunk: %+v, %v", read, err)
 	}
-	firstChunk := Range{Matchers: testSeries().Labels, From: points[1].At, To: points[1].At + 1, Limits: Limits{DecodedSamples: 239}}
+	firstChunk := Range{Name: testSeries().Name, Match: testSeries().Labels, From: points[1].At, To: points[1].At + 1, Limits: Limits{DecodedSamples: 239}}
 	if read, err := s.Read(t.Context(), firstChunk); !errors.Is(err, ErrLimit) || read != nil {
 		t.Fatalf("undersized selected chunk budget: %+v, %v", read, err)
 	}
@@ -273,13 +273,13 @@ func TestBatchedNarrowHeadsChargeSelectedChunks(t *testing.T) {
 	points := testSamples(481)
 	batches := make([]Batch, 20)
 	for i := range batches {
-		batches[i] = Batch{Series: Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprint(i)}}}, Samples: points}
+		batches[i] = Batch{Series: Series{Name: "cpu", Labels: Labels{"host": fmt.Sprint(i)}}, Samples: points}
 	}
 	if err := s.Ingest(t.Context(), batches); err != nil {
 		t.Fatal(err)
 	}
 	last := points[len(points)-1]
-	request := Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: last.At, To: last.At + 1, Limits: Limits{DecodedSamples: 20, OutputSamples: 20}}
+	request := Range{Name: "cpu", From: last.At, To: last.At + 1, Limits: Limits{DecodedSamples: 20, OutputSamples: 20}}
 	read, err := s.Read(t.Context(), request)
 	if err != nil || len(read) != 20 {
 		t.Fatalf("batched narrow heads: %d series, %v", len(read), err)

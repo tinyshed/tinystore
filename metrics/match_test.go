@@ -28,12 +28,12 @@ func TestTheShortestPostingListDrivesTheMatch(t *testing.T) {
 	store, _ := openTestStore(t, Options{Retention: time.Hour})
 	const crowd = 200
 	for i := range crowd {
-		series := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprintf("host_%d", i)}}, Kind: Gauge}
+		series := Series{Name: "cpu", Labels: Labels{"host": fmt.Sprintf("host_%d", i)}, Kind: Gauge}
 		if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: []Sample{{At: testEpoch, Value: 1}}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	matchers, _, err := canonicalLabels([]Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "host_7"}}, false)
+	matchers, _, err := canonicalLabels([]label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "host_7"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +65,8 @@ func TestAMatcherNamingNothingEndsTheMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := store.Read(t.Context(), Range{
-		Matchers: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "absent"}},
-		From:     testEpoch, To: testEpoch + 4,
+		Name: "cpu", Match: Labels{"host": "absent"},
+		From: testEpoch, To: testEpoch + 4,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,13 +84,13 @@ func TestPostingCountsRankAboveTheOldProbeCap(t *testing.T) {
 		if i < 1025 {
 			zone = "hot"
 		}
-		batches[i] = Batch{Series: Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprint(i)}, {Name: "zone", Value: zone}}}, Samples: testSamples(1)}
+		batches[i] = Batch{Series: Series{Name: "cpu", Labels: Labels{"host": fmt.Sprint(i), "zone": zone}}, Samples: testSamples(1)}
 	}
 	if err := store.Ingest(t.Context(), batches); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.file.View(t.Context(), func(tx *sql.Tx) error {
-		ranked, possible, err := rankMatchers(t.Context(), tx, []Label{{Name: "__name__", Value: "cpu"}, {Name: "zone", Value: "hot"}})
+		ranked, possible, err := rankMatchers(t.Context(), tx, []label{{Name: "__name__", Value: "cpu"}, {Name: "zone", Value: "hot"}})
 		if err != nil {
 			return err
 		}
@@ -108,7 +108,7 @@ func TestPostingCountsRankAboveTheOldProbeCap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	newSeries := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "overflow"}}}
+	newSeries := Series{Name: "cpu", Labels: Labels{"host": "overflow"}}
 	if err := store.Ingest(t.Context(), []Batch{{Series: newSeries, Samples: testSamples(1)}}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("cardinality rejection: %v", err)
 	}
@@ -128,11 +128,11 @@ func TestPostingCountsRankAboveTheOldProbeCap(t *testing.T) {
 
 func TestMatcherLookupBatchesOnlyLargeSelectors(t *testing.T) {
 	store, _ := openTestStore(t, Options{})
-	labels := []Label{{Name: "__name__", Value: "cpu"}}
+	labels := []label{{Name: "__name__", Value: "cpu"}}
 	for i := range 7 {
-		labels = append(labels, Label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})
+		labels = append(labels, label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})
 	}
-	if err := store.Ingest(t.Context(), []Batch{{Series: Series{Labels: labels}, Samples: testSamples(1)}}); err != nil {
+	if err := store.Ingest(t.Context(), []Batch{{Series: publicSeries(labels, ""), Samples: testSamples(1)}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
@@ -162,11 +162,11 @@ func BenchmarkRankThirtyTwoMatchers(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	labels := []Label{{Name: "__name__", Value: "cpu"}}
+	labels := []label{{Name: "__name__", Value: "cpu"}}
 	for i := range 31 {
-		labels = append(labels, Label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})
+		labels = append(labels, label{Name: fmt.Sprintf("dimension_%d", i), Value: fmt.Sprintf("value_%d", i)})
 	}
-	if err := store.Ingest(b.Context(), []Batch{{Series: Series{Labels: labels}, Samples: []Sample{{At: time.Now().UnixMilli(), Value: 1}}}}); err != nil {
+	if err := store.Ingest(b.Context(), []Batch{{Series: publicSeries(labels, ""), Samples: []Sample{{At: time.Now().UnixMilli(), Value: 1}}}}); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()

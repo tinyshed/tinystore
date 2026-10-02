@@ -30,7 +30,7 @@ func TestBatchedHeadsPreserveSnapshotAndReserveBytesFirst(t *testing.T) {
 	batches := make([]Batch, seriesCount)
 	for i := range batches {
 		batches[i] = Batch{
-			Series:  Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: fmt.Sprint(i)}}},
+			Series:  Series{Name: "cpu", Labels: Labels{"host": fmt.Sprint(i)}},
 			Samples: points,
 		}
 	}
@@ -40,7 +40,7 @@ func TestBatchedHeadsPreserveSnapshotAndReserveBytesFirst(t *testing.T) {
 	if _, err := s.Maintain(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.Read(t.Context(), Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 241})
+	result, err := s.Read(t.Context(), Range{Name: "cpu", From: testEpoch, To: testEpoch + 241})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestBatchedHeadsPreserveSnapshotAndReserveBytesFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result, err = s.Read(t.Context(), Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 241})
+	result, err = s.Read(t.Context(), Range{Name: "cpu", From: testEpoch, To: testEpoch + 241})
 	if !errors.Is(err, ErrCorrupt) || result != nil {
 		t.Fatalf("missing batched payload: %d results, %v", len(result), err)
 	}

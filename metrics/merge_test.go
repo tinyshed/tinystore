@@ -10,7 +10,7 @@ import (
 func TestIncrementalSealingMergesGroupsWithoutChangingSamples(t *testing.T) {
 	store, path := openTestStore(t, Options{})
 	points := testSamples(33*blockSamples + 1)
-	constant := Series{Kind: Counter, Labels: []Label{{Name: "__name__", Value: "constant"}}}
+	constant := Series{Kind: Counter, Name: "constant"}
 	for start := 0; start < len(points); {
 		end := min(start+blockSamples, len(points))
 		if start == 0 {

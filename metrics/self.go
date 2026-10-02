@@ -44,9 +44,7 @@ func (s *Store) WriteSelf(ctx context.Context, measures []tinystore.Measure) err
 			kind = Counter
 		}
 		batches = append(batches, Batch{
-			Series: Series{Kind: kind, Labels: []Label{
-				{Name: "__name__", Value: "tinystore_" + measure.Name}, {Name: "engine", Value: measure.Engine},
-			}},
+			Series:  Series{Name: "tinystore_" + measure.Name, Kind: kind, Labels: Labels{"engine": measure.Engine}},
 			Samples: []Sample{{At: at, Value: float64(measure.Value)}},
 		})
 	}

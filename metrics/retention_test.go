@@ -9,7 +9,7 @@ import (
 
 func TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle(t *testing.T) {
 	s, path := openTestStore(t, Options{MaxSeries: 1, Retention: time.Second})
-	old := Series{Kind: Counter, Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "old"}}}
+	old := Series{Kind: Counter, Name: "cpu", Labels: Labels{"host": "old"}}
 	if err := s.Ingest(t.Context(), []Batch{{Series: old, Samples: testSamples(241)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	newSeries := Series{Labels: []Label{{Name: "__name__", Value: "new"}}}
+	newSeries := Series{Name: "new"}
 	if err = s.Ingest(t.Context(), []Batch{{Series: newSeries, Samples: []Sample{{At: testEpoch + 3000, Value: 1}}}}); err != nil {
 		t.Fatalf("new series after reclaim: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
 	reopened.now = func() time.Time { return time.UnixMilli(testEpoch + 5000) }
-	read, err := reopened.Read(t.Context(), Range{Matchers: old.Labels, From: testEpoch + 5000, To: testEpoch + 5001})
+	read, err := reopened.Read(t.Context(), Range{Name: old.Name, Match: old.Labels, From: testEpoch + 5000, To: testEpoch + 5001})
 	if err != nil || len(read) != 1 || read[0].Series.Kind != Gauge || len(read[0].Samples) != 1 || read[0].Samples[0].Value != 42 {
 		t.Fatalf("reopened lifecycle: %+v, %v", read, err)
 	}
@@ -62,8 +62,8 @@ func TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle(t *testing.T) {
 
 func TestReclaimKeepsLabelsUsedByAnotherSeries(t *testing.T) {
 	s, _ := openTestStore(t, Options{MaxSeries: 2, Retention: time.Second})
-	a := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "old"}}}
-	b := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "live"}}}
+	a := Series{Name: "cpu", Labels: Labels{"host": "old"}}
+	b := Series{Name: "cpu", Labels: Labels{"host": "live"}}
 	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: []Sample{{At: testEpoch, Value: 1}}}, {Series: b, Samples: []Sample{{At: testEpoch + 1000, Value: 2}}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestReclaimKeepsLabelsUsedByAnotherSeries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	read, err := s.Read(t.Context(), Range{Matchers: b.Labels, From: testEpoch + 1000, To: testEpoch + 1001})
+	read, err := s.Read(t.Context(), Range{Name: b.Name, Match: b.Labels, From: testEpoch + 1000, To: testEpoch + 1001})
 	if err != nil || len(read) != 1 || len(read[0].Samples) != 1 {
 		t.Fatalf("live series after sibling reclaim: %+v, %v", read, err)
 	}

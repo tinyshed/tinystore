@@ -24,7 +24,7 @@ const matcherBatch = 8
 // rankMatchers resolves every matcher to its dictionary id, shortest posting
 // list first. The second result is false when a matcher names no series at all,
 // which makes the whole match empty without running it.
-func rankMatchers(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]matcherPosting, bool, error) {
+func rankMatchers(ctx context.Context, tx sqlite.Reader, matchers []label) ([]matcherPosting, bool, error) {
 	var ranked []matcherPosting
 	var possible bool
 	var err error
@@ -47,7 +47,7 @@ func rankMatchers(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]ma
 const labelIDQuery = `select id from label_values where name=? and value=?`
 
 // resolveMatcher needs no posting count: a single matcher has nothing to rank.
-func resolveMatcher(ctx context.Context, tx sqlite.Reader, matcher Label) ([]matcherPosting, bool, error) {
+func resolveMatcher(ctx context.Context, tx sqlite.Reader, matcher label) ([]matcherPosting, bool, error) {
 	var posting matcherPosting
 	err := sqlite.QueryRowByKey(ctx, tx, labelIDQuery, matcher.Name, matcher.Value).Scan(&posting.labelID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -61,7 +61,7 @@ func resolveMatcher(ctx context.Context, tx sqlite.Reader, matcher Label) ([]mat
 
 const labelPostingsQuery = `select id,posting_count from label_values where name=? and value=?`
 
-func countEachMatcher(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]matcherPosting, bool, error) {
+func countEachMatcher(ctx context.Context, tx sqlite.Reader, matchers []label) ([]matcherPosting, bool, error) {
 	ranked := make([]matcherPosting, 0, len(matchers))
 	for _, matcher := range matchers {
 		var posting matcherPosting
@@ -85,7 +85,7 @@ const matchersAtOnceQuery = `
 	left join label_values v on v.name = json_extract(j.value, '$[0]') and v.value = json_extract(j.value, '$[1]')
 	order by cast(j.key as integer)`
 
-func countMatchersAtOnce(ctx context.Context, tx sqlite.Reader, matchers []Label) ([]matcherPosting, bool, error) {
+func countMatchersAtOnce(ctx context.Context, tx sqlite.Reader, matchers []label) ([]matcherPosting, bool, error) {
 	pairs := make([][2]string, len(matchers))
 	for i, matcher := range matchers {
 		pairs[i] = [2]string{matcher.Name, matcher.Value}
@@ -143,7 +143,7 @@ const matchShape = `select id,kind,length(label_ids),case when length(label_ids)
 ) order by id limit cast(? as integer)`
 
 func matchSeries(
-	ctx context.Context, tx sqlite.Reader, matchers []Label, budget *queryBudget,
+	ctx context.Context, tx sqlite.Reader, matchers []label, budget *queryBudget,
 ) ([]registeredSeries, error) {
 	ranked, possible, err := rankMatchers(ctx, tx, matchers)
 	if err != nil || !possible {
@@ -233,7 +233,7 @@ func distinctLabelIDs(matched []registeredSeries) []int64 {
 }
 
 // labelDictionary holds the label pairs of one match by their dictionary ids.
-type labelDictionary map[int64]Label
+type labelDictionary map[int64]label
 
 const labelsByIDQuery = `select id,name,value from label_values where id in (`
 
@@ -250,14 +250,14 @@ func (d labelDictionary) read(ctx context.Context, tx sqlite.Reader, ids []int64
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var label Label
-		if err = rows.Scan(&id, &label.Name, &label.Value); err != nil {
+		var pair label
+		if err = rows.Scan(&id, &pair.Name, &pair.Value); err != nil {
 			return fmt.Errorf("read label pair: %w", err)
 		}
-		if err = budget.takeBytes(len(label.Name) + len(label.Value)); err != nil {
+		if err = budget.takeBytes(len(pair.Name) + len(pair.Value)); err != nil {
 			return err
 		}
-		d[id] = label
+		d[id] = pair
 	}
 	return rows.Err()
 }
@@ -266,13 +266,13 @@ func (d labelDictionary) read(ctx context.Context, tx sqlite.Reader, ids []int64
 // missing or no longer form valid labels.
 func (d labelDictionary) label(matched []registeredSeries) error {
 	for i := range matched {
-		labels := make([]Label, 0, len(matched[i].ids))
+		labels := make([]label, 0, len(matched[i].ids))
 		for _, id := range matched[i].ids {
-			label, found := d[id]
-			if !found || label.Name == "" {
+			pair, found := d[id]
+			if !found || pair.Name == "" {
 				return fmt.Errorf("%w: label %d is missing from the dictionary", ErrCorrupt, id)
 			}
-			labels = append(labels, label)
+			labels = append(labels, pair)
 		}
 		ordered, err := orderedLabels(labels, true)
 		if err != nil {

@@ -26,7 +26,7 @@ func TestAConflictingInstrumentCannotChangeTheRegisteredKind(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	value, kind := lastValue(t, s, Label{Name: "__name__", Value: "shared"})
+	value, kind := lastValue(t, s, "shared", nil)
 	if value != 5 || kind != Gauge || strings.Count(output.String(), "registered as both counter and gauge") != 1 {
 		t.Fatalf("conflicting handle changed %s to %v; logs: %s", kind, value, output.String())
 	}
@@ -40,7 +40,7 @@ func TestCounterDropsAnIncrementThatOverflowsItsTotal(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if value, kind := lastValue(t, s, Label{Name: "__name__", Value: "large_total"}); value != math.MaxFloat64 || kind != Counter {
+	if value, kind := lastValue(t, s, "large_total", nil); value != math.MaxFloat64 || kind != Counter {
 		t.Fatalf("overflow changed counter to %v as %s", value, kind)
 	}
 }
@@ -53,7 +53,7 @@ func TestAnUnpairedInstrumentLabelDoesNotIncrementItsValidPrefix(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if value, _ := lastValue(t, s, Label{Name: "route", Value: "/notes"}); value != 1 {
+	if value, _ := lastValue(t, s, "", Labels{"route": "/notes"}); value != 1 {
 		t.Fatalf("unpaired label incremented a different instrument to %v", value)
 	}
 }
@@ -75,11 +75,11 @@ func TestGaugeFuncCanBeUpdatedWhileFlushing(t *testing.T) {
 	workers.Wait()
 }
 
-func lastValue(t *testing.T, s *Store, labels ...Label) (float64, Kind) {
+func lastValue(t *testing.T, s *Store, name string, match Labels) (float64, Kind) {
 	t.Helper()
-	results, err := s.Read(t.Context(), Range{Matchers: labels, From: testEpoch, To: testEpoch + 10_000})
+	results, err := s.Read(t.Context(), Range{Name: name, Match: match, From: testEpoch, To: testEpoch + 10_000})
 	if err != nil || len(results) != 1 {
-		t.Fatalf("read %v: %+v, %v", labels, results, err)
+		t.Fatalf("read %s %v: %+v, %v", name, match, results, err)
 	}
 	samples := results[0].Samples
 	return samples[len(samples)-1].Value, results[0].Series.Kind
@@ -104,7 +104,7 @@ func TestInstrumentsAreIngestedAtEachFlush(t *testing.T) {
 		value float64
 		kind  Kind
 	}{{"requests_total", 3, Counter}, {"inflight", 4, Gauge}, {"notes", 42, Gauge}} {
-		value, kind := lastValue(t, s, Label{Name: "__name__", Value: want.name})
+		value, kind := lastValue(t, s, want.name, nil)
 		if value != want.value || kind != want.kind {
 			t.Errorf("%s: %v as %v, want %v as %v", want.name, value, kind, want.value, want.kind)
 		}
@@ -119,7 +119,7 @@ func TestTheSameLabelsInAnyOrderAreOneSeries(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	value, _ := lastValue(t, s, Label{Name: "route", Value: "/notes"})
+	value, _ := lastValue(t, s, "", Labels{"route": "/notes"})
 	if value != 2 {
 		t.Fatalf("two increments of one series read %v", value)
 	}
@@ -150,7 +150,7 @@ func TestARefusedInstrumentDoesNotKeepTheOthersOut(t *testing.T) {
 		}
 	}
 
-	if value, _ := lastValue(t, s, Label{Name: "__name__", Value: "good_total"}); value != 1 {
+	if value, _ := lastValue(t, s, "good_total", nil); value != 1 {
 		t.Fatalf("good_total read %v", value)
 	}
 	for _, line := range []string{"bad_total", "negative_total", "disk gone"} {
@@ -171,7 +171,7 @@ func TestClosingTheStoreFlushesTheLastValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened.now = func() time.Time { return time.UnixMilli(testEpoch + 900) }
-	if value, _ := lastValue(t, reopened, Label{Name: "__name__", Value: "requests_total"}); value != 7 {
+	if value, _ := lastValue(t, reopened, "requests_total", nil); value != 7 {
 		t.Fatalf("after close and reopen: %v", value)
 	}
 }

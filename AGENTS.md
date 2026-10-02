@@ -536,6 +536,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | work holding a writer never waits for memory         | `TestAReservationThatCannotWaitTakesOnlyWhatIsFree`                       |
 | streaming owns each result and exposes partial failure | `TestStreamOwnsResultsAndReportsPartialFailure`                         |
 | an error about one series carries its labels           | `TestIngestRefusalNamesItsSeries` and `TestIngestValidationNamesItsSeries` |
+| a series is its name and its labels, `__` the store's  | `TestASeriesIsItsNameAndItsLabels`, `TestIngestIsAtomicAndLastMutableValueWins` |
+| a range over the last Since starts that long before now | `TestARangeSinceStartsThatLongBeforeNow`, a To of zero the open end            |
 | a series that cannot be repaired can still be dropped  | `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours` |
 | long-head append preserves bits and frontier           | `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`                   |
 | exact aggregates cross blocks, resets and retention    | `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestAggregateCounterIncludesBlockTransitionButNotBucketTransition` and `TestAggregateClipsRetentionBeforeSummingSealedEdges` |

@@ -49,7 +49,17 @@ func openAt(t testing.TB, path string, options Options) (*Store, error) {
 }
 
 func testSeries() Series {
-	return Series{Labels: []Label{{Name: "host", Value: "one"}, {Name: "__name__", Value: "cpu"}}, Kind: Gauge}
+	return Series{Name: "cpu", Labels: Labels{"host": "one"}, Kind: Gauge}
+}
+
+// keptOf is a series' labels as the store keeps them, its name among them
+func keptOf(t testing.TB, series Series) []label {
+	t.Helper()
+	kept, err := keptLabels(series.Name, series.Labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kept
 }
 
 func testSamples(n int) []Sample {
@@ -71,7 +81,7 @@ func testSamples(n int) []Sample {
 
 func readAll(t *testing.T, store *Store) []Sample {
 	t.Helper()
-	result, err := store.Read(t.Context(), Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: math.MinInt64, To: math.MaxInt64})
+	result, err := store.Read(t.Context(), Range{Name: "cpu", From: math.MinInt64, To: math.MaxInt64})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +175,7 @@ func TestIngestIsAtomicAndLastMutableValueWins(t *testing.T) {
 	store, _ := openTestStore(t, Options{MaxSeries: 1, MaxHeadSamples: 4})
 	series := testSeries()
 	other := testSeries()
-	other.Labels = []Label{{Name: "__name__", Value: "other"}}
+	other.Name, other.Labels = "other", Labels{}
 	points := []Sample{{At: testEpoch + 3, Value: 3}, {At: testEpoch + 1, Value: 1}, {At: testEpoch + 3, Value: 33}}
 	if err := store.Ingest(t.Context(), []Batch{{Series: series, Samples: points}}); err != nil {
 		t.Fatal(err)
@@ -182,10 +192,11 @@ func TestIngestIsAtomicAndLastMutableValueWins(t *testing.T) {
 		t.Fatalf("head bound: %v", err)
 	}
 	assertSamples(t, readAll(t, store), want)
-	bad := series
-	bad.Labels = []Label{{Name: "__name__", Value: "cpu"}, {Name: "__name__", Value: "cpu"}}
-	if err = store.Ingest(t.Context(), []Batch{{Series: bad, Samples: points}}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("duplicate label: %v", err)
+	for _, labels := range []Labels{{"__name__": "cpu"}, {"__anything": "x"}} {
+		bad := Series{Name: "cpu", Kind: Gauge, Labels: labels}
+		if err = store.Ingest(t.Context(), []Batch{{Series: bad, Samples: points}}); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("a label of the store's own, %v: %v", labels, err)
+		}
 	}
 }
 
@@ -199,23 +210,23 @@ func TestQueryBudgetsAndMatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, limits := range []Limits{{DecodedSamples: 100}, {PayloadBytes: 1}, {Blocks: 1}, {OutputSamples: 1}} {
-		result, err := store.Read(t.Context(), Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 500, Limits: limits})
+		result, err := store.Read(t.Context(), Range{Name: "cpu", From: testEpoch, To: testEpoch + 500, Limits: limits})
 		if !errors.Is(err, ErrLimit) || result != nil {
 			t.Fatalf("limit %+v: %v, %d results", limits, err, len(result))
 		}
 	}
-	result, err := store.Read(t.Context(), Range{Matchers: []Label{{Name: "host", Value: "missing"}, {Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 500})
+	result, err := store.Read(t.Context(), Range{Name: "cpu", Match: Labels{"host": "missing"}, From: testEpoch, To: testEpoch + 500})
 	if err != nil || len(result) != 0 {
 		t.Fatalf("matcher: %v %#v", err, result)
 	}
-	result, err = store.Read(t.Context(), Range{Matchers: testSeries().Labels, From: testEpoch + 239, To: testEpoch + 242})
+	result, err = store.Read(t.Context(), Range{Name: testSeries().Name, Match: testSeries().Labels, From: testEpoch + 239, To: testEpoch + 242})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertSamples(t, result[0].Samples, points[239:242])
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err = store.Read(ctx, Range{Matchers: testSeries().Labels, From: 0, To: 1}); !errors.Is(err, context.Canceled) {
+	if _, err = store.Read(ctx, Range{Name: testSeries().Name, Match: testSeries().Labels, From: 0, To: 1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
@@ -311,7 +322,7 @@ func TestReadersSeeOneSnapshotWhilePackingAndIngesting(t *testing.T) {
 	})
 	workers.Go(func() {
 		for range 30 {
-			result, err := store.Read(t.Context(), Range{Matchers: testSeries().Labels, From: testEpoch, To: testEpoch + 800})
+			result, err := store.Read(t.Context(), Range{Name: testSeries().Name, Match: testSeries().Labels, From: testEpoch, To: testEpoch + 800})
 			if err != nil {
 				failures <- err
 				return

@@ -35,15 +35,16 @@ func (s *sentinel) Unwrap() error { return s.kind }
 
 // SeriesError is a refusal that belongs to one series: its data, state or
 // limits, never a cancelled call or a failing file. errors.Is still finds the
-// cause and errors.As gives the labels; Ingest is atomic, so a caller can send
-// the call again without that series.
+// cause and errors.As gives the series' name and labels; Ingest is atomic, so a
+// caller can send the call again without that series.
 type SeriesError struct {
-	Labels []Label
+	Name   string
+	Labels Labels
 	Err    error
 }
 
 func (e *SeriesError) Error() string {
-	return "series " + formatLabels(e.Labels) + ": " + e.Err.Error()
+	return "series " + formatSeries(e.Name, e.Labels) + ": " + e.Err.Error()
 }
 
 func (e *SeriesError) Unwrap() error { return e.Err }
@@ -57,23 +58,38 @@ const (
 	Counter Kind = "counter"
 )
 
-type Label struct{ Name, Value string }
+// Labels tell the series of one name apart: a host, a route, a status. A label
+// whose name begins with __ is the store's own, and refused.
+type Labels map[string]string
 
+// Series is what a metric's samples are, by its name and its labels:
+//
+//	http_requests_total{route="/users", status="200"}, a counter
 type Series struct {
-	Labels []Label
+	Name   string
 	Kind   Kind
+	Labels Labels
 }
+
+// String prints the series as Prometheus does: cpu{host="web-1"}.
+func (s Series) String() string { return formatSeries(s.Name, s.Labels) }
 
 type Batch struct {
 	Series  Series
 	Samples []Sample
 }
 
-// Range selects exact labels and an exclusive upper timestamp bound; limits may
-// only narrow the store's limits.
+// Range selects the series of a name, of labels, or of both, each matched
+// exactly, and their samples in [From, To) or over the last Since; a To of
+// zero is the open end. Limits may only narrow the store's.
+//
+//	Range{Name: "cpu", Since: time.Hour}                   the last hour of every cpu series
+//	Range{Match: Labels{"host": "web-1"}, From: f, To: t}  every series of web-1, f to t
 type Range struct {
-	Matchers []Label
-	From, To int64
+	Name     string
+	Match    Labels
+	Since    time.Duration
+	From, To int64 // unix milliseconds
 	Limits   Limits
 }
 

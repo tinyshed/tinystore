@@ -13,7 +13,7 @@ func TestClockSharingAndLastOwnerRetention(t *testing.T) {
 	store, _ := openTestStore(t, Options{Retention: time.Second})
 	first := testSeries()
 	second := testSeries()
-	second.Labels[0].Value = "two"
+	second.Labels["host"] = "two"
 	points := testSamples(800)
 	for i := range points {
 		points[i].Value = float64(i / 200)
@@ -39,7 +39,7 @@ func TestClockSharingAndLastOwnerRetention(t *testing.T) {
 		}
 	}
 	check(1, 2)
-	result, err := store.Read(t.Context(), Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 800})
+	result, err := store.Read(t.Context(), Range{Name: "cpu", From: testEpoch, To: testEpoch + 800})
 	if err != nil || len(result) != 2 {
 		t.Fatal("shared read", err)
 	}
@@ -50,7 +50,7 @@ func TestClockSharingAndLastOwnerRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(1, 1)
-	result, err = store.Read(t.Context(), Range{Matchers: second.Labels, From: testEpoch, To: testEpoch + 800})
+	result, err = store.Read(t.Context(), Range{Name: second.Name, Match: second.Labels, From: testEpoch, To: testEpoch + 800})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestClockCorruptionIsRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := store.Read(context.Background(), Range{Matchers: testSeries().Labels, From: 0, To: math.MaxInt64})
+	_, err := store.Read(context.Background(), Range{Name: testSeries().Name, Match: testSeries().Labels, From: 0, To: math.MaxInt64})
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatal("clock corruption", err)
 	}

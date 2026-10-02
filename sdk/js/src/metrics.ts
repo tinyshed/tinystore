@@ -18,12 +18,17 @@ import {
 
 export type SeriesKind = 'gauge' | 'counter'
 
-/** A series by its labels, __name__ among them. */
+/**
+ * What tells the series of one name apart: a host, a route, a status. A label
+ * whose name begins with __ is the store's own, and refused.
+ */
 export type Labels = Record<string, string>
 
 export interface SeriesInput {
-	labels: Labels
+	/** the metric: 'http_requests_total' */
+	name: string
 	kind: SeriesKind
+	labels?: Labels
 	/** samples as [time, value] pairs, or as columns: unix milliseconds and their values */
 	samples:
 		| readonly (readonly [time: Time, value: number])[]
@@ -31,18 +36,32 @@ export interface SeriesInput {
 }
 
 export interface Series {
-	labels: Labels
+	name: string
 	kind: SeriesKind
+	labels: Labels
 	/** unix milliseconds, in time order */
 	times: number[]
 	/** the values, their bits as they were ingested: -0 and a NaN's payload survive */
 	values: Float64Array
 }
 
+/**
+ * The series of a name, of labels, or of both, each matched exactly, and
+ * their samples over the last `since` or from `from` to `to`.
+ *
+ * ```ts
+ * { name: 'cpu', since: '1h' }                         // the last hour of every cpu series
+ * { match: { host: 'web-1' }, from: start, to: end }   // every series of web-1
+ * ```
+ */
 export interface Range {
-	/** the labels a series has, exactly; one at least */
-	match: Labels
-	from: Time
+	name?: string
+	/** labels a series holds, each exactly */
+	match?: Labels
+	/** the span before now the range covers: '1h', '15m', or milliseconds */
+	since?: Duration
+	/** the range's start, included; the oldest sample kept when absent */
+	from?: Time
 	/** excluded; the open end when absent */
 	to?: Time
 	/** each narrows the server's: series matched, blocks decoded, bytes fetched, samples decoded, answered */
@@ -67,24 +86,54 @@ export interface Bucket {
 }
 
 export interface Aggregate {
-	labels: Labels
+	name: string
 	kind: SeriesKind
+	labels: Labels
 	/** only buckets holding samples */
 	buckets: Bucket[]
 }
 
 const openEnd = 0x7fff_ffff_ffff_ffffn
 
+/** The label the wire carries a series' name as, the store's own spelling. */
+const wireName = '__name__'
+
+/** A series' name and labels as the wire spells them, its name among its labels. */
+function wireLabels(name: string | undefined, labels: Labels | undefined): Labels {
+	const spelled: Labels = {}
+	for (const [key, value] of Object.entries(labels ?? {})) {
+		if (key.startsWith('__')) {
+			throw new InvalidError(`the label ${key}: a name beginning with __ is the store's own`)
+		}
+		spelled[key] = value
+	}
+	if (name !== undefined) {
+		spelled[wireName] = name
+	}
+	return spelled
+}
+
+/** A series as the wire spelled it: its name apart from its labels. */
+function namedSeries(spelled: Labels | undefined): { name: string; labels: Labels } {
+	const { [wireName]: name = '', ...labels } = spelled ?? {}
+	return { name, labels }
+}
+
 function rangeOf(
 	r: Range,
 	extra?: { width?: number; op?: AggregateOp },
 ): Parameters<typeof MetricsRange.encode>[0] {
-	if (Object.keys(r.match).length === 0) {
-		throw new InvalidError('a range matches one label at least')
+	if (r.name === undefined && Object.keys(r.match ?? {}).length === 0) {
+		throw new InvalidError('a range names a series or a label to match')
 	}
+	if (r.since !== undefined && r.from !== undefined) {
+		throw new InvalidError('a range starts since a span before now or from a time, not both')
+	}
+	const from =
+		r.since !== undefined ? Date.now() - ms(r.since) : r.from === undefined ? 0 : unixMs(r.from)
 	return {
-		matchers: r.match,
-		from: BigInt(unixMs(r.from)),
+		matchers: wireLabels(r.name, r.match),
+		from: BigInt(from),
 		to: r.to === undefined ? openEnd : BigInt(unixMs(r.to)),
 		limitSeries: r.limits?.series,
 		limitBlocks: r.limits?.blocks,
@@ -120,12 +169,15 @@ function columnsOf(samples: SeriesInput['samples']): {
 	}
 }
 
-/** Joins the pieces a series longer than a body came in, one after another with its labels. */
-function joined<T extends { labels: Labels }>(pieces: T[], join: (into: T, piece: T) => void): T[] {
+/** Joins the pieces a series longer than a body came in, one after another with its name and labels. */
+function joined<T extends { name: string; labels: Labels }>(
+	pieces: T[],
+	join: (into: T, piece: T) => void,
+): T[] {
 	const out: T[] = []
 	for (const piece of pieces) {
 		const last = out.at(-1)
-		if (last !== undefined && sameLabels(last.labels, piece.labels)) {
+		if (last !== undefined && last.name === piece.name && sameLabels(last.labels, piece.labels)) {
 			join(last, piece)
 		} else {
 			out.push(piece)
@@ -161,7 +213,7 @@ export class Metrics {
 	/** Stores series and their samples, all or none; a refused series is named by its labels. */
 	async ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void> {
 		const batch = (Array.isArray(series) ? series : [series as SeriesInput]).map(s => ({
-			labels: s.labels,
+			labels: wireLabels(s.name, s.labels),
 			kind: s.kind,
 			...columnsOf(s.samples),
 		}))
@@ -178,7 +230,7 @@ export class Metrics {
 		const pieces = got.items.map(item => {
 			const s = MetricsSeries.decode(item)
 			return {
-				labels: (s.labels ?? {}) as Labels,
+				...namedSeries(s.labels as Labels | undefined),
 				kind: (s.kind ?? 'gauge') as SeriesKind,
 				times: Array.from(s.times ?? [], Number),
 				values: s.values ?? new Float64Array(0),
@@ -212,7 +264,7 @@ export class Metrics {
 				partial: ((b.flags?.[i] ?? 0) & 2) !== 0,
 			}))
 			return {
-				labels: (b.labels ?? {}) as Labels,
+				...namedSeries(b.labels as Labels | undefined),
 				kind: (b.kind ?? 'gauge') as SeriesKind,
 				buckets,
 			}
@@ -223,7 +275,11 @@ export class Metrics {
 	}
 
 	/** Removes one series and everything it holds, whether it still reads or not. */
-	async drop(labels: Labels): Promise<{ found: boolean; unreadableGroups: number }> {
+	async drop(series: {
+		name: string
+		labels?: Labels
+	}): Promise<{ found: boolean; unreadableGroups: number }> {
+		const labels = wireLabels(series.name, series.labels)
 		const body = await this.#link.run('write', connection =>
 			connection.session.call(methods['metrics.drop'], MetricsLabels.encode({ labels })),
 		)
@@ -278,7 +334,7 @@ export class Metrics {
 			}
 			for (const s of instrument.series.values()) {
 				batch.push({
-					labels: { ...s.labels, __name__: instrument.name },
+					labels: { ...s.labels, [wireName]: instrument.name },
 					kind: instrument.kind,
 					times: BigInt64Array.of(at),
 					values: Float64Array.of(s.value),

@@ -46,8 +46,8 @@ func TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers(t *testing.T) {
 
 func stagedTestGroups(t *testing.T, s *Store) ([]stagedPublication, []int64) {
 	t.Helper()
-	a := Series{Labels: []Label{{Name: "__name__", Value: "a"}}}
-	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
+	a := Series{Name: "a"}
+	b := Series{Name: "b"}
 	if err := s.Ingest(t.Context(), []Batch{{Series: a, Samples: testSamples(241)}, {Series: b, Samples: testSamples(241)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func stagedTestGroups(t *testing.T, s *Store) ([]stagedPublication, []int64) {
 func TestPublicationBatchRollsBackOneConflictingSeries(t *testing.T) {
 	s, _ := openTestStore(t, Options{})
 	staged, ids := stagedTestGroups(t, s)
-	b := Series{Labels: []Label{{Name: "__name__", Value: "b"}}}
+	b := Series{Name: "b"}
 	if err := s.Ingest(t.Context(), []Batch{{Series: b, Samples: []Sample{{At: testEpoch + 1, Value: 99}}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPublicationBatchRollsBackOneConflictingSeries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	resultForB, err := s.Read(t.Context(), Range{Matchers: b.Labels, From: testEpoch, To: testEpoch + 241})
+	resultForB, err := s.Read(t.Context(), Range{Name: b.Name, Match: b.Labels, From: testEpoch, To: testEpoch + 241})
 	if err != nil || len(resultForB) != 1 || len(resultForB[0].Samples) != 241 || resultForB[0].Samples[1].Value != 99 {
 		t.Fatalf("conflicting series changed: %+v, %v", resultForB, err)
 	}

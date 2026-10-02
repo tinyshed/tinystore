@@ -141,11 +141,13 @@ describe('metrics', () => {
 		view.setBigUint64(8, 0x7ff8000000000001n, true)
 		values[2] = 0.5
 		await store.metrics.ingest({
-			labels: { __name__: 'cpu', host: 'web-1' },
+			name: 'cpu',
 			kind: 'gauge',
+			labels: { host: 'web-1' },
 			samples: { times: [now - 2000, now - 1000, now], values },
 		})
-		const [series] = await store.metrics.read({ match: { __name__: 'cpu' }, from: now - 60_000 })
+		const [series] = await store.metrics.read({ name: 'cpu', since: '1m' })
+		expect([series?.name, series?.labels]).toEqual(['cpu', { host: 'web-1' }])
 		expect(series?.times).toEqual([now - 2000, now - 1000, now])
 		const read = new DataView(series!.values.buffer, series!.values.byteOffset)
 		expect(read.getBigUint64(0, true)).toBe(0x8000000000000000n)
@@ -156,7 +158,7 @@ describe('metrics', () => {
 	test("an aggregate's increase counts a counter's reset", async () => {
 		const start = Date.now() - 50 * 60_000
 		await store.metrics.ingest({
-			labels: { __name__: 'requests_total' },
+			name: 'requests_total',
 			kind: 'counter',
 			samples: [
 				[start, 100],
@@ -166,7 +168,7 @@ describe('metrics', () => {
 			],
 		})
 		const [agg] = await store.metrics.aggregate({
-			match: { __name__: 'requests_total' },
+			name: 'requests_total',
 			from: start,
 			to: start + 3_600_000,
 			width: '1h',
@@ -186,22 +188,32 @@ describe('metrics', () => {
 		store.metrics.gaugeFunc('queue_depth', () => 7)
 		await store.metrics.flush()
 		const [posts] = await store.metrics.read({
-			match: { __name__: 'http_requests_total', route: '/notes' },
-			from: Date.now() - 60_000,
+			name: 'http_requests_total',
+			match: { route: '/notes' },
+			since: '1m',
 		})
 		expect(posts?.values[0]).toBe(3)
-		const [depth] = await store.metrics.read({
-			match: { __name__: 'queue_depth' },
-			from: Date.now() - 60_000,
-		})
+		expect(posts?.labels).toEqual({ route: '/notes', method: 'POST' })
+		const [depth] = await store.metrics.read({ name: 'queue_depth', since: '1m' })
 		expect(depth?.values[0]).toBe(7)
 	})
 
 	test('a drop removes a series', async () => {
-		expect(await store.metrics.drop({ __name__: 'cpu', host: 'web-1' })).toEqual({
+		expect(await store.metrics.drop({ name: 'cpu', labels: { host: 'web-1' } })).toEqual({
 			found: true,
 			unreadableGroups: 0,
 		})
-		expect(await store.metrics.read({ match: { __name__: 'cpu' }, from: 0 })).toEqual([])
+		expect(await store.metrics.read({ name: 'cpu' })).toEqual([])
+	})
+
+	test("a label of the store's own, a range of nothing or of both kinds of start are refused", async () => {
+		for (const refused of [
+			() => store.metrics.read({ name: 'cpu', match: { __name__: 'other' } }),
+			() => store.metrics.read({}),
+			() => store.metrics.read({ name: 'cpu', since: '1h', from: 0 }),
+			() => store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { __x: 'y' }, samples: [] }),
+		]) {
+			expect(await caught(refused())).toBeInstanceOf(InvalidError)
+		}
 	})
 })

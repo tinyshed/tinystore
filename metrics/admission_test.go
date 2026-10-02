@@ -12,7 +12,7 @@ import (
 func TestActiveReadAndIngestAdmissionHonorsCancellation(t *testing.T) {
 	s, _ := openTestStore(t, Options{MaxConcurrentReads: 1, MaxConcurrentIngest: 1})
 	series := testSeries()
-	request := Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 1}
+	request := Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 1}
 	batch := []Batch{{Series: series, Samples: testSamples(1)}}
 	s.readSlots <- struct{}{}
 	readCtx, cancelRead := context.WithTimeout(t.Context(), 100*time.Millisecond)
@@ -49,7 +49,7 @@ func TestStoreMemoryBoundsReadsIngestAndMaintenance(t *testing.T) {
 	}
 	s.now = func() time.Time { return time.UnixMilli(testEpoch + 900) }
 	batch := []Batch{{Series: testSeries(), Samples: testSamples(241)}}
-	request := Range{Matchers: testSeries().Labels, From: testEpoch, To: testEpoch + 241}
+	request := Range{Name: testSeries().Name, Match: testSeries().Labels, From: testEpoch, To: testEpoch + 241}
 	work := map[string]func(context.Context) error{
 		"ingest": func(ctx context.Context) error { return s.Ingest(ctx, batch) },
 		"read": func(ctx context.Context) error {

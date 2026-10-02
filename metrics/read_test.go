@@ -5,13 +5,14 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 )
 
 func TestStreamOwnsResultsAndReportsPartialFailure(t *testing.T) {
 	store, _ := openTestStore(t, Options{MaxBatchSamples: 1024})
 	first := testSeries()
 	second := testSeries()
-	second.Labels = []Label{{Name: "host", Value: "two"}, {Name: "__name__", Value: "cpu"}}
+	second.Name, second.Labels = "cpu", Labels{"host": "two"}
 	points := testSamples(241)
 	if err := store.Ingest(t.Context(), []Batch{{Series: first, Samples: points}, {Series: second, Samples: points}}); err != nil {
 		t.Fatal(err)
@@ -19,7 +20,7 @@ func TestStreamOwnsResultsAndReportsPartialFailure(t *testing.T) {
 	if _, err := store.Maintain(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	request := Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 241}
+	request := Range{Name: "cpu", From: testEpoch, To: testEpoch + 241}
 	want, err := store.Read(t.Context(), request)
 	if err != nil || len(want) != 2 {
 		t.Fatalf("materialized read: %d: %v", len(want), err)
@@ -60,5 +61,45 @@ func TestStreamOwnsResultsAndReportsPartialFailure(t *testing.T) {
 	}
 	if err := store.Stream(t.Context(), request, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nil callback: %v", err)
+	}
+}
+
+// a range over the last Since starts that long before the store's clock and
+// stays open at its end, as a To of zero does; Since and From are one or the
+// other
+func TestARangeSinceStartsThatLongBeforeNow(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	points := make([]Sample, 900)
+	for i := range points {
+		points[i] = Sample{At: testEpoch + int64(i), Value: float64(i)}
+	}
+	if err := store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points}}); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.Read(t.Context(), Range{Name: "cpu", Since: 100 * time.Millisecond})
+	if err != nil || len(results) != 1 || len(results[0].Samples) != 100 || results[0].Samples[0].At != testEpoch+800 {
+		t.Fatalf("the last 100 ms of 900: %+v, %v", results, err)
+	}
+	buckets, err := store.Aggregate(t.Context(), AggregateRequest{
+		Range: Range{Name: "cpu", Since: 100 * time.Millisecond}, Width: 50 * time.Millisecond, Op: AggregateCount,
+	})
+	if err != nil || len(buckets) != 1 || len(buckets[0].Buckets) != 2 ||
+		buckets[0].Buckets[0].From != testEpoch+800 || buckets[0].Buckets[1].Count != 50 {
+		t.Fatalf("buckets of the last 100 ms: %+v, %v", buckets, err)
+	}
+	if results, err = store.Read(t.Context(), Range{Name: "cpu", From: testEpoch + 850}); err != nil ||
+		len(results[0].Samples) != 50 {
+		t.Fatalf("a range open at its end: %+v, %v", results, err)
+	}
+
+	for _, refused := range []Range{
+		{Name: "cpu", Since: time.Second, From: testEpoch},
+		{Name: "cpu", Since: -time.Second},
+		{Name: "cpu", From: testEpoch + 10, To: testEpoch + 5},
+	} {
+		if _, err = store.Read(t.Context(), refused); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v: %v", refused, err)
+		}
 	}
 }

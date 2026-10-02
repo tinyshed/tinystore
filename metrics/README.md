@@ -74,27 +74,27 @@ if err != nil {
     return err
 }
 
-series := metrics.Series{
-    Kind: metrics.Gauge,
-    Labels: []metrics.Label{
-        {Name: "__name__", Value: "cpu"},
-        {Name: "host", Value: "web-1"},
-    },
-}
 err = store.Ingest(ctx, []metrics.Batch{{
-    Series: series,
+    Series:  metrics.Series{Name: "cpu", Kind: metrics.Gauge, Labels: metrics.Labels{"host": "web-1"}},
     Samples: []metrics.Sample{{At: time.Now().UnixMilli(), Value: 42}},
 }})
 if err != nil {
     return err
 }
 
-result, err := store.Read(ctx, metrics.Range{
-    Matchers: series.Labels,
-    From:     from.UnixMilli(),
-    To:       to.UnixMilli(), // exclusive
+lastHour, err := store.Read(ctx, metrics.Range{Name: "cpu", Since: time.Hour})
+web1, err := store.Read(ctx, metrics.Range{
+    Match: metrics.Labels{"host": "web-1"},       // every series of web-1, whatever its name
+    From:  from.UnixMilli(), To: to.UnixMilli(),  // To excluded; zero is the open end
 })
 ```
+
+A series is its name and its labels. The store keeps the name as the label
+`__name__`, as Prometheus does, and so a label of the application's may not
+begin with `__`: the name is `Series.Name` and `Range.Name`, and a result gives
+it apart from its labels. A range names a series, labels to match, or both,
+each exactly, over the last `Since` before the store's clock or from `From` to
+`To`.
 
 The store calls `Maintain(ctx)` every `MaintenanceInterval`; in a Manual store
 the application calls it itself. Each call considers at most
@@ -110,7 +110,7 @@ call. A still damaged series will be suspended again on the next pass, and
 ingestion into a suspended series returns `ErrSuspended`. A suspended series
 stays out of retention until it is retried or dropped.
 
-`DropSeries(ctx, labels)` removes one series and everything it holds in one
+`DropSeries(ctx, name, labels)` removes one series and everything it holds in one
 transaction, whether its data still reads or not, and waits for a running
 `Maintain`. A group whose directory or clock no longer reads is removed without
 the payload rows it named, since only a directory that reads proves which rows
@@ -150,7 +150,7 @@ reset and boundary behavior.
 
 `tinystore.Options{SelfMetrics: true}` enables the runtime's periodic collection
 into this engine. `Store.FlushSelfMetrics(ctx)` is the Manual-store path.
-Self samples use fixed `__name__=tinystore_<name>` and `engine` labels and do
+Self samples are named `tinystore_<name>` with an `engine` label, and do
 not count toward user ingest/rejections. The collector covers runtime memory
 reservations and the metrics/records counters, not process RSS or every engine.
 
@@ -187,12 +187,12 @@ this engine promises.
   unusable. `Aggregate` computes exact `count`, correctly rounded `sum`,
   signed-zero-aware `min`/`max`, and counter `increase` from raw samples in one
   snapshot. It does not use the existing float64 directory summaries.
-- `__name__` is required on ingestion. Labels are case-sensitive and unique by
-  name, and are bounded by four budgets rather than one count: at most 128
-  pairs, 16 KiB of combined raw name/value bytes, 256 bytes for one name and
-  4 KiB for one value. Stock container telemetry carries 36 to 37 labels, which
-  the earlier cap of 32 refused outright. Matchers are ANDed exact equality
-  predicates; absence is different from an empty value.
+- A series has a name. Labels are case-sensitive, a name beginning with `__` is
+  the store's own, and a series is bounded by four budgets rather than one
+  count, its name counted as a label: at most 128 pairs, 16 KiB of combined raw
+  name/value bytes, 256 bytes for one name and 4 KiB for one value. Stock container telemetry carries 36 to 37 labels, which
+  the earlier cap of 32 refused outright. A range's name and labels are
+  ANDed exact equality predicates; absence is different from an empty value.
 - Retention defaults to 30 days. Lateness defaults to zero and follows the
   newest timestamp of the series. `ClockSkew` defaults to ten minutes. All
   three must be whole milliseconds. Ingest rejects expired samples, samples

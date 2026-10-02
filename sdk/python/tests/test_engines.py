@@ -264,20 +264,22 @@ async def test_samples_come_back_bit_for_bit_and_aggregate_exactly(store: tinyst
     values = array("d", struct.unpack("<3d", struct.pack("<QQd", 0x8000000000000000, 0x7FF8000000000001, 0.5)))
     await store.metrics.ingest(
         {
-            "labels": {"__name__": "cpu"},
+            "name": "cpu",
             "kind": "gauge",
+            "labels": {"host": "web-1"},
             "times": [now - 2000, now - 1000, now],
             "values": values,
         }
     )
-    [series] = await store.metrics.read({"__name__": "cpu"}, now - 60_000)
+    [series] = await store.metrics.read(name="cpu", since="1m")
+    assert (series.name, series.labels) == ("cpu", {"host": "web-1"})
     assert series.times == [now - 2000, now - 1000, now]
     assert series.values.tobytes() == values.tobytes()
 
     start = now - 50 * 60_000
     await store.metrics.ingest(
         {
-            "labels": {"__name__": "requests_total"},
+            "name": "requests_total",
             "kind": "counter",
             "samples": [
                 (start, 100),
@@ -287,15 +289,28 @@ async def test_samples_come_back_bit_for_bit_and_aggregate_exactly(store: tinyst
             ],
         }
     )
-    [agg] = await store.metrics.aggregate({"__name__": "requests_total"}, start, start + 3_600_000, 3600, "increase")
+    [agg] = await store.metrics.aggregate(
+        name="requests_total", from_=start, to=start + 3_600_000, width="1h", op="increase"
+    )
     assert [(b.value, b.resets, b.count) for b in agg.buckets] == [(30.0, 1, 4)]
+    assert agg.buckets[0].from_ is not None and agg.buckets[0].from_.timestamp() * 1000 == start
 
     store.metrics.counter("http_requests_total").labels(route="/notes").inc()
     store.metrics.counter("http_requests_total").labels(route="/notes").inc(2)
     await store.metrics.flush()
-    [posts] = await store.metrics.read({"__name__": "http_requests_total", "route": "/notes"}, now - 60_000)
+    [posts] = await store.metrics.read(name="http_requests_total", match={"route": "/notes"}, since=60)
     assert posts.values[0] == 3
-    assert await store.metrics.drop({"__name__": "cpu"}) == (True, 0)
+    assert await store.metrics.drop("cpu", {"host": "web-1"}) == (True, 0)
+    assert await store.metrics.read(name="cpu") == []
+
+    for refused in (
+        store.metrics.read(name="cpu", match={"__name__": "other"}),
+        store.metrics.read(),
+        store.metrics.read(name="cpu", since="1h", from_=0),
+        store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"__x": "y"}, "samples": []}),
+    ):
+        with pytest.raises(InvalidError):
+            await refused
 
 
 async def test_a_second_open_finds_the_sidecar_the_first_started(tmp_path: Path) -> None:

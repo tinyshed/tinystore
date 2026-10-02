@@ -59,7 +59,7 @@ func TestPhysicalWriteCounters(t *testing.T) {
 			}
 			series := make([]Series, count)
 			for id := range series {
-				series[id] = Series{Kind: Gauge, Labels: []Label{{Name: "__name__", Value: "physical"}, {Name: "id", Value: fmt.Sprint(id)}}}
+				series[id] = Series{Kind: Gauge, Name: "physical", Labels: Labels{"id": fmt.Sprint(id)}}
 			}
 			start := time.Now().UnixMilli() - 3600000
 			if stage != "register" {

@@ -46,7 +46,7 @@ func TestDropSeriesRemovesEverythingItHolds(t *testing.T) {
 		t.Fatal("the fixture sealed no external payload")
 	}
 
-	dropped, err := s.DropSeries(t.Context(), series.Labels)
+	dropped, err := s.DropSeries(t.Context(), series.Name, series.Labels)
 	if err != nil || !dropped.Found || dropped.UnreadableGroups != 0 {
 		t.Fatalf("drop: %+v, %v", dropped, err)
 	}
@@ -63,7 +63,7 @@ func TestDropSeriesRemovesEverythingItHolds(t *testing.T) {
 	if err = s.Ingest(t.Context(), []Batch{{Series: series, Samples: fresh}}); err != nil {
 		t.Fatal(err)
 	}
-	results, err := s.Read(t.Context(), Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 481})
+	results, err := s.Read(t.Context(), Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 481})
 	if err != nil || len(results) != 1 || len(results[0].Samples) != 1 || results[0].Samples[0] != fresh[0] {
 		t.Fatalf("after drop: %+v, %v", results, err)
 	}
@@ -71,14 +71,14 @@ func TestDropSeriesRemovesEverythingItHolds(t *testing.T) {
 
 func TestDropSeriesKeepsItsNeighbours(t *testing.T) {
 	s, _ := openTestStore(t, Options{})
-	dropped := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "a"}}}
-	kept := Series{Labels: []Label{{Name: "__name__", Value: "cpu"}, {Name: "host", Value: "b"}}}
+	dropped := Series{Name: "cpu", Labels: Labels{"host": "a"}}
+	kept := Series{Name: "cpu", Labels: Labels{"host": "b"}}
 	points := sealedSeries(t, s, dropped, kept)
 
-	if result, err := s.DropSeries(t.Context(), dropped.Labels); err != nil || !result.Found {
+	if result, err := s.DropSeries(t.Context(), dropped.Name, dropped.Labels); err != nil || !result.Found {
 		t.Fatalf("drop: %+v, %v", result, err)
 	}
-	results, err := s.Read(t.Context(), Range{Matchers: []Label{{Name: "__name__", Value: "cpu"}}, From: testEpoch, To: testEpoch + 481})
+	results, err := s.Read(t.Context(), Range{Name: "cpu", From: testEpoch, To: testEpoch + 481})
 	if err != nil || len(results) != 1 || len(results[0].Samples) != len(points) {
 		t.Fatalf("neighbour: %d results, %v", len(results), err)
 	}
@@ -99,7 +99,7 @@ func TestDropSeriesRemovesAnUnreadableSuspendedSeries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Read(t.Context(), Range{Matchers: series.Labels, From: testEpoch, To: testEpoch + 481}); !errors.Is(err, ErrCorrupt) {
+	if _, err := s.Read(t.Context(), Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + 481}); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("damaged read: %v", err)
 	}
 	if _, err := s.handleMaintenanceFailure(t.Context(), 1, "test", fmt.Errorf("%w: test", ErrCorrupt)); err != nil {
@@ -107,7 +107,7 @@ func TestDropSeriesRemovesAnUnreadableSuspendedSeries(t *testing.T) {
 	}
 	payloads := countRows(t, s, "payloads")
 
-	dropped, err := s.DropSeries(t.Context(), series.Labels)
+	dropped, err := s.DropSeries(t.Context(), series.Name, series.Labels)
 	if err != nil || !dropped.Found || dropped.UnreadableGroups != 1 {
 		t.Fatalf("drop: %+v, %v", dropped, err)
 	}
@@ -124,10 +124,10 @@ func TestDropSeriesRemovesAnUnreadableSuspendedSeries(t *testing.T) {
 
 func TestDropSeriesOfAnUnknownSeries(t *testing.T) {
 	s, _ := openTestStore(t, Options{})
-	if dropped, err := s.DropSeries(t.Context(), testSeries().Labels); err != nil || dropped.Found {
+	if dropped, err := s.DropSeries(t.Context(), testSeries().Name, testSeries().Labels); err != nil || dropped.Found {
 		t.Fatalf("unknown series: %+v, %v", dropped, err)
 	}
-	if _, err := s.DropSeries(t.Context(), []Label{{Name: "host", Value: "a"}}); !errors.Is(err, ErrInvalid) {
+	if _, err := s.DropSeries(t.Context(), "", Labels{"host": "a"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("labels without a name: %v", err)
 	}
 }

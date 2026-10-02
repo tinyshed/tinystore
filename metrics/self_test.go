@@ -46,9 +46,7 @@ func TestSelfSamplesDoNotCountThemselvesAndSurviveClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Read(t.Context(), Range{From: testEpoch, To: testEpoch + 1000, Matchers: []Label{
-		{Name: "__name__", Value: "tinystore_ingested_samples_total"}, {Name: "engine", Value: "metrics"},
-	}})
+	got, err := store.Read(t.Context(), Range{From: testEpoch, To: testEpoch + 1000, Name: "tinystore_ingested_samples_total", Match: Labels{"engine": "metrics"}})
 	if err != nil {
 		t.Fatal(err)
 	}

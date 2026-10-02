@@ -113,8 +113,7 @@ func TestABackupRestoresEveryEngine(t *testing.T) {
 
 	restored := openEngines(t, dir)
 	results, err := restored.cpu.Read(t.Context(), metrics.Range{
-		Matchers: []metrics.Label{{Name: "__name__", Value: "temperature"}},
-		From:     epoch.UnixMilli(), To: epoch.UnixMilli() + 1,
+		Name: "temperature", From: epoch.UnixMilli(), To: epoch.UnixMilli() + 1,
 	})
 	if err != nil || len(results) != 1 || results[0].Samples[0].Value != 21.5 {
 		t.Fatalf("metrics: %+v, %v", results, err)

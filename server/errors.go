@@ -88,7 +88,7 @@ func whatOf(err error) map[string]string {
 	}
 	var series *metrics.SeriesError
 	if errors.As(err, &series) {
-		return labelMapOf(series.Labels)
+		return wireLabels(metrics.Series{Name: series.Name, Labels: series.Labels})
 	}
 	return recordsWhat(err)
 }

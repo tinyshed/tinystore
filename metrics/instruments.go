@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -73,7 +74,7 @@ func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, erro
 }
 
 func named(kind Kind, name string) Series {
-	return Series{Kind: kind, Labels: []Label{{Name: "__name__", Value: name}}}
+	return Series{Name: name, Kind: kind}
 }
 
 type instrument struct {
@@ -101,22 +102,24 @@ func (i *instrument) add(delta float64) {
 }
 
 func (i *instrument) child(pairs []string) *instrument {
-	labels := slices.Clone(i.series.Labels)
+	labels := make(Labels, len(i.series.Labels)+len(pairs)/2)
+	maps.Copy(labels, i.series.Labels)
 	for index := 0; index+1 < len(pairs); index += 2 {
-		labels = append(labels, Label{Name: pairs[index], Value: pairs[index+1]})
+		labels[pairs[index]] = pairs[index+1]
 	}
+	series := Series{Name: i.series.Name, Kind: i.series.Kind, Labels: labels}
 	if len(pairs)%2 != 0 {
-		child := &instrument{set: i.set, series: Series{Kind: i.series.Kind, Labels: labels}}
+		child := &instrument{set: i.set, series: series}
 		child.refused.Store(true)
 		child.warnOnce(fmt.Errorf("%w: label %q has no value", ErrInvalid, pairs[len(pairs)-1]))
 		return child
 	}
-	return i.set.register(Series{Kind: i.series.Kind, Labels: labels})
+	return i.set.register(series)
 }
 
 func (i *instrument) warnOnce(err error) {
 	if i.warned.CompareAndSwap(false, true) {
-		i.set.store.log.Warn("instrument refused", "series", formatLabels(i.series.Labels), "error", err)
+		i.set.store.log.Warn("instrument refused", "series", i.series.String(), "error", err)
 	}
 }
 
@@ -134,7 +137,7 @@ type conflictKey struct {
 }
 
 func (set *instruments) register(series Series) *instrument {
-	key := labelKey(series.Labels)
+	key := seriesKey(series)
 	set.mu.Lock()
 	if existing, ok := set.all[key]; ok {
 		if existing.series.Kind == series.Kind {
@@ -176,11 +179,12 @@ func (set *instruments) snapshot() []*instrument {
 	return out
 }
 
-// labelKey is one series whatever order its labels were given in
-func labelKey(labels []Label) string {
-	pairs := make([]string, len(labels))
-	for i, label := range labels {
-		pairs[i] = label.Name + "\xff" + label.Value
+// seriesKey is one series whatever order its labels were given in
+func seriesKey(series Series) string {
+	pairs := make([]string, 0, len(series.Labels)+1)
+	pairs = append(pairs, metricName+"\xff"+series.Name)
+	for name, value := range series.Labels {
+		pairs = append(pairs, name+"\xff"+value)
 	}
 	slices.Sort(pairs)
 	return strings.Join(pairs, "\xfe")
@@ -228,7 +232,7 @@ func (i *instrument) current(ctx context.Context) (float64, bool) {
 	value, err := reader.call(ctx)
 	if err != nil {
 		if err.Error() != i.lastRead {
-			i.set.store.log.Warn("gauge read failed", "series", formatLabels(i.series.Labels), "error", err)
+			i.set.store.log.Warn("gauge read failed", "series", i.series.String(), "error", err)
 			i.lastRead = err.Error()
 		}
 		return 0, false
@@ -238,7 +242,7 @@ func (i *instrument) current(ctx context.Context) (float64, bool) {
 }
 
 func (s *Store) dropRefused(batches []Batch, refused *SeriesError) []Batch {
-	key := labelKey(refused.Labels)
+	key := seriesKey(Series{Name: refused.Name, Labels: refused.Labels})
 	s.instruments.mu.Lock()
 	instrument := s.instruments.all[key]
 	s.instruments.mu.Unlock()
@@ -246,5 +250,5 @@ func (s *Store) dropRefused(batches []Batch, refused *SeriesError) []Batch {
 		instrument.refused.Store(true)
 		instrument.warnOnce(refused.Err)
 	}
-	return slices.DeleteFunc(batches, func(batch Batch) bool { return labelKey(batch.Series.Labels) == key })
+	return slices.DeleteFunc(batches, func(batch Batch) bool { return seriesKey(batch.Series) == key })
 }
