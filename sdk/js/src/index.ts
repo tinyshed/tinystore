@@ -48,6 +48,7 @@ export {
 	type Series,
 	type SeriesInput,
 	type SeriesKind,
+	type Timer,
 } from './metrics.ts'
 export type {
 	Cursor,

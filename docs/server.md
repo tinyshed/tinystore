@@ -642,7 +642,8 @@ async with tinystore.open("./data") as store:
 - **Logs and instruments stay in the SDK**, as the Go engines keep them: a
   logging handler, Python's `logging.Handler` or a Bun logger, appends its
   records once a second without waiting, dropping and counting what does not
-  fit; counters and gauges live in the SDK and are ingested every flush.
+  fit; counters, gauges and timers live in the SDK and are ingested every
+  flush.
 - **Python**: 3.12 or later, asyncio first; a program without asyncio gets
   `open_sync`, one call at a time, generated from the asyncio code as httpx
   generates its own, after the first version. **JavaScript**: `Bun.connect`

@@ -335,6 +335,42 @@ describe('metrics', () => {
 		expect(depth?.values[0]).toBe(7)
 	})
 
+	test('a timer writes its count, sum and longest at each flush; measure answers and rethrows', async () => {
+		const latency = store.metrics.timer('timed_ms')
+		latency.record(10)
+		latency.record('30ms')
+		latency.with({ route: '/a' }).record(2.5)
+		expect(await latency.measure(() => 42)).toBe(42)
+		const boom = new Error('boom')
+		expect(
+			await caught(
+				latency.measure(async () => {
+					throw boom
+				}),
+			),
+		).toBe(boom)
+		expect(() => latency.record(-1)).toThrow(InvalidError)
+		expect(() => store.metrics.counter('timed_ms_count')).toThrow(InvalidError)
+		store.metrics.counter('busy_ms_sum').inc()
+		expect(() => store.metrics.timer('busy_ms')).toThrow(InvalidError)
+		await store.metrics.flush()
+		await Bun.sleep(2)
+		await store.metrics.flush() // nothing measured since: the totals again, no longest
+
+		const last = async (name: string, route?: string) => {
+			const series = await store.metrics.read({ name, since: '1m' })
+			const s = series.find(s => s.labels.route === route)
+			return s?.values
+		}
+		expect((await last('timed_ms_count'))?.at(-1)).toBe(4)
+		const sum = (await last('timed_ms_sum'))?.at(-1) ?? 0
+		expect(sum >= 40 && sum < 1040).toBe(true)
+		expect(await last('timed_ms_max')).toEqual(Float64Array.of(30))
+		expect(await last('timed_ms_count', '/a')).toEqual(Float64Array.of(1, 1))
+		expect(await last('timed_ms_sum', '/a')).toEqual(Float64Array.of(2.5, 2.5))
+		expect(await last('timed_ms_max', '/a')).toEqual(Float64Array.of(2.5))
+	})
+
 	test('conditions find series beyond equality, and noneOf alone is refused', async () => {
 		const at = new Date()
 		for (const [host, status, env] of [

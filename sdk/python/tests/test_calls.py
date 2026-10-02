@@ -139,6 +139,43 @@ async def test_gauges_and_their_functions(store: tinystore.Store) -> None:
         store.metrics.counter("c").inc(-1)
 
 
+async def test_a_timer_writes_its_count_sum_and_longest_at_each_flush(store: tinystore.Store) -> None:
+    import asyncio
+
+    latency = store.metrics.timer("timed_ms")
+    latency.record(0.5)
+    latency.record("30ms")
+    latency.record(timedelta(milliseconds=2))
+    latency.labels(route="/a").record(timedelta(microseconds=2500))
+    with latency.measure():
+        await asyncio.sleep(0)
+    with pytest.raises(RuntimeError), latency.measure():
+        raise RuntimeError("boom")
+    async with latency.measure():
+        pass
+    with pytest.raises(InvalidError):
+        latency.record(-1)
+    with pytest.raises(InvalidError):
+        store.metrics.counter("timed_ms_count")
+    store.metrics.counter("busy_ms_sum").inc()
+    with pytest.raises(InvalidError):
+        store.metrics.timer("busy_ms")
+    await store.metrics.flush()
+    await asyncio.sleep(0.002)
+    await store.metrics.flush()  # nothing measured since: the totals again, no longest
+
+    async def values(name: str, route: str | None = None) -> list[float]:
+        found = await store.metrics.read(name=name, since="1m")
+        return next(list(s.values) for s in found if s.labels.get("route") == route)
+
+    assert (await values("timed_ms_count"))[-1] == 6
+    assert 532 <= (await values("timed_ms_sum"))[-1] < 1532
+    assert await values("timed_ms_max") == [500]
+    assert await values("timed_ms_count", "/a") == [1, 1]
+    assert await values("timed_ms_sum", "/a") == [2.5, 2.5]
+    assert await values("timed_ms_max", "/a") == [2.5]
+
+
 async def test_a_remote_server_takes_its_token_and_refuses_another(tmp_path: Path) -> None:
     import asyncio
     import os

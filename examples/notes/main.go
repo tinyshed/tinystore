@@ -71,6 +71,7 @@ type app struct {
 	logger    *slog.Logger
 	created   metrics.CounterInstrument
 	requests  metrics.CounterInstrument
+	latency   metrics.TimerInstrument
 }
 
 func run(ctx context.Context, dir string, out io.Writer) (err error) {
@@ -142,6 +143,7 @@ func (a *app) openEngines(ctx context.Context) (err error) {
 	a.logger = slog.New(a.logs.Handler("notes"))
 	a.created = a.stats.Counter("notes_created_total")
 	a.requests = a.stats.Counter("requests_total")
+	a.latency = a.stats.Timer("request_ms")
 	a.stats.GaugeFunc("notes", func(ctx context.Context) (float64, error) {
 		count, err := sqldb.Scalar[int](ctx, a.db, `select count(*) from notes`)
 		return float64(count), err
@@ -160,16 +162,27 @@ func (a *app) openQueues(ctx context.Context) (err error) {
 	return err
 }
 
+// createNote is what a handler of POST /notes would do, timed from its start to
+// its return
+func (a *app) createNote(ctx context.Context, title string) (Note, error) {
+	defer a.latency.With("route", "/notes").Since(time.Now())
+	note, err := sqldb.Insert(ctx, a.db, notes, Note{Title: title, CreatedAt: a.store.Now()})
+	if err != nil {
+		return note, err
+	}
+	a.created.Inc()
+	a.requests.With("route", "/notes", "method", "POST").Inc()
+	a.logger.Info("note created", "id", note.ID, "title", note.Title)
+	return note, nil
+}
+
 func (a *app) useNotes(ctx context.Context, out io.Writer) error {
 	var ideas int64
 	for _, title := range []string{"groceries", "ideas"} {
-		note, err := sqldb.Insert(ctx, a.db, notes, Note{Title: title, CreatedAt: a.store.Now()})
+		note, err := a.createNote(ctx, title)
 		if err != nil {
 			return err
 		}
-		a.created.Inc()
-		a.requests.With("route", "/notes", "method", "POST").Inc()
-		a.logger.Info("note created", "id", note.ID, "title", note.Title)
 		if err = a.scheduleFor(ctx, note.ID); err != nil {
 			return err
 		}
@@ -290,6 +303,14 @@ func (a *app) readBack(ctx context.Context, out io.Writer) error {
 		return errors.Join(err, errors.New("notes_created_total was not flushed"))
 	}
 	fmt.Fprintf(out, "notes created: %v\n", results[0].Samples[len(results[0].Samples)-1].Value)
+
+	// a timer's count and sum are what a mean divides: request_ms_sum over request_ms_count
+	route := metrics.Labels{"route": "/notes"}
+	timed, err := a.stats.Read(ctx, metrics.Range{Name: "request_ms_count", Match: route, Since: time.Minute})
+	if err != nil || len(timed) != 1 {
+		return errors.Join(err, errors.New("request_ms_count was not flushed"))
+	}
+	fmt.Fprintf(out, "requests timed: %v\n", timed[0].Samples[len(timed[0].Samples)-1].Value)
 
 	page, err := a.logs.Scan(ctx, records.Query{Since: time.Minute})
 	fmt.Fprintf(out, "log lines: %d\n", len(page.Records))

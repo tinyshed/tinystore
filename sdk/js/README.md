@@ -143,6 +143,8 @@ const db = log.with({ module: 'db' })
 ```ts
 store.metrics.counter('http_requests_total').with({ route: '/users' }).inc()
 store.metrics.gauge('queue_depth').set(12)
+const latency = store.metrics.timer('http_request_ms')
+const user = await latency.with({ route: '/users' }).measure(() => users.get(id))
 
 await store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { host: 'web-1' }, samples: [[new Date(), 0.42]] })
 const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' }, since: '1h' })
@@ -154,6 +156,12 @@ const routes = await store.metrics.aggregate({ name: 'http_requests_total', sinc
 A sample comes back bit for bit, `-0` and a NaN's payload included; a range is
 `since`, or `from` and `to` in unix milliseconds. `metrics.explain(range)` says
 what a read or an aggregate would spend of its limits before it runs.
+
+A timer's `measure(fn)` answers what `fn` answered and throws what it threw,
+recording the time either way; `record(ms)` adds a duration of its own. Every
+flush writes `http_request_ms_count` and `http_request_ms_sum`, counters, and
+the longest since the flush before, `http_request_ms_max`, so that a range's
+mean is the increase of its sum over the increase of its count.
 
 ## Errors and cancellation
 

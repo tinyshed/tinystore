@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import time
 from array import array
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from ._connection import Connection, Link, download
 from ._time import Duration, date_of, ms, unix_ms
@@ -31,6 +33,7 @@ from .errors import InvalidError, LimitError, error_of
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
     from datetime import datetime
+    from types import TracebackType
 
 type Kind = Literal["gauge", "counter"]
 type Op = Literal["count", "sum", "min", "max", "avg", "increase", "rate", "delta"]
@@ -182,6 +185,7 @@ class Metrics:
     def __init__(self, link: Link) -> None:
         self._link = link
         self._instruments: dict[str, _Instrument] = {}
+        self._timers: dict[str, _Timer] = {}
         self._task: asyncio.Task[None] | None = None
 
     async def ingest(self, *series: Mapping[str, Any]) -> None:
@@ -372,15 +376,39 @@ class Metrics:
         """A gauge read by a function at each flush; one that raises skips that sample."""
         self._instrument(name, "gauge").read = read
 
+    def timer(self, name: str) -> Timer:
+        """A timer: how many durations it measured and their sum in milliseconds, and the longest.
+
+        Every flush ingests the first two as the counters name_count and
+        name_sum, and the longest since the flush before as the gauge
+        name_max, left out when it measured none. A range's mean is its sum's
+        increase over its count's.
+        """
+        timer = self._timers.get(name)
+        if timer is None:
+            for suffix in _TIMER_SUFFIXES:
+                writer = self._instruments.get(name + suffix)
+                if writer is not None:
+                    raise InvalidError(f"{name + suffix} is a {writer.kind}; the timer {name} would write it")
+            timer = self._timers[name] = _Timer(name)
+            self._flushing_soon()
+        return Timer(timer, {})
+
     def _instrument(self, name: str, kind: Kind) -> _Instrument:
         instrument = self._instruments.get(name)
         if instrument is None:
+            for suffix in _TIMER_SUFFIXES:
+                if name.endswith(suffix) and name.removesuffix(suffix) in self._timers:
+                    raise InvalidError(f"{name} is written by the timer {name.removesuffix(suffix)}")
             instrument = self._instruments[name] = _Instrument(name, kind)
-            if self._task is None:
-                self._task = asyncio.get_running_loop().create_task(self._flushing())
+            self._flushing_soon()
         elif instrument.kind != kind:
             raise InvalidError(f"{name} is a {instrument.kind}, not a {kind}")
         return instrument
+
+    def _flushing_soon(self) -> None:
+        if self._task is None:
+            self._task = asyncio.get_running_loop().create_task(self._flushing())
 
     async def _flushing(self) -> None:
         while True:
@@ -401,16 +429,33 @@ class Metrics:
                     continue
                 instrument.series[()] = ({}, float(value))  # type: ignore[arg-type]
             for labels, value in instrument.series.values():
-                batch.append(
-                    {
-                        "labels": {**labels, _WIRE_NAME: instrument.name},
-                        "kind": instrument.kind,
-                        "times": array("q", [now]),
-                        "values": array("d", [value]),
-                    }
-                )
-        if batch:
+                batch.append(_sample_at(now, instrument.name, labels, instrument.kind, value))
+        taken = self._take_timers(now, batch)
+        if not batch:
+            return
+        try:
             await self._send(batch)
+        except BaseException:
+            for timing, longest in taken:
+                timing.longest = max(timing.longest, longest)
+                timing.measured = True
+            raise
+
+    def _take_timers(self, now: int, batch: list[dict[str, Any]]) -> list[tuple[_Timing, float]]:
+        """Adds what the timers ingest to batch, and starts their longest again.
+
+        It answers what it took, so that a flush that fails gives it back.
+        """
+        taken: list[tuple[_Timing, float]] = []
+        for timer in self._timers.values():
+            for timing in timer.series.values():
+                batch.append(_sample_at(now, timer.name + "_count", timing.labels, "counter", timing.count))
+                batch.append(_sample_at(now, timer.name + "_sum", timing.labels, "counter", timing.sum))
+                if timing.measured:
+                    batch.append(_sample_at(now, timer.name + "_max", timing.labels, "gauge", timing.longest))
+                    taken.append((timing, timing.longest))
+                    timing.longest, timing.measured = 0.0, False
+        return taken
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -420,9 +465,19 @@ class Metrics:
                 await self.flush()
 
 
+def _sample_at(now: int, name: str, labels: dict[str, str], kind: Kind, value: float) -> dict[str, Any]:
+    return {
+        "labels": {**labels, _WIRE_NAME: name},
+        "kind": kind,
+        "times": array("q", [now]),
+        "values": array("d", [value]),
+    }
+
+
 class _Instrument:
     def __init__(self, name: str, kind: Kind) -> None:
-        self.name, self.kind = name, kind
+        self.name = name
+        self.kind: Kind = kind
         self.series: dict[tuple[tuple[str, str], ...], tuple[dict[str, str], float]] = {}
         self.read: Callable[[], float | Awaitable[float]] | None = None
 
@@ -461,3 +516,89 @@ class Gauge:
 
     def dec(self, n: float = 1) -> None:
         self._instrument.add(self._labels, -n)
+
+
+_TIMER_SUFFIXES = ("_count", "_sum", "_max")
+
+
+@dataclass(slots=True)
+class _Timing:
+    labels: dict[str, str]
+    count: int = 0
+    sum: float = 0.0  # milliseconds
+    longest: float = 0.0  # milliseconds, since the flush before
+    measured: bool = False  # since the flush before
+
+
+class _Timer:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.series: dict[tuple[tuple[str, str], ...], _Timing] = {}
+
+    def add(self, labels: dict[str, str], millis: float) -> None:
+        key = tuple(sorted(labels.items()))
+        timing = self.series.get(key)
+        if timing is None:
+            timing = self.series[key] = _Timing(labels)
+        timing.count += 1
+        timing.sum += millis
+        timing.longest = max(timing.longest, millis)
+        timing.measured = True
+
+
+class Timer:
+    def __init__(self, timer: _Timer, labels: dict[str, str]) -> None:
+        self._timer, self._labels = timer, labels
+
+    def labels(self, **labels: str) -> Timer:
+        """The timer of these labels besides its own: the same labels in any order are one series."""
+        return Timer(self._timer, {**self._labels, **labels})
+
+    def record(self, d: Duration) -> None:
+        """Adds one duration: seconds, a timedelta, or text such as "250ms"."""
+        if isinstance(d, str):
+            millis: float = ms(d)
+        elif isinstance(d, timedelta):
+            millis = d / timedelta(milliseconds=1)
+        else:
+            millis = float(d) * 1000
+        if not (math.isfinite(millis) and millis >= 0):
+            raise InvalidError(f"a timer records {d!r}; a duration is never negative")
+        self._timer.add(self._labels, millis)
+
+    def measure(self) -> Measured:
+        """Times the block of a with, whether it returns or raises; await inside it is timed too.
+
+        with latency.labels(route="/users").measure():
+            user = await users.get(user_id)
+        """
+        return Measured(self._timer, self._labels)
+
+
+class Measured:
+    """The block a timer's measure times, in a with or an async with.
+
+    It is not a decorator: one on an async function would time making its
+    coroutine, not running it.
+    """
+
+    def __init__(self, timer: _Timer, labels: dict[str, str]) -> None:
+        self._timer, self._labels = timer, labels
+        self._start = 0
+
+    def __enter__(self) -> Self:
+        self._start = time.perf_counter_ns()
+        return self
+
+    def __exit__(
+        self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
+    ) -> None:
+        self._timer.add(self._labels, (time.perf_counter_ns() - self._start) / 1e6)
+
+    async def __aenter__(self) -> Self:
+        return self.__enter__()
+
+    async def __aexit__(
+        self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
+    ) -> None:
+        self.__exit__(kind, error, trace)

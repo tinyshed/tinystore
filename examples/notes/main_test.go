@@ -12,10 +12,12 @@ func TestTheExampleRunsTwice(t *testing.T) {
 	for _, want := range []string{
 		"note 1: groceries — milk, bread\ndraft of note 1: milk, bread, eggs, tea\n" +
 			"attachment list.txt: 22 bytes, starts \"milk\"; note 1 holds 22\n" +
-			"notes indexed: 2, reminders ahead: 1\nnotes created: 2\nlog lines: 2\nbackup written\n",
+			"notes indexed: 2, reminders ahead: 1\nnotes created: 2\nrequests timed: 2\nlog lines: 2\n" +
+			"backup written\n",
 		"note 1: groceries — milk, bread\nnote 2: groceries — milk, bread\ndraft of note 1: milk, bread, eggs, tea\n" +
 			"attachment list.txt: 22 bytes, starts \"milk\"; note 1 holds 22\n" +
-			"notes indexed: 2, reminders ahead: 2\nnotes created: 2\nlog lines: 4\nbackup written\n",
+			"notes indexed: 2, reminders ahead: 2\nnotes created: 2\nrequests timed: 2\nlog lines: 4\n" +
+			"backup written\n",
 	} {
 		var out bytes.Buffer
 		if err := run(t.Context(), dir, &out); err != nil {

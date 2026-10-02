@@ -254,6 +254,7 @@ elsewhere; an application measuring itself uses instruments:
 ```go
 requests := stats.Counter("http_requests_total")
 inflight := stats.Gauge("http_requests_inflight")
+latency := stats.Timer("http_request_ms")
 stats.GaugeFunc("notes", func(ctx context.Context) (float64, error) {
 	n, err := sqldb.Scalar[int](ctx, app, `select count(*) from notes`)
 	return float64(n), err
@@ -261,15 +262,18 @@ stats.GaugeFunc("notes", func(ctx context.Context) (float64, error) {
 
 requests.With("route", "/notes").Inc()
 inflight.Add(1)
+defer latency.With("route", "/notes").Since(time.Now())
 ```
 
 The engine keeps their values in memory and ingests them every `Options.Flush`
 (15 s by default) and on `Close`; a Manual store flushes on `stats.Flush(ctx)`.
 What is stored is the value at each flush, so a gauge's resolution is the flush
 interval, and a counter reset by a restart is a reset `increase` already
-counts. A new label set beyond `MaxSeries` is refused with `ErrLimit` and
-logged once. Histograms wait: bucketed approximations are not the exact answer
-this engine promises.
+counts. A timer writes its count and its sum in milliseconds as counters and
+its longest since the flush before as a gauge, `<name>_count`, `<name>_sum`
+and `<name>_max`, so that a range's mean is one division. A new label set
+beyond `MaxSeries` is refused with `ErrLimit` and logged once. Histograms wait:
+bucketed approximations are not the exact answer this engine promises.
 
 **records** (built; contract in `records/README.md`, design in
 [records.md](records.md)). Logs and events in `records.db`, one model: a time,

@@ -185,10 +185,12 @@ or on `Flush(ctx)` in a Manual store.
 ```go
 requests := store.Counter("http_requests_total")
 inflight := store.Gauge("http_requests_inflight")
+latency := store.Timer("http_request_ms")
 store.GaugeFunc("notes", func(ctx context.Context) (float64, error) { … })
 
 requests.With("route", "/notes", "method", "POST").Inc()
 inflight.Add(1)
+defer latency.With("route", "/notes").Since(time.Now()) // or Record(d)
 ```
 
 What is stored is the value at each flush, so a gauge's resolution is the flush
@@ -198,8 +200,16 @@ series. A series `Ingest` refuses — an invalid label, a new label set beyond
 `MaxSeries`, a negative counter increment, the same name as a counter and a
 gauge — is dropped and logged once, and the other instruments still flush; a
 `GaugeFunc` error skips that sample and is logged once while it repeats.
-Histograms are not provided: a bucketed approximation is not the exact answer
-this engine promises.
+
+A timer writes three series at each flush: how many durations it measured
+and their sum in milliseconds since the process started, `<name>_count` and
+`<name>_sum`, counters, and the longest since the flush before, `<name>_max`,
+a gauge a flush leaves out when nothing was measured. A range's mean is the
+increase of its sum over the increase of its count. Its three series go in a
+flush together or not at all, and a series a timer writes is refused to a
+counter or a gauge, as theirs are to a timer. Histograms, and so percentiles,
+are not provided: a bucketed approximation is not the exact answer this engine
+promises.
 
 ## Contracts and defaults
 

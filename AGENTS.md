@@ -417,6 +417,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
 | one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
 | an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
+| a timer writes its count, sum and longest at each flush | `TestATimerWritesItsCountSumAndLongestAtEachFlush`, `TestAFailedFlushKeepsATimersLongestForTheNext` |
+| a timer's three series go together and have one writer | `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries` |
+| a timer's measure answers, rethrows, and records either way | `a timer writes its count, sum and longest at each flush; measure answers and rethrows` in `sdk/js/test/records.test.ts`, `test_a_timer_writes_its_count_sum_and_longest_at_each_flush` in Python's |
 | self-metrics are opt-in, the last report before the engines close | `TestSelfMetricsAreOptInAndCollectBeforeClose`                    |
 | a self-report never counts itself, nor rounds a value | `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports` |
 | engines never import each other, nor the server     | `TestEnginesDoNotImportEachOther`, over every engine package                    |

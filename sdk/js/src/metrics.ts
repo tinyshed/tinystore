@@ -303,7 +303,8 @@ function concatFloats(a: Float64Array, b: Float64Array): Float64Array {
 export class Metrics {
 	readonly #link: Link
 	readonly #instruments = new Map<string, Instrument>()
-	#timer: ReturnType<typeof setInterval> | undefined
+	readonly #timers = new Map<string, TimerInstrument>()
+	#interval: ReturnType<typeof setInterval> | undefined
 	/** instruments' flushes that failed, and why the last did */
 	failures = 0
 	lastFailure: Error | undefined
@@ -450,28 +451,59 @@ export class Metrics {
 		this.#instrument(name, 'gauge').read = read
 	}
 
+	/**
+	 * A timer: how many durations it measured and their sum in milliseconds,
+	 * ingested every flush as the counters name_count and name_sum, and the
+	 * longest since the flush before as the gauge name_max, left out when it
+	 * measured none. A range's mean is its sum's increase over its count's.
+	 */
+	timer(name: string): Timer {
+		return new Timer(this.#timer(name), {})
+	}
+
 	#instrument(name: string, kind: SeriesKind): Instrument {
 		let instrument = this.#instruments.get(name)
 		if (instrument === undefined) {
+			const timer = timerWriting(name, this.#timers)
+			if (timer !== undefined) {
+				throw new InvalidError(`${name} is written by the timer ${timer}`)
+			}
 			instrument = { name, kind, series: new Map() }
 			this.#instruments.set(name, instrument)
-			this.#timer ??= setInterval(() => void this.flush().catch(() => {}), flushEvery)
-			this.#timer.unref?.()
+			this.#flushing()
 		} else if (instrument.kind !== kind) {
 			throw new InvalidError(`${name} is a ${instrument.kind}, not a ${kind}`)
 		}
 		return instrument
 	}
 
+	#timer(name: string): TimerInstrument {
+		let timer = this.#timers.get(name)
+		if (timer === undefined) {
+			for (const { suffix } of timerSeries) {
+				const writer = this.#instruments.get(name + suffix)
+				if (writer !== undefined) {
+					throw new InvalidError(
+						`${name + suffix} is a ${writer.kind}; the timer ${name} would write it`,
+					)
+				}
+			}
+			timer = { name, series: new Map() }
+			this.#timers.set(name, timer)
+			this.#flushing()
+		}
+		return timer
+	}
+
+	#flushing(): void {
+		this.#interval ??= setInterval(() => void this.flush().catch(() => {}), flushEvery)
+		this.#interval.unref?.()
+	}
+
 	/** Ingests every instrument's value now, as the timer does every 15 s. */
 	async flush(): Promise<void> {
 		const at = BigInt(Date.now())
-		const batch: {
-			labels: Labels
-			kind: SeriesKind
-			times: BigInt64Array
-			values: Float64Array
-		}[] = []
+		const batch: Sampled[] = []
 		for (const instrument of this.#instruments.values()) {
 			if (instrument.read !== undefined) {
 				try {
@@ -481,14 +513,10 @@ export class Metrics {
 				}
 			}
 			for (const s of instrument.series.values()) {
-				batch.push({
-					labels: { ...s.labels, [wireName]: instrument.name },
-					kind: instrument.kind,
-					times: BigInt64Array.of(at),
-					values: Float64Array.of(s.value),
-				})
+				batch.push(sampleAt(at, instrument.name, s.labels, instrument.kind, s.value))
 			}
 		}
+		const taken = this.#takeTimers(at, batch)
 		if (batch.length === 0) {
 			return
 		}
@@ -497,22 +525,45 @@ export class Metrics {
 				connection.session.call(methods['metrics.ingest'], MetricsBatch.encode({ series: batch })),
 			)
 		} catch (err) {
+			for (const [timing, longest] of taken) {
+				timing.longest = Math.max(timing.longest, longest)
+				timing.measured = true
+			}
 			this.failures++
 			this.lastFailure = err as Error
 			throw err
 		}
 	}
 
-	/** Stops the timer; the store flushes once more as it closes. */
+	// adds what the timers ingest to batch and starts their longest again,
+	// answering what it took so that a failed flush gives it back
+	#takeTimers(at: bigint, batch: Sampled[]): [Timing, number][] {
+		const taken: [Timing, number][] = []
+		for (const timer of this.#timers.values()) {
+			for (const t of timer.series.values()) {
+				batch.push(sampleAt(at, `${timer.name}_count`, t.labels, 'counter', t.count))
+				batch.push(sampleAt(at, `${timer.name}_sum`, t.labels, 'counter', t.sum))
+				if (t.measured) {
+					batch.push(sampleAt(at, `${timer.name}_max`, t.labels, 'gauge', t.longest))
+					taken.push([t, t.longest])
+					t.longest = 0
+					t.measured = false
+				}
+			}
+		}
+		return taken
+	}
+
+	/** Stops flushing every 15 s; the store flushes once more as it closes. */
 	stop(): void {
-		if (this.#timer !== undefined) {
-			clearInterval(this.#timer)
-			this.#timer = undefined
+		if (this.#interval !== undefined) {
+			clearInterval(this.#interval)
+			this.#interval = undefined
 		}
 	}
 
 	get instruments(): number {
-		return this.#instruments.size
+		return this.#instruments.size + this.#timers.size
 	}
 }
 
@@ -524,6 +575,64 @@ interface Instrument {
 	/** by the canonical spelling of each label set */
 	series: Map<string, { labels: Labels; value: number }>
 	read?: () => number | Promise<number>
+}
+
+/** what a timer ingests, each series its name and a suffix */
+const timerSeries = [
+	{ suffix: '_count', kind: 'counter' },
+	{ suffix: '_sum', kind: 'counter' },
+	{ suffix: '_max', kind: 'gauge' },
+] as const
+
+interface TimerInstrument {
+	name: string
+	/** by the canonical spelling of each label set */
+	series: Map<string, Timing>
+}
+
+interface Timing {
+	labels: Labels
+	count: number
+	/** milliseconds */
+	sum: number
+	/** milliseconds, since the flush before */
+	longest: number
+	/** since the flush before */
+	measured: boolean
+}
+
+/** the timer that writes the series name, if one does */
+function timerWriting(name: string, timers: Map<string, TimerInstrument>): string | undefined {
+	for (const { suffix } of timerSeries) {
+		const base = name.slice(0, -suffix.length)
+		if (name.endsWith(suffix) && timers.has(base)) {
+			return base
+		}
+	}
+	return undefined
+}
+
+/** one sample of a series, as metrics.ingest takes it */
+interface Sampled {
+	labels: Labels
+	kind: SeriesKind
+	times: BigInt64Array
+	values: Float64Array
+}
+
+function sampleAt(
+	at: bigint,
+	name: string,
+	labels: Labels,
+	kind: SeriesKind,
+	value: number,
+): Sampled {
+	return {
+		labels: { ...labels, [wireName]: name },
+		kind,
+		times: BigInt64Array.of(at),
+		values: Float64Array.of(value),
+	}
 }
 
 function keyOf(labels: Labels): string {
@@ -593,5 +702,54 @@ export class Gauge {
 
 	dec(): void {
 		this.add(-1)
+	}
+}
+
+/** A timer of labels; record and measure add a duration to the next flush. */
+export class Timer {
+	readonly #timer: TimerInstrument
+	readonly #labels: Labels
+
+	constructor(timer: TimerInstrument, labels: Labels) {
+		this.#timer = timer
+		this.#labels = labels
+	}
+
+	/** The timer of these labels besides its own: the same labels in any order are one series. */
+	with(labels: Labels): Timer {
+		return new Timer(this.#timer, { ...this.#labels, ...labels })
+	}
+
+	/** Adds one duration: milliseconds, their fractions kept, or text such as '250ms'. */
+	record(d: Duration): void {
+		const millis = typeof d === 'number' ? d : ms(d)
+		if (!(Number.isFinite(millis) && millis >= 0)) {
+			throw new InvalidError(`a timer records ${d}; a duration is never negative`)
+		}
+		const key = keyOf(this.#labels)
+		let t = this.#timer.series.get(key)
+		if (t === undefined) {
+			t = { labels: this.#labels, count: 0, sum: 0, longest: 0, measured: false }
+			this.#timer.series.set(key, t)
+		}
+		t.count++
+		t.sum += millis
+		t.longest = Math.max(t.longest, millis)
+		t.measured = true
+	}
+
+	/**
+	 * Runs fn and records how long it took, whether it returned or threw: its
+	 * result comes back, and what it threw is thrown again.
+	 *
+	 *     const user = await latency.with({ route: '/users' }).measure(() => users.get(id))
+	 */
+	async measure<R>(fn: () => R | Promise<R>): Promise<R> {
+		const start = performance.now()
+		try {
+			return await fn()
+		} finally {
+			this.record(performance.now() - start)
+		}
 	}
 }

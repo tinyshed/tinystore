@@ -147,6 +147,9 @@ log = logging.getLogger("app.db")  # the console alone, nothing kept
 ```python
 store.metrics.counter("http_requests_total").labels(route="/users").inc()
 store.metrics.gauge("queue_depth").set(12)
+latency = store.metrics.timer("http_request_ms")
+with latency.labels(route="/users").measure():  # await inside is timed too
+    user = await users.get(user_id)
 
 await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"}, "samples": [(now, 0.42)]})
 series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")
@@ -160,6 +163,13 @@ routes = await store.metrics.aggregate(name="http_requests_total", since="24h", 
 A sample comes back bit for bit, `-0.0` and a NaN's payload included; a range
 is `since`, or `from_` and `to`. `metrics.explain(...)` says what a read or an
 aggregate would spend of its limits before it runs.
+
+A timer's `measure()` times its block whether it returns or raises, in a `with`
+or an `async with`; `record(d)` adds a duration of its own, seconds, a
+`timedelta` or `"250ms"`. Every flush writes `http_request_ms_count` and
+`http_request_ms_sum`, counters, and the longest since the flush before,
+`http_request_ms_max`, so that a range's mean is the increase of its sum over
+the increase of its count.
 
 ## Durations, errors and cancellation
 

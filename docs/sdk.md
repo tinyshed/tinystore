@@ -66,6 +66,7 @@ routes, err := store.Aggregate(ctx, metrics.AggregateRequest{
 	By: []string{"route"},
 })
 store.Counter("http_requests_total").With("route", "/users").Inc()
+defer store.Timer("http_request_ms").With("route", "/users").Since(time.Now())
 ```
 
 ```ts
@@ -75,6 +76,7 @@ const failing = await store.metrics.read({ name: 'http_requests_total', since: '
 const buckets = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'increase' })
 const routes = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'rate', by: ['route'] })
 store.metrics.counter('http_requests_total').with({ route: '/users' }).inc()
+const user = await store.metrics.timer('http_request_ms').with({ route: '/users' }).measure(() => users.get(id))
 ```
 
 ```python
@@ -84,11 +86,24 @@ failing = await store.metrics.read(name="http_requests_total", since="1h", where
 buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
 routes = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="rate", by=["route"])
 store.metrics.counter("http_requests_total").labels(route="/users").inc()
+with store.metrics.timer("http_request_ms").labels(route="/users").measure():
+    user = await users.get(user_id)
 ```
 
 A result is `{name, kind, labels, ...}` in every language. An instrument's
 labels follow its Prometheus client: Go's `With(pairs...)`, Bun's
 `with({...})`, Python's `labels(**...)`.
+
+A timer times each language's own way, and writes the same three series at
+every flush: `<name>_count` and `<name>_sum`, counters of the durations and of
+their milliseconds, and `<name>_max`, a gauge of the longest since the flush
+before, left out when there was none. A range's mean is the increase of its
+sum over the increase of its count.
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| time a block | `defer t.Since(time.Now())` | `await t.measure(fn)`, its answer and its throw | `with t.measure():`, `async with` too |
+| add a duration | `t.Record(d)` | `t.record(12.5)`, milliseconds | `t.record(0.0125)`, seconds |
 
 ## Records
 
@@ -282,6 +297,11 @@ Built after it:
 - **Text in records**: `search` finds a record whose body or name holds the
   text, the case ignored, through `scan` and `all`; its budget ends a page
   early rather than failing. An index of words waits for a measurement.
+- **A timer**, beside the counter and the gauge: a count, a sum of
+  milliseconds and the longest since the last flush, written as three series,
+  whose mean over any range is one division; timed by `defer t.Since(...)`,
+  `t.measure(fn)` and `with t.measure():`. No histogram: its percentiles would
+  be approximations this engine does not promise.
 - **The logger as the console**: every logger writes its lines to stderr as
   they are logged, pretty or JSON, the same bytes in every language;
   `redact` hides fields by name in the store and on the console; and a logger
