@@ -49,7 +49,7 @@ async def test_kv_expiry_take_and_delete(store: tinystore.Store) -> None:
 
 
 async def test_a_claimed_job_retries_snoozes_extends_and_fails(store: tinystore.Store) -> None:
-    q = store.jobs.queue("claims", str, backoff=(0.001, 0.001))
+    q = store.jobs.queue("claims", str, backoff=(3600, 3600))
     await q.enqueue("x", key="k")
     job = await q.claim(lease=60)
     assert job is not None

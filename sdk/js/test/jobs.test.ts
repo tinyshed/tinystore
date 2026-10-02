@@ -150,6 +150,14 @@ describe('a work loop', () => {
 		expect(await q.get('k')).toBeUndefined()
 	})
 
+	test('a retry after nothing runs now, as After(0) does in Go, not after its backoff', async () => {
+		const q = store.jobs.queue<string>('again', { backoff: { first: '1h', most: '1h' } })
+		await q.enqueue('x', { key: 'k' })
+		await (await q.claim({ lease: '1m' }))?.retry('busy', { after: 0 })
+		const again = await q.claim()
+		expect([again?.key, again?.attempt]).toEqual(['k', 2])
+	})
+
 	test('a schedule is a queue of one repeating job under its name', async () => {
 		const purge = store.jobs.schedule('purge', { daily: '03:10', zone: 'Europe/Moscow' })
 		const job = await purge.get('purge')
