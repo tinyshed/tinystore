@@ -133,6 +133,41 @@ describe('records', () => {
 	})
 })
 
+describe('logger', () => {
+	test('a logger returns at once, keeps its context and reaches a scan once it has flushed', async () => {
+		const log = store.records.logger('app')
+		log.info('server started', { port: 3000 })
+		log.with({ requestId: 'r1' }).warn('slow request', { ms: 1200 })
+		log.event('user.created', { userId: 42 })
+		log.error('payment failed', { err: new Error('boom') })
+		await log.flush()
+		const { items } = await store.records.scan({ streams: ['app'] })
+		expect(items.map(r => [r.name, r.level, r.body])).toEqual([
+			['log', 0, 'server started'],
+			['log', 4, 'slow request'],
+			['user.created', undefined, undefined],
+			['log', 8, 'payment failed'],
+		])
+		expect([items[1]?.context, items[1]?.attrs]).toEqual([
+			[['requestId', '"r1"']],
+			[['ms', '1200']],
+		])
+		expect(String(items[3]?.attrs[0]?.[1])).toContain('boom')
+	})
+
+	test('a full logger drops and counts rather than wait, and keeps its least level', async () => {
+		const log = store.records.logger('quiet', { buffer: 2, level: 'warn' })
+		log.info('below its level')
+		for (const n of ['one', 'two', 'three', 'four']) {
+			log.warn(n)
+		}
+		await log.flush()
+		expect(log.dropped).toBe(1)
+		const { items } = await store.records.scan({ streams: ['quiet'] })
+		expect(items.map(r => r.body)).toEqual(['one', 'two', 'three'])
+	})
+})
+
 describe('metrics', () => {
 	test('a sample comes back bit for bit, -0 and a NaN payload included', async () => {
 		const now = Date.now()

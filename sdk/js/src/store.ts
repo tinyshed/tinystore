@@ -63,14 +63,16 @@ export class Store implements AsyncDisposable {
 	}
 
 	/**
-	 * Ingests the instruments' last values, then closes the connection; the
-	 * directory's sidecar goes once it has been idle.
+	 * Ingests the instruments' last values and hands over the loggers' lines,
+	 * then closes the connection; the directory's sidecar goes once it has been
+	 * idle.
 	 */
 	async close(): Promise<void> {
 		this.metrics.stop()
 		if (this.metrics.instruments > 0) {
 			await this.metrics.flush().catch(() => {})
 		}
+		await this.records.stop()
 		this.#link.close()
 	}
 

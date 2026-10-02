@@ -5,6 +5,7 @@
 import { type Connection, download, type Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
 import type { Page } from './handles.ts'
+import { type Logger, type LoggerOptions, newLogger } from './logger.ts'
 import type { Stream } from './session.ts'
 import { type Duration, ms } from './time.ts'
 import {
@@ -244,9 +245,25 @@ function queryOf(q: RecordsQuery | undefined): Parameters<typeof QueryMessage.en
 
 export class Records {
 	readonly #link: Link
+	readonly #loggers: Logger[] = []
 
 	constructor(link: Link) {
 		this.#link = link
+	}
+
+	/**
+	 * A logger of a stream: its calls return at once, and its lines reach the
+	 * server every second, as Go's slog handler's and Python's logging.Handler's do.
+	 */
+	logger(stream: string, options?: LoggerOptions): Logger {
+		const logger = newLogger(records => this.append(records), stream, options)
+		this.#loggers.push(logger)
+		return logger
+	}
+
+	/** Hands over what every logger holds, as the store does when it closes. */
+	async stop(): Promise<void> {
+		await Promise.all(this.#loggers.map(logger => logger.stop()))
 	}
 
 	/**

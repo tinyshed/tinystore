@@ -25,6 +25,7 @@ export type {
 	Scanned,
 	WriteOptions,
 } from './kv.ts'
+export type { Logger, LoggerOptions } from './logger.ts'
 export type {
 	Aggregate,
 	AggregateOp,
