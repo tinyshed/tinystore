@@ -64,7 +64,7 @@ answers a whole block inside one bucket from its exact summary; a cut block,
 the head and a block without exact sums decode raw.
 
 Not built: the SDKs' examples; `v0.1.0` itself, after its release
-candidates; a host and a domain for the site; the guides `docs/README.md`
+candidates; the guides `docs/README.md`
 lists without a link.
 
 Only release candidates are released, `v0.1.0-rc.N`, and they promise nothing

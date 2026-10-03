@@ -14,7 +14,11 @@ both themes, the language switch, a markdown copy of each page, `llms.txt`,
 themselves are the design documents until the guides are written; `Metrics`
 under Store is the one guide, and the shape the others follow.
 
-Not built: a page of the site's own statistics, a host to deploy to, a domain.
+Not built: a page of the site's own statistics.
+
+It is served at https://tinyshed.org/tinystore: built with
+`SITE_BASE=/tinystore`, behind the Caddy and the Cloudflare Tunnel that the
+private `tinyshed/landing` repository runs on the server.
 
 ## The docs are the source, the site a reading of them
 
@@ -108,7 +112,8 @@ task readme       # the landing page's words, written into the README
 ```
 
 `SITE_ORIGIN` is the address the canonical links, the sitemap and llms.txt
-carry; `SITE_PORTABLE=1 SITE_OUT=build-preview` builds a copy that opens from
+carry, and `SITE_BASE` the path a proxy serves the site under, which it strips
+before the Bun server sees a request; `SITE_PORTABLE=1 SITE_OUT=build-preview` builds a copy that opens from
 any folder. The Site workflow builds the image on each push to main that
-changes what the site is built from, pushes it to GHCR, and calls
-`SITE_DEPLOY_HOOK` when that secret is set.
+changes what the site is built from, pushes it to GHCR, and asks
+`tinyshed/landing` to deploy it when the `LANDING_DEPLOY_TOKEN` secret is set.

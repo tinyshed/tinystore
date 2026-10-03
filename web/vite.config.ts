@@ -6,6 +6,8 @@ import { defineConfig, type Plugin } from 'vite'
 // SITE_PORTABLE=1 builds a copy to open from any folder, into SITE_OUT
 const portable = process.env.SITE_PORTABLE === '1'
 const output = process.env.SITE_OUT ?? 'build'
+// SITE_BASE=/tinystore serves the site under that path, behind a proxy that strips it
+const base = process.env.SITE_BASE ?? ''
 
 export default defineConfig({
 	plugins: [
@@ -21,7 +23,7 @@ export default defineConfig({
 
 			// Absolute, so that 404.html finds its assets whatever path it answers; a
 			// portable build, a preview's, links relatively and opens from any folder.
-			paths: { relative: portable },
+			paths: { relative: portable, base: base as '' | `/${string}` },
 
 			prerender: {
 				// a link that leads nowhere fails the build, not the reader
