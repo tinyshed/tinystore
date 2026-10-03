@@ -6,3 +6,6 @@ from contextvars import ContextVar
 
 carried: ContextVar[tuple[bytes, bytes | None] | None] = ContextVar("tinystore_trace", default=None)
 """The trace and span of tinystore.trace, which a handler's lines and records appended without a trace take."""
+
+shared: ContextVar[tuple[tuple[str, object], ...]] = ContextVar("tinystore_context", default=())
+"""The fields of tinystore.context, which a handler's lines take into their context after the logger's name."""

@@ -25,6 +25,8 @@ var helpGroups = []struct {
 		{"serve", "<dir>", "share the store with other processes, until Ctrl+C"},
 		{"stop", "[dir]", "stop the server of a directory, its work finished"},
 		{"mcp", "[dir]", "let an AI agent read the store"},
+		{"backup", "<dir> <zip>", "every engine of the store in one checked zip, while it runs"},
+		{"restore", "<zip> <dir>", "a backup into an empty directory"},
 	}},
 	{"Develop", []helpLine{
 		{"migrate", "[name]", "compare a schema with its migrations"},
@@ -39,6 +41,8 @@ var commandUsages = map[string]string{
 	"serve":   serveUsage,
 	"stop":    stopUsage,
 	"mcp":     mcpUsage,
+	"backup":  backupUsage,
+	"restore": backupUsage,
 	"migrate": usage,
 	"schema":  usage,
 	"version": "usage:\n  tinystore version   print the release, the Go it was built with and the platform",
@@ -54,7 +58,7 @@ func printHelp(out io.Writer) {
 		fmt.Fprintf(&text, "\n%s\n", p.in(bold, group.title))
 		for _, line := range group.lines {
 			fmt.Fprintf(&text, "  %s %s %s\n", p.in(cyan, fmt.Sprintf("%-7s", line.name)),
-				p.in(dim, fmt.Sprintf("%-9s", line.args)), line.does)
+				p.in(dim, fmt.Sprintf("%-11s", line.args)), line.does)
 		}
 	}
 	fmt.Fprintf(&text, "\n%s\n", p.in(dim, "tinystore help <command> · --json for scripts"))

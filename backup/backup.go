@@ -50,6 +50,17 @@ func Write(ctx context.Context, store *tinystore.Store, w io.Writer) (err error)
 		return err
 	}
 	defer func() { err = errors.Join(err, snapshot.Remove()) }()
+	return WriteSnapshot(ctx, snapshot, store.Now(), w)
+}
+
+// WriteSnapshot writes the copies a snapshot holds and their manifest to w as
+// one zip, as Write does, for a snapshot its caller added copies to: a server
+// adds the databases no client opened. created is the time the manifest
+// records. The snapshot stays the caller's to remove.
+func WriteSnapshot(ctx context.Context, snapshot tinystore.Snapshot, created time.Time, w io.Writer) (err error) {
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	copies, err := os.OpenRoot(snapshot.Dir)
 	if err != nil {
 		return fmt.Errorf("backup: %w", err)
@@ -57,7 +68,7 @@ func Write(ctx context.Context, store *tinystore.Store, w io.Writer) (err error)
 	defer func() { err = errors.Join(err, copies.Close()) }()
 
 	archive := zip.NewWriter(w)
-	manifest := Manifest{Format: format, Created: store.Now().UTC()}
+	manifest := Manifest{Format: format, Created: created.UTC()}
 	for _, file := range snapshot.Files {
 		entry, addErr := addFile(archive, copies, file)
 		if addErr != nil {

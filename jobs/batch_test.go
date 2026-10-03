@@ -125,3 +125,61 @@ func TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn(t *testing.T) {
 		t.Fatalf("%d notes after a batch whose job had no place: %v", notes, err)
 	}
 }
+
+// A job added inside a transaction commits with the rows the transaction
+// wrote, and goes when it rolls back; a view, which writes nothing, refuses it.
+func TestAJobInATxCommitsWithItsRows(t *testing.T) {
+	ctx := t.Context()
+	store, db, index := openBatchStore(t, t.TempDir())
+	defer store.Close(context.WithoutCancel(ctx))
+
+	kept := index.Enqueued(ctx, 1)
+	err := db.Tx(ctx, func(tx *sqldb.Tx) error {
+		if _, err := tx.Exec(ctx, `insert into notes (id, body) values (1, 'kept')`); err != nil {
+			return err
+		}
+		return tx.Add(ctx, kept)
+	})
+	if err != nil {
+		t.Fatalf("a note and its job in a transaction: %v", err)
+	}
+	errChanged := errors.New("changed its mind")
+	dropped := index.Enqueued(ctx, 2)
+	err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+		if _, execErr := tx.Exec(ctx, `insert into notes (id, body) values (2, 'dropped')`); execErr != nil {
+			return execErr
+		}
+		if addErr := tx.Add(ctx, dropped); addErr != nil {
+			return addErr
+		}
+		return errChanged
+	})
+	if !errors.Is(err, errChanged) {
+		t.Fatalf("a transaction that rolled back: %v", err)
+	}
+	viewed := index.Enqueued(ctx, 3)
+	err = db.View(ctx, func(tx *sqldb.Tx) error { return tx.Add(ctx, viewed) })
+	if !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a job added in a view: %v", err)
+	}
+
+	notes, err := sqldb.Scalar[int](ctx, db, `select count(*) from notes`)
+	if err != nil || notes != 1 {
+		t.Fatalf("%d notes after a transaction kept and one rolled back: %v", notes, err)
+	}
+	var handled []int64
+	err = index.Work(ctx, func(_ context.Context, job jobs.Job[int64]) error {
+		handled = append(handled, job.Value)
+		return nil
+	}, jobs.UntilIdle())
+	if err != nil || len(handled) != 1 || handled[0] != 1 {
+		t.Fatalf("the jobs handled %v: %v", handled, err)
+	}
+	// every change let go of its queue's turn and memory: the queue takes more
+	if used := store.Memory().Used; used != 0 {
+		t.Fatalf("%d bytes still held after every change ended", used)
+	}
+	if err = index.Enqueue(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
+}

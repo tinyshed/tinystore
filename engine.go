@@ -80,6 +80,12 @@ func (s *Store) Logger(engine string) *slog.Logger {
 	return s.logger.With("engine", engine)
 }
 
+// Dir is the directory the store holds. A tool that backs the store up looks
+// there for the files of engines no one has opened.
+func (s *Store) Dir() string {
+	return s.dir
+}
+
 func (s *Store) Now() time.Time {
 	return s.clock()
 }

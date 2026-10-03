@@ -1,6 +1,10 @@
+import { randomBytes } from 'node:crypto'
+import { open as openFile, rename, rm } from 'node:fs/promises'
+
 import { Blobs } from './blobs.ts'
+import { Clock } from './clock.ts'
 import { Link, privateChild, remote, sidecar } from './connection.ts'
-import { ClosedError } from './errors.ts'
+import { ClosedError, InvalidError } from './errors.ts'
 import { Jobs } from './jobs.ts'
 import { Kv } from './kv.ts'
 import { Metrics } from './metrics.ts'
@@ -9,7 +13,8 @@ import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import { type Database, openDatabase, type SqlOptions } from './sql.ts'
-import { type Duration, ms } from './time.ts'
+import { type Duration, ms, type Time, unixMs } from './time.ts'
+import { Empty, methods } from './wire/messages.ts'
 
 export interface OpenOptions {
 	/**
@@ -25,6 +30,12 @@ export interface OpenOptions {
 	 * has gone: 30 s unless given, 0 for ever. One found running keeps its own.
 	 */
 	idle?: Duration
+	/**
+	 * Runs a private server on a test's clock, starting at this time, which
+	 * `store.clock` moves forward instead of a test waiting: keys expire, jobs
+	 * come due and records age at once. Needs `private`.
+	 */
+	clock?: Time
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */
@@ -54,10 +65,13 @@ export class Store implements AsyncDisposable {
 	readonly blobs: Blobs
 	readonly records: Records
 	readonly metrics: Metrics
+	/** The test's clock of a private store opened with `clock`; on any other, its calls are InvalidError. */
+	readonly clock: Clock
 	readonly #link: Link
 
 	constructor(link: Link) {
 		this.#link = link
+		this.clock = new Clock(link)
 		this.kv = new Kv(link)
 		this.jobs = new Jobs(link)
 		this.blobs = new Blobs(link)
@@ -88,6 +102,45 @@ export class Store implements AsyncDisposable {
 	 */
 	sql(name: string, options?: SqlOptions): Promise<Database> {
 		return openDatabase(this.#link, name, options)
+	}
+
+	/**
+	 * Writes a backup of the whole store to a zip at path while the store keeps
+	 * working, as `tinystore backup` does: every engine's file, with its size
+	 * and checksum, which `tinystore restore` checks. The zip is written beside
+	 * path and renamed into place once whole, so a backup that fails leaves no
+	 * zip. It needs an admin connection; a remote server sends the zip over it.
+	 */
+	async backup(path: string): Promise<void> {
+		const part = `${path}.${randomBytes(4).toString('hex')}.part`
+		try {
+			await this.#link.run('read', async connection => {
+				const file = await openFile(part, 'w')
+				try {
+					const stream = await connection.session.open(
+						methods['server.backup'],
+						Empty.encode({}),
+						true,
+					)
+					await stream.next() // the RESPONSE that heads the zip
+					for (;;) {
+						const event = await stream.next()
+						stream.consumed(event.body.length)
+						await file.write(event.body)
+						if (event.end) {
+							break
+						}
+					}
+					await file.sync()
+				} finally {
+					await file.close()
+				}
+			})
+			await rename(part, path)
+		} catch (err) {
+			await rm(part, { force: true })
+			throw err
+		}
 	}
 
 	/**
@@ -127,9 +180,15 @@ export async function openWith(
 ): Promise<Store> {
 	const binary = () => findBinary(runtime, options.binary)
 	const idle = options.idle === undefined ? undefined : ms(options.idle)
+	if (options.clock !== undefined && options.private !== true) {
+		throw new InvalidError(
+			"a clock is a private server's: a shared sidecar runs on the system's time",
+		)
+	}
+	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
 	const link = new Link(
 		options.private === true
-			? privateChild(runtime, dir, binary)
+			? privateChild(runtime, dir, binary, clock)
 			: sidecar(runtime, dir, binary, idle),
 	)
 	await link.connection()

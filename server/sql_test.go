@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/server/internal/client"
 	"github.com/tinyshed/tinystore/server/wire"
 	"github.com/tinyshed/tinystore/sqldb"
@@ -445,4 +446,114 @@ func TestAnSQLQueryCancelledEndsItsStream(t *testing.T) {
 		}
 	}
 	mustQuery(t, conn, wire.SQLStatement{Handle: app, SQL: `select 1`})
+}
+
+// a job a batch enqueues on a queue kept in its database commits with the
+// batch's rows or not at all; a queue elsewhere, a view and a database no
+// client opened are refused
+func TestAJobInAnSQLBatchCommitsWithItsRows(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	_, err := conn.Call(t.Context(), wire.JobsOpen, wire.JobsQueue{Name: "index", In: "app"})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid {
+		t.Fatalf("a queue in a database no client opened: %+v", failure)
+	}
+	app := openSQL(t, conn, wire.SQLDatabase{Name: "app", Migrations: []wire.SQLMigration{notesMigration}})
+	index := openQueue(t, conn, wire.JobsQueue{Name: "index", In: "app"})
+
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values ('kept')`}},
+		Jobs:       []wire.JobsBatch{{Handle: index, Jobs: []wire.JobsJob{{Value: `1`, Key: "note:1"}}}},
+	})
+	if err != nil {
+		t.Fatalf("a note and its job: %v", err)
+	}
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values (null)`}},
+		Jobs:       []wire.JobsBatch{{Handle: index, Jobs: []wire.JobsJob{{Value: `2`, Key: "note:2"}}}},
+	})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid || failure.What["call"] != "0" {
+		t.Fatalf("a note that breaks a constraint, with its job: %+v", failure)
+	}
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle: app, Read: true, Statements: []wire.SQLStatement{{SQL: `select 1`}},
+		Jobs: []wire.JobsBatch{{Handle: index, Jobs: []wire.JobsJob{{Value: `3`}}}},
+	})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid {
+		t.Fatalf("a job in a view: %+v", failure)
+	}
+	elsewhere := openQueue(t, conn, wire.JobsQueue{Name: "elsewhere"})
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values ('not without its job')`}},
+		Jobs:       []wire.JobsBatch{{Handle: elsewhere, Jobs: []wire.JobsJob{{Value: `4`}}}},
+	})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid || failure.What["call"] != "1" {
+		t.Fatalf("a job of a queue in jobs.db in the database's batch: %+v", failure)
+	}
+
+	if _, rows := mustQuery(t, conn, wire.SQLStatement{Handle: app, SQL: `select count(*) from notes`}); rows[0][0] !=
+		int64(1) {
+		t.Fatalf("%v notes after one batch kept and three refused", rows[0][0])
+	}
+	if kept := fetchJob(t, conn, index, "note:1"); !kept.Found {
+		t.Fatalf("the kept note's job: %+v", kept)
+	}
+	if dropped := fetchJob(t, conn, index, "note:2"); dropped.Found {
+		t.Fatalf("the job of a note that broke a constraint: %+v", dropped)
+	}
+	if held := claim(t, conn, index); !held.Found || held.Value != `1` {
+		t.Fatalf("the queue in the database holds %+v", held)
+	}
+	if held := claim(t, conn, index); held.Found {
+		t.Fatalf("the queue in the database holds a second job: %+v", held)
+	}
+	if used := ts.store.Memory().Used; used != 0 {
+		t.Fatalf("%d bytes still held once every batch ended", used)
+	}
+}
+
+// a program that keeps its queues in its own database passes that store, and
+// a client's queue in the database is the program's: what the client enqueues
+// the program's queue holds
+func TestAQueueInTheProgramsDatabaseIsTheProgramsOwn(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	store, err := tinystore.Open(ctx, root, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations := fstest.MapFS{notesMigration.Name: {Data: []byte(notesMigration.Text)}}
+	db, err := sqldb.Open(ctx, store, "app", migrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queues, err := jobs.Open(ctx, store, jobs.Options{In: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := serveTestStore(t, root, store, Options{
+		SQL:    map[string]*sqldb.DB{"app": db},
+		JobsIn: map[string]*jobs.Store{"app": queues},
+	})
+	conn := ts.dial(t, wire.Hello{})
+	app := openSQL(t, conn, wire.SQLDatabase{Name: "app", Migrations: []wire.SQLMigration{notesMigration}})
+	index := openQueue(t, conn, wire.JobsQueue{Name: "index", In: "app"})
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values ('kept')`}},
+		Jobs:       []wire.JobsBatch{{Handle: index, Jobs: []wire.JobsJob{{Value: `7`, Key: "note:7"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := jobs.OpenQueue[int](ctx, queues, "index")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, found, err := own.Get(ctx, "note:7"); err != nil || !found || entry.Value != 7 {
+		t.Fatalf("the program's queue holds %+v, %v: %v", entry, found, err)
+	}
 }

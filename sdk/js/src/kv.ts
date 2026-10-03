@@ -4,8 +4,8 @@
 
 import { Config, type ConfigOptions } from './config.ts'
 import type { Connection, Link } from './connection.ts'
-import { CorruptError, InvalidError } from './errors.ts'
-import { checkName, handleOn, ownerText, type Page } from './handles.ts'
+import { ConflictError, CorruptError, InvalidError } from './errors.ts'
+import { checkName, handleOn, ownerText, type Page, type Settled, settle } from './handles.ts'
 import { Limiter, type LimiterOptions, limiterOpen, type Rate } from './limiter.ts'
 import { Once, type OnceOptions } from './once.ts'
 import { Quota, quotaOpen } from './quota.ts'
@@ -229,25 +229,73 @@ export class Kv {
 	 * buckets it takes through withTx, whose promises settle once the batch
 	 * has. fn returns before anything is sent, since no transaction is held
 	 * across the network: a call cannot wait for another's answer inside it.
+	 * What fn returns comes back answered, an array's promises each:
+	 *
+	 *     const [code] = await store.kv.batch(tx => [codes.withTx(tx).take(k), used.withTx(tx).set(k, 1)])
 	 */
-	batch(fn: (tx: Batch) => void): Promise<void> {
+	batch<const T = void>(fn: (tx: Batch) => T): Promise<Settled<T>> {
 		return runCalls(this.#link, 'batch', fn)
 	}
 
-	/** Reads the gets and hases fn asks for from one snapshot. */
-	view(fn: (tx: Batch) => void): Promise<void> {
+	/**
+	 * Reads the gets and hases fn asks for from one snapshot, and gives back
+	 * what fn returns, answered as batch answers it:
+	 *
+	 *     const [profile, prefs] = await store.kv.view(tx => [a.withTx(tx).get(id), b.withTx(tx).get(id)])
+	 */
+	view<const T = void>(fn: (tx: Batch) => T): Promise<Settled<T>> {
 		return runCalls(this.#link, 'view', fn)
 	}
+
+	/**
+	 * Runs fn as one transaction that reads before it decides what to write,
+	 * as Go's Tx does, without holding the writer across the network: a read
+	 * goes to the server at once, a write waits, and when fn returns the writes
+	 * commit in one batch that first checks every key fn read is still as it
+	 * read it. When another write changed one meanwhile, fn runs again, five
+	 * times at most before ConflictError, so it does nothing else that must
+	 * happen once. It gives back what fn returns.
+	 *
+	 *     const userId = await store.kv.tx(async tx => {
+	 *       const userId = await codes.withTx(tx).take(digest(code))
+	 *       if (userId === undefined) throw new InvalidCode()
+	 *       sessions.withTx(tx).of(userId).set(digest(token), { device })
+	 *       return userId
+	 *     })
+	 */
+	async tx<T>(fn: (tx: Tx) => T | Promise<T>): Promise<T> {
+		for (let run = 1; ; run++) {
+			const tx = new Tx(this.#link)
+			const returned = await fn(tx)
+			try {
+				await tx.commit()
+				return returned
+			} catch (err) {
+				if (run >= txRuns || !tx.stale(err)) {
+					throw err
+				}
+			}
+		}
+	}
 }
+
+/** How many times tx runs its function before a key it read that keeps changing is ConflictError. */
+const txRuns = 5
 
 /** The calls a batch or a view gathered, in their order. */
 export class Batch {
 	readonly kind: 'batch' | 'view'
 	readonly calls: Recorded[] = []
 	#done = false
+	readonly #made = new WeakSet<Promise<unknown>>()
 
 	constructor(kind: 'batch' | 'view') {
 		this.kind = kind
+	}
+
+	/** Whether the promise is one of this batch's calls', rather than an async function's. */
+	made(promise: Promise<unknown>): boolean {
+		return this.#made.has(promise)
 	}
 
 	record<T>(
@@ -270,6 +318,7 @@ export class Batch {
 		})
 		// a caller need not await a call it only wanted done
 		settled.catch(() => {})
+		this.#made.add(settled)
 		this.calls.push({
 			...call,
 			settle: async entry => {
@@ -297,22 +346,172 @@ interface Recorded {
 	fail?: (err: unknown) => void
 }
 
-async function runCalls(
+/** What a bucket's calls inside a batch, a view or a tx go through. */
+interface Recorder {
+	record<T>(
+		call: Omit<Recorded, 'settle'>,
+		settle: (entry: Entry<Raw> & { found: boolean }) => Promise<T>,
+	): Promise<T>
+}
+
+type Found = Entry<Raw> & { found: boolean }
+
+/** A key a tx read: the call that read it, and what it found, which its commit checks. */
+interface Read {
+	call: Omit<Recorded, 'settle'>
+	version: Uint8Array | undefined
+	entry: Found
+}
+
+const absent: Found = { found: false, value: null, version: '', expires: undefined }
+
+/**
+ * A transaction of store.kv.tx: a read goes to the server at once and is
+ * remembered with its version, so that a key read again answers the same; a
+ * write waits for the commit, and a key read after it answers what it wrote.
+ */
+export class Tx implements Recorder {
+	readonly #link: Link
+	readonly #reads = new Map<string, Promise<Read>>()
+	readonly #writes = new Map<string, { call: Omit<Recorded, 'settle'>; entry: Found }>()
+	#checks = 0
+	#done = false
+
+	constructor(link: Link) {
+		this.#link = link
+	}
+
+	record<T>(call: Omit<Recorded, 'settle'>, settle: (entry: Found) => Promise<T>): Promise<T> {
+		if (this.#done) {
+			throw new InvalidError('a tx takes its calls while its function runs, before it commits')
+		}
+		const at = placeOf(call)
+		switch (call.method) {
+			case 'kv.get':
+			case 'kv.has':
+				return this.#read(at, call).then(settle)
+			case 'kv.take': {
+				const read = this.#read(at, call)
+				this.#writes.set(at, { call: { ...call, method: 'kv.delete' }, entry: absent })
+				return read.then(settle)
+			}
+			case 'kv.set': {
+				// a set's value is what the bucket encoded, which a read decodes
+				const value = (call.call.value ?? null) as Raw
+				const entry: Found = { found: true, value, version: '', expires: undefined }
+				this.#writes.set(at, { call, entry })
+				return settle(entry)
+			}
+			case 'kv.delete':
+				this.#writes.set(at, { call, entry: absent })
+				return settle(absent)
+		}
+		throw new InvalidError(`${call.method} in a tx`)
+	}
+
+	#read(at: string, call: Omit<Recorded, 'settle'>): Promise<Found> {
+		const written = this.#writes.get(at)
+		if (written !== undefined) {
+			return Promise.resolve(written.entry)
+		}
+		let reading = this.#reads.get(at)
+		if (reading === undefined) {
+			reading = this.#fetch(call)
+			// a read fn never awaited still fails the commit, which awaits it
+			reading.catch(() => {})
+			this.#reads.set(at, reading)
+		}
+		return reading.then(read => read.entry)
+	}
+
+	async #fetch(call: Omit<Recorded, 'settle'>): Promise<Read> {
+		const ask = { owners: call.call.owners, key: call.call.key }
+		const e = await this.#link.run('read', async connection => {
+			const handle = await handleOn(connection, methods['kv.open'], call.open)
+			const body = await connection.session.call(
+				methods['kv.get'],
+				KvCall.encode({ ...ask, handle }),
+			)
+			return KvEntry.decode(body)
+		})
+		return {
+			call: { method: 'kv.get', open: call.open, call: ask },
+			version: e.version,
+			entry: entryOfWire(e),
+		}
+	}
+
+	/**
+	 * Sends what fn wrote in one batch, after a check of each key it read: a
+	 * key it found at the version it found, a key it found absent still
+	 * absent. A tx that only read checks its reads from one snapshot.
+	 */
+	async commit(): Promise<void> {
+		this.#done = true
+		const calls: Omit<Recorded, 'settle'>[] = []
+		for (const reading of this.#reads.values()) {
+			const read = await reading
+			const still = read.entry.found ? { ifVersion: read.version } : { ifAbsent: true }
+			calls.push({ ...read.call, call: { ...read.call.call, ...still } })
+		}
+		this.#checks = calls.length
+		for (const write of this.#writes.values()) {
+			calls.push(write.call)
+		}
+		if (calls.length === 0) {
+			return
+		}
+		const writes = this.#writes.size > 0
+		await this.#link.run(writes ? 'write' : 'read', async connection => {
+			const encoded = []
+			for (const call of calls) {
+				const handle = await handleOn(connection, methods['kv.open'], call.open)
+				encoded.push({ method: methods[call.method], ...call.call, handle })
+			}
+			const method = writes ? methods['kv.batch'] : methods['kv.view']
+			await connection.session.call(method, KvCalls.encode({ calls: encoded }))
+		})
+	}
+
+	/** Whether the commit failed for a key fn read that changed since, which another run reads anew. */
+	stale(err: unknown): boolean {
+		return err instanceof ConflictError && Number(err.what.call) < this.#checks
+	}
+}
+
+/**
+ * A key's place as one text: its bucket's open and its owners included, an
+ * integer its decimal spelling, as the store keeps it.
+ */
+function placeOf(call: Omit<Recorded, 'settle'>): string {
+	const part = (p: Key | undefined) =>
+		p instanceof Uint8Array ? `b${Buffer.from(p).toString('base64')}` : `t${String(p ?? '')}`
+	const owners = call.call.owners ?? []
+	return [Buffer.from(call.open).toString('base64'), ...owners.map(part), part(call.call.key)].join(
+		'\u0000',
+	)
+}
+
+async function runCalls<T>(
 	link: Link,
 	kind: 'batch' | 'view',
-	fn: (tx: Batch) => void,
-): Promise<void> {
+	fn: (tx: Batch) => T,
+): Promise<Settled<T>> {
 	const tx = new Batch(kind)
-	const returned: unknown = fn(tx)
+	const returned = fn(tx)
 	tx.close()
-	if (returned instanceof Promise) {
+	if (returned instanceof Promise && !tx.made(returned)) {
 		throw new InvalidError(
 			`a ${kind}'s function returns before anything is sent; it cannot await inside`,
 		)
 	}
-	if (tx.calls.length === 0) {
-		return
+	if (tx.calls.length > 0) {
+		await sendCalls(link, kind, tx)
 	}
+	return settle(returned)
+}
+
+async function sendCalls(link: Link, kind: 'batch' | 'view', tx: Batch): Promise<void> {
 	try {
 		const results = await link.run(kind === 'view' ? 'read' : 'write', async connection => {
 			const calls = []
@@ -391,8 +590,11 @@ export class Bucket<V> {
 		])
 	}
 
-	/** The bucket's calls inside a batch or a view, whose promises settle with it. */
-	withTx(tx: Batch): BucketTx<V> {
+	/**
+	 * The bucket's calls inside a batch or a view, whose promises settle with
+	 * it, or inside a tx, whose reads answer at once and writes wait for it.
+	 */
+	withTx(tx: Batch | Tx): BucketTx<V> {
 		return new BucketTx(tx, this.#open, this.#values, this.#owners)
 	}
 
@@ -566,12 +768,12 @@ export class Bucket<V> {
 
 /** A bucket's calls inside a batch or a view. */
 export class BucketTx<V> {
-	readonly #tx: Batch
+	readonly #tx: Recorder
 	readonly #open: Uint8Array
 	readonly #values: Values<V>
 	readonly #owners: (string | Uint8Array)[]
 
-	constructor(tx: Batch, open: Uint8Array, values: Values<V>, owners: (string | Uint8Array)[]) {
+	constructor(tx: Recorder, open: Uint8Array, values: Values<V>, owners: (string | Uint8Array)[]) {
 		this.#tx = tx
 		this.#open = open
 		this.#values = values

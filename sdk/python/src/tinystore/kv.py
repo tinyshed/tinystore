@@ -25,7 +25,7 @@ from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.messages import METHODS, KvBucket, KvCall, KvCalls, KvEntry, KvPage, KvResults
 from .config import Config
-from .errors import CorruptError, InvalidError, OutcomeUnknownError
+from .errors import ConflictError, CorruptError, InvalidError, OutcomeUnknownError
 from .limiter import Limiter, limiter_open
 from .quota import Quota, quota_open
 
@@ -259,6 +259,37 @@ class Kv:
         """Gets and hases from one snapshot, their futures settled as the block ends."""
         return Batch(self._link, "kv.view")
 
+    async def tx[T](self, fn: Callable[[Tx], Awaitable[T]]) -> T:
+        """Runs fn as one transaction that reads before it decides what to write, as Go's Tx does.
+
+        No writer is held across the network: a read goes to the server at
+        once, a write waits, and when fn returns the writes commit in one batch
+        that first checks every key fn read is still as it read it. When another
+        write changed one meanwhile, fn runs again, five times at most before
+        ConflictError, so it does nothing else that must happen once. It gives
+        back what fn returns::
+
+            async def sign_in(tx: tinystore.Tx) -> int:
+                user_id = await codes.with_tx(tx).take(digest(code))
+                if user_id is None:
+                    raise InvalidCode
+                sessions.of(user_id).with_tx(tx).set(digest(token), Session(device))
+                return user_id
+
+            user_id = await store.kv.tx(sign_in)
+        """
+        for run in range(1, TX_RUNS + 1):
+            tx = Tx(self._link)
+            returned = await fn(tx)
+            try:
+                await tx.commit()
+            except ConflictError as err:
+                if run < TX_RUNS and tx.stale(err):
+                    continue
+                raise
+            return returned
+        raise AssertionError("a tx ran past its last run")
+
 
 @dataclass
 class _Call:
@@ -317,6 +348,137 @@ class Batch:
                 call.future.set_exception(failure)
 
 
+TX_RUNS = 5
+"""How many times tx runs its function before a key it read that keeps changing is ConflictError."""
+
+_ABSENT: dict[str, Any] = {"found": False}
+
+
+@dataclass
+class _Read:
+    """A key a tx read: the call that read it, and what it found, which its commit checks."""
+
+    open_body: bytes
+    fields: dict[str, Any]
+    entry: dict[str, Any]
+
+
+class Tx:
+    """A transaction of store.kv.tx.
+
+    A read goes to the server at once and is remembered with its version, so
+    that a key read again answers the same; a write waits for the commit, and a
+    key read after it answers what it wrote.
+    """
+
+    def __init__(self, link: Link) -> None:
+        self._link = link
+        self._reads: dict[str, asyncio.Future[_Read]] = {}
+        self._writes: dict[str, tuple[tuple[str, bytes, dict[str, Any]], dict[str, Any]]] = {}
+        self._checks = 0
+        self._done = False
+
+    def record(
+        self, method: str, open_body: bytes, fields: dict[str, Any], decode: Callable[[dict[str, Any]], Any]
+    ) -> asyncio.Future[Any]:
+        if self._done:
+            raise InvalidError("a tx takes its calls while its function runs, before it commits")
+        at = _place(open_body, fields)
+        if method in ("kv.get", "kv.has"):
+            return asyncio.ensure_future(self._decoded(self._read(at, open_body, fields), decode))
+        if method == "kv.take":
+            read = self._read(at, open_body, fields)
+            self._writes[at] = (("kv.delete", open_body, fields), _ABSENT)
+            return asyncio.ensure_future(self._decoded(read, decode))
+        answered: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        if method == "kv.set":
+            entry = {"found": True, "value": fields.get("value")}
+            self._writes[at] = (("kv.set", open_body, fields), entry)
+            answered.set_result(decode(entry))
+            return answered
+        if method == "kv.delete":
+            self._writes[at] = (("kv.delete", open_body, fields), _ABSENT)
+            answered.set_result(decode(_ABSENT))
+            return answered
+        raise InvalidError(f"{method} in a tx")
+
+    def _read(self, at: str, open_body: bytes, fields: dict[str, Any]) -> asyncio.Future[dict[str, Any]]:
+        written = self._writes.get(at)
+        if written is not None:
+            answered: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+            answered.set_result(written[1])
+            return answered
+        reading = self._reads.get(at)
+        if reading is None:
+            reading = asyncio.ensure_future(
+                self._fetch(open_body, {"owners": fields.get("owners"), "key": fields["key"]})
+            )
+            # a read fn never awaited still fails the commit, which awaits it
+            reading.add_done_callback(lambda f: f.cancelled() or f.exception())
+            self._reads[at] = reading
+        return asyncio.ensure_future(self._entry_of(reading))
+
+    @staticmethod
+    async def _entry_of(reading: asyncio.Future[_Read]) -> dict[str, Any]:
+        return (await reading).entry
+
+    @staticmethod
+    async def _decoded(entry: asyncio.Future[dict[str, Any]], decode: Callable[[dict[str, Any]], Any]) -> Any:
+        return decode(await entry)
+
+    async def _fetch(self, open_body: bytes, fields: dict[str, Any]) -> _Read:
+        async def attempt(connection: Connection) -> dict[str, Any]:
+            handle = await handle_on(connection, METHODS["kv.open"], open_body)
+            body = KvCall.encode(handle=handle, **fields)
+            return KvEntry.decode(await connection.session.call(METHODS["kv.get"], body))
+
+        return _Read(open_body, fields, await self._link.run("read", attempt))
+
+    async def commit(self) -> None:
+        """Sends what fn wrote in one batch, after a check of each key it read.
+
+        A key it found must still be at the version it found, and a key it
+        found absent still absent. A tx that only read checks its reads from
+        one snapshot.
+        """
+        self._done = True
+        calls: list[tuple[str, bytes, dict[str, Any]]] = []
+        for reading in self._reads.values():
+            read = await reading
+            found = read.entry.get("found")
+            still = {"if_version": read.entry.get("version")} if found else {"if_absent": True}
+            calls.append(("kv.get", read.open_body, {**read.fields, **still}))
+        self._checks = len(calls)
+        calls.extend(call for call, _ in self._writes.values())
+        if not calls:
+            return
+        writes = bool(self._writes)
+
+        async def run(connection: Connection) -> None:
+            encoded: list[dict[str, Any]] = []
+            for method, open_body, fields in calls:
+                handle = await handle_on(connection, METHODS["kv.open"], open_body)
+                encoded.append({"method": METHODS[method], "handle": handle, **fields})
+            batch = METHODS["kv.batch" if writes else "kv.view"]
+            await connection.session.call(batch, KvCalls.encode(calls=encoded))
+
+        await self._link.run("write" if writes else "read", run)
+
+    def stale(self, err: ConflictError) -> bool:
+        """Whether the commit failed for a key fn read that changed since, which another run reads anew."""
+        call = err.what.get("call", "")
+        return call.isdigit() and int(call) < self._checks
+
+
+def _place(open_body: bytes, fields: dict[str, Any]) -> str:
+    """A key's place as one text: its bucket's open and its owners included, an integer its decimal spelling."""
+
+    def part(p: Any) -> str:
+        return f"b{p.hex()}" if isinstance(p, bytes) else f"t{p}"
+
+    return "\0".join([open_body.hex(), *map(part, fields.get("owners") or ()), part(fields["key"])])
+
+
 class Bucket[V]:
     """A bucket's values under one branch of owners: sessions.of(user.id).get(token)."""
 
@@ -333,8 +495,8 @@ class Bucket[V]:
         """The branch below this one that the owners name."""
         return Bucket(self._link, self.name, self.open_body, self.value_type, (*self.owners, *map(owner_text, owners)))
 
-    def with_tx(self, tx: Batch) -> BucketTx[V]:
-        """This bucket's calls inside a batch or a view."""
+    def with_tx(self, tx: Batch | Tx) -> BucketTx[V]:
+        """This bucket's calls inside a batch or a view, or inside a tx, whose reads answer at once."""
         return BucketTx(self, tx)
 
     async def _call(self, method: str, idempotence: Literal["read", "write"], **fields: Any) -> dict[str, Any]:
@@ -460,9 +622,9 @@ class Bucket[V]:
 
 
 class BucketTx[V]:
-    """A bucket's calls inside a batch or a view; each returns a future."""
+    """A bucket's calls inside a batch, a view or a tx; each returns a future."""
 
-    def __init__(self, bucket: Bucket[V], tx: Batch) -> None:
+    def __init__(self, bucket: Bucket[V], tx: Batch | Tx) -> None:
         self._bucket, self._tx = bucket, tx
 
     def _record(self, method: str, decode: Callable[[dict[str, Any]], Any], **fields: Any) -> asyncio.Future[Any]:

@@ -328,8 +328,8 @@ func TestApplyNoneAndMigratedApplyNothing(t *testing.T) {
 	}
 }
 
-// searchSQL is docs/sqldb.md's full-text recipe for the notes, and a table of
-// places by their bounds
+// searchSQL is the full-text recipe of research's design/sqldb.md for the
+// notes, and a table of places by their bounds
 const searchSQL = `create virtual table notes_fts using fts5(title, body, content = 'notes', content_rowid = 'id');
 create trigger notes_fts_insert after insert on notes begin
 	insert into notes_fts (rowid, title, body) values (new.id, new.title, new.body);
@@ -391,5 +391,54 @@ func searchNotesAndPlaces(t *testing.T, db *DB) {
 		`select id from places where min_x <= 25 and max_x >= 25 and min_y <= 25 and max_y >= 25`)
 	if err != nil || place != 2 {
 		t.Fatalf("the R*Tree found place %d, %v", place, err)
+	}
+}
+
+// a database no one in the store opened is copied without opening it, and an
+// open one, or one opened while it is copied, is ErrInUse
+func TestCopyTakesADatabaseNoOneOpened(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	first, err := tinystore.Open(ctx, dir, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(ctx, first, "app", notesMigrations, nil)
+	if err == nil {
+		_, err = db.Exec(ctx, `insert into notes (title) values ('kept')`)
+	}
+	if err = errors.Join(err, first.Close(ctx)); err != nil {
+		t.Fatal(err)
+	}
+
+	store := openStore(t, dir)
+	copies := t.TempDir()
+	copied, err := Copy(ctx, store, "app", copies)
+	if err != nil || copied.Name != "sql/app.db" || copied.Engine != "sql" || copied.Schema != 1 {
+		t.Fatalf("a copy of a database no one opened: %+v, %v", copied, err)
+	}
+	if _, err = Copy(ctx, store, "missing", copies); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a copy of a database that is not there: %v", err)
+	}
+	if _, err = Open(ctx, store, "app", notesMigrations, nil); err != nil {
+		t.Fatalf("an open after a copy: %v", err)
+	}
+	if _, err = Copy(ctx, store, "app", t.TempDir()); !errors.Is(err, tinystore.ErrInUse) {
+		t.Fatalf("a copy of a database that is open: %v", err)
+	}
+
+	restored := t.TempDir()
+	if err = os.MkdirAll(filepath.Join(restored, "sql"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(filepath.Join(copies, "sql", "app.db"), filepath.Join(restored, "sql", "app.db")); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Open(ctx, openStore(t, restored), "app", notesMigrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notes, err := All[note](ctx, back, `select * from notes`); err != nil || len(notes) != 1 || notes[0].Title != "kept" {
+		t.Fatalf("the copy holds %+v: %v", notes, err)
 	}
 }

@@ -24,6 +24,11 @@ type Published struct {
 	Instance  string   `json:"instance"` // InstanceSize bytes, base64url without padding
 	Secret    string   `json:"secret"`   // SecretSize bytes, base64url without padding
 	Endpoints []string `json:"endpoints"`
+
+	// Sidecar is a server started for its clients, which a client of a newer
+	// release stops and starts its own in its place; a program's own server
+	// and one a person runs say nothing.
+	Sidecar bool `json:"sidecar,omitempty"`
 }
 
 // Prove is a WELCOME's answer to a HELLO's challenge: an HMAC-SHA256 of the

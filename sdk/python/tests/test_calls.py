@@ -402,6 +402,35 @@ async def test_lines_and_appended_records_take_the_trace_they_were_made_in(store
     assert sorted(str(r.body) if r.name == "log" else r.name for r in page.items) == ["charged", "paid"]
 
 
+async def test_lines_take_the_fields_of_the_context_they_were_logged_in(store: tinystore.Store) -> None:
+    log = logging.getLogger("contexts")
+    log.propagate = False
+    handler = store.records.handler("contexts", console="off")
+    log.addHandler(handler)
+
+    async def in_a_task() -> None:
+        log.warning("from a task")
+
+    try:
+        with tinystore.context(request_id="r1", user=7):
+            log.warning("charged")
+            with tinystore.context(user=8, step="pay"):
+                log.warning("inner")
+            await asyncio.create_task(in_a_task())
+        log.warning("outside")
+        await handler.flush_now()
+    finally:
+        log.removeHandler(handler)
+    page = await store.records.scan(streams=["contexts"])
+    got = {str(r.body): r.context for r in page.items}
+    assert got == {
+        "charged": [("logger", '"contexts"'), ("request_id", '"r1"'), ("user", "7")],
+        "inner": [("logger", '"contexts"'), ("request_id", '"r1"'), ("user", "8"), ("step", '"pay"')],
+        "from a task": [("logger", '"contexts"'), ("request_id", '"r1"'), ("user", "7")],
+        "outside": [("logger", '"contexts"')],
+    }
+
+
 async def test_a_redacted_field_is_hidden_in_the_store_at_any_depth(store: tinystore.Store) -> None:
     log = logging.getLogger("secret")
     log.propagate = False

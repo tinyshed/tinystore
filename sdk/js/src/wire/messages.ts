@@ -23,6 +23,8 @@ import {
 
 export const methods = {
 	'server.stop': 0x0001,
+	'server.clock': 0x0002,
+	'server.backup': 0x0003,
 	'kv.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,
@@ -118,6 +120,8 @@ export const Handle = message('handle', { handle: [1, uint] })
 
 export const Empty = message('empty', {})
 
+export const Clock = message('clock', { at: [1, int], advance: [2, uint] })
+
 export const KvWindow = message('kv.window', { name: [1, str], limit: [2, uint], per: [3, uint] })
 
 export const KvBucket = message('kv.bucket', {
@@ -206,6 +210,7 @@ export const JobsQueue = message('jobs.queue', {
 	keepDone: [8, uint],
 	schedule: [9, JobsRepeat],
 	maxRunning: [10, uint],
+	in: [11, str],
 })
 
 const jobsJob = {
@@ -350,6 +355,7 @@ export const SqlStatements = message('sql.statements', {
 	handle: [1, uint],
 	statements: [2, list(SqlStatement)],
 	read: [3, bool],
+	jobs: [4, list(JobsBatch)],
 })
 
 export const SqlDone = message('sql.done', { changes: [1, int], lastId: [2, int] })
@@ -495,6 +501,7 @@ export const messages = {
 	error: Failure,
 	handle: Handle,
 	empty: Empty,
+	clock: Clock,
 	'kv.bucket': KvBucket,
 	'kv.call': KvCall,
 	'kv.operation': KvOperation,

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/server/internal/client"
 	"github.com/tinyshed/tinystore/server/internal/pipe"
 	"github.com/tinyshed/tinystore/server/internal/private"
@@ -53,7 +55,7 @@ func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 	secret := base64.RawURLEncoding.EncodeToString(ts.server.secret)
 	if published.Protocol != wire.Protocol || published.Server != "0.4.0" || published.PID != os.Getpid() ||
 		published.Instance != instance || published.Secret != secret ||
-		!slices.Equal(published.Endpoints, []string{l.Addr()}) {
+		!slices.Equal(published.Endpoints, []string{l.Addr()}) || published.Sidecar {
 		t.Fatalf("SERVE says %+v", published)
 	}
 	conn, err := client.Found(t.Context(), ts.root, wire.Hello{})
@@ -78,6 +80,87 @@ func TestServeIsWrittenWholeUnderTheLock(t *testing.T) {
 	}
 	if names := entriesOf(t, dir); len(names) != 0 {
 		t.Fatalf("server/ holds %v after its server unpublished", names)
+	}
+}
+
+// a program shares its own store in one call: a client finds it through SERVE
+// as it finds a sidecar and reads what the program wrote, and stop takes SERVE
+// away and ends the connections
+func TestShareServesTheProgramsStoreUntilItStops(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	store, err := tinystore.Open(ctx, root, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close(context.Background())
+	state, err := kv.Open(ctx, store, kv.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := kv.OpenBucket[string](ctx, state, "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = notes.Set(ctx, "a", "from the program"); err != nil {
+		t.Fatal(err)
+	}
+
+	stop, err := Share(ctx, store, Options{KV: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := client.Found(ctx, root, wire.Hello{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket := openKV(t, conn, wire.KVBucket{Name: "notes"})
+	if got := mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: bucket, Key: "a"}); string(got.Value.Bytes) != "from the program" {
+		t.Fatalf("the shared store answered %+v", got)
+	}
+
+	if err = stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a connection outlived stop")
+	}
+	if _, err = os.Stat(filepath.Join(root, "server", "SERVE")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("SERVE after stop: %v", err)
+	}
+	if err = stop(); err != nil {
+		t.Fatalf("a second stop: %v", err)
+	}
+}
+
+// an engine the program opened and did not pass cannot open again for a
+// client, and the error says how the program passes it
+func TestAnEngineTheProgramOpenedAndDidNotPassSaysToPassIt(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	store, err := tinystore.Open(ctx, root, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close(context.Background())
+	if _, err = kv.Open(ctx, store, kv.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := Share(ctx, store, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	conn, err := client.Found(ctx, root, wire.Hello{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Call(ctx, wire.KVOpen, wire.KVBucket{Name: "notes"})
+	failure, ok := errors.AsType[*wire.Error](err)
+	if !ok || failure.Code != wire.CodeInUse || !strings.Contains(failure.Message, "server.Options.KV") {
+		t.Fatalf("a kv the program kept to itself: %v", err)
 	}
 }
 

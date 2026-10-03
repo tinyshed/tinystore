@@ -1,5 +1,6 @@
 export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from './blobs.ts'
 export { withSignal } from './cancel.ts'
+export type { Clock } from './clock.ts'
 export type { Config, ConfigOptions, DeepPartial, Source } from './config.ts'
 export type { ConsoleFormat } from './console.ts'
 export * from './errors.ts'
@@ -13,6 +14,7 @@ export type {
 	Jobs,
 	Queue,
 	QueueOptions,
+	QueueTx,
 	Repeat,
 	WorkOptions,
 } from './jobs.ts'
@@ -26,6 +28,7 @@ export type {
 	Entry,
 	Kind,
 	Scanned,
+	Tx,
 	WriteOptions,
 } from './kv.ts'
 export type { Allowance, Limiter, LimiterOptions, Rate } from './limiter.ts'

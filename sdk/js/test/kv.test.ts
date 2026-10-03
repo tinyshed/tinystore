@@ -333,6 +333,99 @@ describe('batches', () => {
 		expect(await x).toBe(1)
 		expect(await y).toBe(false)
 	})
+
+	test('a view and a batch give back what their function returns, its promises answered', async () => {
+		const accounts = store.kv.bucket<number>('answered')
+		await accounts.set('x', 1)
+		const [x, missing] = await store.kv.view(tx => [
+			accounts.withTx(tx).get('x'),
+			accounts.withTx(tx).has('nothing'),
+		])
+		const value: number | undefined = x
+		// @ts-expect-error: what comes back is the answer, not its promise
+		const promised: Promise<boolean> = missing
+		expect(value).toBe(1)
+		expect(promised as unknown).toBe(false)
+
+		expect(await store.kv.batch(tx => accounts.withTx(tx).take('x'))).toBe(1)
+		const written = store.kv.batch(tx => {
+			accounts.withTx(tx).set('y', 2)
+		})
+		expect(await written).toBeUndefined()
+		expect(await store.kv.view(() => 'no calls')).toBe('no calls')
+		const awaited = store.kv.view(async tx => [await accounts.withTx(tx).get('y')])
+		expect(await caught(awaited)).toBeInstanceOf(InvalidError)
+	})
+})
+
+describe('transactions', () => {
+	test('a tx reads, decides and writes, and runs again when a key it read changed', async () => {
+		const codes = store.kv.bucket<number>('tx-codes')
+		const sessions = store.kv.bucket<{ device: string }>('tx-sessions')
+		await codes.set('K7Q2', 42)
+
+		let runs = 0
+		const user = await store.kv.tx(async tx => {
+			runs++
+			const userId = await codes.withTx(tx).take('K7Q2')
+			if (runs === 1) {
+				await codes.set('K7Q2', 43) // another writer, between the read and the commit
+			}
+			if (userId === undefined) {
+				throw new InvalidError('no such code')
+			}
+			sessions.withTx(tx).of(userId).set('token', { device: 'phone' })
+			return userId
+		})
+		expect([runs, user]).toEqual([2, 43])
+		expect(await codes.get('K7Q2')).toBeUndefined()
+		expect(await sessions.of(43).get('token')).toEqual({ device: 'phone' })
+		expect(await sessions.of(42).get('token')).toBeUndefined()
+
+		const again = store.kv.tx(async tx => {
+			if ((await codes.withTx(tx).take('K7Q2')) === undefined) {
+				throw new InvalidError('no such code')
+			}
+		})
+		expect(await caught(again)).toBeInstanceOf(InvalidError)
+	})
+
+	test("a tx reads its own writes, and a stale version of the program's own runs once", async () => {
+		const notes = store.kv.bucket<string>('tx-notes')
+		const stale = (await notes.setEntry('a', 'one')).version
+		await notes.set('a', 'two')
+		const seen = await store.kv.tx(async tx => {
+			notes.withTx(tx).set('b', 'written')
+			const written = await notes.withTx(tx).get('b')
+			notes.withTx(tx).delete('b')
+			return [written, await notes.withTx(tx).has('b')] as const
+		})
+		expect(seen).toEqual(['written', false])
+		expect(await store.kv.tx(tx => notes.withTx(tx).get('a'))).toBe('two')
+
+		let runs = 0
+		const refused = store.kv.tx(tx => {
+			runs++
+			notes.withTx(tx).set('a', 'three', { ifVersion: stale })
+		})
+		expect(await caught(refused)).toBeInstanceOf(ConflictError)
+		expect(runs).toBe(1)
+	})
+
+	test('a tx whose key keeps changing gives up with ConflictError after five runs', async () => {
+		const balances = store.kv.bucket<number>('tx-busy')
+		await balances.set('n', 0)
+		let runs = 0
+		const busy = store.kv.tx(async tx => {
+			runs++
+			const n = (await balances.withTx(tx).get('n')) ?? 0
+			await balances.set('n', n + 100) // another writer, every time
+			balances.withTx(tx).set('n', n + 1)
+		})
+		expect(await caught(busy)).toBeInstanceOf(ConflictError)
+		expect(runs).toBe(5)
+		expect(await balances.get('n')).toBe(500)
+	})
 })
 
 describe('the directory sidecar', () => {

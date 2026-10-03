@@ -54,11 +54,27 @@ type Options struct {
 	// It returns at once, and the program closes the server as it would.
 	Stop func()
 
+	// Sidecar says in SERVE that this is the directory's sidecar, which a
+	// client of a newer release replaces with its own: tinystore serve --local
+	// started for its clients, not a program's own server or a person's.
+	Sidecar bool
+
+	// Clock is the time the store runs on in a test, which an admin's
+	// server.clock moves; the store must read it, through
+	// tinystore.Options.Clock. Nil refuses the call: the system's time.
+	Clock *Clock
+
 	// SQL holds the databases the program opened, by name. A client's sql.open
 	// of one checks the migrations it carries against those the file applied,
 	// since a database opens once a store. The server opens any other name
 	// itself, with the migrations the client carries.
 	SQL map[string]*sqldb.DB
+
+	// JobsIn holds the jobs stores the program opened In its databases, by the
+	// database's name, as SQL holds the databases. A client's queue in one of
+	// them lives there; the server opens any other itself, In the database of
+	// that name, once a client has opened it.
+	JobsIn map[string]*jobs.Store
 }
 
 // Server serves one store to other processes, a sidecar's or a remote
@@ -81,6 +97,7 @@ type Server struct {
 
 	sqlOpening sync.Mutex // a database opens once, its migrations applied, while no other engine waits
 	databases  map[string]*sqldb.DB
+	jobsIn     map[string]*jobs.Store // by the database whose file keeps their queues, under opening
 
 	mu         sync.Mutex
 	sessions   map[*session]struct{}
@@ -91,8 +108,8 @@ type Server struct {
 	comings    chan struct{} // a connection came or went, for WaitIdle
 }
 
-// limits bound what a connection holds, docs/server.md's proposals; tests
-// shrink the times
+// limits bound what a connection holds, as research's design/server.md
+// proposed them; tests shrink the times
 type limits struct {
 	maxBody          uint32        // the largest body either side sends
 	inFlight         uint32        // the streams a client may have open at once
@@ -138,6 +155,9 @@ func New(store *tinystore.Store, options Options) (*Server, error) {
 	}
 	if s.databases == nil {
 		s.databases = map[string]*sqldb.DB{}
+	}
+	if s.jobsIn = maps.Clone(options.JobsIn); s.jobsIn == nil {
+		s.jobsIn = map[string]*jobs.Store{}
 	}
 	if s.log == nil {
 		s.log = store.Logger("server")
@@ -382,7 +402,7 @@ func (s *Server) kvStore(ctx context.Context) (*kv.Store, error) {
 	if s.kv == nil {
 		opened, err := kv.Open(ctx, s.store, s.options.KVOptions)
 		if err != nil {
-			return nil, err
+			return nil, passIt(err, "KV")
 		}
 		s.kv = opened
 	}
@@ -395,11 +415,39 @@ func (s *Server) jobsStore(ctx context.Context) (*jobs.Store, error) {
 	if s.jobs == nil {
 		opened, err := jobs.Open(ctx, s.store, s.options.JobsOptions)
 		if err != nil {
-			return nil, err
+			return nil, passIt(err, "Jobs")
 		}
 		s.jobs = opened
 	}
 	return s.jobs, nil
+}
+
+// jobsStoreIn is the jobs store whose queues live in the file of the database
+// named, opened the first time a client asks for one of its queues; "" is
+// jobs.db's store. The database opens first, as a client's sql.open does.
+func (s *Server) jobsStoreIn(ctx context.Context, database string) (*jobs.Store, error) {
+	if database == "" {
+		return s.jobsStore(ctx)
+	}
+	s.sqlOpening.Lock()
+	db := s.databases[database]
+	s.sqlOpening.Unlock()
+
+	s.opening.Lock()
+	defer s.opening.Unlock()
+	if opened := s.jobsIn[database]; opened != nil {
+		return opened, nil
+	}
+	if db == nil {
+		return nil, fmt.Errorf("%w: jobs: a queue in sql %q, which no client has opened on this server; open it first",
+			tinystore.ErrInvalid, database)
+	}
+	opened, err := jobs.Open(ctx, s.store, jobs.Options{In: db})
+	if err != nil {
+		return nil, passIt(err, fmt.Sprintf("JobsIn[%q]", database))
+	}
+	s.jobsIn[database] = opened
+	return opened, nil
 }
 
 func (s *Server) blobsStore(ctx context.Context) (*blobs.Store, error) {
@@ -408,7 +456,7 @@ func (s *Server) blobsStore(ctx context.Context) (*blobs.Store, error) {
 	if s.blobs == nil {
 		opened, err := blobs.Open(ctx, s.store, s.options.BlobsOptions)
 		if err != nil {
-			return nil, err
+			return nil, passIt(err, "Blobs")
 		}
 		s.blobs = opened
 	}
@@ -421,7 +469,7 @@ func (s *Server) recordsStore(ctx context.Context) (*records.Store, error) {
 	if s.records == nil {
 		opened, err := records.Open(ctx, s.store, s.options.RecordsOptions)
 		if err != nil {
-			return nil, err
+			return nil, passIt(err, "Records")
 		}
 		s.records = opened
 	}
@@ -434,11 +482,22 @@ func (s *Server) metricsStore(ctx context.Context) (*metrics.Store, error) {
 	if s.metrics == nil {
 		opened, err := metrics.Open(ctx, s.store, s.options.MetricsOptions)
 		if err != nil {
-			return nil, err
+			return nil, passIt(err, "Metrics")
 		}
 		s.metrics = opened
 	}
 	return s.metrics, nil
+}
+
+// passIt is an engine's open that found the engine open already: in a program
+// serving its own store, one it opened and did not pass, since each engine
+// opens once a store
+func passIt(err error, field string) error {
+	if errors.Is(err, tinystore.ErrInUse) {
+		return fmt.Errorf("%w; a program serving its own store passes the engine it opened as server.Options.%s",
+			err, field)
+	}
+	return err
 }
 
 // engines is what WELCOME says this server serves

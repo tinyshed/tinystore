@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -193,8 +194,18 @@ func runValues(ctx context.Context, bucket *kv.Bucket[kv.Raw], method wire.Metho
 	switch method {
 	case wire.KVGet:
 		entry, found, err := bucket.GetEntry(ctx, ask.Key)
+		if err == nil {
+			err = stillAsRead(ask, entry.Version, found)
+		}
 		return entryOf(entry, found), err
 	case wire.KVHas:
+		if ask.IfVersion != nil || ask.IfAbsent {
+			entry, found, err := bucket.GetEntry(ctx, ask.Key)
+			if err == nil {
+				err = stillAsRead(ask, entry.Version, found)
+			}
+			return wire.KVEntry{Found: found}, err
+		}
 		found, err := bucket.Has(ctx, ask.Key)
 		return wire.KVEntry{Found: found}, err
 	case wire.KVSet:
@@ -250,6 +261,19 @@ func runCounters(ctx context.Context, counters *kv.Counters, method wire.Method,
 			tinystore.ErrInvalid, uint16(method))
 	}
 	return wire.KVEntry{Found: true, Value: wire.KVValue{Kind: wire.KVInt, Int: n}}, err
+}
+
+// stillAsRead fails a read whose key is no longer as the read says it was, at
+// the version it names or absent: an SDK's transaction checks each key it read
+// so as it commits, and runs again when another write came between
+func stillAsRead(ask wire.KVCall, version kv.Version, found bool) error {
+	switch {
+	case ask.IfAbsent && found:
+		return fmt.Errorf("%w: kv: %q holds a value, which was absent", tinystore.ErrConflict, ask.Key)
+	case ask.IfVersion != nil && (!found || !bytes.Equal(versionOf(version), ask.IfVersion)):
+		return fmt.Errorf("%w: kv: %q is no longer at the version read", tinystore.ErrConflict, ask.Key)
+	}
+	return nil
 }
 
 // callOptions is a call's expiry and condition as the bucket takes them

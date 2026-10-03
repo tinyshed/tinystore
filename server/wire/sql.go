@@ -315,6 +315,9 @@ type SQLStatements struct {
 	Handle     uint64
 	Statements []SQLStatement
 	Read       bool
+	// Jobs are enqueued after the statements, in the same transaction, on
+	// queues kept in this database: each opened with jobs.queue's in.
+	Jobs []JobsBatch
 }
 
 func (s SQLStatements) Append(dst []byte) []byte {
@@ -330,6 +333,14 @@ func (s SQLStatements) Append(dst []byte) []byte {
 	m.SetBuf(buf)
 	if s.Read {
 		m.Bool(3, true)
+	}
+	if len(s.Jobs) > 0 {
+		m.Key(4)
+		buf = AppendArray(m.Buf(), len(s.Jobs))
+		for _, jobs := range s.Jobs {
+			buf = jobs.Append(buf)
+		}
+		m.SetBuf(buf)
 	}
 	return m.End()
 }
@@ -348,6 +359,12 @@ func (s *SQLStatements) Decode(body []byte) error {
 			}
 		case 3:
 			s.Read = d.Bool()
+		case 4:
+			for range d.Items() {
+				var jobs JobsBatch
+				jobs.decode(&d)
+				s.Jobs = append(s.Jobs, jobs)
+			}
 		}
 	}
 	return d.End()

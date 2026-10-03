@@ -655,3 +655,49 @@ func quotaUsage(t *testing.T, conn *client.Conn, ask wire.KVCall) wire.KVAllowan
 	}
 	return usage
 }
+
+// a get or has that names the version it read, or that it read nothing, fails
+// conflict once the key is no longer so: the check an SDK's transaction makes
+// of every key it read, in the batch that commits its writes
+func TestAReadThatNamesWhatItReadFailsOnceTheKeyChanged(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	codes := openKV(t, conn, wire.KVBucket{Name: "codes"})
+	sessions := openKV(t, conn, wire.KVBucket{Name: "sessions"})
+
+	read := mustKV(t, conn, wire.KVSet, wire.KVCall{Handle: codes, Key: "K7Q2", Value: text("42")}).Version
+	mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: codes, Key: "K7Q2", IfVersion: read})
+	mustKV(t, conn, wire.KVHas, wire.KVCall{Handle: codes, Key: "K7Q2", IfVersion: read})
+	mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: codes, Key: "none", IfAbsent: true})
+	mustKV(t, conn, wire.KVSet, wire.KVCall{Handle: codes, Key: "K7Q2", Value: text("43")})
+	for _, stale := range []wire.KVOperation{
+		{Method: wire.KVGet, KVCall: wire.KVCall{Handle: codes, Key: "K7Q2", IfVersion: read}},
+		{Method: wire.KVHas, KVCall: wire.KVCall{Handle: codes, Key: "K7Q2", IfVersion: read}},
+		{Method: wire.KVGet, KVCall: wire.KVCall{Handle: codes, Key: "K7Q2", IfAbsent: true}},
+		{Method: wire.KVGet, KVCall: wire.KVCall{Handle: codes, Key: "gone", IfVersion: read}},
+	} {
+		if _, err := kvDo(t, conn, stale.Method, stale.KVCall); failureOf(err).Code != wire.CodeConflict {
+			t.Fatalf("%#04x %+v of a key that changed: %v", uint16(stale.Method), stale.KVCall, err)
+		}
+	}
+
+	batch := wire.KVCalls{Calls: []wire.KVOperation{
+		{Method: wire.KVGet, KVCall: wire.KVCall{Handle: codes, Key: "K7Q2", IfVersion: read}},
+		{Method: wire.KVDelete, KVCall: wire.KVCall{Handle: codes, Key: "K7Q2"}},
+		{Method: wire.KVSet, KVCall: wire.KVCall{Handle: sessions, Key: "token", Value: text("42")}},
+	}}
+	_, err := conn.Call(t.Context(), wire.KVBatch, batch)
+	if failure := failureOf(err); failure.Code != wire.CodeConflict || failure.What["call"] != "0" {
+		t.Fatalf("a batch whose read went stale: %+v", failure)
+	}
+	if got := mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: sessions, Key: "token"}); got.Found {
+		t.Fatal("a batch whose read went stale wrote a session")
+	}
+	batch.Calls[0].IfVersion = mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: codes, Key: "K7Q2"}).Version
+	if _, err = conn.Call(t.Context(), wire.KVBatch, batch); err != nil {
+		t.Fatalf("a batch whose read still holds: %v", err)
+	}
+	if got := mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: sessions, Key: "token"}); !got.Found {
+		t.Fatal("a batch whose read still held wrote no session")
+	}
+}

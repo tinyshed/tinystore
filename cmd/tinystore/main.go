@@ -11,6 +11,8 @@
 //	tinystore serve <dir>                          the directory's sidecar, until Ctrl+C
 //	tinystore serve --dir <dir> --stdio | --local | --listen <endpoint>
 //	tinystore stop [dir]                           the server of a directory, its streams finished
+//	tinystore backup <dir> <file.zip>              every engine of a store in one checked zip, while it runs
+//	tinystore restore <file.zip> <dir>             a backup into an empty directory
 //	tinystore mcp [dir]                            the store's tools for an AI agent, on stdin and stdout
 //	tinystore version                              the release, the Go it was built with, the platform
 //	go tool tinystore migrate [name]               what differs; writes nothing
@@ -78,6 +80,10 @@ func dispatch(ctx context.Context, args []string) error {
 		return logs(ctx, args[1:], os.Stdout, os.Stderr)
 	case "mcp":
 		return mcp(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "backup":
+		return backupStore(ctx, args[1:], os.Stdout, os.Stderr)
+	case "restore":
+		return restoreStore(ctx, args[1:], os.Stdout, os.Stderr)
 	case "version":
 		_, err := fmt.Printf("tinystore %s (%s %s/%s)\n", version(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		return err

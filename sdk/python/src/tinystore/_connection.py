@@ -13,24 +13,26 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from . import _runtime
 from ._session import LostError, Session, Stream
-from ._wire.messages import Handle
+from ._wire.messages import METHODS, Empty, Handle
 from .errors import ClosedError, InvalidError, OutcomeUnknownError, UnavailableError
 
 if TYPE_CHECKING:
     import os
     import ssl
     from collections.abc import Awaitable, Callable
+    from datetime import datetime
 
     from ._wire.codec import Key
 
 HANDSHAKE_TIME = 5.0
-WINNER_TIME = 5.0
-STARTS = 3
+START_TIME = 15.0  # how long a client waits for a sidecar to answer, its own or another's
+HELD_PAUSE = 0.1  # the pause before a start that found the directory held starts again, doubling up to a second
 
 
 class Connection:
@@ -94,65 +96,128 @@ async def dial(
 
 
 def sidecar(
-    directory: str | os.PathLike[str], binary: Callable[[], str], idle: float | None = None
+    directory: str | os.PathLike[str],
+    binary: Callable[[], str],
+    idle: float | None = None,
+    older: Callable[[str], bool] | None = None,
 ) -> Callable[[], Awaitable[Connection]]:
-    """Finds the directory's sidecar through SERVE or starts one, as docs/server.md "SERVE" says.
+    """Finds the directory's sidecar through SERVE or starts one, as docs/wire.md says.
 
     A sidecar found proves itself before the first call; one started exits
     with 3 when another holds the directory, whose SERVE the client then
-    waits for.
+    waits for. A sidecar of an older release than this SDK's is stopped and
+    replaced with this SDK's binary; another server of an older release, a
+    person's or a program's own, is told of once.
     """
     absolute = Path(directory).resolve()
     serve = absolute / "server" / "SERVE"
     log = absolute / "server" / "serve.log"
     idling = [] if idle is None else ["--idle", f"{round(idle * 1000)}ms"]
 
+    def is_older(server: str) -> bool:
+        return older(server) if older is not None else older_release(server, _runtime.VERSION)
+
     told = False
 
     async def reach() -> Connection:
         nonlocal told
         found = await _reach_serve(serve)
+        stopped_instance: str | None = None
         if found is not None:
-            older = None if told else older_sidecar((await found.session.welcomed).server, _runtime.VERSION, directory)
-            told = True
-            if older is not None:
-                print(older, file=sys.stderr)
-            return found
-        why = ""
-        for _ in range(STARTS):
-            child = _runtime.spawn_detached(
-                [binary(), "serve", "--dir", str(absolute), "--local", "--log", str(log), *idling]
-            )
-            deadline = asyncio.get_running_loop().time() + WINNER_TIME
-            pause = 0.005
-            while asyncio.get_running_loop().time() < deadline:
-                reached = await _reach_serve(serve)
-                if reached is not None:
-                    return reached
-                code = child.poll()
-                if code is not None and code != 3:
-                    raise ClosedError(f"the sidecar exited with {code}: {_tail(log)}")
-                await asyncio.sleep(pause)
-                pause = min(pause * 2, 0.1)
-            why = (
-                "another process holds the directory but no sidecar answers"
-                if child.poll() == 3
-                else "no sidecar answered"
-            )
-        raise ClosedError(f"{why} in {STARTS * WINNER_TIME:.0f} s: {_tail(log)}")
+            connection, is_sidecar, instance = found
+            server = (await connection.session.welcomed).server
+            if not is_older(server):
+                return connection
+            if is_sidecar and await _stopped(connection):
+                print(replaced_sidecar(server, _runtime.VERSION, directory), file=sys.stderr)
+                stopped_instance = instance
+            else:
+                if not told:
+                    print(older_server(server, _runtime.VERSION, directory), file=sys.stderr)
+                told = True
+                return connection
+        command = [binary(), "serve", "--dir", str(absolute), "--local", "--log", str(log), *idling]
+        return await _start_sidecar(serve, log, command, stopped_instance)
 
     return reach
 
 
-def older_sidecar(server: str, own: str, directory: str | os.PathLike[str]) -> str | None:
-    """What to tell a program whose SDK found a sidecar of an older release than its own, which runs its own binary
-    until it has been idle; None for one as new or newer, and for a build that is no release."""
+async def _start_sidecar(serve: Path, log: Path, command: list[str], stopped_instance: str | None = None) -> Connection:
+    """Starts a sidecar and waits for SERVE to name one that answers, its own or another client's that won the start.
+
+    One that exits with 3 found the directory held, by a winner about to
+    publish or by a sidecar still letting go, and is started again after a
+    pause; any other exit is an error. A sidecar told to stop answers for a
+    moment after it agreed, until SERVE goes, so the one of the instance
+    stopped is passed over.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + START_TIME
+    held = False
+    pause = HELD_PAUSE
+    while True:
+        child = _runtime.spawn_detached(command)
+        again: float | None = None
+        wait = 0.005
+        while loop.time() < deadline:
+            reached = await _reach_serve(serve)
+            if reached is not None and reached[2] != stopped_instance:
+                return reached[0]
+            if reached is not None:
+                await reached[0].close()
+            code = child.poll()
+            if code is not None and code != 3:
+                raise ClosedError(f"the sidecar exited with {code}: {_tail(log)}")
+            if code == 3:
+                held = True
+                if again is None:
+                    again = loop.time() + pause
+                if loop.time() >= again:
+                    break
+            await asyncio.sleep(wait)
+            wait = min(wait * 2, 0.1)
+        if loop.time() >= deadline:
+            why = "another process holds the directory but no sidecar answers" if held else "no sidecar answered"
+            raise ClosedError(f"{why} in {START_TIME:.0f} s: {_tail(log)}")
+        pause = min(pause * 2, 1.0)
+
+
+async def _stopped(connection: Connection) -> bool:
+    """Asks a sidecar to stop as tinystore stop does, closing the connection once it has answered.
+
+    False when it refuses, and the connection stays open.
+    """
+    try:
+        await connection.session.call(METHODS["server.stop"], Empty.encode())
+    except Exception:
+        return False
+    await connection.close()
+    return True
+
+
+def older_release(server: str, own: str) -> bool:
+    """Whether a server's release is older than the SDK's own.
+
+    A build that is no release, a development copy's or a Go pseudo-version,
+    is neither.
+    """
     theirs, ours = _release(server), _release(own)
-    if theirs is None or ours is None or _compare_releases(theirs, ours) >= 0:
-        return None
+    return theirs is not None and ours is not None and _compare_releases(theirs, ours) < 0
+
+
+def replaced_sidecar(server: str, own: str, directory: str | os.PathLike[str]) -> str:
+    """What a program whose SDK replaced a sidecar of an older release is told."""
     return (
-        f"tinystore: the sidecar serving {directory} is {server}, older than this SDK's {own}; it runs its own "
-        f"binary until it has been idle, or until tinystore stop {directory} lets the next open start this SDK's"
+        f"tinystore: the sidecar serving {directory} was {server}, older than this SDK's {own}; it finishes "
+        "its calls, and this SDK's binary serves the directory from now on"
+    )
+
+
+def older_server(server: str, own: str, directory: str | os.PathLike[str]) -> str:
+    """What a program whose SDK found a server of an older release that is no sidecar is told."""
+    return (
+        f"tinystore: {directory} is served by {server}, older than this SDK's {own}; a person or a program "
+        "started that server, and it runs until they stop it"
     )
 
 
@@ -194,8 +259,11 @@ def _compare_releases(a: tuple[list[int], list[str]], b: tuple[list[int], list[s
     return len(a[1]) - len(b[1])
 
 
-async def _reach_serve(serve: Path) -> Connection | None:
-    """The sidecar SERVE names, once its proof checks; None on any failure."""
+async def _reach_serve(serve: Path) -> tuple[Connection, bool, str] | None:
+    """The sidecar SERVE names, once its proof checks, whether SERVE calls it a sidecar, and its instance.
+
+    None on any failure.
+    """
     try:
         published = json.loads(await asyncio.to_thread(serve.read_bytes))
         endpoint = published["endpoints"][0]
@@ -205,7 +273,7 @@ async def _reach_serve(serve: Path) -> Connection | None:
     if published.get("protocol") != 1 or len(secret) != 32:
         return None
     try:
-        return await dial(endpoint, secret=secret)
+        return await dial(endpoint, secret=secret), published.get("sidecar") is True, str(published.get("instance"))
     except Exception:
         return None
 
@@ -217,15 +285,22 @@ def _tail(log: Path) -> str:
         return "it wrote no log"
 
 
-def private_child(directory: str | os.PathLike[str], binary: Callable[[], str]) -> Callable[[], Awaitable[Connection]]:
-    """A private child: tinystore serve --stdio, living and dying with this process."""
+def private_child(
+    directory: str | os.PathLike[str], binary: Callable[[], str], clock: datetime | None = None
+) -> Callable[[], Awaitable[Connection]]:
+    """A private child: tinystore serve --stdio, living and dying with this process.
+
+    A test's clock starts where the first child's did, and a child started
+    again starts it there.
+    """
 
     absolute = str(Path(directory).resolve())
+    clocked = [] if clock is None else ["--clock", clock.astimezone(UTC).isoformat().replace("+00:00", "Z")]
 
     async def start() -> Connection:
         holder: list[Session] = []
         child = await _runtime.spawn_private(
-            [binary(), "serve", "--dir", absolute, "--stdio"],
+            [binary(), "serve", "--dir", absolute, "--stdio", *clocked],
             lambda chunk: holder[0].receive(chunk) if holder else None,
             lambda err: holder[0].end(err) if holder else None,
         )

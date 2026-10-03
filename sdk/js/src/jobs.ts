@@ -9,6 +9,7 @@ import { CancelledError, CorruptError, errorOf, InvalidError } from './errors.ts
 import { checkName, handleOn, type Page } from './handles.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { LostError, watch } from './session.ts'
+import type { Database, SqlBatch } from './sql.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import {
 	JobsAnswer,
@@ -44,6 +45,11 @@ export interface QueueOptions {
 	keepDone?: Duration
 	/** the jobs that may run at once, across every worker of the store: no bound */
 	maxRunning?: number
+	/**
+	 * keeps the queue in this database's file instead of jobs.db, so that a
+	 * batch of the database commits a job with its rows: `queue.withTx(tx)`
+	 */
+	in?: Database
 }
 
 /** When a job runs again: cron text in a zone by its name, a daily time, or every so often. */
@@ -458,7 +464,8 @@ export class Jobs {
 		} else if (of !== undefined) {
 			options = of
 		}
-		return new Queue(this.#link, name, JobsQueue.encode(queueFields(name, options)), values)
+		const open = JobsQueue.encode(queueFields(name, options))
+		return new Queue(this.#link, name, open, values, options?.in)
 	}
 
 	/**
@@ -468,7 +475,8 @@ export class Jobs {
 	schedule(name: string, repeat: Repeat, options?: QueueOptions): Queue<null> {
 		checkName(name, 'schedule')
 		const open = JobsQueue.encode({ ...queueFields(name, options), schedule: repeatOf(repeat) })
-		return new Queue(this.#link, name, open, { encode: () => '{}', decode: () => null })
+		const nothing = { encode: () => '{}', decode: () => null }
+		return new Queue(this.#link, name, open, nothing, options?.in)
 	}
 }
 
@@ -486,6 +494,36 @@ function queueFields(
 		keepFailed: options?.keepFailed === undefined ? undefined : ms(options.keepFailed),
 		keepDone: options?.keepDone === undefined ? undefined : ms(options.keepDone),
 		maxRunning: options?.maxRunning,
+		in: options?.in?.name,
+	}
+}
+
+/** A job's fields as jobs.enqueue and a batch carry them. */
+function jobFields<T>(values: Values<T>, value: T, options: EnqueueOptions | undefined) {
+	return {
+		value: values.encode(value),
+		key: options?.key,
+		at: options?.at === undefined ? undefined : unixMs(options.at),
+		after: options?.after === undefined ? undefined : ms(options.after),
+		repeat: options?.repeat === undefined ? undefined : repeatOf(options.repeat),
+	}
+}
+
+/** A queue's enqueue inside a batch of the database it lives in. */
+export class QueueTx<T> {
+	readonly #tx: SqlBatch
+	readonly #open: Uint8Array
+	readonly #values: Values<T>
+
+	constructor(tx: SqlBatch, open: Uint8Array, values: Values<T>) {
+		this.#tx = tx
+		this.#open = open
+		this.#values = values
+	}
+
+	/** Adds a job to the batch; it settles once the batch has committed. */
+	enqueue(value: T, options?: EnqueueOptions): Promise<void> {
+		return this.#tx.enqueue(this.#open, jobFields(this.#values, value, options))
 	}
 }
 
@@ -502,16 +540,46 @@ export class Queue<T> {
 	readonly #link: Link
 	readonly #open: Uint8Array
 	readonly #values: Values<T>
+	readonly #in: Database | undefined
 
-	constructor(link: Link, name: string, open: Uint8Array, values: Values<T>) {
+	constructor(
+		link: Link,
+		name: string,
+		open: Uint8Array,
+		values: Values<T>,
+		inDatabase: Database | undefined,
+	) {
 		this.#link = link
 		this.name = name
 		this.#open = open
 		this.#values = values as Values<T>
+		this.#in = inDatabase
 	}
 
-	#handle(connection: Connection): Promise<number> {
+	/** The queue's handle, its database opened first when it lives in one, as the server needs. */
+	async #handle(connection: Connection): Promise<number> {
+		await this.#in?.handle(connection)
 		return handleOn(connection, methods['jobs.open'], this.#open)
+	}
+
+	/**
+	 * The queue's enqueue inside a batch of the database it lives in, which
+	 * it was opened `in`: the job commits with the batch's rows or not at all.
+	 *
+	 *     await db.batch(tx => {
+	 *       tx.exec`update notes set body = ${body} where id = ${id}`
+	 *       index.withTx(tx).enqueue({ id })
+	 *     })
+	 */
+	withTx(tx: SqlBatch): QueueTx<T> {
+		if (this.#in === undefined || this.#in.name !== tx.database) {
+			const lives = this.#in === undefined ? 'jobs.db' : `sql ${this.#in.name}`
+			throw new InvalidError(
+				`the queue ${this.name} lives in ${lives}, not in sql ${tx.database}: ` +
+					"open it with { in: db } to enqueue in that database's batches",
+			)
+		}
+		return new QueueTx(tx, this.#open, this.#values)
 	}
 
 	/** Adds a job; it returns once the job is in the file. */
@@ -521,13 +589,7 @@ export class Queue<T> {
 
 	/** Adds jobs in one transaction, all or none: a refused one names itself as `call`. */
 	async enqueueAll(jobs: readonly ({ value: T } & EnqueueOptions)[]): Promise<void> {
-		const encoded = jobs.map(job => ({
-			value: this.#values.encode(job.value),
-			key: job.key,
-			at: job.at === undefined ? undefined : unixMs(job.at),
-			after: job.after === undefined ? undefined : ms(job.after),
-			repeat: job.repeat === undefined ? undefined : repeatOf(job.repeat),
-		}))
+		const encoded = jobs.map(job => jobFields(this.#values, job.value, job))
 		await this.#link.run('write', async connection => {
 			const handle = await this.#handle(connection)
 			await connection.session.call(

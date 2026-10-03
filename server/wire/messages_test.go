@@ -71,6 +71,7 @@ var schema = map[string][]field{
 	"error":  {{1, "code", "str"}, {2, "message", "str"}, {3, "what", "names"}},
 	"handle": {{1, "handle", "uint"}},
 	"empty":  {},
+	"clock":  {{1, "at", "int"}, {2, "advance", "uint"}},
 
 	"kv.bucket": {
 		{1, "name", "str"},
@@ -120,6 +121,7 @@ var schema = map[string][]field{
 		{8, "keep done", "uint"},
 		{9, "schedule", "jobs.repeat"},
 		{10, "max running", "uint"},
+		{11, "in", "str"},
 	},
 	"jobs.repeat": {{1, "cron", "str"}, {2, "zone", "str"}, {3, "every", "uint"}},
 	"jobs.job":    jobsJob,
@@ -220,10 +222,12 @@ var schema = map[string][]field{
 		{5, "write", "bool"},
 		{6, "rows", "bool"},
 	},
-	"sql.statements": {{1, "handle", "uint"}, {2, "statements", "[]sql.statement"}, {3, "read", "bool"}},
-	"sql.done":       {{1, "changes", "int"}, {2, "last id", "int"}},
-	"sql.columns":    {{1, "columns", "[]str"}},
-	"sql.row":        {{1, "values", "[]sql value"}},
+	"sql.statements": {
+		{1, "handle", "uint"}, {2, "statements", "[]sql.statement"}, {3, "read", "bool"}, {4, "jobs", "[]jobs.batch"},
+	},
+	"sql.done":    {{1, "changes", "int"}, {2, "last id", "int"}},
+	"sql.columns": {{1, "columns", "[]str"}},
+	"sql.row":     {{1, "values", "[]sql value"}},
 	"sql.result": {
 		{1, "changes", "int"}, {2, "last id", "int"}, {3, "columns", "[]str"}, {4, "rows", "[][]sql value"},
 	},
@@ -339,6 +343,8 @@ var methods = []struct {
 	method wire.Method
 }{
 	{"server.stop", wire.ServerStop},
+	{"server.clock", wire.ServerClock},
+	{"server.backup", wire.ServerBackup},
 	{"kv.open", wire.KVOpen},
 	{"kv.get", wire.KVGet},
 	{"kv.has", wire.KVHas},
@@ -489,6 +495,8 @@ func handshakeExamples() []example {
 		},
 		of("a handle", "handle", wire.Handle{Handle: 3}),
 		of("an answer that says only that its call was done", "empty", wire.Empty{}),
+		of("a test's clock moved forward by an hour", "clock", wire.Clock{Advance: 3_600_000}),
+		of("the time a test's clock reads", "clock", wire.Clock{At: 1_790_000_000_000}),
 	}
 }
 
@@ -565,6 +573,7 @@ func jobsExamples() []example {
 		of("a schedule by cron in a zone", "jobs.queue", wire.JobsQueue{
 			Name: "purge", Schedule: &wire.Repeat{Cron: "10 3 * * *", Zone: "Europe/Moscow"},
 		}),
+		of("a queue kept in a database's file", "jobs.queue", wire.JobsQueue{Name: "index", In: "app"}),
 		of("jobs.enqueue of a job at a time and one repeating every minute", "jobs.batch", wire.JobsBatch{
 			Handle: 1, Jobs: []wire.JobsJob{
 				{Value: `{"user":42}`, Key: "call:42", At: at},
@@ -673,6 +682,12 @@ func sqlExamples() []example {
 				{SQL: "insert into notes (title) values (?)", Args: []any{"milk"}},
 				{SQL: "select id from notes", Rows: true},
 			},
+		}),
+		of("sql.batch of an update and the job it enqueues, one commit", "sql.statements", wire.SQLStatements{
+			Handle: 1, Statements: []wire.SQLStatement{
+				{SQL: "update notes set body = ? where id = ?", Args: []any{"milk", int64(7)}},
+			},
+			Jobs: []wire.JobsBatch{{Handle: 2, Jobs: []wire.JobsJob{{Value: `{"id":7}`, Key: "index:7"}}}},
 		}),
 		of("sql.batch of reads from one snapshot", "sql.statements", wire.SQLStatements{
 			Handle: 1, Statements: []wire.SQLStatement{{SQL: "select count(*) from notes"}}, Read: true,

@@ -8,10 +8,11 @@ import { join } from 'node:path'
 
 import type { Connection, Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
-import { checkName, handleOn } from './handles.ts'
+import { checkName, handleOn, type Settled, settle } from './handles.ts'
 import { watch } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import {
+	type JobsJob,
 	methods,
 	SqlColumns,
 	SqlDatabase,
@@ -293,38 +294,56 @@ export class Database {
 	/**
 	 * Runs the statements fn asks for in one transaction, all or none: a
 	 * failure names its statement as `call`. fn returns before anything is
-	 * sent, since no transaction is held across the network.
+	 * sent, since no transaction is held across the network, and what it
+	 * returns comes back answered, an array's promises each:
+	 *
+	 *     const [note] = await db.batch(tx => [tx.one`insert into notes (title) values (${t}) returning *`])
 	 */
-	batch(fn: (tx: SqlBatch) => void): Promise<void> {
+	batch<const T = void>(fn: (tx: SqlBatch) => T): Promise<Settled<T>> {
 		return this.#run(false, fn)
 	}
 
-	/** Runs the reads fn asks for from one snapshot. */
-	view(fn: (tx: SqlBatch) => void): Promise<void> {
+	/**
+	 * Runs the reads fn asks for from one snapshot, and gives back what fn
+	 * returns, answered as batch answers it:
+	 *
+	 *     const [notes, total] = await db.view(tx => [tx.all`select * from notes`, tx.scalar`select count(*) from notes`])
+	 */
+	view<const T = void>(fn: (tx: SqlBatch) => T): Promise<Settled<T>> {
 		return this.#run(true, fn)
 	}
 
-	async #run(read: boolean, fn: (tx: SqlBatch) => void): Promise<void> {
-		const tx = new SqlBatch(read)
-		const returned: unknown = fn(tx)
+	async #run<T>(read: boolean, fn: (tx: SqlBatch) => T): Promise<Settled<T>> {
+		const tx = new SqlBatch(read, this.name)
+		const returned = fn(tx)
 		tx.close()
-		if (returned instanceof Promise) {
+		if (returned instanceof Promise && !tx.made(returned)) {
 			throw new InvalidError(
 				'a batch function returns before anything is sent; it cannot await inside',
 			)
 		}
-		if (tx.statements.length === 0) {
-			return
+		if (tx.statements.length > 0 || tx.jobs.length > 0) {
+			await this.#send(read, tx)
 		}
+		return settle(returned)
+	}
+
+	async #send(read: boolean, tx: SqlBatch): Promise<void> {
 		try {
 			const results = await this.#link.run(read ? 'read' : 'write', async connection => {
 				const handle = await this.handle(connection)
+				const jobs = []
+				for (const queued of tx.jobs) {
+					const queue = await handleOn(connection, methods['jobs.open'], queued.open)
+					jobs.push({ handle: queue, jobs: [queued.job] })
+				}
 				const body = await connection.session.call(
 					methods['sql.batch'],
 					SqlStatements.encode({
 						handle,
 						statements: tx.statements.map(s => s.statement),
 						read: read || undefined,
+						jobs: jobs.length > 0 ? jobs : undefined,
 					}),
 				)
 				return SqlResults.decode(body).results ?? []
@@ -332,8 +351,11 @@ export class Database {
 			tx.statements.forEach((s, i) => {
 				s.settle(results[i] ?? {})
 			})
+			for (const queued of tx.jobs) {
+				queued.settle()
+			}
 		} catch (err) {
-			for (const s of tx.statements) {
+			for (const s of [...tx.statements, ...tx.jobs]) {
 				s.fail(err)
 			}
 			throw err
@@ -351,34 +373,73 @@ interface Batched {
 	fail: (err: unknown) => void
 }
 
+/** A job a batch enqueues after its statements, on a queue that lives in its database. */
+interface Queued {
+	/** the queue's jobs.open, whose handle the batch opens on its connection */
+	open: Uint8Array
+	job: Parameters<typeof JobsJob.encode>[0]
+	settle: () => void
+	fail: (err: unknown) => void
+}
+
 /** The statements of a batch or a view, whose promises settle with it. */
 export class SqlBatch {
 	readonly read: boolean
+	/** the database the batch runs in, whose queues alone take its jobs */
+	readonly database: string
 	readonly statements: Batched[] = []
+	readonly jobs: Queued[] = []
 	#done = false
+	readonly #made = new WeakSet<Promise<unknown>>()
 
-	constructor(read: boolean) {
+	constructor(read: boolean, database: string) {
 		this.read = read
+		this.database = database
 	}
 
 	close(): void {
 		this.#done = true
 	}
 
-	#record<T>(given: Statement, rows: boolean, settle: (result: Result) => T): Promise<T> {
+	/** Whether the promise is one of this batch's statements', rather than an async function's. */
+	made(promise: Promise<unknown>): boolean {
+		return this.#made.has(promise)
+	}
+
+	/**
+	 * Adds a job to the batch, for a queue's withTx: a program writes
+	 * `queue.withTx(tx).enqueue(value)`, on a queue opened `in` this database.
+	 */
+	enqueue(open: Uint8Array, job: Queued['job']): Promise<void> {
+		if (this.read) {
+			throw new InvalidError('a job in a view, which reads')
+		}
+		const { promise, settle, fail } = this.#promise<void>()
+		this.jobs.push({ open, job, settle: () => settle(undefined), fail })
+		return promise
+	}
+
+	#promise<T>(): { promise: Promise<T>; settle: (v: T) => void; fail: (err: unknown) => void } {
 		if (this.#done) {
 			throw new InvalidError(
 				'a batch takes its statements while its function runs, before it is sent',
 			)
 		}
-		const statement = statementOf(given)
-		let resolve!: (v: T) => void
-		let reject!: (e: unknown) => void
-		const settled = new Promise<T>((res, rej) => {
-			resolve = res
-			reject = rej
+		let settle!: (v: T) => void
+		let fail!: (e: unknown) => void
+		const promise = new Promise<T>((res, rej) => {
+			settle = res
+			fail = rej
 		})
-		settled.catch(() => {})
+		// a caller need not await a call it only wanted done
+		promise.catch(() => {})
+		this.#made.add(promise)
+		return { promise, settle, fail }
+	}
+
+	#record<T>(given: Statement, rows: boolean, settle: (result: Result) => T): Promise<T> {
+		const statement = statementOf(given)
+		const { promise: settled, settle: resolve, fail: reject } = this.#promise<T>()
 		this.statements.push({
 			statement: { ...statement, rows: rows && !this.read ? true : undefined },
 			settle: result => {

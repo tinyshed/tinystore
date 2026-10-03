@@ -11,6 +11,7 @@ import { currentSignal } from './cancel.ts'
 import { ClosedError, OutcomeUnknownError, TinystoreError, UnavailableError } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
 import { LostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
+import { Empty, methods } from './wire/messages.ts'
 
 /** How long a server may take to answer HELLO. */
 const handshakeTime = 5000
@@ -109,25 +110,30 @@ interface Published {
 	instance: string
 	secret: string
 	endpoints: string[]
+	/** a server started for its clients, which a client of a newer release replaces */
+	sidecar?: boolean
 }
 
-/** How long a client waits for another's sidecar, which won the start, before starting one again. */
-const winnerTime = 5000
+/** How long a client waits for a sidecar to answer, its own or another's, before it gives up. */
+const startTime = 15_000
 
-/** The starts a client tries before it gives up on the directory. */
-const starts = 3
+/** The pause before a start that found the directory held starts again, doubling up to a second. */
+const heldPause = 100
 
 /**
- * Finds the directory's sidecar through SERVE or starts one, as docs/server.md
- * "SERVE" says: a sidecar found proves itself before the first call, and one
- * started exits with 3 when another holds the directory, whose SERVE the
- * client then waits for.
+ * Finds the directory's sidecar through SERVE or starts one, as docs/wire.md
+ * "Finding a local server" says: a sidecar found proves itself before the
+ * first call, and one started exits with 3 when another holds the directory,
+ * whose SERVE the client then waits for. A sidecar of an older release than
+ * this SDK's is stopped and replaced with this SDK's binary; another server
+ * of an older release, a person's or a program's own, is told of once.
  */
 export function sidecar(
 	runtime: Runtime,
 	dir: string,
 	binary: () => string,
 	idle?: number,
+	older: (server: string) => boolean = server => olderRelease(server, manifest.version),
 ): Dialer {
 	const absolute = resolve(dir)
 	const serve = join(absolute, 'server', 'SERVE')
@@ -136,68 +142,116 @@ export function sidecar(
 	let told = false
 	return async () => {
 		const found = await reachServe(runtime, serve)
+		let stoppedInstance: string | undefined
 		if (found !== undefined) {
-			const older = told
-				? undefined
-				: olderSidecar((await found.session.welcomed).server, manifest.version, dir)
-			told = true
-			if (older !== undefined) {
-				process.stderr.write(`${older}\n`)
+			const server = (await found.connection.session.welcomed).server
+			if (!older(server)) {
+				return found.connection
 			}
-			return found
-		}
-		let why = ''
-		for (let tried = 0; tried < starts; tried++) {
-			const child = runtime.spawnDetached([
-				binary(),
-				'serve',
-				'--dir',
-				absolute,
-				'--local',
-				'--log',
-				log,
-				...idling,
-			])
-			let exited: number | undefined
-			child.exited.then(code => {
-				exited = code
-			})
-			const deadline = Date.now() + winnerTime
-			for (let pause = 5; Date.now() < deadline; pause = Math.min(pause * 2, 100)) {
-				const reached = await reachServe(runtime, serve)
-				if (reached !== undefined) {
-					return reached
+			if (found.sidecar && (await stopped(found.connection))) {
+				process.stderr.write(`${replacedSidecar(server, manifest.version, dir)}\n`)
+				stoppedInstance = found.instance
+			} else {
+				if (!told) {
+					process.stderr.write(`${olderServer(server, manifest.version, dir)}\n`)
 				}
-				if (exited !== undefined && exited !== 3) {
-					throw new ClosedError(`the sidecar exited with ${exited}: ${await tail(runtime, log)}`)
-				}
-				await sleep(pause)
+				told = true
+				return found.connection
 			}
-			why =
-				exited === 3
-					? 'another process holds the directory but no sidecar answers'
-					: 'no sidecar answered'
 		}
-		throw new ClosedError(
-			`${why} in ${(starts * winnerTime) / 1000} s: ${await tail(runtime, log)}`,
-		)
+		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log', log, ...idling]
+		return startSidecar(runtime, serve, log, command, stoppedInstance)
 	}
 }
 
 /**
- * What to tell a program whose SDK found a sidecar of an older release than
- * its own, which runs its own binary until it has been idle; undefined for one
- * as new or newer, and for a build that is no release.
+ * Starts a sidecar and waits for SERVE to name one that answers, its own or
+ * another client's that won the start. One that exits with 3 found the
+ * directory held, by a winner about to publish or by a sidecar still letting
+ * go, and is started again after a pause; any other exit is an error. A
+ * sidecar told to stop answers for a moment after it agreed, until SERVE
+ * goes, so the one of the instance stopped is passed over.
  */
-export function olderSidecar(server: string, own: string, dir: string): string | undefined {
+async function startSidecar(
+	runtime: Runtime,
+	serve: string,
+	log: string,
+	command: string[],
+	stoppedInstance?: string,
+): Promise<Connection> {
+	const deadline = Date.now() + startTime
+	let held = false
+	for (let pause = heldPause; ; pause = Math.min(pause * 2, 1000)) {
+		const child = runtime.spawnDetached(command)
+		let exited: number | undefined
+		child.exited.then(code => {
+			exited = code
+		})
+		let again: number | undefined
+		for (let wait = 5; Date.now() < deadline; wait = Math.min(wait * 2, 100)) {
+			const reached = await reachServe(runtime, serve)
+			if (reached !== undefined && reached.instance !== stoppedInstance) {
+				return reached.connection
+			}
+			await reached?.connection.close()
+			if (exited !== undefined && exited !== 3) {
+				throw new ClosedError(`the sidecar exited with ${exited}: ${await tail(runtime, log)}`)
+			}
+			if (exited === 3) {
+				held = true
+				again ??= Date.now() + pause
+				if (Date.now() >= again) {
+					break
+				}
+			}
+			await sleep(wait)
+		}
+		if (Date.now() >= deadline) {
+			const why = held
+				? 'another process holds the directory but no sidecar answers'
+				: 'no sidecar answered'
+			throw new ClosedError(`${why} in ${startTime / 1000} s: ${await tail(runtime, log)}`)
+		}
+	}
+}
+
+/**
+ * Asks a sidecar to stop as tinystore stop does, closing the connection once
+ * it has answered; false when it refuses, and the connection stays open.
+ */
+async function stopped(connection: Connection): Promise<boolean> {
+	try {
+		await connection.session.call(methods['server.stop'], Empty.encode({}))
+	} catch {
+		return false
+	}
+	await connection.close()
+	return true
+}
+
+/**
+ * Whether a server's release is older than the SDK's own; a build that is no
+ * release, a development copy's or a Go pseudo-version, is neither.
+ */
+export function olderRelease(server: string, own: string): boolean {
 	const theirs = release(server)
 	const ours = release(own)
-	if (theirs === undefined || ours === undefined || compareReleases(theirs, ours) >= 0) {
-		return undefined
-	}
+	return theirs !== undefined && ours !== undefined && compareReleases(theirs, ours) < 0
+}
+
+/** What a program whose SDK replaced a sidecar of an older release is told. */
+export function replacedSidecar(server: string, own: string, dir: string): string {
 	return (
-		`tinystore: the sidecar serving ${dir} is ${server}, older than this SDK's ${own}; it runs its own ` +
-		`binary until it has been idle, or until tinystore stop ${dir} lets the next open start this SDK's`
+		`tinystore: the sidecar serving ${dir} was ${server}, older than this SDK's ${own}; it finishes ` +
+		"its calls, and this SDK's binary serves the directory from now on"
+	)
+}
+
+/** What a program whose SDK found a server of an older release that is no sidecar is told. */
+export function olderServer(server: string, own: string, dir: string): string {
+	return (
+		`tinystore: ${dir} is served by ${server}, older than this SDK's ${own}; a person or a program ` +
+		'started that server, and it runs until they stop it'
 	)
 }
 
@@ -243,7 +297,10 @@ function compareReleases(a: Release, b: Release): number {
 }
 
 /** The sidecar SERVE names, once its proof checks; undefined on any failure. */
-async function reachServe(runtime: Runtime, serve: string): Promise<Connection | undefined> {
+async function reachServe(
+	runtime: Runtime,
+	serve: string,
+): Promise<{ connection: Connection; sidecar: boolean; instance: string } | undefined> {
 	let published: Published
 	try {
 		const text = await runtime.readFile(serve)
@@ -260,11 +317,12 @@ async function reachServe(runtime: Runtime, serve: string): Promise<Connection |
 		return undefined
 	}
 	try {
-		return await Connection.dial(runtime, endpoint, {
+		const connection = await Connection.dial(runtime, endpoint, {
 			client: runtime.client,
 			secret: new Uint8Array(secret),
 			challenge: new Uint8Array(randomBytes(16)),
 		})
+		return { connection, sidecar: published.sidecar === true, instance: published.instance }
 	} catch {
 		return undefined
 	}
@@ -284,10 +342,18 @@ async function tail(runtime: Runtime, log: string): Promise<string> {
 }
 
 /** A private child: tinystore serve --stdio, living and dying with this process. */
-export function privateChild(runtime: Runtime, dir: string, binary: () => string): Dialer {
+export function privateChild(
+	runtime: Runtime,
+	dir: string,
+	binary: () => string,
+	clock?: Date,
+): Dialer {
+	// a test's clock starts where the first child's did, and a child started again starts it there
+	const clocked = clock === undefined ? [] : ['--clock', clock.toISOString()]
 	return async () => {
 		let session: Session | undefined
-		const child = runtime.spawnPrivate([binary(), 'serve', '--dir', resolve(dir), '--stdio'], {
+		const argv = [binary(), 'serve', '--dir', resolve(dir), '--stdio', ...clocked]
+		const child = runtime.spawnPrivate(argv, {
 			data: bytes => session?.receive(bytes),
 			end: err => session?.end(err),
 		})

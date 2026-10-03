@@ -13,14 +13,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/server/internal/private"
 	"github.com/tinyshed/tinystore/server/wire"
 )
 
-// The names a local server publishes in its store's directory, docs/server.md "SERVE".
+// What a local server publishes in its store's directory, docs/wire.md "Finding a local server".
 const (
 	publishedDir = "server/"
 	serveName    = "SERVE"
@@ -70,13 +72,60 @@ func (s *Server) Publish(ctx context.Context) (l Listener, unpublish func() erro
 	}, nil
 }
 
+// Share serves a program's own store to the other processes of its machine
+// while the program runs: it publishes the store as Publish does and serves
+// whoever finds it there, the tinystore command, an agent over MCP, and Bun
+// and Python programs alike. options carries the engines the program opened,
+// since each opens once a store.
+//
+//	stop, err := server.Share(ctx, store, server.Options{KV: state})
+//	if err != nil {
+//		return err
+//	}
+//	defer stop()
+//
+// ctx bounds publishing alone. stop removes SERVE and closes the server, giving
+// the streams running ten seconds to finish before it cancels them, and waits
+// for every connection to end; it comes before the store's Close.
+func Share(ctx context.Context, store *tinystore.Store, options Options) (stop func() error, err error) {
+	srv, err := New(store, options)
+	if err != nil {
+		return nil, err
+	}
+	l, unpublish, err := srv.Publish(ctx)
+	if err != nil {
+		return nil, err
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(context.WithoutCancel(ctx), l) }()
+
+	var once sync.Once
+	var stopped error
+	return func() error {
+		once.Do(func() {
+			closing, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopWait)
+			defer cancel()
+			stopped = errors.Join(unpublish(), srv.Close(closing))
+			if servedErr := <-served; !errors.Is(servedErr, errClosing) {
+				stopped = errors.Join(stopped, servedErr)
+			}
+			_ = l.Close() // a Serve that found the server closing never took the listener
+		})
+		return stopped
+	}, nil
+}
+
+// the time stop gives a shared store's streams before it cancels them, as a
+// sidecar gives its own
+const stopWait = 10 * time.Second
+
 // writeServe writes SERVE as a file of its own and renames it into place, so
 // that a client reads the whole of it or nothing
 func (s *Server) writeServe(dir string, endpoints ...string) error {
 	text, err := json.Marshal(wire.Published{
 		Protocol: wire.Protocol, Server: s.options.Version, PID: os.Getpid(),
 		Instance: base64.RawURLEncoding.EncodeToString(s.instance),
-		Secret:   base64.RawURLEncoding.EncodeToString(s.secret), Endpoints: endpoints,
+		Secret:   base64.RawURLEncoding.EncodeToString(s.secret), Endpoints: endpoints, Sidecar: s.options.Sidecar,
 	})
 	if err != nil {
 		return err

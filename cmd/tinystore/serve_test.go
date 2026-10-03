@@ -170,6 +170,9 @@ func TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle(t *testing.T) {
 	dir := t.TempDir()
 	done := start(t.Context(), t, "--dir", dir, "--local", "--idle", "300ms")
 	published := waitServe(t, dir, "", done)
+	if !published.Sidecar {
+		t.Fatalf("a sidecar's SERVE does not say so: %+v", published)
+	}
 	if welcome := handshake(t, published); welcome.Capability != wire.Admin {
 		t.Fatalf("a local connection is %s", welcome.Capability)
 	}
@@ -298,6 +301,35 @@ func TestAPrivateChildServesItsParent(t *testing.T) {
 	mustRelease(t, dir)
 }
 
+// a private child started with a clock runs on it, as its WELCOME says, for
+// a test that moves it with server.clock
+func TestAPrivateChildRunsOnTheClockItIsGiven(t *testing.T) {
+	dir := t.TempDir()
+	stdin, parentWrites := io.Pipe()
+	parentReads, stdout := io.Pipe()
+	logs := &lockedBuffer{}
+	done := make(chan error, 1)
+	args := []string{"--dir", dir, "--stdio", "--clock", "2026-10-03T09:00:00Z"}
+	go func() {
+		done <- serve(t.Context(), args, console{stdin: stdin, stdout: stdout, stderr: logs})
+	}()
+	hello := wire.Hello{Protocol: wire.Protocol, Client: "tinystore-cmd-test"}
+	if _, err := parentWrites.Write(wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil))); err !=
+		nil {
+		t.Fatal(err)
+	}
+	if welcome := readWelcome(t, parentReads); welcome.Now != time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC).UnixMilli() {
+		t.Fatalf("a private child on a clock welcomed at %d", welcome.Now)
+	}
+	if err := parentWrites.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ended(t, done); err != nil {
+		t.Fatalf("%v\n%s", err, logs)
+	}
+	mustRelease(t, dir)
+}
+
 // a private child told to leave does, though its parent keeps its side open
 // and says nothing: closing a blocking stdin ends no read waiting on it
 func TestAPrivateChildLeavesWhenToldThoughItsParentStays(t *testing.T) {
@@ -355,7 +387,11 @@ func TestServeOfADirectoryServesItUntilCtrlC(t *testing.T) {
 	go func() {
 		done <- serve(ctx, []string{dir}, console{stdin: strings.NewReader(""), stdout: stderr, stderr: stderr})
 	}()
-	handshake(t, waitServe(t, dir, "", done))
+	published := waitServe(t, dir, "", done)
+	if published.Sidecar {
+		t.Fatal("a person's serve says in SERVE it is a sidecar, which a newer client would stop")
+	}
+	handshake(t, published)
 	cancel()
 	if err := ended(t, done); err != nil {
 		t.Fatal(err)
@@ -392,6 +428,8 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 		{"--dir", dir, "--local", "--tls-cert", missing, "--tls-key", missing},
 		{"--dir", dir, "--local", "--idle", "-1s"},
 		{"--dir", dir, "--local", "extra"},
+		{"--dir", dir, "--local", "--clock", "2026-10-03T09:00:00Z"},
+		{"--dir", dir, "--stdio", "--clock", "yesterday"},
 	} {
 		if err := serve(t.Context(), args, console{stderr: &lockedBuffer{}}); err == nil || errors.Is(err, errHeld) {
 			t.Errorf("serve %q: %v", args, err)

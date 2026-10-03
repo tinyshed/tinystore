@@ -267,6 +267,33 @@ func (d *DB) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile
 	return []tinystore.SnapshotFile{{Name: fileName(d.name), Engine: "sql", Schema: schema}}, nil
 }
 
+// Copy writes a consistent copy of the database name into dir, as the store's
+// Snapshot copies a database that is open, while no one in this store has it
+// open: a backup of a whole directory takes the databases no program opened
+// too. Opening one instead would make it open for good, and a migration that
+// waits for its program would then wait for the store to open again.
+//
+// It holds the name while it copies, so an Open meanwhile is
+// tinystore.ErrInUse, as is a copy of a database that is open.
+func Copy(ctx context.Context, store *tinystore.Store, name, dir string) (tinystore.SnapshotFile, error) {
+	if !validName.MatchString(name) {
+		return tinystore.SnapshotFile{}, fmt.Errorf("%w: database name %q", tinystore.ErrInvalid, name)
+	}
+	path, release, err := store.Claim(fileName(name))
+	if err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("copy sql %q: %w", name, err)
+	}
+	defer release()
+	if _, err = os.Stat(path); err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("copy sql %q: %w", name, err)
+	}
+	schema, err := sqlite.Copy(ctx, path, tinystore.SnapshotPath(dir, fileName(name)))
+	if err != nil {
+		return tinystore.SnapshotFile{}, fmt.Errorf("copy sql %q: %w", name, err)
+	}
+	return tinystore.SnapshotFile{Name: fileName(name), Engine: "sql", Schema: schema}, nil
+}
+
 // SQLiteFile is the database's file, for an engine that keeps its tables in it,
 // as a jobs store opened with Options.In does. A program has no use for it.
 func (d *DB) SQLiteFile() *sqlite.File {

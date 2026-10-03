@@ -137,11 +137,68 @@ describe('batches', () => {
 		expect((await notes)?.length).toBe(await count)
 	})
 
+	test('a batch and a view give back what their function returns, its promises answered', async () => {
+		const [jam] = await app.batch(tx => [
+			tx.one<Note>("insert into notes (author_id, title) values (1, 'jam') returning *"),
+		])
+		expect(jam?.title).toBe('jam')
+		const [notes, count] = await app.view(tx => [
+			tx.all<Note>('select * from notes'),
+			tx.scalar<number>('select count(*) from notes'),
+		])
+		const titles: string[] = notes.map(note => note.title)
+		expect(titles).toContain('jam')
+		expect(titles.length).toBe(count)
+		const awaited = app.view(async tx => [await tx.all('select * from notes')])
+		expect(await caught(awaited)).toBeInstanceOf(InvalidError)
+	})
+
 	test('a second open checks the migrations it carries against the file', async () => {
 		const again = await store
 			.sql('app', { migrations: { '001_notes.sql': 'something else' } })
 			.catch(e => e)
 		expect(again).toBeInstanceOf(InvalidError)
 		expect((await store.sql('app')).name).toBe('app')
+	})
+})
+
+describe('jobs in the database', () => {
+	test('a job a batch enqueues commits with the rows or not at all', async () => {
+		const index = store.jobs.queue<{ id: number }>('index', { in: app })
+		await app.batch(tx => {
+			tx.exec("insert into notes (author_id, title) values (1, 'indexed')")
+			index.withTx(tx).enqueue({ id: 1 }, { key: 'note:1' })
+		})
+		const failed = await caught(
+			app.batch(tx => {
+				index.withTx(tx).enqueue({ id: 2 }, { key: 'note:2' })
+				tx.exec("insert into notes (author_id, title) values (1, 'indexed')")
+			}),
+		)
+		expect(failed).toBeInstanceOf(ConflictError)
+		expect(await index.get('note:1')).toMatchObject({ value: { id: 1 } })
+		expect(await index.get('note:2')).toBeUndefined()
+		expect(await app.scalar<number>("select count(*) from notes where title = 'indexed'")).toBe(1)
+
+		// the queue works outside a batch too, and a batch of jobs alone is one
+		await index.enqueue({ id: 3 }, { key: 'note:3' })
+		await app.batch(tx => {
+			index.withTx(tx).enqueue({ id: 4 }, { key: 'note:4' })
+		})
+		expect(await index.get('note:4')).toMatchObject({ value: { id: 4 } })
+
+		const elsewhere = store.jobs.queue<number>('elsewhere')
+		const refused = await caught(
+			app.batch(tx => {
+				elsewhere.withTx(tx).enqueue(1)
+			}),
+		)
+		expect(refused).toBeInstanceOf(InvalidError)
+		const viewed = await caught(
+			app.view(tx => {
+				index.withTx(tx).enqueue({ id: 5 })
+			}),
+		)
+		expect(viewed).toBeInstanceOf(InvalidError)
 	})
 })

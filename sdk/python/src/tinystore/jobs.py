@@ -44,6 +44,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
     from datetime import datetime
 
+    from .sql import Database, SqlBatch
+
 _ACK, _RETRY, _FAIL, _SNOOZE, _EXTEND, _PROGRESS = 1, 2, 3, 4, 5, 6
 _STATES: dict[int, str] = {1: "waiting", 2: "running", 3: "failed", 4: "done", 5: "cancelled"}
 _REPORT_EVERY = 0.1
@@ -303,21 +305,31 @@ class Jobs:
         keep_failed: Duration | None = None,
         keep_done: Duration | None = None,
         max_running: int | None = None,
+        in_: Database | None = None,
     ) -> Queue[V]:
         """A queue of JSON values of one type; its policy is the options' and the server's defaults.
 
         max_running bounds the jobs that run at once across every worker of
-        the store.
+        the store. in_ keeps the queue in a database's file instead of jobs.db,
+        so that a batch of the database commits a job with its rows::
+
+            index = store.jobs.queue("index", IndexNote, in_=db)
+            async with db.batch() as tx:
+                tx.exec("update notes set body = ? where id = ?", body, note_id)
+                index.with_tx(tx).enqueue(IndexNote(note_id))
         """
         check_name(name, "queue")
         fields = _policy(lease, max_attempts, backoff, max_waiting, keep_failed, keep_done, max_running)
-        return Queue(self._link, name, JobsQueue.encode(name=name, **fields), of)
+        open_body = JobsQueue.encode(name=name, in_=None if in_ is None else in_.name, **fields)
+        return Queue(self._link, name, open_body, of, in_)
 
-    def schedule(self, name: str, repeat: Repeat, /, **options: Any) -> Queue[None]:
+    def schedule(self, name: str, repeat: Repeat, /, in_: Database | None = None, **options: Any) -> Queue[None]:
         """A queue of one job under the schedule's name, repeating as it says; work runs it, cancel stops it."""
         check_name(name, "schedule")
         fields = _policy(**options)
-        return Queue(self._link, name, JobsQueue.encode(name=name, schedule=repeat.fields(), **fields), None)
+        database = None if in_ is None else in_.name
+        open_body = JobsQueue.encode(name=name, schedule=repeat.fields(), in_=database, **fields)
+        return Queue(self._link, name, open_body, None, in_)
 
 
 def _policy(
@@ -341,15 +353,58 @@ def _policy(
     }
 
 
+class QueueTx[V]:
+    """A queue's enqueue inside a batch of the database it lives in."""
+
+    def __init__(self, tx: SqlBatch, open_body: bytes, job: Callable[..., dict[str, Any]]) -> None:
+        self._tx, self._open, self._job = tx, open_body, job
+
+    def enqueue(
+        self,
+        value: V,
+        *,
+        at: datetime | None = None,
+        after: Duration | None = None,
+        key: str | None = None,
+        repeat: Repeat | None = None,
+    ) -> asyncio.Future[None]:
+        """Adds a job to the batch; the future settles once the batch has committed."""
+        return self._tx.enqueue(self._open, self._job(value, at, after, key, repeat))
+
+
 class Queue[V]:
-    def __init__(self, link: Link, name: str, open_body: bytes, of: Any) -> None:
-        self._link, self.name, self._open, self._of = link, name, open_body, of
+    def __init__(self, link: Link, name: str, open_body: bytes, of: Any, in_: Database | None = None) -> None:
+        self._link, self.name, self._open, self._of, self._in = link, name, open_body, of, in_
 
     def _decode(self, text: str) -> Any:
         return None if self._of is None else from_json(text, self._of)
 
     async def _handle(self, connection: Connection) -> int:
+        """The queue's handle, its database opened first when it lives in one, as the server needs."""
+        if self._in is not None:
+            await self._in.handle(connection)
         return await handle_on(connection, METHODS["jobs.open"], self._open)
+
+    def with_tx(self, tx: SqlBatch) -> QueueTx[V]:
+        """The queue's enqueue inside a batch of the database it lives in, opened in_: the job commits with its rows."""
+        if self._in is None or self._in.name != tx.database:
+            lives = "jobs.db" if self._in is None else f"sql {self._in.name}"
+            raise InvalidError(
+                f"the queue {self.name} lives in {lives}, not in sql {tx.database}: "
+                "open it with in_=db to enqueue in that database's batches"
+            )
+        return QueueTx(tx, self._open, self._job)
+
+    def _job(
+        self, value: V, at: datetime | None, after: Duration | None, key: str | None, repeat: Repeat | None
+    ) -> dict[str, Any]:
+        return {
+            "value": "{}" if self._of is None else to_json(value),
+            "key": key,
+            "at": None if at is None else unix_ms(at),
+            "after": None if after is None else ms(after),
+            "repeat": None if repeat is None else repeat.fields(),
+        }
 
     async def enqueue(
         self,
@@ -365,16 +420,7 @@ class Queue[V]:
 
     async def enqueue_all(self, jobs: Iterable[Enqueue[V]]) -> None:
         """Adds jobs in one transaction, all or none; a refused one names itself as call."""
-        encoded = [
-            {
-                "value": "{}" if self._of is None else to_json(j.value),
-                "key": j.key,
-                "at": None if j.at is None else unix_ms(j.at),
-                "after": None if j.after is None else ms(j.after),
-                "repeat": None if j.repeat is None else j.repeat.fields(),
-            }
-            for j in jobs
-        ]
+        encoded = [self._job(j.value, j.at, j.after, j.key, j.repeat) for j in jobs]
 
         async def attempt(connection: Connection) -> None:
             handle = await self._handle(connection)

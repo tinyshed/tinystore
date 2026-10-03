@@ -21,10 +21,20 @@ const (
 // query_only readers refuse VACUUM INTO, and a read-only file lets the writer
 // keep writing.
 func (f *File) Snapshot(ctx context.Context, into string) (applied int, err error) {
+	return Copy(ctx, f.path, into)
+}
+
+// Copy writes a consistent copy of the file at path to into, as Snapshot does
+// for a file that is open, whether or not a File of this process holds it.
+func Copy(ctx context.Context, path, into string) (applied int, err error) {
 	if err = os.MkdirAll(filepath.Dir(into), 0o750); err != nil {
 		return 0, fmt.Errorf("snapshot SQLite: %w", err)
 	}
-	copier, err := openPool(connectionURL(f.path, snapshotArguments()), 0, nil)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return 0, fmt.Errorf("snapshot SQLite: %w", err)
+	}
+	copier, err := openPool(connectionURL(abs, snapshotArguments()), 0, nil)
 	if err != nil {
 		return 0, fmt.Errorf("snapshot SQLite: %w", err)
 	}

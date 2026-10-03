@@ -301,6 +301,62 @@ async def test_objects_come_back_byte_for_byte(store: tinystore.Store) -> None:
     assert (await files.usage()).objects == 0
 
 
+async def test_a_tx_reads_decides_and_writes_and_runs_again_when_a_key_it_read_changed(
+    store: tinystore.Store,
+) -> None:
+    codes = store.kv.bucket("tx-codes", int)
+    sessions = store.kv.bucket("tx-sessions", str)
+    await codes.set("K7Q2", 42)
+    runs = 0
+
+    async def sign_in(tx: tinystore.Tx) -> int:
+        nonlocal runs
+        runs += 1
+        user_id = await codes.with_tx(tx).take("K7Q2")
+        if runs == 1:
+            await codes.set("K7Q2", 43)  # another writer, between the read and the commit
+        if user_id is None:
+            raise InvalidError("no such code")
+        sessions.of(user_id).with_tx(tx).set("token", "phone")
+        return user_id
+
+    assert await store.kv.tx(sign_in) == 43
+    assert runs == 2
+    assert await codes.get("K7Q2") is None
+    assert await sessions.of(43).get("token") == "phone"
+    assert await sessions.of(42).get("token") is None
+    with pytest.raises(InvalidError):
+        await store.kv.tx(sign_in)
+
+
+async def test_a_tx_reads_its_own_writes_and_gives_up_on_a_key_that_keeps_changing(store: tinystore.Store) -> None:
+    notes = store.kv.bucket("tx-notes", str)
+
+    async def write_then_read(tx: tinystore.Tx) -> tuple[str | None, bool]:
+        notes.with_tx(tx).set("b", "written")
+        written = await notes.with_tx(tx).get("b")
+        notes.with_tx(tx).delete("b")
+        return written, await notes.with_tx(tx).has("b")
+
+    assert await store.kv.tx(write_then_read) == ("written", False)
+
+    balances = store.kv.bucket("tx-busy", int)
+    await balances.set("n", 0)
+    runs = 0
+
+    async def contended(tx: tinystore.Tx) -> None:
+        nonlocal runs
+        runs += 1
+        n = await balances.with_tx(tx).get("n") or 0
+        await balances.set("n", n + 100)  # another writer, every time
+        balances.with_tx(tx).set("n", n + 1)
+
+    with pytest.raises(ConflictError):
+        await store.kv.tx(contended)
+    assert runs == 5
+    assert await balances.get("n") == 500
+
+
 async def test_sql_statements_batches_and_views(store: tinystore.Store, tmp_path: Path) -> None:
     migrations = tmp_path / "migrations"
     migrations.mkdir()
@@ -345,6 +401,42 @@ async def test_sql_statements_batches_and_views(store: tinystore.Store, tmp_path
             tx.exec("insert into notes (author_id, title) values (1, 'coffee')")
             tx.exec("insert into notes (author_id, title) values (1, 'tea')")
     assert await app.one("select * from notes where title = 'coffee'") is None
+
+
+async def test_a_job_a_batch_enqueues_commits_with_the_rows_or_not_at_all(
+    store: tinystore.Store, tmp_path: Path
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "001_notes.sql").write_text("create table notes (id integer primary key, title text unique) strict;")
+    app = await store.sql("app", migrations=migrations)
+    index = store.jobs.queue("index", int, in_=app)
+
+    async with app.batch() as tx:
+        tx.exec("insert into notes (title) values ('indexed')")
+        queued = index.with_tx(tx).enqueue(1, key="note:1")
+    assert await queued is None
+    with pytest.raises(ConflictError):
+        async with app.batch() as tx:
+            index.with_tx(tx).enqueue(2, key="note:2")
+            tx.exec("insert into notes (title) values ('indexed')")
+    entry = await index.get("note:1")
+    assert entry is not None and entry.value == 1
+    assert await index.get("note:2") is None
+    assert await app.scalar("select count(*) from notes") == 1
+
+    # the queue works outside a batch too, and a batch of jobs alone is one
+    await index.enqueue(3, key="note:3")
+    async with app.batch() as tx:
+        index.with_tx(tx).enqueue(4, key="note:4")
+    assert await index.get("note:4") is not None
+
+    with pytest.raises(InvalidError):
+        async with app.batch() as tx:
+            store.jobs.queue("elsewhere", int).with_tx(tx).enqueue(1)
+    with pytest.raises(InvalidError):
+        async with app.view() as tx:
+            index.with_tx(tx).enqueue(5)
 
 
 async def test_records_come_back_as_they_went_in(store: tinystore.Store) -> None:

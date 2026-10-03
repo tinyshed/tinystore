@@ -32,6 +32,23 @@ export function checkName(name: string, of: string): void {
 	}
 }
 
+/**
+ * What a batch's or a view's function returned, once the batch has settled: a
+ * promise its answer, an array or a tuple each element's as Promise.all gives
+ * them, and anything else itself.
+ */
+export type Settled<T> =
+	T extends PromiseLike<infer V>
+		? V
+		: T extends readonly unknown[]
+			? { -readonly [K in keyof T]: Awaited<T[K]> }
+			: T
+
+/** Answers what a batch's function returned, once the batch's calls have settled. */
+export async function settle<T>(returned: T): Promise<Settled<T>> {
+	return (Array.isArray(returned) ? await Promise.all(returned) : await returned) as Settled<T>
+}
+
 /** A page of a scan: its items, and where the next begins when more remain. */
 export interface Page<T, After> {
 	items: T[]

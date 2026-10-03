@@ -72,7 +72,7 @@ func jobsOpen(c *call) error {
 	if err := ask.Decode(c.request); err != nil {
 		return err
 	}
-	store, err := c.session.server.jobsStore(c.ctx)
+	store, err := c.session.server.jobsStoreIn(c.ctx, ask.In)
 	if err != nil {
 		return err
 	}

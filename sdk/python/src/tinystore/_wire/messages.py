@@ -27,6 +27,8 @@ from .codec import (
 
 METHODS: dict[str, int] = {
     "server.stop": 0x0001,
+    "server.clock": 0x0002,
+    "server.backup": 0x0003,
     "kv.open": 0x0101,
     "kv.get": 0x0102,
     "kv.has": 0x0103,
@@ -118,6 +120,8 @@ Handle = message("handle", handle=(1, uint))
 
 Empty = message("empty")
 
+Clock = message("clock", at=(1, int_), advance=(2, uint))
+
 KvWindow = message("kv.window", name=(1, str_), limit=(2, uint), per=(3, uint))
 
 KvBucket = message(
@@ -191,6 +195,7 @@ JobsQueue = message(
     keep_done=(8, uint),
     schedule=(9, JobsRepeat),
     max_running=(10, uint),
+    in_=(11, str_),
 )
 
 _jobs_job = {
@@ -325,6 +330,7 @@ SqlStatements = message(
     handle=(1, uint),
     statements=(2, list_(SqlStatement)),
     read=(3, bool_),
+    jobs=(4, list_(JobsBatch)),
 )
 
 SqlDone = message("sql.done", changes=(1, int_), last_id=(2, int_))
@@ -466,6 +472,7 @@ MESSAGES: dict[str, Message] = {
         Failure,
         Handle,
         Empty,
+        Clock,
         KvBucket,
         KvCall,
         KvOperation,

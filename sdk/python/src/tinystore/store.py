@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import secrets
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from ._connection import Link, private_child, remote, sidecar
 from ._runtime import find_binary
 from ._time import Duration, ms
+from ._wire.messages import METHODS, Empty
 from .blobs import Blobs
+from .clock import Clock
+from .errors import InvalidError
 from .jobs import Jobs
 from .kv import Kv
 from .metrics import Metrics
@@ -16,9 +22,9 @@ from .records import Records
 from .sql import Database, Migrations, open_database
 
 if TYPE_CHECKING:
-    import os
     import ssl
     from collections.abc import Awaitable, Callable, Generator
+    from datetime import datetime
 
     from ._connection import Connection
 
@@ -38,6 +44,8 @@ class Store:
 
     def __init__(self, link: Link) -> None:
         self._link = link
+        self.clock = Clock(link)
+        """The test's clock of a private store opened with clock; on any other, its calls are InvalidError."""
         self.kv = Kv(link)
         self.jobs = Jobs(link)
         self.blobs = Blobs(link)
@@ -64,6 +72,37 @@ class Store:
         migrations; every later one checks them against what the file applied.
         """
         return await open_database(self._link, name, migrations)
+
+    async def backup(self, path: str | os.PathLike[str]) -> None:
+        """Writes a backup of the whole store to a zip at path while the store keeps working, as tinystore backup does.
+
+        The zip holds every engine's file with its size and checksum, which
+        tinystore restore checks. It is written beside path and renamed into
+        place once whole, so a backup that fails leaves no zip. It needs an
+        admin connection; a remote server sends the zip over it.
+        """
+        target = Path(path)
+        part = target.with_name(f"{target.name}.{secrets.token_hex(4)}.part")
+
+        async def attempt(connection: Connection) -> None:
+            stream = await connection.session.open(METHODS["server.backup"], Empty.encode(), True)
+            with part.open("wb") as file:
+                await stream.next()  # the RESPONSE that heads the zip
+                while True:
+                    event = await stream.next()
+                    stream.consumed(len(event.body))
+                    file.write(event.body)
+                    if event.end:
+                        break
+                file.flush()
+                os.fsync(file.fileno())
+
+        try:
+            await self._link.run("read", attempt)
+            part.replace(target)
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
 
     async def close(self) -> None:
         """Ingests the instruments' last values, then closes the connection."""
@@ -109,20 +148,26 @@ def open(
     private: bool = False,
     binary: str | None = None,
     idle: Duration | None = None,
+    clock: datetime | None = None,
 ) -> Opening:
     """Opens the store in a directory through its sidecar, found through SERVE or started.
 
     private asks for a child of this process's own on stdin and stdout
     instead, which lives and dies with it. idle is how long a sidecar this
     process starts stays once its last connection has gone: 30 s unless
-    given, 0 for ever. It returns once the server has answered.
+    given, 0 for ever. clock runs a private server on a test's clock, from
+    that time, which store.clock moves forward instead of a test waiting:
+    keys expire, jobs come due and records age at once. It returns once the
+    server has answered.
     """
 
     def which() -> str:
         return find_binary(binary)
 
+    if clock is not None and not private:
+        raise InvalidError("a clock is a private server's: a shared sidecar runs on the system's time")
     if private:
-        return Opening(private_child(directory, which))
+        return Opening(private_child(directory, which, clock))
     return Opening(sidecar(directory, which, None if idle is None else ms(idle) / 1000))
 
 

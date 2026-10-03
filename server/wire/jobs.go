@@ -30,6 +30,7 @@ type JobsQueue struct {
 	KeepDone     int64
 	Schedule     *Repeat
 	MaxRunning   uint64
+	In           string // the database whose file keeps the queue, which its sql.batch enqueues in
 }
 
 func (q JobsQueue) Append(dst []byte) []byte {
@@ -47,6 +48,7 @@ func (q JobsQueue) Append(dst []byte) []byte {
 		m.SetBuf(q.Schedule.Append(m.Buf()))
 	}
 	optionalUint(&m, 10, q.MaxRunning)
+	optionalStr(&m, 11, q.In)
 	return m.End()
 }
 
@@ -75,6 +77,8 @@ func (q *JobsQueue) Decode(body []byte) error {
 			q.Schedule.decode(&d)
 		case 10:
 			q.MaxRunning = d.Uint()
+		case 11:
+			q.In = d.Str()
 		}
 	}
 	return d.End()
@@ -187,6 +191,11 @@ func (e JobsBatch) Append(dst []byte) []byte {
 
 func (e *JobsBatch) Decode(body []byte) error {
 	d := NewDecoder(body)
+	e.decode(&d)
+	return d.End()
+}
+
+func (e *JobsBatch) decode(d *Decoder) {
 	for key := range d.Fields() {
 		switch key {
 		case 1:
@@ -195,13 +204,12 @@ func (e *JobsBatch) Decode(body []byte) error {
 			for range d.Items() {
 				var job JobsJob
 				for field := range d.Fields() {
-					job.decodeField(&d, field)
+					job.decodeField(d, field)
 				}
 				e.Jobs = append(e.Jobs, job)
 			}
 		}
 	}
-	return d.End()
 }
 
 // JobsChange is jobs.update's request: a job by its key, given a new value,

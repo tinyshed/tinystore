@@ -21,7 +21,8 @@ import (
 
 const serveUsage = `usage:
   tinystore serve <dir>                               the directory's sidecar until Ctrl+C, found through SERVE
-  tinystore serve --dir <dir> --stdio                 a private child: frames on stdin and stdout
+  tinystore serve --dir <dir> --stdio [--clock <time>]  a private child: frames on stdin and stdout; --clock runs
+                                                      it on a test's clock, at <time> (RFC 3339) until moved
   tinystore serve --dir <dir> --local [--idle 30s]    the directory's shared sidecar, published in <dir>/server/SERVE
   tinystore serve --dir <dir> --listen tls://<host:port> --tls-cert <file> --tls-key <file> --tokens <file>
 flags:
@@ -55,6 +56,8 @@ type serveFlags struct {
 	foreground                                bool // serve <dir>: a person's, until Ctrl+C, rather than a client's
 	idle                                      time.Duration
 	memory                                    int64
+	clock                                     string    // --clock as given
+	clockAt                                   time.Time // where a test's clock starts, when --clock gives one
 }
 
 func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
@@ -72,6 +75,7 @@ func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
 	flags.StringVar(&asked.tokens, "tokens", "", "")
 	flags.Int64Var(&asked.memory, "memory", 0, "")
 	flags.StringVar(&asked.log, "log", "", "")
+	flags.StringVar(&asked.clock, "clock", "", "")
 	dir, err := parseWithDir(flags, args, &asked.dir)
 	if err != nil {
 		return serveFlags{}, err
@@ -99,6 +103,14 @@ func parseServe(args []string, stderr io.Writer) (serveFlags, error) {
 		return serveFlags{}, errors.New("serve --listen tls:// takes --tls-cert and --tls-key, and nothing else does")
 	case asked.idle < 0:
 		return serveFlags{}, errors.New("serve --idle is a duration, 0 for never")
+	case asked.clock != "" && !asked.stdio:
+		return serveFlags{}, errors.New("serve --clock is a private server's, with --stdio: a shared store runs on " +
+			"the system's time")
+	}
+	if asked.clock != "" {
+		if asked.clockAt, err = time.Parse(time.RFC3339Nano, asked.clock); err != nil {
+			return serveFlags{}, fmt.Errorf("serve --clock is a time such as 2026-10-03T09:00:00Z: %w", err)
+		}
 	}
 	return asked, nil
 }
@@ -120,7 +132,10 @@ type serving struct {
 }
 
 func readServing(asked serveFlags) (serving, error) {
-	read := serving{serveFlags: asked, options: server.Options{Version: version()}}
+	read := serving{serveFlags: asked, options: server.Options{
+		Version: version(),
+		Sidecar: asked.local && !asked.foreground, // a client's, which a client of a newer release replaces
+	}}
 	if asked.tlsCert != "" {
 		certificate, err := tls.LoadX509KeyPair(asked.tlsCert, asked.tlsKey)
 		if err != nil {
@@ -193,7 +208,12 @@ func serveLogged(ctx context.Context, asked serveFlags, streams console, logger 
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(400)
 	}
-	store, err := tinystore.Open(ctx, asked.dir, tinystore.Options{Logger: logger, Memory: asked.memory})
+	opening := tinystore.Options{Logger: logger, Memory: asked.memory}
+	if asked.clock != "" {
+		read.options.Clock = server.NewClock(asked.clockAt)
+		opening.Clock = read.options.Clock.Now
+	}
+	store, err := tinystore.Open(ctx, asked.dir, opening)
 	if errors.Is(err, tinystore.ErrInUse) {
 		return fmt.Errorf("%w: %w", errHeld, err)
 	}

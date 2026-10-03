@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, TextIO
 
-from ._trace import carried
+from ._trace import carried, shared
 from ._values import to_json
 from .errors import InvalidError
 
@@ -267,7 +267,7 @@ class ConsoleHandler(logging.Handler):
             stream=self._stream,
             level=(record.levelno - 20) * 4 // 10,
             msg=record.getMessage(),
-            context=encode_fields([("logger", record.name)], self._hides),
+            context=encode_fields([("logger", record.name), *shared.get()], self._hides),
             attrs=encode_fields(attrs, self._hides),
         )
         trace = carried.get()

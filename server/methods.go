@@ -16,6 +16,8 @@ func (s *Server) handlers() map[wire.Method]handler {
 	s.recordsMethods(methods)
 	s.metricsMethods(methods)
 	methods[wire.ServerStop] = serverStop
+	methods[wire.ServerClock] = serverClock
+	methods[wire.ServerBackup] = serverBackup
 	return methods
 }
 

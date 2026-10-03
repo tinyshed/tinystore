@@ -232,9 +232,16 @@ class Database:
         """Reads from one snapshot, sent as the async with block ends."""
         return SqlBatch(self, True)
 
-    async def run_batch(self, statements: list[dict[str, Any]], read: bool) -> list[dict[str, Any]]:
+    async def run_batch(
+        self, statements: list[dict[str, Any]], read: bool, jobs: list[tuple[bytes, dict[str, Any]]] | None = None
+    ) -> list[dict[str, Any]]:
         async def attempt(connection: Connection) -> list[dict[str, Any]]:
-            body = SqlStatements.encode(handle=await self.handle(connection), statements=statements, read=read or None)
+            handle = await self.handle(connection)
+            queued = [
+                {"handle": await handle_on(connection, METHODS["jobs.open"], open_body), "jobs": [job]}
+                for open_body, job in jobs or []
+            ]
+            body = SqlStatements.encode(handle=handle, statements=statements, read=read or None, jobs=queued or None)
             return SqlResults.decode(await connection.session.call(METHODS["sql.batch"], body)).get("results", [])
 
         return await self._link.run("read" if read else "write", attempt)
@@ -245,7 +252,18 @@ class SqlBatch:
 
     def __init__(self, db: Database, read: bool) -> None:
         self._db, self._read = db, read
+        self.database = db.name
+        """the database the batch runs in, whose queues alone take its jobs"""
         self._calls: list[tuple[dict[str, Any], Any, asyncio.Future[Any]]] = []
+        self._jobs: list[tuple[bytes, dict[str, Any], asyncio.Future[None]]] = []
+
+    def enqueue(self, open_body: bytes, job: dict[str, Any]) -> asyncio.Future[None]:
+        """Adds a job after the statements, for a queue's with_tx: a program writes queue.with_tx(tx).enqueue(value)."""
+        if self._read:
+            raise InvalidError("a job in a view, which reads")
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._jobs.append((open_body, job, future))
+        return future
 
     def _record(
         self,
@@ -280,14 +298,17 @@ class SqlBatch:
         return self
 
     async def __aexit__(self, kind: object, err: object, trace: object) -> None:
-        if err is not None or not self._calls:
-            for _, _, future in self._calls:
+        futures = [future for _, _, future in self._calls] + [future for _, _, future in self._jobs]
+        if err is not None or not futures:
+            for future in futures:
                 future.cancel()
             return
         try:
-            results = await self._db.run_batch([fields for fields, _, _ in self._calls], self._read)
+            results = await self._db.run_batch(
+                [fields for fields, _, _ in self._calls], self._read, [(o, job) for o, job, _ in self._jobs]
+            )
         except BaseException as failure:
-            for _, _, future in self._calls:
+            for future in futures:
                 future.set_exception(failure)
                 future.exception()
             raise
@@ -296,3 +317,5 @@ class SqlBatch:
                 future.set_result(settle(of, result))
             except Exception as failure:
                 future.set_exception(failure)
+        for _, _, future in self._jobs:
+            future.set_result(None)

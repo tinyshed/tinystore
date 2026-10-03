@@ -25,6 +25,7 @@ from ._console import Console, ConsoleHandler, Line
 from ._page import Page
 from ._time import Duration, ms, unix_ns
 from ._trace import carried as _carried
+from ._trace import shared as _shared
 from ._values import to_json
 from ._wire.messages import (
     METHODS,
@@ -150,6 +151,24 @@ def trace(trace_id: bytes | str, span_id: bytes | str | None = None) -> Generato
         yield
     finally:
         _carried.reset(token)
+
+
+@contextmanager
+def context(**fields: object) -> Generator[None]:
+    """Runs a block whose log lines carry fields in their context, as Bun's log.with and Go's Logger.With do.
+
+    A handler's lines inside the block, and in the tasks it starts, take the
+    fields after their logger's name; an inner block adds its own, a field
+    named again taking its newer value::
+
+        with tinystore.context(request_id=request_id):
+            log.info("charged", extra={"amount": 10})  # request_id in the line's context
+    """
+    token = _shared.set(tuple({**dict(_shared.get()), **fields}.items()))
+    try:
+        yield
+    finally:
+        _shared.reset(token)
 
 
 _CURSOR = re.compile(r"(-?\d*):(-?\d*)")
