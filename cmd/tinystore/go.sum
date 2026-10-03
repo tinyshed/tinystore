@@ -6,6 +6,10 @@ github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304 h1:dBSZlcEFdtBMvNRg34y50mConBPO
 github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304/go.mod h1:YvoJzbJpX6phd3BGdtiXu2NuD5RX6G8zsUdzt47GgOY=
 github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=
 github.com/ncruces/julianday v1.0.0/go.mod h1:Dusn2KvZrrovOMJuOt0TNXL6tB7U2E8kvza5fFc9G7g=
+github.com/tinyshed/tinystore v0.1.0-rc.3 h1:w9QXs5hjBxYI5wnXqpeEO3rbvS16ZSZAeng5cQKZHH8=
+github.com/tinyshed/tinystore v0.1.0-rc.3/go.mod h1:/McQxZ2go6ZS4afJ56PArtwJYmEq4AmaL7sVEX/mZPU=
+github.com/tinyshed/tinystore/server v0.1.0-rc.3 h1:zKqhFATVBAFWIdfDDa8+r/jFZN7MeSLeFWU8jyP95q4=
+github.com/tinyshed/tinystore/server v0.1.0-rc.3/go.mod h1:NyUCOmcH2aA6OOFSh+yCSkDwYjbnQduO4EDwjKG2+mo=
 golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
 golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
 golang.org/x/text v0.42.0 h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=
