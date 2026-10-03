@@ -28,7 +28,9 @@ import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 
-const db = await store.sql('app')
+const db = await store.sql('app', {
+	migrations: { '0001_users.sql': 'create table users (id integer primary key, name text)' },
+})
 await db.exec`insert into users (id, name) values (${42}, ${'Ada'})`
 
 const sessions = store.kv.bucket<string>('sessions', { sliding: '30d' })
