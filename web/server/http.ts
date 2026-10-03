@@ -18,10 +18,12 @@ export interface HttpServer {
 	stop(): Promise<void>
 }
 
-/** What the health routes ask the store: whether it answers, and whether its counters reach it. */
+/** What the health routes ask the store: whether it answers, whether its counters and lines reach it. */
 export interface Readiness {
 	status(): Promise<unknown>
 	metrics: { failures: number; lastFailure: Error | undefined }
+	/** the loggers whose dropped lines health reports, by their stream */
+	loggers: Record<string, { readonly dropped: number }>
 }
 
 type Handler = (request: Request, address: string) => Promise<Response> | Response
@@ -53,7 +55,9 @@ export function createRouter(
 				status: 'ok',
 				flushesFailed: store.metrics.failures,
 				lastFlushFailure: store.metrics.lastFailure?.message,
-				recordsDropped: logger.dropped,
+				linesDropped: Object.fromEntries(
+					Object.entries(store.loggers).map(([stream, each]) => [stream, each.dropped]),
+				),
 			}),
 
 		'GET /api/ready': async () => {

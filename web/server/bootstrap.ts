@@ -32,7 +32,14 @@ export async function start(): Promise<App> {
 
 	const analytics = createAnalytics(store, readers, site.pages)
 
-	const http = createHttpServer(site, analytics, store, logger, {
+	// health reports both loggers' drops: the readers' carry every view
+	const readiness = {
+		status: () => store.status(),
+		metrics: store.metrics,
+		loggers: { site: logger, readers },
+	}
+
+	const http = createHttpServer(site, analytics, readiness, logger, {
 		host: config.HOST,
 		port: config.PORT,
 		trustProxy: config.TRUST_PROXY,
