@@ -176,6 +176,11 @@ wrote internal/data/migrations/002_add_description.sql:
   children. Each is kept by its checksum: an edited, renamed or missing one, a
   file that has applied more than the binary knows, or another engine's file
   refuses to open, `ErrInvalid`.
+- **Nil migrations open the file as it is.** `Open(ctx, store, "app", nil, nil)`
+  makes an empty file when there is none, applies nothing and checks no
+  history, for a script or a first try; with `ApplyNone` it opens only a file
+  that is there. A later `Open` that carries migrations applies them from the
+  first.
 - **`ApplyNone` and `Migrated` apply nothing.** `Open(…, sqldb.ApplyNone())`
   opens only a file that applied every migration given, and makes none that
   is not there; `db.Migrated(ctx, migrations)` checks an open file the same

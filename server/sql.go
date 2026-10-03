@@ -68,7 +68,8 @@ func migrationsOf(files []wire.SQLMigration) (fs.FS, error) {
 
 // database is the database of name, opened the first time a client asks for it:
 // an admin's open applies its migrations, and a data connection's finds them
-// applied or is refused.
+// applied or is refused. An open without migrations takes the file as it is,
+// an admin's making an empty one, a data connection's only one that is there.
 //
 // A database opens once a store, so every later open, and an open of one the
 // program passed, checks the migrations it carries against those the file
@@ -80,9 +81,6 @@ func (s *Server) database(ctx context.Context, name string, migrations fs.FS, ca
 	defer s.sqlOpening.Unlock()
 	if db := s.databases[name]; db != nil {
 		return db, migrated(ctx, db, name, migrations, capability)
-	}
-	if migrations == nil {
-		return nil, fmt.Errorf("%w: sql %q opens first with the migrations it applies", tinystore.ErrInvalid, name)
 	}
 	var options []sqldb.OpenOption
 	if capability != wire.Admin {

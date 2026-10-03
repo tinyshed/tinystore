@@ -185,6 +185,33 @@ func TestVerifyChecksTheHistoryAndRunsNothing(t *testing.T) {
 	}
 }
 
+// Claim makes a fresh file the engine's without running anything, leaves a
+// claimed file as it is, and refuses another engine's.
+func TestClaimStampsAFreshFileAndRunsNothing(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "claimed.db"), Config{Readers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := file.Claim(t.Context(), 1234); err != nil {
+		t.Fatal(err)
+	}
+	schema := testMigrations(`create table series(n integer) strict;`)
+	if err := file.Migrate(t.Context(), 1234, schema); err != nil {
+		t.Fatalf("a claimed file migrates as a fresh one: %v", err)
+	}
+	if err := file.Claim(t.Context(), 1234); err != nil {
+		t.Fatalf("a file that ran a script: %v", err)
+	}
+	if err := file.Claim(t.Context(), 4321); !errors.Is(err, ErrMismatch) {
+		t.Fatalf("another engine's file: %v", err)
+	}
+}
+
 // A guest engine migrates in its owner's file with a history of its own: the
 // owner's id and history stay the owner's, the guest's scripts run once and
 // refuse to change, and the owner's next migration does not see them.

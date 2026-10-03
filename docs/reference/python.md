@@ -243,6 +243,10 @@ async with app.batch() as tx:
     index.with_tx(tx).enqueue(note_id)  # commits with the update, or not at all
 ```
 
+Without `migrations`, `store.sql` opens the file as it is, and creates an
+empty one if there is none. Nothing is applied or checked, which is handy for
+a first try: `await (await store.sql("scratch")).scalar("select 1")`.
+
 On Python 3.14, a statement can be a template string:
 `t"… where author = {author}"`. Its values are passed as arguments, never as
 SQL. A value comes back as SQLite stores it. See [SQL](../sql/README.md) and

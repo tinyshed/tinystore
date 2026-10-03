@@ -39,6 +39,20 @@ func (f *File) Migrate(ctx context.Context, applicationID int, scripts fs.FS) er
 	})
 }
 
+// Claim stamps a fresh file as Migrate would and runs no script, so that a
+// file opened without migrations is still the engine's and refuses another's.
+// A file the engine already claimed is left as it is, whatever it has run.
+func (f *File) Claim(ctx context.Context, applicationID int) error {
+	if applicationID <= 0 {
+		return errors.New("claim SQLite: missing application id")
+	}
+	return f.update(ctx, func(connection *writeConnection) (bool, error) {
+		return withoutForeignKeys(ctx, connection.conn, func(tx *sql.Tx) error {
+			return claimFile(ctx, tx, applicationID)
+		})
+	})
+}
+
 // MigrateHosted runs an engine's scripts in a file another engine owns, as
 // jobs' in an application's database: the owner's application id stays, and
 // the guest keeps its own history beside the owner's, so that neither's

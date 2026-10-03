@@ -410,6 +410,14 @@ async def test_sql_statements_batches_and_views(store: tinystore.Store, tmp_path
     assert await app.one("select * from notes where title = 'coffee'") is None
 
 
+async def test_a_database_opens_without_migrations_empty_to_try_a_query(store: tinystore.Store) -> None:
+    scratch = await store.sql("scratch")
+    assert await scratch.scalar("select 1") == 1
+    await scratch.exec("create table tries (id integer primary key)")
+    await scratch.exec("insert into tries (id) values (?)", 7)
+    assert await scratch.all("select id from tries") == [{"id": 7}]
+
+
 async def test_a_job_a_batch_enqueues_commits_with_the_rows_or_not_at_all(
     store: tinystore.Store, tmp_path: Path
 ) -> None:

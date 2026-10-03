@@ -221,6 +221,52 @@ func TestMigrationsApplyOnceAndAChangedOneRefuses(t *testing.T) {
 	}
 }
 
+// Nil migrations open a file as it is, making an empty one, and check nothing;
+// migrations given later apply from the first, and ApplyNone still makes no file
+func TestADatabaseOpensWithoutMigrations(t *testing.T) {
+	dir := t.TempDir()
+	store := openStore(t, dir)
+	if _, err := Open(t.Context(), store, "app", nil, nil, ApplyNone()); !errors.Is(err, ErrPending) {
+		t.Fatalf("ApplyNone without migrations, no file: %v", err)
+	}
+	db, err := Open(t.Context(), store, "app", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := Scalar[int](t.Context(), db, `select 1`)
+	if err != nil || one != 1 {
+		t.Fatalf("select 1: %v, %v", one, err)
+	}
+	if err = db.Migrated(t.Context(), nil); err != nil {
+		t.Fatalf("Migrated without migrations: %v", err)
+	}
+	if err = store.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	store = openStore(t, dir)
+	db, err = Open(t.Context(), store, "app", notesMigrations, nil)
+	if err != nil {
+		t.Fatalf("migrations after an open without them: %v", err)
+	}
+	if _, err = db.Exec(t.Context(), `insert into notes (title) values ('first')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	store = openStore(t, dir)
+	db, err = Open(t.Context(), store, "app", nil, nil, ApplyNone())
+	if err != nil {
+		t.Fatalf("a migrated file opened without its migrations: %v", err)
+	}
+	n, err := Scalar[int](t.Context(), db, `select count(*) from notes`)
+	if err != nil || n != 1 {
+		t.Fatalf("its rows: %v, %v", n, err)
+	}
+}
+
 // an embed.FS of migrations/*.sql holds them in its one directory, which Open
 // finds; two directories are a question Open does not answer
 func TestTheMigrationsAreFoundInTheirOneDirectory(t *testing.T) {

@@ -77,6 +77,10 @@ type holder struct {
 // migration changed after it was applied, a file that has applied more of them
 // than the binary knows, another engine's file, or a file that does not match
 // the schema refuses to open.
+//
+// Nil migrations open the file as it is, making an empty one when there is
+// none: nothing is applied and no history is checked, as a script or a first
+// try wants. A later Open that carries migrations applies them from the first.
 func Open(ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef,
 	options ...OpenOption,
 ) (*DB, error) {
@@ -171,9 +175,13 @@ func openFile(
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)
 	}
-	if timing.applyNone {
+	switch {
+	case scripts == nil && timing.applyNone: // a data connection opens what is there, as it is
+	case scripts == nil:
+		err = file.Claim(ctx, sqlApplicationID)
+	case timing.applyNone:
 		err = file.Verify(ctx, sqlApplicationID, scripts)
-	} else {
+	default:
 		err = file.Migrate(ctx, sqlApplicationID, scripts)
 	}
 	if err != nil {
@@ -207,11 +215,12 @@ func migrationError(name string, err error) error {
 // Migrated checks migrations against those the file applied, applying none:
 // one it has not applied is ErrPending, and one changed after it was applied,
 // or missing, is refused as Open refuses it. A database opens once in a store,
-// so a program that opens it again checks with Migrated instead.
+// so a program that opens it again checks with Migrated instead. Nil
+// migrations check nothing, as Open opens with none.
 func (d *DB) Migrated(ctx context.Context, migrations fs.FS) error {
 	scripts, err := findMigrations(migrations)
-	if err != nil {
-		return fmt.Errorf("sql %q: %w", d.name, err)
+	if err != nil || scripts == nil {
+		return wrapName(d.name, err)
 	}
 	leave, err := d.admit(ctx)
 	if err != nil {
@@ -224,13 +233,20 @@ func (d *DB) Migrated(ctx context.Context, migrations fs.FS) error {
 	return nil
 }
 
+func wrapName(name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("sql %q: %w", name, err)
+}
+
 // findMigrations is the directory in which migrations holds its .sql files: its
-// root, or, while the root has none, its one directory.
+// root, or, while the root has none, its one directory; nil when there are none.
 //
 //	embed.FS of migrations/*.sql → migrations/
 func findMigrations(migrations fs.FS) (fs.FS, error) {
 	if migrations == nil {
-		return nil, fmt.Errorf("%w: no migrations", tinystore.ErrInvalid)
+		return nil, nil
 	}
 	for {
 		entries, err := fs.ReadDir(migrations, ".")

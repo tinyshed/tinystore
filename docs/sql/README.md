@@ -40,6 +40,29 @@ the file has either the old schema or the new one. In Go, the last argument
 can be a schema declared from structs, which `Open` checks the file against.
 See [Schema in Go](schema.md).
 
+### Try it without migrations
+
+```ts
+const scratch = await store.sql('scratch')
+await scratch.scalar<number>`select 1` // 1
+```
+
+```python
+scratch = await store.sql("scratch")
+await scratch.scalar("select 1")  # 1
+```
+
+```go
+scratch, err := sqldb.Open(ctx, store, "scratch", nil, nil)
+one, err := sqldb.Scalar[int](ctx, scratch, `select 1`) // 1
+```
+
+Without migrations, the database opens as it is. If the file doesn't exist,
+TinyStore creates an empty one. Nothing is applied and nothing is checked, so
+this is for scripts and first tries. A program that owns a database passes its
+migrations, so that every start checks that the file has the schema the code
+expects.
+
 ## Query
 
 ```ts

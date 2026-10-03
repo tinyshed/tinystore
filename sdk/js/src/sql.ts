@@ -1,7 +1,7 @@
 // The application's own SQLite databases, sql/<name>.db, as Go's sqldb keeps
 // them: the application writes every query, the server owns the file, its
 // connections and its migrations, which the first open applies and every
-// later one checks.
+// later one checks. An open without migrations takes the file as it is.
 
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'

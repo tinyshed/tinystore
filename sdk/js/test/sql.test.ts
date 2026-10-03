@@ -160,6 +160,14 @@ describe('batches', () => {
 		expect(again).toBeInstanceOf(InvalidError)
 		expect((await store.sql('app')).name).toBe('app')
 	})
+
+	test('a database opens without migrations, empty, to try a query', async () => {
+		const scratch = await store.sql('scratch')
+		expect(await scratch.scalar<number>`select 1`).toBe(1)
+		await scratch.exec`create table tries (id integer primary key)`
+		await scratch.exec`insert into tries (id) values (${7})`
+		expect(await scratch.all`select id from tries`).toEqual([{ id: 7 }])
+	})
 })
 
 describe('jobs in the database', () => {

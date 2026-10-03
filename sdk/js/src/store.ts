@@ -98,7 +98,9 @@ export class Store implements AsyncDisposable {
 	/**
 	 * Opens a database of the application's own, sql/<name>.db. The first open
 	 * in the server, on an admin connection, applies its migrations; every
-	 * later one checks them against what the file applied.
+	 * later one checks them against what the file applied. Without migrations
+	 * it opens the file as it is, an empty one if there is none, and checks
+	 * nothing.
 	 */
 	sql(name: string, options?: SqlOptions): Promise<Database> {
 		return openDatabase(this.#link, name, options)

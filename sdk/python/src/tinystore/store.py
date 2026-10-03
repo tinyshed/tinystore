@@ -70,6 +70,8 @@ class Store:
 
         The first open in the server, on an admin connection, applies its
         migrations; every later one checks them against what the file applied.
+        Without migrations it opens the file as it is, an empty one if there is
+        none, and checks nothing.
         """
         return await open_database(self._link, name, migrations)
 

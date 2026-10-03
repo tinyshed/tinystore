@@ -240,6 +240,10 @@ await app.batch(tx => {
 })
 ```
 
+Without `migrations`, `store.sql` opens the file as it is, and creates an
+empty one if there is none. Nothing is applied or checked, which is handy for
+a first try: ``await (await store.sql('scratch')).scalar<number>`select 1` ``.
+
 The values in a template are passed as arguments, never as SQL. A value comes
 back as SQLite stores it. See [SQL](../sql/README.md) and
 [Jobs and your data](../jobs/your-data.md).

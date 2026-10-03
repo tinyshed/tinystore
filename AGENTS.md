@@ -770,6 +770,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a data client cannot change a schema                   | `TestADataClientCannotChangeTheSchema`, `TestEachLineOfTheCheckRefusesOnItsOwn`, `FuzzDataSQL` |
 | the check ends a statement where SQLite does           | `TestSQLiteEndsAStatementWhereTheCheckDoes`, `TestTheCheckReadsSQLitesTokens`   |
 | a database opens once, and later opens check it        | `TestSQLOpenAppliesOnceAndChecksAfter`, `TestADatabaseTheProgramOpenedIsChecked` |
+| a database opens without migrations as it is, checking nothing | `TestADatabaseOpensWithoutMigrations`, `TestClaimStampsAFreshFileAndRunsNothing`; `a database opens without migrations, empty, to try a query` in `sdk/js/test/sql.test.ts`, `test_a_database_opens_without_migrations_empty_to_try_a_query` in Python's |
 | an sql batch is one transaction, a read one snapshot   | `TestAnSQLBatchIsOneTransaction`                                                |
 | a data connection's statement ends at its deadline     | `TestADataStatementEndsAtItsDeadline`                                           |
 | an answer past the agreed body fails only its stream   | `TestAnAnswerPastTheBodyIsALimit`                                               |
