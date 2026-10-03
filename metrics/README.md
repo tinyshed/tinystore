@@ -159,7 +159,7 @@ samples without shifting them, and the bucket it cuts reports `Partial`.
 `AggregateIncrease`, `AggregateRate` and `AggregateDelta` are also available;
 increase and rate require a counter series, delta a gauge. `By` and `Without`
 join series into groups, one result each, `By: []string{}` every series of a
-name; [the contract](../docs/aggregate-contract.md) has the arithmetic, which
+name; [the contract](https://github.com/tinyshed/research/blob/main/tinystore/design/aggregate-contract.md) has the arithmetic, which
 rounds a group's bucket once. `Count` and `Resets` remain
 integers, `Value` is rounded once from exact finite arithmetic, and `Overflow`
 distinguishes a finite sum that rounded to infinity. An error returns no
@@ -167,7 +167,7 @@ results. `OutputSamples` limits buckets, while `DecodedSamples` limits raw
 work. Whole blocks inside one clipped bucket use checked exact summaries
 without fetching external raw payloads. Cut blocks, head samples and blocks
 without exact sums are decoded and filtered;
-[the numerical contract](../docs/aggregate-contract.md) specifies nonfinite,
+[the numerical contract](https://github.com/tinyshed/research/blob/main/tinystore/design/aggregate-contract.md) specifies nonfinite,
 reset and boundary behavior.
 
 `tinystore.Options{SelfMetrics: true}` enables the runtime's periodic collection
@@ -313,7 +313,7 @@ canonical labels, unique in the index; a digest match resolves a series only
 after its stored label ids equal the batch's.
 
 `group.go` owns slot addressing; `directory.go` owns the directory format,
-docs/format.md's. Think of a directory as a small list of block descriptions:
+research's [design/format.md](https://github.com/tinyshed/research/blob/main/tinystore/design/format.md)'s. Think of a directory as a small list of block descriptions:
 first value, statistics and where the body lives. The shared clock owns its
 time bounds and sample counts. `binary.go` contains checked binary reads and
 the bounded metadata compressor, so parsing checks are not scattered through SQL.

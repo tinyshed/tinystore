@@ -8,9 +8,12 @@ it. `tinyshed/dashbin` is the first caller and not the owner.
 
 This file is the contract for anyone — human or agent — changing the repository.
 Keep it short and factual, and update it when a decision moves. Nothing here
-should be a fact a ten-second grep would answer. The runtime and every engine
-beyond metrics are specified in [docs/architecture.md](docs/architecture.md).
-The measurements, prototypes and dated reports behind the decisions are in
+should be a fact a ten-second grep would answer. The guides in
+[docs/](docs/README.md) say what TinyStore does for the people using it, and
+each package's README what it promises. Why each engine has its shape is in
+the design documents, kept in research's [tinystore/design][design] as they
+were when the guides replaced them, beside the measurements, prototypes and
+dated reports behind the decisions in
 [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore).
 
 ## Status
@@ -20,18 +23,31 @@ design document:
 
 | | What it is | Contract | Design |
 |---|---|---|---|
-| root | the directory and its lifecycle: `Open` under the lock, `Close`, `Claim`, `Attach`, `Logger`, `Now`, `Every`, the memory budget, `Snapshot` | [doc.go](doc.go) | [architecture.md](docs/architecture.md) |
-| `codec/` | 1..240 ordered samples to a checked body, every bit kept | [format.md](docs/format.md) | [design.md](docs/design.md) |
-| `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [design.md](docs/design.md) |
-| `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md](docs/records.md) |
-| `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md](docs/sqldb.md) |
-| `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, quotas of several windows, answers kept once a key | [README](kv/README.md) | [kv.md](docs/kv.md) |
-| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running, steps a run keeps across its attempts | [README](jobs/README.md) | [jobs.md](docs/jobs.md) |
-| `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md](docs/blobs.md) |
-| `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
-| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
-| `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md](docs/sdk.md), [server.md](docs/server.md) |
+| root | the directory and its lifecycle: `Open` under the lock, `Close`, `Claim`, `Attach`, `Logger`, `Now`, `Every`, the memory budget, `Snapshot`, `Dir` | [doc.go](doc.go) | [architecture.md][design-architecture] |
+| `codec/` | 1..240 ordered samples to a checked body, every bit kept | [format.md][design-format] | [metrics.md][design-metrics] |
+| `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [metrics.md][design-metrics] |
+| `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md][design-records] |
+| `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md][design-sqldb] |
+| `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, quotas of several windows, answers kept once a key | [README](kv/README.md) | [kv.md][design-kv] |
+| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running, steps a run keeps across its attempts | [README](jobs/README.md) | [jobs.md][design-jobs] |
+| `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md][design-blobs] |
+| `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md][design-architecture] |
+| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens, a Go program's own store shared in one call; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md][design-server] |
+| `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md][design-sdk], [server.md][design-server] |
 | `web/` | the docs as a site: every page prerendered from `docs/`, served by Bun into a TinyStore of its own, its views and readers' events kept there (`task web`) | [web/AGENTS.md](web/AGENTS.md) | the `docs` skill |
+
+[design]: https://github.com/tinyshed/research/tree/main/tinystore/design
+[design-architecture]: https://github.com/tinyshed/research/blob/main/tinystore/design/architecture.md
+[design-format]: https://github.com/tinyshed/research/blob/main/tinystore/design/format.md
+[design-metrics]: https://github.com/tinyshed/research/blob/main/tinystore/design/metrics.md
+[design-aggregates]: https://github.com/tinyshed/research/blob/main/tinystore/design/aggregate-contract.md
+[design-records]: https://github.com/tinyshed/research/blob/main/tinystore/design/records.md
+[design-sqldb]: https://github.com/tinyshed/research/blob/main/tinystore/design/sqldb.md
+[design-kv]: https://github.com/tinyshed/research/blob/main/tinystore/design/kv.md
+[design-jobs]: https://github.com/tinyshed/research/blob/main/tinystore/design/jobs.md
+[design-blobs]: https://github.com/tinyshed/research/blob/main/tinystore/design/blobs.md
+[design-server]: https://github.com/tinyshed/research/blob/main/tinystore/design/server.md
+[design-sdk]: https://github.com/tinyshed/research/blob/main/tinystore/design/sdk.md
 
 Where the building differs from the design:
 
@@ -48,9 +64,7 @@ answers a whole block inside one bucket from its exact summary; a cut block,
 the head and a block without exact sums decode raw.
 
 Not built: the SDKs' examples and published packages; a release; a host and a
-domain for the site, and the guides the site will show beside the design.
-[docs/server.md](docs/server.md) "Building it" says where each server slice
-stands.
+domain for the site; the guides `docs/README.md` lists without a link.
 
 Nothing is released: there is no tag, and no database written by an earlier
 revision has to be read. Readers for earlier formats are deleted, not kept,
@@ -81,12 +95,11 @@ Do not describe unbuilt behaviour as though it works.
 | `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
 | `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
 | `server/reach/`      | the Go client of a directory's server, found through `SERVE` and proven, for the tool |
-| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, and `migrate` and `schema` for sqldb |
+| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, `backup`, `restore`, and `migrate` and `schema` for sqldb |
 | `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module |
-| `docs/`              | the design, the format, the engines and the wire; `README.md` is its index, the site's sidebar |
+| `docs/`              | the guides, one page per feature in Go, Bun and Python, and the wire protocol; `README.md` is their table of contents and the site's sidebar |
 | `web/`               | the docs site: SvelteKit prerendering `docs/`, and its Bun server under `server/`; `web/go.mod` keeps it out of the Go module |
 | `examples/`          | programs using the public API, built and tested with the module               |
-| `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
 | `.github/workflows/` | the authoritative clean builds                                                |
 | `.agents/skills/`    | how the recurring work is done; `.claude/skills/` points to it                |
 
@@ -145,8 +158,9 @@ nothing.
 
 ## Runtime
 
-Breaking one of these is a design change. [docs/architecture.md](docs/architecture.md)
-has the reasons and the API; the rules hold for the runtime as it is built.
+Breaking one of these is a design change. [architecture.md][design-architecture]
+has the reasons as they were designed; the rules hold for the runtime as it is
+built.
 
 **One directory, a file per engine, unless the application joins two.**
 `metrics.db`, `records.db`, `jobs.db`, `kv.db`, `blobs/`, and `sql/<name>.db`
@@ -187,8 +201,8 @@ arbitrary application-supplied slog handler controls its own call latency.
 is not a storage format, and template mining is optional for a text body.
 Shapes and shared contexts are encoding choices with bounded lifetimes, not
 permanent streams for every session id. The engine takes `slog` lines through
-its handler and records through `Append`; [docs/records.md](docs/records.md) is
-the model.
+its handler and records through `Append`; [records/README.md](records/README.md)
+is the model.
 
 **A record's order is its event time.** A segment stores its records sorted by
 event time, equal times in arrival order; `Append` order is not otherwise
@@ -376,20 +390,18 @@ changing something, not to look something up.
 
 |                                              |                                                                  |
 |----------------------------------------------|------------------------------------------------------------------|
-| [docs/architecture.md](docs/architecture.md) | the runtime, the engines, their files, logs, errors and weight    |
-| [docs/design.md](docs/design.md)             | how the metrics store is meant to work, and why that shape       |
-| [docs/aggregate-contract.md](docs/aggregate-contract.md) | exact aggregate arithmetic, resets, boundaries        |
+| [docs/README.md](docs/README.md)             | the guides: what each engine does for its user, in Go, Bun and Python |
+| each package's README                        | what it promises as built: its contracts, bounds and errors      |
 | [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
-| [docs/server.md](docs/server.md)             | the server and sidecar: modes, discovery, capabilities, limits   |
 | [docs/wire.md](docs/wire.md)                 | the wire protocol's bytes: frames, credit, MessagePack, errors   |
-| [docs/sdk.md](docs/sdk.md)                   | the API in Go, Bun and Python side by side, and the rules for it |
-| [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
 | [web/AGENTS.md](web/AGENTS.md)               | the docs site: how a file becomes a page, the server, its analytics |
+| research's [tinystore/design][design]        | why each engine has its shape, as designed: the runtime, metrics and [its exact aggregates][design-aggregates], the format, every engine, the server, the SDKs' vocabulary |
 | [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions |
 
-A reference a contributor returns to belongs in `docs/`, and a dated
-measurement round belongs in tinyshed/research with the environment and
-command that reproduce it. A rule they are about to violate belongs here.
+What a user of TinyStore reads belongs in a guide in `docs/`, what a package
+promises in its README, and a dated measurement round in tinyshed/research
+with the environment and command that reproduce it. A rule a contributor is
+about to violate belongs here.
 
 How to do the recurring work is a skill in `.agents/skills/`, which
 `.claude/skills/` points to with the same frontmatter: `api-change`, `sdk`,
@@ -433,6 +445,9 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a batch commits whole in its group, and fails alone | `TestABatchCommitsTogetherAndFailsAlone`, `TestABatchThatDoesNotBuildWritesNothing` |
 | a guest engine keeps its history in its owner's file | `TestAGuestKeepsItsOwnHistoryInItsOwnersFile`                                  |
 | a job in a batch commits with its rows or not at all | `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn` |
+| a job a Tx adds commits with its rows, and lets go of its turn either way | `TestAJobInATxCommitsWithItsRows` |
+| a job in an SQL batch over the wire commits with its rows, on the program's own store when it passed one | `TestAJobInAnSQLBatchCommitsWithItsRows`, `TestAQueueInTheProgramsDatabaseIsTheProgramsOwn`; `a job a batch enqueues commits with the rows or not at all` in `sdk/js/test/sql.test.ts`, `test_a_job_a_batch_enqueues_commits_with_the_rows_or_not_at_all` in Python's |
+| a Bun batch or view gives back what its function returns, answered | `a view and a batch give back what their function returns, its promises answered` in `sdk/js/test/kv.test.ts`, `a batch and a view give back what their function returns, its promises answered` in `sdk/js/test/sql.test.ts` |
 | an applied migration cannot change under the file   | `TestMigrationsApplyOnceAndAChangedOneRefuses`                                  |
 | a migration rebuilding a parent keeps its children  | `TestARebuiltTableKeepsItsChildren`, `TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit` |
 | a schema is the SQL it prints                       | `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`        |
@@ -476,6 +491,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the engine's own lines reach the console from Info up, never the store | `TestTheEnginesOwnLinesReachTheConsoleAndNotTheStore`         |
 | a redacted field is kept nowhere                    | `TestARedactedFieldIsHiddenInTheStoreAndOnTheConsole`, and in both SDKs' suites |
 | a logger keeps its lines from its level up          | `TestALevelKeepsALoggersLinesFromItUp`                                          |
+| a Python line takes the fields of the context it was logged in | `test_lines_take_the_fields_of_the_context_they_were_logged_in` in Python's suite |
 | a logger without a store writes the console alone   | `TestAHandlerWithoutAStoreWritesTheConsoleAlone`                                |
 | colours need a terminal, and not NO_COLOR           | `TestAFileIsNoTerminal`, `TestNoColorAndADumbTerminalTurnColoursOff`            |
 | a line one record holds loses no byte; a longer one is dropped and counted | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`, `TestALargeLineWriteKeepsOnlyOneBoundedPartial` |
@@ -528,6 +544,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a snapshot does not stop the writer                 | `TestSnapshotCopiesWhileTheWriterWrites`                                        |
 | a backup restores every engine                      | `TestABackupRestoresEveryEngine`                                                |
 | a changed backup is refused and leaves nothing      | `TestAChangedByteIsRefusedAndLeavesNothing`                                     |
+| a database no one opened is copied without opening it | `TestCopyTakesADatabaseNoOneOpened` in `sqldb`                                |
+| a backup over the wire holds every engine on disk, and makes none that is not | `TestABackupOverTheWireHoldsEveryEngineOnDisk`; `TestBackupWritesAZipThatRestoreTakesBack` in `cmd/tinystore`; `a backup is one zip of every engine, which restore takes back into an empty directory` in `sdk/js/test/backup.test.ts`, `test_a_backup_is_one_zip_of_every_engine_which_restore_takes_back` in Python's |
 | a sample survives the codec exactly                 | `TestEveryValueRepresentationPreservesBits`, on bits and not on values          |
 | a sample survives a file and restart                 | `TestHeadSealingReopenAndPartialRetention`, over the public metrics API         |
 | publication is one write                            | `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`                       |
@@ -733,6 +751,8 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a remote connection needs its token                    | `TestARemoteConnectionNeedsItsToken`                                            |
 | a pipe's name has one owner                            | `TestAPipesNameHasOneOwner`, on Windows                                         |
 | a kv batch is one transaction                          | `TestAKVBatchRollsBackWhenOneOfItsCallsFails`                                   |
+| a read that names what it read fails once its key changed, in a batch too | `TestAReadThatNamesWhatItReadFailsOnceTheKeyChanged`                    |
+| an SDK's tx reads, decides and writes, running again when a key it read changed, five times at most | `transactions` in `sdk/js/test/kv.test.ts`, `test_a_tx_reads_decides_and_writes_and_runs_again_when_a_key_it_read_changed` and `test_a_tx_reads_its_own_writes_and_gives_up_on_a_key_that_keeps_changing` in Python's |
 | Go and a wire client read each other's kv buckets      | `TestAWireClientAndAGoProgramReadEachOthersBuckets`                             |
 | a remote worker's outcomes settle its jobs             | `TestARemoteWorkerSettlesByItsOutcomes`, a retry counted                        |
 | a lost connection aborts uploads, fails attempts in hand | `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand`, `TestALostWorkerFailsTheAttemptsInItsHands` |
@@ -763,19 +783,23 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a `SERVE` left behind goes before its server listens   | `TestAServeLeftBehindGoesBeforeTheServerListens`                                |
 | a client reading `SERVE` delays a change, fails none   | `TestAChangeHeldUpByAReaderIsTriedAgain`, `TestAServeHeldPastEveryTryIsAnError` |
 | a server goes idle only after its last connection     | `TestAServerGoesIdleAfterItsLastConnection`                                     |
+| a program shares its own store in one call, until stop | `TestShareServesTheProgramsStoreUntilItStops`                                  |
+| an engine a program opened and did not pass says to pass it | `TestAnEngineTheProgramOpenedAndDidNotPassSaysToPassIt`                   |
 | a long store's socket moves to the user's own directory | `TestALongSocketPathMovesToTheUsersOwnDirectory`, off Windows                  |
 | a server proves it read `SERVE` to a local challenge only | `TestAServerProvesItselfOnlyToALocalChallenge`, `TestProofVectors`          |
 | an endpoint taken after its server left cannot prove itself | `TestAnEndpointTakenAfterItsServerLeftCannotProveItself`                    |
 | of two sidecars started at once, one exits held        | `TestAStaleServeStartsOneSidecar`, `TestASecondServeOfADirectoryExitsHeld`      |
 | a sidecar leaves once idle, with its `SERVE` and lock  | `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle`                            |
 | a private child leaves when told, though its parent stays | `TestAPrivateChildLeavesWhenToldThoughItsParentStays`, `TestAPrivateChildServesItsParent` |
+| a test's clock moves only forward, an admin's alone, and the store runs on it | `TestATestsClockMovesOnlyForwardAndTheStoreRunsOnIt`, `TestAPrivateChildRunsOnTheClockItIsGiven` in `cmd/tinystore`; `a private store runs on the clock it is given, which moves only forward` in `sdk/js/test/clock.test.ts`, `test_a_private_store_runs_on_the_clock_it_is_given_which_moves_only_forward` in Python's |
 | what serve cannot serve opens nothing                  | `TestServeRefusesWhatItCannotServe`, a file it cannot read included             |
 | the tool requires only the store and the server        | `TestTheToolRequiresOnlyTheStoreAndTheServer`                                   |
 | status reads a directory beside its server, for a person and with `--json`, never printing SERVE's secret | `TestStatusReadsADirectoryAndKeepsTheSecret` in `cmd/tinystore`  |
 | the command alone lists its commands, a directory before or after the flags | `TestHelpListsTheCommandsAndIsNoError`, `TestADirectoryComesBeforeOrAfterTheFlags` in `cmd/tinystore` |
 | `serve <dir>` serves the directory until Ctrl+C, never idle | `TestServeOfADirectoryServesItUntilCtrlC` |
 | a server stops at an admin's request, and only when its program said how | `TestAServerStopsAtAnAdminsRequestOnly`, `TestStopEndsTheServerOfADirectory` in `cmd/tinystore` |
-| an SDK says when the sidecar it found is of an older release than its own | `a sidecar of an older release than its SDK is told of, and only one` in `sdk/js/test/connection.test.ts`, `test_a_sidecar_of_an_older_release_than_its_sdk_is_told_of_and_only_one` in Python's |
+| an SDK replaces a sidecar of an older release than its own, its clients moving to the new one; another server it only tells of | `a sidecar of an older release is stopped, and every client moves to the one started in its place` and `a server of an older release than its SDK is told apart, and only one` in `sdk/js/test/connection.test.ts`, `test_a_sidecar_of_an_older_release_is_stopped_and_every_client_moves_to_the_one_started_in_its_place` in Python's |
+| SERVE calls a sidecar one, and neither a person's server nor a program's | `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle`, `TestServeOfADirectoryServesItUntilCtrlC` in `cmd/tinystore`, `TestServeIsWrittenWholeUnderTheLock` |
 | a read through the tool makes no store of a directory | `TestLogsOfADirectoryWithoutAStoreMakeNone` |
 | `logs -f` prints a record sent a little late, each once and two alike twice | `TestLogsPrintTheLastRecordsAndFollowTheNext` |
 | the tool prints a record as a logger's console does | `TestAPrinterWritesARecordAsTheConsoleDoes` in `records` |
@@ -785,6 +809,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a heading keeps the anchor GitHub gives it | `gives headings the ids GitHub gives them, a repeated one numbered` in `web/src/lib/content/outline.test.ts` |
 | fences in three languages are one block, untitled ones of a language two | `a run in three languages is one block`, `two untitled fences of one language stay two blocks` in `web/src/lib/content/code.test.ts` |
 | the landing page's numbers are the README's SVG cards, read back | `read back from every SVG the README shows, in its order` in `web/src/lib/content/landing.test.ts` |
+| the landing page's words are `web/landing.md`'s, a part missing or a link nowhere failing the build | `takes every word from web/landing.md, its links resolved as a page's`, `fails the build when a part is missing or a link leads nowhere` in `web/src/lib/content/landing.test.ts` |
 | the site's views and events live in its own TinyStore, through a restart | `keeps a view and an event as records and counts both, through a restart` in `web/server/analytics.test.ts` |
 | a page, its data and its markdown are views; an asset, a HEAD and a 404 are not | `is served and counted, as are its data and its markdown; an asset is not counted` in `web/server/http.test.ts` |
 

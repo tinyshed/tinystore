@@ -6,7 +6,7 @@ sent at nine, a push to each member of a group, an account deleted thirty days
 after its owner asked, a purge every night. Typed queues keep their jobs in the
 order of their time, lease each to a worker, retry, repeat by cron text, run
 every job at least once, and say where each one is. The design and the
-measurements behind it are [docs/jobs.md](../docs/jobs.md).
+measurements behind it are research's [design/jobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/jobs.md).
 
 ```go
 queues, err := jobs.Open(ctx, store, jobs.Options{}) // data/jobs.db
@@ -42,7 +42,7 @@ func transcode(ctx context.Context, job jobs.Job[Video]) error {
 ```
 
 [example_test.go](example_test.go) runs the five cases of
-[docs/jobs.md](../docs/jobs.md) as examples, and `go doc` shows them.
+[design/jobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/jobs.md) as examples, and `go doc` shows them.
 
 A store opened `In` an sqldb database keeps its queues in that database's own
 file, so that a job commits with the rows it is about, in one batch and one
@@ -66,9 +66,12 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   database's file with a history of their own, keeps no file of its own and
   copies nothing into a snapshot: the database's copy holds the queues. A
   database holds one store's queues. Its `Enqueued` writes a job in a batch of
-  that database, which commits it with the batch's rows or not at all; a queue
-  whose store lives elsewhere is refused there with `ErrInvalid`. The store
-  opens after the database it names, and so closes before it.
+  that database, or in a `Tx` through `Tx.Add`, which commits it with the rows
+  or not at all; a queue whose store lives elsewhere is refused there with
+  `ErrInvalid`. A change for a `Tx` is made before the transaction begins,
+  since it waits for its queue's turn and its value's memory, which a
+  transaction holding the writer must not. The store opens after the database
+  it names, and so closes before it.
 
 - **A job runs at least once.** An `Enqueue` returns once the job is in the
   file, and a job not cancelled runs whatever the process does. It may run
@@ -242,5 +245,5 @@ _, err = queues.Maintain(ctx)                       // removes failed jobs and d
 
 ## Not in the first version
 
-What [docs/jobs.md](../docs/jobs.md) leaves for later: priority within a
+What [design/jobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/jobs.md) leaves for later: priority within a
 queue, a rate a queue may not pass, a job's history in records.

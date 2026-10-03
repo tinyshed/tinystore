@@ -1,7 +1,74 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { readCard, readCards } from './landing'
+import { landingSummary, readCard, readCards, readLanding } from './landing'
 import { checkout } from './repo'
+import { loadSite } from './site'
+
+describe('the landing page', () => {
+	test("takes every word from web/landing.md, its links resolved as a page's", async () => {
+		const landing = await readLanding(await loadSite())
+
+		expect(landing.headline).not.toBe('')
+		expect(landing.title).toBe(
+			`TinyStore: ${landing.headline.charAt(0).toLowerCase()}${landing.headline.slice(1).replace(/\.$/, '')}`,
+		)
+		expect(landing.pitch).not.toBe('')
+		expect(landing.pitch).not.toContain('<p>')
+		expect(landing.sample).toContain('data-variant="go"')
+		expect(landing.engines.length).toBeGreaterThan(0)
+		for (const engine of landing.engines) {
+			expect(engine.href).toMatch(engine.external ? /^https:\/\// : /^\/docs/)
+		}
+		expect(landing.numbers.legend.length).toBeGreaterThan(0)
+		expect(landing.numbers.caveat).toContain('<a href="https://')
+		expect(landingSummary()).toStartWith(`${landing.headline.replace(/\.$/, '')}: `)
+	})
+
+	test('fails the build when a part is missing or a link leads nowhere', async () => {
+		const site = await loadSite()
+		const root = mkdtempSync(join(tmpdir(), 'landing-'))
+		const write = (text: string) => {
+			mkdirSync(join(root, 'web'), { recursive: true })
+			writeFileSync(join(root, 'web', 'landing.md'), text)
+		}
+		try {
+			write('# Headline.\n\nThe pitch.\n\n```ts\nopen()\n```\n')
+			await expect(readLanding(site, root)).rejects.toThrow(/## Engines/)
+
+			write(
+				[
+					'# Headline.',
+					'',
+					'The pitch.',
+					'',
+					'```ts',
+					'open()',
+					'```',
+					'',
+					'## Engines',
+					'',
+					'| | | |',
+					'|---|---|---|',
+					'| [KV](../gone/README.md) | State | Current state. |',
+					'',
+					'## Numbers.',
+					'',
+					'| | |',
+					'|---|---|',
+					'| Batch | One file. |',
+					'',
+					'Measured somewhere.',
+				].join('\n'),
+			)
+			await expect(readLanding(site, root)).rejects.toThrow(/gone\/README\.md does not exist/)
+		} finally {
+			rmSync(root, { recursive: true, force: true })
+		}
+	})
+})
 
 describe('the benchmark cards', () => {
 	test('read back from every SVG the README shows, in its order', () => {

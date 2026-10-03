@@ -7,7 +7,7 @@ where a change to the styles shows everything it touches at once.
 ## Text
 
 A paragraph with `inline code`, **bold**, _emphasis_, a link to
-[another page](../docs/store/metrics.md#read-it-back), one to
+[another page](../docs/metrics/README.md#ask-how-much), one to
 [a file of the repository](../kv/kv.go) and one
 [elsewhere](https://github.com/tinyshed/tinystore).
 

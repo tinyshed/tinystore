@@ -4,7 +4,7 @@ An application's current state, in `kv.db` inside a `tinystore.Store`:
 sessions, one-time codes, claims, the answers of requests sent twice, drafts,
 flags, settings, a cache of another service's answers. Buckets hold values of one type by key, keys sit in
 branches, expiry runs on the store's clock and a version never repeats. The
-design and the measurements behind it are [docs/kv.md](../docs/kv.md).
+design and the measurements behind it are research's [design/kv.md](https://github.com/tinyshed/research/blob/main/tinystore/design/kv.md).
 
 ```go
 state, err := kv.Open(ctx, store, kv.Options{}) // data/kv.db
@@ -44,7 +44,7 @@ receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, 
 ```
 
 [example_test.go](example_test.go) runs the five cases of
-[docs/kv.md](../docs/kv.md) as examples, and `go doc` shows them.
+[design/kv.md](https://github.com/tinyshed/research/blob/main/tinystore/design/kv.md) as examples, and `go doc` shows them.
 
 ## Contracts
 
@@ -244,6 +244,6 @@ _, err = state.Maintain(ctx)             // writes counters and renewals, delete
 
 ## Not in the first version
 
-What [docs/kv.md](../docs/kv.md) leaves for later: a bucket held in memory, a
+What [design/kv.md](https://github.com/tinyshed/research/blob/main/tinystore/design/kv.md) leaves for later: a bucket held in memory, a
 filter that answers a miss without SQLite, history, watching a bucket of
 values, listing a branch's branches.

@@ -3,7 +3,7 @@
 An application's logs and events, in `records.db` inside a `tinystore.Store`:
 written through `log/slog` or appended as records, read back by time and by
 what they hold, and followed in the order they were sealed. The design and
-the measurements behind it are [docs/records.md](../docs/records.md).
+the measurements behind it are research's [design/records.md](https://github.com/tinyshed/research/blob/main/tinystore/design/records.md).
 
 ```go
 logs, err := records.Open(ctx, store, records.Options{Retention: 14 * 24 * time.Hour})
@@ -171,4 +171,4 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 No text templates beyond the times a line spells, which cost more than zstd
 on the corpus measured; no full-text search; no OTLP. Text compresses per
 block, without the per-segment sample the research measured; see
-docs/records.md for what that costs.
+research's [design/records.md](https://github.com/tinyshed/research/blob/main/tinystore/design/records.md) for what that costs.

@@ -2,21 +2,19 @@
 	import { codeBlocks } from '$lib/code-blocks'
 	import Seo from '$lib/components/Seo.svelte'
 	import { href } from '$lib/href'
-	import { repository, research, summary } from '$lib/site'
+	import { repository } from '$lib/site'
 	import { track } from '$lib/track'
 
+	// every word of this page but its buttons comes from web/landing.md
 	let { data } = $props()
 </script>
 
-<Seo title="TinyStore: a small storage runtime for applications" description={summary} origin={data.origin} path="/" />
+<Seo title={data.title} description={data.summary} origin={data.origin} path="/" />
 
 <main>
 	<section class="hero">
-		<h1>A small storage runtime for applications.</h1>
-		<p class="pitch">
-			SQL, key-value state, durable jobs, files, metrics and logs in one directory, with one
-			lifecycle, one memory budget and one backup.
-		</p>
+		<h1>{data.headline}</h1>
+		<p class="pitch">{@html data.pitch}</p>
 		<div class="actions">
 			<a class="primary" href={href(data.start)}>Start here</a>
 			<a class="secondary" href={repository} onclick={() => track('outbound', 'github')}>View on GitHub</a>
@@ -40,7 +38,7 @@
 
 	<section class="numbers">
 		<p class="eyebrow">Numbers</p>
-		<h2>Measured against what it replaces.</h2>
+		<h2>{data.numbers.title}</h2>
 		<div class="cards">
 			{#each data.cards as card (card.title)}
 				<div class="card">
@@ -67,25 +65,14 @@
 			{/each}
 		</div>
 		<dl class="legend">
-			<div>
-				<dt>Services</dt>
-				<dd>The stack TinyStore replaces: Redis, PostgreSQL, VictoriaMetrics and files on disk.</dd>
-			</div>
-			<div>
-				<dt>Batch</dt>
-				<dd>The queue lives in the application's SQL file; a job commits with its rows.</dd>
-			</div>
-			<div>
-				<dt>Split</dt>
-				<dd>The queue has a file of its own, as by default; each file commits apart.</dd>
-			</div>
+			{#each data.numbers.legend as row (row.term)}
+				<div>
+					<dt>{row.term}</dt>
+					<dd>{row.text}</dd>
+				</div>
+			{/each}
 		</dl>
-		<p class="caveat">
-			Local Linux-container medians on a Ryzen 7 7700 with Go 1.27.1. These are workload
-			comparisons, not universal wins: specialized KV engines read faster, and Prometheus and
-			VictoriaMetrics ingest more samples a second.
-			<a href={research}>Methodology and reports ↗</a>
-		</p>
+		<p class="caveat">{@html data.numbers.caveat}</p>
 	</section>
 </main>
 
@@ -388,7 +375,8 @@
 		line-height: 1.6;
 	}
 
-	.caveat a {
+	/* the caveat's link comes from landing.md, outside the component's scope */
+	.caveat :global(a) {
 		color: var(--ts-accent-text);
 	}
 

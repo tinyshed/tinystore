@@ -144,10 +144,10 @@ func (b *Bucket) All(ctx context.Context, query Query) iter.Seq2[Object, error] 
 }
 
 // Usage is the objects under this handle's folder and their bytes, the folders
-// under it included, counted from their rows in one snapshot; docs/blobs.md has
-// what that costs. An expired object and one a Clear hid are not counted. It is
-// a check and not a limit: two uploads that each pass it can pass a quota
-// together.
+// under it included, counted from their rows in one snapshot; research's
+// design/blobs.md has what that costs. An expired object and one a Clear hid
+// are not counted. It is a check and not a limit: two uploads that each pass it
+// can pass a quota together.
 func (b *Bucket) Usage(ctx context.Context) (Usage, error) {
 	if b.err != nil {
 		return Usage{}, b.err

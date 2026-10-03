@@ -11,10 +11,11 @@ contract from the documents, not from the Go client in
 
 ## Read first
 
-- `docs/server.md`: *Starting and finding a server*, *SERVE*, *What a
-  connection may do*, *Across the wire*, *SDKs*.
-- `docs/wire.md`: frames, `HELLO` and `WELCOME`, every engine's methods, the
-  error codes.
+- `docs/wire.md`: frames, `HELLO` and `WELCOME`, *Finding a local server*,
+  *Versions*, every engine's methods, the error codes.
+- Research's design/server.md, the design both SDKs were built to: *What a
+  connection may do*, *Across the wire*, *SDKs*. It is kept as it was; where it
+  and the code disagree, the code and its tests decide.
 - `server/wire/testdata/vectors.json`: the bytes every SDK is tested against;
   `messages.json` beside it, every message by its fields' names, with the
   methods' numbers and the errors' codes.
@@ -22,8 +23,9 @@ contract from the documents, not from the Go client in
 One commit changes the protocol, the server, both SDKs and the vectors. The
 SDKs live in `sdk/js` (Bun and Node) and `sdk/python`, and `sdk/go.mod`
 keeps them out of the Go module's zip. What they look like to an application,
-beside Go, is `docs/sdk.md`, whose rules every call follows; a change to what a
-program writes is the `api-change` skill, since it reaches all three.
+beside Go, is the guides in `docs/`, three languages a page; the rules every
+call follows, and any change to what a program writes, are the `api-change`
+skill's, since it reaches all three.
 
 ## Reaching the server, in this order
 

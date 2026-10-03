@@ -16,7 +16,7 @@ const (
 	maxPayloadBytes      = 8200
 	maxExpandedDirectory = maxDirectoryBytes - 128
 
-	// directoryVersion is the first byte of every group directory, docs/format.md
+	// directoryVersion is the first byte of every group directory, research's design/format.md
 	directoryVersion = 4
 )
 

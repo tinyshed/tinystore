@@ -5,6 +5,7 @@ import type { Root } from 'mdast'
 import { calloutsFromAlerts } from './alerts'
 import { groupFences } from './code'
 import { createHighlight, type Highlight } from './highlight'
+import { landingFile, landingSummary } from './landing'
 import type { Links, Target } from './links'
 import { exportMarkdown, finish, type Problem, parse, toHast } from './markdown'
 import { type Index, indexFile, type NavSection, readIndex, urlOf } from './nav'
@@ -46,6 +47,8 @@ export interface Page {
 
 export interface Site {
 	title: string
+	/** what TinyStore is, in a sentence: the landing page's headline and pitch */
+	summary: string
 	nav: NavSection[]
 	/** the index first, at /docs, then every page in the index's order */
 	pages: Page[]
@@ -122,6 +125,7 @@ async function buildSite(root: string): Promise<Site> {
 
 	return {
 		title: index.title,
+		summary: landingSummary(root),
 		nav: index.sections,
 		pages,
 		assets: [...links.assets].sort(),
@@ -249,6 +253,7 @@ function stampOf(root: string): string {
 		const files = [
 			indexFile,
 			kitchenSink,
+			landingFile,
 			...[...index.matchAll(/\]\(([^)#\s]+\.md)/g)].map(m => `docs/${m[1]}`),
 		]
 		return files

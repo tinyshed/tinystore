@@ -29,7 +29,7 @@ Nothing is released yet, so a field may still be repurposed, as `HELLO`'s field
 6 went from the instance to the challenge; after a release a message never
 changes meaning and a new field is added instead.
 
-What an older side does with a newer one is `docs/server.md` "Versions", and
+What an older side does with a newer one is `docs/wire.md` "Versions", and
 each change keeps it:
 
 - A new request field is left out at its zero value, so a client using

@@ -36,7 +36,7 @@ func forgetTypes() {
 	plans.Clear()
 }
 
-// the model docs/sqldb.md declares
+// the model research's design/sqldb.md declares
 type (
 	User struct {
 		ID        int64 `db:",generated"`
@@ -57,7 +57,7 @@ type (
 	}
 )
 
-// design is docs/sqldb.md's schema, declared as a program declares it
+// design is the schema of research's design/sqldb.md, declared as a program declares it
 type design struct {
 	users  *TableDef[User]
 	notes  *TableDef[Note]
@@ -93,7 +93,7 @@ func designMigrations(t *testing.T) fstest.MapFS {
 	return fstest.MapFS{"001_notes.sql": {Data: golden}}
 }
 
-// the SQL a schema prints is docs/sqldb.md's, byte for byte
+// the SQL a schema prints is research's design/sqldb.md's, byte for byte
 func TestASchemaIsTheSQLItPrints(t *testing.T) {
 	golden, err := os.ReadFile("testdata/schema.sql")
 	if err != nil {

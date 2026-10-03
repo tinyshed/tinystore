@@ -6,7 +6,7 @@ writes every query; sqldb owns the file, its connections, the migrations and
 the values between Go and SQLite. A struct says what a row is, `Table[T]` what
 a struct cannot say, and `Open` checks the file the migrations made against
 them. The design and the measurements behind it are
-[docs/sqldb.md](../docs/sqldb.md).
+research's [design/sqldb.md](https://github.com/tinyshed/research/blob/main/tinystore/design/sqldb.md).
 
 ```go
 type Note struct {
@@ -146,7 +146,16 @@ wrote internal/data/migrations/002_add_description.sql:
   inside it is `ErrInvalid`, and a `Tx` used after its function returned is
   `tinystore.ErrClosed`. A `Tx` holds the writer for itself and pays an fsync
   of its own, so transactions from many goroutines commit one at a time: what
-  can be a `Batch` should be.
+  can be a `Batch` should be. `Tx.Add` writes another engine's change in the
+  transaction, as a `Batch` adds one, told the outcome once the transaction
+  ends; make the change before the transaction begins, since it holds memory
+  that a transaction holding the writer must not wait for.
+- **`Copy` copies a database no one in the store has open** into a snapshot's
+  directory, as the store's `Snapshot` copies an open one, without opening it:
+  a backup of a whole directory takes it, and a migration that waits for its
+  program still applies when the program opens it. It holds the name while it
+  copies, so an `Open` meanwhile, or a copy of an open one, is
+  `tinystore.ErrInUse`.
 - **Tables named `_tinystore_…` are the store's**: its migration history, and
   the queues a jobs store opened `In` the database keeps there. A schema leaves
   them out, and a table cannot be declared with such a name.
@@ -230,7 +239,7 @@ prints the schema's SQL.
 
 ## Not in the first version
 
-What [docs/sqldb.md](../docs/sqldb.md) leaves for later: `Update` of a whole
+What [design/sqldb.md](https://github.com/tinyshed/research/blob/main/tinystore/design/sqldb.md) leaves for later: `Update` of a whole
 row, `Upsert`, `InsertAll` and binding a struct's fields by name; a reference
 over several columns; building queries from pieces; the schema's manifest, a
 server and other languages; change notifications; search that knows Russian;

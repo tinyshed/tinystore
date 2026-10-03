@@ -1,4 +1,4 @@
-import { engineRows, heroSample, readCards } from '$lib/content/landing'
+import { readCards, readLanding } from '$lib/content/landing'
 import { checkout } from '$lib/content/repo'
 import { loadSite } from '$lib/content/site'
 
@@ -11,8 +11,8 @@ export const load: PageServerLoad = async () => {
 	const starting = site.nav[0]?.items.find(item => item.kind === 'page')
 
 	return {
-		sample: await heroSample(),
-		engines: engineRows(site),
+		...(await readLanding(site)),
+		summary: site.summary,
 		cards: readCards(checkout()),
 		start: starting?.kind === 'page' ? `/docs/${starting.slug}` : '/docs',
 	}

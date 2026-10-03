@@ -1,4 +1,3 @@
-import { summary } from '../site'
 import type { Site } from './site'
 
 /**
@@ -6,7 +5,7 @@ import type { Site } from './site'
  * section of the index with its pages as markdown an agent can fetch.
  */
 export function llmsIndex(site: Site): string {
-	const lines = ['# TinyStore', '', `> ${summary}`, '']
+	const lines = ['# TinyStore', '', `> ${site.summary}`, '']
 	lines.push(
 		'Every page below is also one file: llms-full.txt. Add .md to any page of the site',
 		'for its markdown.',
@@ -35,7 +34,7 @@ export function llmsIndex(site: Site): string {
 
 /** Every page's markdown in the index's order, each after the address it is read at. */
 export function llmsFull(site: Site): string {
-	const parts = [`# TinyStore\n\n> ${summary}\n`]
+	const parts = [`# TinyStore\n\n> ${site.summary}\n`]
 	for (const page of site.pages.filter(page => page.hidden !== true)) {
 		parts.push(`---\n\nSource: ${site.origin}${page.url}\n\n${page.markdown.trim()}\n`)
 	}

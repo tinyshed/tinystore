@@ -2,7 +2,7 @@
 
 kv, jobs, blobs, SQL, records and metrics in one directory, served by a
 sidecar the SDK starts. A Go program embeds the same engines;
-[docs/sdk.md](../../docs/sdk.md) has the three languages side by side.
+[the guides](../../docs/README.md) show the three languages side by side.
 
 ```sh
 bun add tinystore
@@ -30,6 +30,11 @@ import { connect, open } from 'tinystore'
 await using store = await open('./data')                 // the directory's sidecar, started when none runs
 await using alone = await open(dir, { private: true })   // a child of this process, for tests and scripts
 await using remote = await connect('tls://db.internal:7070', { token })
+
+await using test = await open(dir, { private: true, clock: new Date('2026-10-03T09:00:00Z') })
+await test.clock.advance('1h')                           // keys expire and jobs come due without a wait
+
+await store.backup('backup.zip')                         // every engine in one checked zip; tinystore restore takes it back
 ```
 
 `open` returns once the server has answered, so a directory that cannot be
@@ -49,6 +54,13 @@ await views.add('/home')
 
 const page = await sessions.scan({ limit: 100 })         // { items, next }; next goes back as after
 for await (const entry of sessions.all()) { … }
+
+const userId = await store.kv.tx(async tx => {           // reads, decides, writes; runs again if a key it read changed
+	const userId = await codes.withTx(tx).take(digest(code))
+	if (userId === undefined) throw new InvalidCodeError()
+	sessions.withTx(tx).of(userId).set(digest(token), session)
+	return userId
+})
 ```
 
 A bucket's type is given once, where it opens: JSON of `T`, a kind
@@ -150,6 +162,13 @@ const notes = await app.all<Note>`select id, body from notes where author = ${au
 await app.batch(tx => {                                   // one transaction, all or none
 	tx.exec`update notes set body = ${body} where id = ${id}`
 	tx.exec`insert into edits (note) values (${id})`
+})
+const [page, total] = await app.view(tx => [tx.all`select * from notes limit 20`, tx.scalar`select count(*) from notes`])
+
+const index = store.jobs.queue<{ id: number }>('index', { in: app }) // the queue lives in sql/app.db
+await app.batch(tx => {
+	tx.exec`update notes set body = ${body} where id = ${id}`
+	index.withTx(tx).enqueue({ id })                       // commits with the update, or not at all
 })
 ```
 

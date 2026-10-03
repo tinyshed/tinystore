@@ -27,9 +27,10 @@ export const indexFile = 'docs/README.md'
  * list under it an entry, in the order written. GitHub shows the same file as
  * the table of contents of docs/.
  *
- *     ## Store                      Store
- *     - KV                          KV, written later: shown, not linked
- *     - [Metrics](store/metrics.md) Metrics, /docs/store/metrics
+ *     ## KV                         KV
+ *     - [Overview](kv/README.md)    Overview, /docs/kv
+ *     - [Quotas](kv/quotas.md)      Quotas, /docs/kv/quotas
+ *     - Sessions                    Sessions, written later: shown, not linked
  *     - [Go API](https://…)         Go API, a link out
  */
 export function readIndex(tree: Root, root: string, commit: string): Index {
@@ -75,7 +76,7 @@ function entry(title: string, url: string, root: string, commit: string): NavIte
 	return { kind: 'link', title, href: sourceUrl(file, commit, kind) }
 }
 
-/** `docs/store/metrics.md` → `store/metrics`, `docs/store/README.md` → `store`, `docs/README.md` → `` */
+/** `docs/kv/quotas.md` → `kv/quotas`, `docs/kv/README.md` → `kv`, `docs/README.md` → `` */
 export function slugOf(file: string): string {
 	return file
 		.replace(/^docs\/?/, '')

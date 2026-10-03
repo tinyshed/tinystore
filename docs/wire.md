@@ -1,11 +1,15 @@
 # The wire protocol, version 1
 
-The bytes a TinyStore server and its clients exchange over any byte stream, a
+The bytes a TinyStore server and its clients exchange over any byte stream: a
 child's stdin and stdout, a Unix socket, a Windows named pipe, TCP or TLS.
-What they mean, who may send them and what bounds them is
-[server.md](server.md). Frames, the profile, the handshake, the errors and
-every engine's methods, kv, jobs, blobs, sql, records and metrics, are built
-in `server/wire`. Every example on this page is a vector of
+Read it to write a client in a language TinyStore has no SDK for, or to see
+what an SDK does on the wire; the Bun and Python SDKs are built to this page.
+
+Frames, the profile, the handshake, the errors and every engine's methods, kv,
+jobs, blobs, sql, records and metrics, are built in `server/wire`, and why the
+server behaves as it does is
+[its design](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md).
+Every example on this page is a vector of
 [server/wire/testdata/vectors.json](../server/wire/testdata/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
@@ -138,6 +142,77 @@ belongs, with `limit` or `unavailable`.
 |---|---|---|---|
 | 1 | code | str | as [an error's](#errors) |
 | 2 | message | str | |
+
+## Finding a local server
+
+A store directory has at most one server, since its `LOCK` lets one process
+open it. That server publishes how to reach it in `<dir>/server/`, which only
+the directory's owner may enter: mode 0700 and, on Windows, which lets anyone
+traverse a directory to a file whose path they know, a protected DACL naming
+its owner alone, which every file made in it inherits. `SERVE` there is a
+hint; `LOCK` is the truth.
+
+```json
+{"protocol": 1, "server": "0.4.0", "pid": 4212, "instance": "q1q0l3yZ3JvYw8g7oM2sYA",
+ "secret": "Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE",
+ "endpoints": ["unix:///srv/app/data/server/tinystore.sock"], "sidecar": true}
+```
+
+| field | |
+|---|---|
+| protocol | the newest protocol the server speaks |
+| server | its version |
+| pid | its process, for a person reading the file; no client trusts it, since a pid is reused |
+| instance | 16 random bytes a start, base64url without padding, which `WELCOME` repeats |
+| secret | 32 random bytes a start, base64url without padding, the key of the proof |
+| endpoints | where it listens: `unix://` and a socket's path, or `pipe:` and a Windows named pipe's name |
+| sidecar | `true` when the server is a sidecar, which `tinystore serve --local` starts for its clients. A client of a newer release may replace a sidecar. The field is absent for a Go program's own server and for `tinystore serve <dir>`, which a person runs |
+
+- **Written whole, under the lock.** Only the store holding `LOCK` writes
+  `server/`. A server removes a `SERVE` left behind before it listens, since
+  the endpoint that file names may be another process's by now, writes its
+  own once it listens, as a temporary file renamed into place, and removes it
+  when it leaves, before it lets go of `LOCK`.
+- **Find or start.** A client reads `SERVE`, connects to an endpoint and
+  checks the proof. Any failure, no file, a refused connection or a proof that
+  does not check, starts `tinystore serve --dir <dir> --local --log
+  <dir>/server/serve.log`. That child takes `LOCK`, which means the old server
+  is gone, and publishes itself; or it finds `LOCK` held and exits with code 3,
+  and the client reads `SERVE` again until the winner answers, five seconds at
+  most, starting one again when none does.
+- **The proof.** A client that found its server through `SERVE` sends a
+  `HELLO` with 16 random bytes as its challenge, and sends no `REQUEST` until
+  `WELCOME`'s proof equals the HMAC-SHA256 of the challenge keyed with the
+  secret, compared in constant time. An endpoint's name is anyone's to take
+  once its server is gone, a Windows pipe's above all, and only the
+  directory's owner can read the secret. A client whose proof fails reads
+  `SERVE` again, as a stale one.
+- **A reader delays a change and never fails it.** On Windows a client
+  holding `SERVE` open refuses its rename or removal, and so may a scanner;
+  the server tries again eight times, from 1 to 64 ms apart.
+
+How a client knows its server depends on the transport:
+
+| transport | how the client knows its server |
+|---|---|
+| stdio | it started the server itself, as a private child |
+| a Unix socket or a named pipe found through `SERVE` | the proof |
+| TCP with TLS | the certificate, checked before its token leaves |
+| TCP | not at all: the token travels in the clear, on a network its operator trusts |
+
+Where a local server listens:
+
+- **A Unix socket**, `<dir>/server/tinystore.sock`, when that absolute path
+  fits a `sockaddr_un`, 104 bytes on macOS and the BSDs and 108 on Linux;
+  past it, the same name in a directory of the owner's own,
+  `$XDG_RUNTIME_DIR/tinystore-<hash>`, or in the temporary directory without
+  one. `<hash>` is the first eight bytes of the SHA-256 of the store's absolute
+  path, in hex: eight, so that a socket under macOS's temporary directory
+  still fits.
+- **A named pipe on Windows**, `pipe:tinystore-<hash>`, created as the first
+  instance of its name with a DACL naming its owner alone, which refuses
+  remote clients. No local endpoint takes a token: its permission is the file
+  system's, and a local connection is `admin`.
 
 ## Streams
 
@@ -306,6 +381,44 @@ A conflict on stream 7:
    03 81 a6 62 75 63 6b 65 74 a8 73 65 73 73 69 6f 6e 73                  what: {"bucket": "sessions"}
 ```
 
+## Versions
+
+A server and its clients upgrade apart: a remote server deployed once while
+the applications' SDKs move on, or a sidecar still serving a directory after
+its application's SDK was updated. So each side promises what it does with an
+older or a newer one:
+
+- **A connection speaks the older protocol of its two sides.** `HELLO` says
+  the newest the client speaks and `WELCOME` the one the connection speaks; a
+  server refuses only a client older than the oldest protocol it still speaks.
+  A protocol moves only for what a field cannot carry: frames, the handshake,
+  credit.
+- **Within a protocol a message grows by fields, and a request is understood
+  whole or refused.** A field the server does not know is `unimplemented`,
+  naming the field and the server's version, so a newer client using
+  something new learns which server to upgrade rather than reading an answer
+  to another question. A client leaves a field out at its zero value, so one
+  using nothing new talks to any server of its protocol.
+- **An answer grows only by what a client may skip.** A field whose meaning a
+  client must know is answered only to a client that asked for it with a
+  field of its request, which an older server refuses.
+- **A method is added, never repurposed.** An older server answers a newer
+  method `unimplemented`, naming its version. After the first release a
+  message never changes meaning and a field's number is never reused.
+
+A client that finds a sidecar of an older release than its own replaces it:
+
+1. The client sends `server.stop`. The sidecar answers, lets its running
+   streams finish, and gives back `SERVE` and `LOCK`.
+2. The client starts its own binary, as it does when no sidecar runs, and
+   prints one line about it on stderr.
+3. Every other client of the old sidecar gets `GOAWAY` and connects to the new
+   sidecar when it connects again.
+
+A client doesn't replace a server that `SERVE` doesn't call a sidecar, such as
+a Go program's own server or one that a person runs. It also keeps a sidecar
+that refuses to stop. In both cases, it prints a warning once on stderr.
+
 ## Methods
 
 Each engine's messages are fixed on this page with its slice, before its
@@ -355,13 +468,30 @@ The server's own methods take the range below the engines', `0x00xx`.
 | method | | request | answer |
 |---|---|---|---|
 | `0x0001` | stop | `{}` | `{}`, then the server stops as its closing does: the streams running finish, every connection is told `GOAWAY`, and a sidecar gives back `SERVE` and its directory |
+| `0x0002` | clock | a clock: a time to set it to, a while to move it forward by, or neither to read it | a clock: the time it reads once moved |
+| `0x0003` | backup | `{}` | a download: `{}`, then the zip of the whole store in `DATA`, its bytes as they come, the last with END |
 
 A stop is an admin connection's alone, `permission` to a data connection, and
 a server whose program said nothing of stopping refuses it with `permission`
 too: a program serving its own store decides when that store's server stops.
 `tinystore serve` stops at one, as it does at Ctrl+C, which is how
 `tinystore stop` ends a sidecar and how an SDK newer than the sidecar it found
-has it replaced: the next open starts that SDK's binary.
+replaces it with its own binary, as [Versions](#versions) says.
+
+Only an admin connection can ask for a backup. The server first opens each
+engine whose file is in the directory. It copies each database that no client
+has opened, without opening it. Then it sends what the `backup` package
+writes: a copy of every engine's file, and a manifest of their sizes and
+checksums, which a restore checks.
+
+A clock is `{1: at, 2: advance}`. `at` is a time in unix milliseconds, and
+`advance` is a duration in milliseconds. Only a private server started with
+`tinystore serve --stdio --clock <time>` has a clock that moves, and the store
+runs on it instead of the system's clock. An SDK starts such a server when you
+open a store with `private` and `clock`. Only an admin connection can move the
+clock, and only forward. The server answers `invalid` to a time before the
+clock's, a negative duration, both fields at once, or a clock call to a server
+that runs on the system's clock.
 
 ### kv
 
@@ -420,8 +550,8 @@ A handle is `{1: uint}`. A call:
 | 4 | value | nil, int or bin | nil when absent |
 | 5 | ttl | uint | milliseconds |
 | 6 | expire at | int | unix milliseconds |
-| 7 | if version | bin | a version an entry carried |
-| 8 | if absent | bool | |
+| 7 | if version | bin | a version that an entry carried. A get or a has with it fails `conflict` if the key no longer has that version |
+| 8 | if absent | bool | A get or a has with it fails `conflict` if the key holds a value |
 | 9 | n | int | what add adds, and max compares |
 | 10 | after | a key | the key a scan's page begins after |
 | 11 | limit | uint | the keys a page returns: 100 when absent, 1000 at most |
@@ -522,6 +652,7 @@ A queue:
 | 8 | keep done | uint | milliseconds; absent forgets a key when its job is done |
 | 9 | schedule | a repeat | a schedule rather than a queue |
 | 10 | max running | uint | the jobs that may run at once, across every worker of the store; absent bounds none |
+| 11 | in | str | a database's name. The queue lives in that database's file instead of `jobs.db`, and the database's batches can enqueue on it. A client opens the database first, on any connection. Absent means `jobs.db` |
 
 A repeat is `{1: cron, 2: zone}`, five cron fields and the zone's name, or
 `{3: every}`, milliseconds, at least a second. A job, a batch's item:
@@ -728,15 +859,23 @@ bin also carrying TEXT that is not UTF-8, and it is what the row keeps: a time
 held as text travels as its text, whatever its column declares.
 
 Done is `{1: changes, 2: last id}`, the columns `{1: [name…]}` and a row
-`{1: [value…]}`. Statements are `{1: handle, 2: [statement…], 3: read}` and
-their results `{1: [result…]}`, a result being done, or `{3: columns, 4:
-[[value…]…]}` for a statement that returned rows. A message past the agreed
-body is `limit`: a row a query downloads, or a batch's results, which travel in
-one message. A query holds its rows in the server's memory, 64 MiB of them at
-most, before the first leaves.
+`{1: [value…]}`. Statements are `{1: handle, 2: [statement…], 3: read, 4:
+[jobs…]}` and their results `{1: [result…]}`, a result being done, or `{3:
+columns, 4: [[value…]…]}` for a statement that returned rows.
+
+Each item of `jobs` has the shape of an enqueue's request, `{1: handle, 2:
+[job…]}`, and its queue must be opened `in` this database. The transaction
+writes the jobs after the statements, so a job commits with the rows it is
+about, or not at all. A job has no result. When a job fails, `what` names it as
+`call`, counted after the statements. A job in a view, or on a queue that lives
+in another file, is `invalid`.
+
+A message past the agreed body is `limit`: a row a query downloads, or a
+batch's results, which travel in one message. A query holds its rows in the
+server's memory, 64 MiB of them at most, before the first leaves.
 
 A data connection's statement, each of a batch's included, runs only once the
-check [server.md](server.md#what-a-connection-may-do) describes lets it, and
+check [server.md](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md#what-a-connection-may-do) describes lets it, and
 one it refuses is `permission`; it runs 30 seconds at most, past which it is
 `limit`. An admin connection's runs as it is.
 

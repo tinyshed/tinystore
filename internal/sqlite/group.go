@@ -51,7 +51,7 @@ const (
 // still waiting. A commit's fsync is therefore shared by the writes that
 // arrived while the last one ran, and no goroutine is started.
 //
-// See docs/group-commit-contract.md.
+// See research's design/group-commit-contract.md.
 type group struct {
 	mu      sync.Mutex
 	queue   []*groupedWrite

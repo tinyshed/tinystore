@@ -2,7 +2,7 @@
 
 kv, jobs, blobs, SQL, records and metrics in one directory, served by a
 sidecar the SDK starts. A Go program embeds the same engines;
-[docs/sdk.md](https://github.com/tinyshed/tinystore/blob/main/docs/sdk.md) has
+[the guides](https://github.com/tinyshed/tinystore/blob/main/docs/README.md) show
 the three languages side by side.
 
 ```sh
@@ -29,6 +29,10 @@ async with tinystore.open(directory, private=True) as store:  # a child of this 
     ...
 async with tinystore.connect("tls://db.internal:7070", token=token) as store:
     ...
+
+async with tinystore.open(directory, private=True, clock=datetime(2026, 10, 3, 9, tzinfo=UTC)) as store:
+    await store.clock.advance("1h")  # keys expire and jobs come due without a wait
+    await store.backup("backup.zip")  # every engine in one checked zip; tinystore restore takes it back
 ```
 
 `open` returns once the server has answered, so a directory that cannot be
@@ -50,6 +54,17 @@ await views.add("/home")
 page = await sessions.scan(limit=100)  # Page(items, next); next goes back as after
 async for entry in sessions.all():
     ...
+
+
+async def sign_in(tx: tinystore.Tx) -> int:  # reads, decides, writes; runs again if a key it read changed
+    user_id = await codes.with_tx(tx).take(digest(code))
+    if user_id is None:
+        raise InvalidCodeError
+    sessions.of(user_id).with_tx(tx).set(digest(token), session)
+    return user_id
+
+
+user_id = await store.kv.tx(sign_in)
 ```
 
 A bucket's type is given once, where it opens: `str`, `bytes`, `int`,
@@ -157,6 +172,11 @@ notes = await app.all(Note, "select id, body from notes where author = ?", autho
 async with app.batch() as tx:  # one transaction, all or none
     tx.exec("update notes set body = ? where id = ?", body, note_id)
     tx.exec("insert into edits (note) values (?)", note_id)
+
+index = store.jobs.queue("index", int, in_=app)  # the queue lives in sql/app.db
+async with app.batch() as tx:
+    tx.exec("update notes set body = ? where id = ?", body, note_id)
+    index.with_tx(tx).enqueue(note_id)  # commits with the update, or not at all
 ```
 
 On Python 3.14 a statement may be a template, `t"… where author = {author}"`,
@@ -168,6 +188,8 @@ its values arguments and never SQL. A value comes back as SQLite keeps it.
 logging.getLogger().addHandler(store.records.handler("api", redact=["password"]))  # never waits for the server
 with tinystore.trace(trace_id, span_id):  # what is logged inside carries the trace
     logging.info("charged")
+with tinystore.context(request_id=request_id):  # every line inside carries request_id, tasks it starts too
+    logging.warning("slow request", extra={"ms": 1200})
 
 page = await store.records.scan(since="1h", min_level="warn", limit=100)
 resets = await store.records.scan(since="1h", search="connection reset")  # case ignored

@@ -9,7 +9,7 @@ export interface Target {
 export interface Links {
 	root: string
 	commit: string
-	/** pages by the repository path of their file, `docs/store/metrics.md` */
+	/** pages by the repository path of their file, `docs/kv/quotas.md` */
 	pages: Map<string, Target>
 	/** files shown on a page, by repository path; the site serves each under /files/ */
 	assets: Set<string>

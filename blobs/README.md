@@ -5,7 +5,7 @@ their sizes, a chat's attachments, a camera's recordings, an export a user
 downloads tomorrow, an editor's documents. Objects sit under keys that are
 paths, their rows in `blobs.db`, their bytes inline up to 16 KiB and in a file
 of their own above it. The design and the measurements behind it are
-[docs/blobs.md](../docs/blobs.md) and
+research's [design/blobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/blobs.md) and
 [the mechanics round](https://github.com/tinyshed/research/blob/main/tinystore/reports/blobs-mechanics-2026-09-27.md).
 
 ```go
@@ -30,7 +30,7 @@ err = avatars.Of(user.ID).Clear(ctx)                             // the account 
 ```
 
 [example_test.go](example_test.go) runs the five cases of
-[docs/blobs.md](../docs/blobs.md) as examples, and `go doc` shows them.
+[design/blobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/blobs.md) as examples, and `go doc` shows them.
 
 ## Contracts
 
@@ -139,7 +139,7 @@ _, err = objects.Maintain(ctx)                  // removes it and its file, and 
 
 ## Not in the first version
 
-What [docs/blobs.md](../docs/blobs.md) leaves for later: resuming an upload,
+What [design/blobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/blobs.md) leaves for later: resuming an upload,
 packs for small files, totals kept for folders, checked ranges, sharing the
 bytes of equal uploads, compression, a folder's own objects and sub-folders,
 versions kept after a replace, a quota enforced in the commit, transactions

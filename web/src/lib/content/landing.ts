@@ -2,24 +2,207 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { toHtml } from 'hast-util-to-html'
 import { h } from 'hastscript'
-import type { Code } from 'mdast'
+import type { Code, Paragraph, Root, RootContent, Table, TableCell } from 'mdast'
+import { toString as textOf } from 'mdast-util-to-string'
 
 import { byLanguage, copyButton, languageSwitch, panes, toFence } from './code'
-import { createHighlight } from './highlight'
-import { parse } from './markdown'
-import { sourceUrl } from './repo'
+import { createHighlight, type Highlight } from './highlight'
+import { type Links, resolveLink } from './links'
+import { finish, parse, toHast } from './markdown'
+import { checkout } from './repo'
 import type { Site } from './site'
 
+/** The landing page's words, read when the site is built; its design is +page.svelte. */
+export const landingFile = 'web/landing.md'
+
+export interface Landing {
+	/** what a browser's tab and a search result show */
+	title: string
+	headline: string
+	/** the paragraph under the headline, as HTML */
+	pitch: string
+	/** the sample: a language each, its install command beside the switch */
+	sample: string
+	engines: EngineRow[]
+	numbers: Numbers
+}
+
+export interface EngineRow {
+	name: string
+	short: string
+	text: string
+	href: string
+	external: boolean
+}
+
+export interface Numbers {
+	title: string
+	legend: { term: string; text: string }[]
+	/** the paragraph under the legend, as HTML, its links resolved */
+	caveat: string
+}
+
 /**
- * The landing page's sample: a language each, its install command beside the
- * switch and a copy button inside the code. It shares the docs' language
- * switch, so a reader who picks Python here reads Python everywhere.
+ * The landing page's words from web/landing.md, so that changing them is
+ * editing markdown:
+ *
+ *     # A small storage runtime for applications.   the headline
+ *     SQL, key-value state, …                        the pitch
+ *     ```ts install="bun add tinystore"              the sample, a fence a language
+ *     ## Engines                                     a row an engine: its link, in short, in a line
+ *     ## Measured against what it replaces.          the numbers: the legend's rows, then the caveat
+ *
+ * A part that is missing, or a link that leads nowhere, fails the build.
  */
-export async function heroSample(): Promise<string> {
-	const tree = parse(readFileSync(join(process.cwd(), 'src/lib/landing/first-look.md'), 'utf8'))
-	const fences = tree.children.filter((node): node is Code => node.type === 'code').map(toFence)
+export async function readLanding(site: Site, root = checkout()): Promise<Landing> {
+	const [intro, ...sections] = sectionsOf(readTree(root))
+	const at = sections.findIndex(section => section.title === 'Engines')
+	const engines = sections[at]
+	const numbers = sections[at + 1]
+	if (intro === undefined || engines === undefined || numbers === undefined) {
+		throw new Error(
+			`${landingFile}: a headline, then "## Engines" and the numbers' section after it`,
+		)
+	}
+
 	const highlight = await createHighlight()
-	const variants = byLanguage(fences)
+	const links = linksOf(site, root)
+	const headline = headlineOf(intro)
+
+	return {
+		title: `TinyStore: ${lowerFirst(withoutStop(headline))}`,
+		headline,
+		pitch: await inline(paragraphOf(intro), links, highlight),
+		sample: sampleOf(
+			intro.nodes.filter((node): node is Code => node.type === 'code'),
+			highlight,
+		),
+		engines: rowsOf(tableOf(engines)).map(cells => engineRow(cells, links)),
+		numbers: {
+			title: numbers.title,
+			legend: rowsOf(tableOf(numbers)).map(([term, text]) => ({
+				term: plain(term),
+				text: plain(text),
+			})),
+			caveat: await inline(paragraphOf(numbers), links, highlight),
+		},
+	}
+}
+
+/** What TinyStore is, in one sentence: the headline, then the pitch. llms.txt opens with it. */
+export function landingSummary(root = checkout()): string {
+	const [intro] = sectionsOf(readTree(root))
+	if (intro === undefined) {
+		throw new Error(`${landingFile} is empty`)
+	}
+	return `${withoutStop(headlineOf(intro))}: ${plain(paragraphOf(intro))}`
+}
+
+interface Section {
+	/** the `##` heading's text; the part before the first one has none */
+	title: string
+	nodes: RootContent[]
+}
+
+function readTree(root: string): Root {
+	return parse(readFileSync(join(root, landingFile), 'utf8'))
+}
+
+function sectionsOf(tree: Root): Section[] {
+	const sections: Section[] = [{ title: '', nodes: [] }]
+	for (const node of tree.children) {
+		if (node.type === 'heading' && node.depth === 2) {
+			sections.push({ title: textOf(node), nodes: [] })
+		} else {
+			sections.at(-1)?.nodes.push(node)
+		}
+	}
+	return sections
+}
+
+function headlineOf(intro: Section): string {
+	const heading = intro.nodes.find(node => node.type === 'heading' && node.depth === 1)
+	if (heading === undefined) {
+		throw new Error(`${landingFile} has no headline: its first heading should be a # heading`)
+	}
+	return textOf(heading)
+}
+
+function paragraphOf(section: Section): Paragraph {
+	const paragraph = section.nodes.find((node): node is Paragraph => node.type === 'paragraph')
+	if (paragraph === undefined) {
+		const where = section.title === '' ? 'the headline' : `"## ${section.title}"`
+		throw new Error(`${landingFile}: ${where} has no paragraph under it`)
+	}
+	return paragraph
+}
+
+function tableOf(section: Section): Table {
+	const table = section.nodes.find((node): node is Table => node.type === 'table')
+	if (table === undefined) {
+		throw new Error(`${landingFile}: "## ${section.title}" has no table`)
+	}
+	return table
+}
+
+// a table's rows past its header, which GitHub needs and which is left empty here
+function rowsOf(table: Table): TableCell[][] {
+	return table.children.slice(1).map(row => row.children)
+}
+
+function engineRow([name, short, text]: TableCell[], links: Links): EngineRow {
+	const link = name?.children.find(node => node.type === 'link')
+	if (link === undefined) {
+		throw new Error(`${landingFile}: an engine's row begins with a link to its page`)
+	}
+	const resolved = resolveLink(links, landingFile, link.url, new Set(), 'link')
+	if ('problem' in resolved) {
+		throw new Error(`${landingFile}: ${resolved.problem}`)
+	}
+	return {
+		name: textOf(link),
+		short: plain(short),
+		text: plain(text),
+		href: resolved.href,
+		external: !resolved.href.startsWith('/'),
+	}
+}
+
+// the docs' pages, as a link from the landing page reaches them
+function linksOf(site: Site, root: string): Links {
+	return {
+		root,
+		commit: site.commit,
+		pages: new Map(
+			site.pages.map(page => [
+				page.file,
+				{ url: page.url, ids: new Set(page.headings.map(heading => heading.id)) },
+			]),
+		),
+		assets: new Set(),
+	}
+}
+
+// a paragraph's inside as HTML, its links resolved as a page's are
+async function inline(paragraph: Paragraph, links: Links, highlight: Highlight): Promise<string> {
+	const tree = await toHast({ type: 'root', children: [paragraph] }, highlight)
+	const { html, problems } = finish(tree, links, landingFile, new Set())
+	if (problems.length > 0) {
+		throw new Error(`${landingFile}: ${problems.map(problem => problem.message).join('; ')}`)
+	}
+	return html.replace(/^<p>/, '').replace(/<\/p>$/, '')
+}
+
+/**
+ * The sample: a language each, its install command beside the switch and a
+ * copy button inside the code. It shares the docs' language switch, so a
+ * reader who picks Python here reads Python everywhere.
+ */
+function sampleOf(codes: Code[], highlight: Highlight): string {
+	const variants = byLanguage(codes.map(toFence))
+	if (variants.length === 0) {
+		throw new Error(`${landingFile} has no sample: a fence a language under the headline`)
+	}
 
 	const group = h(
 		'div.code.code-hero',
@@ -52,80 +235,16 @@ export async function heroSample(): Promise<string> {
 	return toHtml(group)
 }
 
-interface Engine {
-	name: string
-	short: string
-	text: string
-	/** its guide, when the docs have it */
-	guide: string
-	/** its contract, which stands in until the guide is written */
-	readme: string
+function plain(node: TableCell | Paragraph | undefined): string {
+	return node === undefined ? '' : textOf(node).replace(/\s+/g, ' ').trim()
 }
 
-const engines: Engine[] = [
-	{
-		name: 'SQL',
-		short: 'Relational state',
-		text: "The application's own SQL databases: tables from structs, checked migrations.",
-		guide: 'docs/store/sql.md',
-		readme: 'sqldb/README.md',
-	},
-	{
-		name: 'KV',
-		short: 'Application state',
-		text: 'Current state: typed buckets, counters, expiry, versions.',
-		guide: 'docs/store/kv.md',
-		readme: 'kv/README.md',
-	},
-	{
-		name: 'Jobs',
-		short: 'Durable background work',
-		text: 'Work that runs at its time: retries, leases, repeats.',
-		guide: 'docs/store/jobs.md',
-		readme: 'jobs/README.md',
-	},
-	{
-		name: 'Blobs',
-		short: 'Files and objects',
-		text: 'Files by path, checked when read whole.',
-		guide: 'docs/store/blobs.md',
-		readme: 'blobs/README.md',
-	},
-	{
-		name: 'Records',
-		short: 'Logs and events',
-		text: 'Read by time, level and keys.',
-		guide: 'docs/store/records.md',
-		readme: 'records/README.md',
-	},
-	{
-		name: 'Metrics',
-		short: 'Time series',
-		text: 'Samples kept bit for bit, answered exactly.',
-		guide: 'docs/store/metrics.md',
-		readme: 'metrics/README.md',
-	},
-]
-
-export interface EngineRow {
-	name: string
-	short: string
-	text: string
-	href: string
-	external: boolean
+function withoutStop(text: string): string {
+	return text.replace(/\.$/, '')
 }
 
-export function engineRows(site: Site): EngineRow[] {
-	return engines.map(engine => {
-		const page = site.pages.find(candidate => candidate.file === engine.guide)
-		return {
-			name: engine.name,
-			short: engine.short,
-			text: engine.text,
-			href: page?.url ?? sourceUrl(engine.readme, site.commit, 'file'),
-			external: page === undefined,
-		}
-	})
+function lowerFirst(text: string): string {
+	return text.charAt(0).toLowerCase() + text.slice(1)
 }
 
 /** A benchmark card as the README draws it, read back from its SVG. */

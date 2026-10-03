@@ -10,9 +10,9 @@ describe('the index', () => {
 			parse(
 				[
 					'# Docs',
-					'## Store',
-					'- KV',
-					'- [Metrics](store/metrics.md)',
+					'## Metrics',
+					'- [Overview](metrics/README.md)',
+					'- Instruments',
 					'## Reference',
 					'- [Bun API](../sdk/js/README.md)',
 					'- [Elsewhere](https://example.com)',
@@ -23,10 +23,10 @@ describe('the index', () => {
 		)
 
 		expect(index.title).toBe('Docs')
-		expect(index.sections.map(section => section.title)).toEqual(['Store', 'Reference'])
+		expect(index.sections.map(section => section.title)).toEqual(['Metrics', 'Reference'])
 		expect(index.sections[0]?.items).toEqual([
-			{ kind: 'planned', title: 'KV' },
-			{ kind: 'page', title: 'Metrics', file: 'docs/store/metrics.md', slug: 'store/metrics' },
+			{ kind: 'page', title: 'Overview', file: 'docs/metrics/README.md', slug: 'metrics' },
+			{ kind: 'planned', title: 'Instruments' },
 		])
 		expect(index.sections[1]?.items).toEqual([
 			{
@@ -45,10 +45,10 @@ describe('the index', () => {
 	})
 
 	test('a file is a page at its path', () => {
-		expect(slugOf('docs/store/metrics.md')).toBe('store/metrics')
-		expect(slugOf('docs/store/README.md')).toBe('store')
+		expect(slugOf('docs/kv/quotas.md')).toBe('kv/quotas')
+		expect(slugOf('docs/kv/README.md')).toBe('kv')
 		expect(slugOf('docs/README.md')).toBe('')
 		expect(urlOf('')).toBe('/docs')
-		expect(urlOf('store/metrics')).toBe('/docs/store/metrics')
+		expect(urlOf('kv/quotas')).toBe('/docs/kv/quotas')
 	})
 })

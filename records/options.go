@@ -90,8 +90,9 @@ type handlerFunc func(*handlerSettings)
 
 func (f handlerFunc) handlerOption(s *handlerSettings) { f(s) }
 
-// the bounds of docs/records.md: every density and memory figure the design
-// rests on was measured with them, so they are the format's, not options
+// the bounds of research's design/records.md: every density and memory figure
+// the design rests on was measured with them, so they are the format's, not
+// options
 const (
 	maxSegmentRecords = 16_384
 	maxSegmentInput   = 4 << 20

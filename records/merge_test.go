@@ -94,7 +94,7 @@ func (s *testStore) hourly(t *testing.T, stream string, count int) []Record {
 }
 
 // four hours of a quiet stream make one segment of four hours' records, which
-// reads and follows as the four did; the example in docs/records.md
+// reads and follows as the four did: research's design/records.md's example
 func TestFourQuietHoursMergeIntoOneSegment(t *testing.T) {
 	s := openRecords(t)
 	var all []Record
