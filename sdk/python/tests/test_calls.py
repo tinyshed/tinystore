@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -174,6 +175,30 @@ async def test_a_timer_writes_its_count_sum_and_longest_at_each_flush(store: tin
     assert await values("timed_ms_count", "/a") == [1, 1]
     assert await values("timed_ms_sum", "/a") == [2.5, 2.5]
     assert await values("timed_ms_max", "/a") == [2.5]
+
+
+async def test_a_half_full_buffer_is_written_before_its_interval(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("tinystore.records._FLUSH_EVERY", 3600.0)
+    log = logging.getLogger("half-full")
+    log.propagate = False
+    handler = store.records.handler("half", console="off", buffer=64)
+    log.addHandler(handler)
+    try:
+        written, kept = 0, 0
+        for _ in range(8):
+            for _ in range(32):
+                log.warning("line")
+            written += 32
+            for _ in range(500):
+                kept = len((await store.records.scan(streams=["half"], limit=1000)).items)
+                if kept >= written:
+                    break
+                await asyncio.sleep(0.01)
+    finally:
+        log.removeHandler(handler)
+    assert (kept, handler.dropped) == (written, 0)
 
 
 async def test_a_remote_server_takes_its_token_and_refuses_another(tmp_path: Path) -> None:

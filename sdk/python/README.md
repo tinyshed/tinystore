@@ -176,8 +176,8 @@ async for chunk in process.stdout:
     worker.write(chunk)
 ```
 
-A handler holds 1024 records and hands them over every second; what does not
-fit is dropped and counted.
+A handler holds 1024 records and hands them over every second or once half
+of them wait; what does not fit is dropped and counted in `handler.dropped`.
 
 Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
 object a line otherwise, the bytes Go's and Bun's loggers write.

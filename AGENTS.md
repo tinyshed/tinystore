@@ -467,7 +467,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a Bun duration or rate misspelled does not compile | `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts` |
 | a Bun store's close frees its directory            | `close returns once the child has exited` in `sdk/js/test/kv.test.ts`            |
 | the JS SDK runs under Node: its sidecar, a private child, TCP and TLS checked | `a remote server is reached over TLS, its certificate checked, under Node` and the rest of `sdk/js/test/under-node.ts`, run by `node --test` |
-| a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`                                 |
+| a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`; `test_a_half_full_buffer_is_written_before_its_interval` in Python's |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
 | a logger's console line is the same bytes in Go, Bun and Python | `TestConsoleLinesAreTheVectors`, over `records/testdata/console.json`, which both SDKs' suites read |
 | a line reaches its console as it is logged, whole   | `TestEachLineReachesTheConsoleAsItIsLogged`, `TestConsoleLinesFromManyGoroutinesDoNotInterleave` |

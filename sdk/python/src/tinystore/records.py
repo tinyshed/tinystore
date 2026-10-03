@@ -8,6 +8,7 @@ logging.Handler that never makes its caller wait.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import threading
@@ -47,6 +48,8 @@ type Fields = Mapping[str, Any] | Sequence[tuple[str, Any]]
 """Keys and values, each value written as JSON; pairs may repeat a key."""
 
 _LEVELS = {"debug": -4, "info": 0, "warn": 4, "warning": 4, "error": 8}
+_FLUSH_EVERY = 1.0
+"""seconds between a handler's writes, unless half its buffer waits first"""
 
 
 def _level(level: str | int | None) -> int | None:
@@ -444,7 +447,12 @@ class Lines:
 
 
 class Handler(ConsoleHandler):
-    """A logging.Handler: emit writes the console line and queues the record, appended once a second."""
+    """A logging.Handler: emit writes the console line and queues the record.
+
+    The queue is appended once a second, or as soon as half of it waits, so a
+    burst is written rather than dropped; what does not fit, or a write that
+    fails, is dropped and counted.
+    """
 
     def __init__(
         self,
@@ -461,9 +469,15 @@ class Handler(ConsoleHandler):
         self._write, self._most = write, most
         self._queue: deque[Line] = deque()
         self._queued = threading.Lock()
+        self._asked = False
+        """a flush was asked for before its interval, and has not yet emptied the queue"""
+        self._writing = asyncio.Lock()
         self._loop = asyncio.get_running_loop()
         self._task = self._loop.create_task(self._flushing())
+        self._soon: set[asyncio.Task[None]] = set()
+        """the flushes asked for before their interval, held since the loop holds a task weakly"""
         self.dropped = 0
+        """lines dropped since the handler began: a full buffer, or a write that failed"""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -477,21 +491,40 @@ class Handler(ConsoleHandler):
                 self.dropped += 1
                 return
             self._queue.append(line)
+            ask = not self._asked and len(self._queue) >= self._most / 2
+            self._asked = self._asked or ask
+        if ask:
+            self._ask_for_flush()
+
+    def _ask_for_flush(self) -> None:
+        # emit runs on whichever thread logged, the flush on the loop's; a loop
+        # already closed has nobody to write for
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._flush_soon)
+
+    def _flush_soon(self) -> None:
+        task = self._loop.create_task(self.flush_now())
+        self._soon.add(task)
+        task.add_done_callback(self._soon.discard)
 
     async def _flushing(self) -> None:
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(_FLUSH_EVERY)
             await self.flush_now()
 
     async def flush_now(self) -> None:
-        with self._queued:
-            batch = list(self._queue)
-            self._queue.clear()
-        if batch:
+        async with self._writing:
+            with self._queued:
+                batch = list(self._queue)
+                self._queue.clear()
+                self._asked = False
+            if not batch:
+                return
             try:
                 await self._write(batch)
             except Exception:
-                self.dropped += len(batch)
+                with self._queued:
+                    self.dropped += len(batch)
 
     def close(self) -> None:
         self._task.cancel()
