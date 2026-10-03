@@ -42,6 +42,7 @@ idle 30 s.
 sessions = store.kv.bucket("sessions", Session, sliding="30d")
 await sessions.of(user.id).set(token, session)
 found = await sessions.of(user.id).get(token)  # None when absent or expired
+created, entry = await sessions.of(user.id).set_entry_if_absent(token, session)  # this one, or the one there
 
 views = store.kv.counters("views")
 await views.add("/home")
@@ -53,6 +54,9 @@ async for entry in sessions.all():
 
 A bucket's type is given once, where it opens: `str`, `bytes`, `int`,
 `float`, `bool`, or a dataclass, a `TypedDict` or anything else JSON holds.
+`set_if_absent` and `set_entry_if_absent` write only where no live key is, in
+one write: two processes making the same key, a day's salt or a claim, keep
+one, where a `get` and then a `set` keep both.
 
 ```python
 cfg = await store.kv.config("app", Settings, file=tomllib.load(f), env_file=".env")
@@ -178,14 +182,18 @@ async for chunk in process.stdout:
 
 A handler holds 1024 records and hands them over every second or once half
 of them wait; what does not fit is dropped, counted in `handler.dropped` and
-said on stderr.
+said on stderr. A handler is for lines a burst may cost: what must all be kept
+goes through `records.append`, which returns once it is, and a larger `buffer`
+holds a longer burst.
 
 Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
 object a line otherwise, the bytes Go's and Bun's loggers write.
-`console="pretty" | "json" | "off"` and `stdout=True` choose; `redact` hides
-the values of fields of those names, at any depth, the case ignored, in the
-store and on the console. A program that wants the logger and not the records
-takes a handler without a store; its children are `logging`'s own:
+`console="pretty" | "json" | "off"` and `stdout=True` choose, and a handler
+of events, a view a request, takes `"off"` or fills the program's log;
+`redact` hides the values of fields of those names, at any depth, the case
+ignored, in the store and on the console. A program that wants the logger and
+not the records takes a handler without a store; its children are
+`logging`'s own:
 
 ```python
 logging.basicConfig(handlers=[tinystore.handler("app", redact=["password"])], level=logging.INFO)
@@ -202,7 +210,7 @@ with latency.labels(route="/users").measure():  # await inside is timed too
     user = await users.get(user_id)
 
 await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"}, "samples": [(now, 0.42)]})
-series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")
+series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")  # [Series(..., times, values)]
 failing = await store.metrics.read(
     name="http_requests_total", since="1h", where={"status": tinystore.one_of("500", "502")}
 )
@@ -210,9 +218,11 @@ buckets = await store.metrics.aggregate(name="http_requests_total", since="24h",
 routes = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="rate", by=["route"])
 ```
 
-A sample comes back bit for bit, `-0.0` and a NaN's payload included; a range
-is `since`, or `from_` and `to`. `metrics.explain(...)` says what a read or an
-aggregate would spend of its limits before it runs.
+A read answers each series as columns, `times` in unix milliseconds and
+`values` an `array("d")`, as `ingest` takes them too beside `(time, value)`
+pairs. A sample comes back bit for bit, `-0.0` and a NaN's payload included; a
+range is `since`, or `from_` and `to`. `metrics.explain(...)` says what a read
+or an aggregate would spend of its limits before it runs.
 
 A timer's `measure()` times its block whether it returns or raises, in a `with`
 or an `async with`; `record(d)` adds a duration of its own, seconds, a

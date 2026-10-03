@@ -13,6 +13,11 @@ The package for this platform, an optional dependency, carries the
 Bun 1.4 or later, or Node 22 or later, with one API: Bun runs the package's
 TypeScript, and Node the JavaScript it carries.
 
+Until a release the package comes from a checkout, `bun add
+../tinystore/sdk/js`, as its source. The declarations `types` names are built
+by a release, so TypeScript checks the source in their place with
+`"customConditions": ["bun"]` and `"allowImportingTsExtensions": true`.
+
 The binary is the `tinystore` command too: `bunx tinystore status ./data`,
 `bunx tinystore logs ./data -f`, and for an AI agent
 `claude mcp add tinystore -- bunx tinystore mcp ./data`.
@@ -37,6 +42,7 @@ last values; a sidecar leaves once its last connection has been idle 30 s.
 const sessions = store.kv.bucket<Session>('sessions', { sliding: '30d' })
 await sessions.of(user.id).set(token, session)
 const found = await sessions.of(user.id).get(token)      // undefined when absent or expired
+const { created, entry } = await sessions.of(user.id).setEntryIfAbsent(token, session) // this one, or the one there
 
 const views = store.kv.counters('views')
 await views.add('/home')
@@ -47,7 +53,9 @@ for await (const entry of sessions.all()) { … }
 
 A bucket's type is given once, where it opens: JSON of `T`, a kind
 (`'string'`, `'bytes'`, `'bigint'`, …) or a Standard Schema such as zod's,
-which checks every read.
+which checks every read. `setIfAbsent` and `setEntryIfAbsent` write only
+where no live key is, in one write: two processes making the same key, a
+day's salt or a claim, keep one, where a `get` and then a `set` keep both.
 
 ```ts
 import file from './config.yaml'
@@ -168,11 +176,14 @@ for await (const chunk of child.stdout) worker.write(chunk)
 
 A logger holds 1024 lines and hands them over every second or once half of
 them wait; what does not fit is dropped, counted in `log.dropped` and said on
-stderr.
+stderr. A logger is for lines a burst may cost: what must all be kept goes
+through `records.append`, which answers once it is, and a larger `buffer`
+holds a longer burst.
 
 Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
 object a line otherwise, the bytes Go's and Python's loggers write.
-`console: 'pretty' | 'json' | 'off'` and `stdout: true` choose; `redact`
+`console: 'pretty' | 'json' | 'off'` and `stdout: true` choose, and a logger
+of events, a view a request, takes `'off'` or fills the program's log; `redact`
 hides the values of fields of those names, at any depth, the case ignored, in
 the store and on the console. A program that wants the logger and not the
 records takes one without a store, and passes it, or a child, to what needs
@@ -194,15 +205,18 @@ const latency = store.metrics.timer('http_request_ms')
 const user = await latency.with({ route: '/users' }).measure(() => users.get(id))
 
 await store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { host: 'web-1' }, samples: [[new Date(), 0.42]] })
-const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' }, since: '1h' })
+const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' }, since: '1h' }) // columns: times, values
 const failing = await store.metrics.read({ name: 'http_requests_total', since: '1h', where: { status: oneOf('500', '502') } })
 const buckets = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'increase' })
 const routes = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'rate', by: ['route'] })
 ```
 
-A sample comes back bit for bit, `-0` and a NaN's payload included; a range is
-`since`, or `from` and `to` in unix milliseconds. `metrics.explain(range)` says
-what a read or an aggregate would spend of its limits before it runs.
+A read answers each series as columns, `times` in unix milliseconds and
+`values` a `Float64Array`, as `ingest` takes them too beside `[time, value]`
+pairs. A sample comes back bit for bit, `-0` and a NaN's payload included; a
+range is `since`, or `from` and `to` in unix milliseconds.
+`metrics.explain(range)` says what a read or an aggregate would spend of its
+limits before it runs.
 
 A timer's `measure(fn)` answers what `fn` answered and throws what it threw,
 recording the time either way; `record(ms)` adds a duration of its own. Every

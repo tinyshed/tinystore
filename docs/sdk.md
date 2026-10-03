@@ -96,10 +96,14 @@ with store.metrics.timer("http_request_ms").labels(route="/users").measure():
     user = await users.get(user_id)
 ```
 
-A result is `{name, kind, labels, ...}` in every language. An instrument's
-labels follow its Prometheus client: Go's `With(pairs...)`, Bun's
-`with({...})`, Python's `labels(**...)`. A series the store refuses is left
-out from then on, and the other instruments go on being written, in all three.
+A result is a series and its samples in every language: Go's
+`Result{Series, Samples}`, each sample `{At, Value}`; Bun's and Python's
+`{name, kind, labels, times, values}`, columns of unix milliseconds and of
+values, a `Float64Array` and an `array("d")`, so that a long read holds no
+object a sample. An instrument's labels follow its Prometheus client: Go's
+`With(pairs...)`, Bun's `with({...})`, Python's `labels(**...)`. A series the
+store refuses is left out from then on, and the other instruments go on
+being written, in all three.
 
 A timer times each language's own way, and writes the same three series at
 every flush: `<name>_count` and `<name>_sum`, counters of the durations and of
@@ -166,8 +170,10 @@ A logger is also the program's console, so that it needs no other:
 | from a level | `records.Level(slog.LevelInfo)` | `level: 'info'` | `level=logging.INFO` |
 | a record's fields | `[]Field`, each `Value` its JSON | `[key, json]` pairs; `fields(record.attrs)` an object | `(key, json)` pairs; `tinystore.fields(record.attrs)` a dict |
 
-`fields` reads each value as `JSON.parse` and `json.loads` do, the last of a
-repeated key kept; the pairs keep what they may not, `1.2300` as written.
+A logger of events, a view a request, takes `ConsoleOff`, `console: 'off'` or
+`console="off"`, or fills the program's log with them. `fields` reads each
+value as `JSON.parse` and `json.loads` do, the last of a repeated key kept;
+the pairs keep what they may not, `1.2300` as written.
 
 A line goes to stderr as it is logged, before the store has it: pretty on a
 terminal, one JSON object a line otherwise, so that a terminal shows what a
