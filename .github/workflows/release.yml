@@ -224,6 +224,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+      # the attestation's record of where the image is kept
+      artifact-metadata: write
     env:
       VERSION: ${{ inputs.version }}
     steps:
