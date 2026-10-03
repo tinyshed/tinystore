@@ -7,7 +7,7 @@ and its trace and span ids are the same bytes as OpenTelemetry's.
 ## Log with a trace
 
 ```ts
-import { withTrace } from 'tinystore'
+import { withTrace } from '@tinyshed/tinystore'
 
 await withTrace({ traceId, spanId }, async () => {
 	log.info('charging card')

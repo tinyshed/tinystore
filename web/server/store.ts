@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs'
-import { open, type Store } from 'tinystore'
+import { open, type Store } from '@tinyshed/tinystore'
 
 /**
  * The directory's sidecar, started when none runs, so that while the site

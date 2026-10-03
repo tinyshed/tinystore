@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The tinystore command, as this package installs it: the binary its platform's
 // package carries, run with these arguments on this console, its exit code
-// this process's. `bunx tinystore status ./data` and `npx tinystore` need
+// this process's. `bunx @tinyshed/tinystore status ./data` and `npx @tinyshed/tinystore` need
 // nothing else installed. Plain JavaScript, so that Node and Bun both run it.
 
 import { spawn } from 'node:child_process'

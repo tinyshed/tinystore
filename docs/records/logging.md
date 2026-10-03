@@ -107,7 +107,7 @@ The message itself is not searched, so don't put secrets into messages.
 ## A console without a store
 
 ```ts
-import { logger } from 'tinystore'
+import { logger } from '@tinyshed/tinystore'
 
 const log = logger('cli') // prints, keeps nothing
 ```

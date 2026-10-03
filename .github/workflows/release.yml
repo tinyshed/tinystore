@@ -72,8 +72,8 @@ jobs:
           fi
           plain="${VERSION#v}"
           python="${plain/-alpha./a}"; python="${python/-beta./b}"; python="${python/-rc./rc}"
-          if npm view "tinystore@$plain" version >/dev/null 2>&1; then
-            echo "npm has tinystore@$plain already"; exit 1
+          if npm view "@tinyshed/tinystore@$plain" version >/dev/null 2>&1; then
+            echo "npm has @tinyshed/tinystore@$plain already"; exit 1
           fi
           if curl -fsS -o /dev/null "https://pypi.org/pypi/tinyshed-tinystore/$python/json"; then
             echo "PyPI has tinyshed-tinystore $python already"; exit 1
@@ -171,17 +171,25 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # the platforms first, so that tinystore never names a package not there
+      # the platforms first, so that the SDK never names a package not there
       # yet; one published by an earlier attempt is left as it is, since npm
       # refuses a version twice. A token only until trusted publishing is set
-      # up for each package.
+      # up for each package. The SDK's tarball shares the platforms' prefix,
+      # tinyshed-tinystore-, so it is picked out by its version.
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ needs.build.outputs.prerelease == 'true' && 'next' || 'latest' }}
+          VERSION: ${{ inputs.version }}
         run: |
           npm install -g npm@12
-          for package in dist/npm/tinyshed-tinystore-*.tgz dist/npm/tinystore-*.tgz; do
+          sdk="dist/npm/tinyshed-tinystore-${VERSION#v}.tgz"
+          test -f "$sdk"
+          platforms=()
+          for package in dist/npm/*.tgz; do
+            if [ "$package" != "$sdk" ]; then platforms+=("$package"); fi
+          done
+          for package in "${platforms[@]}" "$sdk"; do
             named=$(tar -xzOf "$package" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')
             if npm view "$named" version >/dev/null 2>&1; then
               echo "$named is published already"; continue

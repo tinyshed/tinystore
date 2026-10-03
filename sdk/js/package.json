@@ -1,5 +1,5 @@
 {
-	"name": "tinystore",
+	"name": "@tinyshed/tinystore",
 	"version": "0.0.0",
 	"description": "TinyStore for Bun and Node: kv, jobs, blobs, SQL, records and metrics in one directory, served by a sidecar",
 	"license": "Apache-2.0",

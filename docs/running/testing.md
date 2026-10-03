@@ -11,7 +11,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { open, type Store } from 'tinystore'
+import { open, type Store } from '@tinyshed/tinystore'
 
 let store: Store
 beforeAll(async () => {

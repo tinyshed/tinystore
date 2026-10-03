@@ -16,8 +16,8 @@ them there from this file.
 SQL, key-value state, durable jobs, files, metrics and logs in one directory,
 with one lifecycle, one memory budget and one backup.
 
-```ts title="app.ts" install="bun add tinystore"
-import { open } from 'tinystore'
+```ts title="app.ts" install="bun add @tinyshed/tinystore"
+import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 

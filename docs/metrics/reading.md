@@ -43,7 +43,7 @@ in Python). `to` is excluded, and without it the range is open.
 ## Find series
 
 ```ts
-import { noneOf, oneOf, prefix } from 'tinystore'
+import { noneOf, oneOf, prefix } from '@tinyshed/tinystore'
 
 const failing = await store.metrics.read({
 	name: 'http_requests_total',

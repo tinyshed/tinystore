@@ -56,7 +56,7 @@ func TestAPyprojectIsStampedWithTheReleasesVersion(t *testing.T) {
 func TestTheSDKPackageCarriesTheReleasesVersion(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
-		"sdk/js/package.json": `{"name": "tinystore", "version": "0.0.0", "scripts": {"test": "bun test"},
+		"sdk/js/package.json": `{"name": "@tinyshed/tinystore", "version": "0.0.0", "scripts": {"test": "bun test"},
 			"devDependencies": {"typescript": "^7.0.2"}, "engines": {"node": ">=22"},
 			"exports": {".": {"bun": "./src/index.ts", "types": "./dist/index.d.ts", "default": "./dist/index.js"}},
 			"bin": {"tinystore": "bin/tinystore.js"}, "files": ["src", "bin", "README.md"]}`,
@@ -82,14 +82,14 @@ func TestTheSDKPackageCarriesTheReleasesVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	manifest := packageManifest(t, filepath.Join(out, "tinystore-0.1.0-rc.1.tgz"))
+	manifest := packageManifest(t, filepath.Join(out, "tinyshed-tinystore-0.1.0-rc.1.tgz"))
 	if manifest["version"] != "0.1.0-rc.1" || manifest["scripts"] != nil || manifest["devDependencies"] != nil {
 		t.Errorf("the package's manifest: %v", manifest)
 	}
 	if optional, _ := manifest["optionalDependencies"].(map[string]any); optional["@tinyshed/tinystore-linux-x64"] != "0.1.0-rc.1" {
 		t.Errorf("the package names its platforms as %v", manifest["optionalDependencies"])
 	}
-	text := packageFile(t, filepath.Join(out, "tinystore-0.1.0-rc.1.tgz"), "package/package.json")
+	text := packageFile(t, filepath.Join(out, "tinyshed-tinystore-0.1.0-rc.1.tgz"), "package/package.json")
 	conditions := regexp.MustCompile(`"(bun|types|default)":`).FindAllStringSubmatch(text, -1)
 	if len(conditions) != 3 || conditions[0][1] != "bun" || conditions[1][1] != "types" ||
 		conditions[2][1] != "default" || !strings.Contains(text, `">=22"`) {
@@ -99,7 +99,7 @@ func TestTheSDKPackageCarriesTheReleasesVersion(t *testing.T) {
 		"package/package.json": 0o644, "package/LICENSE": 0o644, "package/README.md": 0o644,
 		"package/src/index.ts": 0o644, "package/bin/tinystore.js": 0o755,
 	}
-	if got := packageModes(t, filepath.Join(out, "tinystore-0.1.0-rc.1.tgz")); !maps.Equal(got, want) {
+	if got := packageModes(t, filepath.Join(out, "tinyshed-tinystore-0.1.0-rc.1.tgz")); !maps.Equal(got, want) {
 		t.Errorf("the package holds %v, want %v", got, want)
 	}
 
@@ -195,7 +195,7 @@ func packageManifest(t *testing.T, tarball string) map[string]any {
 func TestATarballIsNamedAsNpmPackNamesIt(t *testing.T) {
 	for name, want := range map[string]string{
 		"@tinyshed/tinystore-linux-x64": "tinyshed-tinystore-linux-x64-0.1.0.tgz",
-		"tinystore":                     "tinystore-0.1.0.tgz",
+		"@tinyshed/tinystore":           "tinyshed-tinystore-0.1.0.tgz",
 	} {
 		if got := tarballName(name, "0.1.0"); got != want {
 			t.Errorf("%s: %s, want %s", name, got, want)

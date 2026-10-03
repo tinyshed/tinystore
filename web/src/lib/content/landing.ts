@@ -48,7 +48,7 @@ export interface Numbers {
  *
  *     # A small storage runtime for applications.   the headline
  *     SQL, key-value state, …                        the pitch
- *     ```ts install="bun add tinystore"              the sample, a fence a language
+ *     ```ts install="bun add @tinyshed/tinystore"              the sample, a fence a language
  *     ## Engines                                     a row an engine: its link, in short, in a line
  *     ## Measured against what it replaces.          the numbers: the legend's rows, then the caveat
  *

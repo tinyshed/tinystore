@@ -8,7 +8,7 @@ markdown.
 ## Add the store to Claude Code
 
 ```sh for=bun
-claude mcp add tinystore -- bunx tinystore mcp ./data
+claude mcp add tinystore -- bunx @tinyshed/tinystore mcp ./data
 ```
 
 ```sh for=python

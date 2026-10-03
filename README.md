@@ -82,7 +82,7 @@ series.Counter("signups_total").Inc()
 <summary><b>Bun</b></summary>
 
 ```ts
-import { open } from 'tinystore'
+import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 
@@ -145,7 +145,7 @@ asyncio.run(main())
 
 ```sh
 go get github.com/tinyshed/tinystore
-bun add tinystore
+bun add @tinyshed/tinystore
 pip install tinyshed-tinystore
 ```
 
@@ -192,7 +192,7 @@ For reference, see the [Bun and Node API](sdk/js/README.md), the
 
 The same binary shows a person, and an AI agent, what a store holds while its
 application runs. Both SDK packages install it as the `tinystore` command:
-`bunx tinystore …` and `uvx --from tinyshed-tinystore tinystore …` run it with
+`bunx @tinyshed/tinystore …` and `uvx --from tinyshed-tinystore tinystore …` run it with
 nothing else installed, and `go install
 github.com/tinyshed/tinystore/cmd/tinystore@latest` builds it.
 

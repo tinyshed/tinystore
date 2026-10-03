@@ -25,7 +25,7 @@ limit.
 ## Connect
 
 ```ts
-import { connect } from 'tinystore'
+import { connect } from '@tinyshed/tinystore'
 
 await using store = await connect('tls://db.internal:7443', { token: process.env.TINYSTORE_TOKEN! })
 ```

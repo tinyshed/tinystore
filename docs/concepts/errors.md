@@ -8,7 +8,7 @@ do about each.
 ## Check the kind
 
 ```ts
-import { ConflictError, LimitError } from 'tinystore'
+import { ConflictError, LimitError } from '@tinyshed/tinystore'
 
 try {
 	await drafts.set(id, draft, { ifVersion })

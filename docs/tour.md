@@ -22,7 +22,7 @@ browser        ─── Jobs     watch the reply: queued, thinking, done
 ## 1. Open everything
 
 ```ts
-import { open } from 'tinystore'
+import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 

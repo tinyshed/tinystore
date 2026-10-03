@@ -1,4 +1,4 @@
-import type { Logger, Store } from 'tinystore'
+import type { Logger, Store } from '@tinyshed/tinystore'
 
 import type { ReaderEvent } from '../src/lib/events.ts'
 import { agentOf } from './agents.ts'

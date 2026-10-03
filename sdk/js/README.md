@@ -5,7 +5,7 @@ sidecar the SDK starts. A Go program embeds the same engines;
 [the guides](../../docs/README.md) show the three languages side by side.
 
 ```sh
-bun add tinystore
+bun add @tinyshed/tinystore
 ```
 
 The package for this platform, an optional dependency, carries the
@@ -18,14 +18,14 @@ Until a release the package comes from a checkout, `bun add
 by a release, so TypeScript checks the source in their place with
 `"customConditions": ["bun"]` and `"allowImportingTsExtensions": true`.
 
-The binary is the `tinystore` command too: `bunx tinystore status ./data`,
-`bunx tinystore logs ./data -f`, and for an AI agent
-`claude mcp add tinystore -- bunx tinystore mcp ./data`.
+The binary is the `tinystore` command too: `bunx @tinyshed/tinystore status ./data`,
+`bunx @tinyshed/tinystore logs ./data -f`, and for an AI agent
+`claude mcp add tinystore -- bunx @tinyshed/tinystore mcp ./data`.
 
 ## Open
 
 ```ts
-import { connect, open } from 'tinystore'
+import { connect, open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')                 // the directory's sidecar, started when none runs
 await using alone = await open(dir, { private: true })   // a child of this process, for tests and scripts
@@ -209,7 +209,7 @@ records takes one without a store, and passes it, or a child, to what needs
 it:
 
 ```ts
-import { logger } from 'tinystore'
+import { logger } from '@tinyshed/tinystore'
 
 const log = logger('app', { redact: ['password'] })   // the console alone, nothing kept
 const db = log.with({ module: 'db' })

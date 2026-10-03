@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fields, open } from 'tinystore'
+import { fields, open } from '@tinyshed/tinystore'
 
 import { createAnalytics, language, origin } from './analytics.ts'
 import type { SiteFile } from './files.ts'

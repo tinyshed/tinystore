@@ -211,7 +211,7 @@ function findBinary(runtime: Runtime, given: string | undefined): string {
 		given ?? process.env.TINYSTORE_BIN ?? runtime.packagedBinary() ?? runtime.which('tinystore')
 	if (found === undefined || found === '') {
 		throw new ClosedError(
-			'no tinystore binary: this platform has no @tinyshed/tinystore package installed; ' +
+			`no tinystore binary: @tinyshed/tinystore-${process.platform}-${process.arch} is not installed; ` +
 				'install it, put tinystore on PATH, or set TINYSTORE_BIN',
 		)
 	}

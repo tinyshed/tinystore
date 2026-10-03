@@ -1,4 +1,4 @@
-import type { Bucket } from 'tinystore'
+import type { Bucket } from '@tinyshed/tinystore'
 
 /**
  * A reader's id for one day, as Plausible counts them: a hash of the address

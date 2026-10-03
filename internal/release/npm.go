@@ -80,7 +80,7 @@ func writeBinaryPackage(s settings, dir, name string, b binary) error {
 	manifest := map[string]any{
 		"name":        name,
 		"version":     s.version,
-		"description": fmt.Sprintf("The tinystore binary for %s/%s, run by the tinystore package", b.goos, b.goarch),
+		"description": fmt.Sprintf("The tinystore binary for %s/%s, run by @tinyshed/tinystore", b.goos, b.goarch),
 		"license":     "Apache-2.0",
 		"repository":  repository("cmd/tinystore"),
 		"os":          []string{b.npmOS},

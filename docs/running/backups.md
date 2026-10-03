@@ -45,7 +45,7 @@ don't include `archive/zip` in their binary.
 ## Back up from the command line
 
 ```sh for=bun
-bunx tinystore backup ./data backup-2026-10-03.zip
+bunx @tinyshed/tinystore backup ./data backup-2026-10-03.zip
 ```
 
 ```sh for=python
@@ -72,7 +72,7 @@ command can't reach the store. Share the store with
 ## Restore
 
 ```sh for=bun
-bunx tinystore restore backup-2026-10-03.zip ./data
+bunx @tinyshed/tinystore restore backup-2026-10-03.zip ./data
 ```
 
 ```sh for=python

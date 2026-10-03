@@ -58,10 +58,10 @@ describe('fences', () => {
 	})
 
 	test('an info string names a file, a language and an install command', () => {
-		expect(parseMeta(`title="metrics.ts" for=bun install='bun add tinystore'`)).toEqual({
+		expect(parseMeta(`title="metrics.ts" for=bun install='bun add @tinyshed/tinystore'`)).toEqual({
 			title: 'metrics.ts',
 			for: 'bun',
-			install: 'bun add tinystore',
+			install: 'bun add @tinyshed/tinystore',
 		})
 	})
 

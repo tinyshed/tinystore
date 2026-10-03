@@ -29,7 +29,7 @@ data/
 You open the whole store with one call:
 
 ```ts
-import { open } from 'tinystore'
+import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 ```

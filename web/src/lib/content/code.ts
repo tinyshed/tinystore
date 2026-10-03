@@ -30,7 +30,7 @@ export interface Fence {
 	title?: string
 	/** `for=bun`: which language a fence belongs to when its own does not say, a shell command's */
 	language?: Language
-	/** `install="bun add tinystore"`: the command the landing page shows beside its sample */
+	/** `install="bun add @tinyshed/tinystore"`: the command the landing page shows beside its sample */
 	install?: string
 }
 

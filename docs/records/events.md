@@ -82,7 +82,7 @@ attribute.
 ## Read the fields of a record
 
 ```ts
-import { fields } from 'tinystore'
+import { fields } from '@tinyshed/tinystore'
 
 const page = await store.records.scan({ since: '1h', names: ['click'] })
 const { element, x } = fields(page.items[0].attrs) // { element: 'buy', x: 812 }

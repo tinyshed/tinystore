@@ -21,7 +21,7 @@
 		"readme": "bun src/lib/content/readme.ts"
 	},
 	"dependencies": {
-		"tinystore": "file:../sdk/js",
+		"@tinyshed/tinystore": "file:../sdk/js",
 		"zod": "^4.6.5"
 	},
 	"devDependencies": {

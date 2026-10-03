@@ -1,4 +1,4 @@
-import type { Logger, Store } from 'tinystore'
+import type { Logger, Store } from '@tinyshed/tinystore'
 
 import { type Analytics, createAnalytics } from './analytics.ts'
 import { type Config, createConfig } from './config.ts'

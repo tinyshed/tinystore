@@ -8,7 +8,7 @@ the ways to connect to a store and what is different in each language.
 ## Connect to a store
 
 ```ts
-import { connect, open } from 'tinystore'
+import { connect, open } from '@tinyshed/tinystore'
 
 // The directory's shared sidecar, started if none is running.
 await using store = await open('./data')
@@ -218,7 +218,7 @@ in parallel.
 Every error has a kind, and the kinds are the same in every language:
 
 ```ts
-import { ConflictError } from 'tinystore'
+import { ConflictError } from '@tinyshed/tinystore'
 
 try {
 	await drafts.set(noteId, draft, { ifVersion: version })
@@ -265,7 +265,7 @@ what the limit is.
 ## Cancel a call
 
 ```ts
-import { withSignal } from 'tinystore'
+import { withSignal } from '@tinyshed/tinystore'
 
 await withSignal(AbortSignal.timeout(2000), async () => {
 	const notes = await db.all`select * from notes`

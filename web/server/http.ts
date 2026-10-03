@@ -1,4 +1,4 @@
-import type { Logger } from 'tinystore'
+import type { Logger } from '@tinyshed/tinystore'
 import { z } from 'zod'
 
 import { readerEvents } from '../src/lib/events.ts'

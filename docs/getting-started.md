@@ -8,7 +8,7 @@ line that you can read after the program exits.
 ## Install
 
 ```sh for=bun
-bun add tinystore
+bun add @tinyshed/tinystore
 ```
 
 ```sh for=python
@@ -39,7 +39,7 @@ platform, which runs the store for them. TinyStore needs Bun 1.4+, Node.js
 ## Open a store
 
 ```ts
-import { open } from 'tinystore'
+import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 ```
@@ -201,7 +201,7 @@ contains. The Bun and Python packages install the command. In Go, install it
 with `go install`:
 
 ```sh for=bun
-bunx tinystore status ./data
+bunx @tinyshed/tinystore status ./data
 ```
 
 ```sh for=python
@@ -231,7 +231,7 @@ the program runs.
 ## The complete program
 
 ```ts title="app.ts"
-import { open } from 'tinystore'
+import { open } from '@tinyshed/tinystore'
 
 await using store = await open('./data')
 

@@ -7,7 +7,7 @@ schemas. The Bun and Python packages install it, and Go builds it.
 ## Install
 
 ```sh for=bun
-bunx tinystore status ./data
+bunx @tinyshed/tinystore status ./data
 ```
 
 ```sh for=python

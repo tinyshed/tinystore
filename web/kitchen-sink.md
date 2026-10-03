@@ -60,7 +60,7 @@ requests.With("route", "/users").Inc()
 A command for each language:
 
 ```sh for=bun
-bun add tinystore
+bun add @tinyshed/tinystore
 ```
 
 ```sh for=python
