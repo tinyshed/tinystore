@@ -177,6 +177,31 @@ async def test_a_timer_writes_its_count_sum_and_longest_at_each_flush(store: tin
     assert await values("timed_ms_max", "/a") == [2.5]
 
 
+async def test_a_refused_instrument_keeps_no_other_out_and_says_so_once(
+    store: tinystore.Store, capsys: pytest.CaptureFixture[str]
+) -> None:
+    refused = store.metrics.counter("refused_total").labels(**{"": "x"})
+    store.metrics.counter("kept_total").inc()
+    refused.inc()
+    store.metrics.timer("refused_ms").labels(**{"": "y"}).record(0.005)
+
+    def unread() -> float:
+        raise OSError("no reading")
+
+    store.metrics.gauge_func("unread", unread)
+    await store.metrics.flush()
+    store.metrics.counter("kept_total").inc()
+    refused.inc()
+    await store.metrics.flush()
+
+    [kept] = await store.metrics.read(name="kept_total", since="1m")
+    assert list(kept.values) == [1, 2]
+    said = capsys.readouterr().err
+    assert said.count("instrument refused") == 2 and "refused_total" in said and "refused_ms" in said
+    assert said.count("gauge read failed") == 1
+    assert store.metrics.failures == 0
+
+
 async def test_a_half_full_buffer_is_written_before_its_interval(
     store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:

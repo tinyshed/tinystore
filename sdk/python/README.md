@@ -219,7 +219,9 @@ or an `async with`; `record(d)` adds a duration of its own, seconds, a
 `timedelta` or `"250ms"`. Every flush writes `http_request_ms_count` and
 `http_request_ms_sum`, counters, and the longest since the flush before,
 `http_request_ms_max`, so that a range's mean is the increase of its sum over
-the increase of its count.
+the increase of its count. A series the store refuses, a label it cannot keep,
+is left out from then on and said once, and the other instruments go on being
+written.
 
 ## Durations, errors and cancellation
 
@@ -232,6 +234,6 @@ what the server is: its version, its protocol, its engines.
 
 What fails where no call waits is said on stderr, as a handler of stream
 `tinystore` writes a line: an instrument's flush or a handler's write that
-failed, and its recovery; a gauge's function that raised; the lines a full
-handler dropped. A failure repeated is said again ten minutes on, or when it
-changes, as Go's store logs its own.
+failed, and its recovery; a gauge's function that raised; a refused
+instrument; the lines a full handler dropped. A failure repeated is said again
+ten minutes on, or when it changes, as Go's store logs its own.

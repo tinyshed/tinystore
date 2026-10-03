@@ -8,6 +8,8 @@ exactly and rounded once. Instruments live in the SDK and are ingested every
 from __future__ import annotations
 
 import asyncio
+import functools
+import json
 import math
 import time
 from array import array
@@ -28,7 +30,7 @@ from ._wire.messages import (
     MetricsRange,
     MetricsSeries,
 )
-from .errors import InvalidError, LimitError, error_of
+from .errors import InvalidError, LimitError, TinystoreError, error_of
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -429,19 +431,18 @@ class Metrics:
             self._failure_log.succeeded()
 
     async def flush(self) -> None:
-        """Ingests every instrument's value now, as the timer does every 15 s."""
+        """Ingests every instrument's value now, as the timer does every 15 s.
+
+        A series the store refuses is left out from then on, said once, so that
+        one bad instrument keeps no other out.
+        """
         now = time.time_ns() // 1_000_000
-        batch: list[dict[str, Any]] = []
-        for instrument in list(self._instruments.values()):
-            if instrument.read is not None and not await _read_gauge(instrument, instrument.read):
-                continue
-            for labels, value in instrument.series.values():
-                batch.append(_sample_at(now, instrument.name, labels, instrument.kind, value))
+        batch = await self._instrument_samples(now)
         taken = self._take_timers(now, batch)
         if not batch:
             return
         try:
-            await self._send(batch)
+            await self._ingest_leaving_refused_out(batch)
         except BaseException as err:
             for timing, longest in taken:
                 timing.longest = max(timing.longest, longest)
@@ -451,18 +452,52 @@ class Metrics:
                 self.last_failure = err
             raise
 
-    def _take_timers(self, now: int, batch: list[dict[str, Any]]) -> list[tuple[_Timing, float]]:
+    async def _instrument_samples(self, now: int) -> list[_Owned]:
+        """Every instrument's value now; a gauge whose function raises skips this flush."""
+        batch: list[_Owned] = []
+        for instrument in list(self._instruments.values()):
+            if instrument.read is not None and not await _read_gauge(instrument, instrument.read):
+                continue
+            for key, (labels, value) in instrument.series.items():
+                owner = _Owner(_format_series(instrument.name, labels), functools.partial(instrument.refuse, key))
+                batch.append(_Owned(_sample_at(now, instrument.name, labels, instrument.kind, value), owner))
+        return batch
+
+    async def _ingest_leaving_refused_out(self, batch: list[_Owned]) -> None:
+        """Sends the batch until the store takes what is left of it.
+
+        A refusal that names one of its series leaves that series out, for good,
+        and goes again.
+        """
+        sending = batch
+        while sending:
+            try:
+                await self._send([owned.sample for owned in sending])
+                return
+            except TinystoreError as err:
+                refused = _refused_in(sending, err)
+                if refused is None:
+                    raise
+                refused.refuse()
+                say_own("warn", "instrument refused", {"series": refused.series, "error": str(err)})
+                sending = [owned for owned in sending if owned.owner is not refused]
+
+    def _take_timers(self, now: int, batch: list[_Owned]) -> list[tuple[_Timing, float]]:
         """Adds what the timers ingest to batch, and starts their longest again.
 
-        It answers what it took, so that a flush that fails gives it back.
+        It answers what it took, so that a flush that fails gives it back. A
+        timer's series of one label set share an owner, so that a refusal
+        leaves all three out.
         """
         taken: list[tuple[_Timing, float]] = []
         for timer in self._timers.values():
-            for timing in timer.series.values():
-                batch.append(_sample_at(now, timer.name + "_count", timing.labels, "counter", timing.count))
-                batch.append(_sample_at(now, timer.name + "_sum", timing.labels, "counter", timing.sum))
+            for key, timing in timer.series.items():
+                owner = _Owner(_format_series(timer.name, timing.labels), functools.partial(timer.refuse, key))
+                labels = timing.labels
+                batch.append(_Owned(_sample_at(now, timer.name + "_count", labels, "counter", timing.count), owner))
+                batch.append(_Owned(_sample_at(now, timer.name + "_sum", labels, "counter", timing.sum), owner))
                 if timing.measured:
-                    batch.append(_sample_at(now, timer.name + "_max", timing.labels, "gauge", timing.longest))
+                    batch.append(_Owned(_sample_at(now, timer.name + "_max", labels, "gauge", timing.longest), owner))
                     taken.append((timing, timing.longest))
                     timing.longest, timing.measured = 0.0, False
         return taken
@@ -484,23 +519,62 @@ def _sample_at(now: int, name: str, labels: dict[str, str], kind: Kind, value: f
     }
 
 
+type _Key = tuple[tuple[str, str], ...]
+
+
 class _Instrument:
     def __init__(self, name: str, kind: Kind) -> None:
         self.name = name
         self.kind: Kind = kind
-        self.series: dict[tuple[tuple[str, str], ...], tuple[dict[str, str], float]] = {}
+        self.series: dict[_Key, tuple[dict[str, str], float]] = {}
+        self.refused: set[_Key] = set()
+        """the label sets the store refused, whose writes are left out"""
         self.read: Callable[[], float | Awaitable[float]] | None = None
         self.last_read: str | None = None
         """the error a gauge's function last raised, said once while it stays the same"""
 
     def add(self, labels: dict[str, str], n: float, replace: bool = False) -> None:
         key = tuple(sorted(labels.items()))
+        if key in self.refused:
+            return
         old = self.series.get(key, (labels, 0.0))[1]
         self.series[key] = (labels, n if replace else old + n)
+
+    def refuse(self, key: _Key) -> None:
+        self.series.pop(key, None)
+        self.refused.add(key)
+
+
+@dataclass(slots=True)
+class _Owner:
+    """An instrument's series, or a timer's three of one label set, which a refusal leaves out together."""
+
+    series: str
+    """as Go prints a series: name{route="/a"}"""
+    refuse: Callable[[], None]
+
+
+@dataclass(slots=True)
+class _Owned:
+    sample: dict[str, Any]
+    owner: _Owner
+
+
+_SERIES_REFUSALS = frozenset({"invalid", "limit", "too_old", "too_new", "conflict", "corrupt", "suspended"})
+"""the codes of a refusal that is the series' own doing, as Go's metrics tells them apart"""
+
+
+def _refused_in(sending: list[_Owned], err: TinystoreError) -> _Owner | None:
+    """The owner of the series a refusal names by its labels, when it names one of these."""
+    if err.code not in _SERIES_REFUSALS:
+        return None
+    return next((owned.owner for owned in sending if owned.sample["labels"] == err.what), None)
 
 
 async def _read_gauge(instrument: _Instrument, read: Callable[[], float | Awaitable[float]]) -> bool:
     """Sets a gauge's value from its function, or says why not, once while the error stays the same."""
+    if instrument.refused:
+        return False
     try:
         got = read()
         value = await got if asyncio.iscoroutine(got) or isinstance(got, asyncio.Future) else got
@@ -512,6 +586,13 @@ async def _read_gauge(instrument: _Instrument, read: Callable[[], float | Awaita
     instrument.series[()] = ({}, float(value))  # type: ignore[arg-type]
     instrument.last_read = None
     return True
+
+
+def _format_series(name: str, labels: dict[str, str]) -> str:
+    """A series as Go prints one: its name, then its labels sorted and quoted."""
+    if not labels:
+        return name
+    return name + "{" + ",".join(f"{k}={json.dumps(labels[k], ensure_ascii=False)}" for k in sorted(labels)) + "}"
 
 
 class Counter:
@@ -560,10 +641,13 @@ class _Timing:
 class _Timer:
     def __init__(self, name: str) -> None:
         self.name = name
-        self.series: dict[tuple[tuple[str, str], ...], _Timing] = {}
+        self.series: dict[_Key, _Timing] = {}
+        self.refused: set[_Key] = set()
 
     def add(self, labels: dict[str, str], millis: float) -> None:
         key = tuple(sorted(labels.items()))
+        if key in self.refused:
+            return
         timing = self.series.get(key)
         if timing is None:
             timing = self.series[key] = _Timing(labels)
@@ -571,6 +655,10 @@ class _Timer:
         timing.sum += millis
         timing.longest = max(timing.longest, millis)
         timing.measured = True
+
+    def refuse(self, key: _Key) -> None:
+        self.series.pop(key, None)
+        self.refused.add(key)
 
 
 class Timer:

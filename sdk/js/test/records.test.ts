@@ -354,6 +354,29 @@ describe('metrics', () => {
 		expect(depth?.values[0]).toBe(7)
 	})
 
+	test('a refused instrument keeps no other out, and says so once', async () => {
+		const refused = store.metrics.counter('refused_total').with({ '': 'x' })
+		const said = await stderrWhile(async () => {
+			store.metrics.counter('kept_total').inc()
+			refused.inc()
+			store.metrics.timer('refused_ms').with({ '': 'y' }).record(5)
+			store.metrics.gaugeFunc('unread', () => {
+				throw new Error('no reading')
+			})
+			await store.metrics.flush()
+			store.metrics.counter('kept_total').inc()
+			refused.inc()
+			await store.metrics.flush()
+		})
+		const [kept] = await store.metrics.read({ name: 'kept_total', since: '1m' })
+		expect(kept?.values).toEqual(Float64Array.of(1, 2))
+		expect(times(said, 'instrument refused')).toBe(2)
+		expect(said).toContain('refused_total')
+		expect(said).toContain('refused_ms')
+		expect(times(said, 'gauge read failed')).toBe(1)
+		expect(store.metrics.failures).toBe(0)
+	})
+
 	test('a timer writes its count, sum and longest at each flush; measure answers and rethrows', async () => {
 		const latency = store.metrics.timer('timed_ms')
 		latency.record(10)

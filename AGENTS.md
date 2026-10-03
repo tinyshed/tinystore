@@ -420,7 +420,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`; `a repeated failure is said once a quiet period, and its recovery once` in `sdk/js/test/background.test.ts`, `test_a_repeated_failure_is_said_once_a_quiet_period_and_its_recovery_once` in Python's |
 | an engine's errors are the store's kinds            | `TestMetricsErrorsAreTheStoresKinds`                                            |
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
-| one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
+| one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`; `a refused instrument keeps no other out, and says so once` in `sdk/js/test/records.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's |
 | an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
 | a timer writes its count, sum and longest at each flush | `TestATimerWritesItsCountSumAndLongestAtEachFlush`, `TestAFailedFlushKeepsATimersLongestForTheNext` |
 | a timer's three series go together and have one writer | `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries` |

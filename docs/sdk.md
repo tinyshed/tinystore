@@ -98,7 +98,8 @@ with store.metrics.timer("http_request_ms").labels(route="/users").measure():
 
 A result is `{name, kind, labels, ...}` in every language. An instrument's
 labels follow its Prometheus client: Go's `With(pairs...)`, Bun's
-`with({...})`, Python's `labels(**...)`.
+`with({...})`, Python's `labels(**...)`. A series the store refuses is left
+out from then on, and the other instruments go on being written, in all three.
 
 A timer times each language's own way, and writes the same three series at
 every flush: `<name>_count` and `<name>_sum`, counters of the durations and of
@@ -387,9 +388,10 @@ await withSignal(AbortSignal.timeout(2000), async () => {
 An instrument's flush, a logger's write and a gauge's function run in the
 background, and a failure there has no caller to return to. Each language says
 it as Go's store logs its own: `background work failed` once, again when the
-error changes or ten minutes on, and `background work recovered` once;
-`gauge read failed` once while its error stays the same; and
-`log lines dropped`, what a full buffer dropped, at most once in ten minutes.
+error changes or ten minutes on, and `background work recovered` once; a
+refused instrument, `instrument refused`, once; `gauge read failed` once while
+its error stays the same; and `log lines dropped`, what a full buffer dropped,
+at most once in ten minutes.
 
 | | Go | Bun | Python |
 |---|---|---|---|

@@ -207,7 +207,9 @@ A timer's `measure(fn)` answers what `fn` answered and throws what it threw,
 recording the time either way; `record(ms)` adds a duration of its own. Every
 flush writes `http_request_ms_count` and `http_request_ms_sum`, counters, and
 the longest since the flush before, `http_request_ms_max`, so that a range's
-mean is the increase of its sum over the increase of its count.
+mean is the increase of its sum over the increase of its count. A series the
+store refuses, a label it cannot keep, is left out from then on and said
+once, and the other instruments go on being written.
 
 ## Errors and cancellation
 
@@ -221,6 +223,6 @@ protocol, its engines.
 
 What fails where no call waits is said on stderr, as a logger of stream
 `tinystore` writes a line: an instrument's flush or a logger's write that
-failed, and its recovery; a gauge's function that threw; the lines a full
-logger dropped. A failure repeated is said again ten minutes on, or when it
-changes, as Go's store logs its own.
+failed, and its recovery; a gauge's function that threw; a refused
+instrument; the lines a full logger dropped. A failure repeated is said again
+ten minutes on, or when it changes, as Go's store logs its own.
