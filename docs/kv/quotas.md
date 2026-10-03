@@ -182,7 +182,7 @@ them between deploys:
 restart never loses a count. This is why quotas fit plan limits.
 
 To limit a request rate, use the KV engine's
-[rate limiter](../../kv/README.md#limiter) instead. It keeps its state in
+[rate limiter](rate-limits.md) instead. It keeps its state in
 memory, so each check is cheaper, but a crash can let one extra burst of
 requests through.
 

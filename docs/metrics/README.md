@@ -74,13 +74,13 @@ counts those resets correctly.
 
 Most metrics systems round, interpolate and extrapolate. TinyStore doesn't:
 
-- a sample comes back with the same bits it was stored with, including `-0`
-  and the payload of a `NaN`;
-- a sum is computed exactly and rounded once, so its result doesn't depend on
-  how the samples were stored or in which order they were added;
-- a bucket contains only the samples in its time range, with no
-  interpolation to its edges;
-- when a query hits a limit, it fails with a limit error instead of returning a
+- A sample comes back with the same bits it was stored with, including `-0`
+  and the payload of a `NaN`.
+- A sum is computed exactly and rounded once, so its result doesn't depend on
+  how the samples were stored or in which order they were added.
+- A bucket contains only the samples in its time range, with no
+  interpolation to its edges.
+- When a query hits a limit, it fails with a limit error instead of returning a
   smaller answer.
 
 There are no histograms, because a percentile from buckets is an

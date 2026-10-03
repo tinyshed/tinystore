@@ -103,7 +103,7 @@ such as systemd.
 
 | Platform | Endpoint |
 |---|---|
-| Linux, macOS | a Unix socket, `data/server/tinystore.sock`, or in `$XDG_RUNTIME_DIR` when the path is too long |
+| Linux, macOS | a Unix socket, `data/server/tinystore.sock`; when that path is too long for a socket, in `$XDG_RUNTIME_DIR` or the temporary directory |
 | Windows | a named pipe, `\\.\pipe\tinystore-<hash>`, that only its owner can open |
 
 A local connection needs no token: the permissions of the directory decide

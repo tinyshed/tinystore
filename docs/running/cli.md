@@ -42,6 +42,8 @@ Run
 Develop
   migrate [name]      compare a schema with its migrations
   schema  [name]      print a schema's SQL
+
+tinystore help <command> · --json for scripts
 ```
 
 The directory can come before or after the flags, or with `--dir`. Without

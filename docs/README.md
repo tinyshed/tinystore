@@ -2,8 +2,8 @@
 
 TinyStore gives an application SQL, key-value state, durable jobs, files,
 metrics and logs in one directory, with one lifecycle, one memory budget and
-one backup. Go programs embed it; Bun, Node and Python programs reach the same
-directory through a sidecar their SDK starts.
+one backup. Go programs embed it. Bun, Node and Python programs reach the same
+directory through a sidecar that their SDK starts.
 
 Read Start here in order, then the engines your application needs. Each
 engine's section opens with an overview, followed by a page for each feature.

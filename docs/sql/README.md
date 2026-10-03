@@ -91,7 +91,7 @@ const { changes, lastId } = await db.exec`insert into notes (author_id, title, c
 
 ```python
 done = await db.exec(
-    "insert into notes (author_id, title, created_at) values (?, ?, ?)", user_id, title, now_ms()
+    "insert into notes (author_id, title, created_at) values (?, ?, ?)", user_id, title, int(time.time() * 1000)
 )
 done.changes, done.last_id
 ```

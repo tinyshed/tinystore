@@ -70,7 +70,7 @@ attributes. You can search by either.
 
 ## What the console shows
 
-On a terminal, lines are colored and easy to read:
+On a terminal, lines are colored and formatted for people:
 
 ```text
 11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200
@@ -141,7 +141,7 @@ records are saved.
 |---|---|
 | A logger's buffer | 1,024 lines, larger with `buffer` |
 | Writes to the store | every second, or when the buffer is half full |
-| A record | 256 KiB, 128 fields |
+| A record | 256 KiB; 128 context fields and 128 attributes |
 
 ## See also
 

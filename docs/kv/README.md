@@ -206,10 +206,10 @@ database and the same id from a URL find the same value.
 |---|---|
 | A key, including its branch | 1 KiB |
 | A value | 1 MiB |
-| A `scan` page | 1,000 keys or 4 MiB of values |
+| A `scan` page | 100 keys by default, at most 1,000 keys or 4 MiB of values |
 | A bucket name | `[a-z0-9][a-z0-9_-]{0,63}` |
 
-Store larger values in [blobs](../../blobs/README.md) and keep their keys in
+Store larger values in [blobs](../blobs/README.md) and keep their keys in
 KV.
 
 ## See also

@@ -108,10 +108,10 @@ time zone. A repeating job needs a key, because only the key can stop it:
 
 ```ts
 const entry = await cleanup.get('cleanup')
-entry.at    // the next run
-entry.ran   // when the last run started
-entry.took  // how long it took, in milliseconds
-entry.error // why it failed, if it did
+entry?.at    // the next run
+entry?.ran   // when the last run started
+entry?.took  // how long it took, in milliseconds
+entry?.error // why it failed, if it did
 ```
 
 ```python

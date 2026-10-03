@@ -80,7 +80,7 @@ back exactly as they were written, in the original order of the fields.
 | | |
 |---|---|
 | Retention | 14 days |
-| A record | 256 KiB, 128 fields |
+| A record | 256 KiB; 128 context fields and 128 attributes |
 | A page of `scan` | 1,000 records, at most 10,000 |
 | A logger's buffer | 1,024 lines |
 | A record's time | from 14 days ago to 10 minutes ahead of the store's clock |

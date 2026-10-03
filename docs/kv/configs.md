@@ -41,17 +41,20 @@ config.value.port  # 8080, or the value of APP_PORT
 ```
 
 ```go
+type Limits struct {
+	RPS int `json:"rps"`
+}
+
 type Settings struct {
 	Port        int      `json:"port"`
 	Origins     []string `json:"origins"`
-	Limits      struct {
-		RPS int `json:"rps"`
-	} `json:"limits"`
-	DatabaseURL string `json:"databaseUrl" secret:"true"`
+	Limits      Limits   `json:"limits"`
+	DatabaseURL string   `json:"databaseUrl" secret:"true"`
 }
 
+state, err := kv.Open(ctx, store, kv.Options{})
 config, err := kv.OpenConfig[Settings](ctx, state, "app",
-	kv.Defaults(Settings{Port: 8080, Origins: []string{"localhost"}}),
+	kv.Defaults(Settings{Port: 8080, Origins: []string{"localhost"}, Limits: Limits{RPS: 100}}),
 	kv.FromEnv("APP", ".env"))
 
 port := config.Get().Port // 8080, or the value of APP_PORT

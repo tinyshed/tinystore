@@ -41,7 +41,7 @@ trailing newline.
 ## What a line becomes
 
 ```text
-level=info msg="slow request" ms=1200   → name logfmt, level info, attributes msg and ms
+level=info msg="slow request" ms=1200   → name logfmt, level info, attributes level, msg and ms
 {"level":"error","msg":"db down"}         → name json, level error, attributes level and msg
 [ERROR] 2026-10-03 failed to connect      → name log, level error, the line as its body
 \x1b[32mINFO\x1b[0m started                → name log, level info: a colored level counts too
@@ -70,7 +70,9 @@ ValueError: bad input
 
 A stack trace, a Python traceback, a Java exception or a JSON value printed
 over several lines becomes one record. A line that is indented, or that
-continues a traceback or an exception, is joined to the record before it. A
+continues a traceback or an exception, is joined to the record before it. The
+first line of a traceback joins the record before it too, which is usually
+the error line that your logger printed. A
 record that may still grow is written once a second passes without a new
 line joining it.
 

@@ -15,9 +15,9 @@ store, err := tinystore.Open(ctx, dir, tinystore.Options{
 ```
 
 A call reads the clock once and uses that time for all of its work. In Bun and
-Python, the store's clock is the clock of the server process. The server sends
-its time when a client connects, and the SDK prints a warning if its own clock
-differs from the server's by more than the time window allows.
+Python, the store's clock is the clock of the server process, not of your
+program. On a remote server, keep both machines' clocks in sync, because the
+time window below is checked against the server's clock.
 
 ## The time window
 

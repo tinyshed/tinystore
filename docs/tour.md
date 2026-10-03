@@ -97,7 +97,7 @@ async def post_message(user_id: int, text: str, idempotency_key: str) -> dict:
         if not usage.ok:
             raise LimitReached(usage.retry_after)
         done = await db.exec(
-            "insert into messages (user_id, text, created_at) values (?, ?, ?)", user_id, text, now_ms()
+            "insert into messages (user_id, text, created_at) values (?, ?, ?)", user_id, text, int(time.time() * 1000)
         )
         await replies.enqueue({"message_id": done.last_id}, key=f"message:{done.last_id}")
         logging.info("message received", extra={"user_id": user_id, "message_id": done.last_id})

@@ -95,8 +95,8 @@ fails and leaves nothing in the directory.
 A backup of blobs doesn't copy the files first: the snapshot hard-links each
 file, which takes no time and no space, so even a store of large videos is
 snapshotted instantly. The zip then streams each file. A file is never changed
-after it is stored, so tools such as rsync or restic copy each file only once
-across many backups.
+after it is stored, so if you also copy `data/blobs/objects/` with rsync or
+restic, they copy each file only once across many backups.
 
 ## Snapshots
 

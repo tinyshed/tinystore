@@ -118,9 +118,9 @@ of text ends a page early when it reaches its budget, and `next` continues it.
 Records are stored in blocks of up to 1,024 records, sorted by time. A query
 skips every block that can't match:
 
-- the time index finds only the blocks in the range;
-- each block knows the levels it contains;
-- a block has a filter of its trace ids, and of each id-like attribute, such as
+- The time index finds only the blocks in the range.
+- Each block knows the levels it contains.
+- A block has a filter of its trace ids, and of each id-like attribute, such as
   a request id.
 
 Finding one request id among 1.32 million production log lines read 11 blocks

@@ -108,7 +108,7 @@ pairs in their original order. `fields` turns them into an object, the way
 
 | | |
 |---|---|
-| A record | 256 KiB and 128 fields |
+| A record | 256 KiB; 128 context fields and 128 attributes |
 | An `append` | up to 4 MiB of records |
 | A record's time | from the retention cutoff to 10 minutes ahead of the store's clock |
 

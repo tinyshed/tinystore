@@ -67,7 +67,7 @@ applied, but can't apply them.
 ## Run it in Docker
 
 From the first release, each release publishes an image that serves `/data`
-on `tls://` port 7443 with the certificate, key and tokens in
+on `tls://` port 7443. It reads `cert.pem`, `key.pem` and `tokens` from
 `/etc/tinystore`:
 
 ```sh

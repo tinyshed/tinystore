@@ -101,11 +101,11 @@ causes a version conflict for another writer.
 
 Once a key expires, every call treats it as deleted:
 
-- `get`, `has`, `scan` and `all` don't see it;
-- `take` finds nothing;
-- `setIfAbsent` can create the key again;
-- a write with a version of the old key fails with a conflict;
-- a [counter](counters.md) starts again from zero.
+- `get`, `has`, `scan` and `all` don't see it.
+- `take` finds nothing.
+- `setIfAbsent` can create the key again.
+- A write with a version of the old key fails with a conflict.
+- A [counter](counters.md) starts again from zero.
 
 TinyStore deletes expired keys in the background, up to 600,000 keys per
 minute, so a bucket that creates many short-lived keys doesn't grow forever.

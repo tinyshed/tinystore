@@ -41,16 +41,22 @@ async def sign_in(user_id: int, device: str) -> tuple[int, str]:
 ```
 
 ```go
+type app struct {
+	sessions *kv.Bucket[Session]
+}
+
+// at startup
 sessions, err := kv.OpenBucket[Session](ctx, state, "sessions", kv.Sliding(30*24*time.Hour))
+a := &app{sessions: sessions}
 
 func digest(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-func signIn(ctx context.Context, userID int64, device string) (string, error) {
+func (a *app) signIn(ctx context.Context, userID int64, device string) (string, error) {
 	token := rand.Text()
-	err := sessions.Of(userID).Set(ctx, digest(token), Session{Device: device, Since: time.Now()})
+	err := a.sessions.Of(userID).Set(ctx, digest(token), Session{Device: device, Since: time.Now()})
 	return token, err // put the user id and the token in the cookie
 }
 ```
@@ -86,7 +92,7 @@ if !found {
 
 Each read extends the session to 30 days from now, because the bucket has a
 [sliding expiry](expiry.md). The read doesn't wait for a disk write: the new
-expiry is saved in the background. An expired session is simply not found.
+expiry is saved in the background. An expired session is not found.
 
 ## Sign out
 
@@ -134,6 +140,9 @@ make the old one stop working at the same moment:
 
 ```ts
 const old = await sessions.of(userId).getEntry(digest(token))
+if (!old) {
+	return redirectToSignIn() // the session expired or was signed out
+}
 const fresh = randomBytes(32).toString('base64url')
 
 await store.kv.batch(tx => {
@@ -144,11 +153,13 @@ await store.kv.batch(tx => {
 
 ```python
 old = await sessions.of(user_id).get_entry(digest(token))
+if old is None:
+    return redirect_to_sign_in()  # the session expired or was signed out
 fresh = secrets.token_urlsafe(32)
 
 async with store.kv.batch() as tx:
-    sessions.with_tx(tx).of(user_id).delete(digest(token), if_version=old.version)
-    sessions.with_tx(tx).of(user_id).set(digest(fresh), old.value)
+    sessions.of(user_id).with_tx(tx).delete(digest(token), if_version=old.version)
+    sessions.of(user_id).with_tx(tx).set(digest(fresh), old.value)
 ```
 
 ```go

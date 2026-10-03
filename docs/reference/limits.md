@@ -84,7 +84,7 @@ bucket or queue. A query can lower its own limits, but not raise them.
 | | Limit or default |
 |---|---|
 | Retention | 14 days |
-| A record | 256 KiB and 128 fields |
+| A record | 256 KiB; 128 context fields and 128 attributes |
 | An `append` | 4 MiB |
 | A page | 1,000 records by default, at most 10,000 |
 | A logger's buffer | 1,024 lines |
@@ -113,7 +113,7 @@ bucket or queue. A query can lower its own limits, but not raise them.
 | | Default |
 |---|---|
 | Sidecar idle time | 30 seconds |
-| A frame's body | 1 MiB and 64 KiB |
+| A frame's body | 1 MiB plus 64 KiB, so the largest KV or jobs value fits in one |
 | Calls in flight per connection | 256 |
 | Connections | 64 local, 1,024 remote |
 

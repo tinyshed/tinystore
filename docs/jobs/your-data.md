@@ -149,15 +149,15 @@ await deletions.work(async job => {
 
 ```python
 await deletions.enqueue(user_id, at=delete_at, key=f"user:{user_id}")  # the alarm first
-await db.exec("update users set delete_at = ? where id = ?", ms(delete_at), user_id)
+await db.exec("update users set delete_at = ? where id = ?", int(delete_at.timestamp() * 1000), user_id)
 
 
 async def delete_account(job: tinystore.Job[int]) -> None:
     user = await db.one("select delete_at from users where id = ?", job.value)
     if user is None or user["delete_at"] is None:
         return  # cancelled, or already deleted
-    if user["delete_at"] > now_ms():
-        return job.snooze(at=from_ms(user["delete_at"]))  # the row says later
+    if user["delete_at"] > time.time() * 1000:
+        return job.snooze(at=datetime.fromtimestamp(user["delete_at"] / 1000, UTC))  # the row says later
     await purge_user(job.value)
 
 

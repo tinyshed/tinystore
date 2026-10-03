@@ -105,8 +105,9 @@ an interrupted upload left behind.
 
 An upload stops with a limit error if the disk would have less than 1 GiB free
 after it. This protects the other engines: a single large upload can't take
-the space that the database files need to commit. Change the reserve with
-`blobs.Options{KeepFree: …}` in Go, or with the server's options.
+the space that the database files need to commit. In Go, change the reserve
+with `blobs.Options{KeepFree: …}`. A sidecar that Bun or Python starts keeps
+the default.
 
 TinyStore checks the space when an upload with a known size starts, and every
 64 MiB during the upload.

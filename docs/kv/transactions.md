@@ -15,7 +15,7 @@ await store.kv.batch(tx => {
 
 ```python
 async with store.kv.batch() as tx:
-    drafts.with_tx(tx).of(user_id).delete(note_id, if_version=draft.version)
+    drafts.of(user_id).with_tx(tx).delete(note_id, if_version=draft.version)
     published.with_tx(tx).set(note_id, draft.value)
 ```
 
@@ -42,7 +42,7 @@ const userId = await store.kv.tx(async tx => {
 	if (userId === undefined) {
 		throw new InvalidCodeError()
 	}
-	sessions.withTx(tx).of(userId).set(digest(token), { device })
+	sessions.withTx(tx).of(userId).set(digest(token), { device, since: Date.now() })
 	return userId
 })
 ```
@@ -52,7 +52,7 @@ async def sign_in(tx: tinystore.Tx) -> int:
     user_id = await codes.with_tx(tx).take(digest(code))  # None: the code was used
     if user_id is None:
         raise InvalidCodeError
-    sessions.of(user_id).with_tx(tx).set(digest(token), Session(device))
+    sessions.of(user_id).with_tx(tx).set(digest(token), Session(device=device, since=int(time.time())))
     return user_id
 
 
@@ -68,7 +68,7 @@ err = state.Tx(ctx, func(tx *kv.Tx) error {
 	if !found {
 		return errInvalidCode
 	}
-	return sessions.WithTx(tx).Of(userID).Set(ctx, digest(token), Session{Device: device})
+	return sessions.WithTx(tx).Of(userID).Set(ctx, digest(token), Session{Device: device, Since: time.Now()})
 })
 ```
 
@@ -141,10 +141,10 @@ Python, each call returns a future that you await after the block.
 
 Most of the time you don't need one. Each call is already atomic:
 
-- `take` reads and deletes a key in one step;
-- `setIfAbsent` creates a key only if it doesn't exist;
-- a write with `ifVersion` changes a key only if nobody else did;
-- a [quota](quotas.md) checks and counts all of its windows in one write.
+- `take` reads and deletes a key in one step.
+- `setIfAbsent` creates a key only if it doesn't exist.
+- A write with `ifVersion` changes a key only if nobody else did.
+- A [quota](quotas.md) checks and counts all of its windows in one write.
 
 ## Limits and defaults
 

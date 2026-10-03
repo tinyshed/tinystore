@@ -95,8 +95,9 @@ obj, err := media.Copy(ctx, "templates/welcome.png", fmt.Sprintf("users/%d/banne
 
 A copy shares the bytes of its source. Copying a 4 GB file takes the same time
 as copying a 4 KB one, and uses no extra disk space. The bytes stay until the
-last file that uses them is deleted. A copy has its own content type, meta and
-expiry, which you can set in the call.
+last file that uses them is deleted. A copy keeps the source's content type
+and meta, unless you give others in the call. It gets the expiry that a new
+`put` would give it.
 
 Copies and moves stay within one bucket. Copying or moving a key that doesn't
 exist fails with a conflict error. Both accept `ifNoneMatch` and `ifMatch` for
