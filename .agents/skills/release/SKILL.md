@@ -26,7 +26,11 @@ the run, only when the user has said to, for that version.
    with `dist/NOTES.md`, once what it announces is there.
 
 A version is `vX.Y.Z` or `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, the
-pre-releases every registry spells (PyPI's `0.1.0rc1` is stamped for it). It
+pre-releases every registry spells (PyPI's `0.1.0rc1` is stamped for it).
+On npm a pre-release takes the `next` tag, and `latest` too while no release
+that is not one exists, since a plain `npm install` takes `latest`; the job
+sets the tag with `npm dist-tag`, which needs `NPM_TOKEN`, so a re-run mends
+it too. It
 comes after every release before it and is on neither npm nor PyPI yet; the
 workflow checks both before it tags.
 

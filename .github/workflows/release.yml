@@ -189,12 +189,18 @@ jobs:
           for package in dist/npm/*.tgz; do
             if [ "$package" != "$sdk" ]; then platforms+=("$package"); fi
           done
+          # Until a release that is not a pre-release exists, latest follows the
+          # newest pre-release, or a plain `npm install` keeps the first one.
+          stable=$(npm view @tinyshed/tinystore versions --json 2>/dev/null | node -p 'const v = JSON.parse(require("fs").readFileSync(0) || "[]"); [].concat(v).some(x => !x.includes("-"))')
+          if [ "$DIST_TAG" = next ] && [ "$stable" != true ]; then DIST_TAG=latest; fi
           for package in "${platforms[@]}" "$sdk"; do
             named=$(tar -xzOf "$package" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')
             if npm view "$named" version >/dev/null 2>&1; then
-              echo "$named is published already"; continue
+              echo "$named is published already"
+            else
+              npm publish "$package" --access public --provenance --tag "$DIST_TAG"
             fi
-            npm publish "$package" --access public --provenance --tag "$DIST_TAG"
+            npm dist-tag add "$named" "$DIST_TAG"
           done
 
   pypi:
