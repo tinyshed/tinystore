@@ -100,6 +100,37 @@ jobs:
       - name: Check and test the SDKs
         run: task sdk
 
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # each page's last change is read from the history
+          fetch-depth: 0
+
+      # the server's test runs against a tinystore built here
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/tinystore/go.mod
+          cache-dependency-path: |
+            go.sum
+            server/go.sum
+            cmd/tinystore/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: arduino/setup-task@v3
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # a link in the docs that leads nowhere fails the build here
+      - name: Check, test and build the site
+        run: task web
+
   quality:
     name: quality
     runs-on: ubuntu-latest

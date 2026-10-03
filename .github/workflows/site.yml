@@ -1,0 +1,103 @@
+name: Site
+
+# The site follows main: a push that changes what it is built from makes a new
+# image, and deploys it when a host is set up. CI's web job has already built
+# and checked the same commit.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - web/**
+      - sdk/js/**
+      - README.md
+      - .github/assets/**
+      - cmd/**
+      - server/**
+      - '*.go'
+      - go.mod
+      - go.sum
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a deploy finishes before the next one starts
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # canonical links, the sitemap and llms.txt carry the site's own address
+      SITE_ORIGIN: ${{ vars.SITE_ORIGIN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: The site's address
+        run: |
+          if [ -z "$SITE_ORIGIN" ]; then
+            echo "::error::Set the repository variable SITE_ORIGIN to the site's address, https://…, under Settings, Secrets and variables, Actions, Variables."
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      # outside the image, where git can date every page
+      - name: Build the site
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/tinystore-site
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: web/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    name: deploy
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      # Coolify, Dokploy, Render and the like each give a URL that redeploys;
+      # without one the image waits in GHCR for whoever runs it
+      - name: Ask the host to pull the new image
+        env:
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "No SITE_DEPLOY_HOOK secret: ghcr.io/${{ github.repository_owner }}/tinystore-site:latest is ready to run." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK"

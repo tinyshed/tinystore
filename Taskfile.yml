@@ -167,6 +167,40 @@ tasks:
         --exclude=./dist -cf - .
         | tar -xf - && go -C tools build -o /usr/local/bin/task github.com/go-task/task/v3/cmd/task && task sdk'
 
+  web:
+    # needs bun, and go for the server's test against a real store
+    desc: Check, test and build the docs site in web/, as CI's web job does
+    dir: web
+    cmds:
+      - bun install --frozen-lockfile
+      - bun run check
+      - bun test
+      - bun run build
+
+  web:dev:
+    # docs/ is watched too: a markdown change reloads the page
+    desc: Run the docs site with live reload on :5173
+    dir: web
+    cmds:
+      - bun install
+      - bun run dev
+
+  web:serve:
+    # the analytics land in web/data, which `tinystore logs web/data -f` follows
+    desc: Serve the last build of the site as production does, through a tinystore built here
+    dir: web
+    env:
+      TINYSTORE_BIN: '{{.ROOT_DIR}}/web/.bin/tinystore{{exeExt}}'
+    cmds:
+      - go -C ../cmd/tinystore build -o ../../web/.bin/tinystore{{exeExt}} .
+      - bun run serve
+
+  web:image:
+    desc: Build the docs site's image, the site built first
+    cmds:
+      - cd web && bun install --frozen-lockfile && bun run build
+      - docker build -f web/Dockerfile -t tinystore-site .
+
   tidy:
     desc: Tidy every module file CI checks
     cmds:
@@ -194,6 +228,7 @@ tasks:
       - task: lint:actions
       - task: test
       - task: sdk
+      - task: web
       - task: vuln
       - task: size
 
