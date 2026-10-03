@@ -201,6 +201,14 @@ tasks:
       - cd web && bun install --frozen-lockfile && bun run build
       - docker build -f web/Dockerfile -t tinystore-site .
 
+  readme:
+    # the web tests fail when the README's parts are not what this writes
+    desc: Write the README's sample and engines from the landing page's words in web/landing.md
+    dir: web
+    cmds:
+      - bun install --frozen-lockfile
+      - bun run readme
+
   tidy:
     desc: Tidy every module file CI checks
     cmds:

@@ -19,8 +19,9 @@
 
 ---
 
-> **Not released yet.** The engines below are built and tested; the API may
-> still change, and no file written by an earlier revision has to be read.
+> **Not released yet.** The engines are built and tested, and the packages
+> below are published from the first release on. The API may still change, and
+> no file written by an earlier revision has to be read.
 
 TinyStore gives an application SQL, key-value state, durable jobs, files,
 metrics and logs in one directory, with one lifecycle, one memory budget and
@@ -33,20 +34,42 @@ their own job. SQLite is underneath, with formats of its own where a workload
 needs one. The goal is to make the storage of an application on one machine
 boring to operate.
 
+<!--
+The sample and the engines below are the landing page's: task readme writes
+them from web/landing.md, and the site's tests fail when the two differ.
+Change them there.
+-->
+
 ## A first look
+
+<!-- landing:sample -->
 
 ```go
 // errors left out
 store, err := tinystore.Open(ctx, "./data", tinystore.Options{})
 defer store.Close(ctx)
 
+db, err := sqldb.Open(ctx, store, "app", migrations, schema)
+_, err = db.Exec(ctx, `insert into users (id, name) values (?, ?)`, 42, "Ada")
+
 state, err := kv.Open(ctx, store, kv.Options{})
-drafts, err := kv.OpenBucket[string](ctx, state, "drafts")
-err = drafts.Set(ctx, "note/1", "hello")
+sessions, err := kv.OpenBucket[string](ctx, state, "sessions", kv.Sliding(30*24*time.Hour))
+err = sessions.Of("42").Set(ctx, "token", "abc123")
 
 queues, err := jobs.Open(ctx, store, jobs.Options{})
-reminders, err := jobs.OpenQueue[Reminder](ctx, queues, "reminders")
-err = reminders.Enqueue(ctx, Reminder{Note: 1}, jobs.After(time.Hour))
+emails, err := jobs.OpenQueue[Email](ctx, queues, "emails")
+err = emails.Enqueue(ctx, Email{To: "ada@example.com"})
+
+objects, err := blobs.Open(ctx, store, blobs.Options{})
+files, err := blobs.OpenBucket(ctx, objects, "files")
+_, err = files.Put(ctx, "avatars/42.png", avatar)
+
+logs, err := records.Open(ctx, store, records.Options{})
+log := slog.New(logs.Handler("api"))
+log.Info("user created", "userId", 42)
+
+series, err := metrics.Open(ctx, store, metrics.Options{})
+series.Counter("signups_total").Inc()
 ```
 
 <details>
@@ -57,11 +80,23 @@ import { open } from 'tinystore'
 
 await using store = await open('./data')
 
-const drafts = store.kv.bucket('drafts', 'string')
-await drafts.set('note/1', 'hello')
+const db = await store.sql('app')
+await db.exec`insert into users (id, name) values (${42}, ${'Ada'})`
 
-const reminders = store.jobs.queue<{ note: number }>('reminders')
-await reminders.enqueue({ note: 1 }, { after: '1h' })
+const sessions = store.kv.bucket<string>('sessions', { sliding: '30d' })
+await sessions.of('42').set('token', 'abc123')
+
+const emails = store.jobs.queue<{ to: string }>('emails')
+await emails.enqueue({ to: 'ada@example.com' })
+
+const files = store.blobs.bucket('files')
+await files.put('avatars/42.png', Bun.file('avatar.png'))
+
+const log = store.records.logger('api')
+log.event('user.created', { userId: 42 })
+
+const signups = store.metrics.counter('signups_total')
+signups.inc()
 ```
 
 </details>
@@ -71,33 +106,81 @@ await reminders.enqueue({ note: 1 }, { after: '1h' })
 
 ```python
 import asyncio
+import logging
+from pathlib import Path
+
 import tinystore
+
 
 async def main() -> None:
     async with tinystore.open("./data") as store:
-        drafts = store.kv.bucket("drafts", str)
-        await drafts.set("note/1", "hello")
+        db = await store.sql("app")
+        await db.exec("insert into users (id, name) values (?, ?)", 42, "Ada")
 
-        reminders = store.jobs.queue("reminders", dict[str, int])
-        await reminders.enqueue({"note": 1}, after="1h")
+        sessions = store.kv.bucket("sessions", str, sliding="30d")
+        await sessions.of("42").set("token", "abc123")
+
+        emails = store.jobs.queue("emails", dict[str, str])
+        await emails.enqueue({"to": "ada@example.com"})
+
+        files = store.blobs.bucket("files")
+        await files.put("avatars/42.png", Path("avatar.png").read_bytes())
+
+        logging.getLogger().addHandler(store.records.handler("api"))
+        logging.info("user created", extra={"user_id": 42})
+
+        store.metrics.counter("signups_total").inc()
+
 
 asyncio.run(main())
 ```
 
 </details>
 
-From the first release:
-
 ```sh
 go get github.com/tinyshed/tinystore
 bun add tinystore
 pip install tinyshed-tinystore
-docker pull ghcr.io/tinyshed/tinystore
 ```
 
-Release packages will carry the `tinystore` binary for Linux, macOS and Windows,
-and the image serves a store to remote clients.
-[examples/notes](examples/notes/main.go) is a program using every engine.
+<!-- /landing:sample -->
+
+[examples/notes](examples/notes/main.go) is a complete program that uses every
+engine, and [Getting started](docs/getting-started.md) builds a first one step
+by step.
+
+## Engines
+
+<!-- landing:engines -->
+
+| | | |
+|---|---|---|
+| [SQL](docs/sql/README.md) | Relational state | The application's own SQL databases: tables from structs, checked migrations. |
+| [KV](docs/kv/README.md) | Application state | Current state: typed buckets, counters, expiry, versions. |
+| [Jobs](docs/jobs/README.md) | Durable background work | Work that runs at its time: retries, leases, repeats. |
+| [Blobs](docs/blobs/README.md) | Files and objects | Files by path, checked when read whole. |
+| [Records](docs/records/README.md) | Logs and events | Read by time, level and keys. |
+| [Metrics](docs/metrics/README.md) | Time series | Samples kept bit for bit, answered exactly. |
+
+<!-- /landing:engines -->
+
+By default each engine has its own file and its own writer. An application can
+keep its jobs in its SQL database and commit a job together with its rows in
+one `Batch`, as [Jobs and your data](docs/jobs/your-data.md) shows. One call
+backs up every engine into one checked zip: see [Backups](docs/running/backups.md).
+
+## Documentation
+
+The [guides](docs/README.md) cover every engine, with a page per feature and
+each example in Bun, Python and Go. Start with these:
+
+- [Introduction](docs/introduction.md): what TinyStore is for and what it replaces
+- [Getting started](docs/getting-started.md): install it and write a first program
+- [Go, Bun and Python](docs/languages.md): how each language reaches a store
+- [A tour](docs/tour.md): every engine on one page
+
+For reference, see the [Bun and Node API](sdk/js/README.md), the
+[Python API](sdk/python/README.md) and the [wire protocol](docs/wire.md).
 
 ## Looking at a store
 
@@ -115,20 +198,9 @@ tinystore stop ./data                              # its server, once its work i
 claude mcp add tinystore -- tinystore mcp ./data   # logs, kv, jobs and SQL for an agent, read only
 ```
 
-## Engines
-
-| | |
-|---|---|
-| [sqldb](sqldb/README.md) | the application's own SQL databases: tables from structs, checked migrations |
-| [kv](kv/README.md) | current state: typed buckets, counters, expiry, versions |
-| [jobs](jobs/README.md) | work that runs at its time: retries, leases, repeats |
-| [blobs](blobs/README.md) | files by path, checked when read whole |
-| [metrics](metrics/README.md) | samples kept bit for bit, answered exactly |
-| [records](records/README.md) | logs and events, read by time, level and keys |
-| [backup](backup/backup.go) | every engine's files in one checked zip |
-
-By default each engine has its own file and writer. An application can put
-jobs in its SQL database and commit a job with its rows in one `Batch`.
+[The command line](docs/running/cli.md) and [AI agents](docs/running/agents.md)
+explain each command. The image `ghcr.io/tinyshed/tinystore` serves a store to
+remote clients, as [A remote server](docs/running/server.md) shows.
 
 ## Numbers
 

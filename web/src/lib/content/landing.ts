@@ -98,7 +98,7 @@ export function landingSummary(root = checkout()): string {
 	return `${withoutStop(headlineOf(intro))}: ${plain(paragraphOf(intro))}`
 }
 
-interface Section {
+export interface Section {
 	/** the `##` heading's text; the part before the first one has none */
 	title: string
 	nodes: RootContent[]
@@ -108,7 +108,7 @@ function readTree(root: string): Root {
 	return parse(readFileSync(join(root, landingFile), 'utf8'))
 }
 
-function sectionsOf(tree: Root): Section[] {
+export function sectionsOf(tree: Root): Section[] {
 	const sections: Section[] = [{ title: '', nodes: [] }]
 	for (const node of tree.children) {
 		if (node.type === 'heading' && node.depth === 2) {
@@ -168,8 +168,8 @@ function engineRow([name, short, text]: TableCell[], links: Links): EngineRow {
 	}
 }
 
-// the docs' pages, as a link from the landing page reaches them
-function linksOf(site: Site, root: string): Links {
+/** The docs' pages, as a link from the landing page, or from the README, reaches them. */
+export function linksOf(site: Site, root: string): Links {
 	return {
 		root,
 		commit: site.commit,

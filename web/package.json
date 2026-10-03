@@ -17,7 +17,8 @@
 		"check:write": "biome check --write .",
 		"format": "biome format --write .",
 		"lint": "biome lint .",
-		"test": "bun test"
+		"test": "bun test",
+		"readme": "bun src/lib/content/readme.ts"
 	},
 	"dependencies": {
 		"tinystore": "file:../sdk/js",
