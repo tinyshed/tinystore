@@ -417,7 +417,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |
 | one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
 | engines close last opened first, once               | `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`                              |
-| a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`                             |
+| a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`; `a repeated failure is said once a quiet period, and its recovery once` in `sdk/js/test/background.test.ts`, `test_a_repeated_failure_is_said_once_a_quiet_period_and_its_recovery_once` in Python's |
 | an engine's errors are the store's kinds            | `TestMetricsErrorsAreTheStoresKinds`                                            |
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
 | one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
@@ -462,6 +462,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an ambiguous change is a draft that does not run    | `TestAnAmbiguousChangeIsADraftThatDoesNotRun`                                   |
 | the tool finds each database by its name            | `TestTheToolFindsEachDatabaseByItsName`, `TestTheToolWritesTheNextMigrationThroughTheCheck` in `cmd/tinystore` |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
+| what a full buffer dropped is said, once a quiet period | `TestDroppedLinesAreSaidOncePerQuietPeriod`; `dropped lines are said at a flush, once a quiet period, counted since the last time` in `sdk/js/test/background.test.ts`, `test_dropped_lines_are_said_at_a_flush_once_a_quiet_period_counted_since_the_last_time` in Python's |
 | a Bun logger's line never waits for the server     | `a full logger drops and counts rather than wait` in `sdk/js/test/records.test.ts` |
 | a Bun call under an aborted signal is refused      | `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts` |
 | a Bun duration or rate misspelled does not compile | `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts` |

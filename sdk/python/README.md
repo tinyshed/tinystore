@@ -177,7 +177,8 @@ async for chunk in process.stdout:
 ```
 
 A handler holds 1024 records and hands them over every second or once half
-of them wait; what does not fit is dropped and counted in `handler.dropped`.
+of them wait; what does not fit is dropped, counted in `handler.dropped` and
+said on stderr.
 
 Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
 object a line otherwise, the bytes Go's and Bun's loggers write.
@@ -228,3 +229,9 @@ is its code's class, a `TinystoreError`: `InvalidError`, `ConflictError`,
 `LimitError` names the bound, what the call wanted and the bound. A cancelled
 task cancels its call, one `CANCEL` on the wire. `await store.status()` says
 what the server is: its version, its protocol, its engines.
+
+What fails where no call waits is said on stderr, as a handler of stream
+`tinystore` writes a line: an instrument's flush or a handler's write that
+failed, and its recovery; a gauge's function that raised; the lines a full
+handler dropped. A failure repeated is said again ten minutes on, or when it
+changes, as Go's store logs its own.

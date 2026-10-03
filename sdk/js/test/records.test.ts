@@ -1,6 +1,6 @@
 // records and metrics through a real tinystore serve, the one test/binary.ts built.
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -37,6 +37,21 @@ async function caught(promise: Promise<unknown>): Promise<unknown> {
 		() => undefined,
 		(err: unknown) => err,
 	)
+}
+
+/** What was written to stderr while fn ran, where TinyStore says its own lines. */
+async function stderrWhile(fn: () => Promise<void>): Promise<string> {
+	const spy = spyOn(process.stderr, 'write')
+	try {
+		await fn()
+		return spy.mock.calls.map(([text]) => String(text)).join('')
+	} finally {
+		spy.mockRestore()
+	}
+}
+
+function times(text: string, said: string): number {
+	return text.split(said).length - 1
 }
 
 const second = 1_000_000_000n
@@ -166,14 +181,18 @@ describe('logger', () => {
 		expect(String(items[3]?.attrs[0]?.[1])).toContain('boom')
 	})
 
-	test('a full logger drops and counts rather than wait, and keeps its least level', async () => {
+	test('a full logger drops and counts rather than wait, says so, and keeps its least level', async () => {
 		const log = store.records.logger('quiet', { buffer: 2, level: 'warn', console: 'off' })
-		log.info('below its level')
-		for (const n of ['one', 'two', 'three', 'four']) {
-			log.warn(n)
-		}
-		await log.flush()
+		const said = await stderrWhile(async () => {
+			log.info('below its level')
+			for (const n of ['one', 'two', 'three', 'four']) {
+				log.warn(n)
+			}
+			await log.flush()
+		})
 		expect(log.dropped).toBe(1)
+		expect(times(said, 'log lines dropped')).toBe(1)
+		expect(said).toContain('quiet')
 		const { items } = await store.records.scan({ streams: ['quiet'] })
 		expect(items.map(r => r.body)).toEqual(['one', 'two', 'three'])
 	})

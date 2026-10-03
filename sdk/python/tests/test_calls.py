@@ -201,6 +201,24 @@ async def test_a_half_full_buffer_is_written_before_its_interval(
     assert (kept, handler.dropped) == (written, 0)
 
 
+async def test_a_full_handler_drops_counts_and_says_so(
+    store: tinystore.Store, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = logging.getLogger("full")
+    log.propagate = False
+    handler = store.records.handler("full", console="off", buffer=2)
+    log.addHandler(handler)
+    try:
+        for n in ("one", "two", "three", "four"):
+            log.warning(n)
+        await handler.flush_now()
+    finally:
+        log.removeHandler(handler)
+    assert handler.dropped == 2
+    said = capsys.readouterr().err
+    assert said.count("log lines dropped") == 1 and '"logger":"full"' in said
+
+
 async def test_a_remote_server_takes_its_token_and_refuses_another(tmp_path: Path) -> None:
     import asyncio
     import os

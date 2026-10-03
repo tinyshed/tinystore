@@ -2,8 +2,10 @@
 // logging.Handler write them: each on the console as it is logged, and as a
 // record when the logger is a store's. A call never waits for the server.
 // Lines wait in a bounded buffer and go every second, or once half of it
-// waits; what does not fit, or a write that fails, is dropped and counted.
+// waits; what does not fit, or a write that fails, is dropped and counted,
+// and said in TinyStore's own lines, since no call is waiting to be told.
 
+import { DropNotice, FailureLog, type Say } from './background.ts'
 import {
 	type ConsoleFormat,
 	type ConsoleLine,
@@ -52,6 +54,9 @@ interface Shared {
 	timer: ReturnType<typeof setInterval> | undefined
 	writing: Promise<void> | undefined
 	dropped: number
+	/** undefined for a logger of the console alone, which writes nothing */
+	failures: FailureLog | undefined
+	drops: DropNotice | undefined
 }
 
 /**
@@ -93,8 +98,18 @@ export function newLogger(
 		timer: undefined,
 		writing: undefined,
 		dropped: 0,
+		failures: append === undefined ? undefined : new FailureLog(`records flush ${stream}`, sayOwn),
+		drops: append === undefined ? undefined : new DropNotice(stream, most, sayOwn),
 	}
 	return new Logger(shared, [])
+}
+
+let own: Logger | undefined
+
+/** TinyStore's own lines, on the console of a logger of stream tinystore made when first needed. */
+export const sayOwn: Say = (level, message, fields) => {
+	own ??= logger('tinystore')
+	own[level](message, fields)
 }
 
 /** How a logger prints its lines, or undefined when it prints none. */
@@ -137,7 +152,10 @@ export class Logger {
 		this.#context = context
 	}
 
-	/** The lines dropped since the logger began: a full buffer, or a write that failed. */
+	/**
+	 * The lines dropped since the logger began: a full buffer, or a write that
+	 * failed. Each is also said on stderr, at most once in ten minutes.
+	 */
 	get dropped(): number {
 		return this.#shared.dropped
 	}
@@ -180,15 +198,20 @@ export class Logger {
 		while (shared.writing !== undefined) {
 			await shared.writing
 		}
+		shared.drops?.sayIfDue()
 		if (shared.waiting.length === 0 || shared.append === undefined) {
 			return
 		}
 		const batch = shared.waiting.splice(0)
 		shared.writing = shared
 			.append(batch)
-			.catch(() => {
-				shared.dropped += batch.length
-			})
+			.then(
+				() => shared.failures?.succeeded(),
+				err => {
+					shared.dropped += batch.length
+					shared.failures?.failed(err)
+				},
+			)
 			.finally(() => {
 				shared.writing = undefined
 			})
@@ -232,6 +255,7 @@ export class Logger {
 		}
 		if (shared.waiting.length >= shared.most) {
 			shared.dropped++
+			shared.drops?.dropped()
 			return
 		}
 		shared.waiting.push(line)

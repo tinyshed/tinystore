@@ -3,8 +3,10 @@
 // exactly and rounded once. Instruments live in the SDK and are ingested
 // every flush.
 
+import { FailureLog, messageOf } from './background.ts'
 import { download, type Link } from './connection.ts'
 import { errorOf, InvalidError, type LimitError } from './errors.ts'
+import { sayOwn } from './logger.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { byCodePoint } from './wire/codec.ts'
 import {
@@ -305,6 +307,7 @@ export class Metrics {
 	readonly #instruments = new Map<string, Instrument>()
 	readonly #timers = new Map<string, TimerInstrument>()
 	#interval: ReturnType<typeof setInterval> | undefined
+	readonly #failureLog = new FailureLog('metrics instruments', sayOwn)
 	/** instruments' flushes that failed, and why the last did */
 	failures = 0
 	lastFailure: Error | undefined
@@ -468,7 +471,7 @@ export class Metrics {
 			if (timer !== undefined) {
 				throw new InvalidError(`${name} is written by the timer ${timer}`)
 			}
-			instrument = { name, kind, series: new Map() }
+			instrument = { name, kind, series: new Map(), lastRead: undefined }
 			this.#instruments.set(name, instrument)
 			this.#flushing()
 		} else if (instrument.kind !== kind) {
@@ -496,8 +499,18 @@ export class Metrics {
 	}
 
 	#flushing(): void {
-		this.#interval ??= setInterval(() => void this.flush().catch(() => {}), flushEvery)
+		this.#interval ??= setInterval(() => void this.#flushInBackground(), flushEvery)
 		this.#interval.unref?.()
+	}
+
+	// a flush no caller awaits says its failure, as Go's background work does
+	async #flushInBackground(): Promise<void> {
+		try {
+			await this.flush()
+			this.#failureLog.succeeded()
+		} catch (err) {
+			this.#failureLog.failed(err)
+		}
 	}
 
 	/** Ingests every instrument's value now, as the timer does every 15 s. */
@@ -505,12 +518,8 @@ export class Metrics {
 		const at = BigInt(Date.now())
 		const batch: Sampled[] = []
 		for (const instrument of this.#instruments.values()) {
-			if (instrument.read !== undefined) {
-				try {
-					instrument.series.set('{}', { labels: {}, value: await instrument.read() })
-				} catch {
-					continue
-				}
+			if (instrument.read !== undefined && !(await readGauge(instrument, instrument.read))) {
+				continue
 			}
 			for (const s of instrument.series.values()) {
 				batch.push(sampleAt(at, instrument.name, s.labels, instrument.kind, s.value))
@@ -554,11 +563,14 @@ export class Metrics {
 		return taken
 	}
 
-	/** Stops flushing every 15 s; the store flushes once more as it closes. */
-	stop(): void {
+	/** Stops flushing every 15 s and ingests the instruments' last values; the store's close calls it. */
+	async stop(): Promise<void> {
 		if (this.#interval !== undefined) {
 			clearInterval(this.#interval)
 			this.#interval = undefined
+		}
+		if (this.instruments > 0) {
+			await this.#flushInBackground()
 		}
 	}
 
@@ -575,6 +587,8 @@ interface Instrument {
 	/** by the canonical spelling of each label set */
 	series: Map<string, { labels: Labels; value: number }>
 	read?: () => number | Promise<number>
+	/** the error a gauge's function last threw, said once while it stays the same */
+	lastRead: string | undefined
 }
 
 /** what a timer ingests, each series its name and a suffix */
@@ -647,6 +661,25 @@ function seriesOf(instrument: Instrument, labels: Labels): { labels: Labels; val
 		instrument.series.set(key, s)
 	}
 	return s
+}
+
+/** a gauge's value from its function, or false when it threw: said once while the error stays the same */
+async function readGauge(
+	instrument: Instrument,
+	read: () => number | Promise<number>,
+): Promise<boolean> {
+	try {
+		instrument.series.set('{}', { labels: {}, value: await read() })
+		instrument.lastRead = undefined
+		return true
+	} catch (err) {
+		const error = messageOf(err)
+		if (error !== instrument.lastRead) {
+			sayOwn('warn', 'gauge read failed', { series: instrument.name, error })
+			instrument.lastRead = error
+		}
+		return false
+	}
 }
 
 export class Counter {

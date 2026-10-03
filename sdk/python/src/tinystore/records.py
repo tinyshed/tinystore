@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ._background import DropNotice, FailureLog
 from ._connection import Connection, Link, download
 from ._console import Console, ConsoleHandler, Line
 from ._page import Page
@@ -451,7 +452,7 @@ class Handler(ConsoleHandler):
 
     The queue is appended once a second, or as soon as half of it waits, so a
     burst is written rather than dropped; what does not fit, or a write that
-    fails, is dropped and counted.
+    fails, is dropped and counted, and said in TinyStore's own lines.
     """
 
     def __init__(
@@ -476,6 +477,8 @@ class Handler(ConsoleHandler):
         self._task = self._loop.create_task(self._flushing())
         self._soon: set[asyncio.Task[None]] = set()
         """the flushes asked for before their interval, held since the loop holds a task weakly"""
+        self._failures = FailureLog(f"records flush {stream}")
+        self._drops = DropNotice(stream, most)
         self.dropped = 0
         """lines dropped since the handler began: a full buffer, or a write that failed"""
 
@@ -489,6 +492,7 @@ class Handler(ConsoleHandler):
         with self._queued:
             if len(self._queue) >= self._most:
                 self.dropped += 1
+                self._drops.dropped()
                 return
             self._queue.append(line)
             ask = not self._asked and len(self._queue) >= self._most / 2
@@ -518,13 +522,17 @@ class Handler(ConsoleHandler):
                 batch = list(self._queue)
                 self._queue.clear()
                 self._asked = False
+            self._drops.say_if_due()
             if not batch:
                 return
             try:
                 await self._write(batch)
-            except Exception:
+            except Exception as err:
                 with self._queued:
                     self.dropped += len(batch)
+                self._failures.failed(err)
+            else:
+                self._failures.succeeded()
 
     def close(self) -> None:
         self._task.cancel()

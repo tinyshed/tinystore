@@ -166,7 +166,8 @@ for await (const chunk of child.stdout) worker.write(chunk)
 ```
 
 A logger holds 1024 lines and hands them over every second or once half of
-them wait; what does not fit is dropped and counted in `log.dropped`.
+them wait; what does not fit is dropped, counted in `log.dropped` and said on
+stderr.
 
 Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
 object a line otherwise, the bytes Go's and Python's loggers write.
@@ -217,3 +218,9 @@ Every call inside `withSignal(signal, fn)` ends when the signal aborts, one
 `CANCEL` on the wire; `work`, `put` and `get` of blobs also take a signal of
 their own. `await store.status()` says what the server is: its version, its
 protocol, its engines.
+
+What fails where no call waits is said on stderr, as a logger of stream
+`tinystore` writes a line: an instrument's flush or a logger's write that
+failed, and its recovery; a gauge's function that threw; the lines a full
+logger dropped. A failure repeated is said again ten minutes on, or when it
+changes, as Go's store logs its own.

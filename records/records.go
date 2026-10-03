@@ -48,6 +48,8 @@ type Store struct {
 	queue       chan Record
 	flushSoon   func()       // runs the flush now, once the queue is half full
 	asked       atomic.Bool  // the queue has asked for the flush since the last one
+	dropsSaid   uint64       // the full buffer's drops last said; only flushInBackground reads it
+	dropsSaidAt time.Time    // zero before the first
 	appendMu    sync.Mutex   // routing, its commit and what the cache learns move together
 	enqueueMu   sync.RWMutex // handlers share it; the last flush takes it to shut them out
 	stopping    bool

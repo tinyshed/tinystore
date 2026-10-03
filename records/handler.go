@@ -289,7 +289,25 @@ func (s *Store) flushInBackground(ctx context.Context) error {
 			"dropped_write_delta", s.droppedWrite.Load()-beforeWrite,
 			"failed", err != nil)
 	}
+	s.sayDrops(s.now())
 	return err
+}
+
+// a full buffer's drops within this long of the last said are counted, not said
+const quietDrops = 10 * time.Minute
+
+// sayDrops says how many lines a full buffer dropped since it last said so, at
+// most once in a quiet period, as the Bun and Python loggers say theirs: a
+// burst is one line, and a handler that keeps dropping says how many every ten
+// minutes rather than every second. A failed write is background work failing,
+// which the store's failure log says.
+func (s *Store) sayDrops(now time.Time) {
+	full := s.droppedFull.Load()
+	if full == s.dropsSaid || !s.dropsSaidAt.IsZero() && now.Sub(s.dropsSaidAt) < quietDrops {
+		return
+	}
+	s.log.Warn("log lines dropped", "dropped", full-s.dropsSaid, "buffer", cap(s.queue))
+	s.dropsSaid, s.dropsSaidAt = full, now
 }
 
 // flush takes what the queue holds, then has the writers of Lines hand over

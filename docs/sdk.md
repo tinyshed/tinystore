@@ -382,6 +382,20 @@ await withSignal(AbortSignal.timeout(2000), async () => {
 })
 ```
 
+## What fails where no call waits
+
+An instrument's flush, a logger's write and a gauge's function run in the
+background, and a failure there has no caller to return to. Each language says
+it as Go's store logs its own: `background work failed` once, again when the
+error changes or ten minutes on, and `background work recovered` once;
+`gauge read failed` once while its error stays the same; and
+`log lines dropped`, what a full buffer dropped, at most once in ten minutes.
+
+| | Go | Bun | Python |
+|---|---|---|---|
+| where they go | `tinystore.Options.Logger`; nil discards them | stderr, a console line of stream `tinystore` | the same bytes as Bun's |
+| counted besides | records' `Stats`: `DroppedFull`, `DroppedWrite` | `metrics.failures`, `log.dropped` | `metrics.failures`, `handler.dropped` |
+
 ## The proposals, decided
 
 An outside list of twenty ideas was read against these rules on 2 October 2026.

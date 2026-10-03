@@ -8,7 +8,6 @@ exactly and rounded once. Instruments live in the SDK and are ingested every
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import math
 import time
 from array import array
@@ -16,6 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal, Self
 
+from ._background import FailureLog, say_own
 from ._connection import Connection, Link, download
 from ._time import Duration, date_of, ms, unix_ms
 from ._wire.messages import (
@@ -187,6 +187,10 @@ class Metrics:
         self._instruments: dict[str, _Instrument] = {}
         self._timers: dict[str, _Timer] = {}
         self._task: asyncio.Task[None] | None = None
+        self._failure_log = FailureLog("metrics instruments")
+        self.failures = 0
+        """instruments' flushes that failed"""
+        self.last_failure: Exception | None = None
 
     async def ingest(self, *series: Mapping[str, Any]) -> None:
         """Stores series and their samples, all or none; a refused series is named by its labels.
@@ -413,21 +417,24 @@ class Metrics:
     async def _flushing(self) -> None:
         while True:
             await asyncio.sleep(_FLUSH_EVERY)
-            with contextlib.suppress(Exception):
-                await self.flush()
+            await self._flush_in_background()
+
+    async def _flush_in_background(self) -> None:
+        """A flush no caller awaits says its failure, as Go's background work does."""
+        try:
+            await self.flush()
+        except Exception as err:
+            self._failure_log.failed(err)
+        else:
+            self._failure_log.succeeded()
 
     async def flush(self) -> None:
         """Ingests every instrument's value now, as the timer does every 15 s."""
         now = time.time_ns() // 1_000_000
         batch: list[dict[str, Any]] = []
-        for instrument in self._instruments.values():
-            if instrument.read is not None:
-                try:
-                    got = instrument.read()
-                    value = await got if asyncio.iscoroutine(got) or isinstance(got, asyncio.Future) else got
-                except Exception:
-                    continue
-                instrument.series[()] = ({}, float(value))  # type: ignore[arg-type]
+        for instrument in list(self._instruments.values()):
+            if instrument.read is not None and not await _read_gauge(instrument, instrument.read):
+                continue
             for labels, value in instrument.series.values():
                 batch.append(_sample_at(now, instrument.name, labels, instrument.kind, value))
         taken = self._take_timers(now, batch)
@@ -435,10 +442,13 @@ class Metrics:
             return
         try:
             await self._send(batch)
-        except BaseException:
+        except BaseException as err:
             for timing, longest in taken:
                 timing.longest = max(timing.longest, longest)
                 timing.measured = True
+            if isinstance(err, Exception):
+                self.failures += 1
+                self.last_failure = err
             raise
 
     def _take_timers(self, now: int, batch: list[dict[str, Any]]) -> list[tuple[_Timing, float]]:
@@ -458,11 +468,11 @@ class Metrics:
         return taken
 
     async def stop(self) -> None:
+        """Stops flushing every 15 s and ingests the instruments' last values, as the store does as it closes."""
         if self._task is not None:
             self._task.cancel()
             self._task = None
-            with contextlib.suppress(Exception):
-                await self.flush()
+            await self._flush_in_background()
 
 
 def _sample_at(now: int, name: str, labels: dict[str, str], kind: Kind, value: float) -> dict[str, Any]:
@@ -480,11 +490,28 @@ class _Instrument:
         self.kind: Kind = kind
         self.series: dict[tuple[tuple[str, str], ...], tuple[dict[str, str], float]] = {}
         self.read: Callable[[], float | Awaitable[float]] | None = None
+        self.last_read: str | None = None
+        """the error a gauge's function last raised, said once while it stays the same"""
 
     def add(self, labels: dict[str, str], n: float, replace: bool = False) -> None:
         key = tuple(sorted(labels.items()))
         old = self.series.get(key, (labels, 0.0))[1]
         self.series[key] = (labels, n if replace else old + n)
+
+
+async def _read_gauge(instrument: _Instrument, read: Callable[[], float | Awaitable[float]]) -> bool:
+    """Sets a gauge's value from its function, or says why not, once while the error stays the same."""
+    try:
+        got = read()
+        value = await got if asyncio.iscoroutine(got) or isinstance(got, asyncio.Future) else got
+    except Exception as err:
+        if str(err) != instrument.last_read:
+            say_own("warn", "gauge read failed", {"series": instrument.name, "error": str(err)})
+            instrument.last_read = str(err)
+        return False
+    instrument.series[()] = ({}, float(value))  # type: ignore[arg-type]
+    instrument.last_read = None
+    return True
 
 
 class Counter:
