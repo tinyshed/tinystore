@@ -13,10 +13,10 @@ The package for this platform, an optional dependency, carries the
 Bun 1.4 or later, or Node 22 or later, with one API: Bun runs the package's
 TypeScript, and Node the JavaScript it carries.
 
-Until a release the package comes from a checkout, `bun add
-../tinystore/sdk/js`, as its source. The declarations `types` names are built
-by a release, so TypeScript checks the source in their place with
-`"customConditions": ["bun"]` and `"allowImportingTsExtensions": true`.
+From a checkout, `bun add ../tinystore/sdk/js` installs the package as its
+source. The declarations `types` names are built by a release, so TypeScript
+checks that source in their place with `"customConditions": ["bun"]` and
+`"allowImportingTsExtensions": true`.
 
 The binary is the `tinystore` command too: `bunx @tinyshed/tinystore status ./data`,
 `bunx @tinyshed/tinystore logs ./data -f`, and for an AI agent

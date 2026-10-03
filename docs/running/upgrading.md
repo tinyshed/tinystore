@@ -6,14 +6,14 @@ explains how a store's files, a sidecar and a remote server move to a new
 version.
 
 > [!IMPORTANT]
-> **Before the first release**
-> Nothing is released yet. Until the first release, a file written by one
-> version may not open in the next one.
+> **Release candidates**
+> Releases begin with release candidates, `v0.1.0-rc.N`. Until `v0.1.0`, a
+> file written by one version may not open in the next one.
 
 ## Upgrade a package
 
 ```sh for=bun
-bun update tinystore
+bun update @tinyshed/tinystore
 ```
 
 ```sh for=python

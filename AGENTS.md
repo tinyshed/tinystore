@@ -63,13 +63,15 @@ ordinary series; kv, jobs, blobs and sqldb report nothing yet. An aggregate
 answers a whole block inside one bucket from its exact summary; a cut block,
 the head and a block without exact sums decode raw.
 
-Not built: the SDKs' examples and published packages; a release; a host and a
-domain for the site; the guides `docs/README.md` lists without a link.
+Not built: the SDKs' examples; `v0.1.0` itself, after its release
+candidates; a host and a domain for the site; the guides `docs/README.md`
+lists without a link.
 
-Nothing is released: there is no tag, and no database written by an earlier
-revision has to be read. Readers for earlier formats are deleted, not kept,
-and an engine's schema changes inside its `0001` migration: a second one is
-added only after a release.
+Only release candidates are released, `v0.1.0-rc.N`, and they promise nothing
+about files: until `v0.1.0`, no database written by an earlier revision has to
+be read. Readers for earlier formats are deleted, not kept, and an engine's
+schema changes inside its `0001` migration: a second one is added only after
+`v0.1.0`.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -140,8 +142,8 @@ new as its tool's, and its `migrate` commands only run the application's own
 test, so the comparison comes from the sqldb the application's graph selects.
 `server/` is one for the same reason, and `TestTheServerRequiresOnlyTheRoot`
 holds it to the root; a Go client links `server/wire` without SQLite,
-`TestWireImportsOnlyTheStandardLibrary`. Until a release both reach what they
-require through a `replace`. `task` tests, lints, formats and tidies both
+`TestWireImportsOnlyTheStandardLibrary`. On main both reach what they require
+through a `replace`, which a release drops in the commits only its tags reach. `task` tests, lints, formats and tidies both
 beside the root.
 
 The root module's dependency list is a promise rather than an accident:

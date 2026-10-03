@@ -111,10 +111,10 @@ with Go 1.27.1, with jobs committed in the same transaction as their rows. The
 has every setting and number.
 
 > [!IMPORTANT]
-> **Not released yet**
-> All engines are built and tested, but nothing is published yet, and the API
-> may still change. Files written by the current version may not open in the
-> first release.
+> **Release candidates**
+> Releases begin with release candidates, `v0.1.0-rc.N`. Until `v0.1.0`, the
+> API may still change, and a file written by one release may not open in the
+> next one.
 
 ## How to read these docs
 

@@ -33,9 +33,9 @@ the site's tests fail when the two differ. Change them there.
 
 ---
 
-> **Not released yet.** The engines are built and tested, and the packages
-> below are published from the first release on. The API may still change, and
-> no file written by an earlier revision has to be read.
+> **Release candidates first.** Releases begin with `v0.1.0-rc.N`, before
+> `v0.1.0`. Until `v0.1.0`, the API may still change, and a file written by one
+> release may not open in the next.
 
 Go programs embed TinyStore as a library. Bun, Node and Python programs reach
 the same directory through `tinystore serve`, a sidecar that their SDK starts,

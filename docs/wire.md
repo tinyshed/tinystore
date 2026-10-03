@@ -403,8 +403,8 @@ older or a newer one:
   client must know is answered only to a client that asked for it with a
   field of its request, which an older server refuses.
 - **A method is added, never repurposed.** An older server answers a newer
-  method `unimplemented`, naming its version. After the first release a
-  message never changes meaning and a field's number is never reused.
+  method `unimplemented`, naming its version. From `v0.1.0` on, a message
+  never changes meaning and a field's number is never reused.
 
 A client that finds a sidecar of an older release than its own replaces it:
 

@@ -66,8 +66,7 @@ applied, but can't apply them.
 
 ## Run it in Docker
 
-From the first release, each release publishes an image that serves `/data`
-on `tls://` port 7443. It reads `cert.pem`, `key.pem` and `tokens` from
+Each release publishes an image that serves `/data` on `tls://` port 7443. It reads `cert.pem`, `key.pem` and `tokens` from
 `/etc/tinystore`:
 
 ```sh
@@ -75,10 +74,11 @@ docker run -d -p 7443:7443 -v tinystore-data:/data -v ./secrets:/etc/tinystore:r
   ghcr.io/tinyshed/tinystore
 ```
 
-> [!IMPORTANT]
-> **Not released yet**
-> The image is not published yet. Until the first release, build the binary
-> from the repository with `go -C cmd/tinystore build`.
+> [!NOTE]
+> **Release candidates**
+> `latest` names the newest release that is not a release candidate, so until
+> `v0.1.0` it names nothing. Pull a release candidate by its version instead,
+> such as `ghcr.io/tinyshed/tinystore:0.1.0-rc.1`.
 
 ## When a connection drops
 

@@ -23,19 +23,6 @@ The Bun and Python packages include the `tinystore` binary for your
 platform, which runs the store for them. TinyStore needs Bun 1.4+, Node.js
 22+, Python 3.12+ or Go 1.27+.
 
-> [!IMPORTANT]
-> **Before the first release**
-> The packages are not published yet. Until they are, check out the
-> repository next to your project and install from it:
->
-> - Go: `go get github.com/tinyshed/tinystore@main`
-> - Bun: `bun add ../tinystore/sdk/js`
-> - Python: `pip install ../tinystore/sdk/python`
->
-> Bun and Python also need the `tinystore` binary. Build it with
-> `go -C ../tinystore/cmd/tinystore build`, and set the `TINYSTORE_BIN`
-> environment variable to its path.
-
 ## Open a store
 
 ```ts
