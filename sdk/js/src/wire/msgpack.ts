@@ -84,8 +84,11 @@ export class Writer {
 		return at
 	}
 
+	// room first: in this.#bytes[this.#room(1)] the old buffer is read before
+	// #room grows it, and a byte at 128, 256, 512… went into the old one
 	#byte(b: number): void {
-		this.#bytes[this.#room(1)] = b
+		const at = this.#room(1)
+		this.#bytes[at] = b
 	}
 
 	nil(): void {

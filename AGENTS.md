@@ -714,6 +714,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a request is understood whole or refused, naming the field and the server's version | `TestARequestWithAFieldTheServerDoesNotKnowIsRefused`, `TestAMessageReadsWhatItKnowsAndNamesWhatItDoesNot` |
 | a client newer than its server speaks the server's protocol | `TestAClientOfANewerProtocolIsWelcomedInTheServers`                    |
 | the vectors are the bytes                              | `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`     |
+| a byte the Bun encoder writes as its buffer grows is kept | `a byte written as the buffer grows is kept` in `sdk/js/test/wire.test.ts`    |
 | every message is a vector, every field by its name     | `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one |
 | the largest kv or jobs value travels in one body       | `TestTheLargestValueTravelsInOneBody`                                           |
 | a work stream asked to end when idle ends              | `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`                                    |
