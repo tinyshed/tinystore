@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -166,11 +167,40 @@ def open(
     def which() -> str:
         return find_binary(binary)
 
+    _check_directory(os.fspath(directory))
     if clock is not None and not private:
         raise InvalidError("a clock is a private server's: a shared sidecar runs on the system's time")
     if private:
         return Opening(private_child(directory, which, clock))
     return Opening(sidecar(directory, which, None if idle is None else ms(idle) / 1000))
+
+
+# two letters or more before a colon: an address, never a Windows drive
+_ADDRESS = re.compile(r"^([a-z][a-z0-9+.-]+):", re.IGNORECASE)
+
+
+def _check_directory(directory: str) -> None:
+    """Refuses an address where a directory belongs.
+
+    open("tcp://…") would make a folder of that name and start a server in it,
+    rather than reach the one meant:
+
+        open("tcp://db.internal:7070")       → use connect
+        open("pipe:tinystore-d761f24b7e59")  → open the directory it serves
+        open("C:/data")                      → a directory
+    """
+    found = _ADDRESS.match(directory)
+    if found is None:
+        return
+    if found.group(1).lower() in ("tcp", "tls"):
+        raise InvalidError(
+            f"open takes a store's directory, and {directory} is a server's address: "
+            f"connect({directory!r}, token=...) reaches it"
+        )
+    raise InvalidError(
+        f"open takes a store's directory, and {directory} is an address: "
+        "open the directory its server serves, and it is found through SERVE"
+    )
 
 
 def connect(url: str, *, token: str, tls: ssl.SSLContext | None = None) -> Opening:

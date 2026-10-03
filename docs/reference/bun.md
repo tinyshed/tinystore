@@ -54,6 +54,11 @@ await store.backup('backup.zip')                         // every engine in one 
 `open` returns after the server has answered. If the server can't serve the
 directory, `open` fails.
 
+`open` takes a directory, never an address. If a server already serves the
+directory, for example `tinystore serve ./data`, `open('./data')` finds it
+through the directory's `SERVE` file. An address such as `tcp://…` or
+`pipe:…` fails with `InvalidError`, which says what to call instead.
+
 When you close the store, the SDK first sends the lines that loggers still
 hold and the last values of the instruments. A sidecar exits after its last
 connection has been idle for 30 seconds.

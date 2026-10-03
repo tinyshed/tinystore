@@ -1,4 +1,7 @@
-"""What a connection does with the sidecar it found: one of an older release is replaced, another server told of."""
+"""What a connection does with the sidecar it found: one of an older release is replaced, another server told of.
+
+And an address given where a directory belongs is refused.
+"""
 
 from __future__ import annotations
 
@@ -63,3 +66,10 @@ async def test_a_sidecar_of_an_older_release_is_stopped_and_every_client_moves_t
         # the first client was told GOAWAY, and reaches the new sidecar as it connects again
         assert await notes.get("a") == "kept across the replacement"
         await replaced.close()
+
+
+def test_open_refuses_an_address_and_says_to_connect_or_to_open_the_directory() -> None:
+    with pytest.raises(tinystore.InvalidError, match=r"connect\('tcp://db.internal:7070', token=\.\.\.\)"):
+        tinystore.open("tcp://db.internal:7070")
+    with pytest.raises(tinystore.InvalidError, match="open the directory its server serves"):
+        tinystore.open("pipe:tinystore-d761f24b7e598066")

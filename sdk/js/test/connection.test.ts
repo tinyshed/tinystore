@@ -1,5 +1,6 @@
 // What a connection does with the sidecar it found: one of an older release
-// is replaced with this SDK's binary, and another server is told of.
+// is replaced with this SDK's binary, and another server is told of; and an
+// address given where a directory belongs.
 
 import { expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -7,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { Link, olderRelease, olderServer, replacedSidecar, sidecar } from '../src/connection.ts'
-import { open } from '../src/index.ts'
+import { InvalidError, open } from '../src/index.ts'
 import { bunRuntime } from '../src/runtime/bun.ts'
 
 test('a server of an older release than its SDK is told apart, and only one', () => {
@@ -83,3 +84,13 @@ test('a sidecar of an older release is stopped, and every client moves to the on
 		}
 	}
 }, 30_000)
+
+test('open refuses an address, and says to connect or to open the directory', async () => {
+	const remote = await open('tcp://db.internal:7070').catch(e => e)
+	expect(remote).toBeInstanceOf(InvalidError)
+	expect(remote.message).toContain("connect('tcp://db.internal:7070', { token })")
+
+	const local = await open('pipe:tinystore-d761f24b7e598066').catch(e => e)
+	expect(local).toBeInstanceOf(InvalidError)
+	expect(local.message).toContain('open the directory its server serves')
+})

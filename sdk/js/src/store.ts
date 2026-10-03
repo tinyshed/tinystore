@@ -180,6 +180,7 @@ export async function openWith(
 	dir: string,
 	options: OpenOptions = {},
 ): Promise<Store> {
+	checkDirectory(dir)
 	const binary = () => findBinary(runtime, options.binary)
 	const idle = options.idle === undefined ? undefined : ms(options.idle)
 	if (options.clock !== undefined && options.private !== true) {
@@ -206,6 +207,31 @@ export async function connect(url: string, options: ConnectOptions): Promise<Sto
 	const link = new Link(remote(runtime, url, options.token, options.tls))
 	await link.connection()
 	return new Store(link)
+}
+
+// two letters or more before a colon: an address, never a Windows drive
+const address = /^([a-z][a-z0-9+.-]+):/i
+
+/**
+ * Refuses an address where a directory belongs: open('tcp://…') would make a
+ * folder of that name and start a server in it, rather than reach the one meant.
+ *
+ *     open('tcp://db.internal:7070')       → use connect
+ *     open('pipe:tinystore-d761f24b7e59')  → open the directory it serves
+ *     open('C:/data')                      → a directory
+ */
+function checkDirectory(dir: string): void {
+	const scheme = address.exec(dir)?.[1]?.toLowerCase()
+	if (scheme === 'tcp' || scheme === 'tls') {
+		throw new InvalidError(
+			`open takes a store's directory, and ${dir} is a server's address: connect('${dir}', { token }) reaches it`,
+		)
+	}
+	if (scheme !== undefined) {
+		throw new InvalidError(
+			`open takes a store's directory, and ${dir} is an address: open the directory its server serves, and it is found through SERVE`,
+		)
+	}
 }
 
 function findBinary(runtime: Runtime, given: string | undefined): string {
