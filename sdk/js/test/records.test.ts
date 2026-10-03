@@ -7,6 +7,7 @@ import { join } from 'node:path'
 
 import {
 	type Condition,
+	fields,
 	InvalidError,
 	LimitError,
 	noneOf,
@@ -57,6 +58,27 @@ function times(text: string, said: string): number {
 const second = 1_000_000_000n
 
 describe('records', () => {
+	test("fields reads a record's pairs as JSON, the last of a repeated key kept", async () => {
+		await store.records.append({
+			stream: 'fields',
+			name: 'view',
+			context: { session: 's1' },
+			attrs: [
+				['page', '/docs'],
+				['nested', { a: [1, 2] }],
+				['n', 1],
+				['n', 2],
+				['__proto__', { polluted: true }],
+			],
+		})
+		const { items } = await store.records.scan({ streams: ['fields'] })
+		const read = fields(items[0]?.attrs ?? [])
+		expect([read.page, read.nested, read.n]).toEqual(['/docs', { a: [1, 2] }, 2])
+		expect(Object.hasOwn(read, '__proto__')).toBe(true)
+		expect(Object.getPrototypeOf(read)).toBe(Object.prototype)
+		expect(fields(items[0]?.context ?? [])).toEqual({ session: 's1' })
+	})
+
 	test('a record comes back as it went in, its time to the nanosecond', async () => {
 		const at = BigInt(Date.now()) * 1_000_000n + 123_456n
 		await store.records.append({

@@ -164,6 +164,10 @@ A logger is also the program's console, so that it needs no other:
 | on stdout | `records.Stdout` | `stdout: true` | `stdout=True` |
 | hidden fields | `records.Redact("password")` | `redact: ['password']` | `redact=["password"]` |
 | from a level | `records.Level(slog.LevelInfo)` | `level: 'info'` | `level=logging.INFO` |
+| a record's fields | `[]Field`, each `Value` its JSON | `[key, json]` pairs; `fields(record.attrs)` an object | `(key, json)` pairs; `tinystore.fields(record.attrs)` a dict |
+
+`fields` reads each value as `JSON.parse` and `json.loads` do, the last of a
+repeated key kept; the pairs keep what they may not, `1.2300` as written.
 
 A line goes to stderr as it is logged, before the store has it: pretty on a
 terminal, one JSON object a line otherwise, so that a terminal shows what a

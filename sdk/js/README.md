@@ -160,6 +160,7 @@ const page = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 10
 const resets = await store.records.scan({ since: '1h', search: 'connection reset' }) // case ignored
 const more = await store.records.scan({ since: '1h', minLevel: 'warn', limit: 100, after: page.next })
 for await (const record of store.records.all({ since: '24h', traceId })) { … }
+const { ms } = fields(page.items[0].attrs)               // a record's [key, json] pairs, as JSON.parse reads them
 
 const worker = store.records.lines('worker')             // another program's output, cut anywhere
 for await (const chunk of child.stdout) worker.write(chunk)

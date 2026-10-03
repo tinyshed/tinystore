@@ -177,6 +177,21 @@ async def test_a_timer_writes_its_count_sum_and_longest_at_each_flush(store: tin
     assert await values("timed_ms_max", "/a") == [2.5]
 
 
+async def test_fields_read_a_records_pairs_as_json_the_last_of_a_repeated_key_kept(store: tinystore.Store) -> None:
+    await store.records.append(
+        {
+            "stream": "fields",
+            "name": "view",
+            "context": {"session": "s1"},
+            "attrs": [("page", "/docs"), ("nested", {"a": [1, 2]}), ("n", 1), ("n", 2)],
+        }
+    )
+    [record] = (await store.records.scan(streams=["fields"])).items
+    assert tinystore.fields(record.attrs) == {"page": "/docs", "nested": {"a": [1, 2]}, "n": 2}
+    assert tinystore.fields(record.context) == {"session": "s1"}
+    assert tinystore.fields([("text", b'"caf\xc3"')]) == {"text": "caf\ufffd"}
+
+
 async def test_a_refused_instrument_keeps_no_other_out_and_says_so_once(
     store: tinystore.Store, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -169,7 +169,7 @@ page = await store.records.scan(since="1h", min_level="warn", limit=100)
 resets = await store.records.scan(since="1h", search="connection reset")  # case ignored
 more = await store.records.scan(since="1h", min_level="warn", limit=100, after=page.next)
 async for record in store.records.all(since="24h", trace_id=trace):
-    ...
+    ms = tinystore.fields(record.attrs)["ms"]  # a record's (key, json) pairs, as json.loads reads them
 
 worker = store.records.lines("worker")  # another program's output, cut anywhere
 async for chunk in process.stdout:

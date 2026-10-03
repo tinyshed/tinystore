@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import threading
@@ -96,6 +97,21 @@ class Record:
     span_id: bytes | None
     context: list[tuple[str, str | bytes]]
     attrs: list[tuple[str, str | bytes]]
+
+
+def fields(pairs: Iterable[tuple[str, str | bytes]]) -> dict[str, Any]:
+    """A record's fields, its attrs or its context, as a dict, each value as json.loads reads it.
+
+    The last of a repeated key is kept, and bytes that are not UTF-8 read
+    with U+FFFD in their place. The pairs keep what json.loads may not:
+    1.2300 as written.
+
+        async for record in store.records.all(since="1h", streams=["readers"]):
+            page = tinystore.fields(record.attrs)["page"]
+    """
+    return {
+        key: json.loads(value if isinstance(value, str) else value.decode(errors="replace")) for key, value in pairs
+    }
 
 
 def _record(r: dict[str, Any]) -> Record:

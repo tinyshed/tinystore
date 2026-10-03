@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { type LogRecord, open } from 'tinystore'
+import { fields, open } from 'tinystore'
 
 import { createAnalytics, language, origin } from './analytics.ts'
 import type { SiteFile } from './files.ts'
@@ -24,16 +24,6 @@ const page: SiteFile = {
 	kind: 'page',
 	page: '/docs/kv',
 	immutable: false,
-}
-
-// a record's fields come back as their JSON, each a string to parse
-function fieldsOf(record: LogRecord): Record<string, unknown> {
-	return Object.fromEntries(
-		record.attrs.map(([key, json]) => [
-			key,
-			JSON.parse(typeof json === 'string' ? json : new TextDecoder().decode(json)),
-		]),
-	)
 }
 
 const reader = (headers: Record<string, string> = {}) =>
@@ -75,8 +65,8 @@ describe('the site in its own store', () => {
 			for await (const record of again.records.all({ since: '1h' })) {
 				records.push(record)
 			}
-			const fields = records.map(record => ({ name: record.name, ...fieldsOf(record) }))
-			expect(fields).toContainEqual(
+			const kept = records.map(record => ({ name: record.name, ...fields(record.attrs) }))
+			expect(kept).toContainEqual(
 				expect.objectContaining({
 					name: 'view',
 					page: '/docs/kv',
@@ -85,15 +75,15 @@ describe('the site in its own store', () => {
 					referrer: 'www.google.com',
 				}),
 			)
-			expect(fields).toContainEqual(
+			expect(kept).toContainEqual(
 				expect.objectContaining({ name: 'view', via: 'data', from: '/docs' }),
 			)
-			expect(fields).toContainEqual(
+			expect(kept).toContainEqual(
 				expect.objectContaining({ name: 'copy-code', page: '/docs/kv', value: 'go' }),
 			)
-			expect(fields).toContainEqual(expect.objectContaining({ name: 'search', page: 'other' }))
+			expect(kept).toContainEqual(expect.objectContaining({ name: 'search', page: 'other' }))
 
-			const visitors = new Set(records.map(record => fieldsOf(record).visitor))
+			const visitors = new Set(records.map(record => fields(record.attrs).visitor))
 			expect(visitors.size).toBe(1)
 
 			const views = await again.metrics.read({ name: 'site_views_total', since: '1h' })

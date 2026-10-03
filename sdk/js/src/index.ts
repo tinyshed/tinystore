@@ -52,16 +52,17 @@ export {
 } from './metrics.ts'
 export type { Once, OnceOptions } from './once.ts'
 export type { Quota, QuotaUsage, WindowUsage } from './quota.ts'
-export type {
-	Cursor,
-	Damage,
-	Fields,
-	Level,
-	LinesWriter,
-	LogRecord,
-	RecordInput,
-	Records,
-	RecordsQuery,
+export {
+	type Cursor,
+	type Damage,
+	type Fields,
+	fields,
+	type Level,
+	type LinesWriter,
+	type LogRecord,
+	type RecordInput,
+	type Records,
+	type RecordsQuery,
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
 export type {

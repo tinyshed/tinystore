@@ -74,6 +74,23 @@ export interface LogRecord {
 }
 
 /**
+ * A record's fields, its attrs or its context, as an object, each value read
+ * as JSON.parse reads the JSON it was kept as; the last of a repeated key is
+ * kept. The pairs keep what JSON.parse may not: 1.2300 as written, an integer
+ * past 2^53 whole.
+ *
+ * ```ts
+ * for await (const record of store.records.all({ since: '1h', streams: ['readers'] })) {
+ *   const { page, from } = fields(record.attrs)
+ * }
+ * ```
+ */
+export function fields(pairs: LogRecord['attrs']): Record<string, unknown> {
+	// fromEntries, since an assignment to __proto__ would set the prototype
+	return Object.fromEntries(pairs.map(([key, json]) => [key, JSON.parse(textOf(json))]))
+}
+
+/**
  * The records in a range that meet every condition given.
  *
  * ```ts
