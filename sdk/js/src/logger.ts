@@ -202,19 +202,9 @@ export class Logger {
 		if (shared.waiting.length === 0 || shared.append === undefined) {
 			return
 		}
-		const batch = shared.waiting.splice(0)
-		shared.writing = shared
-			.append(batch)
-			.then(
-				() => shared.failures?.succeeded(),
-				err => {
-					shared.dropped += batch.length
-					shared.failures?.failed(err)
-				},
-			)
-			.finally(() => {
-				shared.writing = undefined
-			})
+		shared.writing = writeWaiting(shared, shared.append).finally(() => {
+			shared.writing = undefined
+		})
 		await shared.writing
 	}
 
@@ -266,6 +256,29 @@ export class Logger {
 		if (shared.waiting.length >= shared.most / 2 && shared.writing === undefined) {
 			void this.flush()
 		}
+	}
+}
+
+/**
+ * Writes what the buffer holds, and again while half of it filled during the
+ * write before. A full buffer drops a line before the line could ask for a
+ * write, so a burst that filled it while a write ran would otherwise wait for
+ * the timer's next second, every line until then dropped.
+ */
+async function writeWaiting(
+	shared: Shared,
+	append: (lines: ConsoleLine[]) => Promise<void>,
+): Promise<void> {
+	let batch = shared.waiting.splice(0)
+	while (batch.length > 0) {
+		try {
+			await append(batch)
+			shared.failures?.succeeded()
+		} catch (err) {
+			shared.dropped += batch.length
+			shared.failures?.failed(err)
+		}
+		batch = shared.waiting.length >= shared.most / 2 ? shared.waiting.splice(0) : []
 	}
 }
 
