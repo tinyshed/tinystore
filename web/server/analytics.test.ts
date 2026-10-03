@@ -10,10 +10,11 @@ import { tinystoreBinary } from './testing.ts'
 
 let dir: string
 
+// a build of tinystore on a cold cache outlasts a hook's default five seconds
 beforeAll(() => {
 	tinystoreBinary()
 	dir = mkdtempSync(join(tmpdir(), 'analytics-'))
-})
+}, 120_000)
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
