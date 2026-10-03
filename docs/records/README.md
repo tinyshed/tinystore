@@ -41,7 +41,7 @@ Each language logs the way it already does: Go through `log/slog`, Python
 through `logging`, and Bun through a logger of the store. On a terminal, the
 lines look like this:
 
-```text
+```log
 11:02:11.123 INFO  api  server started  port=3000
 11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200
 ```

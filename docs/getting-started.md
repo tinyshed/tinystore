@@ -187,7 +187,7 @@ logger.Info("code sent", "userId", 42)
 The logger prints each line to stderr as soon as you log it, and also saves
 it in the store. In a terminal, lines are formatted for people:
 
-```text
+```log
 09:08:47.058 INFO  app  code sent  userId=42
 ```
 

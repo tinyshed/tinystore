@@ -188,6 +188,9 @@ ai, err := kv.OpenQuota(ctx, state, "ai",
   language become files of one block. Leave the title off a single snippet.
   Two untitled blocks of the same language stay two separate blocks.
 - A shell command joins a language's tab with `for`: ` ```sh for=bun `.
+- Lines that a logger prints on a terminal go in a ` ```log ` fence. The site
+  colours them as the console does: the time and `key=` dim, the level in its
+  colour, the stream cyan. GitHub shows the fence as plain text.
 - **Every block shows all three languages.** If one is missing, the page says
   why, for example because only Go declares a schema from structs. A reader
   who chose Python and only finds Go has learned nothing.

@@ -57,7 +57,7 @@ directory and a zip, in the order that the help shows.
 tinystore logs ./data -f --level warn
 ```
 
-```text
+```log
 11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200
 11:02:15.911 ERROR api  payment failed  orderId=981 reason="card declined"
 ```

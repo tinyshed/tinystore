@@ -72,7 +72,7 @@ attributes. You can search by either.
 
 On a terminal, lines are colored and formatted for people:
 
-```text
+```log
 11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200
 ```
 
