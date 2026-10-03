@@ -3,10 +3,12 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
@@ -147,6 +149,10 @@ func platformWheel(pure string, b binary) error {
 func copyWheel(w *wheelWriter, files []*zip.File, b binary) (string, error) {
 	info := ""
 	for _, f := range files {
+		// RECORD names only files, and an installer makes the directories they need
+		if strings.HasSuffix(f.Name, "/") {
+			continue
+		}
 		dir, base := filepath.ToSlash(filepath.Dir(f.Name)), filepath.Base(f.Name)
 		if strings.HasSuffix(dir, ".dist-info") {
 			info = dir
@@ -210,16 +216,7 @@ func (w *wheelWriter) add(name, from string, mode os.FileMode) error {
 }
 
 func (w *wheelWriter) write(name string, body []byte, mode os.FileMode) error {
-	header := &zip.FileHeader{Name: name, Method: zip.Deflate}
-	if mode == 0 {
-		mode = 0o644
-	}
-	header.SetMode(mode)
-	out, err := w.archive.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-	if _, err = out.Write(body); err != nil {
+	if err := w.put(name, body, mode); err != nil {
 		return err
 	}
 	sum := sha256.Sum256(body)
@@ -230,19 +227,52 @@ func (w *wheelWriter) write(name string, body []byte, mode os.FileMode) error {
 // finish writes RECORD, which names itself without a hash, and closes the wheel
 func (w *wheelWriter) finish(record string) error {
 	fmt.Fprintf(w.record, "%s,,\n", record)
-	header := &zip.FileHeader{Name: record, Method: zip.Deflate}
-	header.SetMode(0o644)
-	out, err := w.archive.CreateHeader(header)
-	if err != nil {
+	if err := w.put(record, w.record.Bytes(), 0o644); err != nil {
 		return err
 	}
-	if _, err = out.Write(w.record.Bytes()); err != nil {
-		return err
-	}
-	if err = w.archive.Close(); err != nil {
+	if err := w.archive.Close(); err != nil {
 		return err
 	}
 	return w.file.Close()
+}
+
+// 1980-01-01 as a zip spells a date, the earliest it can, as the pure wheel uv builds carries it
+const zipEpoch = 1<<5 | 1
+
+// put writes a file whose CRC and sizes stand in its header before its bytes.
+// PyPI refuses a wheel that gives them after the bytes, in a data descriptor,
+// and CreateHeader always does, since it streams.
+func (w *wheelWriter) put(name string, body []byte, mode os.FileMode) error {
+	var deflated bytes.Buffer
+	compressor, err := flate.NewWriter(&deflated, flate.DefaultCompression)
+	if err != nil {
+		return err
+	}
+	if _, err = compressor.Write(body); err != nil {
+		return err
+	}
+	if err = compressor.Close(); err != nil {
+		return err
+	}
+	compressed := deflated.Bytes()
+	header := &zip.FileHeader{
+		Name:               name,
+		Method:             zip.Deflate,
+		CRC32:              crc32.ChecksumIEEE(body),
+		CompressedSize64:   uint64(len(compressed)),
+		UncompressedSize64: uint64(len(body)),
+	}
+	header.ModifiedDate = zipEpoch //nolint:staticcheck // CreateRaw writes this MS-DOS date and ignores Modified
+	if mode == 0 {
+		mode = 0o644
+	}
+	header.SetMode(mode)
+	out, err := w.archive.CreateRaw(header)
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(compressed)
+	return err
 }
 
 func readZipFile(f *zip.File) ([]byte, error) {

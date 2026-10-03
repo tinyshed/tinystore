@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAPlatformWheelNamesEachOfItsTags(t *testing.T) {
@@ -209,6 +210,7 @@ func TestAPlatformWheelRecordsEveryFile(t *testing.T) {
 	dir := t.TempDir()
 	pure := filepath.Join(dir, "demo-0.1.0-py3-none-any.whl")
 	writeTestWheel(t, pure, map[string]string{
+		"tinystore/":                    "",
 		"tinystore/__init__.py":         "",
 		"demo-0.1.0.dist-info/WHEEL":    "Root-Is-Purelib: true\nTag: py3-none-any\n",
 		"demo-0.1.0.dist-info/RECORD":   "stale\n",
@@ -238,6 +240,12 @@ func TestAPlatformWheelRecordsEveryFile(t *testing.T) {
 		files[f.Name] = body
 		if f.Name == "tinystore/bin/tinystore" && f.Mode().Perm() != 0o755 {
 			t.Errorf("the binary's mode is %v", f.Mode())
+		}
+		if f.Flags&0x8 != 0 {
+			t.Errorf("%s gives its sizes after its bytes, in a data descriptor PyPI refuses", f.Name)
+		}
+		if !f.Modified.Equal(time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("%s was modified %v, not on the first day a zip can name", f.Name, f.Modified)
 		}
 	}
 	checkRecord(t, files, "demo-0.1.0.dist-info/RECORD")

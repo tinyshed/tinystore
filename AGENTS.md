@@ -426,6 +426,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a skill's pointer says what its skill says          | `TestEverySkillHasAPointerThatMatchesIt`                                        |
 | a release's version is one every registry spells, after every release before it | `TestOnlyAPreReleaseEveryRegistrySpellsIsPublished`, `TestVersionsOrderAsSemanticVersioningSays` |
 | what a release publishes says its version, stamped as it is built | `TestTheSDKPackageCarriesTheReleasesVersion`, `TestAPyprojectIsStampedWithTheReleasesVersion` |
+| a platform wheel is one PyPI takes: every file in RECORD, each file's sizes before its bytes | `TestAPlatformWheelRecordsEveryFile` |
 | `feat` and `fix` subjects are a release's notes     | `TestNotesKeepFeaturesAndFixesUnderTheirSections`, `TestNotesBeginAfterThePreviousReleaseOfTheirKind` |
 | the workflows parse before a release needs them     | `task lint:actions`, in CI's quality job                                        |
 | the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |

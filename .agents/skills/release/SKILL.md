@@ -72,7 +72,9 @@ another version than the one it was published as.
 - A publish that failed is run again with "Re-run failed jobs", which reuses
   the build's artifacts: npm skips the packages it has, PyPI skips the files
   it has, and the GitHub release is made once. Never run the build again once
-  its tags are pushed.
+  its tags are pushed. A re-run mends what failed around the build, a setting
+  or a token; what the build made wrong, such as a wheel PyPI refuses, is the
+  next version.
 
 ## Trying it locally
 
@@ -92,7 +94,9 @@ another version than the one it was published as.
   chosen. Run `bunx @tinyshed/tinystore version`, `npx @tinyshed/tinystore version` and the
   wheel's `tinystore version` too. Do it on Windows, in `node:24-slim`,
   `oven/bun`, `python:3.12-slim` and `python:3.12-alpine`, and run `uvx twine
-  check dist/pypi/*`.
+  check dist/pypi/*`. Neither twine nor pip refuses a wheel whose files give
+  their sizes after their bytes, and PyPI does, at the upload: that rule is
+  `TestAPlatformWheelRecordsEveryFile`'s.
 - The image: `linux-amd64/tinystore` and an empty `data/` beside
   `internal/release/Dockerfile`, `docker build`, then run
   `serve --dir /data --listen tcp://0.0.0.0:7443 --tokens /etc/tinystore/tokens`
@@ -103,8 +107,9 @@ another version than the one it was published as.
 ## Once, before the first release
 
 - Environments: `release` with the maintainers as required reviewers, the
-  approval that pushes the tags; `npm` and `pypi`, each deploying from main
-  only.
+  approval that pushes the tags, which without them go as soon as the build
+  passes; `npm` and `pypi`, each with `main` as its one deployment branch, or
+  its job fails at once: "Branch main is not allowed to deploy".
 - npm: the organisation `tinyshed` owns the scope. npm can trust a workflow
   only for a package that exists, so the first release publishes with the
   `NPM_TOKEN` secret of the `npm` environment; then set each of the seven
