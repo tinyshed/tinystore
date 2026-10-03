@@ -203,7 +203,7 @@ tasks:
 
   readme:
     # the web tests fail when the README's parts are not what this writes
-    desc: Write the README's sample and engines from the landing page's words in web/landing.md
+    desc: Write the landing page's headline, pitch, sample and engines from web/landing.md into the README
     dir: web
     cmds:
       - bun install --frozen-lockfile

@@ -809,7 +809,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a heading keeps the anchor GitHub gives it | `gives headings the ids GitHub gives them, a repeated one numbered` in `web/src/lib/content/outline.test.ts` |
 | fences in three languages are one block, untitled ones of a language two | `a run in three languages is one block`, `two untitled fences of one language stay two blocks` in `web/src/lib/content/code.test.ts` |
 | the landing page's numbers are the README's SVG cards, read back | `read back from every SVG the README shows, in its order` in `web/src/lib/content/landing.test.ts` |
-| the README's sample and engines are the landing page's, and no link in it leads nowhere | `is what task readme writes into it from web/landing.md`, `has no link that leads nowhere` in `web/src/lib/content/readme.test.ts` |
+| the README's headline, pitch, sample and engines are the landing page's, and no link in it leads nowhere | `is what task readme writes into it from web/landing.md`, `has no link that leads nowhere` in `web/src/lib/content/readme.test.ts` |
 | the landing page's words are `web/landing.md`'s, a part missing or a link nowhere failing the build | `takes every word from web/landing.md, its links resolved as a page's`, `fails the build when a part is missing or a link leads nowhere` in `web/src/lib/content/landing.test.ts` |
 | the site's views and events live in its own TinyStore, through a restart | `keeps a view and an event as records and counts both, through a restart` in `web/server/analytics.test.ts` |
 | a page, its data and its markdown are views; an asset, a HEAD and a 404 are not | `is served and counted, as are its data and its markdown; an asset is not counted` in `web/server/http.test.ts` |
@@ -986,7 +986,7 @@ task lint:platforms   # golangci-lint as Linux, macOS and Windows build the code
 task sdk              # both SDKs' checks and suites, against a tinystore built here
 task web              # the docs site's checks, tests and build
 task web:dev          # the docs site, reloading as docs/ changes
-task readme           # the README's sample and engines, written from web/landing.md
+task readme           # the README's headline, pitch, sample and engines, from web/landing.md
 task race:linux       # the race detector in a Linux container, for a host without cgo
 task sdk:linux        # both SDKs' suites in a Linux container
 ```

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Code, Image, Link, RootContent, Table } from 'mdast'
+import { toString as textOf } from 'mdast-util-to-string'
 import { visit } from 'unist-util-visit'
 
 import { byLanguage, toFence } from './code'
@@ -17,14 +18,16 @@ export const readmeFile = 'README.md'
 const shownFirst = ['go', 'bun', 'python']
 
 /**
- * The README with its sample and its engines written from web/landing.md, so
- * that the repository's front page and the site's say the same thing. Each
- * part lies between two markers, and whatever is between them is replaced:
+ * The README with the landing page's words written into it from
+ * web/landing.md, so that the repository's front page and the site's say the
+ * same thing. Each part lies between two markers, and whatever is between
+ * them is replaced:
  *
+ *     <!-- landing:headline -->   the headline and the pitch, centred under the logo
  *     <!-- landing:sample -->     Go open, the other languages folded, then each install command
- *     <!-- /landing:sample -->
  *     <!-- landing:engines -->    the engines' table, its links rebased from web/ to the top
- *     <!-- /landing:engines -->
+ *
+ * and each ends at its `<!-- /landing:… -->`.
  */
 export function readmeFromLanding(readme: string, landing: string): string {
 	const [intro, ...sections] = sectionsOf(parse(landing))
@@ -33,8 +36,12 @@ export function readmeFromLanding(readme: string, landing: string): string {
 		throw new Error(`${landingFile}: a sample under the headline, then "## Engines"`)
 	}
 
-	const sampled = replacePart(readme, 'sample', sampleOf(intro.nodes))
-	return replacePart(sampled, 'engines', tableOf(engines.nodes, landing))
+	const parts = {
+		headline: headlineOf(intro.nodes),
+		sample: sampleOf(intro.nodes),
+		engines: tableOf(engines.nodes, landing),
+	}
+	return Object.entries(parts).reduce((text, [name, part]) => replacePart(text, name, part), readme)
 }
 
 /** Writes the README's parts from web/landing.md, as `task readme` does, and says whether they changed. */
@@ -74,6 +81,23 @@ function replacePart(readme: string, name: string, part: string): string {
 		throw new Error(`${readmeFile} has no ${open} … ${close} for the landing page's ${name}`)
 	}
 	return `${readme.slice(0, start + open.length)}\n\n${part}\n\n${readme.slice(end)}`
+}
+
+// plain text, since GitHub reads no markdown inside the HTML that centres it
+function headlineOf(nodes: RootContent[]): string {
+	const headline = nodes.find(node => node.type === 'heading' && node.depth === 1)
+	const pitch = nodes.find(node => node.type === 'paragraph')
+	if (headline === undefined || pitch === undefined) {
+		throw new Error(`${landingFile}: a # headline, then the pitch's paragraph`)
+	}
+	return [`<b>${htmlOf(headline)}</b>`, htmlOf(pitch)]
+		.map(line => `<p align="center">\n  ${line}\n</p>`)
+		.join('\n\n')
+}
+
+function htmlOf(node: RootContent): string {
+	const text = textOf(node).replace(/\s+/g, ' ').trim()
+	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 }
 
 function sampleOf(nodes: RootContent[]): string {
@@ -135,5 +159,5 @@ function fromTop(url: string): string {
 }
 
 if (import.meta.main && writeReadme()) {
-	process.stdout.write(`${readmeFile}: its sample and engines written from ${landingFile}\n`)
+	process.stdout.write(`${readmeFile}: the landing page's words written from ${landingFile}\n`)
 }

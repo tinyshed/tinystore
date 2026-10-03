@@ -86,9 +86,10 @@ private child.
   `bun test` runs it as it is.
 - The landing page's numbers are read from the SVG cards the README shows,
   never typed again, so the two cannot disagree.
-- The README's sample and engines are the landing page's: `task readme`
-  writes them from `web/landing.md` between `<!-- landing:… -->` markers, and
-  the tests fail when they differ or when a link in the README leads nowhere.
+- The README's headline, pitch, sample and engines are the landing page's:
+  `task readme` writes them from `web/landing.md` between `<!-- landing:… -->`
+  markers, and the tests fail when they differ or when a link in the README
+  leads nowhere.
 - The server takes the SDK from `../sdk/js`, unpublished, and `bun.lock`
   records the SDK's own dependencies: a change to `sdk/js/package.json` needs
   `bun install` here too, or CI's frozen install refuses.
@@ -102,7 +103,7 @@ task web          # check, test and build, as CI's web job does
 task web:dev      # the site on :5173, reloading as docs/ changes
 task web:serve    # the last build as production serves it, into web/data
 task web:image    # the image: tinystore, the server and the build
-task readme       # the README's sample and engines, from landing.md
+task readme       # the landing page's words, written into the README
 ```
 
 `SITE_ORIGIN` is the address the canonical links, the sitemap and llms.txt

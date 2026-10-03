@@ -40,8 +40,11 @@ describe('the README', () => {
 		expect(readmeFromLanding(readme, readFileSync(join(root, landingFile), 'utf8'))).toBe(readme)
 	})
 
-	test('shows the Go sample, folds the others and links from the top of the repository', () => {
+	test('centres the headline, shows the Go sample, folds the others and links from the top', () => {
 		const readme = [
+			'<!-- landing:headline -->',
+			'<!-- /landing:headline -->',
+			'',
 			'<!-- landing:sample -->',
 			'what was here before',
 			'<!-- /landing:sample -->',
@@ -53,6 +56,18 @@ describe('the README', () => {
 
 		expect(readmeFromLanding(readme, landing)).toBe(
 			[
+				'<!-- landing:headline -->',
+				'',
+				'<p align="center">',
+				'  <b>Headline.</b>',
+				'</p>',
+				'',
+				'<p align="center">',
+				'  The pitch.',
+				'</p>',
+				'',
+				'<!-- /landing:headline -->',
+				'',
 				'<!-- landing:sample -->',
 				'',
 				'```go',
@@ -98,7 +113,7 @@ describe('the README', () => {
 	})
 
 	test("refuses a README without a part's markers", () => {
-		expect(() => readmeFromLanding('# TinyStore\n', landing)).toThrow('<!-- landing:sample -->')
+		expect(() => readmeFromLanding('# TinyStore\n', landing)).toThrow('<!-- landing:headline -->')
 	})
 
 	test('has no link that leads nowhere', async () => {

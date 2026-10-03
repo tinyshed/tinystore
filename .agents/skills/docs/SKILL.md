@@ -285,8 +285,9 @@ read from the SVGs in the README, so their numbers are never typed twice. Link
 each engine's row to its overview page once that page exists, and to its
 package README until then.
 
-The README shows the same sample and engines. After you change them in
-`web/landing.md`, run `task readme` to write them into the README. `task web`
+The README shows the same headline, pitch, sample and engines. After you
+change them in `web/landing.md`, run `task readme` to write them into the
+README. `task web`
 fails until the two match, and it also fails when a link in the README leads
 nowhere.
 

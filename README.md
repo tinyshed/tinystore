@@ -1,3 +1,9 @@
+<!--
+The headline, the pitch, the sample and the engines are the landing page's:
+task readme writes them between the landing: markers from web/landing.md, and
+the site's tests fail when the two differ. Change them there.
+-->
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
@@ -7,9 +13,17 @@
 
 <h1 align="center">TinyStore</h1>
 
+<!-- landing:headline -->
+
 <p align="center">
-  A small storage runtime for applications.
+  <b>A small storage runtime for applications.</b>
 </p>
+
+<p align="center">
+  SQL, key-value state, durable jobs, files, metrics and logs in one directory, with one lifecycle, one memory budget and one backup.
+</p>
+
+<!-- /landing:headline -->
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
@@ -23,22 +37,14 @@
 > below are published from the first release on. The API may still change, and
 > no file written by an earlier revision has to be read.
 
-TinyStore gives an application SQL, key-value state, durable jobs, files,
-metrics and logs in one directory, with one lifecycle, one memory budget and
-one backup. Go programs embed it. Bun, Node and Python programs reach the same
-directory through `tinystore serve`, a sidecar their SDK starts, and the same
-protocol serves remote clients.
+Go programs embed TinyStore as a library. Bun, Node and Python programs reach
+the same directory through `tinystore serve`, a sidecar that their SDK starts,
+and the same protocol serves remote clients.
 
 It is not a new database engine and does not try to beat specialised ones at
 their own job. SQLite is underneath, with formats of its own where a workload
 needs one. The goal is to make the storage of an application on one machine
 boring to operate.
-
-<!--
-The sample and the engines below are the landing page's: task readme writes
-them from web/landing.md, and the site's tests fail when the two differ.
-Change them there.
--->
 
 ## A first look
 
