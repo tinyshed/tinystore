@@ -627,6 +627,10 @@ class BucketTx[V]:
     def __init__(self, bucket: Bucket[V], tx: Batch | Tx) -> None:
         self._bucket, self._tx = bucket, tx
 
+    def of(self, *owners: Key) -> BucketTx[V]:
+        """The branch below this one that the owners name, inside the same batch, view or tx."""
+        return BucketTx(self._bucket.of(*owners), self._tx)
+
     def _record(self, method: str, decode: Callable[[dict[str, Any]], Any], **fields: Any) -> asyncio.Future[Any]:
         b = self._bucket
         return self._tx.record(method, b.open_body, {"owners": list(b.owners) or None, **fields}, decode)

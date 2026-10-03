@@ -95,6 +95,13 @@ async def test_counters_clear_scan_batch_and_view(store: tinystore.Store) -> Non
         none = accounts.with_tx(tx).has("nothing")
     assert (await a, await none) == (10, False)
 
+    devices = store.kv.bucket("devices", str)
+    async with store.kv.batch() as tx:
+        devices.with_tx(tx).of(42).set("phone", "iPhone")
+        devices.of(42).with_tx(tx).set("laptop", "MacBook")
+    assert (await devices.of(42).get("phone"), await devices.of(42).get("laptop")) == ("iPhone", "MacBook")
+    assert await devices.get("phone") is None
+
 
 @dataclass
 class Receipt:
