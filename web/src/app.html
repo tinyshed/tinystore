@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<script>
+			// before the first paint, so that neither the theme nor a code block's language flashes
+			try {
+				const root = document.documentElement
+				const theme = localStorage.getItem('docs.theme')
+				if (theme === 'light' || theme === 'dark') root.dataset.theme = theme
+				const language = localStorage.getItem('docs.language')
+				if (language) root.dataset.lang = language
+			} catch {}
+		</script>
+		%sveltekit.head%
+	</head>
+	<!-- the server counts a page when its data is fetched, so data never loads on a mere hover -->
+	<body data-sveltekit-preload-data="off" data-sveltekit-preload-code="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

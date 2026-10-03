@@ -1,0 +1,468 @@
+/* What a page's markdown becomes: the HTML arrives through {@html}, so these
+   are global, under .prose, and read the tokens alone. */
+
+.prose {
+	color: var(--ts-text-body);
+	font-size: 17.5px;
+	line-height: 1.75;
+	overflow-wrap: break-word;
+}
+
+.prose > :first-child {
+	margin-top: 0;
+}
+
+.prose p {
+	margin: 0 0 20px;
+	text-wrap: pretty;
+}
+
+.prose p.lead {
+	margin: 0 0 8px;
+	font-size: 21px;
+	line-height: 1.6;
+	color: var(--ts-text-lead);
+}
+
+.prose h2,
+.prose h3,
+.prose h4 {
+	position: relative;
+	color: var(--ts-text);
+	font-weight: 600;
+}
+
+.prose h2 {
+	margin: 72px 0 24px;
+	padding-bottom: 14px;
+	border-bottom: 1px solid var(--ts-line);
+	font-size: 32px;
+	line-height: 1.2;
+	letter-spacing: -0.035em;
+}
+
+.prose h3 {
+	margin: 44px 0 16px;
+	font-size: 22px;
+	line-height: 1.3;
+	letter-spacing: -0.02em;
+}
+
+.prose h4 {
+	margin: 32px 0 12px;
+	font-size: 18px;
+	line-height: 1.4;
+}
+
+.prose .anchor {
+	position: absolute;
+	margin-left: -1em;
+	width: 1em;
+	color: var(--ts-border-strong);
+	font-weight: 400;
+	opacity: 0;
+	transition: opacity 0.12s;
+}
+
+.prose h2:hover .anchor,
+.prose h3:hover .anchor,
+.prose h4:hover .anchor {
+	opacity: 1;
+}
+
+.prose a:not(.anchor) {
+	color: var(--ts-text);
+	text-decoration: underline;
+	text-decoration-color: var(--ts-border-strong);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+
+.prose a:not(.anchor):hover {
+	color: var(--ts-accent-text);
+	text-decoration-color: currentColor;
+}
+
+.prose strong {
+	color: var(--ts-text);
+	font-weight: 600;
+}
+
+.prose :not(pre) > code {
+	font-size: 0.86em;
+	color: var(--ts-text);
+	background: var(--ts-surface-2);
+	border: 1px solid var(--ts-border);
+	border-radius: 6px;
+	padding: 2px 6px;
+}
+
+.prose ul,
+.prose ol {
+	margin: 0 0 20px;
+	padding-left: 1.4em;
+}
+
+.prose li {
+	margin: 6px 0;
+}
+
+.prose li::marker {
+	color: var(--ts-faint);
+}
+
+.prose li > p {
+	margin-bottom: 8px;
+}
+
+.prose blockquote {
+	margin: 0 0 20px;
+	padding: 2px 0 2px 18px;
+	border-left: 2px solid var(--ts-border-2);
+	color: var(--ts-muted);
+}
+
+.prose hr {
+	margin: 48px 0;
+	border: 0;
+	border-top: 1px solid var(--ts-line);
+}
+
+.prose img {
+	max-width: 100%;
+	height: auto;
+}
+
+/* GitHub's alerts, as the design draws a note */
+
+.prose .callout {
+	margin: 8px 0 28px;
+	padding: 18px 22px;
+	color: var(--ts-text-note);
+	background: var(--ts-surface);
+	border: 1px solid var(--ts-border);
+	border-radius: 12px;
+	font-size: 17px;
+	line-height: 1.65;
+}
+
+.prose .callout p {
+	margin-bottom: 10px;
+}
+
+.prose .callout > :last-child {
+	margin-bottom: 0;
+}
+
+.prose .callout p.callout-label {
+	margin-bottom: 8px;
+	color: var(--ts-accent-text);
+	font: 500 12px / 1.4 var(--ts-mono);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.prose .callout-caution p.callout-label {
+	color: var(--ts-danger);
+}
+
+.prose .callout :not(pre) > code {
+	background: var(--ts-chip);
+	border-color: transparent;
+}
+
+/* tables: a card of rows, the design's limits table */
+
+.prose .table {
+	margin: 8px 0 24px;
+	overflow-x: auto;
+	border: 1px solid var(--ts-border);
+	border-radius: 12px;
+}
+
+.prose table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 15.5px;
+	line-height: 1.5;
+}
+
+.prose th,
+.prose td {
+	padding: 13px 20px;
+	text-align: left;
+	vertical-align: top;
+	border-top: 1px solid var(--ts-line);
+}
+
+.prose thead th {
+	border-top: 0;
+	color: var(--ts-faint);
+	font: 500 12px / 1.4 var(--ts-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.prose table.headless thead {
+	display: none;
+}
+
+.prose table.headless tbody tr:first-child td {
+	border-top: 0;
+}
+
+.prose .table td code {
+	padding: 0;
+	color: var(--ts-text);
+	background: none;
+	border: 0;
+	font-size: 14px;
+}
+
+.prose .table td:not(:first-child) {
+	color: var(--ts-text);
+}
+
+/* a code block: files on the left, the reader's language on the right */
+
+.code {
+	margin: 26px 0 30px;
+	overflow: hidden;
+	background: var(--ts-surface);
+	border: 1px solid var(--ts-border-2);
+	border-radius: 12px;
+}
+
+.code-variant {
+	display: none;
+}
+
+.code-variant[data-default] {
+	display: block;
+}
+
+/* the language the reader picked, which the root names before the first paint */
+:root[data-lang="bun"] .code:has(> [data-variant="bun"]) > .code-variant,
+:root[data-lang="python"] .code:has(> [data-variant="python"]) > .code-variant,
+:root[data-lang="go"] .code:has(> [data-variant="go"]) > .code-variant {
+	display: none;
+}
+
+:root[data-lang="bun"] .code:has(> [data-variant="bun"]) > [data-variant="bun"],
+:root[data-lang="python"] .code:has(> [data-variant="python"]) > [data-variant="python"],
+:root[data-lang="go"] .code:has(> [data-variant="go"]) > [data-variant="go"] {
+	display: block;
+}
+
+.code-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 46px;
+	padding: 0 8px 0 18px;
+	background: var(--ts-surface-2);
+	border-bottom: 1px solid var(--ts-border-2);
+}
+
+.code-title {
+	color: var(--ts-muted-2);
+	font: 13px var(--ts-mono);
+}
+
+.code-files {
+	display: flex;
+	align-self: stretch;
+	margin-left: -18px;
+}
+
+.code-file {
+	display: flex;
+	align-items: center;
+	margin-bottom: -1px;
+	padding: 0 18px;
+	color: var(--ts-muted-2);
+	background: none;
+	border: 0;
+	border-top: 2px solid transparent;
+	border-right: 1px solid var(--ts-border-2);
+	font: 13px var(--ts-mono);
+	cursor: pointer;
+}
+
+.code-file:hover {
+	color: var(--ts-text);
+}
+
+.code-file[aria-selected="true"] {
+	color: var(--ts-text);
+	background: var(--ts-surface);
+	border-top-color: var(--ts-accent);
+}
+
+.code-tools {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+
+.code-langs {
+	display: flex;
+	gap: 2px;
+}
+
+.code-lang {
+	padding: 5px 11px;
+	color: var(--ts-muted-2);
+	background: transparent;
+	border: 0;
+	border-radius: 7px;
+	font: 500 13px var(--ts-sans);
+	cursor: pointer;
+}
+
+.code-lang:hover {
+	color: var(--ts-text);
+}
+
+.code-lang[aria-pressed="true"] {
+	color: var(--ts-text);
+	background: var(--ts-chip);
+}
+
+.code-copy {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	color: var(--ts-faint);
+	background: transparent;
+	border: 0;
+	border-radius: 7px;
+	cursor: pointer;
+}
+
+.code-copy:hover {
+	color: var(--ts-text);
+}
+
+.code-copy .icon-done,
+.code-copy[data-copied] .icon-copy {
+	display: none;
+}
+
+.code-copy[data-copied] .icon-done {
+	display: block;
+	color: var(--ts-accent-text);
+}
+
+.code pre {
+	margin: 0;
+	padding: 20px 22px 22px;
+	overflow-x: auto;
+	font: 14px / 1.75 var(--ts-mono);
+	tab-size: 4;
+	scrollbar-width: thin;
+	scrollbar-color: var(--ts-border-strong) transparent;
+}
+
+/* the SDK's samples are written with tabs, which read best narrow */
+.code [data-variant="bun"] pre {
+	tab-size: 2;
+}
+
+/* biome-ignore lint/style/noDescendingSpecificity: a block's code, never the inline code a callout styles */
+.code pre code {
+	font: inherit;
+}
+
+.shiki span {
+	color: var(--shiki-light);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) .shiki span {
+		color: var(--shiki-dark);
+	}
+}
+
+:root[data-theme="dark"] .shiki span {
+	color: var(--shiki-dark);
+}
+
+@media (max-width: 720px) {
+	.prose {
+		font-size: 16.5px;
+	}
+
+	.prose p.lead {
+		font-size: 19px;
+	}
+
+	.prose h2 {
+		margin-top: 56px;
+		font-size: 26px;
+	}
+
+	.code {
+		margin: 22px 0 24px;
+	}
+
+	.code-bar {
+		flex-wrap: wrap;
+		row-gap: 8px;
+		padding: 8px 12px;
+	}
+
+	.code-tools {
+		justify-content: space-between;
+		width: 100%;
+	}
+
+	.code-copy {
+		border: 1px solid var(--ts-border-2);
+	}
+
+	.code-title,
+	.code-files {
+		order: 2;
+		flex-basis: 100%;
+	}
+
+	.code-title:empty {
+		display: none;
+	}
+
+	.code-title {
+		font-size: 12px;
+	}
+
+	.code-files {
+		gap: 6px;
+		margin-left: 0;
+	}
+
+	.code-file {
+		margin: 0;
+		padding: 3px 10px;
+		border: 1px solid var(--ts-border-2);
+		border-radius: 6px;
+		font-size: 12px;
+	}
+
+	.code-file[aria-selected="true"] {
+		background: var(--ts-border-2);
+		border-color: transparent;
+	}
+
+	.code pre {
+		padding: 14px 16px 16px;
+		font-size: 12.5px;
+		line-height: 1.7;
+	}
+}
