@@ -1,0 +1,14 @@
+node_modules
+/.svelte-kit
+/build
+
+# the store the server writes when run here
+/data
+
+.env
+.env.*
+!.env.example
+
+vite.config.ts.timestamp-*
+/build-preview
+/.bin

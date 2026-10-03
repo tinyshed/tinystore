@@ -31,6 +31,7 @@ design document:
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md](docs/architecture.md) |
 | `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md](docs/server.md) |
 | `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md](docs/sdk.md), [server.md](docs/server.md) |
+| `web/` | the docs as a site: every page prerendered from `docs/`, served by Bun into a TinyStore of its own, its views and readers' events kept there (`task web`) | [web/AGENTS.md](web/AGENTS.md) | the `docs` skill |
 
 Where the building differs from the design:
 
@@ -46,7 +47,8 @@ ordinary series; kv, jobs, blobs and sqldb report nothing yet. An aggregate
 answers a whole block inside one bucket from its exact summary; a cut block,
 the head and a block without exact sums decode raw.
 
-Not built: the SDKs' examples and published packages; a release.
+Not built: the SDKs' examples and published packages; a release; a host and a
+domain for the site, and the guides the site will show beside the design.
 [docs/server.md](docs/server.md) "Building it" says where each server slice
 stands.
 
@@ -81,7 +83,8 @@ Do not describe unbuilt behaviour as though it works.
 | `server/reach/`      | the Go client of a directory's server, found through `SERVE` and proven, for the tool |
 | `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, and `migrate` and `schema` for sqldb |
 | `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module |
-| `docs/`              | the design, the format, the engines and the wire                              |
+| `docs/`              | the design, the format, the engines and the wire; `README.md` is its index, the site's sidebar |
+| `web/`               | the docs site: SvelteKit prerendering `docs/`, and its Bun server under `server/`; `web/go.mod` keeps it out of the Go module |
 | `examples/`          | programs using the public API, built and tested with the module               |
 | `docs/samples/`      | where the reference rewrite of one metrics path lives                         |
 | `.github/workflows/` | the authoritative clean builds                                                |
@@ -381,6 +384,7 @@ changing something, not to look something up.
 | [docs/wire.md](docs/wire.md)                 | the wire protocol's bytes: frames, credit, MessagePack, errors   |
 | [docs/sdk.md](docs/sdk.md)                   | the API in Go, Bun and Python side by side, and the rules for it |
 | [docs/format.md](docs/format.md)             | the bytes: the payload's layout, version by version              |
+| [web/AGENTS.md](web/AGENTS.md)               | the docs site: how a file becomes a page, the server, its analytics |
 | [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions |
 
 A reference a contributor returns to belongs in `docs/`, and a dated
@@ -389,7 +393,7 @@ command that reproduce it. A rule they are about to violate belongs here.
 
 How to do the recurring work is a skill in `.agents/skills/`, which
 `.claude/skills/` points to with the same frontmatter: `api-change`, `sdk`,
-`wire-change`, `verify`, `release` and `platform-traps`. Read the one that fits
+`wire-change`, `verify`, `release`, `platform-traps` and `docs`. Read the one that fits
 before you start, and fix it where it is wrong, as you would this file.
 Measuring is research's `measure` skill.
 
@@ -413,10 +417,10 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the root links no engine                            | `TestTheRootImportsNoEngine`                                                    |
 | one store holds a directory                         | `TestASecondStoreOnTheSameDirectoryIsRefused`                                   |
 | engines close last opened first, once               | `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`                              |
-| a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`                             |
+| a repeated background failure is not a log flood    | `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`; `a repeated failure is said once a quiet period, and its recovery once` in `sdk/js/test/background.test.ts`, `test_a_repeated_failure_is_said_once_a_quiet_period_and_its_recovery_once` in Python's |
 | an engine's errors are the store's kinds            | `TestMetricsErrorsAreTheStoresKinds`                                            |
 | a failed engine open gives its file back            | `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`                              |
-| one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`                                 |
+| one refused instrument does not keep the others out | `TestARefusedInstrumentDoesNotKeepTheOthersOut`; `a refused instrument keeps no other out, and says so once` in `sdk/js/test/records.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's |
 | an instrument's last value survives Close           | `TestClosingTheStoreFlushesTheLastValues`                                       |
 | a timer writes its count, sum and longest at each flush | `TestATimerWritesItsCountSumAndLongestAtEachFlush`, `TestAFailedFlushKeepsATimersLongestForTheNext` |
 | a timer's three series go together and have one writer | `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries` |
@@ -458,12 +462,14 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | an ambiguous change is a draft that does not run    | `TestAnAmbiguousChangeIsADraftThatDoesNotRun`                                   |
 | the tool finds each database by its name            | `TestTheToolFindsEachDatabaseByItsName`, `TestTheToolWritesTheNextMigrationThroughTheCheck` in `cmd/tinystore` |
 | a log line never waits for the file                 | `TestAFullBufferDropsAndCountsWithoutWaiting`                                   |
+| what a full buffer dropped is said, once a quiet period | `TestDroppedLinesAreSaidOncePerQuietPeriod`; `dropped lines are said at a flush, once a quiet period, counted since the last time` in `sdk/js/test/background.test.ts`, `test_dropped_lines_are_said_at_a_flush_once_a_quiet_period_counted_since_the_last_time` in Python's |
 | a Bun logger's line never waits for the server     | `a full logger drops and counts rather than wait` in `sdk/js/test/records.test.ts` |
+| a Bun logger writes what filled its buffer during a write as that write ends | `what filled the buffer while a write ran goes as the write ends, not at the next second` in `sdk/js/test/logger.test.ts` |
 | a Bun call under an aborted signal is refused      | `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts` |
 | a Bun duration or rate misspelled does not compile | `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts` |
 | a Bun store's close frees its directory            | `close returns once the child has exited` in `sdk/js/test/kv.test.ts`            |
 | the JS SDK runs under Node: its sidecar, a private child, TCP and TLS checked | `a remote server is reached over TLS, its certificate checked, under Node` and the rest of `sdk/js/test/under-node.ts`, run by `node --test` |
-| a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`                                 |
+| a half-full log buffer is written before its interval | `TestAHalfFullBufferFlushesBeforeItsInterval`; `test_a_half_full_buffer_is_written_before_its_interval` in Python's |
 | writing a log does not log again                    | `TestTheEnginesOwnLinesAreRefused`                                              |
 | a logger's console line is the same bytes in Go, Bun and Python | `TestConsoleLinesAreTheVectors`, over `records/testdata/console.json`, which both SDKs' suites read |
 | a line reaches its console as it is logged, whole   | `TestEachLineReachesTheConsoleAsItIsLogged`, `TestConsoleLinesFromManyGoroutinesDoNotInterleave` |
@@ -710,6 +716,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a request is understood whole or refused, naming the field and the server's version | `TestARequestWithAFieldTheServerDoesNotKnowIsRefused`, `TestAMessageReadsWhatItKnowsAndNamesWhatItDoesNot` |
 | a client newer than its server speaks the server's protocol | `TestAClientOfANewerProtocolIsWelcomedInTheServers`                    |
 | the vectors are the bytes                              | `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`     |
+| a byte the Bun encoder writes as its buffer grows is kept | `a byte written as the buffer grows is kept` in `sdk/js/test/wire.test.ts`    |
 | every message is a vector, every field by its name     | `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one |
 | the largest kv or jobs value travels in one body       | `TestTheLargestValueTravelsInOneBody`                                           |
 | a work stream asked to end when idle ends              | `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`                                    |
@@ -774,6 +781,12 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | the tool prints a record as a logger's console does | `TestAPrinterWritesARecordAsTheConsoleDoes` in `records` |
 | an agent over MCP writes nothing, nor makes an engine's file | `TestAnAgentReadsTheStoreOverMCP`, `TestAnAgentMakesNoEnginesFile` |
 | the SDK packages install the `tinystore` command, the binary's output and exit code its own | `the tinystore command runs the binary, with its output and its exit code` in `sdk/js/test/command.test.ts`, under Bun and Node, `test_the_tinystore_command_runs_the_binary_its_output_and_exit_code_the_binarys` in Python's |
+| a link in the docs that leads nowhere fails the site's build | `that leads nowhere is a problem` in `web/src/lib/content/links.test.ts`, and the prerender `task web` runs |
+| a heading keeps the anchor GitHub gives it | `gives headings the ids GitHub gives them, a repeated one numbered` in `web/src/lib/content/outline.test.ts` |
+| fences in three languages are one block, untitled ones of a language two | `a run in three languages is one block`, `two untitled fences of one language stay two blocks` in `web/src/lib/content/code.test.ts` |
+| the landing page's numbers are the README's SVG cards, read back | `read back from every SVG the README shows, in its order` in `web/src/lib/content/landing.test.ts` |
+| the site's views and events live in its own TinyStore, through a restart | `keeps a view and an event as records and counts both, through a restart` in `web/server/analytics.test.ts` |
+| a page, its data and its markdown are views; an asset, a HEAD and a 404 are not | `is served and counted, as are its data and its markdown; an asset is not counted` in `web/server/http.test.ts` |
 
 `task check` runs exactly what CI gates on. When those two drift, the local one
 is the weaker of the pair and a failure arrives after a push instead of before
@@ -945,6 +958,8 @@ task check            # everything CI gates on
 task tidy             # every module file
 task lint:platforms   # golangci-lint as Linux, macOS and Windows build the code
 task sdk              # both SDKs' checks and suites, against a tinystore built here
+task web              # the docs site's checks, tests and build
+task web:dev          # the docs site, reloading as docs/ changes
 task race:linux       # the race detector in a Linux container, for a host without cgo
 task sdk:linux        # both SDKs' suites in a Linux container
 ```

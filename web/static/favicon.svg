@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>TinyStore</title>
+  <style>
+    .top { fill: #c97a12 }
+    .bands { fill: #23212b }
+    @media (prefers-color-scheme: dark) {
+      .top { fill: #e29a36 }
+      .bands { fill: #eceaf3 }
+    }
+  </style>
+  <path class="top" d="M16 3l14 7-14 7-14-7z"/>
+  <path class="bands" d="M2 13l14 7 14-7v3l-14 7-14-7zm0 6l14 7 14-7v3l-14 7-14-7z"/>
+</svg>
