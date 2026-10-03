@@ -185,8 +185,8 @@ each example in Bun, Python and Go. Start with these:
 - [Go, Bun and Python](docs/languages.md): how each language reaches a store
 - [A tour](docs/tour.md): every engine on one page
 
-For reference, see the [Bun and Node API](sdk/js/README.md), the
-[Python API](sdk/python/README.md) and the [wire protocol](docs/wire.md).
+For reference, see the [Bun and Node API](docs/reference/bun.md), the
+[Python API](docs/reference/python.md) and the [wire protocol](docs/wire.md).
 
 ## Looking at a store
 

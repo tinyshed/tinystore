@@ -1,271 +1,120 @@
+<!--
+This is the page PyPI shows. The headline, the sample and the engines are the
+landing page's: task readme writes them between the landing: markers from
+web/landing.md. Every link is absolute, because PyPI cannot follow a relative
+one. Every call, by engine, is in docs/reference/python.md.
+-->
+
 # TinyStore for Python
 
-kv, jobs, blobs, SQL, records and metrics in one directory, served by a
-sidecar the SDK starts. A Go program embeds the same engines;
-[the guides](https://github.com/tinyshed/tinystore/blob/main/docs/README.md) show
-the three languages side by side.
+<!-- landing:headline -->
+
+**A small storage runtime for applications.** SQL, key-value state, durable jobs, files, metrics and logs in one directory, with one lifecycle, one memory budget and one backup.
+
+<!-- /landing:headline -->
+
+> **Release candidates first.** Until `v0.1.0`, the API may still change, and
+> a file written by one release may not open in the next.
+
+The SDK starts a small `tinystore` server next to your program, called the
+sidecar, and talks to it over a local connection. The server binary comes with the
+wheel, so there is nothing else to install. Go programs embed the same
+engines, and every client of one directory sees the same data.
+
+<!-- landing:sample -->
+
+```python
+import asyncio
+import logging
+from pathlib import Path
+
+import tinystore
+
+
+async def main() -> None:
+    async with tinystore.open("./data") as store:
+        db = await store.sql("app")
+        await db.exec("insert into users (id, name) values (?, ?)", 42, "Ada")
+
+        sessions = store.kv.bucket("sessions", str, sliding="30d")
+        await sessions.of("42").set("token", "abc123")
+
+        emails = store.jobs.queue("emails", dict[str, str])
+        await emails.enqueue({"to": "ada@example.com"})
+
+        files = store.blobs.bucket("files")
+        await files.put("avatars/42.png", Path("avatar.png").read_bytes())
+
+        logging.getLogger().addHandler(store.records.handler("api"))
+        logging.info("user created", extra={"user_id": 42})
+
+        store.metrics.counter("signups_total").inc()
+
+
+asyncio.run(main())
+```
 
 ```sh
 pip install tinyshed-tinystore
 ```
 
-Then `import tinystore`. This platform's wheel carries the `tinystore` binary;
-`TINYSTORE_BIN`, `open`'s `binary` or `PATH` name another. Python 3.12 or
-later, asyncio.
+<!-- /landing:sample -->
 
-The wheel installs the binary as the `tinystore` command too:
-`tinystore logs ./data -f`, or without installing anything
-`uvx --from tinyshed-tinystore tinystore status ./data`, and for an AI agent
-`claude mcp add tinystore -- uvx --from tinyshed-tinystore tinystore mcp ./data`.
+It needs Python 3.12 or later and runs on asyncio. The package installs as
+`tinyshed-tinystore` and imports as `tinystore`.
 
-## Open
+## Engines
+
+<!-- landing:engines -->
+
+| | | |
+|---|---|---|
+| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/sql/README.md) | Relational state | The application's own SQL databases: tables from structs, checked migrations. |
+| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/kv/README.md) | Application state | Current state: typed buckets, counters, expiry, versions. |
+| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/jobs/README.md) | Durable background work | Work that runs at its time: retries, leases, repeats. |
+| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/blobs/README.md) | Files and objects | Files by path, checked when read whole. |
+| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/records/README.md) | Logs and events | Read by time, level and keys. |
+| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/metrics/README.md) | Time series | Samples kept bit for bit, answered exactly. |
+
+<!-- /landing:engines -->
+
+## Three ways to connect
 
 ```python
-import tinystore
-
-async with tinystore.open("./data") as store:  # the directory's sidecar, started when none runs
+async with tinystore.open("./data") as store:  # the directory's sidecar, shared with other processes
     ...
-async with tinystore.open(directory, private=True) as store:  # a child of this process, for tests and scripts
+async with tinystore.open("./data", private=True) as store:  # a server for this process alone, for tests and scripts
     ...
 async with tinystore.connect("tls://db.internal:7070", token=token) as store:
     ...
-
-async with tinystore.open(directory, private=True, clock=datetime(2026, 10, 3, 9, tzinfo=UTC)) as store:
-    await store.clock.advance("1h")  # keys expire and jobs come due without a wait
-    await store.backup("backup.zip")  # every engine in one checked zip; tinystore restore takes it back
 ```
 
-`open` returns once the server has answered, so a directory that cannot be
-served fails there. Closing hands over the handlers' records and the
-instruments' last values; a sidecar leaves once its last connection has been
-idle 30 s.
+[The sidecar](https://github.com/tinyshed/tinystore/blob/main/docs/running/sidecar.md)
+and [A remote server](https://github.com/tinyshed/tinystore/blob/main/docs/running/server.md)
+explain each one.
 
-## kv
+## The command line
 
-```python
-sessions = store.kv.bucket("sessions", Session, sliding="30d")
-await sessions.of(user.id).set(token, session)
-found = await sessions.of(user.id).get(token)  # None when absent or expired
-created, entry = await sessions.of(user.id).set_entry_if_absent(token, session)  # this one, or the one there
+The wheel also installs the `tinystore` command. It shows what a store
+contains and follows its logs while your program runs. `uvx` runs it without
+installing anything:
 
-views = store.kv.counters("views")
-await views.add("/home")
-
-page = await sessions.scan(limit=100)  # Page(items, next); next goes back as after
-async for entry in sessions.all():
-    ...
-
-
-async def sign_in(tx: tinystore.Tx) -> int:  # reads, decides, writes; runs again if a key it read changed
-    user_id = await codes.with_tx(tx).take(digest(code))
-    if user_id is None:
-        raise InvalidCodeError
-    sessions.of(user_id).with_tx(tx).set(digest(token), session)
-    return user_id
-
-
-user_id = await store.kv.tx(sign_in)
+```sh
+uvx --from tinyshed-tinystore tinystore status ./data                          # each engine's size, and who serves the directory
+tinystore logs ./data -f                                                       # the application's logs, as they arrive
+claude mcp add tinystore -- uvx --from tinyshed-tinystore tinystore mcp ./data # read-only access for an AI agent
 ```
 
-A bucket's type is given once, where it opens: `str`, `bytes`, `int`,
-`float`, `bool`, or a dataclass, a `TypedDict` or anything else JSON holds.
-`set_if_absent` and `set_entry_if_absent` write only where no live key is, in
-one write: two processes making the same key, a day's salt or a claim, keep
-one, where a `get` and then a `set` keep both.
+See [The command line](https://github.com/tinyshed/tinystore/blob/main/docs/running/cli.md)
+for every command.
 
-```python
-cfg = await store.kv.config("app", Settings, file=tomllib.load(f), env_file=".env")
-cfg.value.port  # PORT=3000 in .env makes it 3000
-await cfg.update({"port": 4000})  # kept: 4000 after a restart too, at once in every process
-await cfg.reset("port")  # back to .env's 3000
-cfg.watch(lambda c: server.set_port(c.port))
+## Documentation
 
-limit = store.kv.limiter("api", rate="100/s", burst=20)
-ok, left, retry_after = await limit.of(tenant).allow(user_id)
+- [Getting started](https://github.com/tinyshed/tinystore/blob/main/docs/getting-started.md): install it and write a first program
+- [A tour](https://github.com/tinyshed/tinystore/blob/main/docs/tour.md): every engine on one page
+- [The guides](https://github.com/tinyshed/tinystore/blob/main/docs/README.md): a page per feature, each example in Bun, Python and Go
+- [Python API](https://github.com/tinyshed/tinystore/blob/main/docs/reference/python.md): every call, by engine
 
-ai = store.kv.quota("ai", session="100/5h", weekly="300/7d")
-usage = await ai.allow(user.id)  # one of each window, or none: usage.windows["weekly"].left
-```
+## License
 
-A config is a dataclass or a model whose defaults are its own: a file's
-values, then the environment, then what `update` kept go over them, a variable
-named by its field, `db_url` as `DB_URL`, after `prefix` when given. A number,
-`true`, a list `a.com,b.com` or JSON read as the default's kind, and one that
-does not is `InvalidError` at open, naming it. `env={"db_url":
-"DATABASE_URL"}` names a variable itself; `secret` fields are never kept;
-`validate` checks each change. A quota's windows count a use together or not
-at all, each from a key's first use; `get` reads them without using any,
-`refund` gives uses back.
-
-```python
-charges = store.kv.once("charges", Receipt)  # answers kept a day
-receipt = await charges.run(request_id, lambda: pay.charge(order, request_id))
-```
-
-`run` returns the answer kept under a key, or runs the function and keeps its
-answer: a call of the key meanwhile, from any client, waits for it and gets
-the same answer, and an exception keeps nothing, so the next call runs again.
-The function runs once a key while its call lives; an effect outside the
-store, a charge, carries the key too.
-
-## jobs
-
-```python
-reminders = store.jobs.queue("reminders", Reminder)
-await reminders.enqueue(Reminder(note=1), after="1h", key="note/1")
-
-
-async def remind(job: tinystore.Job[Reminder]) -> None:
-    await send(job.value.note)
-
-
-await reminders.work(remind, workers=4)  # until the task is cancelled
-```
-
-A handler's return acknowledges its job and an exception retries it, waiting
-longer each time; `job.retry`, `job.fail` and `job.snooze` say otherwise.
-Cancelled, `work` gives back the jobs its handlers did not finish, uncounted.
-
-```python
-videos = store.jobs.queue("videos", Video, max_running=2)
-await videos.enqueue(video, key=video.id)
-async for s in videos.watch(video.id):  # waiting 3 … running 0.4 … done
-    await send(s.state, s.ahead, s.progress)
-
-
-async def transcode(job: tinystore.Job[Video]) -> None:
-    await encode(job.value, on_progress=job.progress)
-
-
-await videos.work(transcode)
-```
-
-`get` says where a job is: `waiting`, with how many jobs run `ahead` of it,
-`running`, with the `progress` its handler last reported, `failed`, or `done`
-while `keep_done` keeps its key; `watch` yields it again at each change until
-it ends, `cancelled` included, and `ran` and `took` say when the last run a
-handler finished began and how many seconds it took: a schedule's last run
-beside its next, `at`. `job.progress` takes any JSON within 4 KiB and
-sends the latest at most ten times a second. `cancel` takes a running job too:
-its handler's task is cancelled, and what it leaves settles nothing.
-`max_running` bounds the jobs running at once across every worker of the
-store.
-
-A step of a job's run keeps its answer, so that the attempt after a failure
-does not run it again: `hits = await job.step("search", lambda: search(q))`.
-
-## blobs
-
-```python
-files = store.blobs.bucket("files")
-await files.put("avatars/42.png", Path("avatar.png").read_bytes(), content_type="image/png")
-avatar = await files.get("avatars/42.png")  # None when absent
-data = await avatar.read()  # a whole read checks every byte
-```
-
-## SQL
-
-```python
-app = await store.sql("app", migrations="./migrations")
-await app.exec("insert into notes (body) values (?)", body)
-notes = await app.all(Note, "select id, body from notes where author = ?", author)
-async with app.batch() as tx:  # one transaction, all or none
-    tx.exec("update notes set body = ? where id = ?", body, note_id)
-    tx.exec("insert into edits (note) values (?)", note_id)
-
-index = store.jobs.queue("index", int, in_=app)  # the queue lives in sql/app.db
-async with app.batch() as tx:
-    tx.exec("update notes set body = ? where id = ?", body, note_id)
-    index.with_tx(tx).enqueue(note_id)  # commits with the update, or not at all
-```
-
-On Python 3.14 a statement may be a template, `t"… where author = {author}"`,
-its values arguments and never SQL. A value comes back as SQLite keeps it.
-
-## records
-
-```python
-logging.getLogger().addHandler(store.records.handler("api", redact=["password"]))  # never waits for the server
-with tinystore.trace(trace_id, span_id):  # what is logged inside carries the trace
-    logging.info("charged")
-with tinystore.context(request_id=request_id):  # every line inside carries request_id, tasks it starts too
-    logging.warning("slow request", extra={"ms": 1200})
-
-page = await store.records.scan(since="1h", min_level="warn", limit=100)
-resets = await store.records.scan(since="1h", search="connection reset")  # case ignored
-more = await store.records.scan(since="1h", min_level="warn", limit=100, after=page.next)
-async for record in store.records.all(since="24h", trace_id=trace):
-    ms = tinystore.fields(record.attrs)["ms"]  # a record's (key, json) pairs, as json.loads reads them
-
-worker = store.records.lines("worker")  # another program's output, cut anywhere
-async for chunk in process.stdout:
-    worker.write(chunk)
-```
-
-A handler holds 1024 records and hands them over every second or once half
-of them wait; what does not fit is dropped, counted in `handler.dropped` and
-said on stderr. A handler is for lines a burst may cost: what must all be kept
-goes through `records.append`, which returns once it is, and a larger `buffer`
-holds a longer burst.
-
-Each line also goes to stderr as it is logged: pretty on a terminal, one JSON
-object a line otherwise, the bytes Go's and Bun's loggers write.
-`console="pretty" | "json" | "off"` and `stdout=True` choose, and a handler
-of events, a view a request, takes `"off"` or fills the program's log;
-`redact` hides the values of fields of those names, at any depth, the case
-ignored, in the store and on the console. A program that wants the logger and
-not the records takes a handler without a store; its children are
-`logging`'s own:
-
-```python
-logging.basicConfig(handlers=[tinystore.handler("app", redact=["password"])], level=logging.INFO)
-log = logging.getLogger("app.db")  # the console alone, nothing kept
-```
-
-## metrics
-
-```python
-store.metrics.counter("http_requests_total").labels(route="/users").inc()
-store.metrics.gauge("queue_depth").set(12)
-latency = store.metrics.timer("http_request_ms")
-with latency.labels(route="/users").measure():  # await inside is timed too
-    user = await users.get(user_id)
-
-await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"}, "samples": [(now, 0.42)]})
-series = await store.metrics.read(name="cpu", match={"host": "web-1"}, since="1h")  # [Series(..., times, values)]
-failing = await store.metrics.read(
-    name="http_requests_total", since="1h", where={"status": tinystore.one_of("500", "502")}
-)
-buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
-routes = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="rate", by=["route"])
-```
-
-A read answers each series as columns, `times` in unix milliseconds and
-`values` an `array("d")`, as `ingest` takes them too beside `(time, value)`
-pairs. A sample comes back bit for bit, `-0.0` and a NaN's payload included; a
-range is `since`, or `from_` and `to`. `metrics.explain(...)` says what a read
-or an aggregate would spend of its limits before it runs.
-
-A timer's `measure()` times its block whether it returns or raises, in a `with`
-or an `async with`; `record(d)` adds a duration of its own, seconds, a
-`timedelta` or `"250ms"`. Every flush writes `http_request_ms_count` and
-`http_request_ms_sum`, counters, and the longest since the flush before,
-`http_request_ms_max`, so that a range's mean is the increase of its sum over
-the increase of its count. A series the store refuses, a label it cannot keep,
-is left out from then on and said once, and the other instruments go on being
-written.
-
-## Durations, errors and cancellation
-
-A duration is a `timedelta`, seconds, or text such as `"1h30m"`. Every error
-is its code's class, a `TinystoreError`: `InvalidError`, `ConflictError`,
-`LimitError`, `TooOldError` and the rest, each carrying what it names; a
-`LimitError` names the bound, what the call wanted and the bound. A cancelled
-task cancels its call, one `CANCEL` on the wire. `await store.status()` says
-what the server is: its version, its protocol, its engines.
-
-What fails where no call waits is said on stderr, as a handler of stream
-`tinystore` writes a line: an instrument's flush or a handler's write that
-failed, and its recovery; a gauge's function that raised; a refused
-instrument; the lines a full handler dropped. A failure repeated is said again
-ten minutes on, or when it changes, as Go's store logs its own.
+Apache-2.0.

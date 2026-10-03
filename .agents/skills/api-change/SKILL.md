@@ -43,8 +43,9 @@ when each of them says it the same way.
    example, and tests through a real `tinystore serve`.
 5. Every place a program reads it: the guides in `docs/`, which show each call
    in all three languages (the `docs` skill), `web/landing.md`'s sample, the
-   top-level `README.md` "A first look", `sdk/js/README.md`,
-   `sdk/python/README.md`, and `examples/notes`, which is built and tested.
+   top-level `README.md` "A first look", the SDK references
+   `docs/reference/bun.md` and `docs/reference/python.md`, the SDK packages'
+   READMEs, and `examples/notes`, which is built and tested.
 
 Then look for the old spelling everywhere, documents first, since no compiler
 reads them:

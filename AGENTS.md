@@ -33,7 +33,7 @@ design document:
 | `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md][design-blobs] |
 | `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md][design-architecture] |
 | `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens, a Go program's own store shared in one call; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md][design-server] |
-| `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](sdk/js/README.md), [Python](sdk/python/README.md) | [sdk.md][design-sdk], [server.md][design-server] |
+| `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](docs/reference/bun.md), [Python](docs/reference/python.md) | [sdk.md][design-sdk], [server.md][design-server] |
 | `web/` | the docs as a site: every page prerendered from `docs/`, served by Bun into a TinyStore of its own, its views and readers' events kept there (`task web`) | [web/AGENTS.md](web/AGENTS.md) | the `docs` skill |
 
 [design]: https://github.com/tinyshed/research/tree/main/tinystore/design
@@ -812,7 +812,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a heading keeps the anchor GitHub gives it | `gives headings the ids GitHub gives them, a repeated one numbered` in `web/src/lib/content/outline.test.ts` |
 | fences in three languages are one block, untitled ones of a language two | `a run in three languages is one block`, `two untitled fences of one language stay two blocks` in `web/src/lib/content/code.test.ts` |
 | the landing page's numbers are the README's SVG cards, read back | `read back from every SVG the README shows, in its order` in `web/src/lib/content/landing.test.ts` |
-| the README's headline, pitch, sample and engines are the landing page's, and no link in it leads nowhere | `is what task readme writes into it from web/landing.md`, `has no link that leads nowhere` in `web/src/lib/content/readme.test.ts` |
+| the README's headline, pitch, sample and engines are the landing page's, and the SDK packages' in their language, and no link in them leads nowhere | `is what task readme writes into it from web/landing.md`, `has no link that leads nowhere`, `links only to what exists, on GitHub` in `web/src/lib/content/readme.test.ts` |
 | the landing page's words are `web/landing.md`'s, a part missing or a link nowhere failing the build | `takes every word from web/landing.md, its links resolved as a page's`, `fails the build when a part is missing or a link leads nowhere` in `web/src/lib/content/landing.test.ts` |
 | the site's views and events live in its own TinyStore, through a restart | `keeps a view and an event as records and counts both, through a restart` in `web/server/analytics.test.ts` |
 | a page, its data and its markdown are views; an asset, a HEAD and a 404 are not | `is served and counted, as are its data and its markdown; an asset is not counted` in `web/server/http.test.ts` |

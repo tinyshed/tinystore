@@ -239,8 +239,8 @@ page. The example tests compile and run, so they are the safest to copy from.
 | To check | Read |
 |---|---|
 | a Go call, its options, contracts and errors | the package README (`kv/README.md`…), `go doc`, and its `example_test.go` |
-| a Bun or Node call | `sdk/js/README.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts` |
-| a Python call | `sdk/python/README.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/` |
+| a Bun or Node call | `docs/reference/bun.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts` |
+| a Python call | `docs/reference/python.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/` |
 | a complete program that uses every engine | `examples/notes/main.go`, built and tested |
 | what a guarantee rests on | the gates table in AGENTS.md: each promise and the test that checks it |
 | a limit or a default | the package README's contracts, then the constant in the code |
@@ -287,9 +287,25 @@ package README until then.
 
 The README shows the same headline, pitch, sample and engines. After you
 change them in `web/landing.md`, run `task readme` to write them into the
-README. `task web`
-fails until the two match, and it also fails when a link in the README leads
-nowhere.
+README. `task web` fails until the two match, and it also fails when a link
+in the README leads nowhere.
+
+## The packages' pages
+
+npm shows `sdk/js/README.md` and PyPI shows `sdk/python/README.md`. Each is a
+short page for someone who found the package there: the headline, a paragraph
+on how the SDK reaches a store, the sample in its own language, the engines,
+how to connect, the command line, and links to the guides. Keep every call and
+option in `docs/reference/bun.md` and `docs/reference/python.md`, not on the
+package page.
+
+- `task readme` writes the headline, the sample and the engines from
+  `web/landing.md`, in the package's language only.
+- Every link is absolute, to `https://github.com/tinyshed/tinystore/blob/main/…`,
+  because npm and PyPI can't follow a relative link. `task web` fails on a
+  relative link and on a link to a file that doesn't exist.
+- Use plain markdown. npm drops centring HTML, and neither registry shows
+  GitHub's `> [!NOTE]` callouts.
 
 ## Before pushing
 

@@ -323,7 +323,7 @@ uses the server as it is.
 
 ## See also
 
-- [The Bun and Node SDK](../sdk/js/README.md) and
-  [the Python SDK](../sdk/python/README.md): every call, by engine.
+- [The Bun and Node API](reference/bun.md) and
+  [the Python API](reference/python.md): every call, by engine.
 - [The wire protocol](wire.md): the bytes between an SDK and the server, for
   anyone writing a client in another language.

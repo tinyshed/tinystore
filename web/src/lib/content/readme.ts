@@ -4,6 +4,7 @@ import type { Code, Image, Link, RootContent, Table } from 'mdast'
 import { toString as textOf } from 'mdast-util-to-string'
 import { visit } from 'unist-util-visit'
 
+import { repository } from '../site'
 import { byLanguage, toFence } from './code'
 import { landingFile, linksOf, sectionsOf } from './landing'
 import { resolveLink } from './links'
@@ -14,22 +15,46 @@ import type { Site } from './site'
 
 export const readmeFile = 'README.md'
 
+/**
+ * A README that shows the landing page's words: the repository's, and each
+ * SDK package's, which npm and PyPI show without the rest of the repository.
+ * A package shows its own language alone and links to GitHub, because
+ * neither registry follows a link relative to the README.
+ */
+export interface Readme {
+	file: string
+	languages: string[]
+	page: 'repository' | 'package'
+}
+
 // GitHub has no language switch, so the language that embeds TinyStore shows and the others fold
-const shownFirst = ['go', 'bun', 'python']
+export const readmes: Readme[] = [
+	{ file: readmeFile, languages: ['go', 'bun', 'python'], page: 'repository' },
+	{ file: 'sdk/js/README.md', languages: ['bun'], page: 'package' },
+	{ file: 'sdk/python/README.md', languages: ['python'], page: 'package' },
+]
+
+const repositoryReadme = readmes[0] as Readme
+const onGitHub = `${repository}/blob/main/`
+const absolute = /^[a-z][a-z\d+.-]*:/i
 
 /**
- * The README with the landing page's words written into it from
- * web/landing.md, so that the repository's front page and the site's say the
- * same thing. Each part lies between two markers, and whatever is between
- * them is replaced:
+ * A README with the landing page's words written into it from
+ * web/landing.md, so that the repository's front page, the packages' pages
+ * and the site's say the same thing. Each part lies between two markers, and
+ * whatever is between them is replaced:
  *
  *     <!-- landing:headline -->   the headline and the pitch, centred under the logo
- *     <!-- landing:sample -->     Go open, the other languages folded, then each install command
- *     <!-- landing:engines -->    the engines' table, its links rebased from web/ to the top
+ *     <!-- landing:sample -->     the first language open, the others folded, then each install command
+ *     <!-- landing:engines -->    the engines' table, its links rebased from web/ to the top, or to GitHub
  *
  * and each ends at its `<!-- /landing:… -->`.
  */
-export function readmeFromLanding(readme: string, landing: string): string {
+export function readmeFromLanding(
+	readme: string,
+	landing: string,
+	shape = repositoryReadme,
+): string {
 	const [intro, ...sections] = sectionsOf(parse(landing))
 	const engines = sections.find(section => section.title === 'Engines')
 	if (intro === undefined || engines === undefined) {
@@ -37,26 +62,42 @@ export function readmeFromLanding(readme: string, landing: string): string {
 	}
 
 	const parts = {
-		headline: headlineOf(intro.nodes),
-		sample: sampleOf(intro.nodes),
-		engines: tableOf(engines.nodes, landing),
+		headline: shape.page === 'repository' ? headlineOf(intro.nodes) : plainHeadlineOf(intro.nodes),
+		sample: sampleOf(intro.nodes, shape.languages),
+		engines: tableOf(engines.nodes, landing, shape.page),
 	}
-	return Object.entries(parts).reduce((text, [name, part]) => replacePart(text, name, part), readme)
+	return Object.entries(parts).reduce(
+		(text, [name, part]) => replacePart(text, shape.file, name, part),
+		readme,
+	)
 }
 
-/** Writes the README's parts from web/landing.md, as `task readme` does, and says whether they changed. */
-export function writeReadme(root = checkout()): boolean {
-	const path = join(root, readmeFile)
-	const readme = readFileSync(path, 'utf8')
-	const written = readmeFromLanding(readme, readFileSync(join(root, landingFile), 'utf8'))
-	if (written !== readme) {
+/** Writes every README's parts from web/landing.md, as `task readme` does, and names those that changed. */
+export function writeReadmes(root = checkout()): string[] {
+	const landing = readFileSync(join(root, landingFile), 'utf8')
+	return readmes.flatMap(shape => {
+		const path = join(root, shape.file)
+		const readme = readFileSync(path, 'utf8')
+		const written = readmeFromLanding(readme, landing, shape)
+		if (written === readme) {
+			return []
+		}
 		writeFileSync(path, written)
-	}
-	return written !== readme
+		return [shape.file]
+	})
 }
 
-/** What is wrong with each link of the README's markdown that leads nowhere. */
-export function readmeProblems(readme: string, site: Site, root = checkout()): string[] {
+/**
+ * What is wrong with each link of a README's markdown that leads nowhere. A
+ * package's link to GitHub's main is checked as the file it names, and a
+ * relative one is refused, because npm and PyPI show it leading nowhere.
+ */
+export function readmeProblems(
+	readme: string,
+	site: Site,
+	root = checkout(),
+	shape = repositoryReadme,
+): string[] {
 	const tree = parse(readme)
 	const { ids } = outline(tree)
 	const links = linksOf(site, root)
@@ -64,7 +105,18 @@ export function readmeProblems(readme: string, site: Site, root = checkout()): s
 	const problems: string[] = []
 	visit(tree, ['link', 'image'], node => {
 		const { type, url } = node as Link | Image
-		const resolved = resolveLink(links, readmeFile, url, ids, type === 'image' ? 'asset' : 'link')
+		if (shape.page === 'package' && !absolute.test(url) && !url.startsWith('#')) {
+			problems.push(`${url} is relative, which npm and PyPI cannot follow`)
+			return
+		}
+		const fromTop = url.startsWith(onGitHub) ? url.slice(onGitHub.length) : url
+		const resolved = resolveLink(
+			links,
+			readmeFile,
+			fromTop,
+			ids,
+			type === 'image' ? 'asset' : 'link',
+		)
 		if ('problem' in resolved) {
 			problems.push(resolved.problem)
 		}
@@ -72,39 +124,57 @@ export function readmeProblems(readme: string, site: Site, root = checkout()): s
 	return problems
 }
 
-function replacePart(readme: string, name: string, part: string): string {
+function replacePart(readme: string, file: string, name: string, part: string): string {
 	const open = `<!-- landing:${name} -->`
 	const close = `<!-- /landing:${name} -->`
 	const start = readme.indexOf(open)
 	const end = readme.indexOf(close, start)
 	if (start === -1 || end === -1) {
-		throw new Error(`${readmeFile} has no ${open} … ${close} for the landing page's ${name}`)
+		throw new Error(`${file} has no ${open} … ${close} for the landing page's ${name}`)
 	}
 	return `${readme.slice(0, start + open.length)}\n\n${part}\n\n${readme.slice(end)}`
 }
 
-// plain text, since GitHub reads no markdown inside the HTML that centres it
-function headlineOf(nodes: RootContent[]): string {
+function headlineAndPitch(nodes: RootContent[]): [RootContent, RootContent] {
 	const headline = nodes.find(node => node.type === 'heading' && node.depth === 1)
 	const pitch = nodes.find(node => node.type === 'paragraph')
 	if (headline === undefined || pitch === undefined) {
 		throw new Error(`${landingFile}: a # headline, then the pitch's paragraph`)
 	}
+	return [headline, pitch]
+}
+
+// plain text, since GitHub reads no markdown inside the HTML that centres it
+function headlineOf(nodes: RootContent[]): string {
+	const [headline, pitch] = headlineAndPitch(nodes)
 	return [`<b>${htmlOf(headline)}</b>`, htmlOf(pitch)]
 		.map(line => `<p align="center">\n  ${line}\n</p>`)
 		.join('\n\n')
 }
 
-function htmlOf(node: RootContent): string {
-	const text = textOf(node).replace(/\s+/g, ' ').trim()
-	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+// npm drops the HTML that centres, so a package's page says it in markdown, under the package's own title
+function plainHeadlineOf(nodes: RootContent[]): string {
+	const [headline, pitch] = headlineAndPitch(nodes)
+	return `**${oneLine(headline)}** ${oneLine(pitch)}`
 }
 
-function sampleOf(nodes: RootContent[]): string {
+function oneLine(node: RootContent): string {
+	return textOf(node).replace(/\s+/g, ' ').trim()
+}
+
+function htmlOf(node: RootContent): string {
+	return oneLine(node).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+}
+
+function sampleOf(nodes: RootContent[], shown: string[]): string {
 	const codes = nodes.filter((node): node is Code => node.type === 'code')
-	const variants = byLanguage(codes.map(toFence)).sort((a, b) => rank(a.key) - rank(b.key))
+	const variants = byLanguage(codes.map(toFence))
+		.filter(variant => shown.includes(variant.key))
+		.sort((a, b) => shown.indexOf(a.key) - shown.indexOf(b.key))
 	if (variants.length === 0) {
-		throw new Error(`${landingFile} has no sample: a fence a language under the headline`)
+		throw new Error(
+			`${landingFile} has no sample in ${shown.join(', ')}: a fence a language under the headline`,
+		)
 	}
 
 	const blocks = variants.map((variant, index) => {
@@ -118,11 +188,6 @@ function sampleOf(nodes: RootContent[]): string {
 	return blocks.join('\n\n')
 }
 
-function rank(language: string): number {
-	const at = shownFirst.indexOf(language)
-	return at === -1 ? shownFirst.length : at
-}
-
 function fenced(lang: string, code: string): string {
 	return `\`\`\`${lang}\n${code}\n\`\`\``
 }
@@ -131,8 +196,8 @@ function folded(label: string, body: string): string {
 	return `<details>\n<summary><b>${label}</b></summary>\n\n${body}\n\n</details>`
 }
 
-// the engines' table as it is written, each link rebased from web/ to the top of the repository
-function tableOf(nodes: RootContent[], landing: string): string {
+// the engines' table as it is written, each link rebased from web/ to the top of the repository, or to GitHub
+function tableOf(nodes: RootContent[], landing: string, page: Readme['page']): string {
 	const table = nodes.find((node): node is Table => node.type === 'table')
 	const start = table?.position?.start.offset
 	const end = table?.position?.end.offset
@@ -145,19 +210,30 @@ function tableOf(nodes: RootContent[], landing: string): string {
 		urls.add(link.url)
 	})
 	return [...urls].reduce(
-		(text, url) => text.replaceAll(`](${url})`, `](${fromTop(url)})`),
+		(text, url) =>
+			text.replaceAll(`](${url})`, `](${page === 'package' ? toGitHub(url) : fromTop(url)})`),
 		landing.slice(start, end),
 	)
 }
 
 // a link written in web/landing.md, as it reads from the top of the repository
 function fromTop(url: string): string {
-	if (/^[a-z][a-z\d+.-]*:/i.test(url) || url.startsWith('#') || url.startsWith('/')) {
+	if (absolute.test(url) || url.startsWith('#') || url.startsWith('/')) {
 		return url
 	}
 	return resolveFrom(landingFile, url) ?? url
 }
 
-if (import.meta.main && writeReadme()) {
-	process.stdout.write(`${readmeFile}: the landing page's words written from ${landingFile}\n`)
+// a link written in web/landing.md, as a page outside the repository reaches it
+function toGitHub(url: string): string {
+	if (absolute.test(url) || url.startsWith('#')) {
+		return url
+	}
+	return `${onGitHub}${fromTop(url)}`
+}
+
+if (import.meta.main) {
+	for (const file of writeReadmes()) {
+		process.stdout.write(`${file}: the landing page's words written from ${landingFile}\n`)
+	}
 }

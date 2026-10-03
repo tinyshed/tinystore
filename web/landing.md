@@ -5,10 +5,11 @@ language with its install command in install="…", the table under Engines
 the engine list, and the section after it the numbers' heading, legend and
 caveat. The design is web/src/routes/+page.svelte, and the numbers' cards are
 read from the README's SVGs. Every call in the sample is the SDK's own: check
-it against the SDK READMEs before changing it. An engine links its overview
+it against docs/reference/ before changing it. An engine links its overview
 page once one is written, and its package README until then. The README shows
-the headline, the pitch, the sample and the engines too: task readme writes
-them there from this file.
+the headline, the pitch, the sample and the engines too, and so do the SDK
+packages' READMEs in their own language: task readme writes them there from
+this file.
 -->
 
 # A small storage runtime for applications.

@@ -88,8 +88,9 @@ private child.
   never typed again, so the two cannot disagree.
 - The README's headline, pitch, sample and engines are the landing page's:
   `task readme` writes them from `web/landing.md` between `<!-- landing:… -->`
-  markers, and the tests fail when they differ or when a link in the README
-  leads nowhere.
+  markers, into the SDK packages' READMEs too in their own language, and the
+  tests fail when they differ or when a link in one leads nowhere. A
+  package's links go to GitHub, since npm and PyPI follow no relative link.
 - The server takes the SDK from `../sdk/js`, unpublished, and `bun.lock`
   records the SDK's own dependencies: a change to `sdk/js/package.json` needs
   `bun install` here too, or CI's frozen install refuses.
