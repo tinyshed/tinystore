@@ -115,5 +115,5 @@ task readme       # the landing page's words, written into the README
 carry, and `SITE_BASE` the path a proxy serves the site under, which it strips
 before the Bun server sees a request; `SITE_PORTABLE=1 SITE_OUT=build-preview` builds a copy that opens from
 any folder. The Site workflow builds the image on each push to main that
-changes what the site is built from, pushes it to GHCR, and asks
-`tinyshed/landing` to deploy it when the `LANDING_DEPLOY_TOKEN` secret is set.
+changes what the site is built from and pushes it to GHCR, and the server
+pulls it within a minute.

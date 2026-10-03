@@ -1,8 +1,8 @@
 name: Site
 
 # The site follows main: a push that changes what it is built from makes a new
-# image, and tinyshed/landing's deploy runs it on the server at
-# tinyshed.org/tinystore. CI's web job has already built and checked the same
+# image, which the server behind tinyshed.org/tinystore pulls within a minute,
+# as tinyshed/landing sets it up. CI's web job has already built and checked the same
 # commit.
 on:
   push:
@@ -24,7 +24,7 @@ on:
 permissions:
   contents: read
 
-# a deploy finishes before the next one starts
+# one image at a time
 concurrency:
   group: site
   cancel-in-progress: false
@@ -88,20 +88,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  deploy:
-    name: deploy
-    needs: image
-    runs-on: ubuntu-latest
-    steps:
-      # The server's runner serves the private tinyshed/landing alone, so this
-      # repository asks that one to deploy; without the token, its hourly
-      # schedule pulls the new image instead.
-      - name: Ask tinyshed/landing to deploy the new image
-        env:
-          GH_TOKEN: ${{ secrets.LANDING_DEPLOY_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "No LANDING_DEPLOY_TOKEN secret: tinyshed/landing pulls ghcr.io/${{ github.repository_owner }}/tinystore-site:latest within the hour." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          gh api repos/${{ github.repository_owner }}/landing/dispatches -f event_type=tinystore-site
