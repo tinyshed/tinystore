@@ -97,10 +97,7 @@ export class Store implements AsyncDisposable {
 	 * sidecar goes once it has been idle.
 	 */
 	async close(): Promise<void> {
-		this.metrics.stop()
-		if (this.metrics.instruments > 0) {
-			await this.metrics.flush().catch(() => {})
-		}
+		await this.metrics.stop()
 		await this.records.stop()
 		this.kv.stop()
 		await this.#link.close()

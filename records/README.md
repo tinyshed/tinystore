@@ -62,7 +62,9 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   a line that does not fit the buffer or the format, or a batch whose write
   failed, or a line outside the store's window, is dropped and counted in
   `Stats`, with separate full-buffer, invalid/out-of-window and failed-write
-  counts. Lines of the records engine itself
+  counts. What a full buffer dropped is also said through the store's
+  `Logger`, `log lines dropped`, at most once in ten minutes, as a failed
+  write is said as background work that failed. Lines of the records engine itself
   are refused. A line is a record named `log`: its message is the body, the
   attributes of `logger.With` its context, the call's its attributes, a
   group's keys written `group.key`, values spelled as `slog.JSONHandler`

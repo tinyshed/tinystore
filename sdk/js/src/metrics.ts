@@ -3,8 +3,10 @@
 // exactly and rounded once. Instruments live in the SDK and are ingested
 // every flush.
 
+import { FailureLog, messageOf } from './background.ts'
 import { download, type Link } from './connection.ts'
-import { errorOf, InvalidError, type LimitError } from './errors.ts'
+import { type Code, errorOf, InvalidError, type LimitError, TinystoreError } from './errors.ts'
+import { sayOwn } from './logger.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { byCodePoint } from './wire/codec.ts'
 import {
@@ -305,6 +307,7 @@ export class Metrics {
 	readonly #instruments = new Map<string, Instrument>()
 	readonly #timers = new Map<string, TimerInstrument>()
 	#interval: ReturnType<typeof setInterval> | undefined
+	readonly #failureLog = new FailureLog('metrics instruments', sayOwn)
 	/** instruments' flushes that failed, and why the last did */
 	failures = 0
 	lastFailure: Error | undefined
@@ -468,7 +471,7 @@ export class Metrics {
 			if (timer !== undefined) {
 				throw new InvalidError(`${name} is written by the timer ${timer}`)
 			}
-			instrument = { name, kind, series: new Map() }
+			instrument = { name, kind, series: new Map(), refused: new Set(), lastRead: undefined }
 			this.#instruments.set(name, instrument)
 			this.#flushing()
 		} else if (instrument.kind !== kind) {
@@ -488,7 +491,7 @@ export class Metrics {
 					)
 				}
 			}
-			timer = { name, series: new Map() }
+			timer = { name, series: new Map(), refused: new Set() }
 			this.#timers.set(name, timer)
 			this.#flushing()
 		}
@@ -496,34 +499,34 @@ export class Metrics {
 	}
 
 	#flushing(): void {
-		this.#interval ??= setInterval(() => void this.flush().catch(() => {}), flushEvery)
+		this.#interval ??= setInterval(() => void this.#flushInBackground(), flushEvery)
 		this.#interval.unref?.()
 	}
 
-	/** Ingests every instrument's value now, as the timer does every 15 s. */
+	// a flush no caller awaits says its failure, as Go's background work does
+	async #flushInBackground(): Promise<void> {
+		try {
+			await this.flush()
+			this.#failureLog.succeeded()
+		} catch (err) {
+			this.#failureLog.failed(err)
+		}
+	}
+
+	/**
+	 * Ingests every instrument's value now, as the timer does every 15 s. A
+	 * series the store refuses is left out from then on, said once, so that one
+	 * bad instrument keeps no other out.
+	 */
 	async flush(): Promise<void> {
 		const at = BigInt(Date.now())
-		const batch: Sampled[] = []
-		for (const instrument of this.#instruments.values()) {
-			if (instrument.read !== undefined) {
-				try {
-					instrument.series.set('{}', { labels: {}, value: await instrument.read() })
-				} catch {
-					continue
-				}
-			}
-			for (const s of instrument.series.values()) {
-				batch.push(sampleAt(at, instrument.name, s.labels, instrument.kind, s.value))
-			}
-		}
+		const batch = await this.#instrumentSamples(at)
 		const taken = this.#takeTimers(at, batch)
 		if (batch.length === 0) {
 			return
 		}
 		try {
-			await this.#link.run('write', connection =>
-				connection.session.call(methods['metrics.ingest'], MetricsBatch.encode({ series: batch })),
-			)
+			await this.#ingestLeavingRefusedOut(batch)
 		} catch (err) {
 			for (const [timing, longest] of taken) {
 				timing.longest = Math.max(timing.longest, longest)
@@ -535,16 +538,67 @@ export class Metrics {
 		}
 	}
 
+	// every instrument's value now; a gauge whose function throws skips this
+	// flush, said once while its error stays the same
+	async #instrumentSamples(at: bigint): Promise<Owned[]> {
+		const batch: Owned[] = []
+		for (const instrument of this.#instruments.values()) {
+			if (instrument.read !== undefined && !(await readGauge(instrument, instrument.read))) {
+				continue
+			}
+			for (const [key, s] of instrument.series) {
+				batch.push({
+					sample: sampleAt(at, instrument.name, s.labels, instrument.kind, s.value),
+					owner: {
+						series: formatSeries(instrument.name, s.labels),
+						refuse: () => refuse(instrument, key),
+					},
+				})
+			}
+		}
+		return batch
+	}
+
+	// sends the batch until the store takes what is left of it: a refusal that
+	// names one of its series leaves that series out, for good, and goes again
+	async #ingestLeavingRefusedOut(batch: Owned[]): Promise<void> {
+		let sending = batch
+		while (sending.length > 0) {
+			try {
+				const series = sending.map(owned => owned.sample)
+				await this.#link.run('write', connection =>
+					connection.session.call(methods['metrics.ingest'], MetricsBatch.encode({ series })),
+				)
+				return
+			} catch (err) {
+				const refused = refusedIn(sending, err)
+				if (refused === undefined) {
+					throw err
+				}
+				refused.refuse()
+				sayOwn('warn', 'instrument refused', { series: refused.series, error: messageOf(err) })
+				sending = sending.filter(owned => owned.owner !== refused)
+			}
+		}
+	}
+
 	// adds what the timers ingest to batch and starts their longest again,
-	// answering what it took so that a failed flush gives it back
-	#takeTimers(at: bigint, batch: Sampled[]): [Timing, number][] {
+	// answering what it took so that a failed flush gives it back; a timer's
+	// series of one label set share an owner, so a refusal leaves all three out
+	#takeTimers(at: bigint, batch: Owned[]): [Timing, number][] {
 		const taken: [Timing, number][] = []
 		for (const timer of this.#timers.values()) {
-			for (const t of timer.series.values()) {
-				batch.push(sampleAt(at, `${timer.name}_count`, t.labels, 'counter', t.count))
-				batch.push(sampleAt(at, `${timer.name}_sum`, t.labels, 'counter', t.sum))
+			for (const [key, t] of timer.series) {
+				const owner = {
+					series: formatSeries(timer.name, t.labels),
+					refuse: () => refuse(timer, key),
+				}
+				const add = (suffix: string, kind: SeriesKind, value: number) =>
+					batch.push({ sample: sampleAt(at, timer.name + suffix, t.labels, kind, value), owner })
+				add('_count', 'counter', t.count)
+				add('_sum', 'counter', t.sum)
 				if (t.measured) {
-					batch.push(sampleAt(at, `${timer.name}_max`, t.labels, 'gauge', t.longest))
+					add('_max', 'gauge', t.longest)
 					taken.push([t, t.longest])
 					t.longest = 0
 					t.measured = false
@@ -554,11 +608,14 @@ export class Metrics {
 		return taken
 	}
 
-	/** Stops flushing every 15 s; the store flushes once more as it closes. */
-	stop(): void {
+	/** Stops flushing every 15 s and ingests the instruments' last values; the store's close calls it. */
+	async stop(): Promise<void> {
 		if (this.#interval !== undefined) {
 			clearInterval(this.#interval)
 			this.#interval = undefined
+		}
+		if (this.instruments > 0) {
+			await this.#flushInBackground()
 		}
 	}
 
@@ -574,7 +631,11 @@ interface Instrument {
 	kind: SeriesKind
 	/** by the canonical spelling of each label set */
 	series: Map<string, { labels: Labels; value: number }>
+	/** the spellings of the label sets the store refused, whose writes are left out */
+	refused: Set<string>
 	read?: () => number | Promise<number>
+	/** the error a gauge's function last threw, said once while it stays the same */
+	lastRead: string | undefined
 }
 
 /** what a timer ingests, each series its name and a suffix */
@@ -588,6 +649,7 @@ interface TimerInstrument {
 	name: string
 	/** by the canonical spelling of each label set */
 	series: Map<string, Timing>
+	refused: Set<string>
 }
 
 interface Timing {
@@ -644,9 +706,85 @@ function seriesOf(instrument: Instrument, labels: Labels): { labels: Labels; val
 	let s = instrument.series.get(key)
 	if (s === undefined) {
 		s = { labels, value: 0 }
-		instrument.series.set(key, s)
+		// a refused series' writes go to a value no flush reads
+		if (!instrument.refused.has(key)) {
+			instrument.series.set(key, s)
+		}
 	}
 	return s
+}
+
+/** a sample of an instrument's, and the series a refusal of it leaves out */
+interface Owned {
+	sample: Sampled
+	owner: Owner
+}
+
+/** an instrument's series, or a timer's three of one label set */
+interface Owner {
+	/** as Go prints a series: name{route="/a"} */
+	series: string
+	refuse(): void
+}
+
+function refuse(instrument: Instrument | TimerInstrument, key: string): void {
+	instrument.series.delete(key)
+	instrument.refused.add(key)
+}
+
+/** the codes of a refusal that is the series' own doing, as Go's metrics tells them apart */
+const seriesRefusals = new Set<Code>([
+	'invalid',
+	'limit',
+	'too_old',
+	'too_new',
+	'conflict',
+	'corrupt',
+	'suspended',
+])
+
+/** the owner of the series a refusal names by its labels, when it names one of these */
+function refusedIn(sending: Owned[], err: unknown): Owner | undefined {
+	if (!(err instanceof TinystoreError) || !seriesRefusals.has(err.code)) {
+		return undefined
+	}
+	const named = Object.entries(err.what)
+	return sending.find(
+		({ sample }) =>
+			named.length === Object.keys(sample.labels).length &&
+			named.every(([key, value]) => sample.labels[key] === value),
+	)?.owner
+}
+
+/** a gauge's value from its function, or false when it threw: said once while the error stays the same */
+async function readGauge(
+	instrument: Instrument,
+	read: () => number | Promise<number>,
+): Promise<boolean> {
+	if (instrument.refused.size > 0) {
+		return false
+	}
+	try {
+		instrument.series.set('{}', { labels: {}, value: await read() })
+		instrument.lastRead = undefined
+		return true
+	} catch (err) {
+		const error = messageOf(err)
+		if (error !== instrument.lastRead) {
+			sayOwn('warn', 'gauge read failed', { series: instrument.name, error })
+			instrument.lastRead = error
+		}
+		return false
+	}
+}
+
+/** a series as Go prints one: its name, then its labels sorted and quoted */
+function formatSeries(name: string, labels: Labels): string {
+	const keys = Object.keys(labels).sort()
+	if (keys.length === 0) {
+		return name
+	}
+	return `${name}{${keys.map(key => `${key}=${JSON.stringify(labels[key])}`).join(',')}}`
 }
 
 export class Counter {
@@ -727,6 +865,9 @@ export class Timer {
 			throw new InvalidError(`a timer records ${d}; a duration is never negative`)
 		}
 		const key = keyOf(this.#labels)
+		if (this.#timer.refused.has(key)) {
+			return
+		}
 		let t = this.#timer.series.get(key)
 		if (t === undefined) {
 			t = { labels: this.#labels, count: 0, sum: 0, longest: 0, measured: false }

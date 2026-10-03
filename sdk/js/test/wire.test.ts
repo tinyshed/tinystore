@@ -483,3 +483,13 @@ test('every method is the number the server gives it', () => {
 test('every code the server sends is a class of its own', () => {
 	expect([...codes].sort()).toEqual([...messageVectors.codes].sort() as typeof codes)
 })
+
+test('a byte written as the buffer grows is kept', () => {
+	// one byte each, past the buffer's first growths at 128, 256, 512 and 1024
+	const w = new Writer()
+	const written = Array.from({ length: 1100 }, (_, n) => n % 100)
+	for (const n of written) {
+		w.uint(n)
+	}
+	expect([...w.bytes()]).toEqual(written)
+})

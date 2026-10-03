@@ -36,6 +36,44 @@ func TestBackgroundFlushSummaryDoesNotEnterRecordsHandler(t *testing.T) {
 	}
 }
 
+func TestDroppedLinesAreSaidOncePerQuietPeriod(t *testing.T) {
+	s := openLogging(t, t.TempDir(), Options{Buffer: 2})
+	var output bytes.Buffer
+	s.log = slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
+	logger := slog.New(s.Handler("app", ConsoleOff))
+	flush := func() {
+		if err := s.flushInBackground(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flush()
+	for range 5 { // two fit, three are dropped
+		logger.Info("line")
+	}
+	flush()
+	logger.Info("one")
+	logger.Info("two")
+	logger.Info("dropped")
+	s.clock.advance(9 * time.Minute)
+	flush()
+	s.clock.advance(time.Minute)
+	flush()
+	flush()
+
+	want := `level=WARN msg="log lines dropped" dropped=3 buffer=2` + "\n" +
+		`level=WARN msg="log lines dropped" dropped=1 buffer=2` + "\n"
+	if output.String() != want {
+		t.Fatalf("said:\n%s\nwant:\n%s", output.String(), want)
+	}
+}
+
 func TestAFailedFlushCountsItsDroppedRecordsByReason(t *testing.T) {
 	s := openLogging(t, t.TempDir(), Options{})
 	slog.New(s.Handler("app", ConsoleOff)).Info("waiting")

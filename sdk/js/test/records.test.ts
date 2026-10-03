@@ -1,12 +1,13 @@
 // records and metrics through a real tinystore serve, the one test/binary.ts built.
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
 	type Condition,
+	fields,
 	InvalidError,
 	LimitError,
 	noneOf,
@@ -39,9 +40,45 @@ async function caught(promise: Promise<unknown>): Promise<unknown> {
 	)
 }
 
+/** What was written to stderr while fn ran, where TinyStore says its own lines. */
+async function stderrWhile(fn: () => Promise<void>): Promise<string> {
+	const spy = spyOn(process.stderr, 'write')
+	try {
+		await fn()
+		return spy.mock.calls.map(([text]) => String(text)).join('')
+	} finally {
+		spy.mockRestore()
+	}
+}
+
+function times(text: string, said: string): number {
+	return text.split(said).length - 1
+}
+
 const second = 1_000_000_000n
 
 describe('records', () => {
+	test("fields reads a record's pairs as JSON, the last of a repeated key kept", async () => {
+		await store.records.append({
+			stream: 'fields',
+			name: 'view',
+			context: { session: 's1' },
+			attrs: [
+				['page', '/docs'],
+				['nested', { a: [1, 2] }],
+				['n', 1],
+				['n', 2],
+				['__proto__', { polluted: true }],
+			],
+		})
+		const { items } = await store.records.scan({ streams: ['fields'] })
+		const read = fields(items[0]?.attrs ?? [])
+		expect([read.page, read.nested, read.n]).toEqual(['/docs', { a: [1, 2] }, 2])
+		expect(Object.hasOwn(read, '__proto__')).toBe(true)
+		expect(Object.getPrototypeOf(read)).toBe(Object.prototype)
+		expect(fields(items[0]?.context ?? [])).toEqual({ session: 's1' })
+	})
+
 	test('a record comes back as it went in, its time to the nanosecond', async () => {
 		const at = BigInt(Date.now()) * 1_000_000n + 123_456n
 		await store.records.append({
@@ -166,14 +203,18 @@ describe('logger', () => {
 		expect(String(items[3]?.attrs[0]?.[1])).toContain('boom')
 	})
 
-	test('a full logger drops and counts rather than wait, and keeps its least level', async () => {
+	test('a full logger drops and counts rather than wait, says so, and keeps its least level', async () => {
 		const log = store.records.logger('quiet', { buffer: 2, level: 'warn', console: 'off' })
-		log.info('below its level')
-		for (const n of ['one', 'two', 'three', 'four']) {
-			log.warn(n)
-		}
-		await log.flush()
+		const said = await stderrWhile(async () => {
+			log.info('below its level')
+			for (const n of ['one', 'two', 'three', 'four']) {
+				log.warn(n)
+			}
+			await log.flush()
+		})
 		expect(log.dropped).toBe(1)
+		expect(times(said, 'log lines dropped')).toBe(1)
+		expect(said).toContain('quiet')
 		const { items } = await store.records.scan({ streams: ['quiet'] })
 		expect(items.map(r => r.body)).toEqual(['one', 'two', 'three'])
 	})
@@ -333,6 +374,29 @@ describe('metrics', () => {
 		expect(posts?.labels).toEqual({ route: '/notes', method: 'POST' })
 		const [depth] = await store.metrics.read({ name: 'queue_depth', since: '1m' })
 		expect(depth?.values[0]).toBe(7)
+	})
+
+	test('a refused instrument keeps no other out, and says so once', async () => {
+		const refused = store.metrics.counter('refused_total').with({ '': 'x' })
+		const said = await stderrWhile(async () => {
+			store.metrics.counter('kept_total').inc()
+			refused.inc()
+			store.metrics.timer('refused_ms').with({ '': 'y' }).record(5)
+			store.metrics.gaugeFunc('unread', () => {
+				throw new Error('no reading')
+			})
+			await store.metrics.flush()
+			store.metrics.counter('kept_total').inc()
+			refused.inc()
+			await store.metrics.flush()
+		})
+		const [kept] = await store.metrics.read({ name: 'kept_total', since: '1m' })
+		expect(kept?.values).toEqual(Float64Array.of(1, 2))
+		expect(times(said, 'instrument refused')).toBe(2)
+		expect(said).toContain('refused_total')
+		expect(said).toContain('refused_ms')
+		expect(times(said, 'gauge read failed')).toBe(1)
+		expect(store.metrics.failures).toBe(0)
 	})
 
 	test('a timer writes its count, sum and longest at each flush; measure answers and rethrows', async () => {

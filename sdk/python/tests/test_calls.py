@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -174,6 +175,88 @@ async def test_a_timer_writes_its_count_sum_and_longest_at_each_flush(store: tin
     assert await values("timed_ms_count", "/a") == [1, 1]
     assert await values("timed_ms_sum", "/a") == [2.5, 2.5]
     assert await values("timed_ms_max", "/a") == [2.5]
+
+
+async def test_fields_read_a_records_pairs_as_json_the_last_of_a_repeated_key_kept(store: tinystore.Store) -> None:
+    await store.records.append(
+        {
+            "stream": "fields",
+            "name": "view",
+            "context": {"session": "s1"},
+            "attrs": [("page", "/docs"), ("nested", {"a": [1, 2]}), ("n", 1), ("n", 2)],
+        }
+    )
+    [record] = (await store.records.scan(streams=["fields"])).items
+    assert tinystore.fields(record.attrs) == {"page": "/docs", "nested": {"a": [1, 2]}, "n": 2}
+    assert tinystore.fields(record.context) == {"session": "s1"}
+    assert tinystore.fields([("text", b'"caf\xc3"')]) == {"text": "caf\ufffd"}
+
+
+async def test_a_refused_instrument_keeps_no_other_out_and_says_so_once(
+    store: tinystore.Store, capsys: pytest.CaptureFixture[str]
+) -> None:
+    refused = store.metrics.counter("refused_total").labels(**{"": "x"})
+    store.metrics.counter("kept_total").inc()
+    refused.inc()
+    store.metrics.timer("refused_ms").labels(**{"": "y"}).record(0.005)
+
+    def unread() -> float:
+        raise OSError("no reading")
+
+    store.metrics.gauge_func("unread", unread)
+    await store.metrics.flush()
+    store.metrics.counter("kept_total").inc()
+    refused.inc()
+    await store.metrics.flush()
+
+    [kept] = await store.metrics.read(name="kept_total", since="1m")
+    assert list(kept.values) == [1, 2]
+    said = capsys.readouterr().err
+    assert said.count("instrument refused") == 2 and "refused_total" in said and "refused_ms" in said
+    assert said.count("gauge read failed") == 1
+    assert store.metrics.failures == 0
+
+
+async def test_a_half_full_buffer_is_written_before_its_interval(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("tinystore.records._FLUSH_EVERY", 3600.0)
+    log = logging.getLogger("half-full")
+    log.propagate = False
+    handler = store.records.handler("half", console="off", buffer=64)
+    log.addHandler(handler)
+    try:
+        written, kept = 0, 0
+        for _ in range(8):
+            for _ in range(32):
+                log.warning("line")
+            written += 32
+            for _ in range(500):
+                kept = len((await store.records.scan(streams=["half"], limit=1000)).items)
+                if kept >= written:
+                    break
+                await asyncio.sleep(0.01)
+    finally:
+        log.removeHandler(handler)
+    assert (kept, handler.dropped) == (written, 0)
+
+
+async def test_a_full_handler_drops_counts_and_says_so(
+    store: tinystore.Store, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = logging.getLogger("full")
+    log.propagate = False
+    handler = store.records.handler("full", console="off", buffer=2)
+    log.addHandler(handler)
+    try:
+        for n in ("one", "two", "three", "four"):
+            log.warning(n)
+        await handler.flush_now()
+    finally:
+        log.removeHandler(handler)
+    assert handler.dropped == 2
+    said = capsys.readouterr().err
+    assert said.count("log lines dropped") == 1 and '"logger":"full"' in said
 
 
 async def test_a_remote_server_takes_its_token_and_refuses_another(tmp_path: Path) -> None:

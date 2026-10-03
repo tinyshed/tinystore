@@ -36,7 +36,7 @@ from .kv import Batch, Bucket, Counters, Entry, Once
 from .limiter import Allowance, Limiter
 from .metrics import Aggregate, Condition, Plan, Series, none_of, one_of, prefix
 from .quota import Quota, QuotaUsage, WindowUsage
-from .records import Cursor, Record, trace
+from .records import Cursor, Record, fields, trace
 from .sql import Database, Done
 from .store import Status, Store, connect, open
 
@@ -97,6 +97,7 @@ __all__ = [
     "cron",
     "daily",
     "every",
+    "fields",
     "handler",
     "none_of",
     "one_of",
