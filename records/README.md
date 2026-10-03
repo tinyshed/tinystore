@@ -77,7 +77,9 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   line keeps the record's spelling, its time in UTC to the millisecond. The
   engine's own lines reach the console from Info up and never the store.
   Colours need a
-  terminal, and not `NO_COLOR` or a `TERM` of dumb.
+  terminal, and not `NO_COLOR` or a `TERM` of dumb; `FORCE_COLOR` other than
+  `0` makes a pipe pretty and coloured by default, as an IDE's run console
+  reads one, and `NO_COLOR` still wins.
 - `Redact(names...)` hides the values of fields with those names, in the
   store and on the console: a key, or the part of a dotted key after its last
   dot, the case ignored, and such a key at any depth of a JSON object. A

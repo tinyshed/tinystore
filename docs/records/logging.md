@@ -86,6 +86,20 @@ JSON object, which log collectors expect:
 Go, Bun and Python print exactly the same bytes for the same line. Colors are
 off when `NO_COLOR` is set or `TERM` is `dumb`.
 
+### Colors in an IDE
+
+The run console of an IDE, such as GoLand, WebStorm or PyCharm, reads your
+program through a pipe, not a terminal. So by default the logger prints JSON
+without colors there. Set `FORCE_COLOR=1` in the run configuration's
+environment variables, and the logger prints pretty lines in color:
+
+```sh
+FORCE_COLOR=1 bun app.ts
+```
+
+`FORCE_COLOR` turns colors on wherever the program runs, so set it where you
+run the program, not in production. `NO_COLOR` still turns colors off.
+
 | Option | Go | Bun | Python |
 |---|---|---|---|
 | format | `records.ConsolePretty`, `ConsoleJSON`, `ConsoleOff` | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |

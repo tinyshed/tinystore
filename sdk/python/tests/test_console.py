@@ -40,7 +40,8 @@ def test_a_console_line_is_the_vectors(vector: dict[str, Any]) -> None:
 
 
 @pytest.fixture
-def logger() -> Iterator[logging.Logger]:
+def logger(monkeypatch: pytest.MonkeyPatch) -> Iterator[logging.Logger]:
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
     log = logging.getLogger("tinystore-console")
     log.propagate = False
     log.setLevel(logging.DEBUG)
@@ -86,6 +87,25 @@ def test_pretty_and_stdout_and_off(logger: logging.Logger, capsys: pytest.Captur
     logger.warning("slow request", extra={"ms": 1200})
     out, err = capsys.readouterr()
     assert out.endswith(" WARN  app  slow request  logger=tinystore-console ms=1200\n") and err == ""
+
+
+def test_force_color_makes_a_pipe_pretty_and_coloured_unless_no_color(
+    logger: logging.Logger, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("TERM", raising=False)
+    logger.addHandler(tinystore.handler("app"))
+    logger.warning("slow request")
+    err = capsys.readouterr().err
+    assert "[" in err and "slow request" in err and not err.startswith("{")
+
+    logger.handlers.clear()
+    monkeypatch.setenv("NO_COLOR", "1")
+    logger.addHandler(tinystore.handler("app"))
+    logger.warning("slow request")
+    err = capsys.readouterr().err
+    assert "[" not in err and " WARN  app  slow request" in err
 
 
 def test_an_unknown_console_is_refused() -> None:

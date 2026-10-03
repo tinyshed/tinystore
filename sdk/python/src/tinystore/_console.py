@@ -200,6 +200,10 @@ def encode_fields(pairs: Iterable[tuple[str, Any]], hides: Callable[[str], bool]
     return [(key, REDACTED if hides is not None and hides(key) else encode(value, hides)) for key, value in pairs]
 
 
+def _forced() -> bool:
+    return os.environ.get("FORCE_COLOR", "") not in ("", "0")
+
+
 def _enable_colours(stream: TextIO) -> bool:
     """Asks a Windows console to read escape sequences, which one from before Windows Terminal prints as text."""
     if sys.platform == "win32":
@@ -281,15 +285,18 @@ class ConsoleHandler(logging.Handler):
             return
         out = sys.stdout if self._stdout else sys.stderr
         terminal = out.isatty()
-        if self._console == "json" or (self._console is None and not terminal):
+        # FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
+        forced = _forced()
+        if self._console == "json" or (self._console is None and not (terminal or forced)):
             out.write(json_line(line))
         else:
-            out.write(pretty_line(line, terminal and self._colour(out)))
+            out.write(pretty_line(line, (terminal or forced) and self._colour(out, forced)))
         out.flush()
 
-    def _colour(self, out: TextIO) -> bool:
+    def _colour(self, out: TextIO, forced: bool) -> bool:
         if self._colours is None:
-            self._colours = not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb" and _enable_colours(out)
+            allowed = not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
+            self._colours = allowed and (_enable_colours(out) or forced)
         return self._colours
 
 

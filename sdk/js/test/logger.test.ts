@@ -1,7 +1,9 @@
 // A logger's buffer against an append that answers when the test lets it, so
-// that what a buffer does while a write runs can be watched step by step.
+// that what a buffer does while a write runs can be watched step by step, and
+// what FORCE_COLOR makes of a child's stderr.
 
 import { describe, expect, test } from 'bun:test'
+import { fileURLToPath } from 'node:url'
 
 import type { ConsoleLine } from '../src/console.ts'
 import { newLogger } from '../src/logger.ts'
@@ -58,5 +60,36 @@ describe("a logger's buffer", () => {
 		}
 		await log.stop()
 		expect([sizes, log.dropped]).toEqual([[2, 1], 3])
+	})
+})
+
+describe('FORCE_COLOR', () => {
+	// a child's stderr is a pipe, as an IDE's run console reads it
+	async function logged(env: Record<string, string>): Promise<string> {
+		const index = fileURLToPath(new URL('../src/index.ts', import.meta.url))
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				'-e',
+				`import { logger } from ${JSON.stringify(index)}; logger('app').warn('slow request')`,
+			],
+			{ env: { ...process.env, NO_COLOR: '', TERM: '', ...env }, stdout: 'ignore', stderr: 'pipe' },
+		)
+		const text = await new Response(child.stderr).text()
+		await child.exited
+		return text
+	}
+
+	test('makes a pipe pretty and coloured, unless NO_COLOR', async () => {
+		const forced = await logged({ FORCE_COLOR: '1' })
+		expect(forced).toContain('[')
+		expect(forced).toContain('slow request')
+		expect(forced.startsWith('{')).toBe(false)
+
+		const refused = await logged({ FORCE_COLOR: '1', NO_COLOR: '1' })
+		expect(refused).not.toContain('[')
+		expect(refused).toContain(' WARN  app  slow request')
+
+		expect((await logged({ FORCE_COLOR: '0' })).startsWith('{')).toBe(true)
 	})
 })

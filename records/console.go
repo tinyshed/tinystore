@@ -50,7 +50,8 @@ func newEcho(settings handlerSettings) *echo {
 		// a test's own writer, whose lines do not depend on the machine's zone
 		c.out, c.zone = settings.out, time.UTC
 	}
-	c.pretty = settings.console == ConsolePretty || settings.console == 0 && term.IsTerminal(file)
+	// FORCE_COLOR says a person reads the pipe, so the default is theirs too
+	c.pretty = settings.console == ConsolePretty || settings.console == 0 && (term.IsTerminal(file) || term.Forced())
 	c.color = c.pretty && settings.out == nil && term.Colors(file)
 	return c
 }
@@ -71,7 +72,7 @@ func NewPrinter(w io.Writer, console Console) *Printer {
 	}
 	c := &echo{out: w, zone: time.Local, pretty: console == ConsolePretty}
 	if file, ok := w.(*os.File); ok {
-		c.pretty = c.pretty || console == 0 && term.IsTerminal(file)
+		c.pretty = c.pretty || console == 0 && (term.IsTerminal(file) || term.Forced())
 		c.color = c.pretty && term.Colors(file)
 	}
 	return &Printer{echo: c}

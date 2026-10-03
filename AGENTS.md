@@ -497,6 +497,7 @@ Every rule worth keeping is worth the twenty lines that make it fail loudly.
 | a Python line takes the fields of the context it was logged in | `test_lines_take_the_fields_of_the_context_they_were_logged_in` in Python's suite |
 | a logger without a store writes the console alone   | `TestAHandlerWithoutAStoreWritesTheConsoleAlone`                                |
 | colours need a terminal, and not NO_COLOR           | `TestAFileIsNoTerminal`, `TestNoColorAndADumbTerminalTurnColoursOff`            |
+| FORCE_COLOR colours a pipe, and NO_COLOR still wins | `TestForceColorTurnsColoursOnWithoutATerminal`; `makes a pipe pretty and coloured, unless NO_COLOR` in `sdk/js/test/logger.test.ts`, `test_force_color_makes_a_pipe_pretty_and_coloured_unless_no_color` in Python's |
 | a line one record holds loses no byte; a longer one is dropped and counted | `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`, `TestALargeLineWriteKeepsOnlyOneBoundedPartial` |
 | a writer of lines never waits, and closes with the store | `TestLinesNeverWaitAndCloseWithTheStore`                                   |
 | a stack trace's lines make one record               | `TestLinesJoinWhatBelongsTogether`, `TestAStackTraceGoesOn`                     |

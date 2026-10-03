@@ -112,19 +112,29 @@ export const sayOwn: Say = (level, message, fields) => {
 	own[level](message, fields)
 }
 
+function forceColor(): boolean {
+	const force = process.env.FORCE_COLOR
+	return force !== undefined && force !== '' && force !== '0'
+}
+
 /** How a logger prints its lines, or undefined when it prints none. */
 function printer(options: LoggerOptions, out?: ConsoleOut & { utc?: boolean }): Shared['print'] {
 	if (options.console === 'off') {
 		return undefined
 	}
 	const stream: ConsoleOut = out ?? (options.stdout === true ? process.stdout : process.stderr)
+	// FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
+	const forced = out === undefined && forceColor()
 	const terminal = stream.isTTY === true
-	const pretty = options.console === 'pretty' || (options.console === undefined && terminal)
+	const pretty =
+		options.console === 'pretty' || (options.console === undefined && (terminal || forced))
 	if (!pretty) {
 		return line => void stream.write(jsonLine(line))
 	}
 	const color =
-		terminal && out === undefined && !process.env.NO_COLOR && process.env.TERM !== 'dumb'
+		(forced || (terminal && out === undefined)) &&
+		!process.env.NO_COLOR &&
+		process.env.TERM !== 'dumb'
 	return line => void stream.write(prettyLine(line, color, out?.utc === true))
 }
 

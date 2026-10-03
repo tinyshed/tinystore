@@ -16,9 +16,17 @@ func isTerminal(f *os.File) bool {
 }
 
 // colors says that f is a terminal that shows colours, and turns them on where
-// a console needs that: not under NO_COLOR, nor on a dumb terminal
+// a console needs that: not under NO_COLOR, nor on a dumb terminal, and on a
+// pipe too under FORCE_COLOR other than 0, as an IDE's run console reads one
 func colors(f *os.File) bool {
-	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" || !isTerminal(f) {
+	force := os.Getenv("FORCE_COLOR")
+	switch {
+	case os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb":
+		return false
+	case force != "" && force != "0":
+		enableColors(f)
+		return true
+	case !isTerminal(f):
 		return false
 	}
 	return enableColors(f)
