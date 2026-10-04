@@ -24,14 +24,13 @@ from ._session import LostError
 from ._time import Duration, date_of, ms, unix_ms
 from ._values import from_json, to_json
 from ._wire.messages import METHODS, KvBucket, KvCall, KvCalls, KvEntry, KvPage, KvResults
-from .config import Config
+from .config import Config, FromEnv
 from .errors import ConflictError, CorruptError, InvalidError, OutcomeUnknownError
 from .limiter import Limiter, limiter_open
 from .quota import Quota, quota_open
 
 if TYPE_CHECKING:
-    import os
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
     from datetime import datetime
 
     from ._session import Stream
@@ -131,27 +130,20 @@ class Kv:
         name: str,
         of: type[T],
         /,
-        *,
-        file: Mapping[str, Any] | None = None,
-        prefix: str = "",
-        env: Mapping[str, str] | bool = True,
-        env_file: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None = None,
-        secret: Iterable[str] = (),
+        *layers: Mapping[str, Any] | FromEnv,
         validate: Callable[[T], object] | None = None,
     ) -> Config[T]:
         """The config name, of a type whose defaults are its own: a dataclass, or a model.
 
-        A file's values, then the environment, then what update kept go over the defaults, each over
-        the one before. It returns once the server's state is read, and follows every change from
-        then on, whoever makes it, until the store closes::
+        Each layer goes over the one before, a file's values or from_env, and what update kept over
+        them all. It returns once the server's state is read, and follows every change from then on,
+        whoever makes it, until the store closes::
 
-            cfg = await store.kv.config("app", Settings, env_file=".env")
-            cfg.value.port                     # PORT=3000 in .env makes it 3000
+            cfg = await store.kv.config("app", Settings, toml, from_env("APP", ".env"))
+            cfg.value.port                     # APP_PORT=3000 in .env makes it 3000
             await cfg.update({"port": 4000})   # kept: 4000 after a restart too
         """
-        config = Config(
-            self._link, name, of, file=file, prefix=prefix, env=env, env_file=env_file, secret=secret, validate=validate
-        )
+        config = Config(self._link, name, of, layers, validate)
         self._configs.append(config)
         try:
             await config.start()

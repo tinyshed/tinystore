@@ -11,7 +11,7 @@ from ._console import ConsoleHandler, handler
 from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
 from .clock import Clock
-from .config import Config, Source
+from .config import Config, FromEnv, Source, from_env, secret
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -64,6 +64,7 @@ __all__ = [
     "Download",
     "Enqueue",
     "Entry",
+    "FromEnv",
     "InUseError",
     "InternalError",
     "InvalidError",
@@ -102,10 +103,12 @@ __all__ = [
     "daily",
     "every",
     "fields",
+    "from_env",
     "handler",
     "none_of",
     "one_of",
     "open",
     "prefix",
+    "secret",
     "trace",
 ]

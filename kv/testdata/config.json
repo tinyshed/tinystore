@@ -1,5 +1,5 @@
 {
-  "about": "A config's variables and .env files, which Go's kv.Config and the Python SDK read alike; Bun reads .env itself. names: [prefix, path, variable]. dotenv: a file's text and the variables it sets, or the line it refuses.",
+  "about": "A config's variables and .env files, which Go's kv.Config and the Bun and Python SDKs read alike. names: [prefix, path, variable]. dotenv: a file's text and the variables it sets, or the line it refuses.",
   "names": [
     ["", "port", "PORT"],
     ["APP", "port", "APP_PORT"],

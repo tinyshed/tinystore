@@ -250,9 +250,11 @@ module defines.
 - kv's All holds no snapshot between its pages — `TestAllWalksEveryKeyAPageAtATime`
 - a kv page ends before the value that passes its bytes — `TestAPageEndsBeforeTheValueThatPassesItsBytes`
 - a config is its defaults, its environment, then what was kept, across a restart — `TestAConfigIsItsDefaultsThenItsEnvironmentThenWhatWasKept`, in both SDKs' suites too
+- a config's layers go over each other in the order given, and no variable is read without one — `TestLayersGoOverEachOtherInTheOrderGiven`; `reads no variable without fromEnv, and a layer after it goes over it` in `sdk/js/test/config.test.ts`, `test_no_variable_is_read_without_from_env_and_a_layer_after_it_goes_over_it` in Python's
+- a required setting is given by a layer, or the config does not open, naming its variable — `TestARequiredFieldIsGivenOrTheConfigDoesNotOpen`; `a required field is given by a layer, or the config does not open, naming its variable` in `sdk/js/test/config.test.ts`, `test_a_required_field_is_given_by_a_layer_or_the_config_does_not_open_naming_its_variable` in Python's
 - a config change reaches every handle and watcher at once — `TestAChangeIsSeenByEveryHandleAtOnce`, `TestAConfigChangeReachesEveryWatcher` over the wire
 - a config change that fails its check, or sets a secret, keeps nothing — `TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing`
-- a kept value that no longer fits its field is left out and named — `TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed`
+- a kept value that no longer fits its field, or names a secret, is left out and named — `TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed`, in both SDKs' suites too
 - a variable is read by its field's type, or refused naming it — `TestAVariableIsReadByItsFieldsType`
 - a config keeps only JSON within its bounds — `TestARawConfigKeepsOnlyJSONWithinItsBounds`
 - variables and `.env` files read alike in every language — `TestVariablesAndDotenvFilesAreTheVectors`, over `kv/testdata/config.json`, which both SDKs' suites read

@@ -1,8 +1,8 @@
 """An application's settings, as Go's kv.Config makes them.
 
-The defaults, then a file's values, then the environment, then what update kept, each over the one
-before. The server keeps what update changed field by field in kv.db and sends it to every store
-watching the config, so `value` is read from memory and is new after each change.
+The defaults, then each layer in the order given, then what update kept, each over the one before. The
+server keeps what update changed field by field in kv.db and sends it to every store watching the config,
+so `value` is read from memory and is new after each change.
 """
 
 from __future__ import annotations
@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import dataclasses
 import json
 import math
 import os
 import typing
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,7 +26,7 @@ from ._wire.messages import METHODS, KvBucket, KvCall, KvConfigure, KvKept
 from .errors import ClosedError, InvalidError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
 
 def env_name(prefix: str, path: str) -> str:
@@ -109,6 +111,53 @@ def _valid_env_name(name: str) -> bool:
     return bool(name) and all(c == "_" or c.isalpha() or (i > 0 and c.isdigit()) for i, c in enumerate(name))
 
 
+_MARK = "tinystore"
+
+
+@dataclass(frozen=True, slots=True)
+class _Mark:
+    secret: bool
+    variable: str | None
+
+
+def secret(variable: str | None = None, *, default: str | None = None) -> Any:
+    """A secret field of a config's dataclass, never kept by update and shown as *** by sources().
+
+    It reads its own variable when given one, and is required without a default::
+
+        url: str = secret("DATABASE_URL")
+    """
+    metadata = {_MARK: _Mark(secret=True, variable=variable)}
+    if default is None:
+        return dataclasses.field(metadata=metadata)
+    return dataclasses.field(default=default, metadata=metadata)
+
+
+@dataclass(frozen=True, slots=True)
+class FromEnv:
+    """The environment as a layer of a config, which from_env makes."""
+
+    prefix: str
+    files: tuple[str | os.PathLike[str], ...]
+
+
+def from_env(prefix: str = "", *files: str | os.PathLike[str]) -> FromEnv:
+    """The environment as a config's layer: from_env("APP") reads db.pool from APP_DB_POOL, from_env() from DB_POOL.
+
+    The .env files given are read first, the process's own variables over them, a missing file skipped.
+    """
+    return FromEnv(prefix, files)
+
+
+@dataclass(frozen=True, slots=True)
+class _Field:
+    sample: Any
+    """its default, or a value of its kind for a field without one"""
+    secret: bool
+    required: bool
+    variable: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class Source:
     """Where a field's value came from."""
@@ -123,32 +172,22 @@ class Source:
 
 
 class Config[T]:
-    """A config: open it with `await store.kv.config(name, Type)`, whose defaults are its own."""
+    """A config: open it with `await store.kv.config(name, Type, *layers)`, whose defaults are its own."""
 
     def __init__(
         self,
         link: Link,
         name: str,
         of: type[T],
-        *,
-        file: Mapping[str, Any] | None,
-        prefix: str,
-        env: Mapping[str, str] | bool,
-        env_file: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None,
-        secret: Iterable[str],
+        layers: Sequence[Mapping[str, Any] | FromEnv],
         validate: Callable[[T], object] | None,
     ) -> None:
         check_name(name, "config")
         self.name, self._link, self._of, self._validate = name, link, of, validate
         self._open = KvBucket.encode(name=name, config=True)
-        defaults = json.loads(to_json(of()))
-        self._leaves = dict(_leaves_of(defaults))
-        self._secret = set(secret)
-        for path in self._secret:
-            if path not in self._leaves:
-                raise InvalidError(f"config {name} has no field {path}")
-        self._from = dict.fromkeys(self._leaves, "default")
-        self._base = self._layered(defaults, file, prefix, env, env_file)
+        self._fields, self._base = _shape(of)
+        self._from = {path: "default" for path, f in self._fields.items() if not f.required}
+        self._lay(layers)
         self._kept: dict[str, str] = {}
         self._ignored: dict[str, str] = {}
         self._tree = copy.deepcopy(self._base)
@@ -165,18 +204,21 @@ class Config[T]:
     async def update(self, change: Mapping[str, Any]) -> None:
         """Changes the fields change names, at any depth: each one that changed is checked, kept, and seen at once.
 
-        A change validate refuses, or one of a secret, is InvalidError and keeps nothing.
+        A change validate refuses, one of a secret, or one leaving a required field empty, is InvalidError and
+        keeps nothing.
         """
         nxt = _merged(copy.deepcopy(self._tree), change)
         changed: list[str] = []
-        for path in self._leaves:
+        for path, field in self._fields.items():
             now = json.dumps(_path_in(nxt, path), separators=(",", ":"), ensure_ascii=False)
             if now == json.dumps(_path_in(self._tree, path), separators=(",", ":"), ensure_ascii=False):
                 continue
-            if path in self._secret:
+            if field.secret:
                 raise InvalidError(
-                    f"config {self.name}: {path} is a secret, set by the defaults, the file or the environment alone"
+                    f"config {self.name}: {path} is a secret, set by the defaults, a file or the environment alone"
                 )
+            if field.required and _missing(_path_in(nxt, path)):
+                raise InvalidError(f"config {self.name}: {path} is required")
             changed += [path, now]
         if not changed:
             return
@@ -186,7 +228,7 @@ class Config[T]:
     async def reset(self, *paths: str) -> None:
         """Forgets what update kept for paths, each a field or a group of them; all of it without paths."""
         for path in paths:
-            if not any(_under(leaf, path) for leaf in self._leaves):
+            if not any(_under(leaf, path) for leaf in self._fields):
                 raise InvalidError(f"config {self.name} has no field {path}")
         reset = [kept for kept in self._kept if not paths or any(_under(kept, path) for path in paths)]
         if reset:
@@ -201,9 +243,9 @@ class Config[T]:
     def sources(self) -> list[Source]:
         """Where each field's value came from, and why a kept value is left out."""
         sources: list[Source] = []
-        for path in self._leaves:
+        for path, field in self._fields.items():
             kept = path in self._kept and path not in self._ignored
-            value = "***" if path in self._secret else json.dumps(_path_in(self._tree, path), ensure_ascii=False)
+            value = "***" if field.secret else json.dumps(_path_in(self._tree, path), ensure_ascii=False)
             sources.append(Source(path, value, "kept" if kept else self._from[path], self._ignored.get(path)))
         return sources
 
@@ -267,7 +309,7 @@ class Config[T]:
     def _build(self, kept: dict[str, str]) -> None:
         """Makes the config from its base and what is kept, leaving out what no longer fits, and tells the watchers."""
         ignored: dict[str, str] = {}
-        tree = _with_kept(self._base, self._leaves, kept, ignored)
+        tree = _with_kept(self._base, self._fields, kept, ignored)
         try:
             value = self._made(tree)
         except InvalidError as err:
@@ -295,48 +337,107 @@ class Config[T]:
             raise InvalidError(f"config {self.name}: {err}") from err
         return value
 
-    def _layered(
-        self,
-        defaults: dict[str, Any],
-        file: Mapping[str, Any] | None,
-        prefix: str,
-        env: Mapping[str, str] | bool,
-        env_file: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None,
-    ) -> dict[str, Any]:
-        base = copy.deepcopy(defaults)
-        for path, value in _leaves_of(dict(file or {})):
-            if path not in self._leaves:
+    def _lay(self, layers: Sequence[object]) -> None:
+        """Lays each layer over the defaults, the one before it under it, and checks what is required."""
+        prefix: str | None = None
+        for layer in layers:
+            if isinstance(layer, FromEnv):
+                self._lay_environment(layer)
+                prefix = layer.prefix
+            elif isinstance(layer, Mapping):
+                self._lay_file(typing.cast("Mapping[str, Any]", layer))
+            else:
+                raise InvalidError(f"config {self.name}: a layer is a file's values or from_env(), not {layer!r}")
+        for path, field in self._fields.items():
+            if field.required and _missing(_path_in(self._base, path)):
+                variable = None if prefix is None else field.variable or env_name(prefix, path)
+                needs = "" if variable is None else f": set {variable}"
+                raise InvalidError(f"config {self.name}: {path} is required{needs}")
+
+    def _lay_file(self, values: Mapping[str, Any]) -> None:
+        for path, value in _leaves_of(dict(values)):
+            field = self._fields.get(path)
+            if field is None:
                 continue
-            if not _fits(value, self._leaves[path]):
-                raise InvalidError(f"the file's {path}: {value!r} is no {_kind(self._leaves[path])}")
-            _set_path(base, path, value)
+            if not _fits(value, field.sample):
+                raise InvalidError(f"the file's {path}: {value!r} is no {_kind(field.sample)}")
+            _set_path(self._base, path, value)
             self._from[path] = "file"
-        if env is False:
-            return base
-        names = dict(env) if isinstance(env, dict) else {}
-        variables = _read_env_files(env_file)
+
+    def _lay_environment(self, layer: FromEnv) -> None:
+        variables = _read_env_files(layer.files)
         variables.update(os.environ)
-        for path, wanted in self._leaves.items():
-            name = names.get(path) or env_name(prefix, path)
+        for path, field in self._fields.items():
+            name = field.variable or env_name(layer.prefix, path)
             if name in variables:
-                _set_path(base, path, _from_env(variables[name], wanted, name))
+                _set_path(self._base, path, _read_variable(variables[name], field.sample, name))
                 self._from[path] = f"env {name}"
-        return base
 
 
-def _read_env_files(files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None) -> dict[str, str]:
+def _shape(of: type) -> tuple[dict[str, _Field], dict[str, Any]]:
+    """A config type's fields by their paths, and its defaults as a tree."""
+    if dataclasses.is_dataclass(of):
+        return _dataclass_shape(of, dataclasses.MISSING, "")
+    defaults = json.loads(to_json(of()))
+    return {path: _Field(value, False, False, None) for path, value in _leaves_of(defaults)}, defaults
+
+
+def _dataclass_shape(of: type, given: Any, parent: str) -> tuple[dict[str, _Field], dict[str, Any]]:
+    """A dataclass's fields under parent, their defaults those of given when there is one."""
+    fields: dict[str, _Field] = {}
+    tree: dict[str, Any] = {}
+    hints = typing.get_type_hints(of)
+    for f in dataclasses.fields(of):
+        path = f"{parent}.{f.name}" if parent else f.name
+        kind = hints.get(f.name, Any)
+        default = _default_of(f) if given is dataclasses.MISSING else getattr(given, f.name)
+        if dataclasses.is_dataclass(kind) and isinstance(kind, type):
+            inner = default if isinstance(default, kind) else dataclasses.MISSING
+            inner_fields, tree[f.name] = _dataclass_shape(kind, inner, path)
+            fields |= inner_fields
+            continue
+        mark = f.metadata.get(_MARK) or _Mark(secret=False, variable=None)
+        if default is dataclasses.MISSING:
+            fields[path] = _Field(_sample(kind), mark.secret, True, mark.variable)
+            continue
+        tree[f.name] = json.loads(to_json(default))
+        fields[path] = _Field(tree[f.name], mark.secret, False, mark.variable)
+    return fields, tree
+
+
+def _default_of(f: dataclasses.Field[Any]) -> Any:
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    if f.default_factory is not dataclasses.MISSING:
+        # a dataclass whose fields have no defaults cannot be made without them
+        with contextlib.suppress(TypeError):
+            return f.default_factory()
+    return dataclasses.MISSING
+
+
+def _sample(kind: Any) -> Any:
+    """A value of a required field's kind, which its variable is read as."""
+    if kind in (str, int, float, bool):
+        return kind()
+    if kind is list or typing.get_origin(kind) is list:
+        return []
+    return None
+
+
+def _missing(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _read_env_files(files: Sequence[str | os.PathLike[str]]) -> dict[str, str]:
     """The variables of .env files, a later file's over an earlier's; a file that is not there is skipped."""
-    if files is None:
-        return {}
-    paths = [files] if isinstance(files, (str, os.PathLike)) else list(files)
     variables: dict[str, str] = {}
-    for path in paths:
+    for path in files:
         with contextlib.suppress(FileNotFoundError):
             variables.update(parse_dotenv(Path(path).read_text(encoding="utf-8")))
     return variables
 
 
-def _from_env(text: str, wanted: Any, name: str) -> Any:
+def _read_variable(text: str, wanted: Any, name: str) -> Any:
     """A variable's text as a value of its default's kind.
 
     A number, true or false, a list split at its commas or given as JSON, and anything else as JSON:
@@ -367,19 +468,19 @@ def _from_env(text: str, wanted: Any, name: str) -> Any:
     if isinstance(wanted, list) and not trimmed.startswith("["):
         items = typing.cast("list[Any]", wanted)
         item: Any = items[0] if items else ""
-        return [] if not trimmed else [_from_env(part.strip(), item, name) for part in trimmed.split(",")]
+        return [] if not trimmed else [_read_variable(part.strip(), item, name) for part in trimmed.split(",")]
     try:
         value = json.loads(trimmed)
     except ValueError:
-        value = _MISSING
-    if value is not _MISSING and _fits(value, wanted):
+        value = _NOT_JSON
+    if value is not _NOT_JSON and _fits(value, wanted):
         return value
     if wanted is None:
         return text
     raise InvalidError(f"{name}: {text!r} is no {_kind(wanted)}")
 
 
-_MISSING = object()
+_NOT_JSON = object()
 
 
 def _leaves_of(value: dict[str, Any], parent: str = "") -> list[tuple[str, Any]]:
@@ -413,20 +514,28 @@ def _kind(wanted: Any) -> str:
 
 
 def _with_kept(
-    base: dict[str, Any], leaves: dict[str, Any], kept: dict[str, str], ignored: dict[str, str]
+    base: dict[str, Any], fields: dict[str, _Field], kept: dict[str, str], ignored: dict[str, str]
 ) -> dict[str, Any]:
+    """The base with each kept value that fits its field over it; a secret is never taken from what was kept."""
     tree = copy.deepcopy(base)
     for path, spelled in kept.items():
-        if path not in leaves:
+        field = fields.get(path)
+        if field is None:
             ignored[path] = "the config has no such field"
+            continue
+        if field.secret:
+            ignored[path] = "the field is a secret"
             continue
         try:
             value = json.loads(spelled)
         except ValueError:
             ignored[path] = f"{spelled} is no JSON"
             continue
-        if not _fits(value, leaves[path]):
-            ignored[path] = f"{spelled} is no {_kind(leaves[path])}"
+        if not _fits(value, field.sample):
+            ignored[path] = f"{spelled} is no {_kind(field.sample)}"
+            continue
+        if field.required and _missing(value):
+            ignored[path] = "the field is required"
             continue
         _set_path(tree, path, value)
     return tree

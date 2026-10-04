@@ -135,7 +135,9 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
   strips no types in `node_modules`. `test/under-node.ts` runs the SDK under
   Node through its own runtime (`node --test`, Node 22.18 or later); the Bun
   suite stays Bun's. A package's `exports` conditions are tried in order:
-  `bun`, then `types`, then `default`, last.
+  `bun`, then `types`, then `default`, last. Node strips types and refuses
+  what it would have to compile, parameter properties, enums and namespaces,
+  so a class assigns its fields in its constructor.
 - Both packages install the binary as the `tinystore` command:
   `sdk/js/bin/tinystore.js`, plain JavaScript that Bun and Node both run, and
   `tinystore._cli` as a console script. Neither looks on PATH, where it may

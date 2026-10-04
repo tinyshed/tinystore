@@ -159,7 +159,8 @@ func TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing(t *testing.T) {
 }
 
 // a kept value that no longer fits its field, from another program or an
-// older version of this one, is left out and named, and the rest still apply
+// older version of this one, or that names a secret, is left out and named,
+// and the rest still apply
 func TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	raw, err := OpenRawConfig(t.Context(), state.Store, "app")
@@ -168,14 +169,14 @@ func TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed(t *testing.T) {
 	}
 	kept := map[string]json.RawMessage{
 		"port": json.RawMessage(`"not a number"`), "limits.rps": json.RawMessage(`7`),
-		"gone": json.RawMessage(`true`),
+		"gone": json.RawMessage(`true`), "dbUrl": json.RawMessage(`"leaked"`),
 	}
 	if err = raw.Change(t.Context(), kept, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	config := openTestConfig(t, state, Defaults(appConfig{Port: 8080}))
-	if got := config.Get(); got.Port != 8080 || got.Limits.RPS != 7 {
+	if got := config.Get(); got.Port != 8080 || got.Limits.RPS != 7 || got.DBURL != "" {
 		t.Fatalf("the config reads %+v", got)
 	}
 	sources := config.Sources()
@@ -183,7 +184,7 @@ func TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed(t *testing.T) {
 	rps := sources[slices.IndexFunc(sources, func(s Source) bool { return s.Path == "limits.rps" })]
 	secret := sources[slices.IndexFunc(sources, func(s Source) bool { return s.Path == "dbUrl" })]
 	if !strings.Contains(port.Ignored, "is no int") || port.From != "default" || rps.From != "kept" || rps.Value != "7" ||
-		secret.Value != "***" {
+		secret.Value != "***" || secret.Ignored != "the field is a secret" {
 		t.Fatalf("sources: port %+v, rps %+v, dbUrl %+v", port, rps, secret)
 	}
 }
@@ -263,6 +264,65 @@ func TestVariablesAndDotenvFilesAreTheVectors(t *testing.T) {
 			t.Errorf("%s: %v, want line %d refused", v.Name, err, v.Refused)
 		case v.Refused == 0 && (err != nil || fmt.Sprint(got) != fmt.Sprint(v.Want)):
 			t.Errorf("%s: %q, %v; want %q", v.Name, got, err, v.Want)
+		}
+	}
+}
+
+// a required field the layers leave empty keeps the config from opening, and
+// the error names the variable that would give it
+func TestARequiredFieldIsGivenOrTheConfigDoesNotOpen(t *testing.T) {
+	type deployment struct {
+		URL     string `json:"url" env:"REQUIRED_DATABASE_URL" secret:"true" required:"true"`
+		Region  string `json:"region" required:"true"`
+		Workers int    `json:"workers"`
+	}
+	state := openTestState(t, t.TempDir())
+	t.Setenv("REQUIRED_DATABASE_URL", "")
+	t.Setenv("REQUIRED_REGION", "eu")
+	open := func(options ...ConfigOption) (*Config[deployment], error) {
+		return OpenConfig[deployment](t.Context(), state.Store, "required", options...)
+	}
+	_, err := open(FromEnv("REQUIRED"))
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "url is required: set REQUIRED_DATABASE_URL") {
+		t.Fatalf("an empty secret: %v", err)
+	}
+	if _, err = open(Defaults(deployment{URL: "postgres://default"})); !errors.Is(err, tinystore.ErrInvalid) ||
+		!strings.HasSuffix(err.Error(), "region is required") {
+		t.Fatalf("no environment: %v", err)
+	}
+
+	t.Setenv("REQUIRED_DATABASE_URL", "postgres://secret")
+	config, err := open(FromEnv("REQUIRED"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.Get(); got.URL != "postgres://secret" || got.Region != "eu" {
+		t.Fatalf("the config reads %+v", got)
+	}
+	if err = config.Update(t.Context(), func(d *deployment) { d.Region = "" }); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a required field emptied: %v", err)
+	}
+}
+
+// each layer goes over the one before it in the order the options give them
+func TestLayersGoOverEachOtherInTheOrderGiven(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	t.Setenv("ORDER_PORT", "3000")
+	file := map[string]any{"port": 9000}
+	for _, c := range []struct {
+		options []ConfigOption
+		want    int
+	}{
+		{[]ConfigOption{Defaults(file), FromEnv("ORDER")}, 3000},
+		{[]ConfigOption{FromEnv("ORDER"), Defaults(file)}, 9000},
+		{[]ConfigOption{Defaults(appConfig{Port: 8080})}, 8080},
+	} {
+		config, err := OpenConfig[appConfig](t.Context(), state.Store, "order", c.options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if port := config.Get().Port; port != c.want {
+			t.Errorf("port %d, want %d", port, c.want)
 		}
 	}
 }

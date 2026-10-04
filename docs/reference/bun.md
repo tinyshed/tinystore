@@ -106,9 +106,11 @@ See [KV](../kv/README.md), [Transactions](../kv/transactions.md) and
 ### Configs, rate limits and quotas
 
 ```ts
+import { fromEnv, secret } from '@tinyshed/tinystore'
 import file from './config.yaml'
 
-const cfg = await store.kv.config('app', { port: 8080, dbUrl: '', origins: ['localhost'] }, { file })
+const defaults = { port: 8080, db: { url: secret('DATABASE_URL'), pool: 10 }, origins: ['localhost'] }
+const cfg = await store.kv.config('app', defaults, file, fromEnv())
 cfg.value.port                       // 3000 if .env sets PORT=3000
 await cfg.update({ port: 4000 })     // stored: 4000 after a restart too, in every process at once
 await cfg.reset('port')              // back to 3000 from .env
@@ -121,20 +123,19 @@ const ai = store.kv.quota('ai', { session: '100/5h', weekly: '300/7d' })
 const usage = await ai.allow(user.id)    // counts in every window or in none: usage.windows.weekly.left
 ```
 
-A config takes its fields and their types from its defaults. Each layer
-overrides the one before it:
+A config takes its fields and their types from its defaults. Each layer you
+pass overrides the one before it, in order, and the values that `update`
+stored override them all. A layer is a file's values, `fromEnv(prefix,
+...files)` for the environment and `.env` files, or `validate(schema)`, which
+checks each change with a zod, valibot or other Standard Schema.
 
-1. the defaults;
-2. the values from `file`;
-3. the environment;
-4. the values that `update` stored.
-
-Each field reads the variable with its name in upper snake case: `dbUrl` reads
-`DB_URL`, after `prefix` if you set one. To use another name, pass
-`env: { dbUrl: 'DATABASE_URL' }`. A variable is read as the default's type: a
-number, `true`, a list such as `a.com,b.com`, or JSON. If it doesn't parse,
-`config` fails with `InvalidError`, which names the variable. Fields in
-`secret` are never stored, and `schema` checks each change.
+Each field reads the variable with its path in upper snake case, after the
+prefix: `db.pool` reads `DB_POOL`, or `APP_DB_POOL` with `fromEnv('APP')`. A
+variable is read as the default's type: a number, `true`, a list such as
+`a.com,b.com`, or JSON. If it doesn't parse, `config` fails with
+`InvalidError`, which names the variable. `secret('DATABASE_URL')` reads its
+own variable and is never stored. `secret` without a default and `required()`
+make a field that a layer has to give, or `config` fails with `InvalidError`.
 
 A quota counts a use in all its windows, or in none of them. Each window
 starts at a key's first use. `get` reads the windows without using anything,

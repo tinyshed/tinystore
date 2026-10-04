@@ -21,12 +21,12 @@ import (
 	"github.com/tinyshed/tinystore"
 )
 
-// Config is an application's settings, a value of T made of layers, each over
-// the one before it:
+// Config is an application's settings, a value of T made of layers in the
+// order given, each over the one before it, and what Update kept over them all:
 //
-//	the defaults given          kv.Defaults(Config{Port: 8080}), kv.Defaults(fromYAML)
-//	the environment             kv.FromEnv("APP", ".env"): APP_PORT=3000
-//	what Update kept            config.Update(ctx, func(c *Config) { c.Port = 4000 })
+//	kv.Defaults(Config{Port: 8080}), kv.Defaults(fromYAML)
+//	kv.FromEnv("APP", ".env")       APP_PORT=3000
+//	config.Update(ctx, func(c *Config) { c.Port = 4000 })
 //
 // Get reads it from memory. Update checks a change and keeps it field by field
 // in kv.db, so that it outlives a restart, and every handle on the config sees
@@ -36,8 +36,9 @@ import (
 // T is a struct. A field's path is its JSON name, a nested struct's below its
 // own: limits.rps. A field tagged `env:"NAME"` reads that variable; another
 // reads the prefix and its path in upper snake case, APP_LIMITS_RPS. A field
-// tagged `secret:"true"` comes from the defaults or the environment alone:
-// Update refuses it and Sources hides it.
+// tagged `secret:"true"` comes from the layers alone: Update refuses it and
+// Sources hides it. A field tagged `required:"true"` is ErrInvalid at
+// OpenConfig while the layers leave it its zero value.
 type Config[T any] struct {
 	hub    *configHub
 	name   string
@@ -62,37 +63,48 @@ type configValue[T any] struct {
 // configField is one leaf of a config's type, which the environment can set
 // and Update keeps by its path
 type configField struct {
-	path   string
-	env    string
-	secret bool
-	kind   reflect.Type
+	path     string
+	variable string // its env tag, read in place of the prefix and its path
+	secret   bool
+	required bool
+	kind     reflect.Type
 }
 
 // ConfigOption is where a config's values come from, and what checks them.
 type ConfigOption func(*configSettings)
 
 type configSettings struct {
-	defaults []any
-	env      bool
-	prefix   string
-	files    []string
-	check    any
+	layers []configLayer
+	check  any
+}
+
+// configLayer is a Defaults' values, or a FromEnv's environment when env is set
+type configLayer struct {
+	values any
+	env    *envLayer
+}
+
+type envLayer struct {
+	prefix string
+	files  []string
 }
 
 // Defaults is a layer of values: a T, which sets every field, or a map, as a
 // JSON or YAML library reads a file into one, which sets the fields it names.
-// A later layer is over an earlier one; a duration may be text, "30s".
+// A duration may be text, "30s".
 func Defaults(values any) ConfigOption {
-	return func(s *configSettings) { s.defaults = append(s.defaults, values) }
+	return func(s *configSettings) { s.layers = append(s.layers, configLayer{values: values}) }
 }
 
-// FromEnv reads the environment over the defaults: each field from its
-// variable, files first, as a dotenv library reads them, and the process's own
-// over them. A file that is not there is skipped.
+// FromEnv is a layer of the environment: each field from its variable, files
+// first, as a dotenv library reads them, and the process's own over them. A
+// file that is not there is skipped.
 //
 //	PORT=3000  ORIGINS=a.com,b.com  TIMEOUT=1h30m  LIMITS={"rps":5}
 func FromEnv(prefix string, files ...string) ConfigOption {
-	return func(s *configSettings) { s.env, s.prefix, s.files = true, prefix, files }
+	return func(s *configSettings) {
+		s.layers = append(s.layers, configLayer{env: &envLayer{prefix: prefix, files: files}})
+	}
 }
 
 // Validate checks the config each time it is made, at open and before Update
@@ -140,7 +152,7 @@ func (c *Config[T]) settle(said configSettings) error {
 		}
 		c.check = check
 	}
-	c.fields = shapeOf(t, "", said.prefix, false)
+	c.fields = shapeOf(t, "", false)
 
 	var zero T
 	base, err := treeOf(zero)
@@ -148,15 +160,31 @@ func (c *Config[T]) settle(said configSettings) error {
 		return err
 	}
 	c.base, c.from = base, map[string]string{}
-	for _, defaults := range said.defaults {
-		if err = c.layDefaults(defaults); err != nil {
+	var env *envLayer // the last, which names a missing field's variable
+	for _, layer := range said.layers {
+		if layer.env != nil {
+			env, err = layer.env, c.layEnvironment(*layer.env)
+		} else {
+			err = c.layDefaults(layer.values)
+		}
+		if err != nil {
 			return err
 		}
 	}
-	if said.env {
-		if err = c.layEnvironment(said.files); err != nil {
-			return err
+	return c.given(env)
+}
+
+// given is ErrInvalid for the first required field the layers left empty,
+// naming the variable that would give it
+func (c *Config[T]) given(env *envLayer) error {
+	for _, f := range c.fields {
+		if value, _ := pathIn(c.base, f.path); !f.required || !f.empty(value) {
+			continue
 		}
+		if env == nil {
+			return fmt.Errorf("%w: %s is required", tinystore.ErrInvalid, f.path)
+		}
+		return fmt.Errorf("%w: %s is required: set %s", tinystore.ErrInvalid, f.path, f.envName(env.prefix))
 	}
 	return nil
 }
@@ -184,13 +212,14 @@ func (c *Config[T]) layDefaults(defaults any) error {
 }
 
 // layEnvironment sets each field whose variable is there
-func (c *Config[T]) layEnvironment(files []string) error {
-	lookup, err := readEnvironment(files)
+func (c *Config[T]) layEnvironment(layer envLayer) error {
+	lookup, err := readEnvironment(layer.files)
 	if err != nil {
 		return err
 	}
 	for _, f := range c.fields {
-		text, ok := lookup(f.env)
+		name := f.envName(layer.prefix)
+		text, ok := lookup(name)
 		if !ok {
 			continue
 		}
@@ -200,11 +229,11 @@ func (c *Config[T]) layEnvironment(files []string) error {
 			fitted, err = f.fit(decodeJSON(spelled))
 			if err == nil {
 				setPath(c.base, f.path, fitted)
-				c.from[f.path] = "env " + f.env
+				c.from[f.path] = "env " + name
 				continue
 			}
 		}
-		return fmt.Errorf("%w: %s: %w", tinystore.ErrInvalid, f.env, err)
+		return fmt.Errorf("%w: %s: %w", tinystore.ErrInvalid, name, err)
 	}
 	return nil
 }
@@ -254,7 +283,8 @@ func (c *Config[T]) refresh() (*configValue[T], error) {
 	return built, nil
 }
 
-// withKept is base with each kept value that fits its field over it
+// withKept is base with each kept value that fits its field over it; a secret
+// is never taken from what was kept
 func (c *Config[T]) withKept(kept map[string][]byte) (map[string]any, map[string]string) {
 	tree, ignored := cloneTree(c.base), map[string]string{}
 	for path, spelled := range kept {
@@ -263,12 +293,19 @@ func (c *Config[T]) withKept(kept map[string][]byte) (map[string]any, map[string
 			ignored[path] = "the config has no such field"
 			continue
 		}
-		fitted, err := f.fit(decodeJSON(spelled))
-		if err != nil {
-			ignored[path] = err.Error()
+		if f.secret {
+			ignored[path] = "the field is a secret"
 			continue
 		}
-		setPath(tree, path, fitted)
+		fitted, err := f.fit(decodeJSON(spelled))
+		switch {
+		case err != nil:
+			ignored[path] = err.Error()
+		case f.required && f.empty(fitted):
+			ignored[path] = "the field is required"
+		default:
+			setPath(tree, path, fitted)
+		}
 	}
 	return tree, ignored
 }
@@ -298,7 +335,8 @@ func (c *Config[T]) checked(value T) error {
 
 // Update changes the config: change gets a copy of it, and each field it
 // changes is checked, kept, and seen by every handle at once. A change that
-// fails Validate, or that sets a secret, is ErrInvalid and keeps nothing.
+// fails Validate, sets a secret or empties a required field is ErrInvalid and
+// keeps nothing.
 func (c *Config[T]) Update(ctx context.Context, change func(*T)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -337,8 +375,11 @@ func (c *Config[T]) changed(tree map[string]any, next T) (map[string][]byte, err
 			continue
 		}
 		if f.secret {
-			return nil, fmt.Errorf("%w: kv: config %q: %s is a secret, set by the defaults or the environment alone",
+			return nil, fmt.Errorf("%w: kv: config %q: %s is a secret, set by the layers alone",
 				tinystore.ErrInvalid, c.name, f.path)
+		}
+		if f.required && f.empty(now) {
+			return nil, fmt.Errorf("%w: kv: config %q: %s is required", tinystore.ErrInvalid, c.name, f.path)
 		}
 		set[f.path] = []byte(nowJSON)
 	}
@@ -433,9 +474,9 @@ var (
 )
 
 // shapeOf is t's leaves, as encoding/json names them, their paths below
-// parent and their variables after envPrefix: a struct that reads itself, or a
-// time, is a leaf, and another struct a group of fields
-func shapeOf(t reflect.Type, parent, envPrefix string, secret bool) []configField {
+// parent: a struct that reads itself, or a time, is a leaf, and another struct
+// a group of fields
+func shapeOf(t reflect.Type, parent string, secret bool) []configField {
 	var fields []configField
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -453,16 +494,32 @@ func shapeOf(t reflect.Type, parent, envPrefix string, secret bool) []configFiel
 			if f.Anonymous && f.Tag.Get("json") == "" {
 				below = parent
 			}
-			fields = append(fields, shapeOf(f.Type, below, envPrefix, hidden)...)
+			fields = append(fields, shapeOf(f.Type, below, hidden)...)
 			continue
 		}
-		variable := f.Tag.Get("env")
-		if variable == "" {
-			variable = envName(envPrefix, path)
-		}
-		fields = append(fields, configField{path: path, env: variable, secret: hidden, kind: f.Type})
+		fields = append(fields, configField{
+			path: path, variable: f.Tag.Get("env"), secret: hidden, required: f.Tag.Get("required") == "true",
+			kind: f.Type,
+		})
 	}
 	return fields
+}
+
+// envName is the field's variable after prefix: its env tag, or the prefix and its path
+func (f configField) envName(prefix string) string {
+	return cmp.Or(f.variable, envName(prefix, f.path))
+}
+
+// empty is a value its field holds as the zero value of its type, or as an
+// empty list or map
+func (f configField) empty(value any) bool {
+	spelled, err := json.Marshal(value)
+	held := reflect.New(f.kind)
+	if err != nil || json.Unmarshal(spelled, held.Interface()) != nil {
+		return true
+	}
+	v := held.Elem()
+	return v.IsZero() || (v.Kind() == reflect.Slice || v.Kind() == reflect.Map) && v.Len() == 0
 }
 
 // jsonName is a field's name in JSON, and false for one JSON leaves out

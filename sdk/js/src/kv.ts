@@ -2,7 +2,7 @@
 // buckets of one value type by key, keys in branches, expiry by the store's
 // clock, versions that never repeat. A handle opens with its first call.
 
-import { Config, type ConfigOptions } from './config.ts'
+import { Config, type ConfigLayer, type ConfigValue } from './config.ts'
 import type { Connection, Link } from './connection.ts'
 import { ConflictError, CorruptError, InvalidError } from './errors.ts'
 import { checkName, handleOn, ownerText, type Page, type Settled, settle } from './handles.ts'
@@ -91,23 +91,27 @@ export class Kv {
 	}
 
 	/**
-	 * The config name, shaped and typed as its defaults: then a file's values,
-	 * then the environment, then what update kept, each over the one before.
-	 * It resolves once the server's state is read, and follows every change
-	 * from then on, whoever makes it, until the store closes.
+	 * The config name, shaped and typed as its defaults, then each layer over
+	 * the one before: a file's values, `fromEnv`, and what update kept over
+	 * them all. It resolves once the server's state is read, and follows every
+	 * change from then on, whoever makes it, until the store closes.
 	 *
 	 * ```ts
-	 * const cfg = await store.kv.config('app', { port: 8080, origins: ['localhost'] })
-	 * cfg.value.port                    // PORT=3000 in .env makes it 3000
+	 * const cfg = await store.kv.config('app', {
+	 *   port: 8080,
+	 *   db: { url: secret('DATABASE_URL'), pool: 10 },
+	 * }, file, fromEnv('APP'))
+	 * cfg.value.port                    // APP_PORT=3000 makes it 3000
 	 * await cfg.update({ port: 4000 })  // kept: 4000 after a restart too
 	 * ```
 	 */
-	async config<T extends object>(
+	async config<D extends object>(
 		name: string,
-		defaults: T,
-		options: ConfigOptions<T> = {},
-	): Promise<Config<T>> {
-		const config = new Config(this.#link, name, defaults, options)
+		defaults: D,
+		...layers: ConfigLayer<ConfigValue<D>>[]
+	): Promise<Config<ConfigValue<D>>> {
+		const config = new Config<ConfigValue<D>>(this.#link, name, defaults)
+		await config.lay(layers)
 		this.#configs.add(config as unknown as Config<object>)
 		try {
 			await config.start()

@@ -151,18 +151,22 @@ receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, 
 
 ## Config
 
-- **Layers, each over the one before**: the `Defaults` given, a `T`, which
-  sets every field, or a map, as a JSON or YAML library reads a file, which
-  sets the fields it names; then `FromEnv`, the `.env` files and the process's
-  own environment over them; then what `Update` kept. `Reset` gives a field,
-  or a struct of them, back to the layers under it.
+- **Layers in the order given, each over the one before**: a `Defaults`, a
+  `T`, which sets every field, or a map, as a JSON or YAML library reads a
+  file, which sets the fields it names; a `FromEnv`, the `.env` files and the
+  process's own environment over them; then what `Update` kept over them all.
+  No variable is read without a `FromEnv`. `Reset` gives a field, or a struct
+  of them, back to the layers under it.
 - **A field is its path and its variable.** A path is the JSON names of a
   field and the structs above it, `limits.rps`; its variable is the prefix and
   the path in upper snake case, `APP_LIMITS_RPS`, or its `env:"NAME"` tag. A
   variable is read by its field's type: a number, `true`, a duration `1h30m`,
   a list `a.com,b.com` or JSON. One that does not read is `ErrInvalid` at
   `OpenConfig`, naming it. A field tagged `secret:"true"` comes from the
-  defaults or the environment alone: `Update` refuses it, `Sources` hides it.
+  layers alone: `Update` refuses it, `Sources` hides it, and a value kept
+  for it is left out. A field tagged `required:"true"` that the layers leave
+  its zero value, or an empty list, is `ErrInvalid` at `OpenConfig`, naming
+  the variable that would give it, and `Update` refuses to empty it.
 - **What changes is kept field by field**, in `kv.db`, so that a default the
   code changes later still reaches a field nobody changed. A change is checked
   by `Validate` and by its fields' types before anything is written, and

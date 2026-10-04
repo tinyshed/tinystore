@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import tinystore
+from tinystore import from_env, secret
 from tinystore.config import env_name, parse_dotenv
 
 if TYPE_CHECKING:
@@ -29,7 +30,7 @@ class Limits:
 @dataclass
 class Settings:
     port: int = 8080
-    db_url: str = ""
+    db_url: str = secret("LAYERS_DATABASE_URL", default="")
     origins: list[str] = field(default_factory=lambda: ["localhost"])
     limits: Limits = field(default_factory=Limits)
 
@@ -54,15 +55,16 @@ def test_a_dotenv_file_reads_as_the_vectors_say(vector: dict[str, Any]) -> None:
         assert parse_dotenv(vector["text"]) == vector["want"]
 
 
-async def test_a_config_is_its_defaults_then_its_file_then_its_environment_then_what_was_kept(
+async def test_a_config_is_its_defaults_then_each_layer_in_its_order_then_what_was_kept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / ".env").write_text("LAYERS_PORT=3000\nLAYERS_ORIGINS=a.com, b.com\n", encoding="utf-8")
     monkeypatch.setenv("LAYERS_LIMITS_ON", "true")
-    options: dict[str, Any] = {"prefix": "LAYERS", "env_file": tmp_path / ".env", "file": {"limits": {"burst": 20}}}
+    monkeypatch.setenv("LAYERS_DATABASE_URL", "postgres://secret")
+    layers = ({"port": 5000, "limits": {"burst": 20}}, from_env("LAYERS", tmp_path / ".env"))
     async with tinystore.open(tmp_path / "data", private=True) as store:
-        cfg = await store.kv.config("layers", Settings, **options)
-        assert cfg.value == Settings(3000, "", ["a.com", "b.com"], Limits(100, 20, True))
+        cfg = await store.kv.config("layers", Settings, *layers)
+        assert cfg.value == Settings(3000, "postgres://secret", ["a.com", "b.com"], Limits(100, 20, True))
         await cfg.update({"port": 4000, "limits": {"rps": 50}})
         assert (cfg.value.port, cfg.value.limits.rps, cfg.value.limits.burst) == (4000, 50, 20)
         sources = {s.path: s for s in cfg.sources()}
@@ -71,9 +73,10 @@ async def test_a_config_is_its_defaults_then_its_file_then_its_environment_then_
             "file",
             "env LAYERS_LIMITS_ON",
         )
+        assert (sources["db_url"].value, sources["db_url"].from_) == ("***", "env LAYERS_DATABASE_URL")
 
     async with tinystore.open(tmp_path / "data", private=True) as store:
-        cfg = await store.kv.config("layers", Settings, **options)
+        cfg = await store.kv.config("layers", Settings, *layers)
         assert (cfg.value.port, cfg.value.limits.rps) == (4000, 50)
         await cfg.reset("port")
         assert cfg.value.port == 3000
@@ -81,9 +84,18 @@ async def test_a_config_is_its_defaults_then_its_file_then_its_environment_then_
         assert cfg.value.limits.rps == 100
 
 
+async def test_no_variable_is_read_without_from_env_and_a_layer_after_it_goes_over_it(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ORDER_PORT", "3000")
+    none = await store.kv.config("order", Settings)
+    last = await store.kv.config("order", Settings, from_env("ORDER"), {"port": 9000})
+    assert (none.value.port, last.value.port) == (8080, 9000)
+
+
 async def test_a_change_through_one_config_reaches_another_of_its_name(store: tinystore.Store) -> None:
-    first = await store.kv.config("shared", Settings, env=False)
-    second = await store.kv.config("shared", Settings, env=False)
+    first = await store.kv.config("shared", Settings)
+    second = await store.kv.config("shared", Settings)
     seen: list[int] = []
     second.watch(lambda c: seen.append(c.port))
     await first.update({"port": 9090})
@@ -100,7 +112,7 @@ async def test_a_change_validate_refuses_or_one_of_a_secret_keeps_nothing(store:
         if not 0 < settings.port < 65536:
             raise ValueError(f"port {settings.port} is no port")
 
-    cfg = await store.kv.config("checked", Settings, env=False, secret=["db_url"], validate=ports)
+    cfg = await store.kv.config("checked", Settings, validate=ports)
     with pytest.raises(tinystore.InvalidError):
         await cfg.update({"port": 70000})
     with pytest.raises(tinystore.InvalidError):
@@ -109,17 +121,62 @@ async def test_a_change_validate_refuses_or_one_of_a_secret_keeps_nothing(store:
     assert next(s for s in cfg.sources() if s.path == "db_url").value == "***"
 
 
-async def test_a_kept_value_that_no_longer_fits_is_left_out_and_named(store: tinystore.Store) -> None:
-    @dataclass
-    class Renamed:
-        port: str = "eighty"
+@dataclass
+class Db:
+    url: str = secret("REQUIRED_DATABASE_URL")
+    pool: int = 10
 
-    older = await store.kv.config("changed", Settings, env=False)
-    await older.update({"port": 4000})
-    newer = await store.kv.config("changed", Renamed, env=False)
-    assert newer.value.port == "eighty"
-    ignored = next(s for s in newer.sources() if s.path == "port").ignored
-    assert ignored is not None and "is no string" in ignored
+
+@dataclass(kw_only=True)
+class Deployment:
+    db: Db
+    region: str
+    workers: int
+
+
+async def test_a_required_field_is_given_by_a_layer_or_the_config_does_not_open_naming_its_variable(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("REQUIRED_DATABASE_URL", raising=False)
+    monkeypatch.setenv("REQUIRED_REGION", "eu")
+    monkeypatch.setenv("REQUIRED_WORKERS", "0")
+    with pytest.raises(tinystore.InvalidError, match=r"db.url is required: set REQUIRED_DATABASE_URL"):
+        await store.kv.config("required", Deployment, from_env("REQUIRED"))
+    with pytest.raises(tinystore.InvalidError, match=r"db.url is required"):
+        await store.kv.config("required", Deployment)
+    monkeypatch.setenv("REQUIRED_DATABASE_URL", "")
+    with pytest.raises(tinystore.InvalidError):
+        await store.kv.config("required", Deployment, from_env("REQUIRED"))
+
+    monkeypatch.setenv("REQUIRED_DATABASE_URL", "postgres://secret")
+    cfg = await store.kv.config("required", Deployment, from_env("REQUIRED"))
+    assert cfg.value == Deployment(db=Db("postgres://secret", 10), region="eu", workers=0)
+    with pytest.raises(tinystore.InvalidError):
+        await cfg.update({"region": ""})
+    await cfg.update({"region": "us"})
+    assert cfg.value.region == "us"
+
+
+async def test_a_kept_value_that_no_longer_fits_or_names_a_secret_is_left_out_and_named(
+    store: tinystore.Store,
+) -> None:
+    @dataclass
+    class Older:
+        port: int = 8080
+        token: str = ""
+
+    @dataclass
+    class Newer:
+        port: str = "eighty"
+        token: str = secret("CHANGED_TOKEN", default="safe")
+
+    older = await store.kv.config("changed", Older)
+    await older.update({"port": 4000, "token": "leaked"})
+    newer = await store.kv.config("changed", Newer)
+    assert (newer.value.port, newer.value.token) == ("eighty", "safe")
+    sources = {s.path: s for s in newer.sources()}
+    assert sources["port"].ignored is not None and "is no string" in sources["port"].ignored
+    assert sources["token"].ignored == "the field is a secret"
 
 
 async def test_a_variable_that_is_not_its_fields_kind_is_refused_naming_it(
@@ -127,7 +184,7 @@ async def test_a_variable_that_is_not_its_fields_kind_is_refused_naming_it(
 ) -> None:
     monkeypatch.setenv("BAD_PORT", "abc")
     with pytest.raises(tinystore.InvalidError, match="BAD_PORT"):
-        await store.kv.config("bad", Settings, prefix="BAD")
+        await store.kv.config("bad", Settings, from_env("BAD"))
 
 
 async def test_a_limiter_lets_its_burst_through_then_says_how_long_to_wait(store: tinystore.Store) -> None:

@@ -106,7 +106,7 @@ See [KV](../kv/README.md), [Transactions](../kv/transactions.md) and
 ### Configs, rate limits and quotas
 
 ```python
-cfg = await store.kv.config("app", Settings, file=tomllib.load(f), env_file=".env")
+cfg = await store.kv.config("app", Settings, tomllib.load(f), tinystore.from_env("", ".env"))
 cfg.value.port  # 3000 if .env sets PORT=3000
 await cfg.update({"port": 4000})  # stored: 4000 after a restart too, in every process at once
 await cfg.reset("port")  # back to 3000 from .env
@@ -120,19 +120,18 @@ usage = await ai.allow(user.id)  # counts in every window or in none: usage.wind
 ```
 
 A config is a dataclass or a model, and takes its fields, types and defaults
-from it. Each layer overrides the one before it:
+from it. Each layer you pass overrides the one before it, in order, and the
+values that `update` stored override them all. A layer is a file's values, or
+`tinystore.from_env(prefix, *files)` for the environment and `.env` files.
+`validate` checks each change.
 
-1. the defaults;
-2. the values from `file`;
-3. the environment;
-4. the values that `update` stored.
-
-Each field reads the variable with its name in upper case: `db_url` reads
-`DB_URL`, after `prefix` if you set one. To use another name, pass
-`env={"db_url": "DATABASE_URL"}`. A variable is read as the default's type: a
-number, `true`, a list such as `a.com,b.com`, or JSON. If it doesn't parse,
-`config` fails with `InvalidError`, which names the variable. Fields in
-`secret` are never stored, and `validate` checks each change.
+Each field reads the variable with its path in upper case, after the prefix:
+`db.pool` reads `DB_POOL`, or `APP_DB_POOL` with `from_env("APP")`. A variable
+is read as the field's type: a number, `true`, a list such as `a.com,b.com`, or
+JSON. If it doesn't parse, `config` fails with `InvalidError`, which names the
+variable. In a dataclass, `url: str = tinystore.secret("DATABASE_URL")` reads
+its own variable and is never stored. A field without a default is required:
+if no layer gives it, `config` fails with `InvalidError`.
 
 A quota counts a use in all its windows, or in none of them. Each window
 starts at a key's first use. `get` reads the windows without using anything,

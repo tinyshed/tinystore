@@ -1,7 +1,20 @@
 export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from './blobs.ts'
 export { withSignal } from './cancel.ts'
 export type { Clock } from './clock.ts'
-export type { Config, ConfigOptions, DeepPartial, Source } from './config.ts'
+export {
+	type Config,
+	type ConfigLayer,
+	type ConfigValue,
+	type DeepPartial,
+	type FromEnv,
+	fromEnv,
+	required,
+	type Setting,
+	type Source,
+	secret,
+	type Validate,
+	validate,
+} from './config.ts'
 export type { ConsoleFormat, ConsoleTime } from './console.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'
