@@ -1003,6 +1003,19 @@ handle.
 | `0x0604` | drop      | labels                                       | `{1: found, 2: unreadable groups}`                                                              |
 | `0x0605` | explain   | a range; with an operation, the aggregate's  | a plan                                                                                          |
 | `0x0606` | latest    | a range                                      | a download: `{}`, a series' newest sample a `DATA`, then `{}`; a series without one is left out |
+| `0x0607` | describe  | a description                                | `{}`                                                                                            |
+| `0x0608` | described | a description of a name alone                | the name's description, its unit and help empty when it has none                                |
+
+A description is what a metric's name means. It belongs to the name, and
+every series of the name shares it:
+
+| key | field | type |                                                                  |
+|-----|-------|------|------------------------------------------------------------------|
+| 1   | name  | str  | the metric's name, its `__name__`                                |
+| 2   | unit  | str  | such as `ms`, `bytes` or `%`, 32 bytes at most; absent when none |
+| 3   | help  | str  | a line of help, 1024 bytes at most; absent when none             |
+
+A describe with neither a unit nor help removes the name's description.
 
 A plan is what a read, or an aggregate when the range names an operation,
 would spend, found in one snapshot from the series, their block directories

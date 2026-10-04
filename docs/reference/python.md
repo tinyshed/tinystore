@@ -334,6 +334,8 @@ failing = await store.metrics.read(
 )
 buckets = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="increase")
 routes = await store.metrics.aggregate(name="http_requests_total", since="24h", width="1h", op="rate", by=["route"])
+now = await store.metrics.latest(name="cpu", since="5m")  # each series' newest sample
+await store.metrics.describe("disk_used", unit="bytes")
 ```
 
 `read` returns each series as two columns: `times` in Unix milliseconds and
@@ -341,7 +343,10 @@ routes = await store.metrics.aggregate(name="http_requests_total", since="24h", 
 `(time, value)` pairs. A sample comes back bit for bit, including `-0.0` and a
 NaN's payload. A range is either `since`, or `from_` and `to`.
 `metrics.explain(...)` tells how much of its limits a read or an aggregate
-would use, before it runs.
+would use, before it runs. `latest` returns the newest sample of each series
+in the range and leaves out a series without one. `describe` keeps a name's
+unit and help, which `description(name)` reads, and an instrument given
+`unit=` or `help=` writes them at its next flush.
 
 A timer's `measure()` times its block whether the block returns or raises,
 in a `with` or an `async with`. `record(d)` adds a duration that you measured

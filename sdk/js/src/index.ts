@@ -54,6 +54,7 @@ export {
 	type Bucket as MetricsBucket,
 	Condition,
 	type Counter,
+	type Description as MetricsDescription,
 	type Gauge,
 	type Labels,
 	type Metrics,

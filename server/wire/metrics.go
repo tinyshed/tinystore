@@ -14,6 +14,8 @@ const (
 	MetricsDrop      Method = 0x0604
 	MetricsExplain   Method = 0x0605
 	MetricsLatest    Method = 0x0606
+	MetricsDescribe  Method = 0x0607
+	MetricsDescribed Method = 0x0608
 )
 
 // MetricsSeries is a series and samples of it: an item of ingest's request and
@@ -383,6 +385,36 @@ func (b *MetricsBuckets) Decode(body []byte) error {
 		}
 	}
 	return d.End()
+}
+
+// MetricsDescription is describe's request and described's answer: what a
+// metric's name means, its unit and a line of help, both empty when it has
+// none. Described asks with the name alone.
+type MetricsDescription struct {
+	Name, Unit, Help string
+}
+
+func (d MetricsDescription) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	m.Str(1, d.Name)
+	optionalStr(&m, 2, d.Unit)
+	optionalStr(&m, 3, d.Help)
+	return m.End()
+}
+
+func (d *MetricsDescription) Decode(body []byte) error {
+	dec := NewDecoder(body)
+	for key := range dec.Fields() {
+		switch key {
+		case 1:
+			d.Name = dec.Str()
+		case 2:
+			d.Unit = dec.Str()
+		case 3:
+			d.Help = dec.Str()
+		}
+	}
+	return dec.End()
 }
 
 // MetricsLabels is drop's request: the labels of the one series it removes.

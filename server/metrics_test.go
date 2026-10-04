@@ -4,6 +4,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,5 +315,30 @@ func TestLatestOverTheWire(t *testing.T) {
 	if err != nil || pieces != 1 || len(found) != 1 || found[0].Labels["host"] != "web" ||
 		!reflect.DeepEqual(found[0].Times, []int64{now - 1000}) || !reflect.DeepEqual(found[0].Values, []float64{0.5}) {
 		t.Fatalf("the latest of a minute: %+v, %d pieces: %v", found, pieces, err)
+	}
+}
+
+// A description travels both ways: describe keeps it, described answers it,
+// and a name never described answers none.
+func TestADescriptionOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	kept := wire.MetricsDescription{Name: "query_sum", Unit: "ms", Help: "How long database queries took."}
+	if _, err := conn.Call(t.Context(), wire.MetricsDescribe, kept); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]wire.MetricsDescription{"query_sum": kept, "other": {Name: "other"}} {
+		body, err := conn.Call(t.Context(), wire.MetricsDescribed, wire.MetricsDescription{Name: name})
+		var got wire.MetricsDescription
+		if err == nil {
+			err = got.Decode(body)
+		}
+		if err != nil || got != want {
+			t.Fatalf("described %s: %+v, %v", name, got, err)
+		}
+	}
+	long := wire.MetricsDescription{Name: "query_sum", Unit: strings.Repeat("m", 33)}
+	if _, err := conn.Call(t.Context(), wire.MetricsDescribe, long); failureOf(err).Code != wire.CodeInvalid {
+		t.Fatalf("a unit past its bound: %v", err)
 	}
 }

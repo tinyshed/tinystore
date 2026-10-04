@@ -33,6 +33,7 @@ func TestMetricsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 			{From: 60_000, To: 120_000, Count: 1, Value: math.Inf(1), Overflow: true},
 		}}, &wire.MetricsBuckets{}},
 		{wire.MetricsLabels{Labels: cpu}, &wire.MetricsLabels{}},
+		{wire.MetricsDescription{Name: "query_sum", Unit: "ms", Help: "Queries."}, &wire.MetricsDescription{}},
 		{wire.MetricsDropped{Found: true, UnreadableGroups: 2}, &wire.MetricsDropped{}},
 	}
 	for _, m := range messages {

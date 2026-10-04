@@ -14,6 +14,7 @@ import pytest
 
 import tinystore
 from tinystore import ConflictError, CorruptError, InvalidError, TooOldError
+from tinystore.metrics import Description
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -576,6 +577,19 @@ async def test_samples_come_back_bit_for_bit_and_aggregate_exactly(store: tinyst
     ):
         with pytest.raises(InvalidError):
             await refused
+
+
+async def test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush(store: tinystore.Store) -> None:
+    await store.metrics.describe("query_ms", unit="ms", help="How long a query took.")
+    assert await store.metrics.description("query_ms") == Description(unit="ms", help="How long a query took.")
+    assert await store.metrics.description("never_described") == Description(unit="", help="")
+    store.metrics.counter("described_total", help="Requests served.").inc()
+    store.metrics.timer("described_query", help="Queries.").record(0.002)
+    await store.metrics.flush()
+    assert await store.metrics.description("described_total") == Description(unit="", help="Requests served.")
+    assert await store.metrics.description("described_query_sum") == Description(unit="ms", help="Queries.")
+    with pytest.raises(InvalidError):
+        store.metrics.gauge("described_gauge", unit="x" * 33)
 
 
 async def test_a_second_open_finds_the_sidecar_the_first_started(tmp_path: Path) -> None:

@@ -412,6 +412,29 @@ describe('metrics', () => {
 		expect([first?.buckets[0]?.value, last?.buckets[0]?.value]).toEqual([4, 7])
 	})
 
+	test("a description is kept by name, and an instrument's is written at its flush", async () => {
+		await store.metrics.describe('query_ms', { unit: 'ms', help: 'How long a query took.' })
+		expect(await store.metrics.description('query_ms')).toEqual({
+			unit: 'ms',
+			help: 'How long a query took.',
+		})
+		expect(await store.metrics.description('never_described')).toEqual({ unit: '', help: '' })
+		store.metrics.counter('described_total', { help: 'Requests served.' }).inc()
+		store.metrics.timer('described_query', { help: 'Queries.' }).record(2)
+		await store.metrics.flush()
+		expect(await store.metrics.description('described_total')).toEqual({
+			unit: '',
+			help: 'Requests served.',
+		})
+		expect(await store.metrics.description('described_query_sum')).toEqual({
+			unit: 'ms',
+			help: 'Queries.',
+		})
+		expect(() => store.metrics.gauge('described_gauge', { unit: 'x'.repeat(33) })).toThrow(
+			InvalidError,
+		)
+	})
+
 	test('instruments are ingested at a flush, the same labels in any order one series', async () => {
 		const requests = store.metrics.counter('http_requests_total')
 		requests.with({ route: '/notes', method: 'POST' }).inc()

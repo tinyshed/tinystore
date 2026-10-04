@@ -24,6 +24,7 @@ from ._wire.messages import (
     METHODS,
     MetricsBatch,
     MetricsBuckets,
+    MetricsDescription,
     MetricsDropped,
     MetricsLabels,
     MetricsPlan,
@@ -66,6 +67,16 @@ class Bucket:
     """retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first"""
     lookback: bool
     """its first step started from a sample before the range"""
+
+
+@dataclass(frozen=True, slots=True)
+class Description:
+    """What the values of a metric's name mean; empty strings when it has none."""
+
+    unit: str
+    """such as "ms", "bytes" or "%", 32 bytes of UTF-8 at most"""
+    help: str
+    """a line of help, 1024 bytes of UTF-8 at most"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +200,7 @@ class Metrics:
     def __init__(self, link: Link) -> None:
         self._link = link
         self._instruments: dict[str, _Instrument] = {}
+        self._described: dict[str, Description] = {}
         self._timers: dict[str, _Timer] = {}
         self._task: asyncio.Task[None] | None = None
         self._failure_log = FailureLog("metrics instruments")
@@ -404,25 +416,66 @@ class Metrics:
             stops=refused if isinstance(refused, LimitError) else None,
         )
 
-    def counter(self, name: str) -> Counter:
-        """A counter: its total since this process started, ingested every flush; a restart is a reset."""
+    async def describe(self, name: str, *, unit: str | None = None, help: str | None = None) -> None:
+        """Keeps what a name's values mean in place of what they meant; with neither it removes it.
+
+        Every series of the name shares it::
+
+            await store.metrics.describe("query_ms", unit="ms", help="How long a query took.")
+        """
+        body = MetricsDescription.encode(name=name, unit=unit or None, help=help or None)
+
+        async def attempt(connection: Connection) -> bytes:
+            return await connection.session.call(METHODS["metrics.describe"], body)
+
+        await self._link.run("write", attempt)
+
+    async def description(self, name: str) -> Description:
+        """What describe kept for a name, empty strings when it has none."""
+
+        async def attempt(connection: Connection) -> bytes:
+            return await connection.session.call(METHODS["metrics.described"], MetricsDescription.encode(name=name))
+
+        described = MetricsDescription.decode(await self._link.run("read", attempt))
+        return Description(unit=described.get("unit", ""), help=described.get("help", ""))
+
+    def counter(self, name: str, *, unit: str | None = None, help: str | None = None) -> Counter:
+        """A counter: its total since this process started, ingested every flush; a restart is a reset.
+
+        A unit or help is written at the next flush, as describe would.
+        """
+        self._describe(name, unit, help)
         return Counter(self._instrument(name, "counter"), {})
 
-    def gauge(self, name: str) -> Gauge:
+    def gauge(self, name: str, *, unit: str | None = None, help: str | None = None) -> Gauge:
+        self._describe(name, unit, help)
         return Gauge(self._instrument(name, "gauge"), {})
 
-    def gauge_func(self, name: str, read: Callable[[], float | Awaitable[float]]) -> None:
+    def gauge_func(
+        self,
+        name: str,
+        read: Callable[[], float | Awaitable[float]],
+        *,
+        unit: str | None = None,
+        help: str | None = None,
+    ) -> None:
         """A gauge read by a function at each flush; one that raises skips that sample."""
+        self._describe(name, unit, help)
         self._instrument(name, "gauge").read = read
 
-    def timer(self, name: str) -> Timer:
+    def timer(self, name: str, *, unit: str | None = None, help: str | None = None) -> Timer:
         """A timer: how many durations it measured and their sum in milliseconds, and the longest.
 
         Every flush ingests the first two as the counters name_count and
         name_sum, and the longest since the flush before as the gauge
         name_max, left out when it measured none. A range's mean is its sum's
-        increase over its count's.
+        increase over its count's. Given a unit or help, its sum and longest
+        are in milliseconds, whatever unit it names.
         """
+        if unit or help:
+            self._describe(f"{name}_count", None, help)
+            self._describe(f"{name}_sum", "ms", help)
+            self._describe(f"{name}_max", "ms", help)
         timer = self._timers.get(name)
         if timer is None:
             for suffix in _TIMER_SUFFIXES:
@@ -432,6 +485,23 @@ class Metrics:
             timer = self._timers[name] = _Timer(name)
             self._flushing_soon()
         return Timer(timer, {})
+
+    def _describe(self, name: str, unit: str | None, help: str | None) -> None:
+        """Keeps an instrument's description for the next flush, checked now.
+
+        One the store refused would fail every flush after it.
+        """
+        if not unit and not help:
+            return
+        if len((unit or "").encode()) > 32 or len((help or "").encode()) > 1024:
+            raise InvalidError(f"the description of {name}: a unit of 32 bytes and help of 1024 at most")
+        self._described[name] = Description(unit=unit or "", help=help or "")
+
+    async def _write_descriptions(self) -> None:
+        for name, description in list(self._described.items()):
+            await self.describe(name, unit=description.unit, help=description.help)
+            if self._described.get(name) is description:
+                del self._described[name]
 
     def _instrument(self, name: str, kind: Kind) -> _Instrument:
         instrument = self._instruments.get(name)
@@ -469,6 +539,7 @@ class Metrics:
         A series the store refuses is left out from then on, said once, so that
         one bad instrument keeps no other out.
         """
+        await self._write_descriptions()
         now = time.time_ns() // 1_000_000
         batch = await self._instrument_samples(now)
         taken = self._take_timers(now, batch)

@@ -143,6 +143,15 @@ head chunk the range touches, alone, or when the head holds no sample before
 `To`, the newest block the range touches; a block that ends before `To` with
 a valid summary answers from its directory, undecoded.
 
+`Describe(ctx, name, metrics.Unit(u), metrics.Help(h))` keeps what a name's
+values mean, a unit of 32 bytes and help of 1024 at most, in place of what it
+had; one with neither removes it, and `Description(ctx, name)` reads it, empty
+when none. It belongs to the name, not to a series, so `DropSeries` leaves it.
+An instrument given `Unit` or `Help` writes its description at the next flush,
+in one transaction before the samples; a timer describes its `_sum` and `_max`
+in milliseconds and its `_count` without a unit. A flush that fails keeps the
+descriptions for the next one.
+
 `Stream(ctx, range, yield)` calls `yield` once per nonempty series, in the same
 series order and with the same exact owned samples as `Read`. It fetches one
 snapshot and closes the read transaction before the first callback. A callback

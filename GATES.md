@@ -102,6 +102,8 @@ module defines.
 - first and last are a bucket's first and last samples bit for bit, from a summary as from raw, and a group adds them up — `TestTheLastOfABucketIsItsNewestSample`, `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`
 - latest is each series' newest sample in its range, which bounds its staleness — `TestLatestLeavesOutASeriesOlderThanItsRange`, `TestLatestIsTheLastSampleOfARead`, `TestLatestOverTheWire` in `server`; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `TestLatestDecodesAtMostOneChunkASeries`
+- a description is kept by name, replaced by the next and removed by an empty one — `TestADescriptionIsKeptByName`, `TestADescriptionOverTheWire` in `server`; `a description is kept by name, and an instrument's is written at its flush` in `sdk/js/test/records.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
+- an instrument describes the names it writes at its flush, a timer's sum and longest in milliseconds, and a failed flush keeps them — `TestAnInstrumentDescribesItsSeries`, `TestAFailedFlushKeepsItsDescriptionsForTheNext`
 - a group joins its series exactly and rounds once — `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined`
 - a whole-block summary spends no decoded-sample budget — `TestWholeExactBlocksNeedNoDecodedSampleBudget`
 - a malformed exact summary is refused — `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary`

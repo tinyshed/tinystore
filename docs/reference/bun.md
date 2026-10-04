@@ -320,7 +320,7 @@ See [Records](../records/README.md), [Logging](../records/logging.md) and
 ```ts
 store.metrics.counter('http_requests_total').with({ route: '/users' }).inc()
 store.metrics.gauge('queue_depth').set(12)
-const latency = store.metrics.timer('http_request_ms')
+const latency = store.metrics.timer('http_request_ms', { help: 'How long an HTTP request took.' })
 const user = await latency.with({ route: '/users' }).measure(() => users.get(id))
 
 await store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { host: 'web-1' }, samples: [[new Date(), 0.42]] })
@@ -328,6 +328,8 @@ const series = await store.metrics.read({ name: 'cpu', match: { host: 'web-1' },
 const failing = await store.metrics.read({ name: 'http_requests_total', since: '1h', where: { status: oneOf('500', '502') } })
 const buckets = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'increase' })
 const routes = await store.metrics.aggregate({ name: 'http_requests_total', since: '24h', width: '1h', op: 'rate', by: ['route'] })
+const now = await store.metrics.latest({ name: 'cpu', since: '5m' }) // each series' newest sample
+await store.metrics.describe('disk_used', { unit: 'bytes' })
 ```
 
 `read` returns each series as two columns: `times` in Unix milliseconds and
@@ -335,7 +337,10 @@ const routes = await store.metrics.aggregate({ name: 'http_requests_total', sinc
 `[time, value]` pairs. A sample comes back bit for bit, including `-0` and a
 NaN's payload. A range is either `since`, or `from` and `to` in Unix
 milliseconds. `metrics.explain(range)` tells how much of its limits a read or
-an aggregate would use, before it runs.
+an aggregate would use, before it runs. `latest` returns the newest sample of
+each series in the range and leaves out a series without one. `describe` keeps
+a name's unit and help, which `description(name)` reads, and an instrument
+given `{ unit, help }` writes them at its next flush.
 
 A timer's `measure(fn)` returns what `fn` returns and throws what it throws,
 and records the time in both cases. `record(ms)` adds a duration that you

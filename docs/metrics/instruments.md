@@ -118,6 +118,47 @@ The mean over any time range is the increase of the sum divided by the
 increase of the count. TinyStore has no histograms: a percentile computed from
 buckets is an approximation, and this engine only returns exact numbers.
 
+## Describe a metric
+
+```ts
+const latency = store.metrics.timer('http_request_ms', { help: 'How long an HTTP request took.' })
+const queue = store.metrics.gauge('queue_length', { unit: 'jobs', help: 'Jobs waiting to run.' })
+
+await store.metrics.describe('disk_used', { unit: 'bytes' }) // a name you ingest yourself
+await store.metrics.description('queue_length') // { unit: 'jobs', help: 'Jobs waiting to run.' }
+```
+
+```python
+latency = store.metrics.timer("http_request_ms", help="How long an HTTP request took.")
+queue = store.metrics.gauge("queue_length", unit="jobs", help="Jobs waiting to run.")
+
+await store.metrics.describe("disk_used", unit="bytes")  # a name you ingest yourself
+await store.metrics.description("queue_length")  # Description(unit="jobs", help="Jobs waiting to run.")
+```
+
+```go
+latency := stats.Timer("http_request_ms", metrics.Help("How long an HTTP request took."))
+queue := stats.Gauge("queue_length", metrics.Unit("jobs"), metrics.Help("Jobs waiting to run."))
+
+err := stats.Describe(ctx, "disk_used", metrics.Unit("bytes")) // a name you ingest yourself
+description, err := stats.Description(ctx, "queue_length") // {Unit: "jobs", Help: "Jobs waiting to run."}
+```
+
+A description tells a reader of the data what a metric means: the unit of its
+values, such as `ms`, `bytes` or `%`, and a line of help. A dashboard can use
+the unit to pick an axis. The description belongs to the name, so every series
+of the name shares it, and it stays after the series are deleted.
+
+An instrument writes its description at its next write. A timer describes its
+three series: the sum and the longest in milliseconds, and the count without a
+unit. `describe` replaces the description a name had, and a `describe` with
+neither a unit nor help deletes it. A name that was never described has an
+empty unit and help.
+
+A unit can have 32 bytes and help 1024 bytes. A longer one is rejected with an
+invalid error (`ErrInvalid` in Go, `InvalidError` in Bun and Python). In Bun
+and Python, the instrument call itself throws it.
+
 ## When a series is rejected
 
 A series can be rejected, for example when its labels are invalid or the store
@@ -141,6 +182,8 @@ most the last 15 seconds. In a Go store opened with `Manual`, call
 | A label name      | 256 bytes; names starting with `__` are reserved |
 | A label value     | 4 KiB                                            |
 | Labels per series | 128 pairs and 16 KiB in total                    |
+| A unit            | 32 bytes                                         |
+| Help              | 1024 bytes                                       |
 
 ## See also
 

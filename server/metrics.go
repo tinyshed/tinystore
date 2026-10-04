@@ -20,6 +20,41 @@ func (s *Server) metricsMethods(methods map[wire.Method]handler) {
 	methods[wire.MetricsDrop] = metricsDrop
 	methods[wire.MetricsExplain] = metricsExplain
 	methods[wire.MetricsLatest] = metricsLatest
+	methods[wire.MetricsDescribe] = metricsDescribe
+	methods[wire.MetricsDescribed] = metricsDescribed
+}
+
+// metricsDescribe keeps what a metric's name means in place of what it meant
+func metricsDescribe(c *call) error {
+	var ask wire.MetricsDescription
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	store, err := c.session.server.metricsStore(c.ctx)
+	if err != nil {
+		return err
+	}
+	if err = store.Describe(c.ctx, ask.Name, metrics.Unit(ask.Unit), metrics.Help(ask.Help)); err != nil {
+		return err
+	}
+	return respond(c, wire.Empty{})
+}
+
+// metricsDescribed answers what describe kept for a name, or none
+func metricsDescribed(c *call) error {
+	var ask wire.MetricsDescription
+	if err := ask.Decode(c.request); err != nil {
+		return err
+	}
+	store, err := c.session.server.metricsStore(c.ctx)
+	if err != nil {
+		return err
+	}
+	description, err := store.Description(c.ctx, ask.Name)
+	if err != nil {
+		return err
+	}
+	return respond(c, wire.MetricsDescription{Name: ask.Name, Unit: description.Unit, Help: description.Help})
 }
 
 // metricsIngest stores its series' samples, all or none

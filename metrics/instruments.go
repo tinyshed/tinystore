@@ -26,6 +26,8 @@ type GaugeInstrument struct{ *instrument }
 // started, as the counters <name>_count and <name>_sum, and the longest since
 // the flush before as the gauge <name>_max, left out when it measured none.
 // A range's mean is the increase of its sum over the increase of its count.
+// Given a description, its sum and longest are in milliseconds, whatever Unit
+// it is given.
 type TimerInstrument struct{ *timer }
 
 func (c CounterInstrument) Inc() { c.Add(1) }
@@ -82,21 +84,32 @@ func (t TimerInstrument) With(labels ...string) TimerInstrument {
 	return TimerInstrument{t.child(labels)}
 }
 
-func (s *Store) Counter(name string) CounterInstrument {
+// Counter is the counter of a name; a description given to it is written at
+// the next flush, as Describe would.
+func (s *Store) Counter(name string, options ...DescribeOption) CounterInstrument {
+	s.instruments.describe(name, describedBy(options))
 	return CounterInstrument{s.instruments.register(named(Counter, name))}
 }
 
-func (s *Store) Gauge(name string) GaugeInstrument {
+func (s *Store) Gauge(name string, options ...DescribeOption) GaugeInstrument {
+	s.instruments.describe(name, describedBy(options))
 	return GaugeInstrument{s.instruments.register(named(Gauge, name))}
 }
 
-func (s *Store) Timer(name string) TimerInstrument {
+func (s *Store) Timer(name string, options ...DescribeOption) TimerInstrument {
+	if len(options) > 0 {
+		help := describedBy(options).Help
+		s.instruments.describe(name+"_count", Description{Help: help})
+		s.instruments.describe(name+"_sum", Description{Unit: "ms", Help: help})
+		s.instruments.describe(name+"_max", Description{Unit: "ms", Help: help})
+	}
 	return TimerInstrument{s.instruments.registerTimer(Series{Name: name})}
 }
 
 // GaugeFunc asks read for the gauge's value at each flush; an error skips that
 // sample and is logged, once while it stays the same.
-func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, error)) {
+func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, error), options ...DescribeOption) {
+	s.instruments.describe(name, describedBy(options))
 	gauge := s.instruments.register(named(Gauge, name))
 	if read == nil {
 		gauge.warnOnce(fmt.Errorf("%w: nil gauge callback", ErrInvalid))
@@ -257,8 +270,50 @@ type instruments struct {
 	mu        sync.Mutex
 	all       map[string]*instrument
 	conflicts map[conflictKey]*instrument
-	timers    map[string]*timer // by their own name and labels
-	timed     map[string]*timer // by each series they write
+	timers    map[string]*timer      // by their own name and labels
+	timed     map[string]*timer      // by each series they write
+	described map[string]Description // by name, for the next flush to write
+}
+
+// describe keeps a name's description for the next flush; one past its
+// bounds is logged and left out, since an instrument returns no error.
+func (set *instruments) describe(name string, description Description) {
+	if description == (Description{}) {
+		return
+	}
+	if err := checkDescription(name, description); err != nil {
+		set.store.log.Warn("description refused", "name", name, "error", err)
+		return
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if set.described == nil {
+		set.described = map[string]Description{}
+	}
+	set.described[name] = description
+}
+
+// takeDescriptions is what the next flush writes; the flush gives them back
+// when it fails.
+func (set *instruments) takeDescriptions() map[string]Description {
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	taken := set.described
+	set.described = nil
+	return taken
+}
+
+func (set *instruments) giveBackDescriptions(taken map[string]Description) {
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	for name, description := range taken {
+		if _, newer := set.described[name]; !newer {
+			if set.described == nil {
+				set.described = map[string]Description{}
+			}
+			set.described[name] = description
+		}
+	}
 }
 
 type conflictKey struct {
@@ -398,6 +453,9 @@ func (s *Store) Flush(ctx context.Context) error {
 	s.flushing.Lock()
 	defer s.flushing.Unlock()
 
+	if err := s.writeDescriptions(ctx); err != nil {
+		return err
+	}
 	batches, taken := s.instrumentBatches(ctx, s.now().UnixMilli())
 	err := s.ingestInstruments(ctx, batches)
 	if err != nil {

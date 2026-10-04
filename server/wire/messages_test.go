@@ -304,8 +304,9 @@ var schema = map[string][]field{
 		{7, "values", "floats"},
 		{8, "flags", "bin"},
 	},
-	"metrics.labels":  {{1, "labels", "names"}},
-	"metrics.dropped": {{1, "found", "bool"}, {2, "unreadable groups", "uint"}},
+	"metrics.labels":      {{1, "labels", "names"}},
+	"metrics.description": {{1, "name", "str"}, {2, "unit", "str"}, {3, "help", "str"}},
+	"metrics.dropped":     {{1, "found", "bool"}, {2, "unreadable groups", "uint"}},
 	"metrics.plan": {
 		{1, "series", "uint"},
 		{2, "blocks", "uint"},
@@ -404,6 +405,8 @@ var methods = []struct {
 	{"metrics.drop", wire.MetricsDrop},
 	{"metrics.explain", wire.MetricsExplain},
 	{"metrics.latest", wire.MetricsLatest},
+	{"metrics.describe", wire.MetricsDescribe},
+	{"metrics.described", wire.MetricsDescribed},
 }
 
 var codes = []wire.Code{
@@ -804,6 +807,10 @@ func metricsExamples() []example {
 				Labels: map[string]string{"__name__": "http_requests_total"}, Kind: "counter",
 				Buckets: []wire.MetricsBucket{{From: at, To: at + 60_000, Count: 4, Value: 60, Lookback: true}},
 			}),
+		of("metrics.describe of a timer's sum", "metrics.description", wire.MetricsDescription{
+			Name: "query_sum", Unit: "ms", Help: "How long database queries took.",
+		}),
+		of("metrics.described of a name", "metrics.description", wire.MetricsDescription{Name: "query_sum"}),
 		of("metrics.drop of a series", "metrics.labels", wire.MetricsLabels{Labels: cpu}),
 		of("what a drop removed", "metrics.dropped", wire.MetricsDropped{Found: true, UnreadableGroups: 1}),
 		of("a plan that stops at its decoded samples", "metrics.plan", wire.MetricsPlan{

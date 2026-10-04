@@ -71,3 +71,10 @@ create table payloads (
     id   integer primary key,
     body blob not null check (length(body) <= 8200)
 ) strict;
+
+-- what a metric's name means; it belongs to the name, not to a series
+create table descriptions (
+    name text primary key,
+    unit text not null check (length(unit) <= 32),
+    help text not null check (length(help) <= 1024)
+) strict, without rowid;

@@ -187,6 +187,19 @@ interface Bucket {
 }
 ```
 
+## Description
+
+```ts
+interface Description {
+    /** 32 bytes of UTF-8 at most */
+    unit?: string
+    /** 1024 bytes of UTF-8 at most */
+    help?: string
+}
+```
+
+What the values of a metric's name mean: their unit, such as 'ms', 'bytes' or '%', and a line of help.
+
 ## Aggregate
 
 ```ts
@@ -270,18 +283,39 @@ drop(series: {
 
 Removes one series and everything it holds, whether it still reads or not.
 
+### Metrics.describe
+
+```ts
+describe(name: string, description: Description): Promise<void>
+```
+
+Keeps what a name's values mean in place of what they meant; with
+neither a unit nor help it removes it. Every series of the name shares it.
+
+### Metrics.description
+
+```ts
+description(name: string): Promise<{
+        unit: string
+        help: string
+    }>
+```
+
+What describe kept for a name, empty strings when it has none.
+
 ### Metrics.counter
 
 ```ts
-counter(name: string): Counter
+counter(name: string, description?: Description): Counter
 ```
 
-A counter: its total since this process started, ingested every flush; a restart is a reset.
+A counter: its total since this process started, ingested every flush;
+a restart is a reset. A description is written at the next flush.
 
 ### Metrics.gauge
 
 ```ts
-gauge(name: string): Gauge
+gauge(name: string, description?: Description): Gauge
 ```
 
 A gauge: its value at each flush.
@@ -289,7 +323,7 @@ A gauge: its value at each flush.
 ### Metrics.gaugeFunc
 
 ```ts
-gaugeFunc(name: string, read: () => number | Promise<number>): void
+gaugeFunc(name: string, read: () => number | Promise<number>, description?: Description): void
 ```
 
 A gauge read by a function at each flush; a function that throws skips that sample.
@@ -297,13 +331,15 @@ A gauge read by a function at each flush; a function that throws skips that samp
 ### Metrics.timer
 
 ```ts
-timer(name: string): Timer
+timer(name: string, description?: Description): Timer
 ```
 
 A timer: how many durations it measured and their sum in milliseconds,
 ingested every flush as the counters name_count and name_sum, and the
 longest since the flush before as the gauge name_max, left out when it
 measured none. A range's mean is its sum's increase over its count's.
+Given a description, its sum and longest are in milliseconds, whatever
+unit it names.
 
 ### Metrics.flush
 

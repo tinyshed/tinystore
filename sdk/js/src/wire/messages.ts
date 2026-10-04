@@ -82,6 +82,8 @@ export const methods = {
 	'metrics.drop': 0x0604,
 	'metrics.explain': 0x0605,
 	'metrics.latest': 0x0606,
+	'metrics.describe': 0x0607,
+	'metrics.described': 0x0608,
 } as const
 
 export type Method = keyof typeof methods
@@ -492,6 +494,12 @@ export const MetricsBuckets = message('metrics.buckets', {
 
 export const MetricsLabels = message('metrics.labels', { labels: [1, names(str)] })
 
+export const MetricsDescription = message('metrics.description', {
+	name: [1, str],
+	unit: [2, str],
+	help: [3, str],
+})
+
 export const MetricsDropped = message('metrics.dropped', {
 	found: [1, bool],
 	unreadableGroups: [2, uint],
@@ -563,5 +571,6 @@ export const messages = {
 	'metrics.plan': MetricsPlan,
 	'metrics.buckets': MetricsBuckets,
 	'metrics.labels': MetricsLabels,
+	'metrics.description': MetricsDescription,
 	'metrics.dropped': MetricsDropped,
 } as const

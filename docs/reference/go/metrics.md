@@ -194,6 +194,37 @@ func (c CounterInstrument) With(labels ...string) CounterInstrument
 
 With is the counter of the same name with more labels, given as name, value pairs; the same labels in any order are the same series.
 
+## DescribeOption
+
+```go
+type DescribeOption func(*Description)
+```
+
+DescribeOption is a part of a Description, given to Describe or to an instrument.
+
+### Help
+
+```go
+func Help(help string) DescribeOption
+```
+
+### Unit
+
+```go
+func Unit(unit string) DescribeOption
+```
+
+## Description
+
+```go
+type Description struct {
+	Unit string
+	Help string
+}
+```
+
+Description is what the values of a metric's name mean: their unit, such as "ms", "bytes" or "%", and a line of help. It belongs to the name, so every series of the name shares it, and it outlives them.
+
 ## DroppedSeries
 
 ```go
@@ -466,8 +497,26 @@ Close ingests the instruments' last values, stops admission and drains in-flight
 ### Store.Counter
 
 ```go
-func (s *Store) Counter(name string) CounterInstrument
+func (s *Store) Counter(name string, options ...DescribeOption) CounterInstrument
 ```
+
+Counter is the counter of a name; a description given to it is written at the next flush, as Describe would.
+
+### Store.Describe
+
+```go
+func (s *Store) Describe(ctx context.Context, name string, options ...DescribeOption) error
+```
+
+Describe keeps a name's description in place of the one it had; without a unit or help it removes it.
+
+### Store.Description
+
+```go
+func (s *Store) Description(ctx context.Context, name string) (Description, error)
+```
+
+Description is what Describe kept for the name, or none.
 
 ### Store.DropSeries
 
@@ -504,13 +553,13 @@ Flush ingests every instrument's value now. A series Ingest refuses, an invalid 
 ### Store.Gauge
 
 ```go
-func (s *Store) Gauge(name string) GaugeInstrument
+func (s *Store) Gauge(name string, options ...DescribeOption) GaugeInstrument
 ```
 
 ### Store.GaugeFunc
 
 ```go
-func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, error))
+func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, error), options ...DescribeOption)
 ```
 
 GaugeFunc asks read for the gauge's value at each flush; an error skips that sample and is logged, once while it stays the same.
@@ -594,7 +643,7 @@ Stream passes one owned series at a time after the snapshot closes; an error may
 ### Store.Timer
 
 ```go
-func (s *Store) Timer(name string) TimerInstrument
+func (s *Store) Timer(name string, options ...DescribeOption) TimerInstrument
 ```
 
 ### Store.WriteSelf
@@ -613,7 +662,7 @@ type TimerInstrument struct {
 }
 ```
 
-TimerInstrument measures how long something takes. Each flush ingests how many durations it measured and their sum in milliseconds, since the process started, as the counters \&lt;name>\_count and \&lt;name>\_sum, and the longest since the flush before as the gauge \&lt;name>\_max, left out when it measured none. A range's mean is the increase of its sum over the increase of its count.
+TimerInstrument measures how long something takes. Each flush ingests how many durations it measured and their sum in milliseconds, since the process started, as the counters \&lt;name>\_count and \&lt;name>\_sum, and the longest since the flush before as the gauge \&lt;name>\_max, left out when it measured none. A range's mean is the increase of its sum over the increase of its count. Given a description, its sum and longest are in milliseconds, whatever Unit it is given.
 
 ### TimerInstrument.Record
 

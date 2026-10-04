@@ -86,6 +86,8 @@ METHODS: dict[str, int] = {
     "metrics.drop": 0x0604,
     "metrics.explain": 0x0605,
     "metrics.latest": 0x0606,
+    "metrics.describe": 0x0607,
+    "metrics.described": 0x0608,
 }
 
 Hello = message(
@@ -465,6 +467,8 @@ MetricsBuckets = message(
 )
 
 MetricsLabels = message("metrics.labels", labels=(1, names(str_)))
+
+MetricsDescription = message("metrics.description", name=(1, str_), unit=(2, str_), help=(3, str_))
 MetricsDropped = message("metrics.dropped", found=(1, bool_), unreadable_groups=(2, uint))
 
 MESSAGES: dict[str, Message] = {
@@ -534,6 +538,7 @@ MESSAGES: dict[str, Message] = {
         MetricsPlan,
         MetricsBuckets,
         MetricsLabels,
+        MetricsDescription,
         MetricsDropped,
     )
 }

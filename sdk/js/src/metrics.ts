@@ -12,6 +12,7 @@ import { byCodePoint } from './wire/codec.ts'
 import {
 	MetricsBatch,
 	MetricsBuckets,
+	MetricsDescription,
 	MetricsDropped,
 	MetricsLabels,
 	MetricsPlan,
@@ -168,6 +169,14 @@ export interface Bucket {
 	partial: boolean
 	/** its first step started from a sample before the range */
 	lookback: boolean
+}
+
+/** What the values of a metric's name mean: their unit, such as 'ms', 'bytes' or '%', and a line of help. */
+export interface Description {
+	/** 32 bytes of UTF-8 at most */
+	unit?: string
+	/** 1024 bytes of UTF-8 at most */
+	help?: string
 }
 
 export interface Aggregate {
@@ -327,6 +336,7 @@ export class Metrics {
 	readonly #link: Link
 	readonly #instruments = new Map<string, Instrument>()
 	readonly #timers = new Map<string, TimerInstrument>()
+	readonly #described = new Map<string, Description>() // for the next flush to write
 	#interval: ReturnType<typeof setInterval> | undefined
 	readonly #failureLog = new FailureLog('metrics instruments', sayOwn)
 	/** instruments' flushes that failed, and why the last did */
@@ -484,18 +494,44 @@ export class Metrics {
 		return { found: dropped.found === true, unreadableGroups: dropped.unreadableGroups ?? 0 }
 	}
 
-	/** A counter: its total since this process started, ingested every flush; a restart is a reset. */
-	counter(name: string): Counter {
+	/**
+	 * Keeps what a name's values mean in place of what they meant; with
+	 * neither a unit nor help it removes it. Every series of the name shares it.
+	 */
+	async describe(name: string, description: Description): Promise<void> {
+		const body = MetricsDescription.encode({ name, unit: description.unit, help: description.help })
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.describe'], body),
+		)
+	}
+
+	/** What describe kept for a name, empty strings when it has none. */
+	async description(name: string): Promise<{ unit: string; help: string }> {
+		const body = await this.#link.run('read', connection =>
+			connection.session.call(methods['metrics.described'], MetricsDescription.encode({ name })),
+		)
+		const described = MetricsDescription.decode(body)
+		return { unit: described.unit ?? '', help: described.help ?? '' }
+	}
+
+	/**
+	 * A counter: its total since this process started, ingested every flush;
+	 * a restart is a reset. A description is written at the next flush.
+	 */
+	counter(name: string, description?: Description): Counter {
+		this.#describe(name, description)
 		return new Counter(this.#instrument(name, 'counter'), {})
 	}
 
 	/** A gauge: its value at each flush. */
-	gauge(name: string): Gauge {
+	gauge(name: string, description?: Description): Gauge {
+		this.#describe(name, description)
 		return new Gauge(this.#instrument(name, 'gauge'), {})
 	}
 
 	/** A gauge read by a function at each flush; a function that throws skips that sample. */
-	gaugeFunc(name: string, read: () => number | Promise<number>): void {
+	gaugeFunc(name: string, read: () => number | Promise<number>, description?: Description): void {
+		this.#describe(name, description)
 		this.#instrument(name, 'gauge').read = read
 	}
 
@@ -504,9 +540,41 @@ export class Metrics {
 	 * ingested every flush as the counters name_count and name_sum, and the
 	 * longest since the flush before as the gauge name_max, left out when it
 	 * measured none. A range's mean is its sum's increase over its count's.
+	 * Given a description, its sum and longest are in milliseconds, whatever
+	 * unit it names.
 	 */
-	timer(name: string): Timer {
+	timer(name: string, description?: Description): Timer {
+		if (description !== undefined) {
+			const help = description.help ?? ''
+			this.#describe(`${name}_count`, { help })
+			this.#describe(`${name}_sum`, { unit: 'ms', help })
+			this.#describe(`${name}_max`, { unit: 'ms', help })
+		}
 		return new Timer(this.#timer(name), {})
+	}
+
+	// an instrument's description, checked now, since a flush the store
+	// refused it in would refuse every flush after
+	#describe(name: string, description: Description | undefined): void {
+		if (!description?.unit && !description?.help) {
+			return
+		}
+		const bytes = (text: string | undefined) => new TextEncoder().encode(text ?? '').length
+		if (bytes(description.unit) > 32 || bytes(description.help) > 1024) {
+			throw new InvalidError(
+				`the description of ${name}: a unit of 32 bytes and help of 1024 at most`,
+			)
+		}
+		this.#described.set(name, description)
+	}
+
+	async #writeDescriptions(): Promise<void> {
+		for (const [name, description] of [...this.#described]) {
+			await this.describe(name, description)
+			if (this.#described.get(name) === description) {
+				this.#described.delete(name)
+			}
+		}
 	}
 
 	#instrument(name: string, kind: SeriesKind): Instrument {
@@ -564,6 +632,7 @@ export class Metrics {
 	 * bad instrument keeps no other out.
 	 */
 	async flush(): Promise<void> {
+		await this.#writeDescriptions()
 		const at = BigInt(Date.now())
 		const batch = await this.#instrumentSamples(at)
 		const taken = this.#takeTimers(at, batch)

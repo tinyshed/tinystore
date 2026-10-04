@@ -231,24 +231,62 @@ The series, the blocks, those an aggregate answers from their
 summaries, the bytes and the samples, beside the limits; stops is the
 LimitError the call would end with, None when it fits.
 
+### Metrics.describe
+
+```python
+async def describe(
+    name: str,
+    *,
+    unit: str | None = None,
+    help: str | None = None,
+) -> None: ...
+```
+
+Keeps what a name's values mean in place of what they meant; with neither it removes it.
+
+Every series of the name shares it:
+
+    await store.metrics.describe("query_ms", unit="ms", help="How long a query took.")
+
+### Metrics.description
+
+```python
+async def description(name: str) -> Description: ...
+```
+
+What describe kept for a name, empty strings when it has none.
+
 ### Metrics.counter
 
 ```python
-def counter(name: str) -> Counter: ...
+def counter(
+    name: str,
+    *,
+    unit: str | None = None,
+    help: str | None = None,
+) -> Counter: ...
 ```
 
 A counter: its total since this process started, ingested every flush; a restart is a reset.
 
+A unit or help is written at the next flush, as describe would.
+
 ### Metrics.gauge
 
 ```python
-def gauge(name: str) -> Gauge: ...
+def gauge(name: str, *, unit: str | None = None, help: str | None = None) -> Gauge: ...
 ```
 
 ### Metrics.gauge_func
 
 ```python
-def gauge_func(name: str, read: Callable[[], float | Awaitable[float]]) -> None: ...
+def gauge_func(
+    name: str,
+    read: Callable[[], float | Awaitable[float]],
+    *,
+    unit: str | None = None,
+    help: str | None = None,
+) -> None: ...
 ```
 
 A gauge read by a function at each flush; one that raises skips that sample.
@@ -256,7 +294,7 @@ A gauge read by a function at each flush; one that raises skips that sample.
 ### Metrics.timer
 
 ```python
-def timer(name: str) -> Timer: ...
+def timer(name: str, *, unit: str | None = None, help: str | None = None) -> Timer: ...
 ```
 
 A timer: how many durations it measured and their sum in milliseconds, and the longest.
@@ -264,7 +302,8 @@ A timer: how many durations it measured and their sum in milliseconds, and the l
 Every flush ingests the first two as the counters name_count and
 name_sum, and the longest since the flush before as the gauge
 name_max, left out when it measured none. A range's mean is its sum's
-increase over its count's.
+increase over its count's. Given a unit or help, its sum and longest
+are in milliseconds, whatever unit it names.
 
 ### Metrics.flush
 
