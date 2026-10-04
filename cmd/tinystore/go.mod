@@ -5,8 +5,8 @@ go 1.27.0
 toolchain go1.27.1
 
 require (
-	github.com/tinyshed/tinystore v0.0.0
-	github.com/tinyshed/tinystore/server v0.0.0
+	github.com/tinyshed/tinystore v0.1.0-rc.5
+	github.com/tinyshed/tinystore/server v0.1.0-rc.5
 )
 
 require (
@@ -15,9 +15,4 @@ require (
 	github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-)
-
-replace (
-	github.com/tinyshed/tinystore => ../..
-	github.com/tinyshed/tinystore/server => ../../server
 )
