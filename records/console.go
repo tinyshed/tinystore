@@ -31,8 +31,14 @@ type echo struct {
 	mu     sync.Mutex
 	out    io.Writer
 	pretty bool
-	color  bool
-	zone   *time.Location
+	look   look
+}
+
+type look struct {
+	color      bool
+	zone       *time.Location
+	time       ConsoleTime
+	hideStream bool
 }
 
 // newEcho is where a handler's lines go, or nil for nowhere: a terminal
@@ -41,18 +47,27 @@ func newEcho(settings handlerSettings) *echo {
 	if settings.console == ConsoleOff {
 		return nil
 	}
-	file := os.Stderr
-	if settings.stdout {
-		file = os.Stdout
+	out := settings.to
+	if out == nil {
+		out = os.Stderr
 	}
-	c := &echo{out: file, zone: time.Local}
-	if settings.out != nil {
+	c := newConsole(out, settings.console)
+	c.look.time, c.look.hideStream = settings.time, settings.hideStream
+	if settings.zone != nil {
 		// a test's own writer, whose lines do not depend on the machine's zone
-		c.out, c.zone = settings.out, time.UTC
+		c.look.zone, c.look.color = settings.zone, false
 	}
-	// FORCE_COLOR says a person reads the pipe, so the default is theirs too
-	c.pretty = settings.console == ConsolePretty || settings.console == 0 && (term.IsTerminal(file) || term.Forced())
-	c.color = c.pretty && settings.out == nil && term.Colors(file)
+	return c
+}
+
+// newConsole writes to w, a terminal only when it is a file that is one
+func newConsole(w io.Writer, console Console) *echo {
+	c := &echo{out: w, pretty: console == ConsolePretty, look: look{zone: time.Local}}
+	if file, ok := w.(*os.File); ok {
+		// FORCE_COLOR says a person reads the pipe, so the default is theirs too
+		c.pretty = c.pretty || console == 0 && (term.IsTerminal(file) || term.Forced())
+		c.look.color = c.pretty && term.Colors(file)
+	}
 	return c
 }
 
@@ -70,12 +85,7 @@ func NewPrinter(w io.Writer, console Console) *Printer {
 	if console == ConsoleOff {
 		return &Printer{}
 	}
-	c := &echo{out: w, zone: time.Local, pretty: console == ConsolePretty}
-	if file, ok := w.(*os.File); ok {
-		c.pretty = c.pretty || console == 0 && (term.IsTerminal(file) || term.Forced())
-		c.color = c.pretty && term.Colors(file)
-	}
-	return &Printer{echo: c}
+	return &Printer{echo: newConsole(w, console)}
 }
 
 // Print writes a record, a whole line a write.
@@ -90,7 +100,7 @@ func (p *Printer) Print(r Record) {
 func (c *echo) write(r *Record) {
 	var line []byte
 	if c.pretty {
-		line = appendPretty(nil, r, c.color, c.zone)
+		line = appendPretty(nil, r, c.look)
 	} else {
 		line = appendJSONLine(nil, r)
 	}
@@ -168,22 +178,34 @@ const (
 //
 // A key, and a string, shows without its quotes when it is one word with no
 // '=', quote or backslash; any other value shows as its JSON.
-func appendPretty(dst []byte, r *Record, color bool, zone *time.Location) []byte {
-	paint := painter(color)
-	dst = paint.text(dst, dim, r.At.In(zone).Format("15:04:05.000"))
+func appendPretty(dst []byte, r *Record, l look) []byte {
+	paint := painter(l.color)
+	switch l.time {
+	case TimeOff:
+	case TimeFull:
+		dst = paint.text(dst, dim, r.At.In(l.zone).Format("2006-01-02 15:04:05.000 -07:00"))
+		dst = append(dst, ' ')
+	default:
+		dst = paint.text(dst, dim, r.At.In(l.zone).Format("15:04:05.000"))
+		dst = append(dst, ' ')
+	}
 	label, hue := prettyLevel(r.Level)
-	dst = append(dst, ' ')
 	dst = paint.text(dst, hue, label)
-	dst = append(dst, strings.Repeat(" ", max(0, 5-len(label)))...)
-	dst = append(dst, ' ')
-	dst = paint.text(dst, cyan, r.Stream)
+
+	// the level is padded to five; the columns after it are two spaces apart
+	separator := strings.Repeat(" ", max(0, 5-len(label))) + " "
+	if !l.hideStream {
+		dst = append(dst, separator...)
+		dst = paint.text(dst, cyan, r.Stream)
+		separator = "  "
+	}
 	if message := prettyMessage(r); message != "" {
-		dst = append(dst, "  "...)
+		dst = append(dst, separator...)
 		dst = append(dst, message...)
+		separator = "  "
 	}
 
 	var below []Field
-	separator := "  "
 	field := func(key, text string) {
 		dst = append(dst, separator...)
 		separator = " "

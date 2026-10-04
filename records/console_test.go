@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,20 +21,22 @@ type consoleVectors struct {
 }
 
 type consoleVector struct {
-	Name    string               `json:"name"`
-	At      string               `json:"at"`
-	Stream  string               `json:"stream"`
-	Level   *int                 `json:"level,omitempty"`
-	Event   string               `json:"event,omitempty"`
-	Msg     *string              `json:"msg,omitempty"`
-	Context [][2]json.RawMessage `json:"context,omitempty"`
-	Attrs   [][2]json.RawMessage `json:"attrs,omitempty"`
-	TraceID string               `json:"trace_id,omitempty"`
-	SpanID  string               `json:"span_id,omitempty"`
-	Redact  []string             `json:"redact,omitempty"`
-	Color   bool                 `json:"color,omitempty"`
-	JSON    string               `json:"json"`
-	Pretty  string               `json:"pretty"`
+	Name       string               `json:"name"`
+	At         string               `json:"at"`
+	Stream     string               `json:"stream"`
+	Level      *int                 `json:"level,omitempty"`
+	Event      string               `json:"event,omitempty"`
+	Msg        *string              `json:"msg,omitempty"`
+	Context    [][2]json.RawMessage `json:"context,omitempty"`
+	Attrs      [][2]json.RawMessage `json:"attrs,omitempty"`
+	TraceID    string               `json:"trace_id,omitempty"`
+	SpanID     string               `json:"span_id,omitempty"`
+	Redact     []string             `json:"redact,omitempty"`
+	Color      bool                 `json:"color,omitempty"`
+	Time       string               `json:"time,omitempty"`
+	HideStream bool                 `json:"hide_stream,omitempty"`
+	JSON       string               `json:"json"`
+	Pretty     string               `json:"pretty"`
 }
 
 func TestConsoleLinesAreTheVectors(t *testing.T) {
@@ -45,7 +48,7 @@ func TestConsoleLinesAreTheVectors(t *testing.T) {
 		redact := newRedactor(v.Redact)
 		record.Context, record.Attrs = redact.fields(record.Context), redact.fields(record.Attrs)
 		gotJSON := string(appendJSONLine(nil, &record))
-		gotPretty := string(appendPretty(nil, &record, v.Color, time.UTC))
+		gotPretty := string(appendPretty(nil, &record, v.look(t)))
 		if *update {
 			v.JSON, v.Pretty = gotJSON, gotPretty
 			continue
@@ -98,6 +101,16 @@ func writeConsoleVectors(t *testing.T, path string, vectors consoleVectors) {
 	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// look is how the vector's pretty line shows, in UTC
+func (v *consoleVector) look(t *testing.T) look {
+	t.Helper()
+	shown, ok := readConsoleTime(v.Time)
+	if v.Time != "" && !ok {
+		t.Fatalf("%s: a time of %q", v.Name, v.Time)
+	}
+	return look{color: v.Color, zone: time.UTC, time: shown, hideStream: v.HideStream}
 }
 
 // record is the vector as the handler would have built it
@@ -160,7 +173,7 @@ func TestAPrinterWritesARecordAsTheConsoleDoes(t *testing.T) {
 		want    []byte
 	}{
 		{ConsoleJSON, appendJSONLine(nil, &record)},
-		{ConsolePretty, appendPretty(nil, &record, false, time.Local)},
+		{ConsolePretty, appendPretty(nil, &record, look{zone: time.Local})},
 		{ConsoleOff, nil},
 	} {
 		var printed bytes.Buffer
@@ -168,5 +181,18 @@ func TestAPrinterWritesARecordAsTheConsoleDoes(t *testing.T) {
 		if !bytes.Equal(printed.Bytes(), c.want) {
 			t.Fatalf("console %d printed %q, want %q", c.console, printed.Bytes(), c.want)
 		}
+	}
+}
+
+func TestToWritesTheConsoleWhereItIsTold(t *testing.T) {
+	t.Setenv("FORCE_COLOR", "")
+	var buffer, pretty bytes.Buffer
+	slog.New(Handler("api", To(&buffer))).Info("started")
+	if !strings.HasPrefix(buffer.String(), `{"time":`) {
+		t.Fatalf("a buffer, which is no terminal, has %q", buffer.String())
+	}
+	slog.New(Handler("api", To(&pretty), ConsolePretty, TimeOff, HideStream)).Info("started", "port", 3000)
+	if want := "INFO  started  port=3000\n"; pretty.String() != want {
+		t.Fatalf("pretty %q, want %q", pretty.String(), want)
 	}
 }

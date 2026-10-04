@@ -41,11 +41,13 @@ type Options struct {
 type HandlerOption interface{ handlerOption(*handlerSettings) }
 
 type handlerSettings struct {
-	console Console
-	stdout  bool
-	redact  []string
-	level   slog.Leveler
-	out     io.Writer // a test's, in place of the process's own stream
+	console    Console
+	time       ConsoleTime
+	hideStream bool
+	to         io.Writer // standard error when nil
+	redact     []string
+	level      slog.Leveler
+	zone       *time.Location // a test's, in place of the machine's own
 }
 
 // Console says how a Handler writes its lines as they are logged. Without one
@@ -63,14 +65,28 @@ const (
 
 func (c Console) handlerOption(s *handlerSettings) { s.console = c }
 
-// Stdout writes a Handler's console lines to standard output. They go to
-// standard error otherwise, where they never mix with what the program prints:
-// a command's answer, or the frames of a protocol spoken over stdout.
-const Stdout = toStdout(true)
+// ConsoleTime is how a pretty line shows its time; a JSON line always has it.
+type ConsoleTime int
 
-type toStdout bool
+const (
+	TimeClock ConsoleTime = iota + 1 // 11:02:11.123, the default
+	TimeFull                         // 2026-10-02 11:02:11.123 +03:00
+	TimeOff                          // none, where docker or journald stamp each line
+)
 
-func (t toStdout) handlerOption(s *handlerSettings) { s.stdout = bool(t) }
+func (t ConsoleTime) handlerOption(s *handlerSettings) { s.time = t }
+
+// HideStream leaves the stream out of a pretty line; the record keeps it.
+const HideStream = hiddenStream(true)
+
+type hiddenStream bool
+
+func (h hiddenStream) handlerOption(s *handlerSettings) { s.hideStream = bool(h) }
+
+// To writes the console lines to w instead of standard error.
+func To(w io.Writer) HandlerOption {
+	return handlerFunc(func(s *handlerSettings) { s.to = w })
+}
 
 // Redact hides the values of fields with these names, in the store and on the
 // console: a field whose key, or the part of a dotted key after its last dot,

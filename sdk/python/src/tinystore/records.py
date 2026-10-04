@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._background import DropNotice, FailureLog
 from ._connection import Connection, Link, download
-from ._console import Console, ConsoleHandler, Line
+from ._console import Console, ConsoleHandler, ConsoleTime, Line
 from ._page import Page
 from ._time import Duration, ms, unix_ns
 from ._trace import carried as _carried
@@ -44,6 +44,7 @@ from .errors import InvalidError
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Mapping, Sequence
     from datetime import datetime
+    from typing import TextIO
 
     from ._session import Stream
 
@@ -393,8 +394,10 @@ class Records:
         *,
         buffer: int = 1024,
         console: Console | None = None,
+        time: ConsoleTime | None = None,
+        hide_stream: bool = False,
+        to: TextIO | None = None,
         redact: Iterable[str] = (),
-        stdout: bool = False,
     ) -> Handler:
         """A logging.Handler whose lines reach the console as they are logged and the stream once a second.
 
@@ -403,7 +406,17 @@ class Records:
         fields of those names, at any depth, the case ignored, in the store
         and on the console.
         """
-        handler = Handler(self._write_lines, stream, level, buffer, console=console, redact=redact, stdout=stdout)
+        handler = Handler(
+            self._write_lines,
+            stream,
+            level,
+            buffer,
+            console=console,
+            time=time,
+            hide_stream=hide_stream,
+            to=to,
+            redact=redact,
+        )
         self._handlers.append(handler)
         return handler
 
@@ -498,10 +511,12 @@ class Handler(ConsoleHandler):
         most: int,
         *,
         console: Console | None,
+        time: ConsoleTime | None,
+        hide_stream: bool,
+        to: TextIO | None,
         redact: Iterable[str],
-        stdout: bool,
     ) -> None:
-        super().__init__(stream, level, console=console, redact=redact, stdout=stdout)
+        super().__init__(stream, level, console=console, time=time, hide_stream=hide_stream, to=to, redact=redact)
         self._write, self._most = write, most
         self._queue: deque[Line] = deque()
         self._queued = threading.Lock()

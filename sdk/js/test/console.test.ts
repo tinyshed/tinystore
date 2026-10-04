@@ -5,7 +5,13 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 
-import { type ConsoleLine, jsonLine, prettyLine, redactor } from '../src/console.ts'
+import {
+	type ConsoleLine,
+	type ConsoleTime,
+	jsonLine,
+	prettyLine,
+	redactor,
+} from '../src/console.ts'
 import { encodeFields, logger, newLogger } from '../src/logger.ts'
 
 interface Vector {
@@ -21,6 +27,8 @@ interface Vector {
 	span_id?: string
 	redact?: string[]
 	color?: boolean
+	time?: ConsoleTime
+	hide_stream?: boolean
 	json: string
 	pretty: string
 }
@@ -44,7 +52,8 @@ describe('console lines', () => {
 				...(v.span_id === undefined ? {} : { spanId: v.span_id }),
 			}
 			expect(jsonLine(line)).toBe(v.json)
-			expect(prettyLine(line, v.color === true, true)).toBe(v.pretty)
+			const look = { color: v.color === true, utc: true, time: v.time, hideStream: v.hide_stream }
+			expect(prettyLine(line, look)).toBe(v.pretty)
 		})
 	}
 })

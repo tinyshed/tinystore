@@ -3,8 +3,11 @@ are tested against too, and the handler of the console alone."""
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,7 +39,10 @@ def test_a_console_line_is_the_vectors(vector: dict[str, Any]) -> None:
         span_id=vector.get("span_id"),
     )
     assert json_line(line) == vector["json"]
-    assert pretty_line(line, vector.get("color", False), utc=True) == vector["pretty"]
+    shown, hide_stream = vector.get("time"), vector.get("hide_stream", False)
+    assert (
+        pretty_line(line, vector.get("color", False), utc=True, time=shown, hide_stream=hide_stream) == vector["pretty"]
+    )
 
 
 @pytest.fixture
@@ -81,8 +87,8 @@ def test_the_console_is_json_off_a_terminal_and_keeps_its_level(
     assert err.count("\n") == 1 and json.loads(err)["msg"] == "kept"
 
 
-def test_pretty_and_stdout_and_off(logger: logging.Logger, capsys: pytest.CaptureFixture[str]) -> None:
-    logger.addHandler(tinystore.handler("app", console="pretty", stdout=True))
+def test_pretty_and_to_and_off(logger: logging.Logger, capsys: pytest.CaptureFixture[str]) -> None:
+    logger.addHandler(tinystore.handler("app", console="pretty", to=sys.stdout))
     logger.addHandler(tinystore.handler("quiet", console="off"))
     logger.warning("slow request", extra={"ms": 1200})
     out, err = capsys.readouterr()
@@ -111,3 +117,60 @@ def test_force_color_makes_a_pipe_pretty_and_coloured_unless_no_color(
 def test_an_unknown_console_is_refused() -> None:
     with pytest.raises(tinystore.InvalidError):
         tinystore.handler("app", console="loud")  # type: ignore[arg-type]
+    with pytest.raises(tinystore.InvalidError):
+        tinystore.handler("app", time="noon")  # type: ignore[arg-type]
+
+
+def test_a_handler_writes_where_to_says_json_off_a_terminal(
+    logger: logging.Logger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    pipe, pretty = io.StringIO(), io.StringIO()
+    logger.addHandler(tinystore.handler("app", to=pipe))
+    logger.addHandler(tinystore.handler("app", console="pretty", time="off", hide_stream=True, to=pretty))
+    logger.warning("slow request", extra={"ms": 1200})
+    assert json.loads(pipe.getvalue())["msg"] == "slow request"
+    assert pretty.getvalue() == "WARN  slow request  logger=tinystore-console ms=1200\n"
+
+
+def test_the_environment_wins_over_the_arguments_and_never_turns_a_console_on(
+    logger: logging.Logger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "WARN")
+    monkeypatch.setenv("LOG_FORMAT", "pretty")
+    monkeypatch.setenv("LOG_TIME", "off")
+    written, events = io.StringIO(), io.StringIO()
+    logger.addHandler(tinystore.handler("api", logging.DEBUG, console="json", time="full", to=written))
+    logger.addHandler(tinystore.handler("events", console="off", to=events))
+    logger.info("below the level")
+    logger.warning("kept", extra={"ms": 1200})
+    assert written.getvalue() == "WARN  api  kept  logger=tinystore-console ms=1200\n"
+    assert events.getvalue() == ""
+
+    logger.handlers.clear()
+    monkeypatch.setenv("LOG_FORMAT", "off")
+    silenced = io.StringIO()
+    logger.addHandler(tinystore.handler("api", to=silenced))
+    logger.warning("w")
+    assert silenced.getvalue() == ""
+
+
+def test_a_value_the_environment_cannot_mean_is_ignored_and_said_once(
+    logger: logging.Logger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = f"verbose-{time.time_ns()}"
+    monkeypatch.setenv("LOG_LEVEL", value)
+    first, second = io.StringIO(), io.StringIO()
+    logger.addHandler(tinystore.handler("api", console="json", to=first))
+    logger.addHandler(tinystore.handler("api", console="json", to=second))
+    logger.debug("d")
+    said, line = (json.loads(text) for text in first.getvalue().splitlines())
+    assert said == {
+        "time": said["time"],
+        "level": "WARN",
+        "stream": "tinystore",
+        "msg": "LOG_LEVEL is ignored",
+        "value": value,
+        "expected": "debug, info, warn or error",
+    }
+    assert line["msg"] == "d" and second.getvalue().count("\n") == 1

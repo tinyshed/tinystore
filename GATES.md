@@ -100,7 +100,10 @@ module defines.
 - what a full buffer dropped is said, once a quiet period — `TestDroppedLinesAreSaidOncePerQuietPeriod`; `dropped lines are said at a flush, once a quiet period, counted since the last time` in `sdk/js/test/background.test.ts`, `test_dropped_lines_are_said_at_a_flush_once_a_quiet_period_counted_since_the_last_time` in Python's
 - a half-full log buffer is written before its interval — `TestAHalfFullBufferFlushesBeforeItsInterval`; `test_a_half_full_buffer_is_written_before_its_interval` in Python's
 - writing a log does not log again — `TestTheEnginesOwnLinesAreRefused`
-- a logger's console line is the same bytes in Go, Bun and Python — `TestConsoleLinesAreTheVectors`, over `records/testdata/console.json`, which both SDKs' suites read
+- a logger's console line is the same bytes in Go, Bun and Python, its time and stream as it is told — `TestConsoleLinesAreTheVectors`, over `records/testdata/console.json`, which both SDKs' suites read
+- LOG_LEVEL, LOG_FORMAT and LOG_TIME win over a logger's code, and never turn a console on — `TestTheEnvironmentWinsOverTheOptions`; `win over the options, and never turn on a console turned off` in `sdk/js/test/logger.test.ts`, `test_the_environment_wins_over_the_arguments_and_never_turns_a_console_on` in Python's
+- a LOG_ value no one can mean is ignored, and said once — `TestAValueTheEnvironmentCannotMeanIsIgnoredAndSaidOnce`; `a value they cannot mean is ignored, and said once` in `sdk/js/test/logger.test.ts`, `test_a_value_the_environment_cannot_mean_is_ignored_and_said_once` in Python's
+- a logger writes its console where it is told — `TestToWritesTheConsoleWhereItIsTold`; `a logger writes where to says: JSON off a terminal, pretty on one` in `sdk/js/test/logger.test.ts`, `test_a_handler_writes_where_to_says_json_off_a_terminal` in Python's
 - a line reaches its console as it is logged, whole — `TestEachLineReachesTheConsoleAsItIsLogged`, `TestConsoleLinesFromManyGoroutinesDoNotInterleave`
 - the engine's own lines reach the console from Info up, never the store — `TestTheEnginesOwnLinesReachTheConsoleAndNotTheStore`
 - a redacted field is kept nowhere — `TestARedactedFieldIsHiddenInTheStoreAndOnTheConsole`, and in both SDKs' suites

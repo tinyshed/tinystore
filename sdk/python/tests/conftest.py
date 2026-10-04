@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def pytest_configure() -> None:
     if os.environ.get("TINYSTORE_BIN"):
@@ -23,3 +25,10 @@ def pytest_configure() -> None:
         check=True,
     )
     os.environ["TINYSTORE_BIN"] = str(binary)
+
+
+@pytest.fixture(autouse=True)
+def _no_log_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clears what a developer's shell may set, which would change the lines the tests compare."""
+    for name in ("LOG_LEVEL", "LOG_FORMAT", "LOG_TIME"):
+        monkeypatch.delenv(name, raising=False)

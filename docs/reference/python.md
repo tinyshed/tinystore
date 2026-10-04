@@ -286,9 +286,12 @@ you can afford to lose in a burst. For records that you must keep, call
 
 A handler also writes each line to stderr: pretty on a terminal, and one JSON
 object per line otherwise. The bytes are the same as Go's and Bun's loggers
-write. To change this, set `console` to `"pretty"`, `"json"` or `"off"`, or
-set `stdout=True`. A handler of events, such as one view per request, usually
-sets `"off"`, so it doesn't fill the program's log.
+write. To change this, set `console` to `"pretty"`, `"json"` or `"off"`,
+`time` to `"clock"`, `"full"` or `"off"`, `hide_stream=True` to leave the
+stream out, or `to` to print somewhere else, such as `sys.stdout`. `LOG_LEVEL`,
+`LOG_FORMAT` and `LOG_TIME` in the environment win over these arguments. A
+handler of events, such as one view per request, usually sets `"off"`, so it
+doesn't fill the program's log.
 
 `redact` hides the values of fields with those names, at any depth and in any
 case, both in the store and on the console.
@@ -301,7 +304,8 @@ logging.basicConfig(handlers=[tinystore.handler("app", redact=["password"])], le
 log = logging.getLogger("app.db")  # the console only, nothing stored
 ```
 
-See [Records](../records/README.md) and [Logging](../records/logging.md).
+See [Records](../records/README.md), [Logging](../records/logging.md) and
+[Console output](../records/console.md).
 
 ## Metrics
 

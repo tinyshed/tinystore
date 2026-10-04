@@ -67,6 +67,7 @@ skill: .agents/skills/docs/SKILL.md.
 
 - [Overview](records/README.md)
 - [Logging](records/logging.md)
+- [Console output](records/console.md)
 - [Events](records/events.md)
 - [Reading](records/reading.md)
 - [Traces](records/traces.md)

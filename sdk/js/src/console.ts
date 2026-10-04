@@ -8,6 +8,17 @@
 /** How a logger writes its lines as they are logged; without one, pretty on a terminal and JSON otherwise. */
 export type ConsoleFormat = 'pretty' | 'json' | 'off'
 
+/** How a pretty line shows its time: `11:02:11.123`, `2026-10-02 11:02:11.123 +03:00` or none. */
+export type ConsoleTime = 'clock' | 'full' | 'off'
+
+export interface Look {
+	color: boolean
+	/** a test's, whose lines do not depend on the machine's zone */
+	utc?: boolean
+	time?: ConsoleTime | undefined
+	hideStream?: boolean | undefined
+}
+
 /** A line as a console writes it and the store keeps it: its fields already JSON. */
 export interface ConsoleLine {
 	at: Date
@@ -74,16 +85,22 @@ const cyan = '\x1b[36m'
  * traceback, follows the line, indented. A key or a string shows without its
  * quotes when it is one word with no '=', quote or backslash.
  */
-export function prettyLine(line: ConsoleLine, color: boolean, utc = false): string {
-	const paint = (hue: string, text: string) => (color ? hue + text + reset : text)
+export function prettyLine(line: ConsoleLine, look: Look): string {
+	const paint = (hue: string, text: string) => (look.color ? hue + text + reset : text)
 	const [label, hue] = prettyLevel(line.level)
-	let out = `${paint(dim, clock(line.at, utc))} ${paint(hue, label)}${' '.repeat(Math.max(0, 5 - label.length))}`
-	out += ` ${paint(cyan, line.stream)}`
+	let out = look.time === 'off' ? '' : `${paint(dim, stamp(line.at, look))} `
+	out += paint(hue, label)
+	// the level is padded to five; the columns after it are two spaces apart
+	let separator = `${' '.repeat(Math.max(0, 5 - label.length))} `
+	if (look.hideStream !== true) {
+		out += `${separator}${paint(cyan, line.stream)}`
+		separator = '  '
+	}
 	const message = prettyMessage(line)
 	if (message !== '') {
-		out += `  ${message}`
+		out += `${separator}${message}`
+		separator = '  '
 	}
-	let separator = '  '
 	const field = (key: string, text: string) => {
 		out += `${separator}${paint(dim, `${bare(key) ? key : JSON.stringify(key)}=`)}${text}`
 		separator = ' '
@@ -174,12 +191,36 @@ function bare(text: string): boolean {
 	return true
 }
 
-function clock(at: Date, utc: boolean): string {
-	const parts = utc
-		? [at.getUTCHours(), at.getUTCMinutes(), at.getUTCSeconds()]
-		: [at.getHours(), at.getMinutes(), at.getSeconds()]
-	const millis = utc ? at.getUTCMilliseconds() : at.getMilliseconds()
-	return `${parts.map(n => String(n).padStart(2, '0')).join(':')}.${String(millis).padStart(3, '0')}`
+/** The time of day, or with the date and zone in full: 2026-10-02 11:02:11.123 +03:00. */
+function stamp(at: Date, look: Look): string {
+	const utc = look.utc === true
+	const [year, month, day, hours, minutes, seconds, millis] = utc
+		? [
+				at.getUTCFullYear(),
+				at.getUTCMonth() + 1,
+				at.getUTCDate(),
+				at.getUTCHours(),
+				at.getUTCMinutes(),
+				at.getUTCSeconds(),
+				at.getUTCMilliseconds(),
+			]
+		: [
+				at.getFullYear(),
+				at.getMonth() + 1,
+				at.getDate(),
+				at.getHours(),
+				at.getMinutes(),
+				at.getSeconds(),
+				at.getMilliseconds(),
+			]
+	const two = (n: number) => String(n).padStart(2, '0')
+	const clock = `${two(hours)}:${two(minutes)}:${two(seconds)}.${String(millis).padStart(3, '0')}`
+	if (look.time !== 'full') {
+		return clock
+	}
+	const offset = utc ? 0 : -at.getTimezoneOffset()
+	const zone = `${offset < 0 ? '-' : '+'}${two(Math.trunc(Math.abs(offset) / 60))}:${two(Math.abs(offset) % 60)}`
+	return `${String(year).padStart(4, '0')}-${two(month)}-${two(day)} ${clock} ${zone}`
 }
 
 /**

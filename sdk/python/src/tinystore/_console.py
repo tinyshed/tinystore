@@ -15,8 +15,9 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, TextIO
+from datetime import UTC, datetime, timedelta
+from time import time_ns
+from typing import TYPE_CHECKING, Any, Literal, TextIO, cast
 
 from ._trace import carried, shared
 from ._values import to_json
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
 
 type Console = Literal["pretty", "json", "off"]
 """How a handler writes its lines as they are logged; pretty on a terminal and JSON otherwise when None."""
+
+type ConsoleTime = Literal["clock", "full", "off"]
+"""How a pretty line shows its time: 11:02:11.123, 2026-10-02 11:02:11.123 +03:00, or none."""
 
 REDACTED = '"[redacted]"'
 """What a hidden value becomes, in the store and on the console."""
@@ -85,7 +89,9 @@ _RESET, _DIM = "\x1b[0m", "\x1b[2m"
 _RED, _GREEN, _YELLOW, _BLUE, _MAGENTA, _CYAN = (f"\x1b[{n}m" for n in (31, 32, 33, 34, 35, 36))
 
 
-def pretty_line(line: Line, color: bool, utc: bool = False) -> str:
+def pretty_line(
+    line: Line, color: bool, *, utc: bool = False, time: ConsoleTime | None = None, hide_stream: bool = False
+) -> str:
     """A line as a person reads it: time of day, level, stream, message, fields, and the trace's first eight digits.
 
     A value of several lines, a stack or a traceback, follows the line,
@@ -96,14 +102,14 @@ def pretty_line(line: Line, color: bool, utc: bool = False) -> str:
     def paint(hue: str, text: str) -> str:
         return hue + text + _RESET if color else text
 
-    seconds, nanos = divmod(line.at, 1_000_000_000)
-    moment = datetime.fromtimestamp(seconds, UTC if utc else None)
     label, hue = _pretty_level(line.level)
-    out = paint(_DIM, f"{moment:%H:%M:%S}.{nanos // 1_000_000:03d}")
-    out += f" {paint(hue, label)}{' ' * max(0, 5 - len(label))} {paint(_CYAN, line.stream)}"
+    out = "" if time == "off" else paint(_DIM, _stamp(line.at, utc, full=time == "full")) + " "
+    out += paint(hue, label)
+    # the level is padded to five; the columns after it are two spaces apart
+    columns = [] if hide_stream else [paint(_CYAN, line.stream)]
     message = _pretty_message(line)
     if message:
-        out += "  " + message
+        columns.append(message)
     shown: list[str] = []
     below: list[tuple[str, str]] = []
     for key, value in [*line.context, *line.attrs]:
@@ -115,12 +121,26 @@ def pretty_line(line: Line, color: bool, utc: bool = False) -> str:
     if line.trace_id is not None:
         shown.append(paint(_DIM, "trace=") + line.trace_id[:8])
     if shown:
-        out += "  " + " ".join(shown)
+        columns.append(" ".join(shown))
+    if columns:
+        out += " " * max(0, 5 - len(label)) + " " + "  ".join(columns)
     for key, text in below:
         for i, part in enumerate(text.rstrip("\r\n").split("\n")):
             part = part.removesuffix("\r")
             out += "\n    " + paint(_DIM, f"{key}: {part}" if i == 0 else part)
     return out + "\n"
+
+
+def _stamp(at: int, utc: bool, *, full: bool) -> str:
+    """The time of day, or with the date and zone in full: 2026-10-02 11:02:11.123 +03:00."""
+    seconds, nanos = divmod(at, 1_000_000_000)
+    moment = datetime.fromtimestamp(seconds, UTC) if utc else datetime.fromtimestamp(seconds).astimezone()
+    clock = f"{moment:%H:%M:%S}.{nanos // 1_000_000:03d}"
+    if not full:
+        return clock
+    offset = int((moment.utcoffset() or timedelta()).total_seconds()) // 60
+    sign = "-" if offset < 0 else "+"
+    return f"{moment.year:04d}-{moment:%m-%d} {clock} {sign}{abs(offset) // 60:02d}:{abs(offset) % 60:02d}"
 
 
 def level_label(level: int) -> str:
@@ -225,14 +245,56 @@ def _enable_colours(stream: TextIO) -> bool:
 # the attributes every LogRecord has, which are not a line's own fields
 _STANDARD = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message", "asctime", "taskName"}
 
+_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+type _Unread = tuple[str, str, str]
+
+
+def _from_environment(
+    level: int, console: Console | None, time: ConsoleTime | None
+) -> tuple[int, Console | None, ConsoleTime | None, list[_Unread]]:
+    """LOG_LEVEL, LOG_FORMAT and LOG_TIME over the arguments; a console turned off stays off."""
+    ignored: list[_Unread] = []
+    if (text := _variable("LOG_LEVEL")) is not None:
+        if text.lower() in _LEVELS:
+            level = _LEVELS[text.lower()]
+        else:
+            ignored.append(("LOG_LEVEL", text, "debug, info, warn or error"))
+    if (text := _variable("LOG_FORMAT")) is not None:
+        if text.lower() not in ("pretty", "json", "off"):
+            ignored.append(("LOG_FORMAT", text, "pretty, json or off"))
+        elif console != "off":
+            console = cast("Console", text.lower())
+    if (text := _variable("LOG_TIME")) is not None:
+        if text.lower() in ("clock", "full", "off"):
+            time = cast("ConsoleTime", text.lower())
+        else:
+            ignored.append(("LOG_TIME", text, "clock, full or off"))
+    return level, console, time, ignored
+
+
+def _variable(name: str) -> str | None:
+    return os.environ.get(name, "").strip() or None
+
+
+_said_ignored: set[str] = set()
+"""The values said to be ignored, so that a program making many handlers says each once."""
+
 
 class ConsoleHandler(logging.Handler):
     """A logging.Handler of the console alone: each record is written as it is logged, never kept.
 
     It writes the lines store.records.handler writes, which keeps them too:
     pretty on a terminal and one JSON object a line otherwise, on stderr
-    unless stdout is asked for. A record's logger name is its context, its
-    extra fields its attributes, an exception its traceback under error.
+    unless to says where. LOG_LEVEL, LOG_FORMAT and LOG_TIME win over the
+    arguments. A record's logger name is its context, its extra fields its
+    attributes, an exception its traceback under error.
     """
 
     def __init__(
@@ -241,17 +303,24 @@ class ConsoleHandler(logging.Handler):
         level: int = logging.NOTSET,
         *,
         console: Console | None = None,
+        time: ConsoleTime | None = None,
+        hide_stream: bool = False,
+        to: TextIO | None = None,
         redact: Iterable[str] = (),
-        stdout: bool = False,
     ) -> None:
         if not stream:
             raise InvalidError("a handler of no stream")
         if console not in (None, "pretty", "json", "off"):
             raise InvalidError(f"a console of {console!r}, not pretty, json or off")
+        if time not in (None, "clock", "full", "off"):
+            raise InvalidError(f"a time of {time!r}, not clock, full or off")
+        level, console, time, ignored = _from_environment(level, console, time)
         super().__init__(level)
-        self._stream, self._console, self._stdout = stream, console, stdout
+        self._stream, self._console, self._hide_stream, self._to = stream, console, hide_stream, to
+        self._time: ConsoleTime | None = time
         self._hides = redactor(redact)
         self._colours: bool | None = None
+        self._say_ignored(ignored)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -280,17 +349,26 @@ class ConsoleHandler(logging.Handler):
             line.span_id = None if trace[1] is None else trace[1].hex()
         return line
 
+    def _say_ignored(self, ignored: list[_Unread]) -> None:
+        for name, value, expected in ignored:
+            if self._console == "off" or f"{name}={value}" in _said_ignored:
+                continue
+            _said_ignored.add(f"{name}={value}")
+            fields = encode_fields([("value", value), ("expected", expected)], None)
+            self._print(Line(at=time_ns(), stream="tinystore", level=4, msg=f"{name} is ignored", attrs=fields))
+
     def _print(self, line: Line) -> None:
         if self._console == "off":
             return
-        out = sys.stdout if self._stdout else sys.stderr
+        out = self._to if self._to is not None else sys.stderr
         terminal = out.isatty()
         # FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
         forced = _forced()
         if self._console == "json" or (self._console is None and not (terminal or forced)):
             out.write(json_line(line))
         else:
-            out.write(pretty_line(line, (terminal or forced) and self._colour(out, forced)))
+            colour = (terminal or forced) and self._colour(out, forced)
+            out.write(pretty_line(line, colour, time=self._time, hide_stream=self._hide_stream))
         out.flush()
 
     def _colour(self, out: TextIO, forced: bool) -> bool:
@@ -305,8 +383,10 @@ def handler(
     level: int = logging.NOTSET,
     *,
     console: Console | None = None,
+    time: ConsoleTime | None = None,
+    hide_stream: bool = False,
+    to: TextIO | None = None,
     redact: Iterable[str] = (),
-    stdout: bool = False,
 ) -> ConsoleHandler:
     """A logging.Handler of the console alone, for a program that wants the logger and not the records.
 
@@ -314,4 +394,4 @@ def handler(
 
     store.records.handler(stream) in its place keeps every line too.
     """
-    return ConsoleHandler(stream, level, console=console, redact=redact, stdout=stdout)
+    return ConsoleHandler(stream, level, console=console, time=time, hide_stream=hide_stream, to=to, redact=redact)

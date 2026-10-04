@@ -256,7 +256,7 @@ func TestAHalfFullBufferFlushesBeforeItsInterval(t *testing.T) {
 // writeTo sends a handler's console lines to a test's writer, in UTC
 type writeTo struct{ io.Writer }
 
-func (w writeTo) handlerOption(s *handlerSettings) { s.out = w.Writer }
+func (w writeTo) handlerOption(s *handlerSettings) { s.to, s.zone = w.Writer, time.UTC }
 
 // a line reaches its console as it is logged, before any flush: pretty with a
 // duration as a person reads it, JSON with the nanoseconds the record keeps

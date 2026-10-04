@@ -68,6 +68,8 @@ back exactly as they were written, in the original order of the fields.
 
 - [Logging](logging.md): the logger as your console, levels, and hiding
   secrets.
+- [Console output](console.md): the format, the time, where lines go, and
+  `LOG_LEVEL`.
 - [Events](events.md): store clicks, sign-ups and other events.
 - [Reading](reading.md): filter by time, level, fields and text, a page at a
   time.

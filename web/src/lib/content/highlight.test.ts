@@ -33,4 +33,19 @@ describe('a log fence', () => {
 		expect(level('09:08:47.058 DEBUG app  miss')).toEqual(['DEBUG', '#58a6ff'])
 		expect(level('09:08:47.058 EVENT web  click')).toEqual(['EVENT', '#bc8cff'])
 	})
+
+	test('colours a line with its time in full or none, and no word of a message as a stream', () => {
+		const streams = (line: string) =>
+			colours(line).flatMap(([text, colour]) => (colour === '#39c5cf' ? [text] : []))
+		const full = new Map(colours('2026-10-02 11:02:14.502 +03:00 WARN  api  slow request'))
+		expect(full.get('2026-10-02 11:02:14.502 +03:00')).toBe('#7f7c8f')
+		expect(full.get('api')).toBe('#39c5cf')
+
+		const bare = colours('WARN  slow request  requestId=7f3a ms=1200')
+		expect(bare[0]).toEqual(['WARN', '#d29922'])
+		expect(new Map(bare).get('requestId=')).toBe('#7f7c8f')
+		expect(streams('WARN  slow request  requestId=7f3a ms=1200')).toEqual([])
+		expect(streams('11:02:14.502 INFO  n=1')).toEqual([])
+		expect(streams('11:02:14.502 INFO  api')).toEqual(['api'])
+	})
 })

@@ -83,32 +83,10 @@ JSON object, which log collectors expect:
 {"time":"2026-10-02T11:02:14.502Z","level":"WARN","stream":"api","msg":"slow request","requestId":"7f3a","ms":1200}
 ```
 
-Go, Bun and Python print exactly the same bytes for the same line. Colors are
-off when `NO_COLOR` is set or `TERM` is `dumb`.
-
-### Colors in an IDE
-
-The run console of an IDE, such as GoLand, WebStorm or PyCharm, reads your
-program through a pipe, not a terminal. So by default the logger prints JSON
-without colors there. Set `FORCE_COLOR=1` in the run configuration's
-environment variables, and the logger prints pretty lines in color:
-
-```sh
-FORCE_COLOR=1 bun app.ts
-```
-
-`FORCE_COLOR` turns colors on wherever the program runs, so set it where you
-run the program, not in production. `NO_COLOR` still turns colors off.
-
-| Option                            | Go                                                   | Bun                                    | Python                                |
-|-----------------------------------|------------------------------------------------------|----------------------------------------|---------------------------------------|
-| format                            | `records.ConsolePretty`, `ConsoleJSON`, `ConsoleOff` | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |
-| print to stdout instead of stderr | `records.Stdout`                                     | `stdout: true`                         | `stdout=True`                         |
-| lowest level kept                 | `records.Level(slog.LevelInfo)`                      | `level: 'info'`                        | `level=logging.INFO`                  |
-| hidden fields                     | `records.Redact("password")`                         | `redact: ['password']`                 | `redact=["password"]`                 |
-
-Lines go to stderr by default, because a library shouldn't write into what a
-program prints to stdout, such as a command's output.
+Go, Bun and Python print exactly the same bytes for the same line. You can
+choose the format, hide the time or the stream, print to a file, and change
+all of it with `LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME`. See
+[Console output](console.md).
 
 ## Hide secrets
 

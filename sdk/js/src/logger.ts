@@ -9,8 +9,10 @@ import { DropNotice, FailureLog, type Say } from './background.ts'
 import {
 	type ConsoleFormat,
 	type ConsoleLine,
+	type ConsoleTime,
 	jsonLine,
 	jsonOf,
+	type Look,
 	prettyLine,
 	redacted,
 	redactor,
@@ -26,13 +28,17 @@ export interface LoggerOptions {
 	level?: Level
 	/** how a line is written as it is logged: pretty on a terminal and JSON otherwise when absent */
 	console?: ConsoleFormat
+	/** how a pretty line shows its time: 'clock' when absent */
+	time?: ConsoleTime
+	/** leaves the stream out of a pretty line; the record keeps it */
+	hideStream?: boolean
+	/** where the console lines go: process.stderr when absent */
+	to?: ConsoleOut
 	/** fields whose values are hidden, in the store and on the console, at any depth, the case ignored */
 	redact?: readonly string[]
-	/** the console lines go to stdout rather than stderr */
-	stdout?: boolean
 }
 
-/** Where a console line goes: a process's stream, or a test's. */
+/** Where console lines go: process.stdout, a file's stream, or any other writer. */
 export interface ConsoleOut {
 	write(text: string): unknown
 	readonly isTTY?: boolean
@@ -87,13 +93,14 @@ export function newLogger(
 	if (!Number.isInteger(most) || most < 1) {
 		throw new InvalidError(`a logger's buffer of ${most} lines`)
 	}
+	const [read, ignored] = fromEnvironment(options)
 	const shared: Shared = {
 		append,
 		stream,
 		most,
-		least: options.level === undefined ? Number.NEGATIVE_INFINITY : levelOf(options.level),
-		hides: redactor(options.redact),
-		print: printer(options, out),
+		least: read.level === undefined ? Number.NEGATIVE_INFINITY : levelOf(read.level),
+		hides: redactor(read.redact),
+		print: printer(read, out),
 		waiting: [],
 		timer: undefined,
 		writing: undefined,
@@ -101,7 +108,69 @@ export function newLogger(
 		failures: append === undefined ? undefined : new FailureLog(`records flush ${stream}`, sayOwn),
 		drops: append === undefined ? undefined : new DropNotice(stream, most, sayOwn),
 	}
+	sayIgnored(shared.print, ignored)
 	return new Logger(shared, [])
+}
+
+type Unread = [name: string, value: string, expected: string]
+
+/** LOG_LEVEL, LOG_FORMAT and LOG_TIME over the options, as Go and Python read them; a console turned off stays off. */
+function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
+	const read = { ...options }
+	const ignored: Unread[] = []
+	const level = variable('LOG_LEVEL')
+	if (level !== undefined) {
+		const name = level.toLowerCase() === 'warning' ? 'warn' : level.toLowerCase()
+		if (Object.hasOwn(levels, name)) {
+			read.level = name as keyof typeof levels
+		} else {
+			ignored.push(['LOG_LEVEL', level, 'debug, info, warn or error'])
+		}
+	}
+	const format = variable('LOG_FORMAT')
+	if (format !== undefined) {
+		const name = format.toLowerCase()
+		if (name !== 'pretty' && name !== 'json' && name !== 'off') {
+			ignored.push(['LOG_FORMAT', format, 'pretty, json or off'])
+		} else if (read.console !== 'off') {
+			read.console = name
+		}
+	}
+	const time = variable('LOG_TIME')
+	if (time !== undefined) {
+		const name = time.toLowerCase()
+		if (name === 'clock' || name === 'full' || name === 'off') {
+			read.time = name
+		} else {
+			ignored.push(['LOG_TIME', time, 'clock, full or off'])
+		}
+	}
+	return [read, ignored]
+}
+
+function variable(name: string): string | undefined {
+	const text = process.env[name]?.trim()
+	return text === '' ? undefined : text
+}
+
+/** The values said to be ignored, so that a program making many loggers says each once. */
+const saidIgnored = new Set<string>()
+
+function sayIgnored(print: Shared['print'], ignored: Unread[]): void {
+	for (const [name, value, expected] of ignored) {
+		if (print === undefined || saidIgnored.has(`${name}=${value}`)) {
+			continue
+		}
+		saidIgnored.add(`${name}=${value}`)
+		print({
+			at: new Date(),
+			stream: 'tinystore',
+			level: levels.warn,
+			msg: `${name} is ignored`,
+			context: [],
+			attrs: ['value', JSON.stringify(value), 'expected', JSON.stringify(expected)],
+		})
+	}
 }
 
 let own: Logger | undefined
@@ -122,7 +191,7 @@ function printer(options: LoggerOptions, out?: ConsoleOut & { utc?: boolean }): 
 	if (options.console === 'off') {
 		return undefined
 	}
-	const stream: ConsoleOut = out ?? (options.stdout === true ? process.stdout : process.stderr)
+	const stream: ConsoleOut = out ?? options.to ?? process.stderr
 	// FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
 	const forced = out === undefined && forceColor()
 	const terminal = stream.isTTY === true
@@ -135,7 +204,13 @@ function printer(options: LoggerOptions, out?: ConsoleOut & { utc?: boolean }): 
 		(forced || (terminal && out === undefined)) &&
 		!process.env.NO_COLOR &&
 		process.env.TERM !== 'dumb'
-	return line => void stream.write(prettyLine(line, color, out?.utc === true))
+	const look: Look = {
+		color,
+		utc: out?.utc === true,
+		time: options.time,
+		hideStream: options.hideStream,
+	}
+	return line => void stream.write(prettyLine(line, look))
 }
 
 /**

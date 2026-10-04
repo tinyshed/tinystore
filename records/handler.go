@@ -23,9 +23,9 @@ import (
 //
 // Each line is also written to standard error as it is logged, pretty on a
 // terminal and one JSON object a line otherwise, as the Bun and Python
-// loggers write theirs; ConsolePretty, ConsoleJSON, ConsoleOff and Stdout
-// change that. The engine's own lines reach the console from Info up, and
-// never the store.
+// loggers write theirs; the Console and ConsoleTime options, HideStream, To
+// and LOG_LEVEL, LOG_FORMAT and LOG_TIME change that. The engine's own lines
+// reach the console from Info up, and never the store.
 //
 //	slog.New(logs.Handler("api", records.ConsoleJSON, records.Redact("password", "token")))
 func (s *Store) Handler(stream string, options ...HandlerOption) slog.Handler {
@@ -47,10 +47,22 @@ func newHandler(s *Store, stream string, options []HandlerOption) *handler {
 	for _, option := range options {
 		option.handlerOption(&settings)
 	}
-	return &handler{
+	settings, ignored := fromEnvironment(settings)
+	h := &handler{
 		store: s, stream: stream, level: settings.level,
 		echo: newEcho(settings), redact: newRedactor(settings.redact),
 	}
+	if h.echo != nil {
+		sayIgnored(h.echo, ignored, h.now())
+	}
+	return h
+}
+
+func (h *handler) now() time.Time {
+	if h.store != nil {
+		return h.store.now()
+	}
+	return time.Now()
 }
 
 type handler struct {
@@ -146,12 +158,8 @@ func (s *Store) askForFlush() {
 // record maps one line, and says whether it is the records engine's own
 func (h *handler) record(line slog.Record) (Record, bool) {
 	at := line.Time
-	switch {
-	case !at.IsZero():
-	case h.store != nil:
-		at = h.store.now()
-	default:
-		at = time.Now()
+	if at.IsZero() {
+		at = h.now()
 	}
 	level, message := line.Level, line.Message
 	record := Record{At: at, Stream: h.stream, Name: logName, Level: &level, Body: &message, Context: h.context}

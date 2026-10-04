@@ -281,8 +281,11 @@ can afford to lose in a burst. For records that you must keep, call
 A logger also writes each line to stderr: pretty on a terminal, and one JSON
 object per line otherwise. The bytes are the same as Go's and Python's
 loggers write. To change this, set `console` to `'pretty'`, `'json'` or
-`'off'`, or set `stdout: true`. A logger of events, such as one view per
-request, usually sets `'off'`, so it doesn't fill the program's log.
+`'off'`, `time` to `'clock'`, `'full'` or `'off'`, `hideStream: true` to leave
+the stream out, or `to` to print somewhere else, such as `process.stdout`.
+`LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME` in the environment win over these
+options. A logger of events, such as one view per request, usually sets
+`'off'`, so it doesn't fill the program's log.
 
 `redact` hides the values of fields with those names, at any depth and in any
 case, both in the store and on the console.
@@ -297,7 +300,8 @@ const log = logger('app', { redact: ['password'] })   // the console only, nothi
 const db = log.with({ module: 'db' })
 ```
 
-See [Records](../records/README.md) and [Logging](../records/logging.md).
+See [Records](../records/README.md), [Logging](../records/logging.md) and
+[Console output](../records/console.md).
 
 ## Metrics
 

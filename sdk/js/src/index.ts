@@ -2,7 +2,7 @@ export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from '
 export { withSignal } from './cancel.ts'
 export type { Clock } from './clock.ts'
 export type { Config, ConfigOptions, DeepPartial, Source } from './config.ts'
-export type { ConsoleFormat } from './console.ts'
+export type { ConsoleFormat, ConsoleTime } from './console.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'
 export type {
@@ -32,7 +32,7 @@ export type {
 	WriteOptions,
 } from './kv.ts'
 export type { Allowance, Limiter, LimiterOptions, Rate } from './limiter.ts'
-export { type Logger, type LoggerOptions, logger } from './logger.ts'
+export { type ConsoleOut, type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,
 	type AggregateOp,

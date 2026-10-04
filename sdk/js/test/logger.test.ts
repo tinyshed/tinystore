@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
 
 import type { ConsoleLine } from '../src/console.ts'
-import { newLogger } from '../src/logger.ts'
+import { logger, newLogger } from '../src/logger.ts'
 
 /** An append that holds each write until let go, and keeps how many lines each carried. */
 function heldAppend() {
@@ -92,4 +92,77 @@ describe('FORCE_COLOR', () => {
 
 		expect((await logged({ FORCE_COLOR: '0' })).startsWith('{')).toBe(true)
 	})
+})
+
+/** Runs fn with these variables set, and puts back what was there. */
+function withEnv(env: Record<string, string>, fn: () => void): void {
+	const before = Object.fromEntries(Object.keys(env).map(name => [name, process.env[name]]))
+	Object.assign(process.env, env)
+	try {
+		fn()
+	} finally {
+		for (const [name, value] of Object.entries(before)) {
+			if (value === undefined) {
+				delete process.env[name]
+			} else {
+				process.env[name] = value
+			}
+		}
+	}
+}
+
+describe('LOG_LEVEL, LOG_FORMAT and LOG_TIME', () => {
+	test('win over the options, and never turn on a console turned off', () => {
+		const written: string[] = []
+		const events: string[] = []
+		const silenced: string[] = []
+		withEnv({ LOG_LEVEL: 'WARN', LOG_FORMAT: 'pretty', LOG_TIME: 'off' }, () => {
+			const options = { console: 'json', level: 'debug', time: 'full' } as const
+			const log = newLogger(undefined, 'api', options, { write: t => written.push(t), utc: true })
+			log.info('below the level')
+			log.warn('kept', { ms: 1200 })
+			newLogger(undefined, 'events', { console: 'off' }, { write: t => events.push(t) }).warn(
+				'viewed',
+			)
+		})
+		withEnv({ LOG_FORMAT: 'off' }, () => {
+			newLogger(undefined, 'api', {}, { write: t => silenced.push(t) }).warn('w')
+		})
+		expect(written).toEqual(['WARN  api  kept  ms=1200\n'])
+		expect(events).toEqual([])
+		expect(silenced).toEqual([])
+	})
+
+	test('a value they cannot mean is ignored, and said once', () => {
+		const value = `verbose-${Date.now()}`
+		const first: string[] = []
+		const second: string[] = []
+		withEnv({ LOG_LEVEL: value }, () => {
+			newLogger(undefined, 'api', { console: 'json' }, { write: t => first.push(t) }).debug('d')
+			newLogger(undefined, 'api', { console: 'json' }, { write: t => second.push(t) }).debug('d')
+		})
+		expect(first).toHaveLength(2)
+		expect(JSON.parse(first[0] as string)).toMatchObject({
+			level: 'WARN',
+			stream: 'tinystore',
+			msg: 'LOG_LEVEL is ignored',
+			value,
+			expected: 'debug, info, warn or error',
+		})
+		expect(second).toHaveLength(1)
+	})
+})
+
+test('a logger writes where to says: JSON off a terminal, pretty on one', () => {
+	const pipe: string[] = []
+	const terminal: string[] = []
+	withEnv({ FORCE_COLOR: '', NO_COLOR: '1' }, () => {
+		logger('app', { to: { write: t => pipe.push(t) } }).info('started')
+		const look = { time: 'off', hideStream: true } as const
+		logger('app', { to: { write: t => terminal.push(t), isTTY: true }, ...look }).info('started', {
+			port: 3000,
+		})
+	})
+	expect(JSON.parse(pipe[0] as string).msg).toBe('started')
+	expect(terminal).toEqual(['INFO  started  port=3000\n'])
 })

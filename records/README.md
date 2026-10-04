@@ -72,10 +72,16 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 - A handler also writes each line to standard error as it is logged, before
   any flush: pretty on a terminal, one JSON object a line otherwise, the bytes
   the Bun and Python loggers write (`testdata/console.json`).
-  `ConsolePretty`, `ConsoleJSON` and `ConsoleOff` choose, and `Stdout` sends
-  the lines there instead. A pretty line shows a duration as `1.5s`; a JSON
-  line keeps the record's spelling, its time in UTC to the millisecond. The
-  engine's own lines reach the console from Info up and never the store.
+  `ConsolePretty`, `ConsoleJSON` and `ConsoleOff` choose, and `To(w)` sends
+  the lines to w instead. `TimeFull` and `TimeOff` change a pretty line's
+  time of day, and `HideStream` leaves its stream out. A pretty line shows a
+  duration as `1.5s`; a JSON line keeps the record's spelling, its time in
+  UTC to the millisecond, and its stream. The engine's own lines reach the
+  console from Info up and never the store.
+- `LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME` win over a handler's options, as
+  in Bun and Python, except that a console the code turned off stays off. A
+  value none of them spells is ignored, and said once a process, as a WARN
+  line of stream `tinystore` on the first console that reads it.
   Colours need a
   terminal, and not `NO_COLOR` or a `TERM` of dumb; `FORCE_COLOR` other than
   `0` makes a pipe pretty and coloured by default, as an IDE's run console

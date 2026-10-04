@@ -36,7 +36,8 @@ const grammars: Record<string, string> = {
  *     11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200
  *     dim          yellow cyan              dim=           dim=
  *
- * A line indented by four spaces, a stack under its record, is dim.
+ * The time may be in full or left out, and so may the stream, the one word
+ * that two spaces follow. A line indented by four spaces, a stack, is dim.
  */
 const consoleLog: LanguageRegistration = {
 	name: 'tinystore-log',
@@ -45,7 +46,8 @@ const consoleLog: LanguageRegistration = {
 	patterns: [
 		{
 			match:
-				'^(\\d\\d:\\d\\d:\\d\\d\\.\\d{3}) +(?:(DEBUG\\S*)|(INFO\\S*)|(WARN\\S*)|(ERROR\\S*)|(EVENT)) +(\\S+)',
+				'^(?:(\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d{3} [+-]\\d\\d:\\d\\d|\\d\\d:\\d\\d:\\d\\d\\.\\d{3}) +)?' +
+				'(?:(DEBUG\\S*)|(INFO\\S*)|(WARN\\S*)|(ERROR\\S*)|(EVENT))(?: +([^\\s=]+)(?=  |$))?',
 			captures: {
 				1: { name: 'log.dim' },
 				2: { name: 'log.blue' },
