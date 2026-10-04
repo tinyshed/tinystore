@@ -58,6 +58,18 @@ describe('a page as HTML', () => {
 
 		expect(html).toContain('<div class="table"><table class="headless">')
 	})
+
+	test('resolves and checks the links inside a table', async () => {
+		const { html, problems } = finish(
+			await toHast(parse('| Page | Gone |\n|---|---|\n| [KV](kv.md) | [x](gone.md) |\n'), plain),
+			links(),
+			from,
+			new Set(),
+		)
+
+		expect(html).toContain('href="/docs/kv"')
+		expect(problems).toEqual([{ line: 3, message: 'docs/gone.md does not exist' }])
+	})
 })
 
 describe('a page as markdown elsewhere', () => {

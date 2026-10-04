@@ -92,8 +92,8 @@ export function finish(
 			if (headless(node)) {
 				node.properties.className = ['headless']
 			}
+			// the walk goes on into the table itself, whose links need resolving too
 			parent.children[index] = h('div.table', [node])
-			return SKIP
 		}
 		return undefined
 	})
