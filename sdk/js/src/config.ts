@@ -31,13 +31,40 @@ export class Setting<V> {
 	readonly secret: boolean
 	/** its own variable, read in place of the prefix and its path */
 	readonly variable: string | undefined
+	/** set by the layers alone, which update refuses to change */
+	readonly fixed: boolean
 
-	constructor(kind: Kind, fallback: V | undefined, secret: boolean, variable: string | undefined) {
+	constructor(
+		kind: Kind,
+		fallback: V | undefined,
+		secret: boolean,
+		variable: string | undefined,
+		fixed = false,
+	) {
 		this.kind = kind
 		this.fallback = fallback
 		this.secret = secret
 		this.variable = variable
+		this.fixed = fixed
 	}
+}
+
+/**
+ * A field the defaults, a file or the environment set alone: update refuses
+ * it, and sources() shows where its value came from. It takes a default or
+ * another marker.
+ *
+ * ```ts
+ * addr: fixed(':8080'), workers: fixed(required(Number))
+ * ```
+ */
+export function fixed<V>(value: V | Setting<V>): Setting<V> {
+	if (value instanceof Setting) {
+		return new Setting<V>(value.kind, value.fallback, value.secret, value.variable, true)
+	}
+	const kind =
+		typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string'
+	return new Setting<V>(kind, value, false, undefined, true)
 }
 
 /**
@@ -132,6 +159,7 @@ interface Field {
 	/** its default, or '', 0 or false for one without */
 	sample: unknown
 	secret: boolean
+	fixed: boolean
 	required: boolean
 	variable: string | undefined
 }
@@ -297,10 +325,11 @@ export class Config<T extends object> {
 				)
 			}
 		}
-		for (const [path, field] of this.#fields) {
-			if (field.required && missing(pathIn(this.#base, path))) {
-				throw new InvalidError(`config ${this.name}: ${this.#requiredText(path, field)}`)
-			}
+		const absent = [...this.#fields]
+			.filter(([path, field]) => field.required && missing(pathIn(this.#base, path)))
+			.map(([path, field]) => this.#requiredText(path, field))
+		if (absent.length > 0) {
+			throw new InvalidError(`config ${this.name}: ${absent.join('\n')}`)
 		}
 		this.#value = deepFreeze(structuredClone(this.#base)) as T
 	}
@@ -308,8 +337,8 @@ export class Config<T extends object> {
 	/**
 	 * Changes the fields change names, at any depth; each one that changed is
 	 * checked, kept, and seen by every store watching the config. A change the
-	 * schema refuses, one of a secret, or one leaving a required field empty, is
-	 * InvalidError and keeps nothing.
+	 * schema refuses, one of a fixed field or a secret, or one leaving a required
+	 * field empty, is InvalidError and keeps nothing.
 	 */
 	async update(change: DeepPartial<T>): Promise<void> {
 		const next = merged(structuredClone(this.#value) as Record<string, unknown>, change)
@@ -319,9 +348,9 @@ export class Config<T extends object> {
 			if (now === JSON.stringify(pathIn(this.#value, path))) {
 				continue
 			}
-			if (field.secret) {
+			if (field.secret || field.fixed) {
 				throw new InvalidError(
-					`config ${this.name}: ${path} is a secret, set by the defaults, a file or the environment alone`,
+					`config ${this.name}: ${path} is ${field.secret ? 'a secret' : 'fixed'}, set by the defaults, a file or the environment alone`,
 				)
 			}
 			if (field.required && missing(pathIn(next, path))) {
@@ -401,21 +430,34 @@ export class Config<T extends object> {
 		}
 	}
 
+	/**
+	 * Sets each field whose variable, or whose file NAME_FILE names, is there.
+	 * Every variable that does not read is said at once, so one restart shows
+	 * them all.
+	 */
 	async #layEnvironment(layer: FromEnv): Promise<void> {
 		const variables: Record<string, string | undefined> = {}
 		for (const file of layer.files) {
 			Object.assign(variables, await readDotenv(file))
 		}
 		Object.assign(variables, process.env)
+		const unread: string[] = []
 		for (const [path, field] of this.#fields) {
 			const name = field.variable ?? envName(layer.prefix, path)
-			const text = variables[name]
-			if (text !== undefined) {
-				setPath(this.#base, path, readVariable(text, field.sample, name))
-				this.#from.set(path, `env ${name}`)
+			try {
+				const found = await variable(variables, name)
+				if (found !== undefined) {
+					setPath(this.#base, path, readVariable(found.text, field.sample, found.from))
+					this.#from.set(path, `env ${found.from}`)
+				}
+			} catch (err) {
+				unread.push((err as Error).message)
 			}
 		}
 		this.#prefix = layer.prefix
+		if (unread.length > 0) {
+			throw new InvalidError(`config ${this.name}: ${unread.join('\n')}`)
+		}
 	}
 
 	#requiredText(path: string, field: Field): string {
@@ -541,14 +583,44 @@ export class Config<T extends object> {
 
 function fieldOf(leaf: unknown): Field {
 	if (!(leaf instanceof Setting)) {
-		return { sample: leaf, secret: false, required: false, variable: undefined }
+		return { sample: leaf, secret: false, fixed: false, required: false, variable: undefined }
 	}
 	return {
 		sample: leaf.fallback ?? { string: '', number: 0, boolean: false }[leaf.kind],
 		secret: leaf.secret,
+		fixed: leaf.fixed,
 		required: leaf.fallback === undefined,
 		variable: leaf.variable,
 	}
+}
+
+/**
+ * A field's variable, or the text of the file NAME_FILE names, as Docker and
+ * Kubernetes give a secret, its last newline taken off; both set is refused.
+ */
+async function variable(
+	variables: Record<string, string | undefined>,
+	name: string,
+): Promise<{ text: string; from: string } | undefined> {
+	const text = variables[name]
+	const path = variables[`${name}_FILE`]
+	if (text !== undefined && path !== undefined) {
+		throw new InvalidError(`both ${name} and ${name}_FILE are set`)
+	}
+	if (text !== undefined) {
+		return { text, from: name }
+	}
+	if (path === undefined) {
+		return undefined
+	}
+	let read: string
+	try {
+		read = await readFile(path, 'utf8')
+	} catch (err) {
+		throw new InvalidError(`${name}_FILE: ${(err as Error).message}`)
+	}
+	const trimmed = read.endsWith('\n') ? read.slice(0, -1) : read
+	return { text: trimmed.endsWith('\r') ? trimmed.slice(0, -1) : trimmed, from: `${name}_FILE` }
 }
 
 /** The defaults' values: a Setting's default, and nothing for one without. */
@@ -604,6 +676,10 @@ function withKept(
 		}
 		if (field.secret) {
 			ignored.set(path, 'the field is a secret')
+			continue
+		}
+		if (field.fixed) {
+			ignored.set(path, 'the field is fixed')
 			continue
 		}
 		let value: unknown

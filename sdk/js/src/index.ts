@@ -7,6 +7,7 @@ export {
 	type ConfigValue,
 	type DeepPartial,
 	type FromEnv,
+	fixed,
 	fromEnv,
 	required,
 	type Setting,

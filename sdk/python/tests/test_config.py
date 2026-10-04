@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import tinystore
-from tinystore import from_env, secret
+from tinystore import fixed, from_env, secret
 from tinystore.config import env_name, parse_dotenv
 
 if TYPE_CHECKING:
@@ -185,6 +185,54 @@ async def test_a_variable_that_is_not_its_fields_kind_is_refused_naming_it(
     monkeypatch.setenv("BAD_PORT", "abc")
     with pytest.raises(tinystore.InvalidError, match="BAD_PORT"):
         await store.kv.config("bad", Settings, from_env("BAD"))
+
+
+async def test_every_variable_that_does_not_read_is_said_at_once(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EVERY_PORT", "eighty")
+    monkeypatch.setenv("EVERY_LIMITS_ON", "yes")
+    with pytest.raises(tinystore.InvalidError) as caught:
+        await store.kv.config("every", Settings, from_env("EVERY"))
+    assert "EVERY_PORT: 'eighty' is no integer" in str(caught.value)
+    assert "EVERY_LIMITS_ON: 'yes' is not true or false" in str(caught.value)
+
+
+@dataclass
+class Served:
+    addr: str = fixed(":8080")
+    instance: str = "dashbin"
+
+
+async def test_a_fixed_field_refuses_update_ignores_what_was_kept_and_says_where_it_came_from(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FIXED_ADDR", ":9090")
+    config = await store.kv.config("fixed", Served, from_env("FIXED"))
+    with pytest.raises(tinystore.InvalidError, match="addr is fixed"):
+        await config.update({"addr": ":1"})
+    await config.update({"instance": "eu-1"})
+    assert config.value == Served(addr=":9090", instance="eu-1")
+    assert config.sources()[0] == tinystore.Source(path="addr", value='":9090"', from_="env FIXED_ADDR")
+
+
+@dataclass
+class Mail:
+    password: str = secret()
+
+
+async def test_a_variables_file_is_read_when_name_file_names_it_and_both_set_is_refused(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    secret_file = tmp_path / "smtp"
+    secret_file.write_text("hunter2\n", encoding="utf-8")
+    monkeypatch.setenv("FILED_PASSWORD_FILE", str(secret_file))
+    config = await store.kv.config("filed", Mail, from_env("FILED"))
+    assert config.value.password == "hunter2"
+    assert config.sources()[0].from_ == "env FILED_PASSWORD_FILE"
+    monkeypatch.setenv("FILED_PASSWORD", "other")
+    with pytest.raises(tinystore.InvalidError, match="both FILED_PASSWORD and FILED_PASSWORD_FILE are set"):
+        await store.kv.config("filed", Mail, from_env("FILED"))
 
 
 async def test_a_limiter_lets_its_burst_through_then_says_how_long_to_wait(store: tinystore.Store) -> None:

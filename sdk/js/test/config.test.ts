@@ -9,6 +9,7 @@ import { join } from 'node:path'
 
 import { envName, parseDotenv } from '../src/config.ts'
 import {
+	fixed,
 	fromEnv,
 	InvalidError,
 	open,
@@ -190,6 +191,47 @@ describe('a config', () => {
 		const err = await caught(store.kv.config('bad', defaults, fromEnv('BAD')))
 		expect(err).toBeInstanceOf(InvalidError)
 		expect(String(err)).toContain('BAD_PORT')
+	})
+
+	test('every variable that does not read is said at once', async () => {
+		process.env.EVERY_PORT = 'eighty'
+		process.env.EVERY_LIMITS_ON = 'yes'
+		const err = String(await caught(store.kv.config('every', defaults, fromEnv('EVERY'))))
+		expect(err).toContain('EVERY_PORT: "eighty" is no number')
+		expect(err).toContain('EVERY_LIMITS_ON: "yes" is not true or false')
+		delete process.env.EVERY_PORT
+		delete process.env.EVERY_LIMITS_ON
+	})
+
+	test('a fixed field refuses update, ignores what was kept, and says where it came from', async () => {
+		const settings = { addr: fixed(':8080'), instance: 'dashbin' }
+		process.env.FIXED_ADDR = ':9090'
+		const cfg = await store.kv.config('fixed', settings, fromEnv('FIXED'))
+		expect(String(await caught(cfg.update({ addr: ':1' })))).toContain('addr is fixed')
+		await cfg.update({ instance: 'eu-1' })
+		expect(cfg.value).toEqual({ addr: ':9090', instance: 'eu-1' })
+		expect(cfg.sources().find(s => s.path === 'addr')).toEqual({
+			path: 'addr',
+			value: '":9090"',
+			from: 'env FIXED_ADDR',
+		})
+		delete process.env.FIXED_ADDR
+	})
+
+	test("a variable's file is read when NAME_FILE names it, and both set is refused", async () => {
+		const file = join(dir, 'smtp')
+		writeFileSync(file, 'hunter2\n')
+		process.env.FILED_PASSWORD_FILE = file
+		const cfg = await store.kv.config('filed', { password: secret() }, fromEnv('FILED'))
+		expect(cfg.value.password).toBe('hunter2')
+		expect(cfg.sources()[0]?.from).toBe('env FILED_PASSWORD_FILE')
+		process.env.FILED_PASSWORD = 'other'
+		const err = String(
+			await caught(store.kv.config('filed', { password: secret() }, fromEnv('FILED'))),
+		)
+		expect(err).toContain('both FILED_PASSWORD and FILED_PASSWORD_FILE are set')
+		delete process.env.FILED_PASSWORD
+		delete process.env.FILED_PASSWORD_FILE
 	})
 })
 

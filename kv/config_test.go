@@ -326,3 +326,121 @@ func TestLayersGoOverEachOtherInTheOrderGiven(t *testing.T) {
 		}
 	}
 }
+
+// a fixed field comes from the layers alone: Update refuses it, a kept value
+// is left out, and Sources shows where it came from
+func TestAFixedFieldRefusesUpdateAndSaysWhereItCameFrom(t *testing.T) {
+	type settings struct {
+		Addr     string `json:"addr" fixed:"true"`
+		Instance string `json:"instanceName"`
+	}
+	state := openTestState(t, t.TempDir())
+	t.Setenv("FIXED_ADDR", ":8080")
+	config, err := OpenConfig[settings](t.Context(), state.Store, "fixed", FromEnv("FIXED"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = config.Update(t.Context(), func(s *settings) { s.Addr = ":9000" })
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "addr is fixed, set by the layers alone") {
+		t.Fatalf("an update of a fixed field: %v", err)
+	}
+	if err = config.Update(t.Context(), func(s *settings) { s.Instance = "eu-1" }); err != nil {
+		t.Fatal(err)
+	}
+	if got := config.Get(); got.Addr != ":8080" || got.Instance != "eu-1" {
+		t.Fatalf("the config reads %+v", got)
+	}
+	if err = config.hub.change(t.Context(), map[string][]byte{"addr": []byte(`":1"`)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	sources := config.Sources()
+	if sources[0] != (Source{Path: "addr", Value: `":8080"`, From: "env FIXED_ADDR", Ignored: "the field is fixed"}) {
+		t.Fatalf("addr's source is %+v", sources[0])
+	}
+}
+
+// one restart shows every variable that does not read, and every required field missing
+func TestEveryBadVariableIsReportedAtOnce(t *testing.T) {
+	type settings struct {
+		Port     int           `json:"port"`
+		Shutdown time.Duration `json:"shutdownTimeout"`
+		Debug    bool          `json:"debug"`
+		Region   string        `json:"region" required:"true"`
+		Zone     string        `json:"zone" required:"true"`
+	}
+	state := openTestState(t, t.TempDir())
+	t.Setenv("BAD_PORT", "eighty")
+	t.Setenv("BAD_SHUTDOWN_TIMEOUT", "5 sec")
+	t.Setenv("BAD_DEBUG", "yes")
+	_, err := OpenConfig[settings](t.Context(), state.Store, "bad", FromEnv("BAD"))
+	if !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("bad variables: %v", err)
+	}
+	for _, want := range []string{`BAD_PORT: "eighty" is no int`, `BAD_SHUTDOWN_TIMEOUT: "5 sec" is no duration`, `BAD_DEBUG: "yes" is not true or false`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%v\nsays nothing of %s", err, want)
+		}
+	}
+
+	t.Setenv("BAD_PORT", "80")
+	t.Setenv("BAD_SHUTDOWN_TIMEOUT", "5s")
+	t.Setenv("BAD_DEBUG", "true")
+	_, err = OpenConfig[settings](t.Context(), state.Store, "bad", FromEnv("BAD"))
+	if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "region is required: set BAD_REGION") ||
+		!strings.Contains(err.Error(), "zone is required: set BAD_ZONE") {
+		t.Fatalf("two required fields missing: %v", err)
+	}
+}
+
+// NAME_FILE gives a field the file's text, as Docker and Kubernetes give a
+// secret, its last newline taken off; NAME and NAME_FILE both set is refused
+func TestASecretReadsItsFile(t *testing.T) {
+	type settings struct {
+		Password string `json:"smtpPassword" secret:"true"`
+		Port     int    `json:"port"`
+	}
+	state := openTestState(t, t.TempDir())
+	secret := filepath.Join(t.TempDir(), "smtp")
+	if err := os.WriteFile(secret, []byte("hunter2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FILED_SMTP_PASSWORD_FILE", secret)
+	config, err := OpenConfig[settings](t.Context(), state.Store, "filed", FromEnv("FILED"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.Get().Password; got != "hunter2" {
+		t.Fatalf("the password is %q", got)
+	}
+	if source := config.Sources()[0]; source.From != "env FILED_SMTP_PASSWORD_FILE" || source.Value != "***" {
+		t.Fatalf("the password's source is %+v", source)
+	}
+
+	t.Setenv("FILED_SMTP_PASSWORD", "other")
+	t.Setenv("FILED_PORT_FILE", filepath.Join(t.TempDir(), "missing"))
+	_, err = OpenConfig[settings](t.Context(), state.Store, "filed", FromEnv("FILED"))
+	if !errors.Is(err, tinystore.ErrInvalid) ||
+		!strings.Contains(err.Error(), "both FILED_SMTP_PASSWORD and FILED_SMTP_PASSWORD_FILE are set") ||
+		!strings.Contains(err.Error(), "FILED_PORT_FILE: ") {
+		t.Fatalf("both set and a missing file: %v", err)
+	}
+}
+
+// FromLookup reads the host's function and nothing of the process
+func TestAConfigsLookupIsTheOnlyEnvironmentRead(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	t.Setenv("LOOKED_PORT", "1")
+	lookup := func(name string) (string, bool) {
+		if name == "LOOKED_PORT" {
+			return "3000", true
+		}
+		return "", false
+	}
+	config := openTestConfig(t, state, Defaults(appConfig{Port: 8080}), FromLookup("LOOKED", lookup))
+	if got := config.Get().Port; got != 3000 {
+		t.Fatalf("the port is %d", got)
+	}
+	if source := config.Sources()[0]; source.From != "env LOOKED_PORT" {
+		t.Fatalf("the port's source is %+v", source)
+	}
+}

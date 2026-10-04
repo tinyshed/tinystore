@@ -35,10 +35,12 @@ import (
 //
 // T is a struct. A field's path is its JSON name, a nested struct's below its
 // own: limits.rps. A field tagged `env:"NAME"` reads that variable; another
-// reads the prefix and its path in upper snake case, APP_LIMITS_RPS. A field
-// tagged `secret:"true"` comes from the layers alone: Update refuses it and
-// Sources hides it. A field tagged `required:"true"` is ErrInvalid at
-// OpenConfig while the layers leave it its zero value.
+// reads the prefix and its path in upper snake case, APP_LIMITS_RPS, or the
+// file that APP_LIMITS_RPS_FILE names. A field tagged `fixed:"true"` comes
+// from the layers alone: Update refuses it, and Sources shows where it came
+// from. A field tagged `secret:"true"` is fixed, and Sources hides it. A field
+// tagged `required:"true"` is ErrInvalid at OpenConfig while the layers leave
+// it its zero value.
 type Config[T any] struct {
 	hub    *configHub
 	name   string
@@ -66,6 +68,7 @@ type configField struct {
 	path     string
 	variable string // its env tag, read in place of the prefix and its path
 	secret   bool
+	fixed    bool // from the layers alone; a secret is fixed too
 	required bool
 	kind     reflect.Type
 }
@@ -87,6 +90,7 @@ type configLayer struct {
 type envLayer struct {
 	prefix string
 	files  []string
+	lookup func(string) (string, bool) // in place of the files and the process's own
 }
 
 // Defaults is a layer of values: a T, which sets every field, or a map, as a
@@ -104,6 +108,15 @@ func Defaults(values any) ConfigOption {
 func FromEnv(prefix string, files ...string) ConfigOption {
 	return func(s *configSettings) {
 		s.layers = append(s.layers, configLayer{env: &envLayer{prefix: prefix, files: files}})
+	}
+}
+
+// FromLookup is a layer of the environment read through lookup alone, the
+// process's own variables left as they are, which suits a host that passes
+// its environment in and a test that sets its own.
+func FromLookup(prefix string, lookup func(name string) (string, bool)) ConfigOption {
+	return func(s *configSettings) {
+		s.layers = append(s.layers, configLayer{env: &envLayer{prefix: prefix, lookup: lookup}})
 	}
 }
 
@@ -152,7 +165,7 @@ func (c *Config[T]) settle(said configSettings) error {
 		}
 		c.check = check
 	}
-	c.fields = shapeOf(t, "", false)
+	c.fields = shapeOf(t, "", configField{})
 
 	var zero T
 	base, err := treeOf(zero)
@@ -161,32 +174,45 @@ func (c *Config[T]) settle(said configSettings) error {
 	}
 	c.base, c.from = base, map[string]string{}
 	var env *envLayer // the last, which names a missing field's variable
+	var unread []error
 	for _, layer := range said.layers {
-		if layer.env != nil {
-			env, err = layer.env, c.layEnvironment(*layer.env)
-		} else {
-			err = c.layDefaults(layer.values)
+		if layer.env == nil {
+			if err = c.layDefaults(layer.values); err != nil {
+				return err
+			}
+			continue
 		}
+		env = layer.env
+		bad, err := c.layEnvironment(*layer.env)
 		if err != nil {
 			return err
 		}
+		unread = append(unread, bad...)
+	}
+	if len(unread) > 0 {
+		return fmt.Errorf("%w: %w", tinystore.ErrInvalid, errors.Join(unread...))
 	}
 	return c.given(env)
 }
 
-// given is ErrInvalid for the first required field the layers left empty,
-// naming the variable that would give it
+// given is ErrInvalid for the required fields the layers left empty, all of
+// them, each naming the variable that would give it
 func (c *Config[T]) given(env *envLayer) error {
+	var missing []error
 	for _, f := range c.fields {
 		if value, _ := pathIn(c.base, f.path); !f.required || !f.empty(value) {
 			continue
 		}
 		if env == nil {
-			return fmt.Errorf("%w: %s is required", tinystore.ErrInvalid, f.path)
+			missing = append(missing, fmt.Errorf("%s is required", f.path))
+		} else {
+			missing = append(missing, fmt.Errorf("%s is required: set %s", f.path, f.envName(env.prefix)))
 		}
-		return fmt.Errorf("%w: %s is required: set %s", tinystore.ErrInvalid, f.path, f.envName(env.prefix))
 	}
-	return nil
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", tinystore.ErrInvalid, errors.Join(missing...))
 }
 
 // layDefaults merges a layer of defaults over base, each field it sets checked
@@ -211,30 +237,45 @@ func (c *Config[T]) layDefaults(defaults any) error {
 	return nil
 }
 
-// layEnvironment sets each field whose variable is there
-func (c *Config[T]) layEnvironment(layer envLayer) error {
-	lookup, err := readEnvironment(layer.files)
+// layEnvironment sets each field whose variable, or whose file, is there, and
+// returns every variable that does not read, so that one restart shows them all
+func (c *Config[T]) layEnvironment(layer envLayer) ([]error, error) {
+	lookup := layer.lookup
+	if lookup == nil {
+		var err error
+		if lookup, err = readEnvironment(layer.files); err != nil {
+			return nil, err
+		}
+	}
+	var unread []error
+	for _, f := range c.fields {
+		name := f.envName(layer.prefix)
+		text, from, err := variable(lookup, name)
+		if err == nil && from == "" {
+			continue
+		}
+		if err == nil {
+			err = c.setFromEnv(f, text, from)
+		}
+		if err != nil {
+			unread = append(unread, fmt.Errorf("%s: %w", cmp.Or(from, name), err))
+		}
+	}
+	return unread, nil
+}
+
+// setFromEnv sets a field from a variable's text, from naming where it came from
+func (c *Config[T]) setFromEnv(f configField, text, from string) error {
+	spelled, err := envJSON(text, f.kind)
 	if err != nil {
 		return err
 	}
-	for _, f := range c.fields {
-		name := f.envName(layer.prefix)
-		text, ok := lookup(name)
-		if !ok {
-			continue
-		}
-		spelled, err := envJSON(text, f.kind)
-		if err == nil {
-			var fitted any
-			fitted, err = f.fit(decodeJSON(spelled))
-			if err == nil {
-				setPath(c.base, f.path, fitted)
-				c.from[f.path] = "env " + name
-				continue
-			}
-		}
-		return fmt.Errorf("%w: %s: %w", tinystore.ErrInvalid, name, err)
+	fitted, err := f.fit(decodeJSON(spelled))
+	if err != nil {
+		return err
 	}
+	setPath(c.base, f.path, fitted)
+	c.from[f.path] = "env " + from
 	return nil
 }
 
@@ -297,6 +338,10 @@ func (c *Config[T]) withKept(kept map[string][]byte) (map[string]any, map[string
 			ignored[path] = "the field is a secret"
 			continue
 		}
+		if f.fixed {
+			ignored[path] = "the field is fixed"
+			continue
+		}
 		fitted, err := f.fit(decodeJSON(spelled))
 		switch {
 		case err != nil:
@@ -335,8 +380,8 @@ func (c *Config[T]) checked(value T) error {
 
 // Update changes the config: change gets a copy of it, and each field it
 // changes is checked, kept, and seen by every handle at once. A change that
-// fails Validate, sets a secret or empties a required field is ErrInvalid and
-// keeps nothing.
+// fails Validate, sets a fixed field or a secret, or empties a required field
+// is ErrInvalid and keeps nothing.
 func (c *Config[T]) Update(ctx context.Context, change func(*T)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -376,6 +421,10 @@ func (c *Config[T]) changed(tree map[string]any, next T) (map[string][]byte, err
 		}
 		if f.secret {
 			return nil, fmt.Errorf("%w: kv: config %q: %s is a secret, set by the layers alone",
+				tinystore.ErrInvalid, c.name, f.path)
+		}
+		if f.fixed {
+			return nil, fmt.Errorf("%w: kv: config %q: %s is fixed, set by the layers alone",
 				tinystore.ErrInvalid, c.name, f.path)
 		}
 		if f.required && f.empty(now) {
@@ -476,7 +525,7 @@ var (
 // shapeOf is t's leaves, as encoding/json names them, their paths below
 // parent: a struct that reads itself, or a time, is a leaf, and another struct
 // a group of fields
-func shapeOf(t reflect.Type, parent string, secret bool) []configField {
+func shapeOf(t reflect.Type, parent string, inherited configField) []configField {
 	var fields []configField
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -488,18 +537,21 @@ func shapeOf(t reflect.Type, parent string, secret bool) []configField {
 		if parent != "" {
 			path = parent + "." + name
 		}
-		hidden := secret || f.Tag.Get("secret") == "true"
+		marked := configField{
+			secret: inherited.secret || f.Tag.Get("secret") == "true",
+			fixed:  inherited.fixed || f.Tag.Get("fixed") == "true",
+		}
 		if group(f.Type) {
 			below := path
 			if f.Anonymous && f.Tag.Get("json") == "" {
 				below = parent
 			}
-			fields = append(fields, shapeOf(f.Type, below, hidden)...)
+			fields = append(fields, shapeOf(f.Type, below, marked)...)
 			continue
 		}
 		fields = append(fields, configField{
-			path: path, variable: f.Tag.Get("env"), secret: hidden, required: f.Tag.Get("required") == "true",
-			kind: f.Type,
+			path: path, variable: f.Tag.Get("env"), secret: marked.secret, fixed: marked.fixed,
+			required: f.Tag.Get("required") == "true", kind: f.Type,
 		})
 	}
 	return fields

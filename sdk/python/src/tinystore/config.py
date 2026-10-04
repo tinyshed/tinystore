@@ -118,6 +118,7 @@ _MARK = "tinystore"
 class _Mark:
     secret: bool
     variable: str | None
+    fixed: bool = False
 
 
 def secret(variable: str | None = None, *, default: str | None = None) -> Any:
@@ -129,6 +130,19 @@ def secret(variable: str | None = None, *, default: str | None = None) -> Any:
     """
     metadata = {_MARK: _Mark(secret=True, variable=variable)}
     if default is None:
+        return dataclasses.field(metadata=metadata)
+    return dataclasses.field(default=default, metadata=metadata)
+
+
+def fixed(default: Any = dataclasses.MISSING, *, variable: str | None = None) -> Any:
+    """A field the defaults, a file or the environment set alone: update refuses it, sources() says where it came from.
+
+    It is required without a default::
+
+        addr: str = fixed(":8080")
+    """
+    metadata = {_MARK: _Mark(secret=False, variable=variable, fixed=True)}
+    if default is dataclasses.MISSING:
         return dataclasses.field(metadata=metadata)
     return dataclasses.field(default=default, metadata=metadata)
 
@@ -156,6 +170,7 @@ class _Field:
     secret: bool
     required: bool
     variable: str | None
+    fixed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,8 +219,8 @@ class Config[T]:
     async def update(self, change: Mapping[str, Any]) -> None:
         """Changes the fields change names, at any depth: each one that changed is checked, kept, and seen at once.
 
-        A change validate refuses, one of a secret, or one leaving a required field empty, is InvalidError and
-        keeps nothing.
+        A change validate refuses, one of a fixed field or a secret, or one leaving a required field empty, is
+        InvalidError and keeps nothing.
         """
         nxt = _merged(copy.deepcopy(self._tree), change)
         changed: list[str] = []
@@ -213,9 +228,10 @@ class Config[T]:
             now = json.dumps(_path_in(nxt, path), separators=(",", ":"), ensure_ascii=False)
             if now == json.dumps(_path_in(self._tree, path), separators=(",", ":"), ensure_ascii=False):
                 continue
-            if field.secret:
+            if field.secret or field.fixed:
+                what = "a secret" if field.secret else "fixed"
                 raise InvalidError(
-                    f"config {self.name}: {path} is a secret, set by the defaults, a file or the environment alone"
+                    f"config {self.name}: {path} is {what}, set by the defaults, a file or the environment alone"
                 )
             if field.required and _missing(_path_in(nxt, path)):
                 raise InvalidError(f"config {self.name}: {path} is required")
@@ -348,11 +364,13 @@ class Config[T]:
                 self._lay_file(typing.cast("Mapping[str, Any]", layer))
             else:
                 raise InvalidError(f"config {self.name}: a layer is a file's values or from_env(), not {layer!r}")
+        absent: list[str] = []
         for path, field in self._fields.items():
             if field.required and _missing(_path_in(self._base, path)):
                 variable = None if prefix is None else field.variable or env_name(prefix, path)
-                needs = "" if variable is None else f": set {variable}"
-                raise InvalidError(f"config {self.name}: {path} is required{needs}")
+                absent.append(f"{path} is required" + ("" if variable is None else f": set {variable}"))
+        if absent:
+            raise InvalidError(f"config {self.name}: " + "\n".join(absent))
 
     def _lay_file(self, values: Mapping[str, Any]) -> None:
         for path, value in _leaves_of(dict(values)):
@@ -365,13 +383,42 @@ class Config[T]:
             self._from[path] = "file"
 
     def _lay_environment(self, layer: FromEnv) -> None:
+        """Sets each field whose variable, or whose file NAME_FILE names, is there; every one that does not read is
+        said at once, so that one restart shows them all."""
         variables = read_env_files(layer.files)
         variables.update(os.environ)
+        unread: list[str] = []
         for path, field in self._fields.items():
             name = field.variable or env_name(layer.prefix, path)
-            if name in variables:
-                _set_path(self._base, path, _read_variable(variables[name], field.sample, name))
-                self._from[path] = f"env {name}"
+            try:
+                found = _variable(variables, name)
+                if found is not None:
+                    text, source = found
+                    _set_path(self._base, path, _read_variable(text, field.sample, source))
+                    self._from[path] = f"env {source}"
+            except InvalidError as err:
+                unread.append(str(err))
+        if unread:
+            raise InvalidError(f"config {self.name}: " + "\n".join(unread))
+
+
+def _variable(variables: Mapping[str, str], name: str) -> tuple[str, str] | None:
+    """A field's variable, or the text of the file NAME_FILE names, its last newline taken off, and where it came
+    from; both set is refused."""
+    path = variables.get(f"{name}_FILE")
+    if name in variables and path is not None:
+        raise InvalidError(f"both {name} and {name}_FILE are set")
+    if name in variables:
+        return variables[name], name
+    if path is None:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as err:
+        raise InvalidError(f"{name}_FILE: {err}") from None
+    if text.endswith("\n"):
+        text = text[:-1].removesuffix("\r")
+    return text, f"{name}_FILE"
 
 
 def _shape(of: type) -> tuple[dict[str, _Field], dict[str, Any]]:
@@ -398,10 +445,10 @@ def _dataclass_shape(of: type, given: Any, parent: str) -> tuple[dict[str, _Fiel
             continue
         mark = f.metadata.get(_MARK) or _Mark(secret=False, variable=None)
         if default is dataclasses.MISSING:
-            fields[path] = _Field(_sample(kind), mark.secret, True, mark.variable)
+            fields[path] = _Field(_sample(kind), mark.secret, True, mark.variable, mark.fixed)
             continue
         tree[f.name] = json.loads(to_json(default))
-        fields[path] = _Field(tree[f.name], mark.secret, False, mark.variable)
+        fields[path] = _Field(tree[f.name], mark.secret, False, mark.variable, mark.fixed)
     return fields, tree
 
 
@@ -525,6 +572,9 @@ def _with_kept(
             continue
         if field.secret:
             ignored[path] = "the field is a secret"
+            continue
+        if field.fixed:
+            ignored[path] = "the field is fixed"
             continue
         try:
             value = json.loads(spelled)

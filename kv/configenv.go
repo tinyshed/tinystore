@@ -53,6 +53,35 @@ func upperSnake(path string) string {
 	return out.String()
 }
 
+// variable reads a field's variable, or the file NAME_FILE names, as Docker
+// and Kubernetes give a secret: from is where the text came from, "" when
+// neither is set. Setting both is refused, since one of them would be ignored.
+func variable(lookup func(string) (string, bool), name string) (text, from string, err error) {
+	text, set := lookup(name)
+	path, inFile := lookup(name + "_FILE")
+	switch {
+	case set && inFile:
+		return "", name, fmt.Errorf("both %s and %s_FILE are set", name, name)
+	case set:
+		return text, name, nil
+	case !inFile:
+		return "", "", nil
+	}
+	read, err := os.ReadFile(path) //nolint:gosec // a file the environment names, as Docker's secrets are
+	if err != nil {
+		return "", name + "_FILE", err
+	}
+	return trimNewline(string(read)), name + "_FILE", nil
+}
+
+// trimNewline takes off the one newline an editor or echo ends a file with
+func trimNewline(text string) string {
+	if trimmed, ok := strings.CutSuffix(text, "\n"); ok {
+		return strings.TrimSuffix(trimmed, "\r")
+	}
+	return text
+}
+
 // readEnvironment is the variables of files, a later file's over an earlier's,
 // and the process's over them all, as dotenv libraries take them. A file that
 // is not there is skipped: production has none.

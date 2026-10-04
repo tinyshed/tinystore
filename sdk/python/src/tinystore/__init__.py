@@ -11,7 +11,7 @@ from ._console import SECRETS, ConsoleHandler, handler
 from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
 from .clock import Clock
-from .config import Config, FromEnv, Source, from_env, secret
+from .config import Config, FromEnv, Source, fixed, from_env, secret
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -104,6 +104,7 @@ __all__ = [
     "daily",
     "every",
     "fields",
+    "fixed",
     "from_env",
     "handler",
     "none_of",

@@ -259,6 +259,10 @@ module defines.
 - a required setting is given by a layer, or the config does not open, naming its variable — `TestARequiredFieldIsGivenOrTheConfigDoesNotOpen`; `a required field is given by a layer, or the config does not open, naming its variable` in `sdk/js/test/config.test.ts`, `test_a_required_field_is_given_by_a_layer_or_the_config_does_not_open_naming_its_variable` in Python's
 - a config change reaches every handle and watcher at once — `TestAChangeIsSeenByEveryHandleAtOnce`, `TestAConfigChangeReachesEveryWatcher` over the wire
 - a config change that fails its check, or sets a secret, keeps nothing — `TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing`
+- a fixed setting comes from the layers alone, and says where it came from — `TestAFixedFieldRefusesUpdateAndSaysWhereItCameFrom`; `a fixed field refuses update, ignores what was kept, and says where it came from` in `sdk/js/test/config.test.ts`, `test_a_fixed_field_refuses_update_ignores_what_was_kept_and_says_where_it_came_from` in Python's
+- every variable that does not read, and every required setting missing, is said at once — `TestEveryBadVariableIsReportedAtOnce`; `every variable that does not read is said at once` in `sdk/js/test/config.test.ts`, `test_every_variable_that_does_not_read_is_said_at_once` in Python's
+- NAME_FILE gives a setting its file's text, and NAME beside it is refused — `TestASecretReadsItsFile`; `a variable's file is read when NAME_FILE names it, and both set is refused` in `sdk/js/test/config.test.ts`, `test_a_variables_file_is_read_when_name_file_names_it_and_both_set_is_refused` in Python's
+- a config's lookup is the only environment it reads — `TestAConfigsLookupIsTheOnlyEnvironmentRead`
 - a kept value that no longer fits its field, or names a secret, is left out and named — `TestAKeptValueThatNoLongerFitsIsLeftOutAndNamed`, in both SDKs' suites too
 - a variable is read by its field's type, or refused naming it — `TestAVariableIsReadByItsFieldsType`
 - a config keeps only JSON within its bounds — `TestARawConfigKeepsOnlyJSONWithinItsBounds`

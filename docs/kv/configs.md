@@ -115,12 +115,28 @@ variable with its path in upper snake case, after the prefix:
 A variable is read according to the setting's type: a number, `true` or
 `false`, a duration such as `1h30m`, a list such as `a.com,b.com`, or JSON. A
 variable that can't be read as its type fails when the config opens, with the
-variable's name in the error.
+variable's name in the error. The error lists every such variable at once, so
+one restart shows all the typos:
+
+```text
+config app: APP_PORT: "eighty" is no number
+APP_SHUTDOWN_TIMEOUT: "5 sec" is no duration
+```
+
+Any setting can also come from a file: `APP_DB_PASSWORD_FILE=/run/secrets/db`
+reads `db.password` from that file, the way Docker and Kubernetes pass
+secrets. The last newline of the file is removed. Setting both `APP_DB_PASSWORD`
+and `APP_DB_PASSWORD_FILE` is an error, because one of them would be ignored.
 
 To read `.env` files, pass them after the prefix: `fromEnv('APP', '.env')`. The
 process's own variables win over the files, and a missing file is skipped, so
 the same code runs in production without a `.env` file. Bun also loads `.env`
 by itself.
+
+In Go, `kv.FromLookup("APP", lookup)` reads the variables through your own
+function instead of the process's environment. Use it when your program passes
+its environment around explicitly, and in tests that shouldn't depend on the
+machine.
 
 ## Secrets and required settings
 
@@ -176,6 +192,46 @@ too. In Go, the zero value of the field's type counts as missing, as Go
 validators treat it. A secret without a default is required. In Python, a
 field without a default is required, and `kw_only=True` lets those fields come
 in any order. `update` refuses to empty a required setting.
+
+## Settings the operator controls
+
+```ts
+import { fixed, fromEnv } from '@tinyshed/tinystore'
+
+const config = await store.kv.config('app', {
+	addr: fixed(':8080'),   // only the defaults, a file or APP_ADDR set it
+	instanceName: 'notes',  // the interface may change it
+}, fromEnv('APP'))
+```
+
+```python
+from tinystore import fixed, from_env
+
+
+@dataclass
+class Settings:
+    addr: str = fixed(":8080")  # only the defaults, a file or APP_ADDR set it
+    instance_name: str = "notes"  # the interface may change it
+
+
+config = await store.kv.config("app", Settings, from_env("APP"))
+```
+
+```go
+type Settings struct {
+	Addr         string `json:"addr" fixed:"true"` // only the defaults, a file or APP_ADDR set it
+	InstanceName string `json:"instanceName"`      // the interface may change it
+}
+
+config, err := kv.OpenConfig[Settings](ctx, state, "app", kv.Defaults(Settings{Addr: ":8080"}), kv.FromEnv("APP"))
+```
+
+Some settings belong to whoever runs the program, such as the address to
+listen on or a TLS certificate's path. Mark them fixed: `update` refuses to
+change a fixed setting, a stored value of it is skipped, and `sources()` shows
+its value and where it came from, such as `env APP_ADDR`. Unlike a secret, a
+fixed setting stays visible. A fixed setting without a default is required:
+`fixed(required(Number))` in Bun, `fixed()` in Python.
 
 ## Change a setting at run time
 
@@ -257,6 +313,9 @@ stored value was skipped.
 | A setting's path               | 256 bytes      |
 | A setting's value              | 16 KiB of JSON |
 | All stored changes of a config | 256 KiB        |
+
+A config keeps its changes in the KV engine's file, `kv.db`. A program that
+uses KV for nothing else still opens that file for its config.
 
 ## See also
 
