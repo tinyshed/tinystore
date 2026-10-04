@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { codeBlocks } from '$lib/code-blocks'
 	import CopyPage from '$lib/components/CopyPage.svelte'
+	import Icon from '$lib/components/Icon.svelte'
 	import Outline from '$lib/components/Outline.svelte'
 	import Pager from '$lib/components/Pager.svelte'
 	import Seo from '$lib/components/Seo.svelte'
@@ -9,6 +10,25 @@
 	let { data } = $props()
 
 	const page = $derived(data.page)
+
+	let toc: HTMLDetailsElement | undefined = $state()
+	let tocOpen = $state(false)
+
+	// the list closes once a heading is picked, or a tap lands anywhere else
+	$effect(() => {
+		if (!tocOpen) {
+			return
+		}
+		const close = (event: Event) => {
+			if (
+				!(event.target instanceof Node && toc?.querySelector('summary')?.contains(event.target))
+			) {
+				tocOpen = false
+			}
+		}
+		document.addEventListener('click', close)
+		return () => document.removeEventListener('click', close)
+	})
 	const updated = $derived(
 		page.updated === undefined
 			? undefined
@@ -41,8 +61,8 @@
 			<span class="here">{page.title}</span>
 		</span>
 		{#if page.headings.length > 0}
-			<details class="toc">
-				<summary>On this page ▾</summary>
+			<details class="toc" bind:this={toc} bind:open={tocOpen}>
+				<summary>On this page <Icon name="chevron" size={14} /></summary>
 				<ul>
 					{#each page.headings as heading (heading.id)}
 						<li><a href="#{heading.id}">{heading.text}</a></li>
@@ -202,13 +222,29 @@
 		}
 
 		.toc summary {
-			padding: 4px 12px;
+			display: flex;
+			align-items: center;
+			gap: 4px;
+			padding: 5px 10px 5px 12px;
 			color: var(--ts-text-body);
 			border: 1px solid var(--ts-border);
 			border-radius: 99px;
 			font-size: 13px;
 			list-style: none;
 			cursor: pointer;
+		}
+
+		.toc summary :global(svg) {
+			color: var(--ts-faint);
+			transition: transform 0.2s;
+		}
+
+		.toc[open] summary {
+			background: var(--ts-pill);
+		}
+
+		.toc[open] summary :global(svg) {
+			transform: rotate(180deg);
 		}
 
 		.toc summary::-webkit-details-marker {
@@ -226,6 +262,20 @@
 			border: 1px solid var(--ts-border-3);
 			border-radius: 12px;
 			box-shadow: 0 20px 50px -20px var(--ts-shadow);
+			animation: drop 0.16s ease-out;
+		}
+
+		@media (prefers-reduced-motion: reduce) {
+			.toc ul {
+				animation: none;
+			}
+		}
+
+		@keyframes drop {
+			from {
+				opacity: 0;
+				transform: translateY(-4px);
+			}
 		}
 
 		.toc a {
@@ -236,7 +286,7 @@
 			font-size: 14px;
 		}
 
-		.toc a:hover {
+		.toc a:active {
 			color: var(--ts-text);
 			background: var(--ts-hover);
 		}

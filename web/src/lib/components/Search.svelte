@@ -198,9 +198,34 @@
 		overflow: hidden;
 	}
 
+	dialog[open] {
+		animation: rise 0.16s ease-out;
+	}
+
 	dialog::backdrop {
 		background: var(--ts-overlay);
 		backdrop-filter: blur(3px);
+		animation: fade 0.16s ease-out;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		dialog[open],
+		dialog::backdrop {
+			animation: none;
+		}
+	}
+
+	@keyframes rise {
+		from {
+			opacity: 0;
+			transform: translateY(8px) scale(0.98);
+		}
+	}
+
+	@keyframes fade {
+		from {
+			opacity: 0;
+		}
 	}
 
 	.panel {
@@ -266,6 +291,10 @@
 		font-size: 13px;
 		font-weight: 500;
 		cursor: pointer;
+	}
+
+	.filters button:active {
+		background: var(--ts-pill);
 	}
 
 	.filters button[aria-selected='true'] {

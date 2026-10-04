@@ -1,13 +1,19 @@
 <script lang="ts">
+	import { afterNavigate } from '$app/navigation'
 	import { page } from '$app/state'
 	import Sidebar from '$lib/components/Sidebar.svelte'
 	import { unbase } from '$lib/href'
+	import { revealCurrent } from '$lib/reveal'
 
 	let { data, children } = $props()
+
+	let sidebar: HTMLElement | undefined = $state()
+
+	afterNavigate(() => revealCurrent(sidebar))
 </script>
 
 <div class="docs">
-	<aside class="sidebar">
+	<aside class="sidebar" bind:this={sidebar}>
 		<Sidebar nav={data.nav} current={unbase(page.url.pathname)} />
 	</aside>
 	{@render children()}

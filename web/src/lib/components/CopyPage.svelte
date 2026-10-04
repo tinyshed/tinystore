@@ -39,9 +39,15 @@
 		cursor: pointer;
 	}
 
-	button:hover {
-		color: var(--ts-text);
-		background: var(--ts-hover);
+	@media (hover: hover) {
+		button:hover {
+			color: var(--ts-text);
+			background: var(--ts-hover);
+		}
+	}
+
+	button:active {
+		background: var(--ts-pill);
 	}
 
 	.copied {

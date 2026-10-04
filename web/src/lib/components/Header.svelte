@@ -89,8 +89,25 @@
 		border-radius: 8px;
 	}
 
-	.tabs a:hover {
-		color: var(--ts-text);
+	@media (hover: hover) {
+		.tabs a:hover {
+			color: var(--ts-text);
+		}
+
+		.search:hover {
+			border-color: var(--ts-border-strong);
+		}
+
+		.square:hover,
+		.menu:hover {
+			background: var(--ts-hover);
+		}
+	}
+
+	.search:active,
+	.square:active,
+	.menu:active {
+		background: var(--ts-pill);
 	}
 
 	.tabs a[aria-current='page'] {
@@ -120,10 +137,6 @@
 		cursor: pointer;
 	}
 
-	.search:hover {
-		border-color: var(--ts-border-strong);
-	}
-
 	.search kbd {
 		color: var(--ts-faint);
 		border-color: var(--ts-border);
@@ -141,20 +154,21 @@
 		border-radius: 9px;
 	}
 
-	.square:hover {
-		background: var(--ts-hover);
-	}
-
 	.theme {
 		display: contents;
 	}
 
 	.menu {
 		display: none;
-		padding: 8px;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		height: 40px;
+		padding: 0;
 		color: var(--ts-text);
 		background: none;
 		border: 0;
+		border-radius: 10px;
 		cursor: pointer;
 	}
 

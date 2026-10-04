@@ -3,7 +3,8 @@
 	let {
 		name,
 		size = 18,
-	}: { name: 'github' | 'search' | 'menu' | 'close' | 'arrow'; size?: number } = $props()
+	}: { name: 'github' | 'search' | 'menu' | 'close' | 'arrow' | 'chevron'; size?: number } =
+		$props()
 </script>
 
 {#if name === 'github'}
@@ -25,6 +26,10 @@
 {:else if name === 'close'}
 	<svg width={size} height={size} viewBox="0 0 20 20" aria-hidden="true">
 		<path d="M4 4l12 12M16 4L4 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+	</svg>
+{:else if name === 'chevron'}
+	<svg width={size} height={size} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+		<path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
 	</svg>
 {:else}
 	<svg width={size} height={size} viewBox="0 0 20 20" fill="none" aria-hidden="true">

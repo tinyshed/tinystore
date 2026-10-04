@@ -44,8 +44,15 @@
 		border-radius: 12px;
 	}
 
-	a:hover {
-		border-color: var(--ts-border-strong);
+	@media (hover: hover) {
+		a:hover {
+			border-color: var(--ts-border-strong);
+			background: var(--ts-row-hover);
+		}
+	}
+
+	a:active {
+		background: var(--ts-hover);
 	}
 
 	.next {

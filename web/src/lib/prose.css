@@ -291,8 +291,12 @@
 	cursor: pointer;
 }
 
-.code-file:hover {
-	color: var(--ts-text);
+@media (hover: hover) {
+	.code-file:hover,
+	.code-lang:hover,
+	.code-copy:hover {
+		color: var(--ts-text);
+	}
 }
 
 .code-file[aria-selected="true"] {
@@ -323,8 +327,9 @@
 	cursor: pointer;
 }
 
-.code-lang:hover {
-	color: var(--ts-text);
+.code-lang:active,
+.code-copy:active {
+	background: var(--ts-chip);
 }
 
 .code-lang[aria-pressed="true"] {
@@ -345,10 +350,6 @@
 	border: 0;
 	border-radius: 7px;
 	cursor: pointer;
-}
-
-.code-copy:hover {
-	color: var(--ts-text);
 }
 
 .code-copy .icon-done,

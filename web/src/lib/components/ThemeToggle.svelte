@@ -27,8 +27,14 @@
 		cursor: pointer;
 	}
 
-	.toggle:hover {
-		background: var(--ts-hover);
+	@media (hover: hover) {
+		.toggle:hover {
+			background: var(--ts-hover);
+		}
+	}
+
+	.toggle:active {
+		background: var(--ts-pill);
 	}
 
 	.half {

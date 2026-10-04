@@ -135,6 +135,14 @@ html {
 	-webkit-text-size-adjust: 100%;
 	text-size-adjust: 100%;
 	scroll-padding-top: calc(var(--ts-header) + 24px);
+	scrollbar-gutter: stable;
+	/* a tap answers with the control's own pressed look, not the browser's blue */
+	-webkit-tap-highlight-color: transparent;
+}
+
+/* the page under a menu or the search stays where it is */
+html:has(dialog[open]) {
+	overflow: hidden;
 }
 
 body {
@@ -156,6 +164,24 @@ a {
 button {
 	font: inherit;
 	color: inherit;
+}
+
+a,
+button,
+summary {
+	transition:
+		color 0.15s,
+		background-color 0.15s,
+		border-color 0.15s,
+		transform 0.1s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	a,
+	button,
+	summary {
+		transition: none;
+	}
 }
 
 code,
