@@ -140,14 +140,14 @@ run on the writer.
 
 ## Values
 
-| Value | Stored as | Comes back as |
-|---|---|---|
-| text, integers, floats, bytes | SQLite's own types | the same value |
-| booleans | `0` or `1` | a boolean, when the field is a boolean |
-| a time (Go `time.Time`) | unix milliseconds | the same time, in UTC |
-| a UUID (Go) | text, `8-4-4-4-12` | the same UUID |
-| JSON (Go `sqldb.JSON[T]`) | text, checked with `json_valid` | the decoded value |
-| a date (Go `sqldb.Date`) | text, `YYYY-MM-DD` | the same date |
+| Value                         | Stored as                       | Comes back as                          |
+|-------------------------------|---------------------------------|----------------------------------------|
+| text, integers, floats, bytes | SQLite's own types              | the same value                         |
+| booleans                      | `0` or `1`                      | a boolean, when the field is a boolean |
+| a time (Go `time.Time`)       | unix milliseconds               | the same time, in UTC                  |
+| a UUID (Go)                   | text, `8-4-4-4-12`              | the same UUID                          |
+| JSON (Go `sqldb.JSON[T]`)     | text, checked with `json_valid` | the decoded value                      |
+| a date (Go `sqldb.Date`)      | text, `YYYY-MM-DD`              | the same date                          |
 
 A value that SQLite would change is rejected before anything is written: a
 `NaN`, which SQLite stores as `NULL`, or a 64-bit unsigned integer that is too
@@ -164,12 +164,12 @@ text into a time on their own.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A database name | `[a-z0-9][a-z0-9_-]{0,63}` |
-| Rows `all` returns | 64 MiB of values; use `each` for more |
-| Reader connections | 8 |
-| Writes committed together | 1,024, or 8 MiB |
+|                           |                                       |
+|---------------------------|---------------------------------------|
+| A database name           | `[a-z0-9][a-z0-9_-]{0,63}`            |
+| Rows `all` returns        | 64 MiB of values; use `each` for more |
+| Reader connections        | 8                                     |
+| Writes committed together | 1,024, or 8 MiB                       |
 
 ## See also
 

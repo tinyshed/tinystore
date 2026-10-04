@@ -108,11 +108,11 @@ records the duration either way. In Python, `measure()` works with `with` and
 
 A timer writes three series at every write:
 
-| Series | Kind | Value |
-|---|---|---|
-| `http_request_ms_count` | counter | how many durations were measured |
-| `http_request_ms_sum` | counter | their total, in milliseconds |
-| `http_request_ms_max` | gauge | the longest since the previous write |
+| Series                  | Kind    | Value                                |
+|-------------------------|---------|--------------------------------------|
+| `http_request_ms_count` | counter | how many durations were measured     |
+| `http_request_ms_sum`   | counter | their total, in milliseconds         |
+| `http_request_ms_max`   | gauge   | the longest since the previous write |
 
 The mean over any time range is the increase of the sum divided by the
 increase of the count. TinyStore has no histograms: a percentile computed from
@@ -134,13 +134,13 @@ most the last 15 seconds. In a Go store opened with `Manual`, call
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Write interval | 15 seconds |
-| Series | 100,000 |
-| A label name | 256 bytes; names starting with `__` are reserved |
-| A label value | 4 KiB |
-| Labels per series | 128 pairs and 16 KiB in total |
+|                   |                                                  |
+|-------------------|--------------------------------------------------|
+| Write interval    | 15 seconds                                       |
+| Series            | 100,000                                          |
+| A label name      | 256 bytes; names starting with `__` are reserved |
+| A label value     | 4 KiB                                            |
+| Labels per series | 128 pairs and 16 KiB in total                    |
 
 ## See also
 

@@ -75,13 +75,13 @@ store, so start it once when your program starts.
 
 What the handler does decides what happens to the job:
 
-| The handler | The job |
-|---|---|
-| returns | is done and removed from the queue |
-| throws, or returns an error | is retried later, with a longer delay each time |
-| panics (Go) | is retried, with the panic as its error |
-| calls `job.fail(err)` | fails for good, without more attempts |
-| calls `job.snooze({ after: '1m' })` | runs again later, without counting an attempt |
+| The handler                         | The job                                         |
+|-------------------------------------|-------------------------------------------------|
+| returns                             | is done and removed from the queue              |
+| throws, or returns an error         | is retried later, with a longer delay each time |
+| panics (Go)                         | is retried, with the panic as its error         |
+| calls `job.fail(err)`               | fails for good, without more attempts           |
+| calls `job.snooze({ after: '1m' })` | runs again later, without counting an attempt   |
 
 Jobs run in the order of their time. Jobs with the same time run in the order
 you enqueued them. With one worker, the default, a queue runs one job at a
@@ -151,17 +151,17 @@ attempt fails.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A value | 1 MiB of JSON |
-| A key | 1 to 1,024 bytes |
-| Attempts | 10 |
-| Retry delay | 1 second, doubling up to 1 hour, ±10% |
-| Lease | 30 seconds |
-| Handler timeout | 1 minute |
-| Failed jobs kept | 7 days |
-| Waiting jobs per queue | 10,000,000 |
-| A queue name | `[a-z0-9][a-z0-9_-]{0,63}` |
+|                        |                                       |
+|------------------------|---------------------------------------|
+| A value                | 1 MiB of JSON                         |
+| A key                  | 1 to 1,024 bytes                      |
+| Attempts               | 10                                    |
+| Retry delay            | 1 second, doubling up to 1 hour, ±10% |
+| Lease                  | 30 seconds                            |
+| Handler timeout        | 1 minute                              |
+| Failed jobs kept       | 7 days                                |
+| Waiting jobs per queue | 10,000,000                            |
+| A queue name           | `[a-z0-9][a-z0-9_-]{0,63}`            |
 
 ## See also
 

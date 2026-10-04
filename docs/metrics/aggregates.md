@@ -49,15 +49,15 @@ samples it counted and how many counter resets it saw.
 
 ## Operations
 
-| `op` | For | Value of a bucket |
-|---|---|---|
-| `count` | any | the number of samples |
-| `sum` | gauges | the exact sum of the samples |
-| `min`, `max` | gauges | the smallest or largest sample |
-| `avg` | gauges | the exact sum divided by the count |
-| `increase` | counters | how much the counter grew, resets included |
-| `rate` | counters | the increase per second of the bucket |
-| `delta` | gauges | the last sample minus the first |
+| `op`         | For      | Value of a bucket                          |
+|--------------|----------|--------------------------------------------|
+| `count`      | any      | the number of samples                      |
+| `sum`        | gauges   | the exact sum of the samples               |
+| `min`, `max` | gauges   | the smallest or largest sample             |
+| `avg`        | gauges   | the exact sum divided by the count         |
+| `increase`   | counters | how much the counter grew, resets included |
+| `rate`       | counters | the increase per second of the bucket      |
+| `delta`      | gauges   | the last sample minus the first            |
 
 In Go, the operations are `metrics.AggregateCount`, `AggregateSum`,
 `AggregateMin`, `AggregateMax`, `AggregateAvg`, `AggregateIncrease`,

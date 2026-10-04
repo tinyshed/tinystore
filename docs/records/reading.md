@@ -78,18 +78,18 @@ reads no further pages.
 
 ## Filter
 
-| Filter | Bun | Python | Go |
-|---|---|---|---|
-| the last hour | `since: '1h'` | `since="1h"` | `Since: time.Hour` |
-| a time range | `from`, `to` | `from_`, `to` | `From`, `To` |
-| streams | `streams: ['api']` | `streams=["api"]` | `Streams: []string{"api"}` |
-| event names | `names: ['click']` | `names=["click"]` | `Names: []string{"click"}` |
-| a level and above | `minLevel: 'warn'` | `min_level="warn"` | `MinLevel: &warn` |
-| a trace | `traceId` | `trace_id` | `TraceID` |
-| attributes | `attrs: { route: '/users' }` | `attrs={"route": "/users"}` | `Attrs: []records.Field{…}` |
-| context | `context: { session: id }` | `context={"session": id}` | `Context: []records.Field{…}` |
-| text in the body or name | `search: 'timeout'` | `search="timeout"` | `Search: "timeout"` |
-| newest first | `newest: true` | `newest=True` | `Newest: true` |
+| Filter                   | Bun                          | Python                      | Go                            |
+|--------------------------|------------------------------|-----------------------------|-------------------------------|
+| the last hour            | `since: '1h'`                | `since="1h"`                | `Since: time.Hour`            |
+| a time range             | `from`, `to`                 | `from_`, `to`               | `From`, `To`                  |
+| streams                  | `streams: ['api']`           | `streams=["api"]`           | `Streams: []string{"api"}`    |
+| event names              | `names: ['click']`           | `names=["click"]`           | `Names: []string{"click"}`    |
+| a level and above        | `minLevel: 'warn'`           | `min_level="warn"`          | `MinLevel: &warn`             |
+| a trace                  | `traceId`                    | `trace_id`                  | `TraceID`                     |
+| attributes               | `attrs: { route: '/users' }` | `attrs={"route": "/users"}` | `Attrs: []records.Field{…}`   |
+| context                  | `context: { session: id }`   | `context={"session": id}`   | `Context: []records.Field{…}` |
+| text in the body or name | `search: 'timeout'`          | `search="timeout"`          | `Search: "timeout"`           |
+| newest first             | `newest: true`               | `newest=True`               | `Newest: true`                |
 
 All filters must match. A record without a level doesn't match a level
 filter. Attributes and context match by key and exact value.
@@ -129,11 +129,11 @@ and took 6 ms, in a Linux container on a Ryzen 7 7700
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A page | 1,000 records by default, at most 10,000 |
+|                 |                                                 |
+|-----------------|-------------------------------------------------|
+| A page          | 1,000 records by default, at most 10,000        |
 | A page's budget | the blocks, bytes and records a read may decode |
-| A search text | 1 KiB |
+| A search text   | 1 KiB                                           |
 
 If more records share one timestamp than a page can hold, `scan` fails with a
 limit error.

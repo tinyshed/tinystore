@@ -47,11 +47,11 @@ time the program opens it.
 
 ## Repeats
 
-| Repeat | Bun | Python | Go |
-|---|---|---|---|
-| every day at a time | `{ daily: '03:10', zone }` | `tinystore.daily("03:10", zone)` | `jobs.Daily("03:10", loc)` |
-| a cron expression | `{ cron: '0 9 * * 1', zone }` | `tinystore.cron("0 9 * * 1", zone)` | `jobs.Cron("0 9 * * 1", loc)` |
-| every interval | `{ every: '15m' }` | `tinystore.every("15m")` | `jobs.Every(15 * time.Minute)` |
+| Repeat              | Bun                           | Python                              | Go                             |
+|---------------------|-------------------------------|-------------------------------------|--------------------------------|
+| every day at a time | `{ daily: '03:10', zone }`    | `tinystore.daily("03:10", zone)`    | `jobs.Daily("03:10", loc)`     |
+| a cron expression   | `{ cron: '0 9 * * 1', zone }` | `tinystore.cron("0 9 * * 1", zone)` | `jobs.Cron("0 9 * * 1", loc)`  |
+| every interval      | `{ every: '15m' }`            | `tinystore.every("15m")`            | `jobs.Every(15 * time.Minute)` |
 
 A cron expression has five fields: minute, hour, day of the month, month and
 day of the week. It supports `*`, ranges, steps and lists, and the shortcuts

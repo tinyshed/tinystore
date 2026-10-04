@@ -88,21 +88,21 @@ wrote internal/data/migrations/002_add_description.sql:
   into Note.Done (bool)`. A read asks what SQLite returned, never what the
   table meant, since a column of an expression has no declared type:
 
-  | a field of type | is the column | which also checks | and reads from |
-  |---|---|---|---|
-  | `string`, named strings | `TEXT` | | `TEXT` |
-  | `[]byte` | `BLOB` | | `BLOB`, `TEXT` |
-  | `bool` | `INTEGER` | `IN (0, 1)` | `INTEGER` 0 or 1 |
-  | integers, named integers | `INTEGER` | | `INTEGER` in the field's range |
-  | `float32`, `float64` | `REAL` | | `REAL`, `INTEGER` |
-  | `time.Time` | `INTEGER`, unix milliseconds | | `INTEGER`; `TEXT` as SQLite's date functions or RFC 3339 spell it |
-  | `time.Duration` | `INTEGER`, milliseconds | | `INTEGER` |
-  | `uuid.UUID` of `github.com/google/uuid` or `github.com/gofrs/uuid` | `TEXT`, lower case | | `TEXT`; a 16-byte `BLOB` |
-  | any other `[N]byte` | `BLOB` | `length(…) = N` | a `BLOB` of `N` bytes |
-  | `sqldb.Date` | `TEXT`, `YYYY-MM-DD` | `IS date(…)` | `TEXT` |
-  | `sqldb.JSON[T]` | `TEXT` | `json_valid(…)` | `TEXT`, through `encoding/json` |
-  | a type with its own `Scan` and `Value` | what `sqldb.Storage` says | | what its `Scan` takes |
-  | `*T`, `sql.Null[T]`, `sql.NullString` and its kin | as `T`, and `NULL` | | as `T`, and `NULL` |
+  | a field of type                                                    | is the column                | which also checks | and reads from                                                    |
+  |--------------------------------------------------------------------|------------------------------|-------------------|-------------------------------------------------------------------|
+  | `string`, named strings                                            | `TEXT`                       |                   | `TEXT`                                                            |
+  | `[]byte`                                                           | `BLOB`                       |                   | `BLOB`, `TEXT`                                                    |
+  | `bool`                                                             | `INTEGER`                    | `IN (0, 1)`       | `INTEGER` 0 or 1                                                  |
+  | integers, named integers                                           | `INTEGER`                    |                   | `INTEGER` in the field's range                                    |
+  | `float32`, `float64`                                               | `REAL`                       |                   | `REAL`, `INTEGER`                                                 |
+  | `time.Time`                                                        | `INTEGER`, unix milliseconds |                   | `INTEGER`; `TEXT` as SQLite's date functions or RFC 3339 spell it |
+  | `time.Duration`                                                    | `INTEGER`, milliseconds      |                   | `INTEGER`                                                         |
+  | `uuid.UUID` of `github.com/google/uuid` or `github.com/gofrs/uuid` | `TEXT`, lower case           |                   | `TEXT`; a 16-byte `BLOB`                                          |
+  | any other `[N]byte`                                                | `BLOB`                       | `length(…) = N`   | a `BLOB` of `N` bytes                                             |
+  | `sqldb.Date`                                                       | `TEXT`, `YYYY-MM-DD`         | `IS date(…)`      | `TEXT`                                                            |
+  | `sqldb.JSON[T]`                                                    | `TEXT`                       | `json_valid(…)`   | `TEXT`, through `encoding/json`                                   |
+  | a type with its own `Scan` and `Value`                             | what `sqldb.Storage` says    |                   | what its `Scan` takes                                             |
+  | `*T`, `sql.Null[T]`, `sql.NullString` and its kin                  | as `T`, and `NULL`           |                   | as `T`, and `NULL`                                                |
 
 - **A parameter is written by its Go type**, as its column would hold it: a
   `time.Time` as unix milliseconds, a known uuid as its text, a

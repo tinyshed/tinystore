@@ -34,13 +34,13 @@ greyed out. To add a page:
    `/docs/kv/quotas`, and an engine's overview `docs/kv/README.md` becomes
    `/docs/kv`.
 
-| Section | Files | What its pages cover |
-|---|---|---|
-| Start here | `docs/*.md` | what TinyStore is, a first program, how Go, Bun and Python connect to a store, a tour of every engine |
-| SQL, KV, Jobs, Blobs, Records, Metrics | `docs/<engine>/` | `README.md` is the overview: what the engine is for, a short tour, and links to its other pages; then one page per feature |
-| Running it | `docs/running/` | the sidecar, a remote server, the command line, AI agents, backups, testing, upgrading |
-| How it works | `docs/concepts/` | durability, concurrency, time, memory and limits, errors, the files on disk: why the store behaves the way it does |
-| Reference | `docs/reference/`, `docs/wire.md` | tables to look things up: limits and defaults, links to the API references, and the wire protocol last, for people who write a client |
+| Section                                | Files                             | What its pages cover                                                                                                                  |
+|----------------------------------------|-----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| Start here                             | `docs/*.md`                       | what TinyStore is, a first program, how Go, Bun and Python connect to a store, a tour of every engine                                 |
+| SQL, KV, Jobs, Blobs, Records, Metrics | `docs/<engine>/`                  | `README.md` is the overview: what the engine is for, a short tour, and links to its other pages; then one page per feature            |
+| Running it                             | `docs/running/`                   | the sidecar, a remote server, the command line, AI agents, backups, testing, upgrading                                                |
+| How it works                           | `docs/concepts/`                  | durability, concurrency, time, memory and limits, errors, the files on disk: why the store behaves the way it does                    |
+| Reference                              | `docs/reference/`, `docs/wire.md` | tables to look things up: limits and defaults, links to the API references, and the wire protocol last, for people who write a client |
 
 A feature gets its own page if a reader would search for it by name, such as
 Sessions, Quotas, Once or Steps. If a page needs more than six sections, split
@@ -149,14 +149,14 @@ and a link to the report that measured it. Otherwise, leave it out.
 Before and after, from the first drafts of these docs and from the design
 documents:
 
-| Dense | Plain |
-|---|---|
-| It is the kv engine's answer to the limits a paid plan states: a use counts in every window or in none. | Quotas are part of the KV engine and are designed for the limits of paid plans. `allow` counts a use in all windows, or in none of them. |
-| `enqueue` returns once the job is on disk, so a job survives the process dying right after it. | `enqueue` returns after the job is saved to disk, so the job survives even if the process crashes right after. |
-| Running until idle returns once no job is due, which suits a script or a test; a server runs `work` for as long as it runs. | With `untilIdle`, `work` returns as soon as no jobs are due. This is useful in scripts and tests. |
-| Expired is absent to every operation. `Get`, `Has` and `Scan` do not see it, `SetIfAbsent` claims it, and `Add` starts again from zero. | When a key expires, TinyStore treats it as deleted. `get` returns nothing, `setIfAbsent` can write the key again, and a counter restarts from zero. You don't need a cleanup job. |
+| Dense                                                                                                                                                       | Plain                                                                                                                                                                                                                                        |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| It is the kv engine's answer to the limits a paid plan states: a use counts in every window or in none.                                                     | Quotas are part of the KV engine and are designed for the limits of paid plans. `allow` counts a use in all windows, or in none of them.                                                                                                     |
+| `enqueue` returns once the job is on disk, so a job survives the process dying right after it.                                                              | `enqueue` returns after the job is saved to disk, so the job survives even if the process crashes right after.                                                                                                                               |
+| Running until idle returns once no job is due, which suits a script or a test; a server runs `work` for as long as it runs.                                 | With `untilIdle`, `work` returns as soon as no jobs are due. This is useful in scripts and tests.                                                                                                                                            |
+| Expired is absent to every operation. `Get`, `Has` and `Scan` do not see it, `SetIfAbsent` claims it, and `Add` starts again from zero.                     | When a key expires, TinyStore treats it as deleted. `get` returns nothing, `setIfAbsent` can write the key again, and a counter restarts from zero. You don't need a cleanup job.                                                            |
 | A lease is its attempt. Settling a job names the attempt it claimed; one whose lease ended and whose job another worker has claimed since is `ErrConflict`. | When a worker claims a job, it gets a lease for a limited time. If the worker stalls and the lease runs out, another worker can claim the job. The first worker's late acknowledgement then fails with a conflict error and changes nothing. |
-| A page ends where it can prove it is whole. | A page never splits records that have the same timestamp. The next page starts exactly where the previous one ended. |
+| A page ends where it can prove it is whole.                                                                                                                 | A page never splits records that have the same timestamp. The next page starts exactly where the previous one ended.                                                                                                                         |
 
 Before you finish a page, read it aloud. If you have to read a sentence twice,
 rewrite it.
@@ -236,18 +236,18 @@ copy, often without any other page, and write code from it.
 Check every call and every claim against its source before you put it on a
 page. The example tests compile and run, so they are the safest to copy from.
 
-| To check | Read |
-|---|---|
-| a Go call, its options, contracts and errors | the package README (`kv/README.md`…), `go doc`, and its `example_test.go` |
-| a Bun or Node call | `docs/reference/bun.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts` |
-| a Python call | `docs/reference/python.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/` |
-| a complete program that uses every engine | `examples/notes/main.go`, built and tested |
-| what a guarantee rests on | GATES.md: each promise and the test that checks it |
-| a limit or a default | the package README's contracts, then the constant in the code |
+| To check                                     | Read                                                                                                                                         |
+|----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| a Go call, its options, contracts and errors | the package README (`kv/README.md`…), `go doc`, and its `example_test.go`                                                                    |
+| a Bun or Node call                           | `docs/reference/bun.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts`                                                            |
+| a Python call                                | `docs/reference/python.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/`                                                      |
+| a complete program that uses every engine    | `examples/notes/main.go`, built and tested                                                                                                   |
+| what a guarantee rests on                    | GATES.md: each promise and the test that checks it                                                                                           |
+| a limit or a default                         | the package README's contracts, then the constant in the code                                                                                |
 | why it works this way, and what was measured | research's `tinystore/design/<engine>.md` and `reports/`. They are not updated anymore, so if they disagree with the code, the code is right |
-| a good real-world example | the "Five cases" sections of the kv, jobs, blobs and sqldb design documents |
-| the command line | `tinystore` without arguments lists its commands; the code is in `cmd/tinystore/` |
-| the bytes on the wire | `docs/wire.md` |
+| a good real-world example                    | the "Five cases" sections of the kv, jobs, blobs and sqldb design documents                                                                  |
+| the command line                             | `tinystore` without arguments lists its commands; the code is in `cmd/tinystore/`                                                            |
+| the bytes on the wire                        | `docs/wire.md`                                                                                                                               |
 
 ## Callouts, tables, links
 
@@ -261,6 +261,8 @@ page. The example tests compile and run, so they are the safest to copy from.
   ```
 
   The kinds are GitHub's: NOTE, TIP, IMPORTANT, WARNING and CAUTION.
+- Align every table, its cells padded so that the pipes line up: `task
+  tables` does it, and `task web` fails on a table that is not aligned.
 - A table with an empty header row, `| | |`, is drawn as rows without a
   header. Text in backticks is drawn in a monospace font.
 - Write links relative to the file, as on GitHub. A link to a page stays on

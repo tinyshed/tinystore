@@ -206,12 +206,12 @@ again for every page.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Writes committed together | 1,024, or 8 MiB |
-| A group's hold on the writer | 10 seconds |
-| A view or `each` snapshot | 5 seconds |
-| Rows `all` returns | 64 MiB of values |
+|                              |                  |
+|------------------------------|------------------|
+| Writes committed together    | 1,024, or 8 MiB  |
+| A group's hold on the writer | 10 seconds       |
+| A view or `each` snapshot    | 5 seconds        |
+| Rows `all` returns           | 64 MiB of values |
 
 ## See also
 

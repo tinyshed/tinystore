@@ -92,10 +92,10 @@ result was stored, `run` fails with an outcome unknown error
 
 ## Limits and defaults
 
-| | |
-|---|---|
+|                  |                                              |
+|------------------|----------------------------------------------|
 | A result is kept | 1 day, unless the default TTL says otherwise |
-| A result | the same limits as a KV value, at most 1 MiB |
+| A result         | the same limits as a KV value, at most 1 MiB |
 
 ## See also
 

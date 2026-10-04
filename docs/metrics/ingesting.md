@@ -93,13 +93,13 @@ longer be read.
 
 ## Limits and defaults
 
-| | |
-|---|---|
+|                      |                  |
+|----------------------|------------------|
 | Samples per `ingest` | 10,000, or 4 MiB |
-| Lateness | 0 |
-| Retention | 30 days |
-| Clock skew | 10 minutes |
-| Series | 100,000 |
+| Lateness             | 0                |
+| Retention            | 30 days          |
+| Clock skew           | 10 minutes       |
+| Series               | 100,000          |
 
 ## See also
 

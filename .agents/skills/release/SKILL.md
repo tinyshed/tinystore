@@ -36,15 +36,15 @@ workflow checks both before it tags.
 
 ## What a release is
 
-| | |
-|---|---|
-| `vX.Y.Z` | the root module, at the commit CI passed |
-| `server/vX.Y.Z` | that commit, `server/go.mod` requiring the root at `vX.Y.Z` without its `replace` |
-| `cmd/tinystore/vX.Y.Z` | then `cmd/tinystore/go.mod` requiring both; the binaries build here and stamp `vX.Y.Z` |
-| `tinystore_<v>_<os>_<arch>.tar.gz`, `.zip`, `SHA256SUMS` | the GitHub release's assets |
-| `@tinyshed/tinystore-<os>-<cpu>` and `@tinyshed/tinystore` on npm | the binary a platform, and the SDK naming those six as optional dependencies |
-| `tinyshed-tinystore` on PyPI | a wheel a platform with the binary in `tinystore/bin/`, a pure wheel, an sdist |
-| `ghcr.io/tinyshed/tinystore:<v>` | the linux binaries, amd64 and arm64, on distroless static (`internal/release/Dockerfile`) |
+|                                                                   |                                                                                           |
+|-------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
+| `vX.Y.Z`                                                          | the root module, at the commit CI passed                                                  |
+| `server/vX.Y.Z`                                                   | that commit, `server/go.mod` requiring the root at `vX.Y.Z` without its `replace`         |
+| `cmd/tinystore/vX.Y.Z`                                            | then `cmd/tinystore/go.mod` requiring both; the binaries build here and stamp `vX.Y.Z`    |
+| `tinystore_<v>_<os>_<arch>.tar.gz`, `.zip`, `SHA256SUMS`          | the GitHub release's assets                                                               |
+| `@tinyshed/tinystore-<os>-<cpu>` and `@tinyshed/tinystore` on npm | the binary a platform, and the SDK naming those six as optional dependencies              |
+| `tinyshed-tinystore` on PyPI                                      | a wheel a platform with the binary in `tinystore/bin/`, a pure wheel, an sdist            |
+| `ghcr.io/tinyshed/tinystore:<v>`                                  | the linux binaries, amd64 and arm64, on distroless static (`internal/release/Dockerfile`) |
 
 Six platforms: linux, darwin and windows, amd64 and arm64. The binary is
 static, so one Linux wheel serves glibc and musl alike, and Go 1.27 needs

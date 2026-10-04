@@ -64,11 +64,11 @@ If any window is full, `allow` returns `ok: false` and counts nothing. This is
 a normal result, not an error. The retry time tells you when the full window
 resets:
 
-| | Field | Unit |
-|---|---|---|
-| Bun | `retryAfter` | milliseconds |
-| Python | `retry_after` | seconds |
-| Go | `RetryAfter` | `time.Duration` |
+|        | Field         | Unit            |
+|--------|---------------|-----------------|
+| Bun    | `retryAfter`  | milliseconds    |
+| Python | `retry_after` | seconds         |
+| Go     | `RetryAfter`  | `time.Duration` |
 
 ## All windows or none
 
@@ -188,13 +188,13 @@ requests through.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Windows per quota | 1 to 8 |
-| Window name | `[a-z][a-z0-9_]{0,31}` |
-| Window | a count and a length: `'100/5h'` or `'300/7d'` in Bun and Python, `kv.Window("weekly", 300, 7*24*time.Hour)` in Go |
-| Uses per call | 1 up to the smallest window's limit |
-| Key | a string or an integer, up to 1 KiB including its branch |
+|                   |                                                                                                                    |
+|-------------------|--------------------------------------------------------------------------------------------------------------------|
+| Windows per quota | 1 to 8                                                                                                             |
+| Window name       | `[a-z][a-z0-9_]{0,31}`                                                                                             |
+| Window            | a count and a length: `'100/5h'` or `'300/7d'` in Bun and Python, `kv.Window("weekly", 300, 7*24*time.Hour)` in Go |
+| Uses per call     | 1 up to the smallest window's limit                                                                                |
+| Key               | a string or an integer, up to 1 KiB including its branch                                                           |
 
 An invalid window, or more than 8 windows, fails immediately. If the quota's
 name is already used by another kind of KV bucket, opening the quota fails. In

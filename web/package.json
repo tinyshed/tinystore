@@ -18,7 +18,8 @@
 		"format": "biome format --write .",
 		"lint": "biome lint .",
 		"test": "bun test",
-		"readme": "bun src/lib/content/readme.ts"
+		"readme": "bun src/lib/content/readme.ts",
+		"tables": "bun src/lib/content/tables.ts"
 	},
 	"dependencies": {
 		"@tinyshed/tinystore": "file:../sdk/js",

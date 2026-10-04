@@ -146,11 +146,11 @@ and why a stored value was skipped.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A setting's path | 256 bytes |
-| A setting's value | 16 KiB of JSON |
-| All stored changes of a config | 256 KiB |
+|                                |                |
+|--------------------------------|----------------|
+| A setting's path               | 256 bytes      |
+| A setting's value              | 16 KiB of JSON |
+| All stored changes of a config | 256 KiB        |
 
 ## See also
 

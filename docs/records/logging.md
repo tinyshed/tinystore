@@ -100,12 +100,12 @@ FORCE_COLOR=1 bun app.ts
 `FORCE_COLOR` turns colors on wherever the program runs, so set it where you
 run the program, not in production. `NO_COLOR` still turns colors off.
 
-| Option | Go | Bun | Python |
-|---|---|---|---|
-| format | `records.ConsolePretty`, `ConsoleJSON`, `ConsoleOff` | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |
-| print to stdout instead of stderr | `records.Stdout` | `stdout: true` | `stdout=True` |
-| lowest level kept | `records.Level(slog.LevelInfo)` | `level: 'info'` | `level=logging.INFO` |
-| hidden fields | `records.Redact("password")` | `redact: ['password']` | `redact=["password"]` |
+| Option                            | Go                                                   | Bun                                    | Python                                |
+|-----------------------------------|------------------------------------------------------|----------------------------------------|---------------------------------------|
+| format                            | `records.ConsolePretty`, `ConsoleJSON`, `ConsoleOff` | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |
+| print to stdout instead of stderr | `records.Stdout`                                     | `stdout: true`                         | `stdout=True`                         |
+| lowest level kept                 | `records.Level(slog.LevelInfo)`                      | `level: 'info'`                        | `level=logging.INFO`                  |
+| hidden fields                     | `records.Redact("password")`                         | `redact: ['password']`                 | `redact=["password"]`                 |
 
 Lines go to stderr by default, because a library shouldn't write into what a
 program prints to stdout, such as a command's output.
@@ -151,11 +151,11 @@ records are saved.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A logger's buffer | 1,024 lines, larger with `buffer` |
-| Writes to the store | every second, or when the buffer is half full |
-| A record | 256 KiB; 128 context fields and 128 attributes |
+|                     |                                                |
+|---------------------|------------------------------------------------|
+| A logger's buffer   | 1,024 lines, larger with `buffer`              |
+| Writes to the store | every second, or when the buffer is half full  |
+| A record            | 256 KiB; 128 context fields and 128 attributes |
 
 ## See also
 

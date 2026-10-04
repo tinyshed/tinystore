@@ -7,20 +7,20 @@ cheap, and each of them says how much a crash can lose.
 
 ## What a returned call guarantees
 
-| Call | When it returns | A crash loses |
-|---|---|---|
-| KV `set`, `delete`, `take`, a quota's `allow` | after the disk sync | nothing |
-| SQL `exec`, `batch`, Go `Tx` | after the disk sync | nothing |
-| jobs `enqueue`, `update`, `cancel` | after the disk sync | nothing |
-| blobs `put`, `move`, `copy`, `delete` | after the file and the row are synced | nothing |
-| records `append` | after the disk sync | nothing |
-| metrics `ingest` | after the disk sync | nothing |
-| KV counters with `loseAtMost` | at once, in memory | the changes since the last write, at most the interval |
-| the rate limiter | at once, in memory | up to one second of requests |
-| a sliding expiry's extension | at once, in memory | extensions from the last second |
-| a logger's line | at once, in memory | lines from the last second |
-| a metrics instrument | at once, in memory | values from the last 15 seconds |
-| a job's progress | at once, in memory | the progress, which the next attempt reports again |
+| Call                                          | When it returns                       | A crash loses                                          |
+|-----------------------------------------------|---------------------------------------|--------------------------------------------------------|
+| KV `set`, `delete`, `take`, a quota's `allow` | after the disk sync                   | nothing                                                |
+| SQL `exec`, `batch`, Go `Tx`                  | after the disk sync                   | nothing                                                |
+| jobs `enqueue`, `update`, `cancel`            | after the disk sync                   | nothing                                                |
+| blobs `put`, `move`, `copy`, `delete`         | after the file and the row are synced | nothing                                                |
+| records `append`                              | after the disk sync                   | nothing                                                |
+| metrics `ingest`                              | after the disk sync                   | nothing                                                |
+| KV counters with `loseAtMost`                 | at once, in memory                    | the changes since the last write, at most the interval |
+| the rate limiter                              | at once, in memory                    | up to one second of requests                           |
+| a sliding expiry's extension                  | at once, in memory                    | extensions from the last second                        |
+| a logger's line                               | at once, in memory                    | lines from the last second                             |
+| a metrics instrument                          | at once, in memory                    | values from the last 15 seconds                        |
+| a job's progress                              | at once, in memory                    | the progress, which the next attempt reports again     |
 
 Every engine uses SQLite in write-ahead log mode with full syncs. TinyStore's
 tests kill the process at every step of a write and check what the next open

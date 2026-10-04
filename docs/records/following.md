@@ -58,10 +58,10 @@ silently.
 
 ## Limits and defaults
 
-| | |
-|---|---|
+|           |                                      |
+|-----------|--------------------------------------|
 | A segment | 16,384 records or 4 MiB, or one hour |
-| Retention | 14 days |
+| Retention | 14 days                              |
 
 ## See also
 

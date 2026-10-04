@@ -101,10 +101,10 @@ such as systemd.
 
 ## Where it listens
 
-| Platform | Endpoint |
-|---|---|
+| Platform     | Endpoint                                                                                                                               |
+|--------------|----------------------------------------------------------------------------------------------------------------------------------------|
 | Linux, macOS | a Unix socket, `data/server/tinystore.sock`; when that path is too long for a socket, in `$XDG_RUNTIME_DIR` or the temporary directory |
-| Windows | a named pipe, `\\.\pipe\tinystore-<hash>`, that only its owner can open |
+| Windows      | a named pipe, `\\.\pipe\tinystore-<hash>`, that only its owner can open                                                                |
 
 A local connection needs no token: the permissions of the directory decide
 who may connect, and a local connection may do everything, including

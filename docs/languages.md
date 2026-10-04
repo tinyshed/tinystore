@@ -47,12 +47,12 @@ if err != nil {
 defer store.Close(ctx)
 ```
 
-| | Go | Bun, Node and Python |
-|---|---|---|
-| Where the engines run | inside your program | in `tinystore serve`, a separate process |
-| A call | a function call | a round trip over a local socket, or TLS for a remote server |
-| Writes that commit together | `Batch` and `Tx` | `batch` and `tx`, which the server commits as one transaction |
-| The binary | not needed | included in the SDK package |
+|                             | Go                  | Bun, Node and Python                                          |
+|-----------------------------|---------------------|---------------------------------------------------------------|
+| Where the engines run       | inside your program | in `tinystore serve`, a separate process                      |
+| A call                      | a function call     | a round trip over a local socket, or TLS for a remote server  |
+| Writes that commit together | `Batch` and `Tx`    | `batch` and `tx`, which the server commits as one transaction |
+| The binary                  | not needed          | included in the SDK package                                   |
 
 The SDKs have no transaction that stays open across calls, because a client
 that stops responding would block every writer of the file. Instead, a batch
@@ -246,18 +246,18 @@ if errors.Is(err, tinystore.ErrConflict) {
 }
 ```
 
-| Kind | Go | Bun and Python | Meaning |
-|---|---|---|---|
-| invalid | `ErrInvalid` | `InvalidError` | the request is wrong, for example a value that can't be stored |
-| limit | `ErrLimit` | `LimitError` | a size, count or memory limit was reached |
-| conflict | `ErrConflict` | `ConflictError` | a version or a condition no longer matches |
-| closed | `ErrClosed` | `ClosedError` | the store or the handle is closed |
-| in use | `ErrInUse` | `InUseError` | the directory or the name is already in use |
-| corrupt | `ErrCorrupt` | `CorruptError` | stored data failed its checksum |
-| too old, too new | `ErrTooOld`, `ErrTooNew` | `TooOldError`, `TooNewError` | a timestamp is outside the engine's time window |
-| outcome unknown | the engine's `ErrOutcomeUnknown` | `OutcomeUnknownError` | a write may or may not have been saved, so read before you retry |
-| permission | | `PermissionDeniedError` | the connection's token doesn't allow the call |
-| unimplemented | | `UnimplementedError` | the server is older than the SDK and doesn't know the call |
+| Kind             | Go                               | Bun and Python               | Meaning                                                          |
+|------------------|----------------------------------|------------------------------|------------------------------------------------------------------|
+| invalid          | `ErrInvalid`                     | `InvalidError`               | the request is wrong, for example a value that can't be stored   |
+| limit            | `ErrLimit`                       | `LimitError`                 | a size, count or memory limit was reached                        |
+| conflict         | `ErrConflict`                    | `ConflictError`              | a version or a condition no longer matches                       |
+| closed           | `ErrClosed`                      | `ClosedError`                | the store or the handle is closed                                |
+| in use           | `ErrInUse`                       | `InUseError`                 | the directory or the name is already in use                      |
+| corrupt          | `ErrCorrupt`                     | `CorruptError`               | stored data failed its checksum                                  |
+| too old, too new | `ErrTooOld`, `ErrTooNew`         | `TooOldError`, `TooNewError` | a timestamp is outside the engine's time window                  |
+| outcome unknown  | the engine's `ErrOutcomeUnknown` | `OutcomeUnknownError`        | a write may or may not have been saved, so read before you retry |
+| permission       |                                  | `PermissionDeniedError`      | the connection's token doesn't allow the call                    |
+| unimplemented    |                                  | `UnimplementedError`         | the server is older than the SDK and doesn't know the call       |
 
 A `LimitError` also says which limit was reached, how much the call wanted and
 what the limit is.
@@ -291,10 +291,10 @@ already started is either saved completely or not at all.
 
 ## Times and durations
 
-| | Go | Bun | Python |
-|---|---|---|---|
-| A point in time | `time.Time` | `Date` | `datetime` |
-| A duration | `time.Duration` | milliseconds, or text such as `'1h30m'` | `timedelta`, seconds, or text such as `"1h30m"` |
+|                 | Go              | Bun                                     | Python                                          |
+|-----------------|-----------------|-----------------------------------------|-------------------------------------------------|
+| A point in time | `time.Time`     | `Date`                                  | `datetime`                                      |
+| A duration      | `time.Duration` | milliseconds, or text such as `'1h30m'` | `timedelta`, seconds, or text such as `"1h30m"` |
 
 A duration written as text uses the units `w`, `d`, `h`, `m`, `s` and `ms`,
 each at most once and from the largest to the smallest: `'30d'`, `'1h30m'`,

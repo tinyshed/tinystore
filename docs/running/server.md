@@ -46,10 +46,10 @@ Use it only on a network you trust.
 
 Each line of the tokens file is a capability and a token:
 
-| Capability | May |
-|---|---|
-| `admin` | everything: read and write data, run migrations, repair damaged records, stop the server |
-| `data` | read and write data, open databases whose migrations are already applied |
+| Capability | May                                                                                      |
+|------------|------------------------------------------------------------------------------------------|
+| `admin`    | everything: read and write data, run migrations, repair damaged records, stop the server |
+| `data`     | read and write data, open databases whose migrations are already applied                 |
 
 A token is 32 random bytes in base64url without padding. Generate one with
 `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
@@ -85,12 +85,12 @@ docker run -d -p 7443:7443 -v tinystore-data:/data -v ./secrets:/etc/tinystore:r
 A client reconnects by itself, opens its buckets and queues again, and a
 `work` loop continues. What was in flight when the connection dropped:
 
-| In flight | After the drop |
-|---|---|
-| a read | may be sent again |
-| a write | fails with an outcome unknown error: read what you wrote before you retry |
-| a blob upload | is aborted and leaves nothing |
-| a job in a worker's hands | its attempt fails, as if the worker crashed, and it is retried |
+| In flight                 | After the drop                                                            |
+|---------------------------|---------------------------------------------------------------------------|
+| a read                    | may be sent again                                                         |
+| a write                   | fails with an outcome unknown error: read what you wrote before you retry |
+| a blob upload             | is aborted and leaves nothing                                             |
+| a job in a worker's hands | its attempt fails, as if the worker crashed, and it is retried            |
 
 There is no transaction that stays open across the network, so a client that
 disappears never blocks other writers.

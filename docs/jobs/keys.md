@@ -53,13 +53,13 @@ separate table of scheduled messages to keep in sync with the queue.
 
 ## Enqueue the same key again
 
-| The key's job is | `enqueue(at: 9:00)` |
-|---|---|
+| The key's job is    | `enqueue(at: 9:00)`                                         |
+|---------------------|-------------------------------------------------------------|
 | waiting until 10:00 | moves it to 9:00. A key's job can move earlier, never later |
-| waiting until 8:00 | changes nothing: the job stays at 8:00 |
-| running | asks for one more run after this one, at 9:00 |
-| failed | starts it again at 9:00, with its attempts reset |
-| not there | creates a new job at 9:00 |
+| waiting until 8:00  | changes nothing: the job stays at 8:00                      |
+| running             | asks for one more run after this one, at 9:00               |
+| failed              | starts it again at 9:00, with its attempts reset            |
+| not there           | creates a new job at 9:00                                   |
 
 An `enqueue` of a waiting key adds nothing and keeps the old value. This is
 how a key stops duplicates: a user who taps "send" twice enqueues one job.
@@ -122,12 +122,12 @@ failed jobs that have no key.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A key | 1 to 1,024 bytes of text |
-| Done keys kept | not kept, unless you set `keepDone` |
-| Failed jobs kept | 7 days |
-| A `scan` page | 1,000 jobs or 4 MiB of values |
+|                  |                                     |
+|------------------|-------------------------------------|
+| A key            | 1 to 1,024 bytes of text            |
+| Done keys kept   | not kept, unless you set `keepDone` |
+| Failed jobs kept | 7 days                              |
+| A `scan` page    | 1,000 jobs or 4 MiB of values       |
 
 ## See also
 

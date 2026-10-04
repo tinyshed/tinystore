@@ -67,15 +67,15 @@ on a terminal, and `-f` keeps printing new ones as they arrive. It reads
 through the directory's server, and starts a sidecar if none runs, but only if
 the directory already contains a store.
 
-| Flag | Meaning |
-|---|---|
-| `-f` | follow new records |
-| `-n 100` | how many of the last records to print first |
-| `--level warn` | only this level and above |
-| `--since 1h` | only records from the last hour |
-| `--grep text` | only records that contain the text |
-| `--stream api` | only one stream |
-| `--json` | one JSON object per line |
+| Flag           | Meaning                                     |
+|----------------|---------------------------------------------|
+| `-f`           | follow new records                          |
+| `-n 100`       | how many of the last records to print first |
+| `--level warn` | only this level and above                   |
+| `--since 1h`   | only records from the last hour             |
+| `--grep text`  | only records that contain the text          |
+| `--stream api` | only one stream                             |
+| `--json`       | one JSON object per line                    |
 
 For `logs` to reach the store of a running Go program, the program must share
 its store with `server.Share`. See

@@ -108,11 +108,11 @@ nothing.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Value | a 64-bit signed integer |
-| Counters in memory, with `loseAtMost` | 100,000 per bucket |
-| Write to disk, with `loseAtMost` | every interval, 10,000 keys per transaction |
+|                                       |                                             |
+|---------------------------------------|---------------------------------------------|
+| Value                                 | a 64-bit signed integer                     |
+| Counters in memory, with `loseAtMost` | 100,000 per bucket                          |
+| Write to disk, with `loseAtMost`      | every interval, 10,000 keys per transaction |
 
 ## See also
 

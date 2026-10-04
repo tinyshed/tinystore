@@ -89,12 +89,12 @@ await recordings.put(f"cam-1/{minute}.mp4", chunks(), content_type="video/mp4")
 
 ## Uploads that don't finish
 
-| What happens | What is left |
-|---|---|
-| the stream fails, or `abort` is called | nothing |
-| the request is cancelled | nothing: the upload ends with its context or signal |
-| the process crashes during the upload | nothing: the next `open` removes the partial file |
-| the process crashes after `put` returned | the complete file |
+| What happens                             | What is left                                        |
+|------------------------------------------|-----------------------------------------------------|
+| the stream fails, or `abort` is called   | nothing                                             |
+| the request is cancelled                 | nothing: the upload ends with its context or signal |
+| the process crashes during the upload    | nothing: the next `open` removes the partial file   |
+| the process crashes after `put` returned | the complete file                                   |
 
 TinyStore writes the bytes to a temporary file, syncs it, moves it into place,
 and only then commits the database row that names it. A row never points to a
@@ -133,12 +133,12 @@ gigabytes stops before its first byte, and again when it commits. See
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A file | no limit, unless the bucket sets `maxSize` |
-| Free disk space kept | 1 GiB |
-| Memory per upload | 16 KiB, up to 80 KiB briefly for a long upload |
-| Uploads at the same time | 1,024 |
+|                          |                                                |
+|--------------------------|------------------------------------------------|
+| A file                   | no limit, unless the bucket sets `maxSize`     |
+| Free disk space kept     | 1 GiB                                          |
+| Memory per upload        | 16 KiB, up to 80 KiB briefly for a long upload |
+| Uploads at the same time | 1,024                                          |
 
 ## See also
 

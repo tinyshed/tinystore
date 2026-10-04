@@ -69,14 +69,14 @@ It needs Python 3.12 or later and runs on asyncio. The package installs as
 
 <!-- landing:engines -->
 
-| | | |
-|---|---|---|
-| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/sql/README.md) | Relational state | The application's own SQL databases: tables from structs, checked migrations. |
-| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/kv/README.md) | Application state | Current state: typed buckets, counters, expiry, versions. |
-| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/jobs/README.md) | Durable background work | Work that runs at its time: retries, leases, repeats. |
-| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/blobs/README.md) | Files and objects | Files by path, checked when read whole. |
-| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/records/README.md) | Logs and events | Read by time, level and keys. |
-| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/metrics/README.md) | Time series | Samples kept bit for bit, answered exactly. |
+|                                                                                   |                         |                                                                               |
+|-----------------------------------------------------------------------------------|-------------------------|-------------------------------------------------------------------------------|
+| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/sql/README.md)         | Relational state        | The application's own SQL databases: tables from structs, checked migrations. |
+| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/kv/README.md)           | Application state       | Current state: typed buckets, counters, expiry, versions.                     |
+| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/jobs/README.md)       | Durable background work | Work that runs at its time: retries, leases, repeats.                         |
+| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/blobs/README.md)     | Files and objects       | Files by path, checked when read whole.                                       |
+| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/records/README.md) | Logs and events         | Read by time, level and keys.                                                 |
+| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/metrics/README.md) | Time series             | Samples kept bit for bit, answered exactly.                                   |
 
 <!-- /landing:engines -->
 

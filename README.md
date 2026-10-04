@@ -163,14 +163,14 @@ by step.
 
 <!-- landing:engines -->
 
-| | | |
-|---|---|---|
-| [SQL](docs/sql/README.md) | Relational state | The application's own SQL databases: tables from structs, checked migrations. |
-| [KV](docs/kv/README.md) | Application state | Current state: typed buckets, counters, expiry, versions. |
-| [Jobs](docs/jobs/README.md) | Durable background work | Work that runs at its time: retries, leases, repeats. |
-| [Blobs](docs/blobs/README.md) | Files and objects | Files by path, checked when read whole. |
-| [Records](docs/records/README.md) | Logs and events | Read by time, level and keys. |
-| [Metrics](docs/metrics/README.md) | Time series | Samples kept bit for bit, answered exactly. |
+|                                   |                         |                                                                               |
+|-----------------------------------|-------------------------|-------------------------------------------------------------------------------|
+| [SQL](docs/sql/README.md)         | Relational state        | The application's own SQL databases: tables from structs, checked migrations. |
+| [KV](docs/kv/README.md)           | Application state       | Current state: typed buckets, counters, expiry, versions.                     |
+| [Jobs](docs/jobs/README.md)       | Durable background work | Work that runs at its time: retries, leases, repeats.                         |
+| [Blobs](docs/blobs/README.md)     | Files and objects       | Files by path, checked when read whole.                                       |
+| [Records](docs/records/README.md) | Logs and events         | Read by time, level and keys.                                                 |
+| [Metrics](docs/metrics/README.md) | Time series             | Samples kept bit for bit, answered exactly.                                   |
 
 <!-- /landing:engines -->
 

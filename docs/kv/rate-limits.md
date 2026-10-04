@@ -40,11 +40,11 @@ if err == nil && !allowed.OK {
 
 `allow` answers three things:
 
-| | Bun | Python | Go |
-|---|---|---|---|
-| whether the request is allowed | `ok` | `ok` | `OK` |
-| how many more requests would be allowed now | `left` | `left` | `Left` |
-| how long until the next request is allowed | `retryAfter`, milliseconds | `retry_after`, seconds | `RetryAfter`, a `time.Duration` |
+|                                             | Bun                        | Python                 | Go                              |
+|---------------------------------------------|----------------------------|------------------------|---------------------------------|
+| whether the request is allowed              | `ok`                       | `ok`                   | `OK`                            |
+| how many more requests would be allowed now | `left`                     | `left`                 | `Left`                          |
+| how long until the next request is allowed  | `retryAfter`, milliseconds | `retry_after`, seconds | `RetryAfter`, a `time.Duration` |
 
 A rejected request is a normal answer, not an error.
 

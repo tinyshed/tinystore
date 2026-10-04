@@ -123,12 +123,12 @@ claim already expired from finishing or deleting a newer claim.
 
 ## Calls that take a version
 
-| Call | With a version |
-|---|---|
+| Call              | With a version                               |
+|-------------------|----------------------------------------------|
 | `set`, `setEntry` | writes only if the key still has the version |
-| `delete` | deletes only that version of the key |
-| `take` | reads and deletes only that version |
-| `touch` | changes the expiry only for that version |
+| `delete`          | deletes only that version of the key         |
+| `take`            | reads and deletes only that version          |
+| `touch`           | changes the expiry only for that version     |
 
 In Python, the option is `if_version`. In Go, it is `kv.IfVersion(v)`.
 

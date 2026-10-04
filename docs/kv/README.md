@@ -162,15 +162,15 @@ block anything. Keys come back sorted by their bytes, so `"10"` comes before
 
 ## Value types
 
-| Value | Bun | Python | Go |
-|---|---|---|---|
-| JSON | `bucket<T>(name)` | a dataclass, `TypedDict` or model | any struct or other type |
-| text | `bucket(name, 'string')` | `str` | `string` |
-| bytes | `bucket(name, 'bytes')` | `bytes` | `[]byte` |
-| integer | `'int'` or `'bigint'` | `int` | `int64` and other integers |
-| float | `'float'` | `float` | `float64`, `float32` |
-| boolean | `'bool'` | `bool` | `bool` |
-| nothing, for a set of keys | `'none'` | `None` | `struct{}` |
+| Value                      | Bun                      | Python                            | Go                         |
+|----------------------------|--------------------------|-----------------------------------|----------------------------|
+| JSON                       | `bucket<T>(name)`        | a dataclass, `TypedDict` or model | any struct or other type   |
+| text                       | `bucket(name, 'string')` | `str`                             | `string`                   |
+| bytes                      | `bucket(name, 'bytes')`  | `bytes`                           | `[]byte`                   |
+| integer                    | `'int'` or `'bigint'`    | `int`                             | `int64` and other integers |
+| float                      | `'float'`                | `float`                           | `float64`, `float32`       |
+| boolean                    | `'bool'`                 | `bool`                            | `bool`                     |
+| nothing, for a set of keys | `'none'`                 | `None`                            | `struct{}`                 |
 
 In Bun, you can also pass a Standard Schema, such as a zod schema. The bucket
 then checks every value it reads. Floats are stored bit for bit, including
@@ -202,12 +202,12 @@ database and the same id from a URL find the same value.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A key, including its branch | 1 KiB |
-| A value | 1 MiB |
-| A `scan` page | 100 keys by default, at most 1,000 keys or 4 MiB of values |
-| A bucket name | `[a-z0-9][a-z0-9_-]{0,63}` |
+|                             |                                                            |
+|-----------------------------|------------------------------------------------------------|
+| A key, including its branch | 1 KiB                                                      |
+| A value                     | 1 MiB                                                      |
+| A `scan` page               | 100 keys by default, at most 1,000 keys or 4 MiB of values |
+| A bucket name               | `[a-z0-9][a-z0-9_-]{0,63}`                                 |
 
 Store larger values in [blobs](../blobs/README.md) and keep their keys in
 KV.

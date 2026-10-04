@@ -59,12 +59,12 @@ at the first minute after it. On a day when an hour repeats, it runs once.
 
 ## How times are stored
 
-| Where | Stored as |
-|---|---|
-| SQL (`time.Time` in Go) | unix milliseconds, in UTC |
-| metrics samples | unix milliseconds |
-| records | unix nanoseconds; a `bigint` in Bun |
-| the wire protocol | unix milliseconds, nanoseconds for records |
+| Where                   | Stored as                                  |
+|-------------------------|--------------------------------------------|
+| SQL (`time.Time` in Go) | unix milliseconds, in UTC                  |
+| metrics samples         | unix milliseconds                          |
+| records                 | unix nanoseconds; a `bigint` in Bun        |
+| the wire protocol       | unix milliseconds, nanoseconds for records |
 
 Unix milliseconds fit a JavaScript number exactly, and SQLite's date
 functions read them with `datetime(created_at / 1000, 'unixepoch')`.

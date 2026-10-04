@@ -43,11 +43,11 @@ because SQLite can't reuse the log while an old reader needs it.
 
 ## Transactions and batches
 
-| | Holds the writer while your code runs | Disk syncs |
-|---|---|---|
-| a single write | no | shared with its group |
-| a batch | no: it is built first, then committed in a group | shared with its group |
-| a Go `Tx` | yes | one of its own |
+|                | Holds the writer while your code runs            | Disk syncs            |
+|----------------|--------------------------------------------------|-----------------------|
+| a single write | no                                               | shared with its group |
+| a batch        | no: it is built first, then committed in a group | shared with its group |
+| a Go `Tx`      | yes                                              | one of its own        |
 
 A batch can be committed together with other writes because your code doesn't
 run while the writer waits. A `Tx` runs your code, so it holds the writer

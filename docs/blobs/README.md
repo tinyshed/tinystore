@@ -100,15 +100,15 @@ and a name that Windows reserves, such as `CON`, is a valid key.
 
 ## What a file carries
 
-| Field | Meaning |
-|---|---|
-| `key` | its path, relative to the folder you asked |
-| `size` | its size in bytes |
-| `etag` | a quoted hash of its bytes, ready for an HTTP `ETag` header |
-| content type | the type you gave when you stored it |
-| `modified` | when this version was saved |
-| `expires` | when it expires, if it does |
-| `meta` | a few strings of your own, such as the original file name |
+| Field        | Meaning                                                     |
+|--------------|-------------------------------------------------------------|
+| `key`        | its path, relative to the folder you asked                  |
+| `size`       | its size in bytes                                           |
+| `etag`       | a quoted hash of its bytes, ready for an HTTP `ETag` header |
+| content type | the type you gave when you stored it                        |
+| `modified`   | when this version was saved                                 |
+| `expires`    | when it expires, if it does                                 |
+| `meta`       | a few strings of your own, such as the original file name   |
 
 The ETag depends only on the bytes: two files with the same bytes have the
 same ETag. Store everything else about a file, such as its owner or album, in
@@ -126,15 +126,15 @@ your database, and keep the file's key there.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A path, including its folder | 1 KiB and 16 segments |
-| A file | no limit, unless the bucket sets one |
-| Stored inside the database | files up to 16 KiB |
-| A content type | 256 bytes |
-| Meta | 2 KiB in total |
-| A `scan` page | 1,000 files |
-| A bucket name | `[a-z0-9][a-z0-9_-]{0,63}` |
+|                              |                                      |
+|------------------------------|--------------------------------------|
+| A path, including its folder | 1 KiB and 16 segments                |
+| A file                       | no limit, unless the bucket sets one |
+| Stored inside the database   | files up to 16 KiB                   |
+| A content type               | 256 bytes                            |
+| Meta                         | 2 KiB in total                       |
+| A `scan` page                | 1,000 files                          |
+| A bucket name                | `[a-z0-9][a-z0-9_-]{0,63}`           |
 
 ## See also
 

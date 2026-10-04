@@ -50,16 +50,16 @@ lines look like this:
 
 Every record has the same fields:
 
-| Field | Example |
-|---|---|
-| time | when it happened, to the nanosecond |
-| stream | the part of your system it came from: `api`, `web`, `worker` |
-| name | `log` for a log line, or the event's name, such as `user.created` |
-| level | debug, info, warn or error, if it has one |
-| body | the message of a log line |
-| trace and span ids | the request it belongs to |
-| context | who produced it: a request id, a session, a host |
-| attributes | what happened: a duration, a route, an element |
+| Field              | Example                                                           |
+|--------------------|-------------------------------------------------------------------|
+| time               | when it happened, to the nanosecond                               |
+| stream             | the part of your system it came from: `api`, `web`, `worker`      |
+| name               | `log` for a log line, or the event's name, such as `user.created` |
+| level              | debug, info, warn or error, if it has one                         |
+| body               | the message of a log line                                         |
+| trace and span ids | the request it belongs to                                         |
+| context            | who produced it: a request id, a session, a host                  |
+| attributes         | what happened: a duration, a route, an element                    |
 
 A value keeps its exact JSON spelling. `1.2300`, `-0` and a large integer come
 back exactly as they were written, in the original order of the fields.
@@ -77,13 +77,13 @@ back exactly as they were written, in the original order of the fields.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Retention | 14 days |
-| A record | 256 KiB; 128 context fields and 128 attributes |
-| A page of `scan` | 1,000 records, at most 10,000 |
-| A logger's buffer | 1,024 lines |
-| A record's time | from 14 days ago to 10 minutes ahead of the store's clock |
+|                   |                                                           |
+|-------------------|-----------------------------------------------------------|
+| Retention         | 14 days                                                   |
+| A record          | 256 KiB; 128 context fields and 128 attributes            |
+| A page of `scan`  | 1,000 records, at most 10,000                             |
+| A logger's buffer | 1,024 lines                                               |
+| A record's time   | from 14 days ago to 10 minutes ahead of the store's clock |
 
 ## See also
 

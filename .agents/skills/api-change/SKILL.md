@@ -68,10 +68,10 @@ git grep -n -e 'oldName' -e 'old_name' -e 'OldName'
   `1h30m`, `250ms`. In Bun the type is the spelling, so `'1hr'` does not
   compile.
 
-  | | Go | Bun | Python |
-  |---|---|---|---|
+  |          | Go                                   | Bun                                              | Python                                         |
+  |----------|--------------------------------------|--------------------------------------------------|------------------------------------------------|
   | a moment | `time.Time`; metrics `int64` unix ms | `Date`; metrics `number` ms, records `bigint` ns | `datetime`; metrics `int` ms, records `int` ns |
-  | a span | `time.Duration` | ms as a number, or `'1h30m'` | `timedelta`, seconds, or `"1h30m"` |
+  | a span   | `time.Duration`                      | ms as a number, or `'1h30m'`                     | `timedelta`, seconds, or `"1h30m"`             |
 - An option is absent rather than zero wherever zero would mean something.
 - An error is the store's kind, `errors.Is` in Go and its class in each SDK,
   and it carries what it names: a series its labels, a record its place.

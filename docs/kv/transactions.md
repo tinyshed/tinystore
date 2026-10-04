@@ -148,12 +148,12 @@ Most of the time you don't need one. Each call is already atomic:
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A view's snapshot | 5 seconds |
-| Runs of a Bun or Python `tx` whose keys keep changing | 5, then a conflict error |
-| `clear` of a branch inside a Go transaction | up to 10,000 keys |
-| [Counters in memory](counters.md#count-in-memory) | can't be used in a transaction |
+|                                                       |                                |
+|-------------------------------------------------------|--------------------------------|
+| A view's snapshot                                     | 5 seconds                      |
+| Runs of a Bun or Python `tx` whose keys keep changing | 5, then a conflict error       |
+| `clear` of a branch inside a Go transaction           | up to 10,000 keys              |
+| [Counters in memory](counters.md#count-in-memory)     | can't be used in a transaction |
 
 ## See also
 

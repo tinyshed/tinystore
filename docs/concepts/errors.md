@@ -46,32 +46,32 @@ same way everywhere. In Bun and Python, every error is a subclass of
 
 ## Kinds
 
-| Kind | Go | Bun and Python | What to do |
-|---|---|---|---|
-| invalid | `ErrInvalid` | `InvalidError` | fix the request: the value, key, name or SQL is wrong |
-| limit | `ErrLimit` | `LimitError` | ask for less, or raise the limit; the error says which |
-| conflict | `ErrConflict` | `ConflictError` | read again, then decide whether to retry |
-| closed | `ErrClosed` | `ClosedError` | the store or handle was closed; open it again |
-| in use | `ErrInUse` | `InUseError` | another process holds the directory, or the name is taken |
-| corrupt | `ErrCorrupt` | `CorruptError` | stored data failed its checksum; restore from a backup |
-| too old, too new | `ErrTooOld`, `ErrTooNew` | `TooOldError`, `TooNewError` | the time is outside the engine's [window](time.md) |
-| suspended | `ErrSuspended` | `SuspendedError` | a metrics series failed maintenance; repair or drop it |
-| outcome unknown | each engine's `ErrOutcomeUnknown` | `OutcomeUnknownError` | read what you wrote before you retry |
-| permission | | `PermissionDeniedError` | the token's capability doesn't allow the call |
-| unimplemented | | `UnimplementedError` | the server is older than your SDK; upgrade the server |
-| unavailable | | `UnavailableError` | the server is shutting down; try again on a new connection |
+| Kind             | Go                                | Bun and Python               | What to do                                                 |
+|------------------|-----------------------------------|------------------------------|------------------------------------------------------------|
+| invalid          | `ErrInvalid`                      | `InvalidError`               | fix the request: the value, key, name or SQL is wrong      |
+| limit            | `ErrLimit`                        | `LimitError`                 | ask for less, or raise the limit; the error says which     |
+| conflict         | `ErrConflict`                     | `ConflictError`              | read again, then decide whether to retry                   |
+| closed           | `ErrClosed`                       | `ClosedError`                | the store or handle was closed; open it again              |
+| in use           | `ErrInUse`                        | `InUseError`                 | another process holds the directory, or the name is taken  |
+| corrupt          | `ErrCorrupt`                      | `CorruptError`               | stored data failed its checksum; restore from a backup     |
+| too old, too new | `ErrTooOld`, `ErrTooNew`          | `TooOldError`, `TooNewError` | the time is outside the engine's [window](time.md)         |
+| suspended        | `ErrSuspended`                    | `SuspendedError`             | a metrics series failed maintenance; repair or drop it     |
+| outcome unknown  | each engine's `ErrOutcomeUnknown` | `OutcomeUnknownError`        | read what you wrote before you retry                       |
+| permission       |                                   | `PermissionDeniedError`      | the token's capability doesn't allow the call              |
+| unimplemented    |                                   | `UnimplementedError`         | the server is older than your SDK; upgrade the server      |
+| unavailable      |                                   | `UnavailableError`           | the server is shutting down; try again on a new connection |
 
 ## Errors that name their item
 
-| Error | Names |
-|---|---|
-| `*kv.KeyError` | the bucket and the key |
-| `*jobs.JobError` | the queue and the key |
-| `*blobs.KeyError` | the bucket and the full path |
-| `*metrics.SeriesError` | the series' name and labels |
-| `*records.RecordError` | the record that was rejected |
-| `*sqldb.ConstraintError` | the kind of constraint, its table and name |
-| `*tinystore.LimitError` | the limit, what the call wanted and the bound |
+| Error                    | Names                                         |
+|--------------------------|-----------------------------------------------|
+| `*kv.KeyError`           | the bucket and the key                        |
+| `*jobs.JobError`         | the queue and the key                         |
+| `*blobs.KeyError`        | the bucket and the full path                  |
+| `*metrics.SeriesError`   | the series' name and labels                   |
+| `*records.RecordError`   | the record that was rejected                  |
+| `*sqldb.ConstraintError` | the kind of constraint, its table and name    |
+| `*tinystore.LimitError`  | the limit, what the call wanted and the bound |
 
 In Go, use `errors.As` to read them. In Bun and Python, the error's `what`
 field carries the same names. A rejected `ingest` or `append` names the one

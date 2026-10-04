@@ -32,16 +32,16 @@ shown and not linked. GitHub shows the same file as the table of contents.
 front matter, which GitHub would draw as a table, and nothing GitHub would
 show as noise. What the site adds it reads from what GitHub already ignores:
 
-| Written | On GitHub | Here |
-|---|---|---|
-| fences one after another, a language each | one under another | one block, the language the reader picked |
-| ` ```ts title="metrics.ts" ` | a TypeScript block | a tab named `metrics.ts` |
-| ` ```sh for=bun ` | a shell block | the Bun variant of its block |
-| `> [!NOTE]` then a **bold** line | GitHub's note | a callout labelled by the bold line |
-| a table whose header row is empty, `\| \| \|` | a table | a card of rows, no header |
-| `[kv](kv.md#expiry)` | the file, its heading | `/docs/kv#expiry`, the heading checked |
-| `[code](../kv/kv.go)` | the file | GitHub, at the commit the site was built from |
-| `<!-- a note -->` | nothing | nothing, and left out of the markdown copy |
+| Written                                       | On GitHub             | Here                                          |
+|-----------------------------------------------|-----------------------|-----------------------------------------------|
+| fences one after another, a language each     | one under another     | one block, the language the reader picked     |
+| ` ```ts title="metrics.ts" `                  | a TypeScript block    | a tab named `metrics.ts`                      |
+| ` ```sh for=bun `                             | a shell block         | the Bun variant of its block                  |
+| `> [!NOTE]` then a **bold** line              | GitHub's note         | a callout labelled by the bold line           |
+| a table whose header row is empty, `\| \| \|` | a table               | a card of rows, no header                     |
+| `[kv](kv.md#expiry)`                          | the file, its heading | `/docs/kv#expiry`, the heading checked        |
+| `[code](../kv/kv.go)`                         | the file              | GitHub, at the commit the site was built from |
+| `<!-- a note -->`                             | nothing               | nothing, and left out of the markdown copy    |
 
 **A link that leads nowhere fails the build.** Every relative link and image
 is resolved at build time against the repository, and a heading against the
@@ -58,13 +58,13 @@ In `server/`, `config.ts` reads the environment through zod, `bootstrap.ts`
 is the only composition root, and `index.ts` only starts and stops. It serves `build/` from an index made at start, brotli or
 gzip as the build made them, and counts what a reader asked for:
 
-| Kept | Where | What |
-|---|---|---|
-| `site_views_total{page, via, agent}` | metrics | a page, its data on navigation, or its markdown; a person, a crawler or an agent |
-| `site_events_total{name}` | metrics | what a page's script reports: copies, searches, the language |
-| `view`, `copy-code`, … | records, stream `readers` | each of those, with the day's visitor id, where the reader came from, their language |
-| the server's own lines | records, stream `site` | and on stderr, as JSON in a container |
-| `salt/<day>`, `site-events` | kv | the day's salt, expiring; the limiter a reader's events go through |
+| Kept                                 | Where                     | What                                                                                 |
+|--------------------------------------|---------------------------|--------------------------------------------------------------------------------------|
+| `site_views_total{page, via, agent}` | metrics                   | a page, its data on navigation, or its markdown; a person, a crawler or an agent     |
+| `site_events_total{name}`            | metrics                   | what a page's script reports: copies, searches, the language                         |
+| `view`, `copy-code`, …               | records, stream `readers` | each of those, with the day's visitor id, where the reader came from, their language |
+| the server's own lines               | records, stream `site`    | and on stderr, as JSON in a container                                                |
+| `salt/<day>`, `site-events`          | kv                        | the day's salt, expiring; the limiter a reader's events go through                   |
 
 No address is kept: a visitor is a hash of the address and the User-Agent under
 a salt that lives a day and a half. No cookie is set. A view is counted when

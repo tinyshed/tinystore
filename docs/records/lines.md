@@ -78,11 +78,11 @@ line joining it.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A line | up to 256 KiB; a longer line is dropped and counted |
-| A record's time | when its first line arrived |
-| Writes to the store | every second |
+|                     |                                                     |
+|---------------------|-----------------------------------------------------|
+| A line              | up to 256 KiB; a longer line is dropped and counted |
+| A record's time     | when its first line arrived                         |
+| Writes to the store | every second                                        |
 
 ## See also
 

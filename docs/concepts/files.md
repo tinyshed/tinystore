@@ -49,13 +49,13 @@ database's file, named `_tinystore_jobs…`. Tables whose names start with
 
 ## Growth and cleanup
 
-| Data | Removed by |
-|---|---|
-| expired KV keys | maintenance, up to 600,000 keys per minute |
-| finished jobs | when they finish; failed jobs after 7 days |
-| expired blobs | maintenance, with their files once no key uses them |
-| records | retention, 14 days by default, whole segments at a time |
-| metrics | retention, 30 days by default |
+| Data            | Removed by                                              |
+|-----------------|---------------------------------------------------------|
+| expired KV keys | maintenance, up to 600,000 keys per minute              |
+| finished jobs   | when they finish; failed jobs after 7 days              |
+| expired blobs   | maintenance, with their files once no key uses them     |
+| records         | retention, 14 days by default, whole segments at a time |
+| metrics         | retention, 30 days by default                           |
 
 SQLite reuses the pages of deleted data, so a file stops growing once the
 amount of live data is stable. It doesn't shrink after a deletion. Freed pages

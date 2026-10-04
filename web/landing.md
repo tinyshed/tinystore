@@ -106,22 +106,22 @@ series.Counter("signups_total").Inc()
 
 ## Engines
 
-| | | |
-|---|---|---|
-| [SQL](../docs/sql/README.md) | Relational state | The application's own SQL databases: tables from structs, checked migrations. |
-| [KV](../docs/kv/README.md) | Application state | Current state: typed buckets, counters, expiry, versions. |
-| [Jobs](../docs/jobs/README.md) | Durable background work | Work that runs at its time: retries, leases, repeats. |
-| [Blobs](../docs/blobs/README.md) | Files and objects | Files by path, checked when read whole. |
-| [Records](../docs/records/README.md) | Logs and events | Read by time, level and keys. |
-| [Metrics](../docs/metrics/README.md) | Time series | Samples kept bit for bit, answered exactly. |
+|                                      |                         |                                                                               |
+|--------------------------------------|-------------------------|-------------------------------------------------------------------------------|
+| [SQL](../docs/sql/README.md)         | Relational state        | The application's own SQL databases: tables from structs, checked migrations. |
+| [KV](../docs/kv/README.md)           | Application state       | Current state: typed buckets, counters, expiry, versions.                     |
+| [Jobs](../docs/jobs/README.md)       | Durable background work | Work that runs at its time: retries, leases, repeats.                         |
+| [Blobs](../docs/blobs/README.md)     | Files and objects       | Files by path, checked when read whole.                                       |
+| [Records](../docs/records/README.md) | Logs and events         | Read by time, level and keys.                                                 |
+| [Metrics](../docs/metrics/README.md) | Time series             | Samples kept bit for bit, answered exactly.                                   |
 
 ## Measured against what it replaces.
 
-| | |
-|---|---|
+|          |                                                                                     |
+|----------|-------------------------------------------------------------------------------------|
 | Services | The stack TinyStore replaces: Redis, PostgreSQL, VictoriaMetrics and files on disk. |
-| Batch | The queue lives in the application's SQL file; a job commits with its rows. |
-| Split | The queue has a file of its own, as by default; each file commits apart. |
+| Batch    | The queue lives in the application's SQL file; a job commits with its rows.         |
+| Split    | The queue has a file of its own, as by default; each file commits apart.            |
 
 Local Linux-container medians on a Ryzen 7 7700 with Go 1.27.1. These are
 workload comparisons, not universal wins: specialized KV engines read faster,

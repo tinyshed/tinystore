@@ -70,12 +70,12 @@ which makes it safe to copy with rsync or restic while the store runs. See
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Hash | SHA-256, computed during the upload |
-| Whole reads | checked |
-| Range reads | not checked |
-| Scrub | every file once per 30 days, at least 1 MiB per minute |
+|             |                                                        |
+|-------------|--------------------------------------------------------|
+| Hash        | SHA-256, computed during the upload                    |
+| Whole reads | checked                                                |
+| Range reads | not checked                                            |
+| Scrub       | every file once per 30 days, at least 1 MiB per minute |
 
 ## See also
 

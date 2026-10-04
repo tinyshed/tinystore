@@ -201,6 +201,14 @@ tasks:
       - cd web && bun install --frozen-lockfile && bun run build
       - docker build -f web/Dockerfile -t tinystore-site .
 
+  tables:
+    # the web tests fail on a table this would change
+    desc: Align every markdown table of the repository as an IDE formats it
+    dir: web
+    cmds:
+      - bun install --frozen-lockfile
+      - bun run tables
+
   readme:
     # the web tests fail when the README's parts are not what this writes
     desc: Write the landing page's headline, pitch, sample and engines from web/landing.md into the README

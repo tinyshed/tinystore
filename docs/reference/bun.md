@@ -187,13 +187,13 @@ await videos.work(async job => {
 
 `get` returns the job's state:
 
-| State | What it includes |
-|---|---|
-| `waiting` | `ahead`: how many jobs run before it |
-| `running` | `progress`: the value the handler reported last |
-| `failed` | |
-| `done` | only while `keepDone` keeps the key |
-| `cancelled` | |
+| State       | What it includes                                |
+|-------------|-------------------------------------------------|
+| `waiting`   | `ahead`: how many jobs run before it            |
+| `running`   | `progress`: the value the handler reported last |
+| `failed`    |                                                 |
+| `done`      | only while `keepDone` keeps the key             |
+| `cancelled` |                                                 |
 
 `watch` yields the state again at each change until the job ends. `ran` and
 `took` tell when the last finished run started and how many milliseconds it
@@ -325,11 +325,11 @@ A timer's `measure(fn)` returns what `fn` returns and throws what it throws,
 and records the time in both cases. `record(ms)` adds a duration that you
 measured yourself. At every flush, a timer writes three series:
 
-| Series | What it contains |
-|---|---|
-| `http_request_ms_count` | a counter of the measured calls |
-| `http_request_ms_sum` | a counter of their total time |
-| `http_request_ms_max` | the longest time since the previous flush |
+| Series                  | What it contains                          |
+|-------------------------|-------------------------------------------|
+| `http_request_ms_count` | a counter of the measured calls           |
+| `http_request_ms_sum`   | a counter of their total time             |
+| `http_request_ms_max`   | the longest time since the previous flush |
 
 The mean over a range is the increase of the sum divided by the increase of
 the count.

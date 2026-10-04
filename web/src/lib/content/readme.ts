@@ -12,6 +12,7 @@ import { parse } from './markdown'
 import { outline } from './outline'
 import { checkout, resolveFrom } from './repo'
 import type { Site } from './site'
+import { alignTables } from './tables'
 
 export const readmeFile = 'README.md'
 
@@ -196,7 +197,8 @@ function folded(label: string, body: string): string {
 	return `<details>\n<summary><b>${label}</b></summary>\n\n${body}\n\n</details>`
 }
 
-// the engines' table as it is written, each link rebased from web/ to the top of the repository, or to GitHub
+// the engines' table as it is written, each link rebased from web/ to the top of the repository, or to
+// GitHub, and aligned again for the links' new lengths
 function tableOf(nodes: RootContent[], landing: string, page: Readme['page']): string {
 	const table = nodes.find((node): node is Table => node.type === 'table')
 	const start = table?.position?.start.offset
@@ -209,11 +211,12 @@ function tableOf(nodes: RootContent[], landing: string, page: Readme['page']): s
 	visit(table, 'link', link => {
 		urls.add(link.url)
 	})
-	return [...urls].reduce(
+	const rebased = [...urls].reduce(
 		(text, url) =>
 			text.replaceAll(`](${url})`, `](${page === 'package' ? toGitHub(url) : fromTop(url)})`),
 		landing.slice(start, end),
 	)
+	return alignTables(rebased)
 }
 
 // a link written in web/landing.md, as it reads from the top of the repository

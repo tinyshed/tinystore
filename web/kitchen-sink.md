@@ -103,16 +103,16 @@ a block of plain text, kept as it is written
 
 A table with a header:
 
-| Engine | File | Writer |
-|---|---|---|
-| kv | `kv.db` | its own |
-| jobs | `jobs.db`, or the application's SQL file | shared when joined |
+| Engine | File                                     | Writer             |
+|--------|------------------------------------------|--------------------|
+| kv     | `kv.db`                                  | its own            |
+| jobs   | `jobs.db`, or the application's SQL file | shared when joined |
 
 A table without one:
 
-| | |
-|---|---|
-| Retention | `30 days` |
+|                  |             |
+|------------------|-------------|
+| Retention        | `30 days`   |
 | Snapshot timeout | `5 seconds` |
 
 ## An image

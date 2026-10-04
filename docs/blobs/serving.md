@@ -147,14 +147,14 @@ the first byte is written, and again when the file is committed.
 
 ## HTTP and blobs
 
-| HTTP | Blobs |
-|---|---|
-| `ETag`, `Content-Type`, `Content-Length`, `Last-Modified` | `etag`, the content type, `size`, `modified` |
-| `Range` | `get` with an offset and a length; in Go, `http.ServeContent` |
-| `If-None-Match: *` on `PUT` | `ifNoneMatch` |
-| `If-Match` on `PUT` or `DELETE` | `ifMatch` |
-| `412 Precondition Failed` | a conflict error |
-| `413 Content Too Large` | a limit error |
+| HTTP                                                      | Blobs                                                         |
+|-----------------------------------------------------------|---------------------------------------------------------------|
+| `ETag`, `Content-Type`, `Content-Length`, `Last-Modified` | `etag`, the content type, `size`, `modified`                  |
+| `Range`                                                   | `get` with an offset and a length; in Go, `http.ServeContent` |
+| `If-None-Match: *` on `PUT`                               | `ifNoneMatch`                                                 |
+| `If-Match` on `PUT` or `DELETE`                           | `ifMatch`                                                     |
+| `412 Precondition Failed`                                 | a conflict error                                              |
+| `413 Content Too Large`                                   | a limit error                                                 |
 
 > [!WARNING]
 > **Files uploaded by users**

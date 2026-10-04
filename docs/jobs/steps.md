@@ -118,10 +118,10 @@ and the loop continues from the first step that didn't finish.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| A step's name | 1 to 256 bytes, unique within the run |
-| A step's result | 1 MiB of JSON |
+|                 |                                       |
+|-----------------|---------------------------------------|
+| A step's name   | 1 to 256 bytes, unique within the run |
+| A step's result | 1 MiB of JSON                         |
 
 A result that can't be encoded as JSON fails with an invalid argument error
 (`ErrInvalid`, `InvalidError`).

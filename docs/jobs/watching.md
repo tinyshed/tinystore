@@ -98,13 +98,13 @@ job ends the watch at once.
 
 ## States
 
-| State | Meaning |
-|---|---|
-| `waiting` | in the queue; `ahead` says how many jobs run first |
-| `running` | a handler has it; `progress` is its last report |
-| `failed` | failed for good; `error` says why |
-| `done` | finished, while the queue remembers its key ([`keepDone`](keys.md#run-a-key-only-once)) |
-| `cancelled` | cancelled; only a watch shows this state, as its last entry |
+| State       | Meaning                                                                                 |
+|-------------|-----------------------------------------------------------------------------------------|
+| `waiting`   | in the queue; `ahead` says how many jobs run first                                      |
+| `running`   | a handler has it; `progress` is its last report                                         |
+| `failed`    | failed for good; `error` says why                                                       |
+| `done`      | finished, while the queue remembers its key ([`keepDone`](keys.md#run-a-key-only-once)) |
+| `cancelled` | cancelled; only a watch shows this state, as its last entry                             |
 
 In Go, the states are `jobs.Waiting`, `jobs.Running`, `jobs.Failed`,
 `jobs.Done` and `jobs.Cancelled`.
@@ -137,12 +137,12 @@ cancel changes nothing. A watch of the job ends with the `cancelled` state.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Jobs counted in `ahead` | up to 10,000 |
-| A progress report | 4 KiB of JSON |
-| A watcher's reads | at most 5 per second |
-| Running jobs per queue | unlimited, unless you set `maxRunning` |
+|                         |                                        |
+|-------------------------|----------------------------------------|
+| Jobs counted in `ahead` | up to 10,000                           |
+| A progress report       | 4 KiB of JSON                          |
+| A watcher's reads       | at most 5 per second                   |
+| Running jobs per queue  | unlimited, unless you set `maxRunning` |
 
 ## See also
 

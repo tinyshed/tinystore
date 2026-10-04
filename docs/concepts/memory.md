@@ -35,13 +35,13 @@ keeps are outside it.
 Without a budget, each engine still limits how much one call can take, and
 how many calls run at once:
 
-| Engine | Examples of limits |
-|---|---|
-| KV | a value 1 MiB; a `scan` page 1,000 keys or 4 MiB |
-| jobs | a value 1 MiB; a progress report 4 KiB |
-| blobs | 16 KiB of memory per upload, whatever the file's size |
-| SQL | `all` holds at most 64 MiB of rows |
-| records | an `append` 4 MiB; a page 10,000 records |
+| Engine  | Examples of limits                                            |
+|---------|---------------------------------------------------------------|
+| KV      | a value 1 MiB; a `scan` page 1,000 keys or 4 MiB              |
+| jobs    | a value 1 MiB; a progress report 4 KiB                        |
+| blobs   | 16 KiB of memory per upload, whatever the file's size         |
+| SQL     | `all` holds at most 64 MiB of rows                            |
+| records | an `append` 4 MiB; a page 10,000 records                      |
 | metrics | a query decodes at most 1,048,576 samples and returns 100,000 |
 
 The [limits and defaults](../reference/limits.md) page lists every limit.

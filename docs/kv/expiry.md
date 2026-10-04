@@ -134,11 +134,11 @@ runs with `state.Maintain(ctx)`.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Default TTL | none: keys don't expire unless you set one |
-| Sliding extension | at most once per 1/30 of the sliding time |
-| Expired keys deleted | up to 600,000 per minute |
+|                      |                                            |
+|----------------------|--------------------------------------------|
+| Default TTL          | none: keys don't expire unless you set one |
+| Sliding extension    | at most once per 1/30 of the sliding time  |
+| Expired keys deleted | up to 600,000 per minute                   |
 
 ## See also
 

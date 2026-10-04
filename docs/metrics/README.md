@@ -96,14 +96,14 @@ instead, which give an exact mean and maximum.
 
 ## Limits and defaults
 
-| | |
-|---|---|
-| Retention | 30 days |
+|                                |                                             |
+|--------------------------------|---------------------------------------------|
+| Retention                      | 30 days                                     |
 | Instruments write their values | every 15 seconds, and when the store closes |
-| Series | 100,000 |
-| Labels per series | 128 pairs |
-| Samples a query returns | 100,000 |
-| A query's snapshot | 5 seconds |
+| Series                         | 100,000                                     |
+| Labels per series              | 128 pairs                                   |
+| Samples a query returns        | 100,000                                     |
+| A query's snapshot             | 5 seconds                                   |
 
 Store options set these limits, and a query can only lower them for itself.
 

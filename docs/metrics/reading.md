@@ -72,12 +72,12 @@ failing, err := stats.Read(ctx, metrics.Range{
 })
 ```
 
-| Condition | Matches a series whose label |
-|---|---|
-| `match: { host: 'web-1' }` | equals the value |
-| `oneOf(…)` | equals one of the values |
-| `noneOf(…)` | equals none of the values, or is missing |
-| `prefix(…)` | starts with the text |
+| Condition                  | Matches a series whose label             |
+|----------------------------|------------------------------------------|
+| `match: { host: 'web-1' }` | equals the value                         |
+| `oneOf(…)`                 | equals one of the values                 |
+| `noneOf(…)`                | equals none of the values, or is missing |
+| `prefix(…)`                | starts with the text                     |
 
 All conditions must match. A query needs a name, a `match`, a `oneOf` or a
 `prefix` to find its series. `noneOf` alone is rejected, because it would have
@@ -115,12 +115,12 @@ reaches one, it fails with a limit error that names the limit, how much the
 query wanted and what the limit is. It never returns a smaller answer
 silently.
 
-| | |
-|---|---|
-| Series per query | 1,000 |
-| Bytes read | 16 MiB |
-| Samples decoded | 1,048,576 |
-| Samples returned | 100,000 |
+|                  |           |
+|------------------|-----------|
+| Series per query | 1,000     |
+| Bytes read       | 16 MiB    |
+| Samples decoded  | 1,048,576 |
+| Samples returned | 100,000   |
 
 A query can lower these limits for itself. Raise them in the store's options.
 

@@ -21,20 +21,20 @@ dated reports behind the decisions in
 Built, each to its README, which states its contracts and limits, and its
 design document:
 
-| | What it is | Contract | Design |
-|---|---|---|---|
-| root | the directory and its lifecycle: `Open` under the lock, `Close`, `Claim`, `Attach`, `Logger`, `Now`, `Every`, the memory budget, `Snapshot`, `Dir` | [doc.go](doc.go) | [architecture.md][design-architecture] |
-| `codec/` | 1..240 ordered samples to a checked body, every bit kept | [format.md][design-format] | [metrics.md][design-metrics] |
-| `metrics/` | samples, exact reads, streams and aggregates, sealing, retention, instruments | [README](metrics/README.md) | [metrics.md][design-metrics] |
-| `records/` | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor | [README](records/README.md) | [records.md][design-records] |
-| `sqldb/` | the application's SQL databases, tables from structs, checked migrations | [README](sqldb/README.md) | [sqldb.md][design-sqldb] |
-| `kv/` | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, quotas of several windows, answers kept once a key | [README](kv/README.md) | [kv.md][design-kv] |
-| `jobs/` | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running, steps a run keeps across its attempts | [README](jobs/README.md) | [jobs.md][design-jobs] |
-| `blobs/` | objects by path, inline or a file each, checked whole reads, a scrub | [README](blobs/README.md) | [blobs.md][design-blobs] |
-| `backup/` | a snapshot as one checked zip, restored before `Open` | [backup.go](backup/backup.go) | [architecture.md][design-architecture] |
-| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens, a Go program's own store shared in one call; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md) | [server.md][design-server] |
-| `sdk/js`, `sdk/python` | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`) | [Bun and Node](docs/reference/bun.md), [Python](docs/reference/python.md) | [sdk.md][design-sdk], [server.md][design-server] |
-| `web/` | the docs as a site: every page prerendered from `docs/`, served by Bun into a TinyStore of its own, its views and readers' events kept there (`task web`) | [web/AGENTS.md](web/AGENTS.md) | the `docs` skill |
+|                            | What it is                                                                                                                                                                                                      | Contract                                                                  | Design                                           |
+|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------|--------------------------------------------------|
+| root                       | the directory and its lifecycle: `Open` under the lock, `Close`, `Claim`, `Attach`, `Logger`, `Now`, `Every`, the memory budget, `Snapshot`, `Dir`                                                              | [doc.go](doc.go)                                                          | [architecture.md][design-architecture]           |
+| `codec/`                   | 1..240 ordered samples to a checked body, every bit kept                                                                                                                                                        | [format.md][design-format]                                                | [metrics.md][design-metrics]                     |
+| `metrics/`                 | samples, exact reads, streams and aggregates, sealing, retention, instruments                                                                                                                                   | [README](metrics/README.md)                                               | [metrics.md][design-metrics]                     |
+| `records/`                 | logs and events, a logger of the console and the store, another program's lines, paged reads, a follow cursor                                                                                                   | [README](records/README.md)                                               | [records.md][design-records]                     |
+| `sqldb/`                   | the application's SQL databases, tables from structs, checked migrations                                                                                                                                        | [README](sqldb/README.md)                                                 | [sqldb.md][design-sqldb]                         |
+| `kv/`                      | buckets, counters, branches, expiry, versions, configs hot in every process, a GCRA limiter, quotas of several windows, answers kept once a key                                                                 | [README](kv/README.md)                                                    | [kv.md][design-kv]                               |
+| `jobs/`                    | queues ordered by time, leases, retries, repeats, a Work loop, where a job is and a watch to its end, its last run, a bound on those running, steps a run keeps across its attempts                             | [README](jobs/README.md)                                                  | [jobs.md][design-jobs]                           |
+| `blobs/`                   | objects by path, inline or a file each, checked whole reads, a scrub                                                                                                                                            | [README](blobs/README.md)                                                 | [blobs.md][design-blobs]                         |
+| `backup/`                  | a snapshot as one checked zip, restored before `Open`                                                                                                                                                           | [backup.go](backup/backup.go)                                             | [architecture.md][design-architecture]           |
+| `server/`, `cmd/tinystore` | every engine over one protocol: a sidecar, a private child, a remote server with TLS and tokens, a Go program's own store shared in one call; a person's `status`, `logs` and `serve`, and an agent's MCP tools | [wire.md](docs/wire.md)                                                   | [server.md][design-server]                       |
+| `sdk/js`, `sdk/python`     | the Bun and Node client and the Python one, tested against every vector and a real `tinystore serve` (`task sdk`)                                                                                               | [Bun and Node](docs/reference/bun.md), [Python](docs/reference/python.md) | [sdk.md][design-sdk], [server.md][design-server] |
+| `web/`                     | the docs as a site: every page prerendered from `docs/`, served by Bun into a TinyStore of its own, its views and readers' events kept there (`task web`)                                                       | [web/AGENTS.md](web/AGENTS.md)                                            | the `docs` skill                                 |
 
 [design]: https://github.com/tinyshed/research/tree/main/tinystore/design
 [design-architecture]: https://github.com/tinyshed/research/blob/main/tinystore/design/architecture.md
@@ -77,33 +77,33 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path                 | What it is                                                                    |
-|----------------------|-------------------------------------------------------------------------------|
-| `codec/`             | the block codec and the payload format. Knows samples and bytes, nothing else |
-| `metrics/`           | the metrics API and its registry, head, groups, query and retention           |
-| `sqldb/`             | the application's SQL databases: tables from structs, checked migrations, typed reads and writes |
-| `records/`           | logs and events: a head, event-time segments, paged reads, a follow cursor    |
-| `kv/`                | the application's current state: typed buckets, branches, expiry, versions    |
-| `jobs/`              | work that runs at its time: queues ordered by time, leases, retries, repeats  |
-| `blobs/`             | the application's files: objects by path, inline or a file each, checked reads |
-| `backup/`            | every engine's file in one checked zip, and its restore before `Open`         |
-| `internal/sqlite/`   | file handles, read/write transactions and checked migrations                  |
-| `internal/admission/` | an engine's open gate and the slots that bound its concurrent work          |
-| `internal/dirlock/`  | the directory's `LOCK`, one store a directory, per platform                   |
-| `internal/term/`     | whether a file is a terminal that shows colours, for a logger's console lines |
-| `internal/dbstat/`   | a closed file's pages divided among its tables and indexes, for measurements  |
-| `internal/release/`  | what a release makes: its tags, binaries, archives, npm packages, wheels, notes |
-| `tools/`             | a second module pinning developer tools. Two files, never hand-edited         |
-| `server/`            | a module of its own: the store served to other processes, sessions, listeners, handlers |
-| `server/wire/`       | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors |
-| `server/reach/`      | the Go client of a directory's server, found through `SERVE` and proven, for the tool |
-| `cmd/tinystore/`     | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, `backup`, `restore`, and `migrate` and `schema` for sqldb |
-| `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module |
-| `docs/`              | the guides, one page per feature in Go, Bun and Python, and the wire protocol; `README.md` is their table of contents and the site's sidebar |
-| `web/`               | the docs site: SvelteKit prerendering `docs/`, and its Bun server under `server/`; `web/go.mod` keeps it out of the Go module |
-| `examples/`          | programs using the public API, built and tested with the module               |
-| `.github/workflows/` | the authoritative clean builds                                                |
-| `.agents/skills/`    | how the recurring work is done; `.claude/skills/` points to it                |
+| Path                     | What it is                                                                                                                                   |
+|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `codec/`                 | the block codec and the payload format. Knows samples and bytes, nothing else                                                                |
+| `metrics/`               | the metrics API and its registry, head, groups, query and retention                                                                          |
+| `sqldb/`                 | the application's SQL databases: tables from structs, checked migrations, typed reads and writes                                             |
+| `records/`               | logs and events: a head, event-time segments, paged reads, a follow cursor                                                                   |
+| `kv/`                    | the application's current state: typed buckets, branches, expiry, versions                                                                   |
+| `jobs/`                  | work that runs at its time: queues ordered by time, leases, retries, repeats                                                                 |
+| `blobs/`                 | the application's files: objects by path, inline or a file each, checked reads                                                               |
+| `backup/`                | every engine's file in one checked zip, and its restore before `Open`                                                                        |
+| `internal/sqlite/`       | file handles, read/write transactions and checked migrations                                                                                 |
+| `internal/admission/`    | an engine's open gate and the slots that bound its concurrent work                                                                           |
+| `internal/dirlock/`      | the directory's `LOCK`, one store a directory, per platform                                                                                  |
+| `internal/term/`         | whether a file is a terminal that shows colours, for a logger's console lines                                                                |
+| `internal/dbstat/`       | a closed file's pages divided among its tables and indexes, for measurements                                                                 |
+| `internal/release/`      | what a release makes: its tags, binaries, archives, npm packages, wheels, notes                                                              |
+| `tools/`                 | a second module pinning developer tools. Two files, never hand-edited                                                                        |
+| `server/`                | a module of its own: the store served to other processes, sessions, listeners, handlers                                                      |
+| `server/wire/`           | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors                                                              |
+| `server/reach/`          | the Go client of a directory's server, found through `SERVE` and proven, for the tool                                                        |
+| `cmd/tinystore/`         | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, `backup`, `restore`, and `migrate` and `schema` for sqldb |
+| `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module                                  |
+| `docs/`                  | the guides, one page per feature in Go, Bun and Python, and the wire protocol; `README.md` is their table of contents and the site's sidebar |
+| `web/`                   | the docs site: SvelteKit prerendering `docs/`, and its Bun server under `server/`; `web/go.mod` keeps it out of the Go module                |
+| `examples/`              | programs using the public API, built and tested with the module                                                                              |
+| `.github/workflows/`     | the authoritative clean builds                                                                                                               |
+| `.agents/skills/`        | how the recurring work is done; `.claude/skills/` points to it                                                                               |
 
 The first engine keeps its implementation in one package; split it only when
 a dependency boundary needs a package, not to mirror the execution steps:
@@ -390,16 +390,16 @@ payload, and bytes a sample in a real file.
 This file holds what gets broken: rules, invariants and traps. Read it before
 changing something, not to look something up.
 
-|                                              |                                                                  |
-|----------------------------------------------|------------------------------------------------------------------|
-| [docs/README.md](docs/README.md)             | the guides: what each engine does for its user, in Go, Bun and Python |
-| [GATES.md](GATES.md) | every promise and the test that fails when it breaks, by engine |
-| each package's README                        | what it promises as built: its contracts, bounds and errors      |
-| [metrics/README.md](metrics/README.md)       | the implemented metrics API, invariants and a runnable example   |
-| [docs/wire.md](docs/wire.md)                 | the wire protocol's bytes: frames, credit, MessagePack, errors   |
-| [web/AGENTS.md](web/AGENTS.md)               | the docs site: how a file becomes a page, the server, its analytics |
-| research's [tinystore/design][design]        | why each engine has its shape, as designed: the runtime, metrics and [its exact aggregates][design-aggregates], the format, every engine, the server, the SDKs' vocabulary |
-| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions |
+|                                                                               |                                                                                                                                                                            |
+|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [docs/README.md](docs/README.md)                                              | the guides: what each engine does for its user, in Go, Bun and Python                                                                                                      |
+| [GATES.md](GATES.md)                                                          | every promise and the test that fails when it breaks, by engine                                                                                                            |
+| each package's README                                                         | what it promises as built: its contracts, bounds and errors                                                                                                                |
+| [metrics/README.md](metrics/README.md)                                        | the implemented metrics API, invariants and a runnable example                                                                                                             |
+| [docs/wire.md](docs/wire.md)                                                  | the wire protocol's bytes: frames, credit, MessagePack, errors                                                                                                             |
+| [web/AGENTS.md](web/AGENTS.md)                                                | the docs site: how a file becomes a page, the server, its analytics                                                                                                        |
+| research's [tinystore/design][design]                                         | why each engine has its shape, as designed: the runtime, metrics and [its exact aggregates][design-aggregates], the format, every engine, the server, the SDKs' vocabulary |
+| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions                                                                                                            |
 
 What a user of TinyStore reads belongs in a guide in `docs/`, what a package
 promises in its README, and a dated measurement round in tinyshed/research
@@ -503,6 +503,9 @@ would be charging to somebody else's binary.
 - **No file-level `//nolint`.** One line with its reason, or a helper that owns
   the conversion once.
 - A test file is named after the file it tests: `head.go`, `head_test.go`.
+- **A markdown table is aligned**, its cells padded so that the pipes line up
+  as an IDE formats one. `task tables` aligns them, and `task web` fails on
+  one that is not.
 - **A comment that restates its declaration is worse than none.** It costs a
   line, it ages on its own, and it teaches the reader that comments here can be
   skipped. When the name and the signature say it, write nothing. revive's
@@ -591,6 +594,7 @@ task sdk              # both SDKs' checks and suites, against a tinystore built 
 task web              # the docs site's checks, tests and build
 task web:dev          # the docs site, reloading as docs/ changes
 task readme           # the README's headline, pitch, sample and engines, from web/landing.md
+task tables           # every markdown table aligned, as an IDE formats one
 task race:linux       # the race detector in a Linux container, for a host without cgo
 task sdk:linux        # both SDKs' suites in a Linux container
 ```
