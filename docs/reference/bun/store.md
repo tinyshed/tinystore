@@ -44,6 +44,17 @@ interface Status {
 
 What a server is, as its WELCOME said it to this store's connection.
 
+## BackupOptions
+
+```ts
+interface BackupOptions {
+    /** files of the application's, by their paths inside the store's directory */
+    files?: readonly string[] | undefined
+}
+```
+
+What `store.backup` keeps beside the engines' files.
+
 ## ConnectOptions
 
 ```ts
@@ -96,7 +107,7 @@ nothing.
 ### Store.backup
 
 ```ts
-backup(path: string): Promise<void>
+backup(path: string, options?: BackupOptions): Promise<void>
 ```
 
 Writes a backup of the whole store to a zip at path while the store keeps
@@ -104,6 +115,10 @@ working, as `tinystore backup` does: every engine's file, with its size
 and checksum, which `tinystore restore` checks. The zip is written beside
 path and renamed into place once whole, so a backup that fails leaves no
 zip. It needs an admin connection; a remote server sends the zip over it.
+
+A backup holds no file but the engines' unless `files` names it: a file
+of the application's inside the store's directory, such as a key kept
+beside the data, `{ files: ['secret.key'] }`.
 
 ### Store.close
 

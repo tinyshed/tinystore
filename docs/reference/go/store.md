@@ -2,6 +2,21 @@
 
 Every public type, function and constant of the store in `github.com/tinyshed/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md) and [Python](../python/store.md) pages list the same API.
 
+## LimitMemory
+
+```go
+const (
+	LimitMemory    = "store memory"      // what one call would hold at once
+	LimitMemoryNow = "store memory, now" // what the calls running hold together
+)
+```
+
+LimitError is a limit a call reached, named: the bound, what the call would have taken of it, what it held included, and the bound's size, so that a caller can say which limit to raise or how much less to ask for:
+
+	resource limit: decoded samples: 120000 past 100000
+
+errors.Is finds ErrLimit through it, and Kind, an engine's own limit, when it has one. The names of the store's own limits, which a LimitError's Name holds.
+
 ## ErrInvalid
 
 ```go
@@ -19,6 +34,16 @@ var (
 ```
 
 Every engine wraps these, so errors.Is means the same in all of them.
+
+## FromCgroup
+
+```go
+func FromCgroup(fraction float64) int64
+```
+
+FromCgroup is fraction of the memory the process's container may use, for Options.Memory: cgroup v2's memory.max, or v1's memory.limit\_in\_bytes. It is 0, no budget, outside Linux and when the container sets no limit.
+
+	tinystore.Options{Memory: tinystore.FromCgroup(0.5)}  // half of a 32 MiB container: 16 MiB
 
 ## SnapshotPath
 
@@ -46,12 +71,6 @@ type LimitError struct {
 	Kind   error // ErrLimit when nil
 }
 ```
-
-LimitError is a limit a call reached, named: the bound, what the call would have taken of it, what it held included, and the bound's size, so that a caller can say which limit to raise or how much less to ask for:
-
-	resource limit: decoded samples: 120000 past 100000
-
-errors.Is finds ErrLimit through it, and Kind, an engine's own limit, when it has one.
 
 ### LimitError.Error
 
@@ -104,6 +123,11 @@ type Options struct {
 	// Memory bounds the bytes that all engines' in-flight work holds at once;
 	// zero leaves each engine to its own per-call limits.
 	Memory int64
+
+	// Readers bounds the reader connections each engine's file opens under
+	// load, half a MiB each; zero leaves each engine its own count. A reader
+	// beyond one closes after a minute unused, whatever the bound.
+	Readers int
 
 	// SelfMetrics periodically writes available engine reports into an opened
 	// metrics engine. Manual stores call FlushSelfMetrics themselves.
@@ -296,6 +320,14 @@ func (s *Store) Memory() MemoryUsage
 ```go
 func (s *Store) Now() time.Time
 ```
+
+### Store.Readers
+
+```go
+func (s *Store) Readers(want int) int
+```
+
+Readers is how many reader connections an engine that wants want opens: want, or Options.Readers when that is fewer.
 
 ### Store.Reserve
 

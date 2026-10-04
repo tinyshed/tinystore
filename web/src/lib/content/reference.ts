@@ -39,6 +39,8 @@ export interface Item {
 interface Sources {
 	/** the Go package's directory, '' for the root's tinystore */
 	go: string
+	/** the engine's other Go packages, whose names the page writes with theirs */
+	goAlso?: string[]
 	/** sdk/js/src modules, in the order the page lists them */
 	bun: string[]
 	/** sdk/python/src/tinystore modules */
@@ -49,7 +51,7 @@ const sources: Record<string, Sources> = {
 	store: {
 		go: '',
 		bun: ['store', 'clock', 'errors', 'handles', 'cancel', 'time', 'wire/codec'],
-		python: ['store', 'clock', 'errors', '_page'],
+		python: ['store', 'clock', 'errors', 'limits', '_page'],
 	},
 	sql: { go: 'sqldb', bun: ['sql'], python: ['sql'] },
 	kv: {
@@ -61,6 +63,7 @@ const sources: Record<string, Sources> = {
 	blobs: { go: 'blobs', bun: ['blobs'], python: ['blobs'] },
 	records: {
 		go: 'records',
+		goAlso: ['records/console'],
 		bun: ['records', 'logger', 'console', 'trace'],
 		python: ['records', '_console'],
 	},
@@ -82,7 +85,10 @@ export function apiPages(root = checkout()): ApiPage[] {
 		return apiLanguages.map(language => {
 			const items =
 				language === 'go'
-					? goItems(root, source.go)
+					? [
+							...goItems(root, source.go),
+							...(source.goAlso ?? []).flatMap(pkg => named(goItems(root, pkg), pkg)),
+						]
 					: language === 'python'
 						? pythonItems(root, source.python)
 						: bun(source.bun)
@@ -180,14 +186,20 @@ function noun(language: ApiLanguage): string {
 
 function packageOf(language: ApiLanguage, source: Sources): string {
 	if (language === 'go') {
-		return `\`github.com/tinyshed/tinystore${source.go === '' ? '' : `/${source.go}`}\``
+		const paths = [source.go, ...(source.goAlso ?? [])].map(
+			pkg => `\`github.com/tinyshed/tinystore${pkg === '' ? '' : `/${pkg}`}\``,
+		)
+		return paths.join(' and ')
 	}
 	return language === 'bun' ? '`@tinyshed/tinystore`' : '`tinystore`'
 }
 
 function sourceOf(language: ApiLanguage, source: Sources): string {
 	if (language === 'go') {
-		return source.go === '' ? 'the root package' : `${source.go}/`
+		const dirs = [source.go, ...(source.goAlso ?? [])].map(pkg =>
+			pkg === '' ? 'the root package' : `${pkg}/`,
+		)
+		return dirs.join(' and ')
 	}
 	if (language === 'bun') {
 		return source.bun.map(module => `sdk/js/src/${module}.ts`).join(', ')
@@ -223,6 +235,16 @@ export function escapeProse(markdown: string): string {
 }
 
 // --- Go and Python, by their own programs ------------------------------------
+
+/** A sub-package's items, each named as a program writes it: console.Handler. */
+function named(items: Item[], pkg: string): Item[] {
+	const prefix = `${pkg.slice(pkg.lastIndexOf('/') + 1)}.`
+	return items.map(item => ({
+		...item,
+		name: prefix + item.name,
+		members: item.members?.map(member => ({ ...member, name: prefix + member.name })),
+	}))
+}
 
 function goItems(root: string, pkg: string): Item[] {
 	const importPath = `github.com/tinyshed/tinystore${pkg === '' ? '' : `/${pkg}`}`

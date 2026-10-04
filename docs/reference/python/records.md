@@ -183,15 +183,22 @@ def handler(
     hide_stream: bool = False,
     to: TextIO | None = None,
     redact: Iterable[str] = (),
+    keep_url_passwords: bool = False,
+    replace: Callable[[str, Any], Any] | None = None,
+    env: FromEnv | bool = True,
+    source: bool = False,
 ) -> Handler: ...
 ```
 
 A logging.Handler whose lines reach the console as they are logged and the stream once a second.
 
 It never makes the logger wait. console is pretty on a terminal and
-JSON otherwise when None, "off" for none; redact hides the values of
-fields of those names, at any depth, the case ignored, in the store
-and on the console.
+JSON otherwise when None, "off" for none. redact hides, in the store
+and on the console, the fields whose keys name a secret, "api key"
+hiding api_key and apiKey, and tinystore.SECRETS the usual ones; a
+URL's password is hidden unless keep_url_passwords. LOG_LEVEL,
+LOG_FORMAT and LOG_TIME win over the arguments, or those after env's
+prefix, and env=False reads none; source adds where a line was logged.
 
 ### Records.damaged
 
@@ -215,6 +222,14 @@ Removes a damaged row, a repair an admin connection alone may make.
 async def stop() -> None: ...
 ```
 
+## SECRETS
+
+```python
+SECRETS = ('password', 'passwd', 'passphrase', 'secret', 'token', 'credential', 'credentials', 'authorization', 'cookie', 'api key', 'private key', 'secret key', 'access key', 'signing key', 'encryption key', 'connection string', 'dsn')
+```
+
+The names redact takes to hide the usual secrets, as Go's console.Secrets and Bun's secrets.
+
 ## ConsoleHandler
 
 ```python
@@ -227,8 +242,12 @@ A logging.Handler of the console alone: each record is written as it is logged, 
 It writes the lines store.records.handler writes, which keeps them too:
 pretty on a terminal and one JSON object a line otherwise, on stderr
 unless to says where. LOG_LEVEL, LOG_FORMAT and LOG_TIME win over the
-arguments. A record's logger name is its context, its extra fields its
-attributes, an exception its traceback under error.
+arguments, or the variables of env's prefix, and env=False reads none. A
+record's logger name is its context, its extra fields its attributes, an
+exception its traceback under error. redact hides the fields whose keys
+name a secret, SECRETS the usual ones, and a URL's password is hidden
+unless keep_url_passwords; replace changes each value first; source adds
+where the line was logged.
 
 ### ConsoleHandler.emit
 
@@ -248,12 +267,16 @@ def handler(
     hide_stream: bool = False,
     to: TextIO | None = None,
     redact: Iterable[str] = (),
+    keep_url_passwords: bool = False,
+    replace: Callable[[str, Any], Any] | None = None,
+    env: FromEnv | bool = True,
+    source: bool = False,
 ) -> ConsoleHandler: ...
 ```
 
 A logging.Handler of the console alone, for a program that wants the logger and not the records.
 
-    logging.basicConfig(handlers=[tinystore.handler("app", redact=["password"])], level=logging.INFO)
+    logging.basicConfig(handlers=[tinystore.handler("app", redact=tinystore.SECRETS)], level=logging.INFO)
 
 store.records.handler(stream) in its place keeps every line too.
 

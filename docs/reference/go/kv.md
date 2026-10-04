@@ -221,7 +221,7 @@ Config is an application's settings, a value of T made of layers in the order gi
 
 Get reads it from memory. Update checks a change and keeps it field by field in kv.db, so that it outlives a restart, and every handle on the config sees it at once, in this process and through the server; Reset gives a field back to the layers under it.
 
-T is a struct. A field's path is its JSON name, a nested struct's below its own: limits.rps. A field tagged \`env:"NAME"\` reads that variable; another reads the prefix and its path in upper snake case, APP\_LIMITS\_RPS. A field tagged \`secret:"true"\` comes from the layers alone: Update refuses it and Sources hides it. A field tagged \`required:"true"\` is ErrInvalid at OpenConfig while the layers leave it its zero value.
+T is a struct. A field's path is its JSON name, a nested struct's below its own: limits.rps. A field tagged \`env:"NAME"\` reads that variable; another reads the prefix and its path in upper snake case, APP\_LIMITS\_RPS, or the file that APP\_LIMITS\_RPS\_FILE names. A field tagged \`fixed:"true"\` comes from the layers alone: Update refuses it, and Sources shows where it came from. A field tagged \`secret:"true"\` is fixed, and Sources hides it. A field tagged \`required:"true"\` is ErrInvalid at OpenConfig while the layers leave it its zero value.
 
 ### OpenConfig
 
@@ -261,7 +261,7 @@ Sources says where each field's value came from, in the order of T's fields, and
 func (c *Config[T]) Update(ctx context.Context, change func(*T)) error
 ```
 
-Update changes the config: change gets a copy of it, and each field it changes is checked, kept, and seen by every handle at once. A change that fails Validate, sets a secret or empties a required field is ErrInvalid and keeps nothing.
+Update changes the config: change gets a copy of it, and each field it changes is checked, kept, and seen by every handle at once. A change that fails Validate, sets a fixed field or a secret, or empties a required field is ErrInvalid and keeps nothing.
 
 ### Config.Watch
 
@@ -296,6 +296,14 @@ func FromEnv(prefix string, files ...string) ConfigOption
 FromEnv is a layer of the environment: each field from its variable, files first, as a dotenv library reads them, and the process's own over them. A file that is not there is skipped.
 
 	PORT=3000  ORIGINS=a.com,b.com  TIMEOUT=1h30m  LIMITS={"rps":5}
+
+### FromLookup
+
+```go
+func FromLookup(prefix string, lookup func(name string) (string, bool)) ConfigOption
+```
+
+FromLookup is a layer of the environment read through lookup alone, the process's own variables left as they are, which suits a host that passes its environment in and a test that sets its own.
 
 ### Validate
 

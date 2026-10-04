@@ -2,6 +2,14 @@
 
 Every public type, function and constant of the Blobs engine in `github.com/tinyshed/tinystore/blobs`, generated from its source. The [Blobs guide](../../blobs/README.md) explains how to use them, and the [Bun and Node](../bun/blobs.md) and [Python](../python/blobs.md) pages list the same API.
 
+## LimitObjectBytes
+
+```go
+const LimitObjectBytes = "bytes of an object, the bucket's MaxSize"
+```
+
+the engine's own bounds and schedule LimitObjectBytes is the name a LimitError holds for an object past its bucket's MaxSize.
+
 ## ErrOutcomeUnknown
 
 ```go

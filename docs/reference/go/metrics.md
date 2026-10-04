@@ -2,6 +2,21 @@
 
 Every public type, function and constant of the Metrics engine in `github.com/tinyshed/tinystore/metrics`, generated from its source. The [Metrics guide](../../metrics/README.md) explains how to use them, and the [Bun and Node](../bun/metrics.md) and [Python](../python/metrics.md) pages list the same API.
 
+## LimitSeries
+
+```go
+const (
+	LimitSeries         = "matched series"
+	LimitBlocks         = "decoded blocks"
+	LimitPayloadBytes   = "fetched bytes"
+	LimitDecodedSamples = "decoded samples"
+	LimitOutputSamples  = "output samples"
+	LimitOutputBuckets  = "output buckets"
+)
+```
+
+The names of a query's budgets, which a LimitError's Name holds when one is spent.
+
 ## ErrInvalid
 
 ```go

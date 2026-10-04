@@ -1,24 +1,17 @@
 # Records API for Go
 
-Every public type, function and constant of the Records engine in `github.com/tinyshed/tinystore/records`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Python](../python/records.md) pages list the same API.
+Every public type, function and constant of the Records engine in `github.com/tinyshed/tinystore/records` and `github.com/tinyshed/tinystore/records/console`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Python](../python/records.md) pages list the same API.
 
-## HideStream
-
-```go
-const HideStream = hiddenStream(true)
-```
-
-HideStream leaves the stream out of a pretty line; the record keeps it.
-
-## Handler
+## LimitRecordBytes
 
 ```go
-func Handler(stream string, options ...HandlerOption) slog.Handler
+const (
+	LimitRecordBytes = "bytes of a record, a block's"
+	LimitAppendBytes = "bytes of records in one Append, a segment's; split it"
+)
 ```
 
-Handler is a logger's handler without a store: its lines go to the console alone, as Store.Handler writes them there, for a program that wants the logger and not the records. Opening the store later and calling its Handler instead keeps every line too.
-
-	slog.SetDefault(slog.New(records.Handler("app", records.Redact("password"))))
+The names of a record's limits, which a LimitError's Name holds.
 
 ## TraceOf
 
@@ -62,45 +55,6 @@ type Budget struct {
 ```
 
 Budget bounds one Scan before it starts: the blocks it may open, the bytes it may fetch and the records it may decode. Reaching it ends a page early rather than failing the read.
-
-## Console
-
-```go
-type Console int
-```
-
-Console says how a Handler writes its lines as they are logged. Without one they are pretty on a terminal and a JSON line otherwise.
-
-### ConsolePretty
-
-```go
-const (
-	// ConsolePretty writes a line for a person: 11:02:11.123 INFO  api  started  port=3000
-	ConsolePretty Console = iota + 1
-	// ConsoleJSON writes one JSON object a line, for a collector.
-	ConsoleJSON
-	// ConsoleOff writes nothing: the lines go to the store alone.
-	ConsoleOff
-)
-```
-
-## ConsoleTime
-
-```go
-type ConsoleTime int
-```
-
-ConsoleTime is how a pretty line shows its time; a JSON line always has it.
-
-### TimeClock
-
-```go
-const (
-	TimeClock ConsoleTime = iota + 1 // 11:02:11.123, the default
-	TimeFull                         // 2026-10-02 11:02:11.123 +03:00
-	TimeOff                          // none, where docker or journald stamp each line
-)
-```
 
 ## Cursor
 
@@ -195,40 +149,6 @@ JSON keeps value as it is; Append refuses it unless it is valid JSON.
 func String(key, value string) Field
 ```
 
-## HandlerOption
-
-```go
-type HandlerOption interface {
-	// contains filtered or unexported methods
-}
-```
-
-HandlerOption changes what a Handler does beside queueing its lines.
-
-### Level
-
-```go
-func Level(level slog.Leveler) HandlerOption
-```
-
-Level keeps a Handler's lines from level up, in the store and on the console; without it every line is kept.
-
-### Redact
-
-```go
-func Redact(names ...string) HandlerOption
-```
-
-Redact hides the values of fields with these names, in the store and on the console: a field whose key, or the part of a dotted key after its last dot, is one of them, the case ignored, and such a key at any depth of a JSON object. A line's message is not searched.
-
-### To
-
-```go
-func To(w io.Writer) HandlerOption
-```
-
-To writes the console lines to w instead of standard error.
-
 ## Maintenance
 
 ```go
@@ -301,15 +221,15 @@ type Printer struct {
 }
 ```
 
-Printer writes records as a Handler's console writes its lines: pretty for a person at a terminal, its levels in colour where the terminal shows them, and one JSON object a line otherwise, unless console says which. The tinystore command prints a store's records with one.
+Printer writes records as a logger's console writes its lines: pretty for a person at a terminal, its levels in colour where the terminal shows them, and one JSON object a line otherwise, unless format says which. The tinystore command prints a store's records with one.
 
 ### NewPrinter
 
 ```go
-func NewPrinter(w io.Writer, console Console) *Printer
+func NewPrinter(w io.Writer, format console.Format) *Printer
 ```
 
-NewPrinter prints to w, which is a terminal only when it is a file that is one. ConsoleOff prints nothing.
+NewPrinter prints to w, which is a terminal only when it is a file that is one. console.Off prints nothing.
 
 ### Printer.Print
 
@@ -512,16 +432,16 @@ Follow returns up to limit records of the sealed segments from after on: segment
 ### Store.Handler
 
 ```go
-func (s *Store) Handler(stream string, options ...HandlerOption) slog.Handler
+func (s *Store) Handler(stream string, options ...console.Option) slog.Handler
 ```
 
 Handler queues the application's log lines for stream and never blocks its caller: when the buffer is full a line is dropped and counted in Stats. Lines of the records engine itself are kept out of the store, or writing a log would log again.
 
 A line becomes a record named "log" whose body is the message. The attributes of logger.With are its context, who is speaking, and the call's are its attributes; a group's keys are written group.key, and a value is spelled as slog.JSONHandler spells it, an error as its message. A line logged with a context of WithTrace takes its trace and span.
 
-Each line is also written to standard error as it is logged, pretty on a terminal and one JSON object a line otherwise, as the Bun and Python loggers write theirs; the Console and ConsoleTime options, HideStream, To and LOG\_LEVEL, LOG\_FORMAT and LOG\_TIME change that. The engine's own lines reach the console from Info up, and never the store.
+Each line is also written to standard error as it is logged, as console.Handler writes it, and the options are console's: the format, the level, the fields to redact, the environment's names. The engine's own lines reach the console from Info up, and never the store.
 
-	slog.New(logs.Handler("api", records.ConsoleJSON, records.Redact("password", "token")))
+	slog.New(logs.Handler("api", console.JSON, console.Redact(console.Secrets...)))
 
 ### Store.Lines
 
@@ -577,4 +497,153 @@ func (s *Store) Stats() Stats
 type TraceID [16]byte
 ```
 
-<!-- Generated by task reference from records/. Edit the doc comments there, not this file. -->
+## console.AddSource
+
+```go
+const AddSource = addSource(true)
+```
+
+AddSource adds where each line was logged, as slog's handlers spell it: source={"function":"main.run","file":"/app/main.go","line":42}, which a pretty line shows as source=app/main.go:42.
+
+## console.HideStream
+
+```go
+const HideStream = hiddenStream(true)
+```
+
+HideStream leaves the stream out of a pretty line; a JSON line and the store keep it.
+
+## console.KeepURLPasswords
+
+```go
+const KeepURLPasswords = keptURLPasswords(true)
+```
+
+KeepURLPasswords leaves the password of a URL inside a value as it is. Without it, postgres://ann:hunter2@db/app is kept as postgres://ann:\[redacted]@db/app.
+
+## console.NoEnv
+
+```go
+const NoEnv = noEnv(true)
+```
+
+NoEnv reads no variable: what the code says is what the handler does.
+
+## console.Secrets
+
+```go
+var Secrets = []string{
+	"password", "passwd", "passphrase", "secret", "token", "credential", "credentials", "authorization", "cookie",
+	"api key", "private key", "secret key", "access key", "signing key", "encryption key",
+	"connection string", "dsn",
+}
+```
+
+Secrets is what Redact takes to hide the usual secrets. It hides a counter named like one too, token\_count among them.
+
+## console.Handler
+
+```go
+func Handler(stream string, options ...Option) slog.Handler
+```
+
+Handler writes a logger's lines to standard error, and keeps none.
+
+## console.Format
+
+```go
+type Format int
+```
+
+Format is how the console writes a line. Without one, lines are pretty on a terminal and JSON otherwise.
+
+### console.Pretty
+
+```go
+const (
+	Pretty Format = iota + 1 // 11:02:11.123 INFO  api  started  port=3000
+	JSON                     // one object a line, for a collector
+	Off                      // nothing: a store's handler still keeps each line
+)
+```
+
+## console.Option
+
+```go
+type Option interface {
+	// contains filtered or unexported methods
+}
+```
+
+Option changes a logger's lines: on the console, and in the store when the handler is a records store's.
+
+### console.FromEnv
+
+```go
+func FromEnv(prefix string) Option
+```
+
+FromEnv reads prefix\_LOG\_LEVEL, prefix\_LOG\_FORMAT and prefix\_LOG\_TIME, which win over the code. Without an environment option a handler reads LOG\_LEVEL, LOG\_FORMAT and LOG\_TIME, as FromEnv("") does.
+
+### console.FromLookup
+
+```go
+func FromLookup(prefix string, lookup func(name string) (string, bool)) Option
+```
+
+FromLookup reads the variables FromEnv names through lookup, the process's environment left alone.
+
+### console.Level
+
+```go
+func Level(level slog.Leveler) Option
+```
+
+Level keeps lines from level up; without it every line is kept.
+
+### console.Redact
+
+```go
+func Redact(names ...string) Option
+```
+
+Redact hides the values of fields whose keys name a secret, at any depth of a JSON value. A key names one when some of its words in a row, written together, are a name's: the words of DB\_PASSWORD, PasswordHash, api-key and APIKey are split at '\_', '-', '.', spaces and capitals, the case ignored. The message is not searched.
+
+	Redact("password", "api key")  hides  password, DB_PASSWORD, PasswordHash, api_key, apiKey, APIKEY
+	Redact("token")                hides  bot_token, token_count, and not tokens_used
+
+### console.ReplaceAttr
+
+```go
+func ReplaceAttr(replace func(groups []string, attr slog.Attr) slog.Attr) Option
+```
+
+ReplaceAttr changes or drops each attribute before it is kept and shown, as slog.HandlerOptions' does: groups are the attribute's groups, outermost first, and a zero Attr drops it. It is not called for the time, the level or the message.
+
+### console.To
+
+```go
+func To(w io.Writer) Option
+```
+
+To writes the lines to w instead of standard error.
+
+## console.Time
+
+```go
+type Time int
+```
+
+Time is how a pretty line shows its time; a JSON line always has it.
+
+### console.TimeClock
+
+```go
+const (
+	TimeClock Time = iota + 1 // 11:02:11.123, the default
+	TimeFull                  // 2026-10-02 11:02:11.123 +03:00
+	TimeOff                   // none, where docker or journald stamp each line
+)
+```
+
+<!-- Generated by task reference from records/ and records/console/. Edit the doc comments there, not this file. -->

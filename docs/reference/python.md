@@ -45,6 +45,7 @@ async with tinystore.connect("tls://db.internal:7070", token=token) as store:
 async with tinystore.open(directory, private=True, clock=datetime(2026, 10, 3, 9, tzinfo=UTC)) as store:
     await store.clock.advance("1h")  # keys expire and jobs come due without waiting
     await store.backup("backup.zip")  # every engine in one checked zip
+    await store.backup("backup.zip", files=["secret.key"])  # and a file of yours beside them
 ```
 
 `open` returns after the server has answered. If the server can't serve the
@@ -128,10 +129,13 @@ values that `update` stored override them all. A layer is a file's values, or
 Each field reads the variable with its path in upper case, after the prefix:
 `db.pool` reads `DB_POOL`, or `APP_DB_POOL` with `from_env("APP")`. A variable
 is read as the field's type: a number, `true`, a list such as `a.com,b.com`, or
-JSON. If it doesn't parse, `config` fails with `InvalidError`, which names the
-variable. In a dataclass, `url: str = tinystore.secret("DATABASE_URL")` reads
-its own variable and is never stored. A field without a default is required:
-if no layer gives it, `config` fails with `InvalidError`.
+JSON. If it doesn't parse, `config` fails with `InvalidError`, which names
+every variable that doesn't parse. `APP_DB_POOL_FILE` gives the field its
+file's text instead. In a dataclass, `url: str = tinystore.secret("DATABASE_URL")`
+reads its own variable and is never stored, and `addr: str = tinystore.fixed(":8080")`
+is set by the layers alone: `update` refuses it, and `sources()` shows where it
+came from. A field without a default is required: if no layer gives it,
+`config` fails with `InvalidError`.
 
 A quota counts a use in all its windows, or in none of them. Each window
 starts at a key's first use. `get` reads the windows without using anything,
@@ -292,8 +296,16 @@ stream out, or `to` to print somewhere else, such as `sys.stdout`. `LOG_LEVEL`,
 handler of events, such as one view per request, usually sets `"off"`, so it
 doesn't fill the program's log.
 
-`redact` hides the values of fields with those names, at any depth and in any
-case, both in the store and on the console.
+`redact` hides the values of fields whose keys name a secret, at any depth,
+both in the store and on the console. A key is split into words at `_`, `-`,
+`.`, spaces and capitals, so `"api key"` hides `api_key` and `apiKey`, and
+`"token"` hides `bot_token` but not `tokens_used`. `tinystore.SECRETS` holds the
+usual names: `redact=tinystore.SECRETS`. A password inside a URL is hidden in
+every value unless `keep_url_passwords=True`. `replace(key, value)` returns
+each field's value before it is hidden and kept, and `source=True` adds where
+each line was logged. `env=tinystore.from_env("MYAPP")` reads
+`MYAPP_LOG_LEVEL` and the rest in place of the bare names, and `env=False`
+reads no variable.
 
 To log to the console without a store, use a handler without one. Its
 children are the usual `logging` loggers:

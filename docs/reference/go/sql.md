@@ -406,6 +406,14 @@ ApplyNone opens a file only if it has applied every migration given, and applies
 
 A migration the file has not applied is ErrPending, and a file that is not there is not made.
 
+### Readers
+
+```go
+func Readers(n int) OpenOption
+```
+
+Readers is how many reader connections the database opens under load, eight unless it says, and fewer when the store's Options.Readers says; half a MiB each, and those beyond one close after a minute unused.
+
 ## Rows
 
 ```go
@@ -551,6 +559,14 @@ func Index(columns ...string) TableOption
 
 Index is an index named \&lt;table>\_\&lt;columns>.
 
+### IndexWhere
+
+```go
+func IndexWhere(where string, columns ...string) TableOption
+```
+
+IndexWhere is an index of the rows where holds, named \&lt;table>\_\&lt;columns>.
+
 ### NamedIndex
 
 ```go
@@ -590,6 +606,16 @@ func Unique(columns ...string) TableOption
 ```
 
 Unique is a unique index named \&lt;table>\_\&lt;columns>, not a table constraint. A later migration can then drop it without rebuilding the table.
+
+### UniqueWhere
+
+```go
+func UniqueWhere(where string, columns ...string) TableOption
+```
+
+UniqueWhere is a unique index of the rows where holds, named \&lt;table>\_\&lt;columns>: a promise about part of a table, such as one owner.
+
+	UniqueWhere("role = 'owner'", "role")  →  CREATE UNIQUE INDEX users_role ON users (role) WHERE role = 'owner';
 
 ## Tx
 

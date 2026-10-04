@@ -297,8 +297,25 @@ interface LoggerOptions {
     hideStream?: boolean
     /** where the console lines go: process.stderr when absent */
     to?: ConsoleOut
-    /** fields whose values are hidden, in the store and on the console, at any depth, the case ignored */
+    /**
+     * secrets whose fields are hidden, in the store and on the console, at any
+     * depth: a key hides its value when some of its words in a row, written
+     * together, are a name's, so 'api key' hides api_key and apiKey; `secrets`
+     * holds the usual ones
+     */
     redact?: readonly string[]
+    /** leaves a URL's password in a value as it is, which is otherwise hidden */
+    keepUrlPasswords?: boolean
+    /** changes each field's value before it is hidden, kept and shown */
+    replace?: (key: string, value: unknown) => unknown
+    /**
+     * where LOG_LEVEL, LOG_FORMAT and LOG_TIME are read, which win over the
+     * options: `fromEnv('APP')` reads APP_LOG_LEVEL and the rest, and false
+     * reads nothing; the bare names when absent
+     */
+    env?: FromEnv | false
+    /** adds where each line was logged: source={"function":…,"file":…,"line":…} */
+    source?: boolean
 }
 ```
 

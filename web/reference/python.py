@@ -25,7 +25,13 @@ def main() -> None:
     items = []
     for module in modules:
         tree = ast.parse((package / f"{module}.py").read_text(encoding="utf-8"))
-        items.extend(item(node) for node in tree.body if named(node) in public)
+        if module in public:
+            items.append(constants(module, tree))
+            continue
+        for at, node in enumerate(tree.body):
+            if named(node) in public:
+                following = tree.body[at + 1] if at + 1 < len(tree.body) else None
+                items.append(item(node, following))
     json.dump({"doc": "", "items": items}, sys.stdout, indent="\t", ensure_ascii=False)
     sys.stdout.write("\n")
 
@@ -53,13 +59,32 @@ def kept_by_store(package: Path) -> set[str]:
 def named(node: ast.stmt) -> str:
     if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
         return node.name
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        return node.targets[0].id
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return node.target.id
     return ""
 
 
-def item(node: ast.stmt) -> dict:
+def item(node: ast.stmt, following: ast.stmt | None) -> dict:
     if isinstance(node, ast.ClassDef):
         return klass(node)
+    if isinstance(node, ast.Assign | ast.AnnAssign):
+        return {"name": named(node), "code": ast.unparse(node), "doc": markdown(docstring_after(following))}
     return {"name": node.name, "code": signature(node), "doc": markdown(ast.get_docstring(node))}  # type: ignore[attr-defined]
+
+
+def docstring_after(node: ast.stmt | None) -> str | None:
+    """The string a module documents the assignment before it with."""
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+        return node.value.value
+    return None
+
+
+def constants(module: str, tree: ast.Module) -> dict:
+    """A module of constants the package exports whole, as tinystore.limits."""
+    lines = [ast.unparse(node) for node in tree.body if isinstance(node, ast.AnnAssign | ast.Assign)]
+    return {"name": module, "code": "\n".join(lines), "doc": markdown(ast.get_docstring(tree))}
 
 
 def klass(node: ast.ClassDef) -> dict:

@@ -624,6 +624,22 @@ It reads its own variable when given one, and is required without a default:
 
     url: str = secret("DATABASE_URL")
 
+## fixed
+
+```python
+def fixed(
+    default: Any = dataclasses.MISSING,
+    *,
+    variable: str | None = None,
+) -> Any: ...
+```
+
+A field the defaults, a file or the environment set alone: update refuses it, sources() says where it came from.
+
+It is required without a default:
+
+    addr: str = fixed(":8080")
+
 ## FromEnv
 
 ```python
@@ -684,8 +700,8 @@ async def update(change: Mapping[str, Any]) -> None: ...
 
 Changes the fields change names, at any depth: each one that changed is checked, kept, and seen at once.
 
-A change validate refuses, one of a secret, or one leaving a required field empty, is InvalidError and
-keeps nothing.
+A change validate refuses, one of a fixed field or a secret, or one leaving a required field empty, is
+InvalidError and keeps nothing.
 
 ### Config.reset
 

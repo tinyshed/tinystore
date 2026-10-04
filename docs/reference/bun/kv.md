@@ -721,10 +721,25 @@ class Setting<V> {
     readonly fallback: V | undefined
     readonly secret: boolean
     readonly variable: string | undefined
+    readonly fixed: boolean
 }
 ```
 
 A field of a config's defaults made by `secret` or `required`, in place of its value.
+
+## fixed
+
+```ts
+function fixed<V>(value: V | Setting<V>): Setting<V>
+```
+
+A field the defaults, a file or the environment set alone: update refuses
+it, and sources() shows where its value came from. It takes a default or
+another marker.
+
+```ts
+addr: fixed(':8080'), workers: fixed(required(Number))
+```
 
 ## secret
 
@@ -857,8 +872,8 @@ update(change: DeepPartial<T>): Promise<void>
 
 Changes the fields change names, at any depth; each one that changed is
 checked, kept, and seen by every store watching the config. A change the
-schema refuses, one of a secret, or one leaving a required field empty, is
-InvalidError and keeps nothing.
+schema refuses, one of a fixed field or a secret, or one leaving a required
+field empty, is InvalidError and keeps nothing.
 
 ### Config.reset
 

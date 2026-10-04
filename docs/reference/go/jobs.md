@@ -2,6 +2,17 @@
 
 Every public type, function and constant of the Jobs engine in `github.com/tinyshed/tinystore/jobs`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md) and [Python](../python/jobs.md) pages list the same API.
 
+## LimitValueBytes
+
+```go
+const (
+	LimitValueBytes = "bytes of a job's value"
+	LimitStepBytes  = "bytes of a step's answer"
+)
+```
+
+The names of a job's limits, which a LimitError's Name holds.
+
 ## ErrCancelled
 
 ```go

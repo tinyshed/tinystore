@@ -49,6 +49,7 @@ await using test = await open(dir, { private: true, clock: new Date('2026-10-03T
 await test.clock.advance('1h')                           // keys expire and jobs come due without waiting
 
 await store.backup('backup.zip')                         // every engine in one checked zip
+await store.backup('backup.zip', { files: ['secret.key'] }) // and a file of yours beside them
 ```
 
 `open` returns after the server has answered. If the server can't serve the
@@ -133,9 +134,12 @@ Each field reads the variable with its path in upper snake case, after the
 prefix: `db.pool` reads `DB_POOL`, or `APP_DB_POOL` with `fromEnv('APP')`. A
 variable is read as the default's type: a number, `true`, a list such as
 `a.com,b.com`, or JSON. If it doesn't parse, `config` fails with
-`InvalidError`, which names the variable. `secret('DATABASE_URL')` reads its
-own variable and is never stored. `secret` without a default and `required()`
-make a field that a layer has to give, or `config` fails with `InvalidError`.
+`InvalidError`, which names every variable that doesn't parse. `APP_DB_POOL_FILE`
+gives the field its file's text instead. `secret('DATABASE_URL')` reads its
+own variable and is never stored. `fixed(':8080')` makes a field that only the
+layers set: `update` refuses it, and `sources()` shows where it came from.
+`secret` without a default and `required()` make a field that a layer has to
+give, or `config` fails with `InvalidError`.
 
 A quota counts a use in all its windows, or in none of them. Each window
 starts at a key's first use. `get` reads the windows without using anything,
@@ -288,8 +292,15 @@ the stream out, or `to` to print somewhere else, such as `process.stdout`.
 options. A logger of events, such as one view per request, usually sets
 `'off'`, so it doesn't fill the program's log.
 
-`redact` hides the values of fields with those names, at any depth and in any
-case, both in the store and on the console.
+`redact` hides the values of fields whose keys name a secret, at any depth,
+both in the store and on the console. A key is split into words at `_`, `-`,
+`.`, spaces and capitals, so `'api key'` hides `api_key` and `apiKey`, and
+`'token'` hides `bot_token` but not `tokens_used`. `secrets` holds the usual
+names: `{ redact: secrets }`. A password inside a URL is hidden in every value
+unless `keepUrlPasswords: true`. `replace(key, value)` returns each field's
+value before it is hidden and kept, and `source: true` adds where each line
+was logged. `env: fromEnv('MYAPP')` reads `MYAPP_LOG_LEVEL` and the rest in
+place of the bare names, and `env: false` reads no variable.
 
 To log to the console without a store, create a logger without one, and pass
 it or its children to the code that needs it:
