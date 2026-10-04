@@ -75,9 +75,11 @@ func serveTestStore(t *testing.T, root string, store *tinystore.Store, options O
 			ts.endpoint = listener.endpoint
 		}
 		go func() {
-			if err := server.Serve(ctx, listener); err != nil {
+			// a test over before this goroutine runs has closed the server already
+			if err := server.Serve(ctx, listener); err != nil && !errors.Is(err, errClosing) {
 				t.Errorf("serve: %v", err)
 			}
+			_ = l.Close()
 			serving <- struct{}{}
 		}()
 	}
