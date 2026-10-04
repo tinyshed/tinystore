@@ -2,8 +2,6 @@ package records
 
 import (
 	"fmt"
-	"io"
-	"log/slog"
 	"time"
 
 	"github.com/tinyshed/tinystore"
@@ -36,75 +34,6 @@ type Options struct {
 	// Budget is the most one Read may spend; a query may only narrow it.
 	Budget Budget
 }
-
-// HandlerOption changes what a Handler does beside queueing its lines.
-type HandlerOption interface{ handlerOption(*handlerSettings) }
-
-type handlerSettings struct {
-	console    Console
-	time       ConsoleTime
-	hideStream bool
-	to         io.Writer // standard error when nil
-	redact     []string
-	level      slog.Leveler
-	zone       *time.Location // a test's, in place of the machine's own
-}
-
-// Console says how a Handler writes its lines as they are logged. Without one
-// they are pretty on a terminal and a JSON line otherwise.
-type Console int
-
-const (
-	// ConsolePretty writes a line for a person: 11:02:11.123 INFO  api  started  port=3000
-	ConsolePretty Console = iota + 1
-	// ConsoleJSON writes one JSON object a line, for a collector.
-	ConsoleJSON
-	// ConsoleOff writes nothing: the lines go to the store alone.
-	ConsoleOff
-)
-
-func (c Console) handlerOption(s *handlerSettings) { s.console = c }
-
-// ConsoleTime is how a pretty line shows its time; a JSON line always has it.
-type ConsoleTime int
-
-const (
-	TimeClock ConsoleTime = iota + 1 // 11:02:11.123, the default
-	TimeFull                         // 2026-10-02 11:02:11.123 +03:00
-	TimeOff                          // none, where docker or journald stamp each line
-)
-
-func (t ConsoleTime) handlerOption(s *handlerSettings) { s.time = t }
-
-// HideStream leaves the stream out of a pretty line; the record keeps it.
-const HideStream = hiddenStream(true)
-
-type hiddenStream bool
-
-func (h hiddenStream) handlerOption(s *handlerSettings) { s.hideStream = bool(h) }
-
-// To writes the console lines to w instead of standard error.
-func To(w io.Writer) HandlerOption {
-	return handlerFunc(func(s *handlerSettings) { s.to = w })
-}
-
-// Redact hides the values of fields with these names, in the store and on the
-// console: a field whose key, or the part of a dotted key after its last dot,
-// is one of them, the case ignored, and such a key at any depth of a JSON
-// object. A line's message is not searched.
-func Redact(names ...string) HandlerOption {
-	return handlerFunc(func(s *handlerSettings) { s.redact = append(s.redact, names...) })
-}
-
-// Level keeps a Handler's lines from level up, in the store and on the
-// console; without it every line is kept.
-func Level(level slog.Leveler) HandlerOption {
-	return handlerFunc(func(s *handlerSettings) { s.level = level })
-}
-
-type handlerFunc func(*handlerSettings)
-
-func (f handlerFunc) handlerOption(s *handlerSettings) { f(s) }
 
 // the bounds of research's design/records.md: every density and memory figure
 // the design rests on was measured with them, so they are the format's, not

@@ -83,6 +83,7 @@ Do not describe unbuilt behaviour as though it works.
 | `metrics/`               | the metrics API and its registry, head, groups, query and retention                                                                          |
 | `sqldb/`                 | the application's SQL databases: tables from structs, checked migrations, typed reads and writes                                             |
 | `records/`               | logs and events: a head, event-time segments, paged reads, a follow cursor                                                                   |
+| `records/console/`       | the logger without the store: a slog handler, its console lines, redaction and environment; links no SQLite                                  |
 | `kv/`                    | the application's current state: typed buckets, branches, expiry, versions                                                                   |
 | `jobs/`                  | work that runs at its time: queues ordered by time, leases, retries, repeats                                                                 |
 | `blobs/`                 | the application's files: objects by path, inline or a file each, checked reads                                                               |

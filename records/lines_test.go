@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/records/console"
 )
 
 func TestALargeLineWriteKeepsOnlyOneBoundedPartial(t *testing.T) {
@@ -195,7 +196,7 @@ func TestLinesNeverWaitAndCloseWithTheStore(t *testing.T) {
 		t.Fatalf("a new writer after Close: %v", err)
 	}
 	before := s.Stats().Dropped
-	if err := s.Handler("new", ConsoleOff).Handle(t.Context(), slog.NewRecord(testNow, slog.LevelInfo, "after close", 0)); err != nil || s.Stats().Dropped != before+1 {
+	if err := s.Handler("new", console.Off).Handle(t.Context(), slog.NewRecord(testNow, slog.LevelInfo, "after close", 0)); err != nil || s.Stats().Dropped != before+1 {
 		t.Fatalf("a handler after Close queued data: %v, %+v", err, s.Stats())
 	}
 }

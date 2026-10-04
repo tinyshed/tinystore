@@ -7,7 +7,7 @@
         await sessions.of(user_id).set(token, session)
 """
 
-from ._console import ConsoleHandler, handler
+from ._console import SECRETS, ConsoleHandler, handler
 from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
 from .clock import Clock
@@ -56,6 +56,7 @@ __all__ = [
     "Config",
     "ConflictError",
     "ConsoleHandler",
+    "SECRETS",
     "CorruptError",
     "Counters",
     "Cursor",

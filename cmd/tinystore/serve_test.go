@@ -54,7 +54,7 @@ func start(ctx context.Context, t *testing.T, args ...string) <-chan error {
 	})
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, args, console{stdin: strings.NewReader(""), stdout: logs, stderr: logs})
+		done <- serve(ctx, args, processStreams{stdin: strings.NewReader(""), stdout: logs, stderr: logs})
 	}()
 	return done
 }
@@ -282,7 +282,7 @@ func TestAPrivateChildServesItsParent(t *testing.T) {
 	logs := &lockedBuffer{}
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(t.Context(), []string{"--dir", dir, "--stdio"}, console{stdin: stdin, stdout: stdout, stderr: logs})
+		done <- serve(t.Context(), []string{"--dir", dir, "--stdio"}, processStreams{stdin: stdin, stdout: stdout, stderr: logs})
 	}()
 	hello := wire.Hello{Protocol: wire.Protocol, Client: "tinystore-cmd-test"}
 	if _, err := parentWrites.Write(wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil))); err !=
@@ -311,7 +311,7 @@ func TestAPrivateChildRunsOnTheClockItIsGiven(t *testing.T) {
 	done := make(chan error, 1)
 	args := []string{"--dir", dir, "--stdio", "--clock", "2026-10-03T09:00:00Z"}
 	go func() {
-		done <- serve(t.Context(), args, console{stdin: stdin, stdout: stdout, stderr: logs})
+		done <- serve(t.Context(), args, processStreams{stdin: stdin, stdout: stdout, stderr: logs})
 	}()
 	hello := wire.Hello{Protocol: wire.Protocol, Client: "tinystore-cmd-test"}
 	if _, err := parentWrites.Write(wire.AppendFrame(nil, wire.Header{Kind: wire.KindHello}, hello.Append(nil))); err !=
@@ -343,7 +343,7 @@ func TestAPrivateChildLeavesWhenToldThoughItsParentStays(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, []string{"--dir", dir, "--stdio"}, console{stdin: stdin, stdout: stdout, stderr: &lockedBuffer{}})
+		done <- serve(ctx, []string{"--dir", dir, "--stdio"}, processStreams{stdin: stdin, stdout: stdout, stderr: &lockedBuffer{}})
 	}()
 	readWelcome(t, parentReads)
 	go func() { _, _ = io.Copy(io.Discard, parentReads) }() // the GOAWAY
@@ -385,7 +385,7 @@ func TestServeOfADirectoryServesItUntilCtrlC(t *testing.T) {
 	stderr := &lockedBuffer{}
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, []string{dir}, console{stdin: strings.NewReader(""), stdout: stderr, stderr: stderr})
+		done <- serve(ctx, []string{dir}, processStreams{stdin: strings.NewReader(""), stdout: stderr, stderr: stderr})
 	}()
 	published := waitServe(t, dir, "", done)
 	if published.Sidecar {
@@ -431,7 +431,7 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 		{"--dir", dir, "--local", "--clock", "2026-10-03T09:00:00Z"},
 		{"--dir", dir, "--stdio", "--clock", "yesterday"},
 	} {
-		if err := serve(t.Context(), args, console{stderr: &lockedBuffer{}}); err == nil || errors.Is(err, errHeld) {
+		if err := serve(t.Context(), args, processStreams{stderr: &lockedBuffer{}}); err == nil || errors.Is(err, errHeld) {
 			t.Errorf("serve %q: %v", args, err)
 		}
 	}

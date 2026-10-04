@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tinyshed/tinystore/records"
+	"github.com/tinyshed/tinystore/records/console"
 	"github.com/tinyshed/tinystore/server/reach"
 	"github.com/tinyshed/tinystore/server/wire"
 )
@@ -391,7 +392,7 @@ func runLogs(ctx context.Context, a *agent, raw json.RawMessage) (any, error) {
 	}
 	slices.Reverse(found)
 	var lines bytes.Buffer
-	printer := records.NewPrinter(&lines, records.ConsoleJSON)
+	printer := records.NewPrinter(&lines, console.JSON)
 	for _, r := range found {
 		if err = printRecord(printer, r); err != nil {
 			return nil, err

@@ -5,17 +5,24 @@
 // waits; what does not fit, or a write that fails, is dropped and counted,
 // and said in TinyStore's own lines, since no call is waiting to be told.
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { DropNotice, FailureLog, type Say } from './background.ts'
+import { FromEnv, parseDotenv } from './config.ts'
 import {
 	type ConsoleFormat,
 	type ConsoleLine,
 	type ConsoleTime,
+	hideUrlPasswords,
 	jsonLine,
 	jsonOf,
 	type Look,
 	prettyLine,
+	type Redactor,
 	redacted,
 	redactor,
+	sourceKey,
 } from './console.ts'
 import { InvalidError } from './errors.ts'
 import type { Fields, Level } from './records.ts'
@@ -34,8 +41,25 @@ export interface LoggerOptions {
 	hideStream?: boolean
 	/** where the console lines go: process.stderr when absent */
 	to?: ConsoleOut
-	/** fields whose values are hidden, in the store and on the console, at any depth, the case ignored */
+	/**
+	 * secrets whose fields are hidden, in the store and on the console, at any
+	 * depth: a key hides its value when some of its words in a row, written
+	 * together, are a name's, so 'api key' hides api_key and apiKey; `secrets`
+	 * holds the usual ones
+	 */
 	redact?: readonly string[]
+	/** leaves a URL's password in a value as it is, which is otherwise hidden */
+	keepUrlPasswords?: boolean
+	/** changes each field's value before it is hidden, kept and shown */
+	replace?: (key: string, value: unknown) => unknown
+	/**
+	 * where LOG_LEVEL, LOG_FORMAT and LOG_TIME are read, which win over the
+	 * options: `fromEnv('APP')` reads APP_LOG_LEVEL and the rest, and false
+	 * reads nothing; the bare names when absent
+	 */
+	env?: FromEnv | false
+	/** adds where each line was logged: source={"function":…,"file":…,"line":…} */
+	source?: boolean
 }
 
 /** Where console lines go: process.stdout, a file's stream, or any other writer. */
@@ -54,7 +78,9 @@ interface Shared {
 	stream: string
 	most: number
 	least: number
-	hides: ((key: string) => boolean) | undefined
+	redact: Redactor | undefined
+	replace: ((key: string, value: unknown) => unknown) | undefined
+	source: boolean
 	print: ((line: ConsoleLine) => void) | undefined
 	waiting: ConsoleLine[]
 	timer: ReturnType<typeof setInterval> | undefined
@@ -99,7 +125,9 @@ export function newLogger(
 		stream,
 		most,
 		least: read.level === undefined ? Number.NEGATIVE_INFINITY : levelOf(read.level),
-		hides: redactor(read.redact),
+		redact: redactor(read.redact, read.keepUrlPasswords),
+		replace: read.replace,
+		source: read.source === true,
 		print: printer(read, out),
 		waiting: [],
 		timer: undefined,
@@ -114,43 +142,65 @@ export function newLogger(
 
 type Unread = [name: string, value: string, expected: string]
 
-/** LOG_LEVEL, LOG_FORMAT and LOG_TIME over the options, as Go and Python read them; a console turned off stays off. */
+/**
+ * LOG_LEVEL, LOG_FORMAT and LOG_TIME over the options, after the prefix env
+ * names, as Go and Python read them; a console turned off stays off.
+ */
 function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
 	const read = { ...options }
 	const ignored: Unread[] = []
-	const level = variable('LOG_LEVEL')
+	const env = options.env ?? new FromEnv('', [])
+	if (env === false) {
+		return [read, ignored]
+	}
+	const variables = environment(env)
+	const name = (variable: string) => (env.prefix === '' ? variable : `${env.prefix}_${variable}`)
+	const level = variables(name('LOG_LEVEL'))
 	if (level !== undefined) {
-		const name = level.toLowerCase() === 'warning' ? 'warn' : level.toLowerCase()
-		if (Object.hasOwn(levels, name)) {
-			read.level = name as keyof typeof levels
+		const known = level.toLowerCase() === 'warning' ? 'warn' : level.toLowerCase()
+		if (Object.hasOwn(levels, known)) {
+			read.level = known as keyof typeof levels
 		} else {
-			ignored.push(['LOG_LEVEL', level, 'debug, info, warn or error'])
+			ignored.push([name('LOG_LEVEL'), level, 'debug, info, warn or error'])
 		}
 	}
-	const format = variable('LOG_FORMAT')
+	const format = variables(name('LOG_FORMAT'))
 	if (format !== undefined) {
-		const name = format.toLowerCase()
-		if (name !== 'pretty' && name !== 'json' && name !== 'off') {
-			ignored.push(['LOG_FORMAT', format, 'pretty, json or off'])
+		const known = format.toLowerCase()
+		if (known !== 'pretty' && known !== 'json' && known !== 'off') {
+			ignored.push([name('LOG_FORMAT'), format, 'pretty, json or off'])
 		} else if (read.console !== 'off') {
-			read.console = name
+			read.console = known
 		}
 	}
-	const time = variable('LOG_TIME')
+	const time = variables(name('LOG_TIME'))
 	if (time !== undefined) {
-		const name = time.toLowerCase()
-		if (name === 'clock' || name === 'full' || name === 'off') {
-			read.time = name
+		const known = time.toLowerCase()
+		if (known === 'clock' || known === 'full' || known === 'off') {
+			read.time = known
 		} else {
-			ignored.push(['LOG_TIME', time, 'clock, full or off'])
+			ignored.push([name('LOG_TIME'), time, 'clock, full or off'])
 		}
 	}
 	return [read, ignored]
 }
 
-function variable(name: string): string | undefined {
-	const text = process.env[name]?.trim()
-	return text === '' ? undefined : text
+/** The variables of fromEnv's files, the process's over them, a missing file skipped; an empty one is none. */
+function environment(env: FromEnv): (name: string) => string | undefined {
+	const fromFiles: Record<string, string> = {}
+	for (const file of env.files) {
+		let text: string
+		try {
+			text = readFileSync(file, 'utf8')
+		} catch {
+			continue
+		}
+		Object.assign(fromFiles, parseDotenv(text))
+	}
+	return name => {
+		const text = (process.env[name] ?? fromFiles[name])?.trim()
+		return text === '' ? undefined : text
+	}
 }
 
 /** The values said to be ignored, so that a program making many loggers says each once. */
@@ -273,7 +323,7 @@ export class Logger {
 	with(context: Fields): Logger {
 		return new Logger(this.#shared, [
 			...this.#context,
-			...encodeFields(context, this.#shared.hides),
+			...encodeFields(context, this.#shared.redact, this.#shared.replace),
 		])
 	}
 
@@ -311,12 +361,14 @@ export class Logger {
 
 	#emit(what: Pick<ConsoleLine, 'level' | 'event' | 'msg'>, attrs: Fields | undefined): void {
 		const trace = traceOf(currentTrace())
+		const shared = this.#shared
+		const encoded = attrs === undefined ? [] : encodeFields(attrs, shared.redact, shared.replace)
 		const line: ConsoleLine = {
 			at: new Date(),
-			stream: this.#shared.stream,
+			stream: shared.stream,
 			...what,
 			context: this.#context,
-			attrs: attrs === undefined ? [] : encodeFields(attrs, this.#shared.hides),
+			attrs: shared.source ? [...encoded, sourceKey, sourceOfCaller()] : encoded,
 			...trace,
 		}
 		this.#shared.print?.(line)
@@ -369,20 +421,27 @@ async function writeWaiting(
 
 /**
  * Fields as key, JSON pairs, as a console writes them and the store keeps
- * them: an Error's value its stack, which JSON would write as {}, and a field
- * hides names hidden at any depth.
+ * them: an Error's value its stack, which JSON would write as {}, a secret's
+ * value hidden at any depth, and a URL's password unless kept.
  */
 export function encodeFields(
 	fields: Fields,
-	hides: ((key: string) => boolean) | undefined,
+	redact: Redactor | undefined,
+	replace?: (key: string, value: unknown) => unknown,
 ): string[] {
 	const pairs = Array.isArray(fields)
 		? (fields as readonly (readonly [string, unknown])[])
 		: Object.entries(fields as Record<string, unknown>)
 	const flat: string[] = []
-	for (const [key, value] of pairs) {
+	for (const [key, given] of pairs) {
+		const value = replace === undefined ? given : replace(key, given)
 		const shown = value instanceof Error ? (value.stack ?? String(value)) : value
-		flat.push(key, hides?.(key) ? redacted : jsonOf(shown, hides))
+		if (redact?.hides(key)) {
+			flat.push(key, redacted)
+			continue
+		}
+		const json = jsonOf(shown, redact?.hides)
+		flat.push(key, redact?.urls === true ? hideUrlPasswords(json) : json)
 	}
 	return flat
 }
@@ -408,4 +467,31 @@ function traceOf(trace: Trace | undefined): Pick<ConsoleLine, 'traceId' | 'spanI
 		return {}
 	}
 	return spanId !== undefined && /^[0-9a-f]{16}$/.test(spanId) ? { traceId, spanId } : { traceId }
+}
+
+/** This file, whose frames a line's source skips. */
+const here = pathOf(import.meta.url)
+
+/**
+ * Where a line was logged, as slog's handlers spell a source: the first frame
+ * of the stack outside this file.
+ */
+function sourceOfCaller(): string {
+	for (const frame of (new Error().stack ?? '').split('\n').slice(1)) {
+		const found = /at (?:(.+?) \()?(.+):(\d+):\d+\)?$/.exec(frame.trim())
+		if (found === null || pathOf(found[2] as string) === here) {
+			continue
+		}
+		return JSON.stringify({
+			function: found[1] ?? '',
+			file: pathOf(found[2] as string),
+			line: Number(found[3]),
+		})
+	}
+	return '{}'
+}
+
+/** A frame's file as a path, which Node writes as a file: URL. */
+function pathOf(file: string): string {
+	return file.startsWith('file://') ? fileURLToPath(file) : file
 }

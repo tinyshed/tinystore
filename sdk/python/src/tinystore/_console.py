@@ -21,10 +21,13 @@ from typing import TYPE_CHECKING, Any, Literal, TextIO, cast
 
 from ._trace import carried, shared
 from ._values import to_json
+from .config import read_env_files
 from .errors import InvalidError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+
+    from .config import FromEnv
 
 type Console = Literal["pretty", "json", "off"]
 """How a handler writes its lines as they are logged; pretty on a terminal and JSON otherwise when None."""
@@ -113,7 +116,7 @@ def pretty_line(
     shown: list[str] = []
     below: list[tuple[str, str]] = []
     for key, value in [*line.context, *line.attrs]:
-        text, lines = _pretty_value(value)
+        text, lines = _pretty_value(key, value)
         if lines:
             below.append((key, text))
         else:
@@ -165,7 +168,25 @@ def _pretty_message(line: Line) -> str:
     return f"{line.event}  {body}" if body else line.event
 
 
-def _pretty_value(value: str) -> tuple[str, bool]:
+SOURCE_KEY = "source"
+"""The field where a line says where it was logged, as slog's handlers spell it."""
+
+
+def _short_source(value: str) -> str | None:
+    """A source as a pretty line shows it, its file's directory and name and its line: server/main.py:42."""
+    if not value.startswith("{"):
+        return None
+    source: dict[str, Any] = json.loads(value)
+    file, line = source.get("file"), source.get("line")
+    if not isinstance(file, str) or not file:
+        return None
+    parts = [part for part in re.split(r"[\\/]+", file) if part]
+    return "/".join(parts[-2:]) + f":{line if isinstance(line, int) else 0}"
+
+
+def _pretty_value(key: str, value: str) -> tuple[str, bool]:
+    if key == SOURCE_KEY and (place := _short_source(value)) is not None:
+        return place, False
     if not value.startswith('"'):
         return value, False
     text = json.loads(value)
@@ -178,28 +199,152 @@ def _bare(text: str) -> bool:
     return text != "" and all(ord(c) > 0x20 and c not in '\x7f"=\\' for c in text)
 
 
-def redactor(names: Iterable[str]) -> Callable[[str], bool] | None:
-    """Whether a key hides its value: the key, or the part of a dotted key after its last dot, is one of names."""
-    hidden = {name.lower() for name in names}
-    if not hidden:
+SECRETS = (
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "token",
+    "credential",
+    "credentials",
+    "authorization",
+    "cookie",
+    "api key",
+    "private key",
+    "secret key",
+    "access key",
+    "signing key",
+    "encryption key",
+    "connection string",
+    "dsn",
+)
+"""The names redact takes to hide the usual secrets, as Go's console.Secrets and Bun's secrets."""
+
+
+def words(key: str) -> list[str]:
+    """A key's words as a person reads them, in lower case: split at anything but a letter or a digit, and where a
+    capital begins a word, as in passwordHash and APIKey."""
+    out: list[str] = []
+    start = -1
+    for i, c in enumerate(key):
+        if not c.isalnum():
+            if start >= 0:
+                out.append(key[start:i].lower())
+                start = -1
+            continue
+        before = key[i - 1] if i > 0 else ""
+        after = key[i + 1] if i + 1 < len(key) else ""
+        begins = c.isupper() and (before.islower() or before.isdigit() or (before.isupper() and after.islower()))
+        if start >= 0 and begins:
+            out.append(key[start:i].lower())
+            start = i
+        if start < 0:
+            start = i
+    if start >= 0:
+        out.append(key[start:].lower())
+    return out
+
+
+def _joins_to(key_words: list[str], name: str) -> bool:
+    for i in range(len(key_words)):
+        rest = name
+        for word in key_words[i:]:
+            if not rest.startswith(word):
+                break
+            rest = rest[len(word) :]
+            if not rest:
+                return True
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class Redactor:
+    """What a handler hides: the keys its names name, and a URL's password unless it keeps them."""
+
+    names: tuple[str, ...]
+    """each name's words written together, "api key" as apikey"""
+    urls: bool
+
+    def hides(self, key: str) -> bool:
+        """Whether a key names a secret: some of its words in a row, written together, are a name's."""
+        if not self.names:
+            return False
+        key_words = words(key)
+        return any(_joins_to(key_words, name) for name in self.names)
+
+
+def redactor(names: Iterable[str], keep_url_passwords: bool = False) -> Redactor | None:
+    """A handler's Redactor, or None when it hides nothing: "api key" hides api_key and apiKey, "token" bot_token."""
+    joined = tuple(j for j in ("".join(words(name)) for name in names) if j)
+    if not joined and keep_url_passwords:
         return None
-
-    def hides(key: str) -> bool:
-        key = key.lower()
-        return key in hidden or key.rpartition(".")[2] in hidden
-
-    return hides
+    return Redactor(joined, not keep_url_passwords)
 
 
-def encode(value: Any, hides: Callable[[str], bool] | None) -> str:
-    """A value's JSON, an object's keys hidden at any depth; what JSON cannot write is its text, never a lost line."""
+def hide_url_passwords(text: str) -> str:
+    """JSON text with the password of each URL inside it hidden, everything else as it was spelled.
+
+    "postgres://ann:hunter2@db/app" is "postgres://ann:[redacted]@db/app".
+    """
+    out: list[str] = []
+    written = 0
+    start = 0
+    while start < len(text):
+        scheme_end = text.find("://", start)
+        if scheme_end < 0:
+            break
+        password, at, end = _find_password(text, scheme_end + 3)
+        start = end
+        if password < 0 or not _ends_in_scheme(text[:scheme_end]):
+            continue
+        out.append(text[written:password] + "[redacted]")
+        written = at
+    if written == 0:
+        return text
+    return "".join(out) + text[written:]
+
+
+def _find_password(text: str, start: int) -> tuple[int, int, int]:
+    """Where an authority's password begins and the '@' after it, -1 when it has none, and where it ends."""
+    at = colon = -1
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in '/?#"' or c <= " ":
+            break
+        if c == "@":
+            at = i
+        elif c == ":" and colon < 0:
+            colon = i
+        i += 1
+    end = min(i, len(text))
+    if at < 0 or colon < 0 or colon + 1 >= at:
+        return -1, -1, end
+    return colon + 1, at, end
+
+
+def _ends_in_scheme(text: str) -> bool:
+    i = len(text)
+    while i > 0 and (text[i - 1].isascii() and (text[i - 1].isalnum() or text[i - 1] in "+-.")):
+        i -= 1
+    return i < len(text) and text[i].isascii() and text[i].isalpha()
+
+
+def encode(value: Any, redact: Redactor | None) -> str:
+    """A value's JSON, an object's secret keys hidden at any depth and a URL's password unless kept; what JSON
+    cannot write is its text, never a lost line."""
     try:
         text = to_json(value)
     except InvalidError:
         return _string(str(value))
-    if hides is None or text[:1] not in ("{", "[") or not any(_mentions(text, hides)):
+    if redact is None:
         return text
-    return to_json(_hide(json.loads(text), hides))
+    if redact.names and text[:1] in ("{", "[") and any(_mentions(text, redact.hides)):
+        text = to_json(_hide(json.loads(text), redact.hides))
+    return hide_url_passwords(text) if redact.urls else text
 
 
 def _mentions(text: str, hides: Callable[[str], bool]) -> Iterable[bool]:
@@ -215,9 +360,17 @@ def _hide(value: Any, hides: Callable[[str], bool]) -> Any:
     return value
 
 
-def encode_fields(pairs: Iterable[tuple[str, Any]], hides: Callable[[str], bool] | None) -> list[tuple[str, str]]:
-    """Fields as key and JSON, a hidden key's value REDACTED."""
-    return [(key, REDACTED if hides is not None and hides(key) else encode(value, hides)) for key, value in pairs]
+def encode_fields(
+    pairs: Iterable[tuple[str, Any]],
+    redact: Redactor | None,
+    replace: Callable[[str, Any], Any] | None = None,
+) -> list[tuple[str, str]]:
+    """Fields as key and JSON, each value replaced first when replace is given, a secret key's value REDACTED."""
+    fields: list[tuple[str, str]] = []
+    for key, given in pairs:
+        value = given if replace is None else replace(key, given)
+        fields.append((key, REDACTED if redact is not None and redact.hides(key) else encode(value, redact)))
+    return fields
 
 
 def _forced() -> bool:
@@ -257,30 +410,39 @@ type _Unread = tuple[str, str, str]
 
 
 def _from_environment(
-    level: int, console: Console | None, time: ConsoleTime | None
+    env: FromEnv | bool, level: int, console: Console | None, time: ConsoleTime | None
 ) -> tuple[int, Console | None, ConsoleTime | None, list[_Unread]]:
-    """LOG_LEVEL, LOG_FORMAT and LOG_TIME over the arguments; a console turned off stays off."""
+    """LOG_LEVEL, LOG_FORMAT and LOG_TIME, after env's prefix, over the arguments; a console turned off stays off."""
     ignored: list[_Unread] = []
-    if (text := _variable("LOG_LEVEL")) is not None:
+    if env is False:
+        return level, console, time, ignored
+    prefix, files = ("", ()) if env is True else (env.prefix, env.files)
+    variables = read_env_files(files)
+    variables.update(os.environ)
+
+    def variable(name: str) -> tuple[str, str | None]:
+        full = f"{prefix}_{name}" if prefix else name
+        return full, variables.get(full, "").strip() or None
+
+    name, text = variable("LOG_LEVEL")
+    if text is not None:
         if text.lower() in _LEVELS:
             level = _LEVELS[text.lower()]
         else:
-            ignored.append(("LOG_LEVEL", text, "debug, info, warn or error"))
-    if (text := _variable("LOG_FORMAT")) is not None:
+            ignored.append((name, text, "debug, info, warn or error"))
+    name, text = variable("LOG_FORMAT")
+    if text is not None:
         if text.lower() not in ("pretty", "json", "off"):
-            ignored.append(("LOG_FORMAT", text, "pretty, json or off"))
+            ignored.append((name, text, "pretty, json or off"))
         elif console != "off":
             console = cast("Console", text.lower())
-    if (text := _variable("LOG_TIME")) is not None:
+    name, text = variable("LOG_TIME")
+    if text is not None:
         if text.lower() in ("clock", "full", "off"):
             time = cast("ConsoleTime", text.lower())
         else:
-            ignored.append(("LOG_TIME", text, "clock, full or off"))
+            ignored.append((name, text, "clock, full or off"))
     return level, console, time, ignored
-
-
-def _variable(name: str) -> str | None:
-    return os.environ.get(name, "").strip() or None
 
 
 _said_ignored: set[str] = set()
@@ -293,8 +455,12 @@ class ConsoleHandler(logging.Handler):
     It writes the lines store.records.handler writes, which keeps them too:
     pretty on a terminal and one JSON object a line otherwise, on stderr
     unless to says where. LOG_LEVEL, LOG_FORMAT and LOG_TIME win over the
-    arguments. A record's logger name is its context, its extra fields its
-    attributes, an exception its traceback under error.
+    arguments, or the variables of env's prefix, and env=False reads none. A
+    record's logger name is its context, its extra fields its attributes, an
+    exception its traceback under error. redact hides the fields whose keys
+    name a secret, SECRETS the usual ones, and a URL's password is hidden
+    unless keep_url_passwords; replace changes each value first; source adds
+    where the line was logged.
     """
 
     def __init__(
@@ -307,6 +473,10 @@ class ConsoleHandler(logging.Handler):
         hide_stream: bool = False,
         to: TextIO | None = None,
         redact: Iterable[str] = (),
+        keep_url_passwords: bool = False,
+        replace: Callable[[str, Any], Any] | None = None,
+        env: FromEnv | bool = True,
+        source: bool = False,
     ) -> None:
         if not stream:
             raise InvalidError("a handler of no stream")
@@ -314,11 +484,12 @@ class ConsoleHandler(logging.Handler):
             raise InvalidError(f"a console of {console!r}, not pretty, json or off")
         if time not in (None, "clock", "full", "off"):
             raise InvalidError(f"a time of {time!r}, not clock, full or off")
-        level, console, time, ignored = _from_environment(level, console, time)
+        level, console, time, ignored = _from_environment(env, level, console, time)
         super().__init__(level)
         self._stream, self._console, self._hide_stream, self._to = stream, console, hide_stream, to
         self._time: ConsoleTime | None = time
-        self._hides = redactor(redact)
+        self._redact = redactor(redact, keep_url_passwords)
+        self._replace, self._source = replace, source
         self._colours: bool | None = None
         self._say_ignored(ignored)
 
@@ -335,13 +506,17 @@ class ConsoleHandler(logging.Handler):
             attrs.append(("error", formatter.formatException(record.exc_info)))
         if record.stack_info:
             attrs.append(("stack", record.stack_info))
+        fields = encode_fields(attrs, self._redact, self._replace)
+        if self._source:
+            where = {"function": record.funcName, "file": record.pathname, "line": record.lineno}
+            fields.append((SOURCE_KEY, to_json(where)))
         line = Line(
             at=int(record.created * 1e9),
             stream=self._stream,
             level=(record.levelno - 20) * 4 // 10,
             msg=record.getMessage(),
-            context=encode_fields([("logger", record.name), *shared.get()], self._hides),
-            attrs=encode_fields(attrs, self._hides),
+            context=encode_fields([("logger", record.name), *shared.get()], self._redact, self._replace),
+            attrs=fields,
         )
         trace = carried.get()
         if trace is not None:
@@ -387,11 +562,27 @@ def handler(
     hide_stream: bool = False,
     to: TextIO | None = None,
     redact: Iterable[str] = (),
+    keep_url_passwords: bool = False,
+    replace: Callable[[str, Any], Any] | None = None,
+    env: FromEnv | bool = True,
+    source: bool = False,
 ) -> ConsoleHandler:
     """A logging.Handler of the console alone, for a program that wants the logger and not the records.
 
-        logging.basicConfig(handlers=[tinystore.handler("app", redact=["password"])], level=logging.INFO)
+        logging.basicConfig(handlers=[tinystore.handler("app", redact=tinystore.SECRETS)], level=logging.INFO)
 
     store.records.handler(stream) in its place keeps every line too.
     """
-    return ConsoleHandler(stream, level, console=console, time=time, hide_stream=hide_stream, to=to, redact=redact)
+    return ConsoleHandler(
+        stream,
+        level,
+        console=console,
+        time=time,
+        hide_stream=hide_stream,
+        to=to,
+        redact=redact,
+        keep_url_passwords=keep_url_passwords,
+        replace=replace,
+        env=env,
+        source=source,
+    )

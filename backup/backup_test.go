@@ -20,6 +20,7 @@ import (
 	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/metrics"
 	"github.com/tinyshed/tinystore/records"
+	"github.com/tinyshed/tinystore/records/console"
 	"github.com/tinyshed/tinystore/sqldb"
 )
 
@@ -82,7 +83,7 @@ func backupOf(t *testing.T) []byte {
 	if _, err := source.app.Exec(t.Context(), `insert into notes (title) values ('kept')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.logs.Handler("app", records.ConsoleOff).Handle(t.Context(), slog.NewRecord(epoch, slog.LevelInfo, "backed up", 0)); err != nil {
+	if err := source.logs.Handler("app", console.Off).Handle(t.Context(), slog.NewRecord(epoch, slog.LevelInfo, "backed up", 0)); err != nil {
 		t.Fatal(err)
 	}
 	if err := source.logs.Flush(t.Context()); err != nil {

@@ -8,9 +8,9 @@ the measurements behind it are research's [design/records.md](https://github.com
 ```go
 logs, err := records.Open(ctx, store, records.Options{Retention: 14 * 24 * time.Hour})
 
-logger := slog.New(logs.Handler("notes", records.Redact("password"))) // kept, and on stderr as it is logged
+logger := slog.New(logs.Handler("notes", console.Redact(console.Secrets...))) // kept, and on stderr as it is logged
 logger.With("request_id", id).Warn("slow request", "route", "/notes", "ms", 1200)
-slog.SetDefault(slog.New(records.Handler("app")))                   // the console alone: nothing kept
+slog.SetDefault(slog.New(console.Handler("app")))                            // records/console: nothing kept
 
 err = logs.Append(ctx, records.Record{
 	At: time.Now(), Stream: "web", Name: "click",
@@ -71,29 +71,40 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
   spells them.
 - A handler also writes each line to standard error as it is logged, before
   any flush: pretty on a terminal, one JSON object a line otherwise, the bytes
-  the Bun and Python loggers write (`testdata/console.json`).
-  `ConsolePretty`, `ConsoleJSON` and `ConsoleOff` choose, and `To(w)` sends
-  the lines to w instead. `TimeFull` and `TimeOff` change a pretty line's
-  time of day, and `HideStream` leaves its stream out. A pretty line shows a
-  duration as `1.5s`; a JSON line keeps the record's spelling, its time in
-  UTC to the millisecond, and its stream. The engine's own lines reach the
-  console from Info up and never the store.
+  the Bun and Python loggers write (`console/testdata/console.json`). Its
+  options are package `console`'s: `console.Pretty`, `JSON` and `Off` choose,
+  and `To(w)` sends the lines to w instead. `TimeFull` and `TimeOff` change a
+  pretty line's time of day, and `HideStream` leaves its stream out. A pretty
+  line shows a duration as `1.5s`; a JSON line keeps the record's spelling,
+  its time in UTC to the millisecond, and its stream. The engine's own lines
+  reach the console from Info up and never the store.
 - `LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME` win over a handler's options, as
-  in Bun and Python, except that a console the code turned off stays off. A
-  value none of them spells is ignored, and said once a process, as a WARN
-  line of stream `tinystore` on the first console that reads it.
-  Colours need a
-  terminal, and not `NO_COLOR` or a `TERM` of dumb; `FORCE_COLOR` other than
-  `0` makes a pipe pretty and coloured by default, as an IDE's run console
-  reads one, and `NO_COLOR` still wins.
-- `Redact(names...)` hides the values of fields with those names, in the
-  store and on the console: a key, or the part of a dotted key after its last
-  dot, the case ignored, and such a key at any depth of a JSON object. A
-  message is not searched. `Level(l)` keeps the lines from `l` up.
-- `records.Handler(stream)`, without a store, writes the console alone, for a
-  program that wants the logger and not the records; `logs.Handler(stream)`
-  in its place keeps every line too. `NewPrinter(w, console)` prints records
-  read back as that console prints its lines, which `tinystore logs` does.
+  in Bun and Python, except that a console the code turned off stays off;
+  `console.FromEnv(prefix)` reads `prefix_LOG_LEVEL` and the rest instead,
+  `FromLookup(prefix, lookup)` reads them through lookup and nothing of the
+  process, and `NoEnv` reads none. A value none of them spells is ignored,
+  and said once a process, as a WARN line of stream `tinystore` on the first
+  console that reads it. Colours need a terminal, and not `NO_COLOR` or a
+  `TERM` of dumb; `FORCE_COLOR` other than `0` makes a pipe pretty and
+  coloured by default, as an IDE's run console reads one, and `NO_COLOR`
+  still wins.
+- `console.Redact(names...)` hides the values of fields whose keys name a
+  secret, in the store and on the console, at any depth of a JSON object: a
+  key's words, split at anything but a letter or a digit and where a capital
+  begins one, the case ignored, name one when some of them in a row, written
+  together, are a name's. `password` hides `DB_PASSWORD` and `PasswordHash`,
+  `api key` hides `apiKey`, and `token` hides `bot_token` and not
+  `tokens_used`. `console.Secrets` is the usual names, the same list as Bun's
+  `secrets` and Python's `SECRETS`. A URL's password inside any value is
+  hidden unless `console.KeepURLPasswords`. A message is not searched.
+  `ReplaceAttr(f)` changes or drops each attribute first, as slog's own hook
+  does; `AddSource` adds `source`, where the line was logged, as slog spells
+  it; `Level(l)` keeps the lines from `l` up.
+- `console.Handler(stream)` writes the console alone, for a program that wants
+  the logger and not the records, and links neither SQLite nor zstd;
+  `logs.Handler(stream)` in its place keeps every line too, with the same
+  options. `NewPrinter(w, format)` prints records read back as that console
+  prints its lines, which `tinystore logs` does.
 - `Lines(stream)` is a writer for another program's output, a child process's
   stdout or a followed file, and never blocks as the handler never does. Each
   line becomes a record at the time it arrived; the lines of a stack trace, a

@@ -3,6 +3,8 @@ package records
 import (
 	"context"
 	"slices"
+
+	"github.com/tinyshed/tinystore/records/internal/logline"
 )
 
 // WithTrace is ctx carrying a trace and the span inside it. A line logged with
@@ -15,22 +17,13 @@ import (
 // It takes no dependency on a tracing library: OpenTelemetry's ids are the
 // same bytes, records.TraceID(span.SpanContext().TraceID()).
 func WithTrace(ctx context.Context, trace TraceID, span SpanID) context.Context {
-	return context.WithValue(ctx, traceKey{}, tracing{trace: trace, span: span})
+	return logline.WithTrace(ctx, trace, span)
 }
 
 // TraceOf is the trace and span ctx carries, both zero when it carries none.
 func TraceOf(ctx context.Context) (TraceID, SpanID) {
-	if carried, found := ctx.Value(traceKey{}).(tracing); found {
-		return carried.trace, carried.span
-	}
-	return TraceID{}, SpanID{}
-}
-
-type traceKey struct{}
-
-type tracing struct {
-	trace TraceID
-	span  SpanID
+	trace, span := logline.TraceOf(ctx)
+	return trace, span
 }
 
 // traced is a batch whose records without a trace take ctx's, copied when one

@@ -1,5 +1,5 @@
-// A logger's console line, as Go's records.Handler and Python's handler write
-// it, byte for byte the lines of records/testdata/console.json: pretty for a
+// A logger's console line, as Go's records/console and Python's handler write
+// it, byte for byte the lines of records/console/testdata/console.json: pretty for a
 // person at a terminal, one JSON object a line for a collector.
 //
 //   11:02:11.123 WARN  api  slow request  requestId=7f3a ms=1200
@@ -108,7 +108,7 @@ export function prettyLine(line: ConsoleLine, look: Look): string {
 	const below: [string, string][] = []
 	for (const fields of [line.context, line.attrs]) {
 		for (let i = 0; i < fields.length; i += 2) {
-			const [shown, lines] = prettyValue(fields[i + 1] as string)
+			const [shown, lines] = prettyValue(fields[i] as string, fields[i + 1] as string)
 			if (lines) {
 				below.push([fields[i] as string, shown])
 			} else {
@@ -166,7 +166,13 @@ function prettyMessage(line: ConsoleLine): string {
 }
 
 /** How a field's JSON shows, and whether it is text of several lines, which goes under the line. */
-function prettyValue(json: string): [string, boolean] {
+function prettyValue(key: string, json: string): [string, boolean] {
+	if (key === sourceKey) {
+		const place = shortSource(json)
+		if (place !== undefined) {
+			return [place, false]
+		}
+	}
 	if (!json.startsWith('"')) {
 		return [json, false]
 	}
@@ -223,21 +229,176 @@ function stamp(at: Date, look: Look): string {
 	return `${String(year).padStart(4, '0')}-${two(month)}-${two(day)} ${clock} ${zone}`
 }
 
+/** The field where a line says where it was logged, as slog's handlers spell it. */
+export const sourceKey = 'source'
+
 /**
- * Says whether a field's key hides its value: the key, or the part of a dotted
- * key after its last dot, is one of the names, the case ignored.
+ * A source as a pretty line shows it, its file's directory and name and its
+ * line: {"function":"run","file":"/home/ann/app/server/main.ts","line":42} is
+ * server/main.ts:42.
+ */
+function shortSource(json: string): string | undefined {
+	if (!json.startsWith('{')) {
+		return undefined
+	}
+	const source = JSON.parse(json) as { file?: unknown; line?: unknown }
+	if (typeof source.file !== 'string' || source.file === '') {
+		return undefined
+	}
+	const parts = source.file.split(/[\\/]+/).filter(part => part !== '')
+	const line = typeof source.line === 'number' ? source.line : 0
+	return `${parts.slice(-2).join('/')}:${line}`
+}
+
+/** The names `redact` takes to hide the usual secrets, as Go's console.Secrets and Python's SECRETS. */
+export const secrets: readonly string[] = Object.freeze([
+	'password',
+	'passwd',
+	'passphrase',
+	'secret',
+	'token',
+	'credential',
+	'credentials',
+	'authorization',
+	'cookie',
+	'api key',
+	'private key',
+	'secret key',
+	'access key',
+	'signing key',
+	'encryption key',
+	'connection string',
+	'dsn',
+])
+
+/** What a logger hides: the keys its names name, and a URL's password unless it keeps them. */
+export interface Redactor {
+	hides(key: string): boolean
+	urls: boolean
+}
+
+/**
+ * Hides the values of fields whose keys name a secret: some of the key's
+ * words in a row, written together, are a name's. DB_PASSWORD, PasswordHash,
+ * api-key and APIKey split into words at '_', '-', '.', spaces and capitals,
+ * the case ignored, so 'api key' hides api_key and apiKey, and 'token' hides
+ * bot_token and not tokens_used.
  */
 export function redactor(
 	names: readonly string[] | undefined,
-): ((key: string) => boolean) | undefined {
-	if (names === undefined || names.length === 0) {
+	keepUrlPasswords = false,
+): Redactor | undefined {
+	const joined = (names ?? []).map(name => words(name).join('')).filter(name => name !== '')
+	if (joined.length === 0 && keepUrlPasswords) {
 		return undefined
 	}
-	const hidden = new Set(names.map(name => name.toLowerCase()))
-	return key => {
-		const lower = key.toLowerCase()
-		return hidden.has(lower) || hidden.has(lower.slice(lower.lastIndexOf('.') + 1))
+	return {
+		hides: key => joined.length > 0 && joined.some(name => joinsTo(words(key), name)),
+		urls: !keepUrlPasswords,
 	}
+}
+
+/**
+ * A key's words as a person reads them, in lower case: split at anything but
+ * a letter or a digit, and where a capital begins a word, as in passwordHash
+ * and APIKey.
+ */
+export function words(key: string): string[] {
+	const out: string[] = []
+	const chars = [...key]
+	let start = -1
+	const upper = (c: string | undefined) => c !== undefined && /\p{Lu}/u.test(c)
+	const lower = (c: string | undefined) => c !== undefined && /\p{Ll}/u.test(c)
+	const digit = (c: string | undefined) => c !== undefined && /\p{N}/u.test(c)
+	for (let i = 0; i < chars.length; i++) {
+		const c = chars[i] as string
+		if (!/[\p{L}\p{N}]/u.test(c)) {
+			if (start >= 0) {
+				out.push(chars.slice(start, i).join('').toLowerCase())
+				start = -1
+			}
+			continue
+		}
+		const before = chars[i - 1]
+		const begins =
+			upper(c) && (lower(before) || digit(before) || (upper(before) && lower(chars[i + 1])))
+		if (start >= 0 && begins) {
+			out.push(chars.slice(start, i).join('').toLowerCase())
+			start = i
+		}
+		if (start < 0) {
+			start = i
+		}
+	}
+	if (start >= 0) {
+		out.push(chars.slice(start).join('').toLowerCase())
+	}
+	return out
+}
+
+function joinsTo(keyWords: string[], name: string): boolean {
+	for (let i = 0; i < keyWords.length; i++) {
+		let rest = name
+		for (const word of keyWords.slice(i)) {
+			if (!rest.startsWith(word)) {
+				break
+			}
+			rest = rest.slice(word.length)
+			if (rest === '') {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+/**
+ * JSON text with the password of each URL inside it hidden, everything else
+ * as it was spelled: "postgres://ann:hunter2@db/app" is
+ * "postgres://ann:[redacted]@db/app".
+ */
+export function hideUrlPasswords(text: string): string {
+	let out = ''
+	let written = 0
+	for (let from = 0; from < text.length; ) {
+		const schemeEnd = text.indexOf('://', from)
+		if (schemeEnd < 0) {
+			break
+		}
+		const [password, at, end] = findPassword(text, schemeEnd + 3)
+		from = end
+		if (password < 0 || !/[A-Za-z][A-Za-z0-9+.-]*$/.test(text.slice(0, schemeEnd))) {
+			continue
+		}
+		out += `${text.slice(written, password)}[redacted]`
+		written = at
+	}
+	return written === 0 ? text : out + text.slice(written)
+}
+
+/** Where an authority's password begins and the '@' after it, -1 when it has none, and where it ends. */
+function findPassword(text: string, start: number): [number, number, number] {
+	let at = -1
+	let colon = -1
+	let i = start
+	while (i < text.length) {
+		const c = text[i] as string
+		if (c === '\\') {
+			i += 2
+			continue
+		}
+		if (c === '/' || c === '?' || c === '#' || c === '"' || c <= ' ') {
+			break
+		}
+		if (c === '@') {
+			at = i
+		} else if (c === ':' && colon < 0) {
+			colon = i
+		}
+		i++
+	}
+	const end = Math.min(i, text.length)
+	return at < 0 || colon < 0 || colon + 1 >= at ? [-1, -1, end] : [colon + 1, at, end]
 }
 
 /** What a hidden value becomes, in the store and on the console. */

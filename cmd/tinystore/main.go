@@ -71,7 +71,7 @@ func dispatch(ctx context.Context, args []string) error {
 	case "help":
 		return help(args[1:], os.Stdout)
 	case "serve":
-		return serve(ctx, args[1:], console{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
+		return serve(ctx, args[1:], processStreams{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
 	case "status":
 		return status(ctx, args[1:], os.Stdout, os.Stderr)
 	case "stop":

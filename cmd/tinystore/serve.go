@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
-	"github.com/tinyshed/tinystore/records"
+	"github.com/tinyshed/tinystore/records/console"
 	"github.com/tinyshed/tinystore/server"
 )
 
@@ -43,9 +43,9 @@ const exitHeld = 3
 // gigabyte. A local client is the same user's own, so it gets no default.
 const remoteMemory = 1 << 30
 
-// console is the streams serve runs on: a private child's frames are on stdin
+// processStreams are the streams serve runs on: a private child's frames are on stdin
 // and stdout, and every server's logs on stderr
-type console struct {
+type processStreams struct {
 	stdin          io.Reader
 	stdout, stderr io.WriteCloser
 }
@@ -160,7 +160,7 @@ func readServing(asked serveFlags) (serving, error) {
 //
 // Ending closes it: the streams running finish, SERVE goes, and the store
 // lets the directory go.
-func serve(ctx context.Context, args []string, streams console) error {
+func serve(ctx context.Context, args []string, streams processStreams) error {
 	asked, err := parseServe(args, streams.stderr)
 	if err != nil {
 		return err
@@ -171,7 +171,7 @@ func serve(ctx context.Context, args []string, streams console) error {
 	}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	if file, ok := logs.(*os.File); ok && asked.foreground && isTerminal(file) {
-		logger = slog.New(records.Handler("serve", records.ConsolePretty))
+		logger = slog.New(console.Handler("serve", console.Pretty))
 	}
 	err = serveLogged(ctx, asked, streams, logger)
 	if err != nil && asked.log != "" {
@@ -200,7 +200,7 @@ func openLog(path string, stderr io.Writer) (io.Writer, func() error, error) {
 	return file, file.Close, nil
 }
 
-func serveLogged(ctx context.Context, asked serveFlags, streams console, logger *slog.Logger) error {
+func serveLogged(ctx context.Context, asked serveFlags, streams processStreams, logger *slog.Logger) error {
 	read, err := readServing(asked)
 	if err != nil {
 		return err
@@ -248,7 +248,7 @@ func closeServer(ctx context.Context, srv *server.Server) error {
 
 // servePrivate serves the parent's connection on stdin and stdout until the
 // parent ends its side, or ctx ends
-func servePrivate(ctx context.Context, srv *server.Server, streams console) error {
+func servePrivate(ctx context.Context, srv *server.Server, streams processStreams) error {
 	served := make(chan error, 1)
 	go func() {
 		served <- srv.ServeConn(context.WithoutCancel(ctx), newStdio(streams.stdin, streams.stdout), false)

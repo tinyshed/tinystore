@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/records/console"
 )
 
 // testClock is the store's clock, moved by the test
@@ -210,7 +211,7 @@ func TestAnAppendOfMoreThanASegmentIsRefused(t *testing.T) {
 	if got := s.readAll(t, Query{}); len(got) != 0 {
 		t.Fatalf("a refused Append wrote %d records", len(got))
 	}
-	logger := slog.New(s.Handler("app", ConsoleOff))
+	logger := slog.New(s.Handler("app", console.Off))
 	for range lines {
 		logger.Info(body)
 	}

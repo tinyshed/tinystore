@@ -1,9 +1,9 @@
 package records
 
 import (
-	"math"
 	"strconv"
-	"unicode/utf8"
+
+	"github.com/tinyshed/tinystore/records/internal/logline"
 )
 
 // Field is one key and its value as JSON, spelled as it was given: 1.2300, -0,
@@ -38,41 +38,9 @@ func JSON(key string, value []byte) Field {
 }
 
 func appendJSONFloat(out []byte, value float64) []byte {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return appendJSONString(out, strconv.FormatFloat(value, 'g', -1, 64))
-	}
-	return strconv.AppendFloat(out, value, 'g', -1, 64)
+	return logline.AppendFloat(out, value)
 }
 
-// appendJSONString quotes as encoding/json does, without escaping HTML. Control
-// characters and the line and paragraph separators are escaped, and an invalid
-// byte becomes the replacement character.
 func appendJSONString(out []byte, value string) []byte {
-	const hex = "0123456789abcdef"
-	out = append(out, '"')
-	for i := 0; i < len(value); {
-		r, size := utf8.DecodeRuneInString(value[i:])
-		switch {
-		case r == '"' || r == '\\':
-			out = append(out, '\\', byte(r))
-		case r == '\n':
-			out = append(out, '\\', 'n')
-		case r == '\r':
-			out = append(out, '\\', 'r')
-		case r == '\t':
-			out = append(out, '\\', 't')
-		case r == '\b':
-			out = append(out, '\\', 'b')
-		case r == '\f':
-			out = append(out, '\\', 'f')
-		case r == utf8.RuneError && size == 1:
-			out = utf8.AppendRune(out, utf8.RuneError)
-		case r < 0x20 || r == 0x2028 || r == 0x2029:
-			out = append(out, '\\', 'u', hex[r>>12&0xf], hex[r>>8&0xf], hex[r>>4&0xf], hex[r&0xf])
-		default:
-			out = append(out, value[i:i+size]...)
-		}
-		i += size
-	}
-	return append(out, '"')
+	return logline.AppendString(out, value)
 }

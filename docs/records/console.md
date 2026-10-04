@@ -17,8 +17,10 @@ logging.basicConfig(handlers=[store.records.handler("api", console="json")], lev
 ```
 
 ```go
+import "github.com/tinyshed/tinystore/records/console"
+
 logs, err := records.Open(ctx, store, records.Options{})
-logger := slog.New(logs.Handler("api", records.ConsoleJSON))
+logger := slog.New(logs.Handler("api", console.JSON))
 ```
 
 Without a format, a terminal gets pretty lines in color:
@@ -37,14 +39,17 @@ which log collectors expect:
 `'off'` prints nothing, and the store still keeps every line. Go, Bun and
 Python print exactly the same bytes for the same line.
 
-| Option                     | Go                                                   | Bun                                    | Python                                |
-|----------------------------|------------------------------------------------------|----------------------------------------|---------------------------------------|
-| format                     | `records.ConsolePretty`, `ConsoleJSON`, `ConsoleOff` | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |
-| time on a pretty line      | `records.TimeClock`, `TimeFull`, `TimeOff`           | `time: 'clock' \| 'full' \| 'off'`     | `time="clock" \| "full" \| "off"`     |
-| no stream on a pretty line | `records.HideStream`                                 | `hideStream: true`                     | `hide_stream=True`                    |
-| where lines go             | `records.To(w)`                                      | `to: process.stdout`                   | `to=sys.stdout`                       |
-| lowest level kept          | `records.Level(slog.LevelInfo)`                      | `level: 'info'`                        | `level=logging.INFO`                  |
-| hidden fields              | `records.Redact("password")`                         | `redact: ['password']`                 | `redact=["password"]`                 |
+| Option                     | Go                                         | Bun                                    | Python                                |
+|----------------------------|--------------------------------------------|----------------------------------------|---------------------------------------|
+| format                     | `console.Pretty`, `JSON`, `Off`            | `console: 'pretty' \| 'json' \| 'off'` | `console="pretty" \| "json" \| "off"` |
+| time on a pretty line      | `console.TimeClock`, `TimeFull`, `TimeOff` | `time: 'clock' \| 'full' \| 'off'`     | `time="clock" \| "full" \| "off"`     |
+| no stream on a pretty line | `console.HideStream`                       | `hideStream: true`                     | `hide_stream=True`                    |
+| where lines go             | `console.To(w)`                            | `to: process.stdout`                   | `to=sys.stdout`                       |
+| lowest level kept          | `console.Level(slog.LevelInfo)`            | `level: 'info'`                        | `level=logging.INFO`                  |
+| hidden fields              | `console.Redact("password")`               | `redact: ['password']`                 | `redact=["password"]`                 |
+| where a line was logged    | `console.AddSource`                        | `source: true`                         | `source=True`                         |
+| the environment's prefix   | `console.FromEnv("MYAPP")`                 | `env: fromEnv('MYAPP')`                | `env=tinystore.from_env("MYAPP")`     |
+| no environment             | `console.NoEnv`                            | `env: false`                           | `env=False`                           |
 
 ## Change the time and the stream
 
@@ -57,7 +62,7 @@ handler = store.records.handler("api", time="off", hide_stream=True)
 ```
 
 ```go
-logger := slog.New(logs.Handler("api", records.TimeOff, records.HideStream))
+logger := slog.New(logs.Handler("api", console.TimeOff, console.HideStream))
 ```
 
 The same line as above now starts with its level:
@@ -93,7 +98,7 @@ handler = store.records.handler("api", to=open("api.log", "a", encoding="utf-8")
 
 ```go
 file, err := os.OpenFile("api.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-logger := slog.New(logs.Handler("api", records.To(file)))
+logger := slog.New(logs.Handler("api", console.To(file)))
 ```
 
 Lines go to stderr by default, because a library shouldn't write into what a
@@ -139,6 +144,57 @@ lines, give `basicConfig` the lowest level and the handler the usual one:
 logging.basicConfig(handlers=[store.records.handler("api", logging.INFO)], level=logging.DEBUG)
 ```
 
+### Use your own prefix
+
+```ts
+import { fromEnv } from '@tinyshed/tinystore'
+
+const log = store.records.logger('api', { env: fromEnv('MYAPP') }) // MYAPP_LOG_LEVEL and the rest
+```
+
+```python
+handler = store.records.handler("api", env=tinystore.from_env("MYAPP"))  # MYAPP_LOG_LEVEL and the rest
+```
+
+```go
+logger := slog.New(logs.Handler("api", console.FromEnv("MYAPP"))) // MYAPP_LOG_LEVEL and the rest
+```
+
+A compose file shared by several services often sets `LOG_LEVEL` for one of
+them. With a prefix, the logger reads `MYAPP_LOG_LEVEL`, `MYAPP_LOG_FORMAT` and
+`MYAPP_LOG_TIME`, and ignores the variables without it. `fromEnv` is the same
+function that gives a [config](../kv/configs.md) its variables.
+
+To read no variables at all, so that only your code decides, set `env: false`
+in Bun, `env=False` in Python or `console.NoEnv` in Go. In Go,
+`console.FromLookup("MYAPP", lookup)` reads the variables through your own
+function instead of the process's environment, which keeps tests apart from
+the machine they run on.
+
+## Show where a line was logged
+
+```ts
+const log = store.records.logger('api', { source: true })
+```
+
+```python
+handler = store.records.handler("api", source=True)
+```
+
+```go
+logger := slog.New(logs.Handler("api", console.AddSource))
+```
+
+```log
+11:02:14.502 DEBUG api  cache miss  key=user:42 source=server/cache.go:42
+```
+
+Each line gets a `source` field with the function, the file and the line that
+logged it, spelled as slog spells it:
+`{"function":"main.load","file":"/app/server/cache.go","line":42}`. A pretty
+line shows only the file's directory, its name and the line. Finding the
+caller costs time on every line, so turn it on while you debug.
+
 ## Colors in an IDE
 
 The run console of an IDE, such as GoLand, WebStorm or PyCharm, reads your
@@ -183,7 +239,7 @@ logging.basicConfig(handlers=[store.records.handler("api", console="off"), RichH
 
 ```go
 logger := slog.New(slog.NewMultiHandler(
-	logs.Handler("api", records.ConsoleOff), // the store keeps every line
+	logs.Handler("api", console.Off), // the store keeps every line
 	tint.NewHandler(os.Stderr, nil),         // and any slog handler prints it
 ))
 ```

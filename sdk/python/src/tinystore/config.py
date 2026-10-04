@@ -365,7 +365,7 @@ class Config[T]:
             self._from[path] = "file"
 
     def _lay_environment(self, layer: FromEnv) -> None:
-        variables = _read_env_files(layer.files)
+        variables = read_env_files(layer.files)
         variables.update(os.environ)
         for path, field in self._fields.items():
             name = field.variable or env_name(layer.prefix, path)
@@ -428,7 +428,7 @@ def _missing(value: Any) -> bool:
     return value is None or value == ""
 
 
-def _read_env_files(files: Sequence[str | os.PathLike[str]]) -> dict[str, str]:
+def read_env_files(files: Sequence[str | os.PathLike[str]]) -> dict[str, str]:
     """The variables of .env files, a later file's over an earlier's; a file that is not there is skipped."""
     variables: dict[str, str] = {}
     for path in files:

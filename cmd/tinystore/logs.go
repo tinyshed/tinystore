@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore/records"
+	"github.com/tinyshed/tinystore/records/console"
 	"github.com/tinyshed/tinystore/server/reach"
 	"github.com/tinyshed/tinystore/server/wire"
 )
@@ -84,11 +85,11 @@ func logs(ctx context.Context, args []string, out io.Writer, stderr io.Writer) e
 	}
 	defer conn.Close() // the records are printed; a close that fails changes none of them
 
-	console := records.Console(0)
+	format := console.Format(0)
 	if asked.json {
-		console = records.ConsoleJSON
+		format = console.JSON
 	}
-	printer := records.NewPrinter(out, console)
+	printer := records.NewPrinter(out, format)
 	printed := newShown()
 	oldest, err := printLast(ctx, conn, query, printer, printed)
 	if err != nil || !asked.follow {

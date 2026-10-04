@@ -2,12 +2,12 @@ package records
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
-	"slices"
-	"strconv"
 	"time"
+	"unsafe"
+
+	"github.com/tinyshed/tinystore/records/console"
+	"github.com/tinyshed/tinystore/records/internal/logline"
 )
 
 // Handler queues the application's log lines for stream and never blocks its
@@ -21,105 +21,34 @@ import (
 // spelled as slog.JSONHandler spells it, an error as its message. A line
 // logged with a context of WithTrace takes its trace and span.
 //
-// Each line is also written to standard error as it is logged, pretty on a
-// terminal and one JSON object a line otherwise, as the Bun and Python
-// loggers write theirs; the Console and ConsoleTime options, HideStream, To
-// and LOG_LEVEL, LOG_FORMAT and LOG_TIME change that. The engine's own lines
+// Each line is also written to standard error as it is logged, as
+// console.Handler writes it, and the options are console's: the format, the
+// level, the fields to redact, the environment's names. The engine's own lines
 // reach the console from Info up, and never the store.
 //
-//	slog.New(logs.Handler("api", records.ConsoleJSON, records.Redact("password", "token")))
-func (s *Store) Handler(stream string, options ...HandlerOption) slog.Handler {
-	return newHandler(s, stream, options)
+//	slog.New(logs.Handler("api", console.JSON, console.Redact(console.Secrets...)))
+func (s *Store) Handler(stream string, options ...console.Option) slog.Handler {
+	return logline.NewHandler(stream, keeper{s}, options)
 }
 
-// Handler is a logger's handler without a store: its lines go to the console
-// alone, as Store.Handler writes them there, for a program that wants the
-// logger and not the records. Opening the store later and calling its Handler
-// instead keeps every line too.
-//
-//	slog.SetDefault(slog.New(records.Handler("app", records.Redact("password"))))
-func Handler(stream string, options ...HandlerOption) slog.Handler {
-	return newHandler(nil, stream, options)
+// keeper hands a handler's lines to the store's queue
+type keeper struct{ s *Store }
+
+func (k keeper) Keep(line logline.Line) {
+	k.s.enqueue(Record{
+		At: line.At, Stream: line.Stream, Name: line.Name, Level: line.Level, Body: line.Body,
+		TraceID: line.TraceID, SpanID: line.SpanID, Context: fieldsOf(line.Context), Attrs: fieldsOf(line.Attrs),
+	})
 }
 
-func newHandler(s *Store, stream string, options []HandlerOption) *handler {
-	var settings handlerSettings
-	for _, option := range options {
-		option.handlerOption(&settings)
-	}
-	settings, ignored := fromEnvironment(settings)
-	h := &handler{
-		store: s, stream: stream, level: settings.level,
-		echo: newEcho(settings), redact: newRedactor(settings.redact),
-	}
-	if h.echo != nil {
-		sayIgnored(h.echo, ignored, h.now())
-	}
-	return h
-}
+func (k keeper) Now() time.Time { return k.s.now() }
 
-func (h *handler) now() time.Time {
-	if h.store != nil {
-		return h.store.now()
-	}
-	return time.Now()
-}
-
-type handler struct {
-	store  *Store // nil for a handler of the console alone
-	stream string
-	level  slog.Leveler // nil keeps every level
-	echo   *echo        // nil writes no console line
-	redact redactor
-	// context and shown never change once built: WithAttrs copies them
-	context []Field
-	shown   []Field // the context as a pretty console line shows it; see show
-	prefix  string
-	own     bool
-}
-
-func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
-	if h.level != nil && level < h.level.Level() {
-		return false
-	}
-	if h.own {
-		return h.echo != nil && h.showsOwn(level)
-	}
-	return h.echo != nil || h.store != nil
-}
-
-// showsOwn says whether the console shows one of the engine's own lines: from
-// Info up, or from the handler's Level when it has one, since the engine
-// writes a Debug summary of its flush every second
-func (h *handler) showsOwn(level slog.Level) bool {
-	return h.level != nil || level >= slog.LevelInfo
-}
-
-func (h *handler) Handle(ctx context.Context, line slog.Record) error {
-	record, own := h.record(line)
-	record.TraceID, record.SpanID = TraceOf(ctx)
-	if h.echo != nil && (!h.own && !own || h.showsOwn(line.Level)) {
-		h.print(record, line)
-	}
-	if h.store != nil && !h.own && !own {
-		h.store.enqueue(record)
-	}
-	return nil
-}
-
-// print writes the line to the console: a JSON line as the record spells it,
-// a pretty one with its durations as a person reads them
-func (h *handler) print(record Record, line slog.Record) {
-	if h.echo.pretty {
-		record.Context = h.shown
-		record.Attrs = nil
-		line.Attrs(func(attr slog.Attr) bool {
-			record.Attrs = appendAttr(record.Attrs, h.prefix, attr, show)
-			return true
-		})
-		record.Attrs = h.redact.fields(record.Attrs)
-	}
-	h.echo.write(&record)
+// fieldsOf is a line's fields as a record's: the two types are one layout,
+// which TestALinesFieldIsARecordsField keeps, so the slice is shared, as the
+// handler shares its context with every line it logs
+func fieldsOf(line []logline.Field) []Field {
+	//nolint:gosec // one layout, which TestALinesFieldIsARecordsField keeps
+	return unsafe.Slice((*Field)(unsafe.Pointer(unsafe.SliceData(line))), len(line))
 }
 
 // enqueue queues a record for the next flush, or drops and counts it when it
@@ -155,123 +84,9 @@ func (s *Store) askForFlush() {
 	}
 }
 
-// record maps one line, and says whether it is the records engine's own
-func (h *handler) record(line slog.Record) (Record, bool) {
-	at := line.Time
-	if at.IsZero() {
-		at = h.now()
-	}
-	level, message := line.Level, line.Message
-	record := Record{At: at, Stream: h.stream, Name: logName, Level: &level, Body: &message, Context: h.context}
-	own := false
-	line.Attrs(func(attr slog.Attr) bool {
-		own = own || isOwn(attr)
-		record.Attrs = appendAttr(record.Attrs, h.prefix, attr, spell)
-		return true
-	})
-	record.Attrs = h.redact.fields(record.Attrs)
-	return record, own
-}
-
 // fits is a line the format can keep, at a time the store's window accepts
 func (s *Store) fits(r *Record) bool {
 	return checkRecord(r) == nil && s.window(s.now()).check(r.At) == nil
-}
-
-func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	next := *h
-	next.context = slices.Clone(h.context)
-	pretty := h.echo != nil && h.echo.pretty
-	if pretty {
-		next.shown = slices.Clone(h.shown)
-	}
-	for _, attr := range attrs {
-		next.context = appendAttr(next.context, h.prefix, attr, spell)
-		if pretty {
-			next.shown = appendAttr(next.shown, h.prefix, attr, show)
-		}
-		next.own = next.own || isOwn(attr)
-	}
-	next.context = h.redact.fields(next.context)
-	next.shown = h.redact.fields(next.shown)
-	return &next
-}
-
-func (h *handler) WithGroup(name string) slog.Handler {
-	if name == "" {
-		return h
-	}
-	next := *h
-	next.prefix = h.prefix + name + "."
-	return &next
-}
-
-// isOwn is the attribute the store's logger gives every line of this engine
-func isOwn(attr slog.Attr) bool {
-	return attr.Key == "engine" && attr.Value.Resolve().String() == "records"
-}
-
-// appendAttr adds one attribute, a group's attributes under its name; an
-// empty attribute is dropped, and an empty group's key is no prefix, as in slog
-func appendAttr(fields []Field, prefix string, attr slog.Attr, spelling func(slog.Value) string) []Field {
-	value := attr.Value.Resolve()
-	if value.Kind() == slog.KindGroup {
-		if attr.Key != "" {
-			prefix += attr.Key + "."
-		}
-		for _, inner := range value.Group() {
-			fields = appendAttr(fields, prefix, inner, spelling)
-		}
-		return fields
-	}
-	if attr.Key == "" && value.Equal(slog.Value{}) {
-		return fields
-	}
-	return append(fields, Field{Key: prefix + attr.Key, Value: spelling(value)})
-}
-
-// show spells a value for a pretty console line: a duration as Go writes one,
-// 1.5s, where the record keeps its nanoseconds as slog.JSONHandler does
-func show(value slog.Value) string {
-	if value.Kind() == slog.KindDuration {
-		return string(appendJSONString(nil, value.Duration().String()))
-	}
-	return spell(value)
-}
-
-// spell writes a resolved value as JSON the way slog.JSONHandler does; NaN and
-// the infinities, which it cannot write, are the strings strconv gives them
-func spell(value slog.Value) string {
-	switch value.Kind() {
-	case slog.KindString:
-		return string(appendJSONString(nil, value.String()))
-	case slog.KindInt64:
-		return strconv.FormatInt(value.Int64(), 10)
-	case slog.KindUint64:
-		return strconv.FormatUint(value.Uint64(), 10)
-	case slog.KindFloat64:
-		return string(appendJSONFloat(nil, value.Float64()))
-	case slog.KindBool:
-		return strconv.FormatBool(value.Bool())
-	case slog.KindDuration:
-		return strconv.FormatInt(int64(value.Duration()), 10)
-	case slog.KindTime:
-		return string(appendJSONString(nil, value.Time().Format(time.RFC3339Nano)))
-	}
-	return spellAny(value.Any())
-}
-
-func spellAny(value any) string {
-	if err, ok := value.(error); ok {
-		if _, marshals := value.(json.Marshaler); !marshals {
-			return string(appendJSONString(nil, err.Error()))
-		}
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return string(appendJSONString(nil, fmt.Sprint(value)))
-	}
-	return string(encoded)
 }
 
 // Flush writes what the handler has queued, and the records that writers of

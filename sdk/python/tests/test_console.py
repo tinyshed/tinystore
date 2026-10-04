@@ -1,5 +1,5 @@
-"""The console lines every logger writes: records/testdata/console.json, which Go's records.Handler and the Bun logger
-are tested against too, and the handler of the console alone."""
+"""The console lines every logger writes: records/console/testdata/console.json, which Go's records/console and the Bun
+logger are tested against too, and the handler of the console alone."""
 
 from __future__ import annotations
 
@@ -14,19 +14,25 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import tinystore
-from tinystore._console import Line, encode_fields, json_line, pretty_line, redactor
+from tinystore._console import SECRETS, Line, encode_fields, json_line, pretty_line, redactor, words
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-VECTORS = json.loads((Path(__file__).parents[3] / "records" / "testdata" / "console.json").read_text(encoding="utf-8"))[
-    "lines"
-]
+FILE = json.loads(
+    (Path(__file__).parents[3] / "records" / "console" / "testdata" / "console.json").read_text(encoding="utf-8")
+)
+VECTORS = FILE["lines"]
+
+
+def test_secrets_are_the_vectors() -> None:
+    assert list(SECRETS) == FILE["secrets"]
 
 
 @pytest.mark.parametrize("vector", VECTORS, ids=[v["name"] for v in VECTORS])
 def test_a_console_line_is_the_vectors(vector: dict[str, Any]) -> None:
-    hides = redactor(vector.get("redact", []))
+    names = [*vector.get("redact", []), *(SECRETS if vector.get("redact_secrets") else ())]
+    hides = redactor(names, vector.get("keep_url_passwords", False))
     line = Line(
         at=int(vector["at"]),
         stream=vector["stream"],
@@ -174,3 +180,71 @@ def test_a_value_the_environment_cannot_mean_is_ignored_and_said_once(
         "expected": "debug, info, warn or error",
     }
     assert line["msg"] == "d" and second.getvalue().count("\n") == 1
+
+
+def test_a_keys_words_are_as_a_person_reads_them() -> None:
+    assert words("DB_PASSWORD") == ["db", "password"]
+    assert words("PasswordHash") == ["password", "hash"]
+    assert words("APIKey") == ["api", "key"]
+    assert words("signing-key") == ["signing", "key"]
+    assert words("oauth2Token") == ["oauth2", "token"]
+
+
+def test_secrets_hide_every_spelling_and_leave_a_counter_that_looks_like_one() -> None:
+    redact = redactor(SECRETS)
+    assert redact is not None
+    assert all(
+        redact.hides(key) for key in ("DB_PASSWORD", "bot_token", "api_key", "apikey", "accessKey", "signing-key")
+    )
+    assert not any(redact.hides(key) for key in ("tokens_used", "passwords", "secretary"))
+
+
+def test_replace_changes_a_value_before_it_is_hidden_and_kept(logger: logging.Logger) -> None:
+    written = io.StringIO()
+
+    def masked(key: str, value: Any) -> Any:
+        return "a***@example.com" if key == "email" else value
+
+    logger.addHandler(tinystore.handler("app", console="json", redact=["password"], replace=masked, to=written))
+    logger.info("signed in", extra={"email": "ann@example.com", "password": "hunter2"})
+    line = json.loads(written.getvalue())
+    assert line["email"] == "a***@example.com" and line["password"] == "[redacted]"
+
+
+def test_a_urls_password_is_hidden_unless_kept(logger: logging.Logger) -> None:
+    hidden, kept = io.StringIO(), io.StringIO()
+    logger.addHandler(tinystore.handler("app", console="json", to=hidden))
+    logger.addHandler(tinystore.handler("app", console="json", keep_url_passwords=True, to=kept))
+    logger.info("connect", extra={"dsn_url": "postgres://ann:hunter2@db/app"})
+    assert json.loads(hidden.getvalue())["dsn_url"] == "postgres://ann:[redacted]@db/app"
+    assert json.loads(kept.getvalue())["dsn_url"] == "postgres://ann:hunter2@db/app"
+
+
+def test_source_says_where_a_line_was_logged(logger: logging.Logger) -> None:
+    written = io.StringIO()
+    logger.addHandler(tinystore.handler("app", console="json", source=True, to=written))
+    logger.info("started")
+    source = json.loads(written.getvalue())["source"]
+    assert source["function"] == "test_source_says_where_a_line_was_logged"
+    assert source["file"].endswith("test_console.py") and source["line"] > 0
+
+
+def test_a_handler_that_named_its_prefix_ignores_the_bare_variables(
+    logger: logging.Logger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    monkeypatch.setenv("APP_LOG_FORMAT", "json")
+    written = io.StringIO()
+    logger.addHandler(tinystore.handler("api", logging.INFO, env=tinystore.from_env("APP"), to=written))
+    logger.debug("hidden")
+    logger.info("shown")
+    lines = written.getvalue().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["msg"] == "shown"
+
+
+def test_env_false_reads_nothing(logger: logging.Logger, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "error")
+    written = io.StringIO()
+    logger.addHandler(tinystore.handler("api", console="json", env=False, to=written))
+    logger.info("shown")
+    assert json.loads(written.getvalue())["msg"] == "shown"

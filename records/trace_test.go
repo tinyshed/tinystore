@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+
+	"github.com/tinyshed/tinystore/records/console"
 )
 
 // A line logged with a traced context, and a record appended with one, take
@@ -15,7 +17,7 @@ func TestARecordTakesTheTraceOfItsContext(t *testing.T) {
 	ctx := WithTrace(t.Context(), trace, span)
 
 	// a line at the test clock's time, which slog's own would be far from
-	if err := s.Handler("api", ConsoleOff).Handle(ctx, slog.NewRecord(testNow, slog.LevelInfo, "charged", 0)); err != nil {
+	if err := s.Handler("api", console.Off).Handle(ctx, slog.NewRecord(testNow, slog.LevelInfo, "charged", 0)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Flush(t.Context()); err != nil {

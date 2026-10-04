@@ -27,7 +27,7 @@ a log line named `log`. Use `append` to give it a name of its own.
 An event logger usually shouldn't print to the console. A view event per
 request would fill your program's log, so turn the console off:
 `store.records.logger('views', { console: 'off' })` in Bun,
-`console="off"` in Python and `records.ConsoleOff` in Go.
+`console="off"` in Python and `console.Off` in Go.
 
 ## Append records that must be kept
 

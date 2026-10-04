@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from typing import TextIO
 
     from ._session import Stream
+    from .config import FromEnv
 
 type Fields = Mapping[str, Any] | Sequence[tuple[str, Any]]
 """Keys and values, each value written as JSON; pairs may repeat a key."""
@@ -398,13 +399,20 @@ class Records:
         hide_stream: bool = False,
         to: TextIO | None = None,
         redact: Iterable[str] = (),
+        keep_url_passwords: bool = False,
+        replace: Callable[[str, Any], Any] | None = None,
+        env: FromEnv | bool = True,
+        source: bool = False,
     ) -> Handler:
         """A logging.Handler whose lines reach the console as they are logged and the stream once a second.
 
         It never makes the logger wait. console is pretty on a terminal and
-        JSON otherwise when None, "off" for none; redact hides the values of
-        fields of those names, at any depth, the case ignored, in the store
-        and on the console.
+        JSON otherwise when None, "off" for none. redact hides, in the store
+        and on the console, the fields whose keys name a secret, "api key"
+        hiding api_key and apiKey, and tinystore.SECRETS the usual ones; a
+        URL's password is hidden unless keep_url_passwords. LOG_LEVEL,
+        LOG_FORMAT and LOG_TIME win over the arguments, or those after env's
+        prefix, and env=False reads none; source adds where a line was logged.
         """
         handler = Handler(
             self._write_lines,
@@ -416,6 +424,10 @@ class Records:
             hide_stream=hide_stream,
             to=to,
             redact=redact,
+            keep_url_passwords=keep_url_passwords,
+            replace=replace,
+            env=env,
+            source=source,
         )
         self._handlers.append(handler)
         return handler
@@ -509,14 +521,9 @@ class Handler(ConsoleHandler):
         stream: str,
         level: int,
         most: int,
-        *,
-        console: Console | None,
-        time: ConsoleTime | None,
-        hide_stream: bool,
-        to: TextIO | None,
-        redact: Iterable[str],
+        **options: Any,
     ) -> None:
-        super().__init__(stream, level, console=console, time=time, hide_stream=hide_stream, to=to, redact=redact)
+        super().__init__(stream, level, **options)
         self._write, self._most = write, most
         self._queue: deque[Line] = deque()
         self._queued = threading.Lock()
