@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -19,7 +20,7 @@ func TestAConstraintSaysItsKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	note := Note{ID: UUID{1}, AuthorID: author.ID, Title: "first", CreatedAt: time.Now()}
+	note := Note{ID: uuid.UUID{1}, AuthorID: author.ID, Title: "first", CreatedAt: time.Now()}
 	if _, err = Insert(ctx, db, d.notes, note); err != nil {
 		t.Fatal(err)
 	}
@@ -44,11 +45,11 @@ func TestAConstraintSaysItsKind(t *testing.T) {
 			return err
 		}, PrimaryKeyViolation, "users", "id", tinystore.ErrConflict},
 		{"an author nobody is", func() error {
-			_, err := Insert(ctx, db, d.notes, Note{ID: UUID{2}, AuthorID: 999, Title: "x", CreatedAt: time.Now()})
+			_, err := Insert(ctx, db, d.notes, Note{ID: uuid.UUID{2}, AuthorID: 999, Title: "x", CreatedAt: time.Now()})
 			return err
 		}, ForeignKeyViolation, "", "", tinystore.ErrInvalid},
 		{"an empty title", func() error {
-			_, err := Insert(ctx, db, d.notes, Note{ID: UUID{3}, AuthorID: author.ID, CreatedAt: time.Now()})
+			_, err := Insert(ctx, db, d.notes, Note{ID: uuid.UUID{3}, AuthorID: author.ID, CreatedAt: time.Now()})
 			return err
 		}, CheckViolation, "", "length(title) > 0", tinystore.ErrInvalid},
 		{"no title at all", func() error {

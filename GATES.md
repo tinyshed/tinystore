@@ -178,6 +178,7 @@ module defines.
 - a declaration that cannot be a table fails at start — `TestADeclarationThatCannotBeATableFailsAtStart`
 - an sqldb value comes back as it went in — `TestEveryValueComesBackAsItWentIn`, `TestArgumentsAreWrittenByTheirGoType`
 - sixteen bytes of a type sqldb does not know are bytes — `TestOnlyAKnownUUIDTypeIsText`
+- the standard library's uuid is text, as a field and as an argument — `TestAStandardLibraryUUIDIsKeptAsText`
 - FTS5 and R*Tree work in an application's file and its snapshot — `TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot`
 - a virtual table's shadow tables are not the application's — `TestAVirtualTablesShadowsAreNotTheSchemas`
 - a value that does not decode names column and field — `TestAValueThatDoesNotDecodeNamesItsColumnAndField`

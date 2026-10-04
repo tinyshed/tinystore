@@ -11,6 +11,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"uuid"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -51,8 +52,8 @@ type everything struct {
 	Infinite  float64
 	At        time.Time
 	Took      time.Duration
-	Key       UUID
-	KeyBytes  UUID
+	Key       uuid.UUID
+	KeyBytes  uuid.UUID
 	Digest    MD5
 	Day       Date
 	Tags      JSON[[]string]
@@ -69,7 +70,6 @@ type everything struct {
 
 func declareEverything(t *testing.T) *TableDef[everything] {
 	t.Helper()
-	knowUUIDs(t)
 	return Table[everything]("everything",
 		PrimaryKey("id"),
 		Storage("key_bytes", Blob),
@@ -95,7 +95,7 @@ func fullRow() everything {
 		Text: "text", Status: "draft", Bytes: []byte{0, 1, 2}, Flag: true, Tiny: -8, Small: 300,
 		Big: math.MinInt64, Unsigned: math.MaxInt64, Ratio: 0.25, Real: 1.0 / 3, Infinite: math.Inf(-1),
 		At:   time.Date(2026, 9, 28, 1, 2, 3, 4_000_000, time.UTC),
-		Took: 1500 * time.Millisecond, Key: UUID{0x01, 0x92, 0xf2, 0xa4, 15: 0xff}, KeyBytes: UUID{1, 2, 3, 15: 4},
+		Took: 1500 * time.Millisecond, Key: uuid.UUID{0x01, 0x92, 0xf2, 0xa4, 15: 0xff}, KeyBytes: uuid.UUID{1, 2, 3, 15: 4},
 		Digest: MD5{9, 15: 9}, Day: Date{2026, time.February, 28},
 		Tags: JSONOf([]string{"home", "<b>&"}), Counts: JSONOf(map[string]int{"a": 1}),
 		Price: Cents{1999}, Maybe: &somewhere, Nullable: sql.Null[int64]{V: 7, Valid: true},
@@ -137,7 +137,6 @@ func TestEveryValueComesBackAsItWentIn(t *testing.T) {
 
 // a parameter is written by its Go type, as its column would hold it
 func TestArgumentsAreWrittenByTheirGoType(t *testing.T) {
-	knowUUIDs(t)
 	db := openNotes(t)
 	at := time.Date(2026, 9, 28, 0, 0, 0, 5_000_000, time.UTC)
 	for _, c := range []struct {
@@ -147,7 +146,7 @@ func TestArgumentsAreWrittenByTheirGoType(t *testing.T) {
 		{at, "integer 1790553600005"},
 		{2 * time.Second, "integer 2000"},
 		{true, "integer 1"},
-		{UUID{0xab, 15: 1}, "text ab000000-0000-0000-0000-000000000001"},
+		{uuid.UUID{0xab, 15: 1}, "text ab000000-0000-0000-0000-000000000001"},
 		{MD5{1}, "blob 01000000000000000000000000000000"},
 		{Date{2026, 9, 28}, "text 2026-09-28"},
 		{JSONOf([]int{1, 2}), "text [1,2]"},
@@ -181,7 +180,7 @@ func TestAValueThatDoesNotDecodeNamesItsColumnAndField(t *testing.T) {
 		`select null as title`:           `column title: NULL does not decode into Note.Title (string)`,
 		`select '2026-13-01' as due`:     `column due: TEXT "2026-13-01" does not decode into Note.Due (*sqldb.Date)`,
 		`select 'not json' as tags`:      `column tags: TEXT "not json" does not decode into Note.Tags (sqldb.JSON[[]string])`,
-		`select 'abc' as id`:             `column id: TEXT "abc" does not decode into Note.ID (sqldb.UUID)`,
+		`select 'abc' as id`:             `column id: TEXT "abc" does not decode into Note.ID (uuid.UUID)`,
 		`select 1 as nobody`:             `column nobody: no field of sqldb.Note takes it`,
 		`select 1 as title, 2 as TITLE`:  `columns title and TITLE both fill Note.Title`,
 		`select 70000 as author_id, 1.5`: `column 1.5: no field of sqldb.Note takes it`,
@@ -232,23 +231,49 @@ func TestAValueSQLiteWouldChangeIsRefused(t *testing.T) {
 	}
 }
 
-type keyed struct {
-	ID     UUID
-	Digest MD5
-}
-
 // sixteen bytes are a uuid, stored as text, only for a type sqldb knows by its
 // import path: another type of sixteen bytes, an MD5, is a BLOB
 func TestOnlyAKnownUUIDTypeIsText(t *testing.T) {
-	forget := knowUUIDs(t)
-	known := Schema(Table[keyed]("keyed")).SQL()
-	if !strings.Contains(known, "id     TEXT NOT NULL,") ||
-		!strings.Contains(known, "digest BLOB NOT NULL CHECK (length(digest) = 16)") {
-		t.Fatalf("with UUID known:\n%s", known)
+	type UUID [16]byte // named as a uuid is, in a package sqldb does not know
+	type keyed struct {
+		ID      uuid.UUID
+		Digest  MD5
+		Unknown UUID
 	}
-	forget()
-	unknown := Schema(Table[keyed]("keyed")).SQL()
-	if !strings.Contains(unknown, "id     BLOB NOT NULL CHECK (length(id) = 16),") {
-		t.Fatalf("a UUID of a package sqldb does not know:\n%s", unknown)
+	sql := Schema(Table[keyed]("keyed")).SQL()
+	for _, want := range []string{
+		"id      TEXT NOT NULL,",
+		"digest  BLOB NOT NULL CHECK (length(digest) = 16),",
+		"unknown BLOB NOT NULL CHECK (length(unknown) = 16)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("no %q in\n%s", want, sql)
+		}
+	}
+}
+
+// the standard library's uuid, Go 1.27's, is text in its column and as an argument
+func TestAStandardLibraryUUIDIsKeptAsText(t *testing.T) {
+	type account struct {
+		ID    uuid.UUID
+		Login string
+	}
+	accounts := Table[account]("accounts", PrimaryKey("id"))
+	schema := Schema(accounts)
+	if sql := schema.SQL(); !strings.Contains(sql, "id    TEXT NOT NULL PRIMARY KEY,") {
+		t.Fatalf("the schema:\n%s", sql)
+	}
+	db := openSchema(t, schema)
+	ctx := t.Context()
+	id := uuid.NewV7()
+	if _, err := Insert(ctx, db, accounts, account{ID: id, Login: "ann"}); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := Scalar[string](ctx, db, `select typeof(id) || ' ' || id from accounts`); err != nil || kept != "text "+id.String() {
+		t.Errorf("the column holds %q, %v; want text %s", kept, err, id)
+	}
+	found, ok, err := One[account](ctx, db, `select * from accounts where id = ?`, id)
+	if err != nil || !ok || found.ID != id || found.Login != "ann" {
+		t.Errorf("found by its uuid: %+v, %v, %v", found, ok, err)
 	}
 }

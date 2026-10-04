@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
@@ -204,9 +205,9 @@ func noteArguments(i, authors int) []any {
 	}
 }
 
-func noteID(i int) UUID {
+func noteID(i int) uuid.UUID {
 	random := rand.New(rand.NewPCG(uint64(i), 17))
-	var id UUID
+	var id uuid.UUID
 	binary.LittleEndian.PutUint64(id[:8], random.Uint64())
 	binary.LittleEndian.PutUint64(id[8:], random.Uint64())
 	id[6] = id[6]&0x0f | 0x40
@@ -260,22 +261,22 @@ func TestPointReadsMeasured(t *testing.T) {
 
 	ways := []struct {
 		name string
-		read func(ctx context.Context, id UUID) error
+		read func(ctx context.Context, id uuid.UUID) error
 	}{
-		{"sqldb.One[Note]", func(ctx context.Context, id UUID) error {
+		{"sqldb.One[Note]", func(ctx context.Context, id uuid.UUID) error {
 			_, found, err := One[Note](ctx, db, noteByID, id)
 			if err == nil && !found {
 				err = sql.ErrNoRows
 			}
 			return err
 		}},
-		{"statement, scanned by hand", func(ctx context.Context, id UUID) error {
+		{"statement, scanned by hand", func(ctx context.Context, id uuid.UUID) error {
 			return db.file.Lookup(ctx, func(r sqlite.Reader) error {
 				_, err := scanNote(sqlite.QueryRow(ctx, r, noteByID, uuidText(id[:])).Scan)
 				return err
 			})
 		}},
-		{"transaction, compiled each call", func(ctx context.Context, id UUID) error {
+		{"transaction, compiled each call", func(ctx context.Context, id uuid.UUID) error {
 			return db.file.View(ctx, func(tx *sql.Tx) error {
 				_, err := scanNote(tx.QueryRowContext(ctx, noteByID, uuidText(id[:])).Scan)
 				return err
@@ -429,13 +430,13 @@ func TestAsAProgramOpensItMeasured(t *testing.T) {
 
 	reads := []struct {
 		name string
-		read func(id UUID) error
+		read func(id uuid.UUID) error
 	}{
-		{"sqldb.One[Note]", func(id UUID) error {
+		{"sqldb.One[Note]", func(id uuid.UUID) error {
 			_, _, err := One[Note](ctx, db, noteByID, id)
 			return err
 		}},
-		{"database/sql, as a program opens it", func(id UUID) error {
+		{"database/sql, as a program opens it", func(id uuid.UUID) error {
 			_, err := scanNote(pool.QueryRowContext(ctx, noteByID, uuidText(id[:])).Scan)
 			return err
 		}},

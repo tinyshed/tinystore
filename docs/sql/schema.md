@@ -130,7 +130,7 @@ differs, or a migration is missing or renamed, `Open` refuses the file.
 
 ```go
 note, err := sqldb.Insert(ctx, db, Notes, Note{
-	ID:        uuid.Must(uuid.NewV7()),
+	ID:        uuid.NewV7(),
 	AuthorID:  user.ID,
 	Title:     "Buy milk",
 	Tags:      sqldb.JSONOf([]string{"home"}),
@@ -146,6 +146,17 @@ Use UUID version 7 for keys: its first bits are a timestamp, so new rows land
 next to each other in the index. Inserting 500,000 rows was 5 to 6 times
 faster than with random version 4 UUIDs, on a Ryzen 7 7700 with an NVMe disk
 ([report](https://github.com/tinyshed/research/blob/main/tinystore/reports/sqldb-mechanics-2026-09-28.md)).
+
+A `uuid.UUID` is stored as text, `8-4-4-4-12` in lower case. This works for
+the standard library's `uuid` package, which Go 1.27 added, and for
+`github.com/google/uuid` and `github.com/gofrs/uuid`. A UUID passed as a query
+argument is written as text too, so `where id = ?` finds the row.
+
+> [!WARNING]
+> **A UUID stored as bytes**
+> `sqldb.Storage("id", sqldb.Blob)` stores a UUID column as 16 bytes instead
+> of text. A UUID passed as a query argument is still written as text, so
+> `where id = ?` finds nothing. Pass its bytes instead: `id[:]`.
 
 ## See also
 

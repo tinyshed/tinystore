@@ -6,6 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"uuid"
 
 	"github.com/tinyshed/tinystore"
 )
@@ -157,7 +158,7 @@ func TestARebuiltTableKeepsItsChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 100 {
-		note := Note{ID: UUID{byte(i)}, AuthorID: author.ID, Title: "note", CreatedAt: time.Now()}
+		note := Note{ID: uuid.UUID{byte(i)}, AuthorID: author.ID, Title: "note", CreatedAt: time.Now()}
 		if _, err = Insert(t.Context(), db, d.notes, note); err != nil {
 			t.Fatal(err)
 		}

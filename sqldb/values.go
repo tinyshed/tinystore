@@ -85,9 +85,10 @@ var (
 )
 
 // uuidPackages are those whose UUID sqldb knows by name, without importing
-// either. Sixteen bytes of any other type are bytes, since reflection cannot
+// any. Sixteen bytes of any other type are bytes, since reflection cannot
 // tell a uuid from an MD5.
 var uuidPackages = map[string]bool{
+	"uuid":                     true, // the standard library's, since Go 1.27
 	"github.com/google/uuid":   true,
 	"github.com/gofrs/uuid":    true,
 	"github.com/gofrs/uuid/v5": true,

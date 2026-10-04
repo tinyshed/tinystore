@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 )
 
 type (
@@ -147,9 +148,8 @@ func panicOf(declare func()) (panicked string) {
 //	a uuid kept as bytes
 //	a field shadowed by a shallower one of the same column
 func TestADeclarationSaysWhatItsStructCannot(t *testing.T) {
-	knowUUIDs(t)
 	type ticket struct {
-		ID       UUID
+		ID       uuid.UUID
 		Status   Status
 		Level    Level
 		Tags     JSON[[]string]

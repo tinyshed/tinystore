@@ -2,39 +2,12 @@ package sqldb
 
 import (
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+	"uuid"
 )
-
-// UUID stands for github.com/google/uuid's, which the module does not
-// require: knowUUIDs makes this package one whose UUID sqldb knows by name
-type UUID [16]byte
-
-// knowUUIDs lets UUID stand for a known uuid until the test ends, or until
-// the function it returns is called
-func knowUUIDs(t *testing.T) (forget func()) {
-	t.Helper()
-	path := reflect.TypeFor[UUID]().PkgPath()
-	uuidPackages[path] = true
-	forgetTypes()
-	forget = func() {
-		delete(uuidPackages, path)
-		forgetTypes()
-	}
-	t.Cleanup(forget)
-	return forget
-}
-
-// forgetTypes drops what sqldb learnt of Go types, so that a change of
-// uuidPackages shows
-func forgetTypes() {
-	classified.Clear()
-	models.Clear()
-	plans.Clear()
-}
 
 // the model research's design/sqldb.md declares
 type (
@@ -47,7 +20,7 @@ type (
 	}
 
 	Note struct {
-		ID        UUID
+		ID        uuid.UUID
 		AuthorID  int64
 		Title     string
 		Done      bool
@@ -66,7 +39,6 @@ type design struct {
 
 func declareDesign(t *testing.T) design {
 	t.Helper()
-	knowUUIDs(t)
 	users := Table[User]("users",
 		PrimaryKey("id"),
 		Unique("email"),
