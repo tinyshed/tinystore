@@ -154,6 +154,55 @@ func Example_attemptLimits() {
 	// false
 }
 
+// Failed sign-ins are counted per login and per address, five in fifteen
+// minutes and fifty a day, and checked before the password is hashed, which
+// is the costly part. A correct password clears the login's failures; the
+// address keeps its own.
+func Example_signInFailures() {
+	ctx := context.Background()
+	state, clock, done := exampleState()
+	defer done()
+	failures, err := kv.OpenQuota(ctx, state, "signin-failures",
+		kv.Window("burst", 5, 15*time.Minute), kv.Window("day", 50, 24*time.Hour))
+	check(err)
+	byLogin, byAddress := failures.Of("login"), failures.Of("address")
+
+	signIn := func(login, address string, correct bool) string {
+		for _, refused := range []struct {
+			quota *kv.Quota
+			key   string
+		}{{byLogin, login}, {byAddress, address}} {
+			usage, getErr := refused.quota.Get(ctx, refused.key)
+			check(getErr)
+			if !usage.OK {
+				return fmt.Sprintf("429, retry after %s", usage.RetryAfter)
+			}
+		}
+		if !correct { // the password was hashed and did not match
+			_, err := byLogin.Allow(ctx, login)
+			check(err)
+			_, err = byAddress.Allow(ctx, address)
+			check(err)
+			return "401"
+		}
+		check(byLogin.Delete(ctx, login))
+		return "200"
+	}
+	for range 5 {
+		signIn("ann", "10.0.0.1", false)
+	}
+	fmt.Println(signIn("ann", "10.0.0.1", true))
+	fmt.Println(signIn("ann", "10.0.0.2", true))
+	clock.advance(15 * time.Minute)
+	fmt.Println(signIn("ann", "10.0.0.1", true))
+	fmt.Println(signIn("ann", "10.0.0.1", false))
+	// Output:
+	// 429, retry after 15m0s
+	// 429, retry after 15m0s
+	// 200
+	// 401
+}
+
 // A provider delivers an event until it gets a 200, so an event may arrive
 // twice. A claim's version keeps a handler slower than its claim from finishing
 // the next one's.

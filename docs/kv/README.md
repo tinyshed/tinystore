@@ -192,6 +192,7 @@ database and the same id from a URL find the same value.
 - [Counters](counters.md): integers that you increment, with optional
   in-memory counting.
 - [Sessions](sessions.md): a complete recipe for user sessions.
+- [Sign-in limits](sign-in-limits.md): a recipe that limits failed sign-ins per login and per address.
 - [Rate limits](rate-limits.md): limit requests per second for each key.
 - [Quotas](quotas.md): limits such as "100 per 5 hours and 300 per week".
 - [Once](once.md): run a function only once per idempotency key.

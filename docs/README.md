@@ -40,6 +40,7 @@ skill: .agents/skills/docs/SKILL.md.
 - [Versions](kv/versions.md)
 - [Counters](kv/counters.md)
 - [Sessions](kv/sessions.md)
+- [Sign-in limits](kv/sign-in-limits.md)
 - [Rate limits](kv/rate-limits.md)
 - [Quotas](kv/quotas.md)
 - [Once](kv/once.md)

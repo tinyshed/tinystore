@@ -188,3 +188,4 @@ expiry is all a session needs.
 - [Expiry](expiry.md): how sliding expiry works.
 - [Transactions](transactions.md): batches in Bun and Python, `Tx` in Go.
 - [Rate limits](rate-limits.md): protect the sign-in form.
+- [Sign-in limits](sign-in-limits.md): limit failed sign-ins per login and per address.
