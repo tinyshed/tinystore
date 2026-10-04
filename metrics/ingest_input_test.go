@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"database/sql"
 	"errors"
 	"math"
 	"testing"
@@ -51,4 +52,21 @@ func TestASampleAheadOfTheClockIsRefused(t *testing.T) {
 		t.Fatalf("a sample at the skew's edge: %v", err)
 	}
 	assertSamples(t, readAll(t, s), []Sample{{At: horizon, Value: 1}})
+}
+
+// The schema admits a histogram series ahead of the engine, so that the kind
+// arrives after v0.1.0 without rebuilding the series table; Ingest refuses one.
+func TestTheSchemaAdmitsAHistogramTheEngineDoesNotIngestYet(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	if err := store.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`insert into series(id, identity, label_ids, kind) values (99, '@histogram', x'', 'histogram')`)
+		return err
+	}); err != nil {
+		t.Fatalf("the schema refused a histogram series: %v", err)
+	}
+	histogram := Batch{Series: Series{Name: "latency", Kind: "histogram"}, Samples: []Sample{{At: testEpoch, Value: 1}}}
+	if err := store.Ingest(t.Context(), []Batch{histogram}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ingested a histogram: %v", err)
+	}
 }

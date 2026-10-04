@@ -6,12 +6,14 @@ create table store_state (
 insert into store_state values (1, 0, 1);
 
 -- identity is '@' and the base64 SHA-256 of the canonical labels; label_ids are
--- the gap-coded dictionary ids every digest match is confirmed against
+-- the gap-coded dictionary ids every digest match is confirmed against. The
+-- check admits 'histogram' ahead of the engine, which ingests no such series
+-- yet, since SQLite changes a check only by rebuilding its table.
 create table series (
     id        integer primary key,
     identity  text not null unique,
     label_ids blob not null,
-    kind      text not null check (kind in ('gauge', 'counter'))
+    kind      text not null check (kind in ('gauge', 'counter', 'histogram'))
 ) strict;
 
 create table label_values (

@@ -94,6 +94,7 @@ module defines.
 - a series that cannot be repaired can still be dropped — `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours`
 - long-head append preserves bits and frontier — `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`
 - exact aggregates cross blocks, resets and retention — `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestACounterStepCountsInTheBucketItEndsIn` and `TestAggregateClipsRetentionBeforeSummingSealedEdges`
+- the schema admits a histogram series before the engine ingests one, so the kind needs no rebuilt table — `TestTheSchemaAdmitsAHistogramTheEngineDoesNotIngestYet`
 - a whole block's summary answers as its samples do — `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`, every operation, kind and boundary
 - an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range — `TestAnHourOfACounterIncreasesBy3585AtEveryWidth`, `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange`, `TestAggregateOverTheWire` in `server`; `an increase counts the step into each bucket, the first from before the range` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - the first bucket steps from the newest sample a lookback before the range, which a block's summary answers undecoded — `TestTheFirstBucketTakesItsStepFromBeforeTheRange`
