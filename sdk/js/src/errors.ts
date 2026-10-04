@@ -66,6 +66,30 @@ export class LimitError extends TinystoreError {
 	}
 }
 
+/**
+ * The names a LimitError's `limit` holds, as Go's constants and Python's
+ * `tinystore.limits` spell them, to map a limit without matching its text.
+ *
+ * ```ts
+ * if (err instanceof LimitError && err.limit === limits.decodedSamples) { … }
+ * ```
+ */
+export const limits = Object.freeze({
+	storeMemory: 'store memory',
+	storeMemoryNow: 'store memory, now',
+	matchedSeries: 'matched series',
+	decodedBlocks: 'decoded blocks',
+	fetchedBytes: 'fetched bytes',
+	decodedSamples: 'decoded samples',
+	outputSamples: 'output samples',
+	outputBuckets: 'output buckets',
+	recordBytes: "bytes of a record, a block's",
+	appendBytes: "bytes of records in one Append, a segment's; split it",
+	jobValueBytes: "bytes of a job's value",
+	stepBytes: "bytes of a step's answer",
+	objectBytes: "bytes of an object, the bucket's MaxSize",
+} as const)
+
 /** The store, the handle or the connection closed. */
 export class ClosedError extends TinystoreError {
 	constructor(message: string, what?: What) {

@@ -17,6 +17,9 @@ type Options struct {
 }
 
 // the engine's own bounds and schedule
+// LimitObjectBytes is the name a LimitError holds for an object past its bucket's MaxSize.
+const LimitObjectBytes = "bytes of an object, the bucket's MaxSize"
+
 const (
 	pageSize        = 4 << 10     // an object's row is its path, a few numbers, its type and its meta
 	readers         = 8           // the reader connections: lookups, scans and counts

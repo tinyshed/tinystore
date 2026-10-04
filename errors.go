@@ -26,6 +26,12 @@ var (
 //
 // errors.Is finds ErrLimit through it, and Kind, an engine's own limit, when
 // it has one.
+// The names of the store's own limits, which a LimitError's Name holds.
+const (
+	LimitMemory    = "store memory"      // what one call would hold at once
+	LimitMemoryNow = "store memory, now" // what the calls running hold together
+)
+
 type LimitError struct {
 	Name   string
 	Wanted int64

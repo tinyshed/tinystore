@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 
+import tinystore
 from tinystore._wire.codec import Codec, Message
 from tinystore._wire.frame import HEADER_SIZE, check_header, frame, parse_header
 from tinystore._wire.messages import MESSAGES, METHODS
@@ -334,3 +335,9 @@ def test_every_method_is_the_number_the_server_gives_it() -> None:
 
 def test_every_code_the_server_sends_is_a_class_of_its_own() -> None:
     assert sorted(codes) == sorted(MESSAGE_VECTORS["codes"])
+
+
+def test_limits_are_the_names_of_the_shared_file() -> None:
+    file = json.loads((Path(__file__).parents[3] / "testdata" / "limits.json").read_text(encoding="utf-8"))
+    names = {name: getattr(tinystore.limits, name) for name in dir(tinystore.limits) if name.isupper()}
+    assert names == {limit["python"]: limit["name"] for limit in file["limits"]}

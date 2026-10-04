@@ -26,6 +26,12 @@ type Record struct {
 	Attrs []Field
 }
 
+// The names of a record's limits, which a LimitError's Name holds.
+const (
+	LimitRecordBytes = "bytes of a record, a block's"
+	LimitAppendBytes = "bytes of records in one Append, a segment's; split it"
+)
+
 type TraceID [16]byte
 
 type SpanID [8]byte

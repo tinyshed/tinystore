@@ -105,7 +105,7 @@ func (j Job[V]) Keep(ctx context.Context, name string, answer json.RawMessage) e
 	case !json.Valid(answer):
 		return fmt.Errorf("%w: jobs: step %q's answer is not JSON", tinystore.ErrInvalid, name)
 	case len(answer) > maxValue:
-		return &tinystore.LimitError{Name: "bytes of a step's answer", Wanted: int64(len(answer)), Bound: maxValue}
+		return &tinystore.LimitError{Name: LimitStepBytes, Wanted: int64(len(answer)), Bound: maxValue}
 	}
 	reserved, err := l.store.reserve(ctx, len(answer))
 	if err != nil {

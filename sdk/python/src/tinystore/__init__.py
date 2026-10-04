@@ -7,6 +7,7 @@
         await sessions.of(user_id).set(token, session)
 """
 
+from . import limits
 from ._console import SECRETS, ConsoleHandler, handler
 from ._page import Page
 from .blobs import BlobBucket, BlobObject, Download, Usage
@@ -42,6 +43,7 @@ from .sql import Database, Done
 from .store import Status, Store, connect, open
 
 __all__ = [
+    "SECRETS",
     "Aggregate",
     "Allowance",
     "Batch",
@@ -56,7 +58,6 @@ __all__ = [
     "Config",
     "ConflictError",
     "ConsoleHandler",
-    "SECRETS",
     "CorruptError",
     "Counters",
     "Cursor",
@@ -107,6 +108,7 @@ __all__ = [
     "fixed",
     "from_env",
     "handler",
+    "limits",
     "none_of",
     "one_of",
     "open",

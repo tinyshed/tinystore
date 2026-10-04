@@ -147,7 +147,7 @@ func (u *Upload) checkStart() error {
 	declared, b := u.call.settings.size, u.bucket
 	if b.maxSize > 0 && declared > b.maxSize {
 		return &tinystore.LimitError{
-			Name: "bytes of an object, the bucket's MaxSize", Wanted: declared,
+			Name: LimitObjectBytes, Wanted: declared,
 			Bound: b.maxSize,
 		}
 	}
@@ -310,7 +310,7 @@ func (u *Upload) bound(n int) error {
 	case declared >= 0 && after > declared:
 		return fmt.Errorf("%w: a stream longer than its Size of %d", tinystore.ErrInvalid, declared)
 	case most > 0 && after > most:
-		return &tinystore.LimitError{Name: "bytes of an object, the bucket's MaxSize", Wanted: after, Bound: most}
+		return &tinystore.LimitError{Name: LimitObjectBytes, Wanted: after, Bound: most}
 	}
 	return nil
 }

@@ -30,6 +30,16 @@ type sentinel struct {
 
 func kindOf(message string, kind error) error { return &sentinel{message: message, kind: kind} }
 
+// The names of a query's budgets, which a LimitError's Name holds when one is spent.
+const (
+	LimitSeries         = "matched series"
+	LimitBlocks         = "decoded blocks"
+	LimitPayloadBytes   = "fetched bytes"
+	LimitDecodedSamples = "decoded samples"
+	LimitOutputSamples  = "output samples"
+	LimitOutputBuckets  = "output buckets"
+)
+
 // limit is a metrics limit a query reached, named, which errors.Is finds as
 // ErrLimit and the store's.
 func limit(name string, wanted, bound int) error {

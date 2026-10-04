@@ -21,6 +21,8 @@ module defines.
 
 ## The store
 
+- a container's memory limit gives the store's budget, and no limit gives none — `TestFromCgroupIsAFractionOfTheContainersLimit`
+- every limit a LimitError names is an exported constant, the SDKs' limits the same names — `TestEveryLimitNameIsAnExportedConstant`, over `testdata/limits.json`; `are the names of testdata/limits.json, which Go's constants hold` in `sdk/js/test/wire.test.ts`, `test_limits_are_the_names_of_the_shared_file` in Python's
 - one store holds a directory — `TestASecondStoreOnTheSameDirectoryIsRefused`
 - engines close last opened first, once — `TestCloseClosesEnginesLastOpenedFirstAndOnlyOnce`
 - a repeated background failure is not a log flood — `TestBackgroundFailuresAreLoggedOncePerQuietPeriod`; `a repeated failure is said once a quiet period, and its recovery once` in `sdk/js/test/background.test.ts`, `test_a_repeated_failure_is_said_once_a_quiet_period_and_its_recovery_once` in Python's

@@ -201,7 +201,7 @@ func readMatchedSeries(
 	for rows.Next() {
 		if len(matched) == budget.limits.Series {
 			budget.series = len(matched) + 1
-			return nil, limit("matched series", len(matched)+1, budget.limits.Series)
+			return nil, limit(LimitSeries, len(matched)+1, budget.limits.Series)
 		}
 		budget.series = len(matched) + 1
 		var series registeredSeries

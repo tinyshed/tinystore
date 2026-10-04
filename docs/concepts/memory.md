@@ -30,6 +30,42 @@ The budget covers the work of the engines. It is not a limit on the process's
 whole memory: the Go runtime, SQLite's caches and the values your program
 keeps are outside it.
 
+## Memory while idle
+
+Each engine's file keeps one writer connection and one reader connection open.
+A burst of reads opens more readers, up to eight for an SQL database or KV,
+and each one closes after a minute without use, until one is left. In Go,
+`tinystore.Options{Readers: 2}` sets the most readers that any engine of the
+store opens, and `sqldb.Readers(n)` sets one database's.
+
+## Set the budget from the container
+
+```go
+store, err := tinystore.Open(ctx, dir, tinystore.Options{Memory: tinystore.FromCgroup(0.5)}) // half the container's limit
+```
+
+`FromCgroup` reads the memory limit of the container the program runs in, from
+cgroup v2 or v1, and returns that fraction of it. It returns 0, which means no
+budget, outside Linux and in a container without a limit. This is Go only,
+because Bun and Python reach the store through a server, which takes
+`--memory`.
+
+## Run your own work under the budget
+
+```go
+reservation, err := store.Reserve(ctx, 19<<20) // an Argon2 hash holds 19 MiB
+if err != nil {
+	return err
+}
+defer reservation.Release()
+hash := argon2.IDKey(password, salt, 2, 19*1024, 1, 32)
+```
+
+Your program can reserve memory from the store's budget for heavy work of its
+own, such as hashing a password. The work then waits while the engines use the
+budget, and the engines wait while it runs, so the whole process stays within
+one bound. `ReserveNow` takes the memory only if it is free right away.
+
 ## Limits of every call
 
 Without a budget, each engine still limits how much one call can take, and
@@ -76,6 +112,41 @@ A limit error tells you which limit was reached, how much the call wanted and
 what the limit is, so you know whether to raise the limit or ask for less. A
 metrics query never returns fewer samples than you asked for without telling
 you.
+
+Compare the limit's name with a constant instead of its text:
+
+```ts
+import { LimitError, limits } from '@tinyshed/tinystore'
+
+if (err instanceof LimitError && err.limit === limits.decodedSamples) { /* ask for a shorter range */ }
+```
+
+```python
+if isinstance(err, tinystore.LimitError) and err.limit == tinystore.limits.DECODED_SAMPLES:
+    ...  # ask for a shorter range
+```
+
+```go
+if limit, ok := errors.AsType[*tinystore.LimitError](err); ok && limit.Name == metrics.LimitDecodedSamples {
+	// ask for a shorter range
+}
+```
+
+| Limit                        | Bun              | Python             | Go                            |
+|------------------------------|------------------|--------------------|-------------------------------|
+| the store's memory, one call | `storeMemory`    | `STORE_MEMORY`     | `tinystore.LimitMemory`       |
+| the store's memory, now      | `storeMemoryNow` | `STORE_MEMORY_NOW` | `tinystore.LimitMemoryNow`    |
+| series a query matches       | `matchedSeries`  | `MATCHED_SERIES`   | `metrics.LimitSeries`         |
+| blocks a query decodes       | `decodedBlocks`  | `DECODED_BLOCKS`   | `metrics.LimitBlocks`         |
+| bytes a query fetches        | `fetchedBytes`   | `FETCHED_BYTES`    | `metrics.LimitPayloadBytes`   |
+| samples a query decodes      | `decodedSamples` | `DECODED_SAMPLES`  | `metrics.LimitDecodedSamples` |
+| samples a query returns      | `outputSamples`  | `OUTPUT_SAMPLES`   | `metrics.LimitOutputSamples`  |
+| buckets an aggregate returns | `outputBuckets`  | `OUTPUT_BUCKETS`   | `metrics.LimitOutputBuckets`  |
+| a record's bytes             | `recordBytes`    | `RECORD_BYTES`     | `records.LimitRecordBytes`    |
+| bytes of one `append`        | `appendBytes`    | `APPEND_BYTES`     | `records.LimitAppendBytes`    |
+| a job's value                | `jobValueBytes`  | `JOB_VALUE_BYTES`  | `jobs.LimitValueBytes`        |
+| a step's answer              | `stepBytes`      | `STEP_BYTES`       | `jobs.LimitStepBytes`         |
+| an object past `maxSize`     | `objectBytes`    | `OBJECT_BYTES`     | `blobs.LimitObjectBytes`      |
 
 ## Why limits instead of best effort
 

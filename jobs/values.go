@@ -55,8 +55,14 @@ func (c valueCodec[V]) weigh(value V) int {
 	return maxValue
 }
 
+// The names of a job's limits, which a LimitError's Name holds.
+const (
+	LimitValueBytes = "bytes of a job's value"
+	LimitStepBytes  = "bytes of a step's answer"
+)
+
 func tooLarge(size int) error {
-	return &tinystore.LimitError{Name: "bytes of a job's value", Wanted: int64(size), Bound: maxValue}
+	return &tinystore.LimitError{Name: LimitValueBytes, Wanted: int64(size), Bound: maxValue}
 }
 
 // decode reads a value back; one that no longer reads into V, because the
