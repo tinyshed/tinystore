@@ -1,8 +1,9 @@
 name: Release
 
 # A release is one run of this workflow, dispatched from main with its version.
-# CI runs on the commit; the three tags are made in the runner and everything
-# is built from them; nothing leaves before that has passed. Asked to publish,
+# CI runs on the commit unless a push has passed it already; the three tags are
+# made in the runner and everything is built from them; nothing leaves before
+# that has passed. Asked to publish,
 # and approved in the release environment, it pushes the tags all at once,
 # publishes npm, PyPI and the server image, and makes the GitHub release last,
 # when everything it announces is there. The release skill has the why.
@@ -26,12 +27,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # a commit whose push CI passed needs no second run of it
+  passed:
+    name: CI passed already
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      ci: ${{ steps.find.outputs.ci }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success" --jq .total_count)
+          if [ "$runs" -gt 0 ]; then echo "ci=passed" >> "$GITHUB_OUTPUT"; fi
+
   ci:
+    needs: passed
+    if: needs.passed.outputs.ci != 'passed'
     uses: ./.github/workflows/ci.yml
 
   build:
     name: build
-    needs: ci
+    needs: [passed, ci]
+    if: >-
+      !cancelled() && (needs.ci.result == 'success'
+      || needs.ci.result == 'skipped' && needs.passed.outputs.ci == 'passed')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,9 +148,10 @@ jobs:
 
   # the first step that cannot be taken back: the environment's reviewers
   # approve it, having seen what the build made
+  # a CI skipped above would skip every job under it, so each says what it waits for
   tags:
     name: push the tags
-    if: inputs.publish
+    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
     needs: build
     runs-on: ubuntu-latest
     environment: release
@@ -155,6 +178,7 @@ jobs:
   npm:
     name: npm
     needs: [build, tags]
+    if: ${{ !cancelled() && needs.tags.result == 'success' }}
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -206,6 +230,7 @@ jobs:
   pypi:
     name: PyPI
     needs: [build, tags]
+    if: ${{ !cancelled() && needs.tags.result == 'success' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -224,6 +249,7 @@ jobs:
   image:
     name: server image
     needs: [build, tags]
+    if: ${{ !cancelled() && needs.tags.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -290,6 +316,9 @@ jobs:
   github:
     name: GitHub release
     needs: [build, npm, pypi, image]
+    if: >-
+      ${{ !cancelled() && needs.npm.result == 'success' && needs.pypi.result == 'success'
+      && needs.image.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

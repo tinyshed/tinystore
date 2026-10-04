@@ -150,6 +150,16 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # the tools change only with tools/, and lint checks only what changed since its last run
+      - uses: actions/cache@v6
+        with:
+          path: |
+            bin
+            .task
+            ~/.cache/golangci-lint
+          key: quality-${{ hashFiles('tools/go.sum', 'Taskfile.yml', '.golangci.yml') }}-${{ github.sha }}
+          restore-keys: quality-${{ hashFiles('tools/go.sum', 'Taskfile.yml', '.golangci.yml') }}-
+
       - name: Build pinned tools
         run: task setup
 

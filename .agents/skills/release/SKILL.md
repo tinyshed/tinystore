@@ -17,9 +17,9 @@ the run, only when the user has said to, for that version.
 
 1. CI is green on main, and the documents describe nothing unbuilt as working.
 2. Try it: Actions, Release, run from main with the version and publish off.
-   It runs CI on the commit, makes the three tags in its runner, builds
-   everything from them, and keeps `dist` and `tags` as the run's artifacts.
-   Try `dist` as below.
+   It runs CI on the commit unless the push already passed it, makes the three
+   tags in its runner, builds everything from them, and keeps `dist` and
+   `tags` as the run's artifacts. Try `dist` as below.
 3. Publish: the same with publish on. Once the build has passed, the run waits
    for a reviewer of the `release` environment. Approving pushes the three tags
    at once; npm, PyPI and the image publish; the GitHub release comes last,
