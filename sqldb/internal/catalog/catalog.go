@@ -60,6 +60,7 @@ type Index struct {
 	Unique  bool
 	Origin  string // c for CREATE INDEX, u for a UNIQUE constraint, pk for the primary key
 	Partial bool
+	Where   string // a partial index's condition, as its CREATE INDEX spells it
 	SQL     string // empty for an index a constraint made
 }
 
@@ -82,10 +83,15 @@ func (t *Table) Column(name string) *Column {
 	return nil
 }
 
-// Plain is an index on columns alone, as a schema declares them; an index on
-// an expression or of a part of the rows is its migrations' own
+// Plain is an index on columns alone and on every row; an index on an
+// expression, or a partial one the schema does not declare, is its migrations' own
 func (ix *Index) Plain() bool {
-	return !ix.Partial && !containsFold(ix.Columns, "")
+	return !ix.Partial && ix.onColumns()
+}
+
+// onColumns is an index a schema can declare: on columns, partial or not
+func (ix *Index) onColumns() bool {
+	return !containsFold(ix.Columns, "")
 }
 
 const (
@@ -206,6 +212,9 @@ func (t *Table) readIndexes(ctx context.Context, r Reader) error {
 		if err := rows.Scan(&ix.Name, &ix.Unique, &ix.Origin, &ix.Partial, &ix.SQL); err != nil {
 			return err
 		}
+		if ix.Partial {
+			ix.Where = whereOf(ix.SQL)
+		}
 		t.Indexes = append(t.Indexes, ix)
 		return nil
 	})
@@ -227,6 +236,34 @@ func (t *Table) readIndexes(ctx context.Context, r Reader) error {
 		})
 	}
 	return err
+}
+
+// whereOf is the condition of a partial index's CREATE INDEX, what follows
+// the WHERE after its columns:
+//
+//	CREATE UNIQUE INDEX users_owner ON users (role) WHERE role = 'owner'  →  role = 'owner'
+func whereOf(create string) string {
+	open := strings.IndexByte(create, '(')
+	if open < 0 {
+		return ""
+	}
+	depth := 0
+	for i := open; i < len(create); i++ {
+		switch create[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		if depth == 0 {
+			rest := strings.TrimSpace(create[i+1:])
+			if len(rest) > len("WHERE") && strings.EqualFold(rest[:len("WHERE")], "WHERE") {
+				return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest[len("WHERE"):]), ";"))
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func (t *Table) readReferences(ctx context.Context, r Reader) error {

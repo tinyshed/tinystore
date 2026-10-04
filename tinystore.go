@@ -29,19 +29,25 @@ type Options struct {
 	// zero leaves each engine to its own per-call limits.
 	Memory int64
 
+	// Readers bounds the reader connections each engine's file opens under
+	// load, half a MiB each; zero leaves each engine its own count. A reader
+	// beyond one closes after a minute unused, whatever the bound.
+	Readers int
+
 	// SelfMetrics periodically writes available engine reports into an opened
 	// metrics engine. Manual stores call FlushSelfMetrics themselves.
 	SelfMetrics bool
 }
 
 type Store struct {
-	dir    string
-	logger *slog.Logger
-	clock  func() time.Time
-	manual bool
-	lock   io.Closer
-	memory *memory
-	self   *selfMetrics
+	dir     string
+	logger  *slog.Logger
+	clock   func() time.Time
+	manual  bool
+	lock    io.Closer
+	memory  *memory
+	readers int
+	self    *selfMetrics
 
 	background context.Context
 	stop       context.CancelFunc
@@ -61,8 +67,8 @@ type Store struct {
 // same directory, in this process or another, is refused with ErrInUse. ctx
 // bounds the opening only: background work lives until Close.
 func Open(ctx context.Context, dir string, options Options) (*Store, error) {
-	if dir == "" || options.Memory < 0 {
-		return nil, fmt.Errorf("%w: empty directory or negative memory", ErrInvalid)
+	if dir == "" || options.Memory < 0 || options.Readers < 0 {
+		return nil, fmt.Errorf("%w: empty directory, negative memory or negative readers", ErrInvalid)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
@@ -84,7 +90,7 @@ func Open(ctx context.Context, dir string, options Options) (*Store, error) {
 func newStore(ctx context.Context, dir string, options Options, lock io.Closer) *Store {
 	store := &Store{
 		dir: dir, logger: options.Logger, clock: options.Clock, manual: options.Manual, lock: lock,
-		claimed: map[string]bool{}, done: make(chan struct{}),
+		readers: options.Readers, claimed: map[string]bool{}, done: make(chan struct{}),
 	}
 	if store.logger == nil {
 		store.logger = slog.New(slog.DiscardHandler)

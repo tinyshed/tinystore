@@ -1,6 +1,7 @@
 package sqldb
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,10 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/ncruces/go-sqlite3"
-	"github.com/ncruces/go-sqlite3/ext/fts5"
-	"github.com/ncruces/go-sqlite3/ext/rtree"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/admission"
@@ -57,6 +54,7 @@ type tuning struct {
 	writer    sqlite.Config
 	snapshot  time.Duration
 	applyNone bool // ApplyNone's: the file must have applied every migration
+	readers   int
 }
 
 // holder is the transaction that holds the writer: where it began, and when
@@ -102,6 +100,13 @@ func ApplyNone() OpenOption {
 	return func(t *tuning) { t.applyNone = true }
 }
 
+// Readers is how many reader connections the database opens under load, eight
+// unless it says, and fewer when the store's Options.Readers says; half a MiB
+// each, and those beyond one close after a minute unused.
+func Readers(n int) OpenOption {
+	return func(t *tuning) { t.readers = n }
+}
+
 func open(
 	ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef, timing tuning,
 ) (*DB, error) {
@@ -142,19 +147,64 @@ func open(
 	return d, nil
 }
 
-// registerExtensions gives a connection the virtual tables an application's
-// migrations may make, FTS5 and R*Tree with Geopoly, which SQLite as the
-// driver builds it leaves to each connection. SQLite tells an FTS5 table's
-// shadow tables from the application's own only on a connection that has
-// the module, so every connection to the file has them.
-func registerExtensions(conn *sqlite3.Conn) error {
-	if err := fts5.Register(conn); err != nil {
-		return fmt.Errorf("register FTS5: %w", err)
+// modulePackages are the imports that link a virtual table module, which
+// SQLite as the driver builds it leaves to each connection. SQLite tells an
+// FTS5 table's shadow tables from the application's own only on a connection
+// that has the module, so every connection to the file registers every
+// module the program linked.
+var modulePackages = map[string]string{
+	"fts5":      "github.com/tinyshed/tinystore/sqldb/fts5",
+	"rtree":     "github.com/tinyshed/tinystore/sqldb/rtree",
+	"rtree_i32": "github.com/tinyshed/tinystore/sqldb/rtree",
+	"geopoly":   "github.com/tinyshed/tinystore/sqldb/rtree",
+}
+
+const virtualTablesQuery = `select name, sql from sqlite_schema
+	where type = 'table' and sql like 'create virtual table%'`
+
+// checkModules refuses a file holding a virtual table whose module the
+// program did not link, naming the import that links it
+func checkModules(ctx context.Context, r sqlite.Reader) error {
+	rows, err := r.QueryContext(ctx, virtualTablesQuery)
+	if err != nil {
+		return err
 	}
-	if err := rtree.Register(conn); err != nil {
-		return fmt.Errorf("register R*Tree: %w", err)
+	defer rows.Close()
+	for rows.Next() {
+		var name, create string
+		if err = rows.Scan(&name, &create); err != nil {
+			return err
+		}
+		if module := moduleOf(create); module != "" && !sqlite.ModuleLinked(module) {
+			return missingModule(name, module)
+		}
 	}
-	return nil
+	return rows.Err()
+}
+
+func missingModule(table, module string) error {
+	if pkg, known := modulePackages[strings.ToLower(module)]; known {
+		return fmt.Errorf("%w: %s uses %s, which the program did not link: import _ %q",
+			tinystore.ErrInvalid, table, module, pkg)
+	}
+	return fmt.Errorf("%w: %s uses the module %s, which sqldb has no package for", tinystore.ErrInvalid, table, module)
+}
+
+// moduleOf is the module of a CREATE VIRTUAL TABLE:
+//
+//	create virtual table notes_fts using fts5(title, body)  →  fts5
+func moduleOf(create string) string {
+	lower := strings.ToLower(create)
+	at := strings.Index(lower, " using ")
+	if at < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(create[at+len(" using "):])
+	end := strings.IndexFunc(rest, func(r rune) bool { return r == '(' || r == ' ' || r == ';' })
+	if end < 0 {
+		end = len(rest)
+	}
+	return strings.Trim(rest[:end], "\"`[]")
 }
 
 func openFile(
@@ -168,9 +218,10 @@ func openFile(
 	d.leave = d.gate.Leave
 
 	config := timing.writer
-	config.Readers, config.Statements, config.Waited = readers, statements, d.waited
+	config.Readers = store.Readers(cmp.Or(timing.readers, readers))
+	config.Statements, config.Waited = statements, d.waited
 	config.MaxLength = int(min(store.Memory().Capacity, math.MaxInt32))
-	config.Connected = registerExtensions
+	config.Connected = sqlite.RegisterModules
 	file, err := sqlite.Open(ctx, path, config)
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)
@@ -183,6 +234,9 @@ func openFile(
 		err = file.Verify(ctx, sqlApplicationID, scripts)
 	default:
 		err = file.Migrate(ctx, sqlApplicationID, scripts)
+	}
+	if err == nil {
+		err = file.Lookup(ctx, func(r sqlite.Reader) error { return checkModules(ctx, r) })
 	}
 	if err != nil {
 		return nil, errors.Join(migrationError(name, err), file.Close())
@@ -208,6 +262,10 @@ func mayOpen(path string, timing tuning) error {
 func migrationError(name string, err error) error {
 	if errors.Is(err, ErrPending) || errors.Is(err, sqlite.ErrMismatch) {
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, name, err)
+	}
+	if _, after, found := strings.Cut(err.Error(), "no such module: "); found {
+		module, _, _ := strings.Cut(after, " ")
+		return fmt.Errorf("sql %q: %w: %w", name, missingModule("a migration", module), err)
 	}
 	return fmt.Errorf("sql %q: %w", name, err)
 }

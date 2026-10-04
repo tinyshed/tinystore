@@ -28,6 +28,7 @@ const (
 	CheckText
 	DefaultText
 	IndexName
+	IndexWhereText
 )
 
 // Difference is one way a file differs from the schema declared.
@@ -236,12 +237,15 @@ func (p tables) indexes() []Difference {
 		claimed[have] = true
 		if !sameShape(want, have) {
 			found = append(found, p.differ(IndexShape, want.Name, shapeOf(want), shapeOf(have)))
+			continue
 		}
+		found = append(found, p.where(want, have)...)
 	}
 	for _, want := range unnamed {
 		if have := p.have.shaped(want, claimed); have != nil {
 			claimed[have] = true
 			found = append(found, p.differ(IndexName, want.Name, want.Name, have.Name))
+			found = append(found, p.where(want, have)...)
 			continue
 		}
 		found = append(found, p.differ(MissingIndex, want.Name, want.SQL, ""))
@@ -252,6 +256,15 @@ func (p tables) indexes() []Difference {
 		}
 	}
 	return found
+}
+
+// where compares two partial indexes' conditions as text folded, which a
+// test reports and Open never refuses: the same rows may be spelled otherwise
+func (p tables) where(want, have *Index) []Difference {
+	if !want.Partial || Fold(want.Where) == Fold(have.Where) {
+		return nil
+	}
+	return []Difference{p.differ(IndexWhereText, want.Name, want.Where, have.Where)}
 }
 
 func (t *Table) index(name string) *Index {
@@ -265,7 +278,7 @@ func (t *Table) index(name string) *Index {
 
 func (t *Table) shaped(want *Index, claimed map[*Index]bool) *Index {
 	for _, ix := range t.Indexes {
-		if !claimed[ix] && ix.Origin != "pk" && ix.Plain() && sameShape(want, ix) {
+		if !claimed[ix] && ix.Origin != "pk" && ix.onColumns() && sameShape(want, ix) {
 			return ix
 		}
 	}

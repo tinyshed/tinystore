@@ -15,6 +15,7 @@ import (
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/server/wire"
 	"github.com/tinyshed/tinystore/sqldb"
+	_ "github.com/tinyshed/tinystore/sqldb/fts5"
 )
 
 // The database the adversarial round attacks. It has a table with an index, a

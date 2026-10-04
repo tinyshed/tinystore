@@ -12,6 +12,8 @@ import (
 	"testing/fstest"
 
 	"github.com/tinyshed/tinystore"
+	_ "github.com/tinyshed/tinystore/sqldb/fts5"
+	_ "github.com/tinyshed/tinystore/sqldb/rtree"
 )
 
 var notesMigrations = fstest.MapFS{
@@ -486,5 +488,60 @@ func TestCopyTakesADatabaseNoOneOpened(t *testing.T) {
 	}
 	if notes, err := All[note](ctx, back, `select * from notes`); err != nil || len(notes) != 1 || notes[0].Title != "kept" {
 		t.Fatalf("the copy holds %+v: %v", notes, err)
+	}
+}
+
+// moduleOf reads the module a CREATE VIRTUAL TABLE names, however it is spelled
+func TestModuleOfReadsTheModule(t *testing.T) {
+	for create, want := range map[string]string{
+		`create virtual table notes_fts using fts5(title, body)`: "fts5",
+		`CREATE VIRTUAL TABLE "places" USING rtree (id, x0, x1)`: "rtree",
+		`create virtual table t using "spellfix1"`:               "spellfix1",
+		`create table notes (id integer)`:                        "",
+	} {
+		if got := moduleOf(create); got != want {
+			t.Errorf("%s: %q, want %q", create, got, want)
+		}
+	}
+}
+
+// a file holding a virtual table of a module the program did not link is
+// refused, naming the import that links it, rather than failing at its first use
+func TestAVirtualTableOfAModuleNotLinkedIsRefused(t *testing.T) {
+	err := missingModule("notes_fts", "fts5")
+	if !errors.Is(err, tinystore.ErrInvalid) ||
+		!strings.Contains(err.Error(), `notes_fts uses fts5, which the program did not link: import _ "github.com/tinyshed/tinystore/sqldb/fts5"`) {
+		t.Fatalf("fts5 not linked: %v", err)
+	}
+	migrations := mapFS(map[string]string{"001_words.sql": `create virtual table words using spellfix1;`})
+	_, err = Open(t.Context(), openStore(t, t.TempDir()), "app", migrations, nil)
+	if err == nil || !strings.Contains(err.Error(), "spellfix1") {
+		t.Fatalf("a module sqldb has no package for: %v", err)
+	}
+}
+
+// a database opens the readers it asks for, and no more than the store's bound
+func TestTheStoresReadersCapEveryDatabase(t *testing.T) {
+	for _, c := range []struct {
+		store, database, want int
+	}{
+		{0, 0, readers},
+		{0, 2, 2},
+		{2, 0, 2},
+		{2, 4, 2},
+		{4, 1, 1},
+	} {
+		store := openStoreWith(t, t.TempDir(), tinystore.Options{Manual: true, Readers: c.store})
+		var options []OpenOption
+		if c.database > 0 {
+			options = append(options, Readers(c.database))
+		}
+		db, err := Open(t.Context(), store, "app", nil, nil, options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := db.file.Readers(); got != c.want {
+			t.Errorf("a store bounding readers to %d, a database asking %d: %d readers, want %d", c.store, c.database, got, c.want)
+		}
 	}
 }

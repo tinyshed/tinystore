@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore/sqldb"
+	_ "github.com/tinyshed/tinystore/sqldb/fts5"
+	_ "github.com/tinyshed/tinystore/sqldb/rtree"
 )
 
 // recorder is a testing.TB that keeps what a check reports; its Fatalf stops

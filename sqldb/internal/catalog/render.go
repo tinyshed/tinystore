@@ -61,6 +61,9 @@ func (d Difference) Sentence(model string, side Side) string {
 			d.Table, d.File, side.name)
 	case IndexName:
 		return fmt.Sprintf("the index %s on %s is %s in %s", d.Column, d.Table, d.File, side.name)
+	case IndexWhereText:
+		return fmt.Sprintf("the index %s covers the rows where %s in the schema and where %s in %s; "+
+			"spelled otherwise, or changed?", d.Column, d.Declared, d.File, side.name)
 	}
 	return fmt.Sprintf("%s differs", d.Table)
 }

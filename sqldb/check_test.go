@@ -9,6 +9,7 @@ import (
 	"uuid"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/sqldb/internal/catalog"
 )
 
 func openDesign(t *testing.T, d design) *DB {
@@ -183,5 +184,59 @@ func TestARebuiltTableKeepsItsChildren(t *testing.T) {
 	}
 	if children, _ := Scalar[int](t.Context(), db, `select count(*) from notes`); children != 100 {
 		t.Fatalf("%d of 100 notes survived their authors' table being rebuilt", children)
+	}
+}
+
+// a partial unique index is declared, printed and checked like any other: a
+// file without it is refused, and one naming it or spelling its WHERE
+// otherwise opens, the difference a line in the schema's test
+func TestAPartialUniqueIndexIsDeclaredAndChecked(t *testing.T) {
+	type member struct {
+		ID   int64
+		Role string
+	}
+	schema := Schema(Table[member]("users", PrimaryKey("id"), UniqueWhere("role = 'owner'", "role")))
+	if sql := schema.SQL(); !strings.Contains(sql, `CREATE UNIQUE INDEX users_role ON users (role) WHERE role = 'owner';`) {
+		t.Fatalf("the schema:\n%s", sql)
+	}
+	table := `CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT NOT NULL) STRICT;`
+	for name, c := range map[string]struct {
+		index string
+		opens bool
+	}{
+		"as declared":                 {`CREATE UNIQUE INDEX users_role ON users (role) WHERE role = 'owner';`, true},
+		"named and spelled otherwise": {`create unique index users_owner on users(role) where ROLE = 'owner' ;`, true},
+		"missing":                     {``, false},
+		"over every row":              {`CREATE UNIQUE INDEX users_role ON users (role);`, false},
+		"not unique":                  {`CREATE INDEX users_owner ON users (role) WHERE role = 'owner';`, false},
+	} {
+		migrations := mapFS(map[string]string{"001_users.sql": table + "\n" + c.index})
+		db, err := Open(t.Context(), openStore(t, t.TempDir()), "app", migrations, schema)
+		if opened := err == nil; opened != c.opens {
+			t.Errorf("%s: opened %v: %v", name, opened, err)
+			continue
+		}
+		if !c.opens {
+			continue
+		}
+		if _, err = db.Exec(t.Context(), `insert into users (role) values ('owner'), ('member'), ('member')`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Exec(t.Context(), `insert into users (role) values ('owner')`); !errors.Is(err, tinystore.ErrConflict) {
+			t.Errorf("%s: a second owner: %v", name, err)
+		}
+	}
+
+	declared, err := catalog.Declare(t.Context(), schema.SQL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := catalog.Declare(t.Context(), table+"\ncreate unique index users_role on users(role) where role in ('owner');")
+	if err != nil {
+		t.Fatal(err)
+	}
+	differences := catalog.Compare(declared, file)
+	if len(differences) != 1 || differences[0].What != catalog.IndexWhereText || differences[0].Structural() {
+		t.Fatalf("a WHERE spelled otherwise: %+v", differences)
 	}
 }

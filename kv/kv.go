@@ -82,7 +82,7 @@ func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error
 // openEngine opens and migrates the file, reads its revision and hands the
 // engine to the store
 func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Store, error) {
-	file, err := openFile(ctx, path)
+	file, err := openFile(ctx, path, store.Readers(readers))
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 	return state, nil
 }
 
-func openFile(ctx context.Context, path string) (*sqlite.File, error) {
+func openFile(ctx context.Context, path string, readers int) (*sqlite.File, error) {
 	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers, PageSize: pageSize, WriterCache: writerCache})
 	if err != nil {
 		return nil, fmt.Errorf("kv: open: %w", err)

@@ -439,3 +439,57 @@ func TestARangeReadEndsAtItsDeadline(t *testing.T) {
 		t.Fatalf("a walk of a billion rows with 50 ms to run: %v", err)
 	}
 }
+
+// a burst of reads opens a reader each; those beyond one close once idle, and
+// the next read opens a reader as the first was: it refuses to write
+func TestAnIdleReaderClosesAndTheNextReadOpensIt(t *testing.T) {
+	file, err := Open(t.Context(), filepath.Join(t.TempDir(), "idle.db"), Config{Readers: 4, ReaderIdle: 30 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if err = file.Migrate(t.Context(), 1234, testMigrations(`create table example(n integer) strict;`)); err != nil {
+		t.Fatal(err)
+	}
+
+	held, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 4)
+	for range 4 {
+		go func() {
+			done <- file.View(t.Context(), func(tx *sql.Tx) error {
+				held <- struct{}{}
+				<-release
+				return nil
+			})
+		}()
+	}
+	for range 4 {
+		<-held
+	}
+	close(release)
+	for range 4 {
+		if err = <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if idle := file.IdleReaders(); idle != 4 {
+		t.Fatalf("%d readers idle after a burst of four", idle)
+	}
+	for deadline := time.Now().Add(5 * time.Second); file.IdleReaders() > 1 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if idle, open := file.IdleReaders(), file.reader.Stats().OpenConnections; idle != 1 || open != 1 {
+		t.Fatalf("%d readers idle, %d open, after they were unused; want one", idle, open)
+	}
+
+	err = file.Lookup(t.Context(), func(r Reader) error {
+		rows, writeErr := r.QueryContext(t.Context(), `insert into example values (1) returning n`)
+		if writeErr != nil {
+			return writeErr
+		}
+		return EachRow(rows, "an insert", func(*sql.Rows) error { return nil })
+	})
+	if err == nil {
+		t.Fatal("a reader opened again wrote")
+	}
+}

@@ -69,6 +69,15 @@ func (r *Reservation) Release() {
 	r.Shrink(0)
 }
 
+// Readers is how many reader connections an engine that wants want opens:
+// want, or Options.Readers when that is fewer.
+func (s *Store) Readers(want int) int {
+	if s.readers > 0 && s.readers < want {
+		return s.readers
+	}
+	return want
+}
+
 func (s *Store) Memory() MemoryUsage {
 	if s.memory == nil {
 		return MemoryUsage{}

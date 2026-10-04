@@ -169,8 +169,13 @@ wrote internal/data/migrations/002_add_description.sql:
   primary keys or two indexes of one name. `References` points at its
   parent's one-column key, `Unique` is an index rather than a table
   constraint, an index is named `<table>_<columns>` unless `NamedIndex` names
-  it, and `Schema(...).SQL()` prints every statement the migrations have to
-  make, each table `STRICT`.
+  it, `UniqueWhere` and `IndexWhere` declare a partial index of the rows a
+  condition holds for, and `Schema(...).SQL()` prints every statement the
+  migrations have to make, each table `STRICT`. A declared partial index pairs
+  with the file's by its columns, its uniqueness and its having a condition,
+  which `Open` refuses a file over; the condition spelled otherwise is a line
+  of `sqldbtest.CheckSchema` that never refuses one, as a `CHECK` is. A
+  partial index the schema does not declare is its migrations' own.
 - **Migrations are the `.sql` files** at the root of the `fs.FS` given or, when
   it holds none, in its one directory, applied in name order and all pending
   ones in one transaction, with foreign keys off and `foreign_key_check`
@@ -178,6 +183,17 @@ wrote internal/data/migrations/002_add_description.sql:
   children. Each is kept by its checksum: an edited, renamed or missing one, a
   file that has applied more than the binary knows, or another engine's file
   refuses to open, `ErrInvalid`.
+- **Reads run on up to eight readers**, `Readers(n)` at `Open` to say
+  otherwise, and fewer when the store's `Options.Readers` bounds every
+  engine's. A reader beyond one closes after a minute unused, and the next
+  read opens one again, query only as the first was.
+- **A virtual table's module is an import.** FTS5 is linked by importing
+  `sqldb/fts5`, R*Tree and Geopoly by `sqldb/rtree`, so a program that never
+  makes one does not carry it, and every connection to every database of a
+  program that imports one registers it. A migration, or a file, with a
+  virtual table of a module the program did not link is `ErrInvalid` at
+  `Open`, naming the import. The `tinystore` binary links both, for Bun and
+  Python.
 - **Nil migrations open the file as it is.** `Open(ctx, store, "app", nil, nil)`
   makes an empty file when there is none, applies nothing and checks no
   history, for a script or a first try; with `ApplyNone` it opens only a file

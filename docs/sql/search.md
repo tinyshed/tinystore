@@ -1,9 +1,28 @@
 # Full-text search
 
-Search the text of your rows with SQLite's FTS5, which is built into every
-TinyStore database. Create the search index in a migration, keep it up to
-date with triggers, and query it with plain SQL. R*Tree, for searching by
-location or range, is available the same way.
+Search the text of your rows with SQLite's FTS5. Create the search index in a
+migration, keep it up to date with triggers, and query it with plain SQL.
+R*Tree, for searching by location or range, is available the same way.
+
+## Turn it on in Go
+
+```go
+import (
+	"github.com/tinyshed/tinystore/sqldb"
+	_ "github.com/tinyshed/tinystore/sqldb/fts5"  // full-text search
+	_ "github.com/tinyshed/tinystore/sqldb/rtree" // R*Tree and Geopoly
+)
+```
+
+In Bun and Python, FTS5 and R*Tree are always there, because the `tinystore`
+server includes them. In Go, each is a package that you import, so a program
+that doesn't search doesn't carry their code. If a database has a virtual
+table whose package your program doesn't import, `sqldb.Open` fails with an
+invalid error (`ErrInvalid`) that names the import to add:
+
+```text
+sql "app": invalid request: messages_fts uses fts5, which the program did not link: import _ "github.com/tinyshed/tinystore/sqldb/fts5"
+```
 
 ## Create the index
 

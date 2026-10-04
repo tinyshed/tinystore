@@ -77,34 +77,36 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path                     | What it is                                                                                                                                   |
-|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `codec/`                 | the block codec and the payload format. Knows samples and bytes, nothing else                                                                |
-| `metrics/`               | the metrics API and its registry, head, groups, query and retention                                                                          |
-| `sqldb/`                 | the application's SQL databases: tables from structs, checked migrations, typed reads and writes                                             |
-| `records/`               | logs and events: a head, event-time segments, paged reads, a follow cursor                                                                   |
-| `records/console/`       | the logger without the store: a slog handler, its console lines, redaction and environment; links no SQLite                                  |
-| `kv/`                    | the application's current state: typed buckets, branches, expiry, versions                                                                   |
-| `jobs/`                  | work that runs at its time: queues ordered by time, leases, retries, repeats                                                                 |
-| `blobs/`                 | the application's files: objects by path, inline or a file each, checked reads                                                               |
-| `backup/`                | every engine's file in one checked zip, and its restore before `Open`                                                                        |
-| `internal/sqlite/`       | file handles, read/write transactions and checked migrations                                                                                 |
-| `internal/admission/`    | an engine's open gate and the slots that bound its concurrent work                                                                           |
-| `internal/dirlock/`      | the directory's `LOCK`, one store a directory, per platform                                                                                  |
-| `internal/term/`         | whether a file is a terminal that shows colours, for a logger's console lines                                                                |
-| `internal/dbstat/`       | a closed file's pages divided among its tables and indexes, for measurements                                                                 |
-| `internal/release/`      | what a release makes: its tags, binaries, archives, npm packages, wheels, notes                                                              |
-| `tools/`                 | a second module pinning developer tools. Two files, never hand-edited                                                                        |
-| `server/`                | a module of its own: the store served to other processes, sessions, listeners, handlers                                                      |
-| `server/wire/`           | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors                                                              |
-| `server/reach/`          | the Go client of a directory's server, found through `SERVE` and proven, for the tool                                                        |
-| `cmd/tinystore/`         | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, `backup`, `restore`, and `migrate` and `schema` for sqldb |
-| `sdk/js/`, `sdk/python/` | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module                                  |
-| `docs/`                  | the guides, one page per feature in Go, Bun and Python, and the wire protocol; `README.md` is their table of contents and the site's sidebar |
-| `web/`                   | the docs site: SvelteKit prerendering `docs/`, and its Bun server under `server/`; `web/go.mod` keeps it out of the Go module                |
-| `examples/`              | programs using the public API, built and tested with the module                                                                              |
-| `.github/workflows/`     | the authoritative clean builds                                                                                                               |
-| `.agents/skills/`        | how the recurring work is done; `.claude/skills/` points to it                                                                               |
+| Path                          | What it is                                                                                                                                   |
+|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `codec/`                      | the block codec and the payload format. Knows samples and bytes, nothing else                                                                |
+| `metrics/`                    | the metrics API and its registry, head, groups, query and retention                                                                          |
+| `sqldb/`                      | the application's SQL databases: tables from structs, checked migrations, typed reads and writes                                             |
+| `records/`                    | logs and events: a head, event-time segments, paged reads, a follow cursor                                                                   |
+| `records/console/`            | the logger without the store: a slog handler, its console lines, redaction and environment; links no SQLite                                  |
+| `kv/`                         | the application's current state: typed buckets, branches, expiry, versions                                                                   |
+| `jobs/`                       | work that runs at its time: queues ordered by time, leases, retries, repeats                                                                 |
+| `blobs/`                      | the application's files: objects by path, inline or a file each, checked reads                                                               |
+| `backup/`                     | every engine's file in one checked zip, and its restore before `Open`                                                                        |
+| `internal/sqlite/`            | file handles, read/write transactions and checked migrations                                                                                 |
+| `internal/admission/`         | an engine's open gate and the slots that bound its concurrent work                                                                           |
+| `internal/dirlock/`           | the directory's `LOCK`, one store a directory, per platform                                                                                  |
+| `internal/term/`              | whether a file is a terminal that shows colours, for a logger's console lines                                                                |
+| `internal/linkaudit/`         | the canary `task size` looks for: methods the linker drops unless method pruning is off                                                      |
+| `sqldb/fts5/`, `sqldb/rtree/` | SQLite's virtual table modules, each linked by its import                                                                                    |
+| `internal/dbstat/`            | a closed file's pages divided among its tables and indexes, for measurements                                                                 |
+| `internal/release/`           | what a release makes: its tags, binaries, archives, npm packages, wheels, notes                                                              |
+| `tools/`                      | a second module pinning developer tools. Two files, never hand-edited                                                                        |
+| `server/`                     | a module of its own: the store served to other processes, sessions, listeners, handlers                                                      |
+| `server/wire/`                | the protocol's bytes: frames, the MessagePack profile, messages, codes, vectors                                                              |
+| `server/reach/`               | the Go client of a directory's server, found through `SERVE` and proven, for the tool                                                        |
+| `cmd/tinystore/`              | the one executable, a module of its own: `serve`, `stop`, `status`, `logs`, `mcp`, `backup`, `restore`, and `migrate` and `schema` for sqldb |
+| `sdk/js/`, `sdk/python/`      | the clients of `tinystore serve` for Bun and Node, and Python; `sdk/go.mod` keeps them out of the Go module                                  |
+| `docs/`                       | the guides, one page per feature in Go, Bun and Python, and the wire protocol; `README.md` is their table of contents and the site's sidebar |
+| `web/`                        | the docs site: SvelteKit prerendering `docs/`, and its Bun server under `server/`; `web/go.mod` keeps it out of the Go module                |
+| `examples/`                   | programs using the public API, built and tested with the module                                                                              |
+| `.github/workflows/`          | the authoritative clean builds                                                                                                               |
+| `.agents/skills/`             | how the recurring work is done; `.claude/skills/` points to it                                                                               |
 
 The first engine keeps its implementation in one package; split it only when
 a dependency boundary needs a package, not to mirror the execution steps:
@@ -325,8 +327,12 @@ Go mutex wait instead of an intermittent `database is locked`; the reader pool
 is opened with `_query_only=1`, so a read path cannot write by mistake.
 `_txlock=immediate` takes the write lock at `BEGIN`, because a deferred
 transaction that upgrades on its first write gets a busy that `busy_timeout`
-cannot wait out. Every pragma is per connection, which is why nothing in the
-pool is allowed to expire and be reopened.
+cannot wait out. Every pragma is per connection, so each travels in the
+connection's URL and each module registers in `Connected`: a reader opened
+again is the same reader. That is what lets a reader beyond one close after a
+minute unused, on a timer `Close` stops and waits for, since a burst of reads
+otherwise keeps half a MiB a reader for good. database/sql's own pool keeps
+no idle connection, so nothing else expires one.
 
 **Read SQL is prepared on its owning connection, with a bounded cache.** A
 prepared program is not a cached result: each read still starts a new snapshot.

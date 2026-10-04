@@ -89,6 +89,7 @@ type index struct {
 	name    string
 	columns []string
 	unique  bool
+	where   string // a partial index's condition, as SQL spells it
 }
 
 // TableOption says what a struct cannot: keys, indexes, references, defaults,
@@ -257,20 +258,33 @@ func PrimaryKey(columns ...string) TableOption {
 // Unique is a unique index named <table>_<columns>, not a table constraint. A
 // later migration can then drop it without rebuilding the table.
 func Unique(columns ...string) TableOption {
-	return indexOn("", columns, true)
+	return indexOn("", columns, true, "")
+}
+
+// UniqueWhere is a unique index of the rows where holds, named
+// <table>_<columns>: a promise about part of a table, such as one owner.
+//
+//	UniqueWhere("role = 'owner'", "role")  →  CREATE UNIQUE INDEX users_role ON users (role) WHERE role = 'owner';
+func UniqueWhere(where string, columns ...string) TableOption {
+	return indexOn("", columns, true, where)
 }
 
 // Index is an index named <table>_<columns>.
 func Index(columns ...string) TableOption {
-	return indexOn("", columns, false)
+	return indexOn("", columns, false, "")
+}
+
+// IndexWhere is an index of the rows where holds, named <table>_<columns>.
+func IndexWhere(where string, columns ...string) TableOption {
+	return indexOn("", columns, false, where)
 }
 
 // NamedIndex is an index a migration made under a name of its own.
 func NamedIndex(name string, columns ...string) TableOption {
-	return indexOn(name, columns, false)
+	return indexOn(name, columns, false, "")
 }
 
-func indexOn(name string, columns []string, unique bool) TableOption {
+func indexOn(name string, columns []string, unique bool, where string) TableOption {
 	columns = slices.Clone(columns)
 	return func(t *table) error {
 		if err := t.knows(columns); err != nil {
@@ -280,7 +294,12 @@ func indexOn(name string, columns []string, unique bool) TableOption {
 		if indexName == "" {
 			indexName = t.name + "_" + strings.Join(columns, "_")
 		}
-		t.indexes = append(t.indexes, &index{name: indexName, columns: slices.Clone(columns), unique: unique})
+		if strings.TrimSpace(where) == "" && where != "" {
+			return fmt.Errorf("an empty WHERE for the index %s", indexName)
+		}
+		t.indexes = append(t.indexes, &index{
+			name: indexName, columns: slices.Clone(columns), unique: unique, where: strings.TrimSpace(where),
+		})
 		return nil
 	}
 }

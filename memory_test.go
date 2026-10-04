@@ -175,3 +175,14 @@ func waitForWaiters(t *testing.T, budget *memory, count int) {
 	}
 	t.Fatalf("never saw %d waiters", count)
 }
+
+func TestTheStoresReadersBoundWhatAnEngineWants(t *testing.T) {
+	bounded := &Store{readers: 2}
+	unbounded := &Store{}
+	if bounded.Readers(8) != 2 || bounded.Readers(1) != 1 || unbounded.Readers(8) != 8 {
+		t.Fatalf("Readers: %d %d %d", bounded.Readers(8), bounded.Readers(1), unbounded.Readers(8))
+	}
+	if _, err := Open(t.Context(), t.TempDir(), Options{Readers: -1}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("negative readers: %v", err)
+	}
+}

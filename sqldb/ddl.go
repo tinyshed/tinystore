@@ -49,8 +49,12 @@ func (ix *index) ddl(table string) string {
 	if ix.unique {
 		unique = "UNIQUE "
 	}
-	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%s);\n",
-		unique, catalog.Quote(ix.name), catalog.Quote(table), quoteAll(ix.columns))
+	where := ""
+	if ix.where != "" {
+		where = " WHERE " + ix.where
+	}
+	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)%s;\n",
+		unique, catalog.Quote(ix.name), catalog.Quote(table), quoteAll(ix.columns), where)
 }
 
 // definition is what follows a column's name in its table:

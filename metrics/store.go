@@ -70,7 +70,7 @@ func Open(ctx context.Context, runtime *tinystore.Store, options Options) (*Stor
 }
 
 func openEngine(ctx context.Context, runtime *tinystore.Store, path string, opts Options) (*Store, error) {
-	f, err := openFile(ctx, path, opts.MaxReaders)
+	f, err := openFile(ctx, path, runtime.Readers(opts.MaxReaders))
 	if err != nil {
 		return nil, err
 	}

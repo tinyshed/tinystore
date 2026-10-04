@@ -5,10 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
 )
 
-// the compiled statements a connection keeps unless Config.Statements says
-const keptStatements = 32
+const (
+	keptStatements = 32          // the compiled statements a connection keeps unless Config.Statements says
+	readerIdle     = time.Minute // a reader beyond one closes after this long unused
+)
 
 type Reader interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -36,6 +40,7 @@ type keptStatement struct {
 
 type readConnection struct {
 	preparedConnection
+	idleSince time.Time
 }
 
 func (r *preparedConnection) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -174,7 +179,7 @@ func (f *File) takeIdleReader() *readConnection {
 	defer f.readersMu.Unlock()
 	last := len(f.idleReaders) - 1
 	if last < 0 {
-		return &readConnection{preparedConnection{limit: f.statements}}
+		return &readConnection{preparedConnection: preparedConnection{limit: f.statements}}
 	}
 	connection := f.idleReaders[last]
 	f.idleReaders = f.idleReaders[:last]
@@ -184,7 +189,64 @@ func (f *File) takeIdleReader() *readConnection {
 func (f *File) returnIdleReader(connection *readConnection) {
 	f.readersMu.Lock()
 	defer f.readersMu.Unlock()
+	if f.closed {
+		_ = connection.close() // Close took the others; this one finished after it
+		return
+	}
+	connection.idleSince = time.Now()
 	f.idleReaders = append(f.idleReaders, connection)
+	f.scheduleSweep()
+}
+
+// scheduleSweep starts the timer that closes readers idle past readerIdle,
+// while more than one is idle. A burst of reads opens up to Readers
+// connections, half a MiB each, and an idle program keeps one.
+func (f *File) scheduleSweep() {
+	if f.sweep == nil && !f.closed && len(f.idleReaders) > 1 {
+		f.sweep = time.AfterFunc(f.readerIdle, f.sweepIdleReaders)
+	}
+}
+
+// sweepIdleReaders closes the readers unused for readerIdle, the newest left
+// open whatever its age. Close stops the timer and waits for a sweep running.
+func (f *File) sweepIdleReaders() {
+	f.readersMu.Lock()
+	f.sweep = nil
+	if f.closed {
+		f.readersMu.Unlock()
+		return
+	}
+	cutoff := time.Now().Add(-f.readerIdle)
+	stale := 0
+	for stale < len(f.idleReaders)-1 && !f.idleReaders[stale].idleSince.After(cutoff) {
+		stale++
+	}
+	closing := slices.Clone(f.idleReaders[:stale])
+	f.idleReaders = slices.Delete(f.idleReaders, 0, stale)
+	f.sweeping.Add(1)
+	f.scheduleSweep()
+	f.readersMu.Unlock()
+
+	defer f.sweeping.Done()
+	for _, connection := range closing {
+		_ = connection.close() // a reader's close fails only for a statement's, which the next read compiles again
+	}
+}
+
+// Readers is how many reader connections the file opens at most.
+func (f *File) Readers() int { return cap(f.readSlots) }
+
+// IdleReaders is how many reader connections are open and unused.
+func (f *File) IdleReaders() int {
+	f.readersMu.Lock()
+	defer f.readersMu.Unlock()
+	open := 0
+	for _, connection := range f.idleReaders {
+		if connection.conn != nil {
+			open++
+		}
+	}
+	return open
 }
 
 // EachRow hands every row to visit and closes the rows before it returns, so

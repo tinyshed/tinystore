@@ -57,7 +57,7 @@ func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store,
 		return nil, err
 	}
 
-	file, err := openFile(ctx, path)
+	file, err := openFile(ctx, path, store.Readers(readers))
 	if err != nil {
 		release()
 		return nil, err
@@ -122,7 +122,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, file *sqlite.File, 
 	return s, nil
 }
 
-func openFile(ctx context.Context, path string) (*sqlite.File, error) {
+func openFile(ctx context.Context, path string, readers int) (*sqlite.File, error) {
 	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers, PageSize: pageSize})
 	if err != nil {
 		return nil, fmt.Errorf("jobs: open: %w", err)

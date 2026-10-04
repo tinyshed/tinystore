@@ -43,6 +43,32 @@ A declaration that can't be a table, such as an option that names a missing
 column, panics when the program starts, with the table and the column in the
 message.
 
+## Indexes on part of a table
+
+```go
+var Users = sqldb.Table[User]("users",
+	sqldb.PrimaryKey("id"),
+	sqldb.UniqueWhere("role = 'owner'", "role"), // at most one owner
+)
+
+var Sources = sqldb.Table[Source]("sources",
+	sqldb.UniqueWhere("agent_id IS NOT NULL", "agent_id", "remote_id"),
+	sqldb.IndexWhere("deleted_at IS NULL", "created_at"),
+)
+```
+
+```sql
+CREATE UNIQUE INDEX users_role ON users (role) WHERE role = 'owner';
+```
+
+`UniqueWhere` and `IndexWhere` declare a partial index: an index of the rows
+where the condition holds. A unique one is a promise of the database, such as
+one owner per installation, and the schema checks it like any other index. A
+file without it, or with an index of every row instead, fails to open. A
+condition spelled differently, such as `ROLE = 'owner'`, doesn't stop the file
+from opening. The schema test reports it, so you can check that the meaning is
+the same.
+
 ## See the SQL
 
 ```go
@@ -118,10 +144,11 @@ db, err := sqldb.Open(ctx, store, "app", migrations, Schema)
 ```
 
 `Open` applies pending migrations, then compares the file with the schema:
-tables, columns and their types, nullability, keys, references and indexes. If
-they differ, `Open` fails and lists every difference. It never changes the
-file to match. Triggers, views and indexes on expressions that the schema
-doesn't declare belong to your migrations and are not compared.
+tables, columns and their types, nullability, keys, references and indexes,
+partial ones included. If they differ, `Open` fails and lists every
+difference. It never changes the file to match. Triggers, views, indexes on
+expressions and partial indexes that the schema doesn't declare belong to your
+migrations and are not compared.
 
 A migration that was already applied must never change. If its checksum
 differs, or a migration is missing or renamed, `Open` refuses the file.

@@ -27,7 +27,11 @@ type File struct {
 	reader      *sql.DB
 	readSlots   chan struct{}
 	readersMu   sync.Mutex
-	idleReaders []*readConnection
+	idleReaders []*readConnection // the least recently used first
+	readerIdle  time.Duration
+	sweep       *time.Timer // pending while more than one reader is idle
+	sweeping    sync.WaitGroup
+	closed      bool
 	commits     atomic.Uint64
 	statements  int
 	hold        time.Duration
@@ -61,11 +65,13 @@ func (f *File) WriterCounters(ctx context.Context) (WriterCounters, error) {
 	return result, err
 }
 
-// Config sizes the reader pool once, because every pragma here is per
-// connection and nothing in the pool may expire and reopen. PageSize applies
-// only to a file this call creates; zero keeps SQLite's default.
+// Config sizes the reader pool. Every pragma is per connection and travels in
+// its URL, so a reader opened again after an idle one closed is the same
+// reader. PageSize applies only to a file this call creates; zero keeps
+// SQLite's default.
 type Config struct {
 	Readers     int
+	ReaderIdle  time.Duration // how long a reader beyond one stays open unused; zero keeps a minute
 	PageSize    int
 	WriterCache int // bytes of the writer's page cache; zero keeps the readers' 1 MiB
 	Statements  int // compiled statements each connection keeps; zero keeps 32
@@ -174,11 +180,16 @@ func (f *File) openReaders(ctx context.Context, abs string, config Config) error
 	if err != nil {
 		return fmt.Errorf("open SQLite reader: %w", err)
 	}
+	// The pool keeps no connection of its own: the idle readers are this
+	// file's, with their compiled statements, and one it lets go closes.
 	f.reader.SetMaxOpenConns(config.Readers)
-	f.reader.SetMaxIdleConns(config.Readers)
-	if err = f.reader.PingContext(ctx); err != nil {
+	f.reader.SetMaxIdleConns(0)
+	first, err := f.reader.Conn(ctx)
+	if err != nil {
 		return fmt.Errorf("connect SQLite reader: %w", err)
 	}
+	f.readerIdle = cmp.Or(config.ReaderIdle, readerIdle)
+	f.idleReaders = []*readConnection{{preparedConnection: preparedConnection{conn: first, limit: f.statements}}}
 	f.readSlots = make(chan struct{}, config.Readers)
 	return nil
 }
@@ -341,8 +352,12 @@ func (f *File) Close() error {
 	var err error
 	f.readersMu.Lock()
 	idle := f.idleReaders
-	f.idleReaders = nil
+	f.idleReaders, f.closed = nil, true
+	if f.sweep != nil {
+		f.sweep.Stop()
+	}
 	f.readersMu.Unlock()
+	f.sweeping.Wait()
 	for _, connection := range idle {
 		err = errors.Join(err, connection.close())
 	}

@@ -180,6 +180,7 @@ module defines.
 - sixteen bytes of a type sqldb does not know are bytes — `TestOnlyAKnownUUIDTypeIsText`
 - the standard library's uuid is text, as a field and as an argument — `TestAStandardLibraryUUIDIsKeptAsText`
 - FTS5 and R*Tree work in an application's file and its snapshot — `TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot`
+- a virtual table of a module the program did not link is refused, naming its import — `TestAVirtualTableOfAModuleNotLinkedIsRefused`, `TestModuleOfReadsTheModule`
 - a virtual table's shadow tables are not the application's — `TestAVirtualTablesShadowsAreNotTheSchemas`
 - a value that does not decode names column and field — `TestAValueThatDoesNotDecodeNamesItsColumnAndField`
 - a numbered SQL parameter without its argument is refused — `TestAStatementWithNumberedParametersNeedsEveryArgument`
@@ -187,6 +188,7 @@ module defines.
 - `Insert` writes every field but the generated ones — `TestInsertWritesEveryFieldButTheGeneratedOnes`, `TestInsertReturnsWhatTheDatabaseGenerated`
 - `Open` checks the file and changes nothing — `TestOpenChecksTheFileAgainstTheSchemaAndChangesNothing`, `TestOpenNamesEachDifferenceOfStructure`
 - an expression spelled otherwise never refuses a file — `TestOpenDoesNotRefuseAnExpressionSpelledOtherwise`
+- a partial unique index is declared and checked, its condition's spelling a line — `TestAPartialUniqueIndexIsDeclaredAndChecked`, `TestOpenRefusesAPartialIndexWithTheDeclaredName`
 - a long transaction fails no grouped write behind it — `TestALongTransactionFailsNoWriteBehindIt`, `TestALongTransactionFailsNoGroupedWriteBehindIt`
 - a call on the DB inside its own Tx ends with its context — `TestACallOnTheDBInsideItsOwnTxEndsWithItsContext`
 - an sqldb snapshot ends at its bound and says so — `TestEachHoldsOneSnapshotAndOneRow`, `TestASnapshotHeldPastItsBoundSaysSo`
@@ -204,6 +206,8 @@ module defines.
 
 ## SQLite under every engine
 
+- a reader beyond one closes once idle, and the next read opens one that still refuses to write — `TestAnIdleReaderClosesAndTheNextReadOpensIt`
+- the store's Options.Readers bounds what an engine opens — `TestTheStoresReadersBoundWhatAnEngineWants`, `TestTheStoresReadersCapEveryDatabase`
 - a guest engine keeps its history in its owner's file — `TestAGuestKeepsItsOwnHistoryInItsOwnersFile`
 - a value comes back as SQLite keeps it, no time read into its text — `TestAValueComesBackAsSQLiteKeepsIt`, `TestAValueTravelsAsItsRowKeepsIt` in `server`
 - bytes a caller scanned are its own — `TestABlobScannedAgainLeavesTheLastOnesBytes`

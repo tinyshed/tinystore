@@ -88,7 +88,7 @@ func openEngine(ctx context.Context, store *tinystore.Store, dir string, options
 	if err != nil {
 		return nil, err
 	}
-	file, err := openFile(ctx, filepath.Join(dir, fileName))
+	file, err := openFile(ctx, filepath.Join(dir, fileName), store.Readers(readers))
 	if err != nil {
 		return nil, errors.Join(err, root.Close())
 	}
@@ -134,7 +134,7 @@ func openDirectory(dir string) (*os.Root, error) {
 	return root, nil
 }
 
-func openFile(ctx context.Context, path string) (*sqlite.File, error) {
+func openFile(ctx context.Context, path string, readers int) (*sqlite.File, error) {
 	file, err := sqlite.Open(ctx, path, sqlite.Config{Readers: readers, PageSize: pageSize})
 	if err != nil {
 		return nil, fmt.Errorf("blobs: open: %w", err)

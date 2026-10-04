@@ -105,6 +105,28 @@ template string, `t"… where id = {note_id}"`. In Go, use `?` placeholders.
 `one` returns nothing for no row and fails for two rows. `scalar` reads one
 value of a query that always returns a row, such as `count(*)`.
 
+To match a list of values, pass the list as one JSON argument and read it with
+`json_each`:
+
+```ts
+const notes = await db.all<Note>`select id, title, done from notes
+	where id in (select value from json_each(${JSON.stringify(ids)}))`
+```
+
+```python
+notes = await db.all(
+    Note, "select id, title, done from notes where id in (select value from json_each(?))", json.dumps(ids)
+)
+```
+
+```go
+notes, err := sqldb.All[Note](ctx, db,
+	`select id, title, done from notes where id in (select value from json_each(?))`, sqldb.JSONOf(ids))
+```
+
+The statement stays the same for any number of values, so it is compiled once
+and SQLite keeps using its index on `id`.
+
 ## Write
 
 ```ts
@@ -132,11 +154,16 @@ doesn't affect the others in its group. See
 
 ## Reads never write
 
-Each database has one writer connection and eight reader connections. Calls
-that read, `all`, `one`, `scalar` and `query`, run on readers that can't
+Each database has one writer connection and up to eight reader connections.
+Calls that read, `all`, `one`, `scalar` and `query`, run on readers that can't
 write. If you send an `insert` to `all`, it fails at once and tells you to use
 `exec`. Calls that may write, `exec` and the `exec…` forms that return rows,
 run on the writer.
+
+A burst of reads opens more readers, and each one closes after a minute
+without use, until one is left. In Go, `sqldb.Readers(4)` sets how many
+readers a database may open, and `tinystore.Options{Readers: 2}` sets the most
+that any engine of the store opens.
 
 ## Values
 
