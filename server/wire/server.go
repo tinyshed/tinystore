@@ -41,5 +41,30 @@ func (c *Clock) Decode(body []byte) error {
 }
 
 // ServerBackup is a download of the whole store as one zip, as the backup
-// package writes it: {} to ask, then the zip's bytes in DATA. An admin's alone.
+// package writes it: a Backup to ask, then the zip's bytes in DATA. An admin's alone.
 const ServerBackup Method = 0x0003
+
+// Backup is server.backup's request: the files of the host's beside the
+// engines', by their paths inside the store's directory.
+type Backup struct {
+	Files []string
+}
+
+func (b Backup) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	if len(b.Files) > 0 {
+		m.Key(1)
+		m.SetBuf(appendStrs(m.Buf(), b.Files))
+	}
+	return m.End()
+}
+
+func (b *Backup) Decode(body []byte) error {
+	d := NewDecoder(body)
+	for key := range d.Fields() {
+		if key == 1 {
+			b.Files = d.Strs()
+		}
+	}
+	return d.End()
+}

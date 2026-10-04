@@ -61,3 +61,24 @@ func TestBackupWritesAZipThatRestoreTakesBack(t *testing.T) {
 		t.Fatalf("the server serving the store left during its backup: %v", err)
 	}
 }
+
+// --file keeps a file of the application's beside the engines, written after
+// the arguments as before them
+func TestBackupKeepsAFileItIsGiven(t *testing.T) {
+	dir, _ := servedStore(t)
+	if err := os.WriteFile(filepath.Join(dir, "secret.key"), []byte("k3y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	zipped := filepath.Join(t.TempDir(), "backup.zip")
+	var out, stderr bytes.Buffer
+	if err := backupStore(t.Context(), []string{dir, zipped, "--file", "secret.key"}, &out, &stderr); err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	restored := filepath.Join(t.TempDir(), "restored")
+	if err := restoreStore(t.Context(), []string{zipped, restored}, &out, &stderr); err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	if key, err := os.ReadFile(filepath.Join(restored, "secret.key")); err != nil || string(key) != "k3y" {
+		t.Fatalf("the restored key: %q, %v", key, err)
+	}
+}

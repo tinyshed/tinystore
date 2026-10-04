@@ -11,6 +11,7 @@
     {"name":"an answer that says only that its call was done","message":"empty","hex":"80","fields":{}},
     {"name":"a test's clock moved forward by an hour","message":"clock","hex":"8102ce0036ee80","fields":{"advance":{"uint":"3600000"}}},
     {"name":"the time a test's clock reads","message":"clock","hex":"8101cf000001a0c4506c00","fields":{"at":{"int":"1790000000000"}}},
+    {"name":"a backup that keeps a file of the host's","message":"backup","hex":"810191aa7365637265742e6b6579","fields":{"files":{"array":[{"str":"secret.key"}]}}},
     {"name":"a bucket of values that slide","message":"kv.bucket","hex":"8201a873657373696f6e7304ce9a7ec800","fields":{"name":{"str":"sessions"},"sliding":{"uint":"2592000000"}}},
     {"name":"counters that live in memory for a second","message":"kv.bucket","hex":"8401ae6c6f67696e2d617474656d70747302c303ce000dbba005cd03e8","fields":{"name":{"str":"login-attempts"},"counters":true,"default ttl":{"uint":"900000"},"lose at most":{"uint":"1000"}}},
     {"name":"kv.get of a key under an owner","message":"kv.call","hex":"8301010291a13703a5746f6b656e","fields":{"handle":{"uint":"1"},"owners":{"array":[{"str":"7"}]},"key":{"str":"token"}}},

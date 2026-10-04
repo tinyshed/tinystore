@@ -17,6 +17,10 @@ const backupUsage = `usage:
   tinystore backup <dir> <file.zip>    every engine of a store in one checked zip, while its application runs
   tinystore restore <file.zip> <dir>   a backup into an empty directory, before anything opens it
 
+backup flags:
+  --file <name>   a file of the application's inside the store's directory, such as secret.key,
+                  kept beside the engines; repeat it for several. None is kept unless named
+
 backup reaches the store through the server serving it, and starts the
 directory's sidecar when none does, as logs does. The zip is written beside
 its name and renamed into place once whole, so a backup that fails leaves no
@@ -25,7 +29,10 @@ zip. restore checks every file's size and checksum before it keeps any of them`
 // backupStore writes a backup of the store in a directory to a zip, as the
 // server serving it makes one
 func backupStore(ctx context.Context, args []string, out, stderr io.Writer) error {
-	dir, file, err := twoArguments("backup", args, stderr)
+	var hostFiles []string
+	dir, file, err := twoArguments("backup", args, stderr, func(flags *flag.FlagSet) {
+		flags.Func("file", "", func(name string) error { hostFiles = append(hostFiles, name); return nil })
+	})
 	if err != nil {
 		return err
 	}
@@ -34,7 +41,7 @@ func backupStore(ctx context.Context, args []string, out, stderr io.Writer) erro
 		return err
 	}
 	defer conn.Close()
-	st, err := conn.Open(ctx, wire.ServerBackup, wire.Empty{}, true)
+	st, err := conn.Open(ctx, wire.ServerBackup, wire.Backup{Files: hostFiles}, true)
 	if err != nil {
 		return err
 	}
@@ -95,7 +102,7 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // restoreStore writes a backup into an empty directory, every file checked
 // before the store there opens
 func restoreStore(ctx context.Context, args []string, out, stderr io.Writer) error {
-	file, dir, err := twoArguments("restore", args, stderr)
+	file, dir, err := twoArguments("restore", args, stderr, nil)
 	if err != nil {
 		return err
 	}
@@ -117,15 +124,29 @@ func restoreStore(ctx context.Context, args []string, out, stderr io.Writer) err
 }
 
 // twoArguments is what backup and restore take: two names, in their order
-func twoArguments(name string, args []string, stderr io.Writer) (first, second string, err error) {
+// twoArguments reads a command's two arguments, its flags before, between or
+// after them
+func twoArguments(
+	name string, args []string, stderr io.Writer, define func(*flag.FlagSet),
+) (first, second string, err error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() { fmt.Fprintln(stderr, backupUsage) }
-	if err = flags.Parse(args); err != nil {
-		return "", "", err
+	if define != nil {
+		define(flags)
 	}
-	if flags.NArg() != 2 {
+	var positional []string
+	for {
+		if err = flags.Parse(args); err != nil {
+			return "", "", err
+		}
+		if flags.NArg() == 0 {
+			break
+		}
+		positional, args = append(positional, flags.Arg(0)), flags.Args()[1:]
+	}
+	if len(positional) != 2 {
 		return "", "", errors.New(backupUsage)
 	}
-	return flags.Arg(0), flags.Arg(1), nil
+	return positional[0], positional[1], nil
 }

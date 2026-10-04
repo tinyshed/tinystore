@@ -98,8 +98,9 @@ tinystore restore backup-2026-10-03.zip ./data2 # into an empty directory
 ```
 
 `backup` asks the server of the directory for a zip of the whole store. If no
-server runs, it starts the sidecar first. `restore` writes a backup into an
-empty directory. See [Backups](backups.md).
+server runs, it starts the sidecar first. `--file <name>` adds a file of your
+own from the store's directory, such as `secret.key`. `restore` writes a backup
+into an empty directory. See [Backups](backups.md).
 
 ## Migrations (Go)
 

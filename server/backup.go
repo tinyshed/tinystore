@@ -19,9 +19,13 @@ import (
 // directory is opened first, so that the snapshot holds it, and a database no
 // client opened is copied without opening it.
 func serverBackup(c *call) error {
-	var ask wire.Empty
+	var ask wire.Backup
 	if err := ask.Decode(c.request); err != nil {
 		return err
+	}
+	var options []backup.Option
+	for _, name := range ask.Files {
+		options = append(options, backup.File(name))
 	}
 	if c.session.capability != wire.Admin {
 		return fmt.Errorf("%w: server: a backup", errAdminOnly)
@@ -44,7 +48,7 @@ func serverBackup(c *call) error {
 		return err
 	}
 	out := &chunks{call: c, buffer: make([]byte, 0, min(transferChunk, int(c.session.agreed.maxBody)))}
-	if err = backup.WriteSnapshot(c.ctx, snapshot, s.store.Now(), out); err != nil {
+	if err = backup.WriteSnapshot(c.ctx, snapshot, s.store.Now(), out, options...); err != nil {
 		return err
 	}
 	return out.end()

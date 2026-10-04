@@ -18,9 +18,9 @@ import (
 )
 
 // downloadBackup asks the server for a backup and gives back the zip's bytes
-func downloadBackup(t *testing.T, conn *client.Conn) ([]byte, error) {
+func downloadBackup(t *testing.T, conn *client.Conn, files ...string) ([]byte, error) {
 	t.Helper()
-	st, err := conn.Open(t.Context(), wire.ServerBackup, wire.Empty{}, true)
+	st, err := conn.Open(t.Context(), wire.ServerBackup, wire.Backup{Files: files}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,4 +124,29 @@ func writeNoteAndCode(ctx context.Context, store *tinystore.Store, migrations fs
 		return err
 	}
 	return codes.Set(ctx, "K7Q2", "42")
+}
+
+// a backup over the wire keeps a file of the host's when it is named, and
+// refuses one outside the store
+func TestABackupOverTheWireKeepsANamedHostFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "secret.key"), []byte("k3y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts := serveTestStore(t, root, mustOpen(t, root), Options{})
+	conn := ts.dial(t, wire.Hello{})
+	zipped, err := downloadBackup(t, conn, "secret.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := filepath.Join(t.TempDir(), "restored")
+	if err = backup.Restore(t.Context(), restored, bytes.NewReader(zipped), int64(len(zipped))); err != nil {
+		t.Fatal(err)
+	}
+	if key, readErr := os.ReadFile(filepath.Join(restored, "secret.key")); readErr != nil || string(key) != "k3y" {
+		t.Fatalf("the restored key: %q, %v", key, readErr)
+	}
+	if _, err = downloadBackup(t, conn, "../outside.key"); codeOfError(err) != wire.CodeInvalid {
+		t.Fatalf("a file outside the store: %v", err)
+	}
 }

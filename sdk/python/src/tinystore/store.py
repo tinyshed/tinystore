@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 from ._connection import Link, private_child, remote, sidecar
 from ._runtime import find_binary
 from ._time import Duration, ms
-from ._wire.messages import METHODS, Empty
+from ._wire.messages import METHODS, Backup
 from .blobs import Blobs
 from .clock import Clock
 from .errors import InvalidError
@@ -24,7 +24,7 @@ from .sql import Database, Migrations, open_database
 
 if TYPE_CHECKING:
     import ssl
-    from collections.abc import Awaitable, Callable, Generator
+    from collections.abc import Awaitable, Callable, Generator, Iterable
     from datetime import datetime
 
     from ._connection import Connection
@@ -76,19 +76,22 @@ class Store:
         """
         return await open_database(self._link, name, migrations)
 
-    async def backup(self, path: str | os.PathLike[str]) -> None:
+    async def backup(self, path: str | os.PathLike[str], *, files: Iterable[str] = ()) -> None:
         """Writes a backup of the whole store to a zip at path while the store keeps working, as tinystore backup does.
 
         The zip holds every engine's file with its size and checksum, which
         tinystore restore checks. It is written beside path and renamed into
         place once whole, so a backup that fails leaves no zip. It needs an
-        admin connection; a remote server sends the zip over it.
+        admin connection; a remote server sends the zip over it. It holds no
+        file but the engines' unless files names it: a file of the
+        application's inside the store's directory, such as files=["secret.key"].
         """
+        request = Backup.encode(files=list(files) or None)
         target = Path(path)
         part = target.with_name(f"{target.name}.{secrets.token_hex(4)}.part")
 
         async def attempt(connection: Connection) -> None:
-            stream = await connection.session.open(METHODS["server.backup"], Empty.encode(), True)
+            stream = await connection.session.open(METHODS["server.backup"], request, True)
             with part.open("wb") as file:
                 await stream.next()  # the RESPONSE that heads the zip
                 while True:

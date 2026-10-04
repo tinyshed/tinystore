@@ -26,3 +26,15 @@ async def test_a_backup_is_one_zip_of_every_engine_which_restore_takes_back(tmp_
     assert await restore.wait() == 0
     async with tinystore.open(restored, private=True) as back:
         assert await back.kv.bucket("codes", str).get("K7Q2") == "kept across the backup"
+
+
+async def test_a_backup_keeps_a_file_of_the_applications_only_when_files_names_it(tmp_path: Path) -> None:
+    zipped = tmp_path / "zips" / "backup.zip"
+    zipped.parent.mkdir()
+    async with tinystore.open(tmp_path / "data", private=True) as store:
+        (tmp_path / "data" / "secret.key").write_text("k3y", encoding="utf-8")
+        await store.backup(zipped, files=["secret.key"])
+    restored = tmp_path / "restored"
+    restore = await asyncio.create_subprocess_exec(os.environ["TINYSTORE_BIN"], "restore", str(zipped), str(restored))
+    assert await restore.wait() == 0
+    assert (restored / "secret.key").read_text(encoding="utf-8") == "k3y"

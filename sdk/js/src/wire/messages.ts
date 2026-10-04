@@ -122,6 +122,8 @@ export const Empty = message('empty', {})
 
 export const Clock = message('clock', { at: [1, int], advance: [2, uint] })
 
+export const Backup = message('backup', { files: [1, list(str)] })
+
 export const KvWindow = message('kv.window', { name: [1, str], limit: [2, uint], per: [3, uint] })
 
 export const KvBucket = message('kv.bucket', {
@@ -502,6 +504,7 @@ export const messages = {
 	handle: Handle,
 	empty: Empty,
 	clock: Clock,
+	backup: Backup,
 	'kv.bucket': KvBucket,
 	'kv.call': KvCall,
 	'kv.operation': KvOperation,

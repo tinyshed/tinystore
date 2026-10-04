@@ -321,3 +321,81 @@ func TestABackupRestoresAnObjectPast4GiB(t *testing.T) {
 		t.Fatalf("the restored object differs: %v", err)
 	}
 }
+
+// a backup holds a file of the host's only when File names it, and restores
+// it checked, as an engine's file is
+func TestABackupKeepsANamedHostFileAndRestoresIt(t *testing.T) {
+	dir := t.TempDir()
+	store, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
+	key := bytes.Repeat([]byte{0x5e}, 32)
+	if err = os.WriteFile(filepath.Join(dir, "secret.key"), key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var without, with bytes.Buffer
+	if err = Write(t.Context(), store, &without); err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(t.Context(), store, &with, File("secret.key")); err != nil {
+		t.Fatal(err)
+	}
+	if names := zipNames(t, without.Bytes()); strings.Contains(strings.Join(names, " "), "secret.key") {
+		t.Fatalf("a backup naming no file holds %q", names)
+	}
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	if err = Restore(t.Context(), restored, bytes.NewReader(with.Bytes()), int64(with.Len())); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(restored, "secret.key"))
+	if err != nil || !bytes.Equal(got, key) {
+		t.Fatalf("the restored key: %x, %v", got, err)
+	}
+	manifest := readManifestOf(t, with.Bytes())
+	if last := manifest.Files[len(manifest.Files)-1]; last.Name != "secret.key" || last.Engine != "host" || last.Size != 32 {
+		t.Fatalf("the manifest says %+v", last)
+	}
+}
+
+func TestAHostFileOutsideTheStoreIsRefused(t *testing.T) {
+	source := openEngines(t, t.TempDir())
+	for _, name := range []string{"../secret.key", filepath.Join(t.TempDir(), "key"), "metrics.db", "LOCK", "./secret.key", "missing.key"} {
+		err := Write(t.Context(), source.store, io.Discard, File(name))
+		if err == nil {
+			t.Errorf("backup.File(%q) was taken", name)
+		}
+	}
+	if err := Write(t.Context(), source.store, io.Discard, File("../secret.key")); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Errorf("a file outside the store: %v", err)
+	}
+}
+
+func zipNames(t *testing.T, archive []byte) []string {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range reader.File {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+func readManifestOf(t *testing.T, archive []byte) Manifest {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := readManifest(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}

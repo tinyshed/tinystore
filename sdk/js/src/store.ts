@@ -14,7 +14,7 @@ import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import { type Database, openDatabase, type SqlOptions } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
-import { Empty, methods } from './wire/messages.ts'
+import { Backup, methods } from './wire/messages.ts'
 
 export interface OpenOptions {
 	/**
@@ -47,6 +47,12 @@ export interface Status {
 	engines: string[]
 	/** admin may change a schema and drop records; data reads and writes */
 	capability: 'admin' | 'data'
+}
+
+/** What `store.backup` keeps beside the engines' files. */
+export interface BackupOptions {
+	/** files of the application's, by their paths inside the store's directory */
+	files?: readonly string[] | undefined
 }
 
 export interface ConnectOptions {
@@ -112,8 +118,12 @@ export class Store implements AsyncDisposable {
 	 * and checksum, which `tinystore restore` checks. The zip is written beside
 	 * path and renamed into place once whole, so a backup that fails leaves no
 	 * zip. It needs an admin connection; a remote server sends the zip over it.
+	 *
+	 * A backup holds no file but the engines' unless `files` names it: a file
+	 * of the application's inside the store's directory, such as a key kept
+	 * beside the data, `{ files: ['secret.key'] }`.
 	 */
-	async backup(path: string): Promise<void> {
+	async backup(path: string, options: BackupOptions = {}): Promise<void> {
 		const part = `${path}.${randomBytes(4).toString('hex')}.part`
 		try {
 			await this.#link.run('read', async connection => {
@@ -121,7 +131,7 @@ export class Store implements AsyncDisposable {
 				try {
 					const stream = await connection.session.open(
 						methods['server.backup'],
-						Empty.encode({}),
+						Backup.encode({ files: options.files === undefined ? undefined : [...options.files] }),
 						true,
 					)
 					await stream.next() // the RESPONSE that heads the zip

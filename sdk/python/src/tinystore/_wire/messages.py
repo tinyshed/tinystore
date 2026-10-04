@@ -122,6 +122,8 @@ Empty = message("empty")
 
 Clock = message("clock", at=(1, int_), advance=(2, uint))
 
+Backup = message("backup", files=(1, list_(str_)))
+
 KvWindow = message("kv.window", name=(1, str_), limit=(2, uint), per=(3, uint))
 
 KvBucket = message(
@@ -473,6 +475,7 @@ MESSAGES: dict[str, Message] = {
         Handle,
         Empty,
         Clock,
+        Backup,
         KvBucket,
         KvCall,
         KvOperation,

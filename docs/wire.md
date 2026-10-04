@@ -469,7 +469,7 @@ The server's own methods take the range below the engines', `0x00xx`.
 |----------|--------|------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `0x0001` | stop   | `{}`                                                                               | `{}`, then the server stops as its closing does: the streams running finish, every connection is told `GOAWAY`, and a sidecar gives back `SERVE` and its directory |
 | `0x0002` | clock  | a clock: a time to set it to, a while to move it forward by, or neither to read it | a clock: the time it reads once moved                                                                                                                              |
-| `0x0003` | backup | `{}`                                                                               | a download: `{}`, then the zip of the whole store in `DATA`, its bytes as they come, the last with END                                                             |
+| `0x0003` | backup | `{1: files}`                                                                       | a download: `{}`, then the zip of the whole store in `DATA`, its bytes as they come, the last with END                                                             |
 
 A stop is an admin connection's alone, `permission` to a data connection, and
 a server whose program said nothing of stopping refuses it with `permission`
@@ -482,7 +482,10 @@ Only an admin connection can ask for a backup. The server first opens each
 engine whose file is in the directory. It copies each database that no client
 has opened, without opening it. Then it sends what the `backup` package
 writes: a copy of every engine's file, and a manifest of their sizes and
-checksums, which a restore checks.
+checksums, which a restore checks. `files`, an array of str, names files of
+the application's by their paths inside the store's directory, which the zip
+holds beside the engines' with the engine `host`; a path outside the
+directory, or an engine's own, is `invalid`.
 
 A clock is `{1: at, 2: advance}`. `at` is a time in unix milliseconds, and
 `advance` is a duration in milliseconds. Only a private server started with

@@ -357,6 +357,7 @@ module defines.
 - a backup restores every engine — `TestABackupRestoresEveryEngine`
 - a changed backup is refused and leaves nothing — `TestAChangedByteIsRefusedAndLeavesNothing`
 - a backup restores every object bit for bit — `TestABackupRestoresEveryObject`; past 4 GiB when `TINYSTORE_LARGE_BACKUP` is set
+- a backup holds a file of the host's only when it is named, and restores it checked — `TestABackupKeepsANamedHostFileAndRestoresIt`, `TestAHostFileOutsideTheStoreIsRefused`; over the wire `TestABackupOverTheWireKeepsANamedHostFile`, `TestBackupKeepsAFileItIsGiven` in `cmd/tinystore`, `a backup keeps a file of the application's only when files names it` in `sdk/js/test/backup.test.ts`, `test_a_backup_keeps_a_file_of_the_applications_only_when_files_names_it` in Python's
 
 ## The server and the wire
 

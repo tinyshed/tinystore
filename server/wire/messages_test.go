@@ -72,6 +72,7 @@ var schema = map[string][]field{
 	"handle": {{1, "handle", "uint"}},
 	"empty":  {},
 	"clock":  {{1, "at", "int"}, {2, "advance", "uint"}},
+	"backup": {{1, "files", "[]str"}},
 
 	"kv.bucket": {
 		{1, "name", "str"},
@@ -497,6 +498,7 @@ func handshakeExamples() []example {
 		of("an answer that says only that its call was done", "empty", wire.Empty{}),
 		of("a test's clock moved forward by an hour", "clock", wire.Clock{Advance: 3_600_000}),
 		of("the time a test's clock reads", "clock", wire.Clock{At: 1_790_000_000_000}),
+		of("a backup that keeps a file of the host's", "backup", wire.Backup{Files: []string{"secret.key"}}),
 	}
 }
 

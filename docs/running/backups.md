@@ -42,6 +42,30 @@ In Go, `backup.Write` copies the engines that your program has opened. The
 `backup` package is separate from the store, so programs that never back up
 don't include `archive/zip` in their binary.
 
+## Your own files
+
+```ts
+await store.backup('backup-2026-10-03.zip', { files: ['secret.key'] })
+```
+
+```python
+await store.backup("backup-2026-10-03.zip", files=["secret.key"])
+```
+
+```go
+err = backup.Write(ctx, store, f, backup.File("secret.key"))
+```
+
+A backup contains only the engines' files, unless you name a file of your own.
+Name it by its path inside the store's directory, such as a key that encrypts
+values in your database. The restore puts it back in the same place, checked
+like the engines' files and readable only by its owner. Leaving a key out by
+default is deliberate: a backup without the key doesn't reveal what the key
+protects, so name it only if the backup is stored as safely as the key.
+
+A name outside the store's directory, or the name of an engine's file, fails
+with an invalid error (`ErrInvalid`, `InvalidError`).
+
 ## Back up from the command line
 
 ```sh for=bun
@@ -57,7 +81,8 @@ tinystore backup ./data backup-2026-10-03.zip
 ```
 
 `tinystore backup` works while your program runs. It asks the server of the
-directory for the backup, and starts the sidecar if no server runs.
+directory for the backup, and starts the sidecar if no server runs. Add
+`--file secret.key` to keep a file of your own, once for each file.
 
 The backup contains every engine whose file is in the directory, even one
 that no program has used since the server started. The server copies such an

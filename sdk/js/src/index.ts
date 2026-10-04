@@ -94,6 +94,7 @@ export type {
 	Statement,
 } from './sql.ts'
 export {
+	type BackupOptions,
 	type ConnectOptions,
 	connect,
 	type OpenOptions,
