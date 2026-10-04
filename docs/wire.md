@@ -1037,19 +1037,20 @@ the value given last for a time repeated.
 
 A range:
 
-| key    | field          | type                |                                                                                                                  |
-|--------|----------------|---------------------|------------------------------------------------------------------------------------------------------------------|
-| 1      | matchers       | a map of names      | the labels a series has, exactly, its name as `__name__`                                                         |
-| 2, 3   | from, to       | int                 | unix milliseconds, to excluded; both required, 2^63−1 the open end                                               |
-| 4      | limit series   | uint                | the series it matches; each limit narrows the server's                                                           |
-| 5      | limit blocks   | uint                | the blocks it decodes                                                                                            |
-| 6      | limit bytes    | uint                | the bytes it fetches                                                                                             |
-| 7      | limit decoded  | uint                | the samples it decodes                                                                                           |
-| 8      | limit answered | uint                | the samples or buckets it answers                                                                                |
-| 9      | width          | uint                | aggregate's: milliseconds, the buckets starting at from                                                          |
-| 10     | op             | str                 | aggregate's: `count`, `sum`, `min`, `max`, `avg`, `increase` or `rate`, a counter's alone, or `delta`, a gauge's |
-| 11     | where          | array of conditions | labels beyond equality, each label once, in the byte order of its name                                           |
-| 12, 13 | by, without    | array of str        | aggregate's: the labels a group keeps, or all but these; an empty `by` is sent and joins every series of a name  |
+| key    | field          | type                |                                                                                                                            |
+|--------|----------------|---------------------|----------------------------------------------------------------------------------------------------------------------------|
+| 1      | matchers       | a map of names      | the labels a series has, exactly, its name as `__name__`                                                                   |
+| 2, 3   | from, to       | int                 | unix milliseconds, to excluded; both required, 2^63−1 the open end                                                         |
+| 4      | limit series   | uint                | the series it matches; each limit narrows the server's                                                                     |
+| 5      | limit blocks   | uint                | the blocks it decodes                                                                                                      |
+| 6      | limit bytes    | uint                | the bytes it fetches                                                                                                       |
+| 7      | limit decoded  | uint                | the samples it decodes                                                                                                     |
+| 8      | limit answered | uint                | the samples or buckets it answers                                                                                          |
+| 9      | width          | uint                | aggregate's: milliseconds, the buckets starting at from                                                                    |
+| 10     | op             | str                 | aggregate's: `count`, `sum`, `min`, `max`, `avg`, `increase` or `rate`, a counter's alone, or `delta`, a gauge's           |
+| 11     | where          | array of conditions | labels beyond equality, each label once, in the byte order of its name                                                     |
+| 12, 13 | by, without    | array of str        | aggregate's: the labels a group keeps, or all but these; an empty `by` is sent and joins every series of a name            |
+| 14     | lookback       | uint                | aggregate's: milliseconds before from where an increase, a rate or a delta looks for its first step; the width when absent |
 
 A condition:
 
@@ -1071,17 +1072,19 @@ aggregate that fails sends no series.
 An aggregate's item is a series, keys 1 and 2, and its buckets as columns, as
 many values each:
 
-| key | field  | type |                                                                                                                                             |
-|-----|--------|------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| 3   | from   | bin  | each bucket's start, unix milliseconds, a little-endian int64 each                                                                          |
-| 4   | to     | bin  | its end, excluded                                                                                                                           |
-| 5   | count  | bin  | the samples it counted, an int64 each                                                                                                       |
-| 6   | resets | bin  | the resets among them, an int64 each                                                                                                        |
-| 7   | values | bin  | its value, a float64 computed exactly and rounded once                                                                                      |
-| 8   | flags  | bin  | a byte each: 1 when the value overflowed to an infinity, 2 when retention cut the bucket, which counted only its samples from the cutoff on |
+| key | field  | type |                                                                                                                                                                                                                                           |
+|-----|--------|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 3   | from   | bin  | each bucket's start, unix milliseconds, a little-endian int64 each                                                                                                                                                                        |
+| 4   | to     | bin  | its end, excluded                                                                                                                                                                                                                         |
+| 5   | count  | bin  | the samples it counted, an int64 each                                                                                                                                                                                                     |
+| 6   | resets | bin  | the resets among them, an int64 each                                                                                                                                                                                                      |
+| 7   | values | bin  | its value, a float64 computed exactly and rounded once                                                                                                                                                                                    |
+| 8   | flags  | bin  | a byte each: 1 when the value overflowed to an infinity, 2 when retention cut the bucket, which counted only its samples from the cutoff on, or not the step into its first, 4 when its first step started from a sample before the range |
 
-An increase counts a reset inside its bucket and not the step from one bucket
-to the next; only a bucket holding samples is answered.
+An increase, a rate and a delta count each step between samples in the bucket
+where it ends, the first bucket's from the last sample up to the lookback
+before from, so the buckets add up to the range; only a bucket holding samples
+is answered.
 
 Drop removes one series and everything it holds, whether it still reads or
 not, the labels naming it exactly; unreadable groups counts the groups removed

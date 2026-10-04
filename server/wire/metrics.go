@@ -155,8 +155,9 @@ func (b *MetricsBatch) Decode(body []byte) error {
 
 // MetricsRange is read's and aggregate's request: the series every matcher
 // names exactly, in [From, To) of unix milliseconds, within limits that may
-// only narrow the server's. Aggregate adds its buckets' width in milliseconds
-// and its operation.
+// only narrow the server's. Aggregate adds its buckets' width in milliseconds,
+// its operation, and how far before From an increase, a rate or a delta looks
+// for its first step, Width when zero.
 type MetricsRange struct {
 	Matchers map[string]string
 	From, To int64
@@ -167,6 +168,7 @@ type MetricsRange struct {
 	// By and Without group an aggregate's series; an empty one, not nil, is
 	// sent and groups by no label.
 	By, Without []string
+	Lookback    int64
 }
 
 // MetricsCondition is what a label's value must be beyond equality: one_of
@@ -234,6 +236,7 @@ func (r MetricsRange) Append(dst []byte) []byte {
 		m.Key(13)
 		m.SetBuf(appendStrs(m.Buf(), r.Without))
 	}
+	optionalInt(&m, 14, r.Lookback)
 	return m.End()
 }
 
@@ -261,6 +264,8 @@ func (r *MetricsRange) Decode(body []byte) error {
 			r.By = append([]string{}, d.Strs()...)
 		case 13:
 			r.Without = append([]string{}, d.Strs()...)
+		case 14:
+			r.Lookback = d.Duration()
 		default:
 			r.decodeLimit(&d, key)
 		}
@@ -302,12 +307,15 @@ type MetricsBucket struct {
 	Overflow bool
 	// Partial says retention cut the bucket.
 	Partial bool
+	// Lookback says its first step started from a sample before the range.
+	Lookback bool
 }
 
 // a bucket's flags, a byte each
 const (
 	bucketOverflow = 1
 	bucketPartial  = 2
+	bucketLookback = 4
 )
 
 func (b MetricsBuckets) Append(dst []byte) []byte {
@@ -325,6 +333,9 @@ func (b MetricsBuckets) Append(dst []byte) []byte {
 		}
 		if bucket.Partial {
 			flags[i] |= bucketPartial
+		}
+		if bucket.Lookback {
+			flags[i] |= bucketLookback
 		}
 	}
 	for key, column := range [][]int64{from, to, count, resets} {
@@ -366,6 +377,7 @@ func (b *MetricsBuckets) Decode(body []byte) error {
 			b.Buckets[i] = MetricsBucket{
 				From: ints[0][i], To: ints[1][i], Count: ints[2][i], Resets: ints[3][i], Value: values[i],
 				Overflow: flags[i]&bucketOverflow != 0, Partial: flags[i]&bucketPartial != 0,
+				Lookback: flags[i]&bucketLookback != 0,
 			}
 		}
 	}

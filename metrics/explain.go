@@ -40,7 +40,10 @@ func (s *Store) ExplainAggregate(ctx context.Context, request AggregateRequest) 
 	if err != nil {
 		return Plan{}, err
 	}
-	query.aggregate = &aggregateSelection{origin: query.origin, width: request.Width.Milliseconds()}
+	if query.from >= query.to {
+		return Plan{Limits: query.limits}, nil
+	}
+	withLookback(request, &query)
 	return s.explain(ctx, query)
 }
 

@@ -122,8 +122,9 @@ export interface Range {
 
 /**
  * Each computed exactly and rounded once, a group's too: avg is the mean of
- * every sample, rate a counter's increase a second, delta a gauge's last
- * sample less its first.
+ * every sample, rate a counter's increase a second, delta how far a gauge
+ * moved. An increase, a rate or a delta counts each step between samples in
+ * the bucket it ends in, so buckets add up to the whole range.
  */
 export type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate' | 'delta'
 
@@ -137,6 +138,8 @@ export interface AggregateRange extends Range {
 	op: AggregateOp
 	by?: string[]
 	without?: string[]
+	/** how far before the range an increase, a rate or a delta looks for its first step: one width when absent */
+	lookback?: Duration
 }
 
 export interface Bucket {
@@ -150,8 +153,10 @@ export interface Bucket {
 	value: number
 	/** the value overflowed to an infinity */
 	overflow: boolean
-	/** retention cut the bucket, which counted only its samples from the cutoff on */
+	/** retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first */
 	partial: boolean
+	/** its first step started from a sample before the range */
+	lookback: boolean
 }
 
 export interface Aggregate {
@@ -163,6 +168,10 @@ export interface Aggregate {
 }
 
 const openEnd = 0x7fff_ffff_ffff_ffffn
+
+function lookbackOf(range: { lookback?: Duration | undefined }): number | undefined {
+	return range.lookback === undefined ? undefined : ms(range.lookback)
+}
 
 /** The label the wire carries a series' name as, the store's own spelling. */
 const wireName = '__name__'
@@ -195,6 +204,7 @@ function rangeOf(
 		op?: AggregateOp
 		by?: string[] | undefined
 		without?: string[] | undefined
+		lookback?: number | undefined
 	},
 ): Parameters<typeof MetricsRange.encode>[0] {
 	const { match, where } = conditionsOf(r)
@@ -348,12 +358,16 @@ export class Metrics {
 		})
 	}
 
-	/** Buckets of a width from the range's start, each computed exactly: a counter's increase counts its resets. */
+	/**
+	 * Buckets of a width from the range's start, each computed exactly: a
+	 * counter's increase counts its resets, and the first bucket the step from
+	 * the last sample a lookback before the range.
+	 */
 	async aggregate(range: AggregateRange): Promise<Aggregate[]> {
 		if (range.by !== undefined && range.without !== undefined) {
 			throw new InvalidError('an aggregate groups by labels or without them, not both')
 		}
-		const grouping = { by: range.by, without: range.without }
+		const grouping = { by: range.by, without: range.without, lookback: lookbackOf(range) }
 		const got = await this.#link.run('read', connection =>
 			download(
 				connection,
@@ -372,6 +386,7 @@ export class Metrics {
 				value,
 				overflow: ((b.flags?.[i] ?? 0) & 1) !== 0,
 				partial: ((b.flags?.[i] ?? 0) & 2) !== 0,
+				lookback: ((b.flags?.[i] ?? 0) & 4) !== 0,
 			}))
 			return {
 				...namedSeries(b.labels as Labels | undefined),
@@ -392,12 +407,18 @@ export class Metrics {
 	 * call would end with, undefined when it fits.
 	 */
 	async explain(
-		range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without'>>,
+		range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without' | 'lookback'>>,
 	): Promise<Plan> {
 		const extra =
 			range.op === undefined
 				? {}
-				: { width: ms(range.width ?? 0), op: range.op, by: range.by, without: range.without }
+				: {
+						width: ms(range.width ?? 0),
+						op: range.op,
+						by: range.by,
+						without: range.without,
+						lookback: lookbackOf(range),
+					}
 		const body = await this.#link.run('read', connection =>
 			connection.session.call(
 				methods['metrics.explain'],

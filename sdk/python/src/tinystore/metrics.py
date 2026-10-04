@@ -63,7 +63,9 @@ class Bucket:
     value: float
     overflow: bool
     partial: bool
-    """retention cut the bucket, which counted only its samples from the cutoff on"""
+    """retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first"""
+    lookback: bool
+    """its first step started from a sample before the range"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,20 +273,25 @@ class Metrics:
         limits: Mapping[str, int] | None = None,
         by: Iterable[str] | None = None,
         without: Iterable[str] | None = None,
+        lookback: Duration | None = None,
     ) -> list[Aggregate]:
         """Buckets of a width from the range's start, each computed exactly and rounded once.
 
         avg is the mean of every sample, rate a counter's increase a second,
-        delta a gauge's last sample less its first. by groups the series by
-        those labels, without by every label but those, each group one
-        result; ``by=[]`` joins every series of a name::
+        delta how far a gauge moved. An increase, a rate or a delta counts
+        each step in the bucket it ends in, the first bucket's from the last
+        sample up to lookback before the range, one width when None, so
+        buckets add up to the whole range. by groups the series by those
+        labels, without by every label but those, each group one result;
+        ``by=[]`` joins every series of a name::
 
             await store.metrics.aggregate(name="http_requests_total", since="1d", width="1h", op="rate", by=["route"])
         """
         if by is not None and without is not None:
             raise InvalidError("an aggregate groups by labels or without them, not both")
         grouping = {"by": None if by is None else list(by), "without": None if without is None else list(without)}
-        body = _range(name, match, where, since, from_, to, limits, width=ms(width), op=op, **grouping)
+        looked = None if lookback is None else ms(lookback)
+        body = _range(name, match, where, since, from_, to, limits, width=ms(width), op=op, lookback=looked, **grouping)
 
         async def attempt(connection: Connection) -> Any:
             return await download(connection, METHODS["metrics.aggregate"], body)
@@ -302,6 +309,7 @@ class Metrics:
                     v,
                     bool(flags[i] & 1),
                     bool(flags[i] & 2),
+                    bool(flags[i] & 4),
                 )
                 for i, v in enumerate(b.get("values", []))
             ]
@@ -336,6 +344,7 @@ class Metrics:
         op: Op | None = None,
         by: Iterable[str] | None = None,
         without: Iterable[str] | None = None,
+        lookback: Duration | None = None,
     ) -> Plan:
         """What read, or aggregate when op is given, would spend of its limits, without reading a sample.
 
@@ -350,6 +359,7 @@ class Metrics:
                 "op": op,
                 "by": None if by is None else list(by),
                 "without": None if without is None else list(without),
+                "lookback": None if lookback is None else ms(lookback),
             }
         body = _range(name, match, where, since, from_, to, limits, **extra)
 

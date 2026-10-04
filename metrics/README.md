@@ -157,7 +157,12 @@ per nonempty bucket. Buckets start at `r.From`; retention clips contributing
 samples without shifting them, and the bucket it cuts reports `Partial`.
 `AggregateCount`, `AggregateMin`, `AggregateMax`, `AggregateAvg`,
 `AggregateIncrease`, `AggregateRate` and `AggregateDelta` are also available;
-increase and rate require a counter series, delta a gauge. `By` and `Without`
+increase and rate require a counter series, delta a gauge. These three count
+each step between samples in the bucket it ends in, so adjacent buckets add up
+to the range: the first bucket steps from the newest sample up to `Lookback`
+before `r.From`, one `Width` when zero, and reports `Lookback`; a whole block
+before `r.From` answers that step from its summary, and a step from a sample
+retention expired is not counted and leaves the bucket `Partial`. `By` and `Without`
 join series into groups, one result each, `By: []string{}` every series of a
 name; [the contract](https://github.com/tinyshed/research/blob/main/tinystore/design/aggregate-contract.md) has the arithmetic, which
 rounds a group's bucket once. `Count` and `Resets` remain

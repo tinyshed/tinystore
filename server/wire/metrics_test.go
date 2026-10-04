@@ -25,11 +25,11 @@ func TestMetricsMessagesReadBackAsTheyWereWritten(t *testing.T) {
 			Labels: cpu, Kind: "counter",
 			Times: []int64{}, Values: []float64{},
 		}}}, &wire.MetricsBatch{}},
-		{wire.MetricsRange{Matchers: cpu, From: 5, To: 9, Width: 60_000, Op: "sum", Limits: wire.MetricsLimits{
+		{wire.MetricsRange{Matchers: cpu, From: 5, To: 9, Width: 60_000, Op: "sum", Lookback: 120_000, Limits: wire.MetricsLimits{
 			Series: 1, Blocks: 2, PayloadBytes: 3, DecodedSamples: 4, OutputSamples: 5,
 		}}, &wire.MetricsRange{}},
 		{wire.MetricsBuckets{Labels: cpu, Kind: "counter", Buckets: []wire.MetricsBucket{
-			{From: 0, To: 60_000, Count: 3, Resets: 1, Value: 1.5, Partial: true},
+			{From: 0, To: 60_000, Count: 3, Resets: 1, Value: 1.5, Partial: true, Lookback: true},
 			{From: 60_000, To: 120_000, Count: 1, Value: math.Inf(1), Overflow: true},
 		}}, &wire.MetricsBuckets{}},
 		{wire.MetricsLabels{Labels: cpu}, &wire.MetricsLabels{}},

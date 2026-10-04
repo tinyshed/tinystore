@@ -475,6 +475,7 @@ export const MetricsRange = message('metrics.range', {
 	where: [11, list(MetricsCondition)],
 	by: [12, list(str)],
 	without: [13, list(str)],
+	lookback: [14, uint],
 })
 
 export const MetricsBuckets = message('metrics.buckets', {

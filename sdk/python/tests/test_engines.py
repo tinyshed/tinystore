@@ -537,6 +537,18 @@ async def test_samples_come_back_bit_for_bit_and_aggregate_exactly(store: tinyst
     )
     assert [(b.value, b.resets, b.count) for b in agg.buckets] == [(30.0, 1, 4)]
     assert agg.buckets[0].from_ is not None and agg.buckets[0].from_.timestamp() * 1000 == start
+    [minutes] = await store.metrics.aggregate(
+        name="requests_total", from_=start + 60_000, to=start + 240_000, width="1m", op="increase"
+    )
+    assert [(b.value, b.resets, b.lookback) for b in minutes.buckets] == [(10, 0, True), (5, 1, False), (15, 0, False)]
+    [halves] = await store.metrics.aggregate(
+        name="requests_total", from_=start + 60_000, to=start + 240_000, width="30s", op="increase"
+    )
+    assert (halves.buckets[0].value, halves.buckets[0].lookback) == (0, False)
+    [looked] = await store.metrics.aggregate(
+        name="requests_total", from_=start + 60_000, to=start + 240_000, width="30s", op="increase", lookback="1m"
+    )
+    assert (looked.buckets[0].value, looked.buckets[0].lookback) == (10, True)
 
     store.metrics.counter("http_requests_total").labels(route="/notes").inc()
     store.metrics.counter("http_requests_total").labels(route="/notes").inc(2)

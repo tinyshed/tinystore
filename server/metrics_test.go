@@ -148,8 +148,9 @@ func TestAMetricsIngestIsAllOrNone(t *testing.T) {
 	}
 }
 
-// a counter's increase counts a reset inside its bucket, and not the step from
-// one bucket to the next
+// A counter's increase counts each step, a reset's too, in the bucket it ends
+// in, so buckets add up to the range; the first steps from the last sample a
+// lookback before the range, one width unless the request names another.
 func TestAggregateOverTheWire(t *testing.T) {
 	ts := startTestServer(t, Options{})
 	conn := ts.dial(t, wire.Hello{})
@@ -161,20 +162,25 @@ func TestAggregateOverTheWire(t *testing.T) {
 	if err := ingest(t, conn, requests); err != nil {
 		t.Fatal(err)
 	}
-	ask := wire.MetricsRange{Matchers: requests.Labels, From: start, To: start + 4000, Op: "increase"}
+	ask := wire.MetricsRange{Matchers: requests.Labels, Op: "increase"}
 	for _, c := range []struct {
-		width int64
-		want  []wire.MetricsBucket
+		from, width, lookback int64
+		want                  []wire.MetricsBucket
 	}{
-		{4000, []wire.MetricsBucket{{From: start, To: start + 4000, Count: 4, Resets: 1, Value: 30}}},
-		{2000, []wire.MetricsBucket{
+		{start, 4000, 0, []wire.MetricsBucket{{From: start, To: start + 4000, Count: 4, Resets: 1, Value: 30}}},
+		{start, 2000, 0, []wire.MetricsBucket{
 			{From: start, To: start + 2000, Count: 2, Value: 10},
-			{From: start + 2000, To: start + 4000, Count: 2, Value: 15},
+			{From: start + 2000, To: start + 4000, Count: 2, Resets: 1, Value: 20},
+		}},
+		{start + 3000, 500, 0, []wire.MetricsBucket{{From: start + 3000, To: start + 3500, Count: 1}}},
+		{start + 3000, 500, 1000, []wire.MetricsBucket{
+			{From: start + 3000, To: start + 3500, Count: 1, Value: 15, Lookback: true},
 		}},
 	} {
-		ask.Width = c.width
+		ask.From, ask.To, ask.Width, ask.Lookback = c.from, start+4000, c.width, c.lookback
 		if buckets, err := aggregate(t, conn, ask); err != nil || !reflect.DeepEqual(buckets, c.want) {
-			t.Errorf("increase in buckets %d ms wide: %+v, %v", c.width, buckets, err)
+			t.Errorf("increase from %d in buckets %d ms wide, a lookback of %d: %+v, %v",
+				c.from-start, c.width, c.lookback, buckets, err)
 		}
 	}
 	// an operation a newer client asks for is unimplemented, named, as an

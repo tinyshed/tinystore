@@ -124,7 +124,10 @@ type AggregateOp string
 //	avg       the mean of the bucket's samples, every series of a group weighed by them
 //	increase  a counter's rise, its resets counted
 //	rate      a counter's increase a second of the bucket
-//	delta     a gauge's last sample less its first
+//	delta     a gauge's last sample less the one before the bucket
+//
+// Increase, rate and delta count each step between samples in the bucket it
+// ends in, so adjacent buckets add up to the range.
 const (
 	AggregateCount    AggregateOp = "count"
 	AggregateSum      AggregateOp = "sum"
@@ -147,6 +150,10 @@ type AggregateRequest struct {
 	Width       time.Duration
 	Op          AggregateOp
 	By, Without []string
+
+	// Lookback is how far before the range an increase, a rate or a delta
+	// looks for the sample its first step starts from; Width when zero.
+	Lookback time.Duration
 }
 
 // AggregateBucket keeps the edges it was asked for.
@@ -157,8 +164,12 @@ type AggregateBucket struct {
 	Overflow      bool
 
 	// Partial reports that retention cut the bucket: only its samples from the
-	// cutoff on were counted.
+	// cutoff on were counted, or the step into its first one was not.
 	Partial bool
+
+	// Lookback reports that the bucket's first step started from a sample
+	// before the range, inside the request's Lookback.
+	Lookback bool
 }
 
 type AggregateResult struct {

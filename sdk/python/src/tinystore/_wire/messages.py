@@ -448,6 +448,7 @@ MetricsRange = message(
     where=(11, list_(MetricsCondition)),
     by=(12, list_(str_)),
     without=(13, list_(str_)),
+    lookback=(14, uint),
 )
 
 MetricsBuckets = message(

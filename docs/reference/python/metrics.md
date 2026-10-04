@@ -25,7 +25,8 @@ class Bucket:
     resets: int
     value: float
     overflow: bool
-    partial: bool  # retention cut the bucket, which counted only its samples from the cutoff on
+    partial: bool  # retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first
+    lookback: bool  # its first step started from a sample before the range
 ```
 
 ## Aggregate
@@ -153,15 +154,19 @@ async def aggregate(
     limits: Mapping[str, int] | None = None,
     by: Iterable[str] | None = None,
     without: Iterable[str] | None = None,
+    lookback: Duration | None = None,
 ) -> list[Aggregate]: ...
 ```
 
 Buckets of a width from the range's start, each computed exactly and rounded once.
 
 avg is the mean of every sample, rate a counter's increase a second,
-delta a gauge's last sample less its first. by groups the series by
-those labels, without by every label but those, each group one
-result; ``by=[]`` joins every series of a name:
+delta how far a gauge moved. An increase, a rate or a delta counts
+each step in the bucket it ends in, the first bucket's from the last
+sample up to lookback before the range, one width when None, so
+buckets add up to the whole range. by groups the series by those
+labels, without by every label but those, each group one result;
+``by=[]`` joins every series of a name:
 
     await store.metrics.aggregate(name="http_requests_total", since="1d", width="1h", op="rate", by=["route"])
 
@@ -192,6 +197,7 @@ async def explain(
     op: Op | None = None,
     by: Iterable[str] | None = None,
     without: Iterable[str] | None = None,
+    lookback: Duration | None = None,
 ) -> Plan: ...
 ```
 

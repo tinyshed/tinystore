@@ -2,11 +2,13 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"math/big"
 	"math/rand/v2"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -42,7 +44,7 @@ func TestAggregateRoundsExactSumAcrossSealedBlocks(t *testing.T) {
 	}
 }
 
-func TestAggregateCounterIncludesBlockTransitionButNotBucketTransition(t *testing.T) {
+func TestACounterStepCountsInTheBucketItEndsIn(t *testing.T) {
 	store, _ := openTestStore(t, Options{MaxHeadSamples: 1024})
 	series := testSeries()
 	series.Kind = Counter
@@ -74,8 +76,9 @@ func TestAggregateCounterIncludesBlockTransitionButNotBucketTransition(t *testin
 	if err != nil || len(split) != 1 || len(split[0].Buckets) != 2 {
 		t.Fatalf("split counter: %+v: %v", split, err)
 	}
-	if split[0].Buckets[0].Value != 20 || split[0].Buckets[1].Value != 15 || split[0].Buckets[1].Resets != 0 {
-		t.Fatalf("bucket boundary changed counter increase: %+v", split[0].Buckets)
+	first, second := split[0].Buckets[0], split[0].Buckets[1]
+	if first.Value != 20 || second.Value != 20 || second.Resets != 1 || first.Value+second.Value != all[0].Buckets[0].Value {
+		t.Fatalf("the step into the second bucket, a reset to 5, is not its own: %+v", split[0].Buckets)
 	}
 }
 
@@ -409,5 +412,270 @@ func TestAGroupingOrOperationTheSeriesCannotTakeIsRefused(t *testing.T) {
 		if _, err := store.Aggregate(t.Context(), request); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%v by %v without %v: %v, want ErrInvalid", request.Op, request.By, request.Without, err)
 		}
+	}
+}
+
+// An hour of a counter that grows by one a second, sampled every 15 s, is an
+// increase of 3585 at every width. Buckets that dropped the step into them
+// added up to 2700 at a minute and 3420 at five. A sample at the hour seals
+// the hour before it into a block, which the hour's bucket answers from.
+func TestAnHourOfACounterIncreasesBy3585AtEveryWidth(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	hour := time.Hour.Milliseconds()
+	store.now = func() time.Time { return time.UnixMilli(testEpoch + hour) }
+	series := testSeries()
+	series.Kind = Counter
+	points := make([]Sample, 241)
+	for i := range points {
+		points[i] = Sample{At: testEpoch + int64(i)*15000, Value: float64(i * 15)}
+	}
+	if sealed := ingestAndSeal(t, store, Batch{Series: series, Samples: points}); sealed != 1 {
+		t.Fatalf("the hour sealed into %d blocks", sealed)
+	}
+
+	for _, test := range []struct {
+		width   time.Duration
+		buckets int
+	}{{time.Minute, 60}, {5 * time.Minute, 12}, {time.Hour, 1}} {
+		buckets := aggregateBuckets(t, store, AggregateRequest{
+			Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch, To: testEpoch + hour},
+			Width: test.width, Op: AggregateIncrease,
+		})
+		if len(buckets) != test.buckets || total(buckets) != 3585 {
+			t.Fatalf("%s: %d buckets adding up to %v", test.width, len(buckets), total(buckets))
+		}
+	}
+}
+
+// The first bucket steps from the newest sample a lookback before the range,
+// here the last of a block the range does not touch, which its summary answers
+// undecoded: a block of 240 samples ending in 110 at 2390 ms, then 130 at 2500
+// and 135 at 3500, read from 2400.
+func TestTheFirstBucketTakesItsStepFromBeforeTheRange(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	counter, gauge := testSeries(), testSeries()
+	counter.Name, counter.Kind = "requests", Counter
+	points := make([]Sample, 241)
+	for i := range points {
+		points[i] = Sample{At: testEpoch + int64(i)*10, Value: 100}
+	}
+	points[239].Value, points[240] = 110, Sample{At: testEpoch + 2500, Value: 130}
+	sealed := ingestAndSeal(t, store, Batch{Series: counter, Samples: points}, Batch{Series: gauge, Samples: points})
+	later := []Sample{{At: testEpoch + 3500, Value: 135}}
+	if err := store.Ingest(t.Context(), []Batch{{Series: counter, Samples: later}, {Series: gauge, Samples: later}}); err != nil || sealed != 2 {
+		t.Fatalf("a block a series: %d: %v", sealed, err)
+	}
+
+	stepped := func(from, to int64) AggregateBucket {
+		return AggregateBucket{From: testEpoch + from, To: testEpoch + to, Count: 1, Value: 20, Lookback: true}
+	}
+	last := func(from, to int64) AggregateBucket {
+		return AggregateBucket{From: testEpoch + from, To: testEpoch + to, Count: 1, Value: 5}
+	}
+	tests := []struct {
+		width, lookback time.Duration
+		want            []AggregateBucket
+	}{
+		{time.Second, 0, []AggregateBucket{stepped(2400, 3400), last(3400, 4400)}},
+		{5 * time.Millisecond, 0, []AggregateBucket{ // 2390 is past a lookback of one width
+			{From: testEpoch + 2500, To: testEpoch + 2505, Count: 1}, last(3500, 3505),
+		}},
+		{5 * time.Millisecond, time.Second, []AggregateBucket{stepped(2500, 2505), last(3500, 3505)}},
+	}
+	var asked []AggregateRequest
+	for _, test := range tests {
+		for _, series := range []Series{counter, gauge} {
+			request := AggregateRequest{
+				Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch + 2400, To: testEpoch + 4400},
+				Width: test.width, Op: AggregateIncrease, Lookback: test.lookback,
+			}
+			if series.Kind == Gauge {
+				request.Op = AggregateDelta
+			}
+			if got := aggregateBuckets(t, store, request); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("%s of %s buckets, a lookback of %s: got %+v, want %+v",
+					request.Op, test.width, test.lookback, got, test.want)
+			}
+			asked = append(asked, request)
+		}
+	}
+
+	zeroPayloads(t, store)
+	for i, request := range asked {
+		got, err := store.Aggregate(t.Context(), request)
+		if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].Buckets, tests[i/2].want) {
+			t.Fatalf("the step from a block before the range decoded it: %+v: %v", got, err)
+		}
+	}
+}
+
+// A lookback that retention cut leaves the step from an expired sample
+// uncounted, and says so: with a minute's retention, 100 at 10 s, 110 at 50 s
+// and 130 at 70 s, read at 60 s and again at 75 s, when 10 s has expired.
+func TestAStepFromAnExpiredSampleIsNotCounted(t *testing.T) {
+	store, _ := openTestStore(t, Options{Retention: time.Minute})
+	store.now = func() time.Time { return time.UnixMilli(testEpoch + 60000) }
+	series := testSeries()
+	series.Kind = Counter
+	ingestAndSeal(t, store, Batch{Series: series, Samples: []Sample{
+		{At: testEpoch + 10000, Value: 100}, {At: testEpoch + 50000, Value: 110}, {At: testEpoch + 70000, Value: 130},
+	}})
+	request := AggregateRequest{
+		Range: Range{Name: series.Name, Match: series.Labels, From: testEpoch + 20000, To: testEpoch + 80000},
+		Width: 20 * time.Second, Op: AggregateIncrease,
+	}
+
+	want := []AggregateBucket{
+		{From: testEpoch + 40000, To: testEpoch + 60000, Count: 1, Value: 10, Lookback: true},
+		{From: testEpoch + 60000, To: testEpoch + 80000, Count: 1, Value: 20},
+	}
+	if got := aggregateBuckets(t, store, request); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a step from a live sample: got %+v, want %+v", got, want)
+	}
+	store.now = func() time.Time { return time.UnixMilli(testEpoch + 75000) }
+	want[0].Value, want[0].Lookback, want[0].Partial = 0, false, true
+	if got := aggregateBuckets(t, store, request); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a step from an expired sample: got %+v, want %+v", got, want)
+	}
+}
+
+// FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange holds the step rule
+// on any counter and gauge: buckets of any width add up to the whole range,
+// and whatever summaries answer, raw samples answer alike.
+func FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange(f *testing.F) {
+	f.Add(uint64(1), uint16(999), uint32(59), uint32(0))
+	f.Add(uint64(2), uint16(0), uint32(0), uint32(7))
+	f.Add(uint64(3), uint16(29999), uint32(899999), uint32(4000000))
+	f.Add(uint64(4), uint16(15000), uint32(60000), uint32(123456))
+	f.Fuzz(func(t *testing.T, seed uint64, gap uint16, width, skip uint32) {
+		store, _ := openTestStore(t, Options{})
+		random := rand.New(rand.NewPCG(seed, seed))
+		counter, gauge := testSeries(), testSeries()
+		counter.Name, counter.Kind = "requests", Counter
+		batches := []Batch{
+			{Series: counter, Samples: steppedSamples(random, Counter, gap)},
+			{Series: gauge, Samples: steppedSamples(random, Gauge, gap)},
+		}
+		lastOf := func(batch Batch) int64 { return batch.Samples[len(batch.Samples)-1].At }
+		last := max(lastOf(batches[0]), lastOf(batches[1]))
+		store.now = func() time.Time { return time.UnixMilli(last) }
+		ingestHalvesSealingTheFirst(t, store, batches...)
+
+		to := last + 1 + random.Int64N(1000)
+		for _, batch := range batches {
+			from := testEpoch + int64(skip)%(lastOf(batch)-testEpoch+1)
+			whole := AggregateRequest{
+				Range: Range{Name: batch.Series.Name, Match: batch.Series.Labels, From: from, To: to},
+				Width: time.Duration(to-from) * time.Millisecond, Op: AggregateIncrease,
+				Lookback: time.Duration(from-testEpoch+1) * time.Millisecond, // to the first sample
+			}
+			if batch.Series.Kind == Gauge {
+				whole.Op = AggregateDelta
+			}
+			split := whole
+			split.Width = time.Duration(1+int64(width)%(to-from)) * time.Millisecond
+			checkStepsAddUp(t, aggregateBuckets(t, store, whole), aggregateBuckets(t, store, split))
+		}
+	})
+}
+
+// steppedSamples is a series of whole values, a counter's rising with a reset
+// now and then, at most gap+1 ms apart from testEpoch on.
+func steppedSamples(random *rand.Rand, kind Kind, gap uint16) []Sample {
+	points := make([]Sample, 1+random.IntN(1000))
+	at, value := testEpoch, float64(random.IntN(100))
+	for i := range points {
+		switch {
+		case kind == Gauge:
+			value = float64(random.IntN(2001) - 1000)
+		case random.IntN(10) == 0:
+			value = float64(random.IntN(20))
+		default:
+			value += float64(random.IntN(50))
+		}
+		points[i] = Sample{At: at, Value: value}
+		at += 1 + random.Int64N(int64(gap)+1)
+	}
+	return points
+}
+
+// ingestHalvesSealingTheFirst leaves blocks and a head behind each series.
+func ingestHalvesSealingTheFirst(t *testing.T, store *Store, batches ...Batch) {
+	t.Helper()
+	var first, second []Batch
+	for _, batch := range batches {
+		half := len(batch.Samples) / 2
+		if half > 0 {
+			first = append(first, Batch{Series: batch.Series, Samples: batch.Samples[:half]})
+		}
+		second = append(second, Batch{Series: batch.Series, Samples: batch.Samples[half:]})
+	}
+	if len(first) > 0 {
+		ingestAndSeal(t, store, first...)
+	}
+	if err := store.Ingest(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkStepsAddUp(t *testing.T, whole, split []AggregateBucket) {
+	t.Helper()
+	var count, resets int
+	for _, bucket := range split {
+		count, resets = count+bucket.Count, resets+bucket.Resets
+		if bucket.Partial {
+			t.Fatalf("a bucket no retention cut is partial: %+v", bucket)
+		}
+	}
+	if len(whole) != 1 || total(split) != whole[0].Value || count != whole[0].Count || resets != whole[0].Resets ||
+		split[0].Lookback != whole[0].Lookback {
+		t.Fatalf("buckets %+v do not add up to the range's %+v", split, whole)
+	}
+}
+
+// aggregateBuckets is one series' answer, which raw samples must give alike.
+func aggregateBuckets(t *testing.T, store *Store, request AggregateRequest) []AggregateBucket {
+	t.Helper()
+	got, err := store.Aggregate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := rawAggregate(t, store, request); !reflect.DeepEqual(got, want) {
+		t.Fatalf("summaries answered %+v, raw samples %+v", got, want)
+	}
+	if len(got) != 1 {
+		t.Fatalf("results for one series: %+v", got)
+	}
+	return got[0].Buckets
+}
+
+func total(buckets []AggregateBucket) (sum float64) {
+	for _, bucket := range buckets {
+		sum += bucket.Value
+	}
+	return sum
+}
+
+// ingestAndSeal returns how many blocks the samples sealed.
+func ingestAndSeal(t *testing.T, store *Store, batches ...Batch) int {
+	t.Helper()
+	if err := store.Ingest(t.Context(), batches); err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := store.Maintain(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sealed.SealedBlocks
+}
+
+// zeroPayloads leaves every block's summary and corrupts its samples.
+func zeroPayloads(t *testing.T, store *Store) {
+	t.Helper()
+	if err := store.file.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `update payloads set body=zeroblob(length(body))`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -128,7 +128,7 @@ func metricsAggregate(c *call) error {
 			for i, bucket := range buckets {
 				sent.Buckets[i] = wire.MetricsBucket{
 					From: bucket.From, To: bucket.To, Count: int64(bucket.Count), Resets: int64(bucket.Resets),
-					Value: bucket.Value, Overflow: bucket.Overflow, Partial: bucket.Partial,
+					Value: bucket.Value, Overflow: bucket.Overflow, Partial: bucket.Partial, Lookback: bucket.Lookback,
 				}
 			}
 			return item(c, sent)
@@ -197,11 +197,15 @@ func rangeOf(sent wire.MetricsRange) (metrics.Range, error) {
 }
 
 // aggregateOf is an aggregate as the engine takes it: its range, its buckets'
-// width, an operation this server has, and its grouping
+// width and lookback, an operation this server has, and its grouping
 func aggregateOf(ask wire.MetricsRange) (metrics.AggregateRequest, error) {
 	if ask.Width > math.MaxInt64/int64(time.Millisecond) {
 		return metrics.AggregateRequest{}, fmt.Errorf("%w: metrics: buckets %d milliseconds wide, past what a "+
 			"duration holds", tinystore.ErrInvalid, ask.Width)
+	}
+	if ask.Lookback > math.MaxInt64/int64(time.Millisecond) {
+		return metrics.AggregateRequest{}, fmt.Errorf("%w: metrics: a lookback of %d milliseconds, past what a "+
+			"duration holds", tinystore.ErrInvalid, ask.Lookback)
 	}
 	selected, err := rangeOf(ask)
 	if err != nil {
@@ -212,7 +216,7 @@ func aggregateOf(ask wire.MetricsRange) (metrics.AggregateRequest, error) {
 	}
 	return metrics.AggregateRequest{
 		Range: selected, Width: time.Duration(ask.Width) * time.Millisecond, Op: metrics.AggregateOp(ask.Op),
-		By: ask.By, Without: ask.Without,
+		By: ask.By, Without: ask.Without, Lookback: time.Duration(ask.Lookback) * time.Millisecond,
 	}, nil
 }
 

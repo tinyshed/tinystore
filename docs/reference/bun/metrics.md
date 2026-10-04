@@ -144,8 +144,9 @@ type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate'
 ```
 
 Each computed exactly and rounded once, a group's too: avg is the mean of
-every sample, rate a counter's increase a second, delta a gauge's last
-sample less its first.
+every sample, rate a counter's increase a second, delta how far a gauge
+moved. An increase, a rate or a delta counts each step between samples in
+the bucket it ends in, so buckets add up to the whole range.
 
 ## AggregateRange
 
@@ -155,6 +156,8 @@ interface AggregateRange extends Range {
     op: AggregateOp
     by?: string[]
     without?: string[]
+    /** how far before the range an increase, a rate or a delta looks for its first step: one width when absent */
+    lookback?: Duration
 }
 ```
 
@@ -176,8 +179,10 @@ interface Bucket {
     value: number
     /** the value overflowed to an infinity */
     overflow: boolean
-    /** retention cut the bucket, which counted only its samples from the cutoff on */
+    /** retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first */
     partial: boolean
+    /** its first step started from a sample before the range */
+    lookback: boolean
 }
 ```
 
@@ -224,12 +229,14 @@ Every sample of the series a range matches, exactly, read whole before the first
 aggregate(range: AggregateRange): Promise<Aggregate[]>
 ```
 
-Buckets of a width from the range's start, each computed exactly: a counter's increase counts its resets.
+Buckets of a width from the range's start, each computed exactly: a
+counter's increase counts its resets, and the first bucket the step from
+the last sample a lookback before the range.
 
 ### Metrics.explain
 
 ```ts
-explain(range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without'>>): Promise<Plan>
+explain(range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without' | 'lookback'>>): Promise<Plan>
 ```
 
 What read(range), or aggregate(range) when it names an op, would spend

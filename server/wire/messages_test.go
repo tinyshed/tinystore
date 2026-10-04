@@ -291,6 +291,7 @@ var schema = map[string][]field{
 		{11, "where", "[]metrics.condition"},
 		{12, "by", "[]str"},
 		{13, "without", "[]str"},
+		{14, "lookback", "uint"},
 	},
 	"metrics.condition": {{1, "label", "str"}, {2, "kind", "str"}, {3, "values", "[]str"}},
 	"metrics.buckets": {
@@ -785,6 +786,11 @@ func metricsExamples() []example {
 			Matchers: map[string]string{"__name__": "temperature"}, From: at, To: at + 86_400_000,
 			Width: 3_600_000, Op: "avg", Without: []string{"host"},
 		}),
+		of("metrics.aggregate of a minute's increase, its first step from up to an hour before", "metrics.range",
+			wire.MetricsRange{
+				Matchers: map[string]string{"__name__": "http_requests_total"}, From: at, To: at + 3_600_000,
+				Width: 60_000, Op: "increase", Lookback: 3_600_000,
+			}),
 		of("an aggregate's buckets, one cut by retention and one overflowed", "metrics.buckets", wire.MetricsBuckets{
 			Labels: map[string]string{"__name__": "http_requests_total"}, Kind: "counter",
 			Buckets: []wire.MetricsBucket{
@@ -792,6 +798,11 @@ func metricsExamples() []example {
 				{From: at + 3_600_000, To: at + 7_200_000, Count: 12, Value: math.Inf(1), Overflow: true},
 			},
 		}),
+		of("an increase's first bucket, its first step from a sample before the range", "metrics.buckets",
+			wire.MetricsBuckets{
+				Labels: map[string]string{"__name__": "http_requests_total"}, Kind: "counter",
+				Buckets: []wire.MetricsBucket{{From: at, To: at + 60_000, Count: 4, Value: 60, Lookback: true}},
+			}),
 		of("metrics.drop of a series", "metrics.labels", wire.MetricsLabels{Labels: cpu}),
 		of("what a drop removed", "metrics.dropped", wire.MetricsDropped{Found: true, UnreadableGroups: 1}),
 		of("a plan that stops at its decoded samples", "metrics.plan", wire.MetricsPlan{

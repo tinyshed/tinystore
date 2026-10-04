@@ -358,6 +358,36 @@ describe('metrics', () => {
 		])
 	})
 
+	test('an increase counts the step into each bucket, the first from before the range', async () => {
+		const start = Date.now() - 50 * 60_000
+		await store.metrics.ingest({
+			name: 'steps_total',
+			kind: 'counter',
+			samples: [
+				[start, 100],
+				[start + 60_000, 110],
+				[start + 120_000, 5],
+				[start + 180_000, 20],
+			],
+		})
+		const range = {
+			name: 'steps_total',
+			from: start + 60_000,
+			to: start + 240_000,
+			op: 'increase',
+		} as const
+		const [minutes] = await store.metrics.aggregate({ ...range, width: '1m' })
+		expect(minutes?.buckets.map(b => [b.value, b.resets, b.lookback])).toEqual([
+			[10, 0, true],
+			[5, 1, false],
+			[15, 0, false],
+		])
+		const [halves] = await store.metrics.aggregate({ ...range, width: '30s' })
+		expect([halves?.buckets[0]?.value, halves?.buckets[0]?.lookback]).toEqual([0, false])
+		const [looked] = await store.metrics.aggregate({ ...range, width: '30s', lookback: '1m' })
+		expect([looked?.buckets[0]?.value, looked?.buckets[0]?.lookback]).toEqual([10, true])
+	})
+
 	test('instruments are ingested at a flush, the same labels in any order one series', async () => {
 		const requests = store.metrics.counter('http_requests_total')
 		requests.with({ route: '/notes', method: 'POST' }).inc()

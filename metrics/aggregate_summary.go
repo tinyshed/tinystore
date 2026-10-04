@@ -6,12 +6,19 @@ import (
 	"math"
 )
 
+// aggregateSelection says which blocks an aggregate answers from their
+// summaries: one inside a bucket of the range, and, when it counts steps, one
+// before the range, of which only the last sample counts
 type aggregateSelection struct {
-	origin, width int64
+	origin, width, from int64
+	steps               bool
 }
 
-func (a aggregateSelection) complete(block storedBlock, from, to int64) bool {
-	if block.summary.exactSum == nil || block.head.Start < from || block.head.End >= to {
+func (a aggregateSelection) complete(block storedBlock, to int64) bool {
+	if a.steps && block.head.End < a.from {
+		return block.summary.valid
+	}
+	if block.summary.exactSum == nil || block.head.Start < a.from || block.head.End >= to {
 		return false
 	}
 	start, end := bucketEdges(a.origin, to, block.head.Start, a.width)
@@ -41,19 +48,18 @@ func (b *seriesBuckets) addBlock(block storedBlock) error {
 	if b.hasPrevious && block.head.Start <= b.previousAt {
 		return fmt.Errorf("%w: overlapping summary samples", ErrCorrupt)
 	}
-	start, end := bucketEdges(b.origin, b.to, block.head.Start, b.width)
-	if b.current.count > 0 && start != b.current.from {
-		if err := b.flush(); err != nil {
-			return err
-		}
-		b.current = bucketAccumulator{}
+	b.previousAt, b.hasPrevious = block.head.End, true
+	if block.head.End < b.from { // before the range: only its last sample counts, for the first step
+		return b.carry(block.summary.last, true)
 	}
-	b.current.from, b.current.to = start, end
+	start, end := bucketEdges(b.origin, b.to, block.head.Start, b.width)
+	if err := b.begin(start, end); err != nil {
+		return err
+	}
 	if err := b.current.mergeSummary(block, b.op); err != nil {
 		return err
 	}
-	b.previousAt, b.hasPrevious = block.head.End, true
-	return nil
+	return b.carry(block.summary.last, false)
 }
 
 func (b *bucketAccumulator) mergeSummary(block storedBlock, op AggregateOp) error {
@@ -89,7 +95,7 @@ func (b *bucketAccumulator) mergeSummary(block storedBlock, op AggregateOp) erro
 // mergeEnds keeps a delta's ends: the bucket's first sample, its first
 // block's, and its last, each block's in turn.
 func (b *bucketAccumulator) mergeEnds(block storedBlock) error {
-	if b.count == 0 {
+	if b.count == 0 && !b.stepFrom {
 		if err := finiteUnits(block.head.First, &b.first); err != nil {
 			return err
 		}
@@ -101,7 +107,7 @@ func (b *bucketAccumulator) mergeIncrease(block storedBlock) error {
 	if err := finiteUnits(block.head.First, &b.current); err != nil {
 		return err
 	}
-	if b.count > 0 {
+	if b.count > 0 || b.stepFrom {
 		if block.head.First < b.previousValue {
 			b.exact.Add(&b.exact, &b.current)
 			b.resets++

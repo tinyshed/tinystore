@@ -92,6 +92,7 @@ type rangeQuery struct {
 	planOnly         bool // a Plan: no payload fetched, nothing decoded
 	limits           Limits
 	origin, from, to int64
+	cutoff           int64 // retention's, read once a query
 	aggregate        *aggregateSelection
 }
 
@@ -122,9 +123,10 @@ func (s *Store) checkRange(request Range) (rangeQuery, error) {
 	if err != nil {
 		return rangeQuery{}, err
 	}
+	cutoff := s.cutoff()
 	return rangeQuery{
 		matchers: matchers, conditions: conditions, limits: limits,
-		origin: origin, from: max(origin, s.cutoff()), to: to,
+		origin: origin, from: max(origin, cutoff), to: to, cutoff: cutoff,
 	}, nil
 }
 

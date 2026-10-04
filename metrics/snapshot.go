@@ -215,7 +215,7 @@ func (r snapshotRead) takeBlock(
 	if r.budget.blocks > r.budget.limits.Blocks {
 		return block, limit(LimitBlocks, r.budget.blocks, r.budget.limits.Blocks)
 	}
-	if r.aggregate != nil && r.aggregate.complete(block, r.from, r.to) {
+	if r.aggregate != nil && r.aggregate.complete(block, r.to) {
 		block.summarized = true
 		r.budget.summarized++
 		return block, nil

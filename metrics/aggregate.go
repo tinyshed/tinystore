@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -14,12 +15,24 @@ import (
 
 // bucketAccumulator folds one bucket's samples exactly, in units of 2^-1074:
 // exact is the sum, the increase, or once closed a delta's last less its
-// first, which first and previous hold until then.
+// first, which first and previous hold until then. A bucket that starts from
+// the sample before it, stepFrom, counts the step into its first sample, so
+// that the increases and deltas of adjacent buckets add up to the range's.
 type bucketAccumulator struct {
 	from, to                                    int64
 	count, resets                               int
 	minimum, maximum, previousValue             float64
 	first, previous, exact, current, difference big.Int
+	stepFrom, lookback, partial                 bool
+}
+
+// startFrom begins a bucket at the sample before its first, which a step
+// into the bucket ends at: a delta is its last sample less that one
+func (b *bucketAccumulator) startFrom(units *big.Int, value float64, beforeRange bool) {
+	b.stepFrom, b.lookback = true, beforeRange
+	b.previous.Set(units)
+	b.first.Set(units)
+	b.previousValue = value
 }
 
 func finiteUnits(value float64, into *big.Int) error {
@@ -86,12 +99,12 @@ func (b *bucketAccumulator) add(value float64, op AggregateOp, kind Kind) error 
 	case AggregateSum, AggregateAvg:
 		b.exact.Add(&b.exact, &b.current)
 	case AggregateDelta:
-		if b.count == 0 {
+		if b.count == 0 && !b.stepFrom {
 			b.first.Set(&b.current)
 		}
 		b.previous.Set(&b.current)
 	case AggregateIncrease, AggregateRate:
-		if b.count > 0 {
+		if b.count > 0 || b.stepFrom {
 			if value < b.previousValue {
 				b.exact.Add(&b.exact, &b.current)
 				b.resets++
@@ -127,11 +140,13 @@ func (b *bucketAccumulator) join(other *bucketAccumulator) error {
 	b.count += other.count
 	b.resets += other.resets
 	b.exact.Add(&b.exact, &other.exact)
+	b.lookback = b.lookback || other.lookback
+	b.partial = b.partial || other.partial
 	return nil
 }
 
 func (b *bucketAccumulator) result(op AggregateOp) AggregateBucket {
-	result := AggregateBucket{From: b.from, To: b.to, Count: b.count}
+	result := AggregateBucket{From: b.from, To: b.to, Count: b.count, Lookback: b.lookback, Partial: b.partial}
 	switch op {
 	case AggregateCount:
 		result.Value = float64(b.count)
@@ -181,7 +196,8 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 	if query.from >= query.to {
 		return []AggregateResult{}, nil
 	}
-	query.aggregate = &aggregateSelection{origin: query.origin, width: request.Width.Milliseconds()}
+	from := query.from // withLookback moves the read's start before it
+	steps := withLookback(request, &query)
 
 	unreserve, err := s.reserve(ctx, func() (int64, error) { return aggregateReservation(query.limits) })
 	if err != nil {
@@ -196,7 +212,8 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 
 	aggregation := aggregation{
 		store: s, op: request.Op, origin: query.origin, width: request.Width.Milliseconds(),
-		from: query.from, to: query.to, limit: query.limits.OutputSamples, by: request.By, without: request.Without,
+		from: from, to: query.to, limit: query.limits.OutputSamples, by: request.By, without: request.Without,
+		steps: steps,
 	}
 	results, err := aggregation.fold(ctx, reads)
 	if err != nil {
@@ -211,6 +228,9 @@ func (s *Store) checkAggregate(request AggregateRequest) (rangeQuery, error) {
 	if width < time.Millisecond || width%time.Millisecond != 0 {
 		return rangeQuery{}, fmt.Errorf("%w: aggregate bucket width", ErrInvalid)
 	}
+	if request.Lookback < 0 || request.Lookback%time.Millisecond != 0 {
+		return rangeQuery{}, fmt.Errorf("%w: aggregate lookback", ErrInvalid)
+	}
 	switch request.Op {
 	case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateAvg, AggregateIncrease, AggregateRate,
 		AggregateDelta:
@@ -221,6 +241,40 @@ func (s *Store) checkAggregate(request AggregateRequest) (rangeQuery, error) {
 		return rangeQuery{}, err
 	}
 	return s.checkRange(request.Range)
+}
+
+// withLookback selects what an aggregate reads, and widens the read to the
+// newest sample a lookback before the range when the operation counts steps
+// between samples: a bucket counts the step that ends in it, and the range's
+// first bucket the step from the last sample before it. A lookback that
+// retention cut leaves that step uncounted, and the bucket partial.
+func withLookback(request AggregateRequest, query *rangeQuery) (steps *lookback) {
+	query.aggregate = &aggregateSelection{origin: query.origin, width: request.Width.Milliseconds(), from: query.from}
+	switch request.Op {
+	case AggregateIncrease, AggregateRate, AggregateDelta:
+	default:
+		return nil
+	}
+	steps = &lookback{from: query.from}
+	if query.from > query.origin { // retention cut the range itself
+		return steps
+	}
+	back := cmp.Or(request.Lookback, request.Width).Milliseconds()
+	start := query.origin - back
+	if start > query.origin { // past the smallest time
+		start = math.MinInt64
+	}
+	steps.from, steps.clipped = max(start, query.cutoff), start < query.cutoff
+	query.from = steps.from
+	query.aggregate.steps = true
+	return steps
+}
+
+// lookback is where an aggregate's read begins before its range, and whether
+// retention cut it
+type lookback struct {
+	from    int64
+	clipped bool
 }
 
 // checkGrouping refuses By beside Without, and a label name a series cannot
@@ -268,6 +322,7 @@ type aggregation struct {
 	from, to      int64
 	limit, output int
 	by, without   []string
+	steps         *lookback // nil unless the operation counts steps between samples
 }
 
 func (a *aggregation) fold(ctx context.Context, reads []seriesRead) ([]AggregateResult, error) {
@@ -365,7 +420,7 @@ func (a *aggregation) groupResults(groups map[string]*bucketGroup) ([]AggregateR
 				return nil, fmt.Errorf("%w: exact count representation", ErrLimit)
 			}
 			bucket := joined.result(a.op)
-			bucket.Partial = bucket.From < a.from
+			bucket.Partial = bucket.Partial || bucket.From < a.from
 			buckets = append(buckets, bucket)
 		}
 		if len(buckets) > 0 {
@@ -376,7 +431,9 @@ func (a *aggregation) groupResults(groups map[string]*bucketGroup) ([]AggregateR
 }
 
 // seriesBuckets folds one series' samples, which arrive in time order, into
-// its buckets; the output limit counts buckets across every series.
+// its buckets; the output limit counts buckets across every series. An
+// operation that counts steps carries the last sample from bucket to bucket,
+// the first from before the range.
 type seriesBuckets struct {
 	*aggregation
 	kind        Kind
@@ -385,28 +442,64 @@ type seriesBuckets struct {
 	hasPrevious bool
 	buckets     []AggregateBucket
 	group       *bucketGroup // when grouped, its buckets join the group's rather than its own result
+	flushed     int
+
+	carried       bool
+	carriedBefore bool // the carried sample is before the range
+	carriedValue  float64
+	carriedUnits  big.Int
 }
 
 func (b *seriesBuckets) add(point Sample) error {
-	if point.At < b.from || point.At >= b.to {
+	if point.At >= b.to || point.At < b.from && (b.steps == nil || point.At < b.steps.from) {
 		return nil
 	}
 	if b.hasPrevious && point.At <= b.previousAt {
 		return fmt.Errorf("%w: overlapping samples", ErrCorrupt)
 	}
 	b.previousAt, b.hasPrevious = point.At, true
+	if point.At < b.from {
+		return b.carry(point.Value, true)
+	}
 
 	start, end := bucketEdges(b.origin, b.to, point.At, b.width)
+	if err := b.begin(start, end); err != nil {
+		return err
+	}
+	if err := b.current.add(point.Value, b.op, b.kind); err != nil {
+		return fmt.Errorf("aggregate sample at %d: %w", point.At, err)
+	}
+	return b.carry(point.Value, false)
+}
+
+// begin makes [start, end) the current bucket, flushing the one before it, and
+// starts it from the carried sample when the operation counts steps
+func (b *seriesBuckets) begin(start, end int64) error {
 	if b.current.count > 0 && start != b.current.from {
 		if err := b.flush(); err != nil {
 			return err
 		}
 		b.current = bucketAccumulator{}
 	}
-	b.current.from, b.current.to = start, end
-	if err := b.current.add(point.Value, b.op, b.kind); err != nil {
-		return fmt.Errorf("aggregate sample at %d: %w", point.At, err)
+	if b.current.count == 0 && !b.current.stepFrom && b.steps != nil && b.carried {
+		b.current.startFrom(&b.carriedUnits, b.carriedValue, b.carriedBefore)
 	}
+	b.current.from, b.current.to = start, end
+	return nil
+}
+
+// carry keeps the series' last sample for the next bucket's first step
+func (b *seriesBuckets) carry(value float64, beforeRange bool) error {
+	if b.steps == nil {
+		return nil
+	}
+	if b.kind == Counter && (math.IsNaN(value) || math.IsInf(value, 0) || value < 0) {
+		return ErrCounterValue
+	}
+	if err := finiteUnits(value, &b.carriedUnits); err != nil {
+		return err
+	}
+	b.carried, b.carriedBefore, b.carriedValue = true, beforeRange, value
 	return nil
 }
 
@@ -415,6 +508,10 @@ func (b *seriesBuckets) flush() error {
 		return nil
 	}
 	b.current.close(b.op)
+	// a first step a retention cut lookback could not find is not counted
+	b.current.partial = b.current.from < b.from ||
+		b.steps != nil && b.steps.clipped && b.flushed == 0 && !b.current.stepFrom
+	b.flushed++
 	if b.group != nil {
 		return b.group.join(&b.current, b.aggregation)
 	}
@@ -424,9 +521,7 @@ func (b *seriesBuckets) flush() error {
 	if b.output == b.limit {
 		return limit(LimitOutputBuckets, b.output+1, b.limit)
 	}
-	bucket := b.current.result(b.op)
-	bucket.Partial = bucket.From < b.from
-	b.buckets = append(b.buckets, bucket)
+	b.buckets = append(b.buckets, b.current.result(b.op))
 	b.output++
 	return nil
 }
