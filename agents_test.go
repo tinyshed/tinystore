@@ -7,28 +7,23 @@ import (
 	"testing"
 )
 
-// AGENTS.md names the test that keeps each promise, so a test renamed or
-// deleted would leave its promise kept by nothing while the table still
+// GATES.md names the test that keeps each promise, so a test renamed or
+// deleted would leave its promise kept by nothing while the list still
 // claims it.
 func TestEveryGateNamesATestThatExists(t *testing.T) {
-	agents, err := os.ReadFile("AGENTS.md")
+	gates, err := os.ReadFile("GATES.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, gates, found := strings.Cut(string(agents), "\n## Rules that are gates\n")
-	if !found {
-		t.Fatal("AGENTS.md has no section of gates")
-	}
-	gates, _, _ = strings.Cut(gates, "\n## ")
 
 	defined := definedTests(t)
-	named := regexp.MustCompile("`((?:Test|Fuzz)[A-Za-z0-9_]+)`").FindAllStringSubmatch(gates, -1)
+	named := regexp.MustCompile("`((?:Test|Fuzz)[A-Za-z0-9_]+)`").FindAllStringSubmatch(string(gates), -1)
 	if len(named) == 0 {
-		t.Fatal("AGENTS.md's gates name no test")
+		t.Fatal("GATES.md names no test")
 	}
 	for _, name := range named {
 		if !defined[name[1]] {
-			t.Errorf("AGENTS.md names %s as a gate, and no module defines it", name[1])
+			t.Errorf("GATES.md names %s as a gate, and no module defines it", name[1])
 		}
 	}
 }

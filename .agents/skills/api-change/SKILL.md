@@ -35,8 +35,8 @@ when each of them says it the same way.
 
 ## Where a change goes, in one commit
 
-1. The engine: the API, its README's example and contract lines, and a row in
-   AGENTS.md's gates for each new promise, with the test that keeps it.
+1. The engine: the API, its README's example and contract lines, and a line in
+   GATES.md for each new promise, with the test that keeps it.
 2. The wire, when the call crosses it: the `wire-change` skill.
 3. The server's handler, and `server/internal/client` when a test needs it.
 4. Both SDKs: the call, its options type or signature, its doc comment's

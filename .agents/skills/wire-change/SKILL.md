@@ -23,7 +23,7 @@ done when every side of it changed together.
 - The seeds of `FuzzMessages` (`msgpack_test.go`) and `FuzzFrames`
   (`frame_test.go`) when a new rule refuses something.
 - `sdk/js` and `sdk/python`: their message codecs, which read `messages.json`.
-- The AGENTS.md gates table, for each promise the change makes.
+- GATES.md, a line for each promise the change makes.
 
 Nothing is released yet, so a field may still be repurposed, as `HELLO`'s field
 6 went from the instance to the challenge; after a release a message never
