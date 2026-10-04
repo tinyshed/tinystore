@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/jobs"
@@ -98,6 +99,22 @@ func TestAJobInABatchCommitsWithItsRows(t *testing.T) {
 
 // A queue whose store lives in jobs.db has no place in a database's batch, and
 // one database holds one store's queues.
+func TestAJobBatchDoesNotWaitForItsOwnWriteSlots(t *testing.T) {
+	store, db, queue := openBatchStore(t, t.TempDir())
+	defer store.Close(context.Background())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err := db.Batch(ctx, func(b *sqldb.Batch) error {
+		for key := range 2049 {
+			b.Add(queue.Enqueued(ctx, int64(key)))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn(t *testing.T) {
 	ctx := t.Context()
 	store, db, _ := openBatchStore(t, t.TempDir())

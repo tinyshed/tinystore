@@ -120,6 +120,7 @@ async def run_batch(
     statements: list[dict[str, Any]],
     read: bool,
     jobs: list[tuple[bytes, dict[str, Any]]] | None = None,
+    keys: list[tuple[bytes, dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]: ...
 ```
 

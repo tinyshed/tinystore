@@ -12,7 +12,7 @@ func TestMaintenanceFailureNamesItsStageAndCounterBucket(t *testing.T) {
 	if _, err := attempts.Add(t.Context(), "one", 1); err != nil {
 		t.Fatal(err)
 	}
-	state.exec(t, `create trigger refuse_flush before insert on cells begin select raise(abort, 'a refused flush'); end`)
+	state.exec(t, `create trigger refuse_flush before insert on _tinystore_kv_cells begin select raise(abort, 'a refused flush'); end`)
 	_, err := state.Maintain(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "flush counters") ||
 		!strings.Contains(err.Error(), `counter bucket "attempts"`) {

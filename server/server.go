@@ -75,6 +75,10 @@ type Options struct {
 	// them lives there; the server opens any other itself, In the database of
 	// that name, once a client has opened it.
 	JobsIn map[string]*jobs.Store
+
+	// KVIn holds the kv stores the program opened In its databases, by the
+	// database's name, as JobsIn holds the jobs stores.
+	KVIn map[string]*kv.Store
 }
 
 // Server serves one store to other processes, a sidecar's or a remote
@@ -98,6 +102,7 @@ type Server struct {
 	sqlOpening sync.Mutex // a database opens once, its migrations applied, while no other engine waits
 	databases  map[string]*sqldb.DB
 	jobsIn     map[string]*jobs.Store // by the database whose file keeps their queues, under opening
+	kvIn       map[string]*kv.Store   // by the database whose file keeps their buckets, under opening
 
 	mu         sync.Mutex
 	sessions   map[*session]struct{}
@@ -158,6 +163,9 @@ func New(store *tinystore.Store, options Options) (*Server, error) {
 	}
 	if s.jobsIn = maps.Clone(options.JobsIn); s.jobsIn == nil {
 		s.jobsIn = map[string]*jobs.Store{}
+	}
+	if s.kvIn = maps.Clone(options.KVIn); s.kvIn == nil {
+		s.kvIn = map[string]*kv.Store{}
 	}
 	if s.log == nil {
 		s.log = store.Logger("server")
@@ -447,6 +455,34 @@ func (s *Server) jobsStoreIn(ctx context.Context, database string) (*jobs.Store,
 		return nil, passIt(err, fmt.Sprintf("JobsIn[%q]", database))
 	}
 	s.jobsIn[database] = opened
+	return opened, nil
+}
+
+// kvStoreIn is the kv store whose buckets live in the file of the database
+// named, opened the first time a client asks for one of its buckets; "" is
+// kv.db's store. The database opens first, as a client's sql.open does.
+func (s *Server) kvStoreIn(ctx context.Context, database string) (*kv.Store, error) {
+	if database == "" {
+		return s.kvStore(ctx)
+	}
+	s.sqlOpening.Lock()
+	db := s.databases[database]
+	s.sqlOpening.Unlock()
+
+	s.opening.Lock()
+	defer s.opening.Unlock()
+	if opened := s.kvIn[database]; opened != nil {
+		return opened, nil
+	}
+	if db == nil {
+		return nil, fmt.Errorf("%w: kv: a bucket in sql %q, which no client has opened on this server; open it first",
+			tinystore.ErrInvalid, database)
+	}
+	opened, err := kv.Open(ctx, s.store, kv.Options{In: db})
+	if err != nil {
+		return nil, passIt(err, fmt.Sprintf("KVIn[%q]", database))
+	}
+	s.kvIn[database] = opened
 	return opened, nil
 }
 

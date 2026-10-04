@@ -22,7 +22,7 @@ func (s *testState) rowsOf(t *testing.T, bucket string) int {
 	t.Helper()
 	var count int
 	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `select count(*) from cells as c join buckets as b on b.id = c.bucket
+		return tx.QueryRowContext(t.Context(), `select count(*) from _tinystore_kv_cells as c join _tinystore_kv_buckets as b on b.id = c.bucket
 			where b.name = ?1`, bucket).Scan(&count)
 	})
 	if err != nil {
@@ -230,7 +230,7 @@ func TestAFailedFlushRefusesNewCountersRatherThanHoldThem(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	state.exec(t, `create trigger refuse_flush before insert on cells begin select raise(abort, 'a refused flush'); end`)
+	state.exec(t, `create trigger refuse_flush before insert on _tinystore_kv_cells begin select raise(abort, 'a refused flush'); end`)
 	if _, err := attempts.Add(t.Context(), "new", 1); err == nil {
 		t.Fatal("a new counter was held while the flush that makes room failed")
 	}

@@ -40,18 +40,19 @@ const (
 // instead: the prefix, then an owner's mark or a key's, since a name under
 // another branch may begin with the prefix's bytes.
 func hidden(row string, param int) string {
-	lookups := []string{fmt.Sprintf(`exists (select 1 from branches as m where m.bucket = %[1]s.bucket
+	lookups := []string{fmt.Sprintf(`exists (select 1 from _tinystore_kv_branches as m where m.bucket = %[1]s.bucket
 		and m.prefix = x'' and m.cleared >= %[1]s.version)`, row)}
 	for level := range hiddenLevels {
-		lookups = append(lookups, fmt.Sprintf(`exists (select 1 from branches as m where m.bucket = %[1]s.bucket
+		lookups = append(lookups, fmt.Sprintf(`exists (select 1 from _tinystore_kv_branches as m
+			where m.bucket = %[1]s.bucket
 			and m.prefix = substr(%[1]s.path, 1, nullif((?%[2]d >> %[3]d) & %[4]d, 0))
 			and m.cleared >= %[1]s.version)`, row, param, level*lengthBits, 1<<lengthBits-1))
 	}
-	lookups = append(lookups, fmt.Sprintf(`((?%[2]d >> %[3]d) & 1 and exists (select 1 from branches as m
+	lookups = append(lookups, fmt.Sprintf(`((?%[2]d >> %[3]d) & 1 and exists (select 1 from _tinystore_kv_branches as m
 			where m.bucket = %[1]s.bucket and m.cleared >= %[1]s.version
 			and substr(%[1]s.path, 1, length(m.prefix)) = m.prefix
 			and substr(%[1]s.path, length(m.prefix) + 1, 1) in (x'01', x'02')))`, row, param, deeperBit))
-	return fmt.Sprintf(`(exists (select 1 from branches as g where g.bucket = %s.bucket) and (%s))`, row,
+	return fmt.Sprintf(`(exists (select 1 from _tinystore_kv_branches as g where g.bucket = %s.bucket) and (%s))`, row,
 		strings.Join(lookups, " or "))
 }
 
@@ -80,10 +81,12 @@ func (c *Counters) Clear(ctx context.Context) error {
 
 const (
 	countUnder = `select count(*) from (
-		select 1 from cells where bucket = ?1 and path >= ?2 and path < ?3 limit cast(?4 as integer)
+		select 1 from _tinystore_kv_cells as cells
+		where bucket = ?1 and path >= ?2 and path < ?3 limit cast(?4 as integer)
 	)`
-	deleteUnder = `delete from cells where bucket = ?1 and path >= ?2 and path < ?3 returning spill`
-	markCleared = `insert into branches (bucket, prefix, cleared) values (?1, ?2, ?3)
+	deleteUnder = `delete from _tinystore_kv_cells as cells
+		where bucket = ?1 and path >= ?2 and path < ?3 returning spill`
+	markCleared = `insert into _tinystore_kv_branches as branches (bucket, prefix, cleared) values (?1, ?2, ?3)
 		on conflict (bucket, prefix) do update set cleared = excluded.cleared`
 )
 
@@ -197,12 +200,13 @@ type mark struct {
 }
 
 const (
-	selectMarks = `select bucket, prefix, cleared from branches`
-	dropHidden  = `delete from cells where (bucket, path) in (
-		select bucket, path from cells where bucket = ?1 and path >= ?2 and path < ?3 and version <= ?4
+	selectMarks = `select bucket, prefix, cleared from _tinystore_kv_branches as branches`
+	dropHidden  = `delete from _tinystore_kv_cells as cells where (bucket, path) in (
+		select bucket, path from _tinystore_kv_cells as cells
+		where bucket = ?1 and path >= ?2 and path < ?3 and version <= ?4
 		limit cast(?5 as integer)
 	) returning spill`
-	unmark = `delete from branches where bucket = ?1 and prefix = ?2 and cleared = ?3`
+	unmark = `delete from _tinystore_kv_branches as branches where bucket = ?1 and prefix = ?2 and cleared = ?3`
 )
 
 // dropCleared deletes the rows that marked Clears hid, clearBound rows a

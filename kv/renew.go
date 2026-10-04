@@ -49,7 +49,8 @@ func (b *Bucket[V]) renew(ctx context.Context, c call, version int64, expires sq
 	b.state.renewals.ask(renewed{bucket: b.id, path: string(c.path)}, due)
 }
 
-const renewCell = `update cells set expires = ?5 where bucket = ?1 and path = ?2 and version = ?3 and expires = ?4`
+const renewCell = `update _tinystore_kv_cells as cells set expires = ?5
+	where bucket = ?1 and path = ?2 and version = ?3 and expires = ?4`
 
 // renewNow writes one renewal in a group of writes, as a Set is written
 func (b *Bucket[V]) renewNow(ctx context.Context, c call, due renewal) error {

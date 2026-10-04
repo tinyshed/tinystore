@@ -168,6 +168,34 @@ func TestAGuestWritesNoneOfTheStoresTables(t *testing.T) {
 	}
 }
 
+func TestAGuestCannotRewriteTheSchema(t *testing.T) {
+	dir := t.TempDir()
+	owner := openStore(t, dir)
+	if _, err := Open(t.Context(), owner, "app", accountsMigrations, nil); err != nil {
+		t.Fatal(err)
+	}
+	guest := openStoreWith(t, dir, tinystore.Options{Guest: true})
+	db, err := Open(t.Context(), guest, "app", accountsMigrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		"pragma writable_schema=on",
+		"pragma schema_version=999",
+		"pragma application_id=0",
+		"pragma user_version=999",
+		"delete from sqlite_schema where name='users'",
+	} {
+		if _, execErr := db.Exec(t.Context(), query); !errors.Is(execErr, tinystore.ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", query, execErr)
+		}
+	}
+	count, err := Scalar[int](t.Context(), db, "select count(*) from sqlite_schema where name='users'")
+	if err != nil || count != 1 {
+		t.Fatalf("the guest changed the owner's schema: %d tables: %v", count, err)
+	}
+}
+
 func must[T any](value T, err error) T {
 	if err != nil {
 		panic(err)

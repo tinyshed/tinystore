@@ -318,6 +318,9 @@ type SQLStatements struct {
 	// Jobs are enqueued after the statements, in the same transaction, on
 	// queues kept in this database: each opened with jobs.queue's in.
 	Jobs []JobsBatch
+	// KV is written after the jobs, in the same transaction, to buckets kept
+	// in this database: each opened with kv.open's in.
+	KV []KVChanges
 }
 
 func (s SQLStatements) Append(dst []byte) []byte {
@@ -339,6 +342,14 @@ func (s SQLStatements) Append(dst []byte) []byte {
 		buf = AppendArray(m.Buf(), len(s.Jobs))
 		for _, jobs := range s.Jobs {
 			buf = jobs.Append(buf)
+		}
+		m.SetBuf(buf)
+	}
+	if len(s.KV) > 0 {
+		m.Key(5)
+		buf = AppendArray(m.Buf(), len(s.KV))
+		for _, keys := range s.KV {
+			buf = keys.Append(buf)
 		}
 		m.SetBuf(buf)
 	}
@@ -364,6 +375,12 @@ func (s *SQLStatements) Decode(body []byte) error {
 				var jobs JobsBatch
 				jobs.decode(&d)
 				s.Jobs = append(s.Jobs, jobs)
+			}
+		case 5:
+			for range d.Items() {
+				var keys KVChanges
+				keys.decode(&d)
+				s.KV = append(s.KV, keys)
 			}
 		}
 	}

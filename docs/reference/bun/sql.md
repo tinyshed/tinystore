@@ -178,6 +178,7 @@ class SqlBatch {
     readonly database: string
     readonly statements: Batched[]
     readonly jobs: Queued[]
+    readonly keys: Keyed[]
 }
 ```
 
@@ -205,6 +206,15 @@ enqueue(open: Uint8Array, job: Queued['job']): Promise<void>
 
 Adds a job to the batch, for a queue's withTx: a program writes
 `queue.withTx(tx).enqueue(value)`, on a queue opened `in` this database.
+
+### SqlBatch.writeKey
+
+```ts
+writeKey(open: Uint8Array, operation: Keyed['operation']): Promise<void>
+```
+
+Adds a key's write to the batch, for a bucket's withTx: a program writes
+`bucket.withTx(tx).set(key, value)`, on a bucket opened `in` this database.
 
 ### SqlBatch.exec
 

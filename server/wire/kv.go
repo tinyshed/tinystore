@@ -32,7 +32,8 @@ const (
 // KVBucket is kv.open's request: a bucket of values, counters, a config, a
 // limiter, once's answers or a quota, by name, with its handle's options. A
 // duration is milliseconds, zero for none; a limiter is a bucket with a rate,
-// and a quota one with windows.
+// and a quota one with windows. In names the SQL database whose file keeps the
+// bucket, which sql.open opened first: a batch of it writes the bucket's keys.
 type KVBucket struct {
 	Name       string
 	Counters   bool
@@ -45,6 +46,7 @@ type KVBucket struct {
 	Burst      uint64
 	Once       bool // the answers kv.run keeps
 	Windows    []KVWindow
+	In         string
 }
 
 // KVWindow is one of a quota's windows: a key may use up to Limit every Per
@@ -97,6 +99,7 @@ func (b KVBucket) Append(dst []byte) []byte {
 		}
 		m.SetBuf(buf)
 	}
+	optionalStr(&m, 12, b.In)
 	return m.End()
 }
 
@@ -128,6 +131,8 @@ func (b *KVBucket) Decode(body []byte) error {
 			for range d.Items() {
 				b.Windows = append(b.Windows, d.kvWindow())
 			}
+		case 12:
+			b.In = d.Str()
 		}
 	}
 	return d.End()
@@ -461,36 +466,80 @@ type KVOperation struct {
 func (b KVCalls) Append(dst []byte) []byte {
 	m := BeginMap(dst)
 	m.Key(1)
-	buf := AppendArray(m.Buf(), len(b.Calls))
-	for _, call := range b.Calls {
-		op := BeginMap(buf)
-		op.Uint(0, uint64(call.Method))
-		call.appendFields(&op)
-		buf = op.End()
-	}
-	m.SetBuf(buf)
+	m.SetBuf(appendOperations(m.Buf(), b.Calls))
 	return m.End()
 }
 
 func (b *KVCalls) Decode(body []byte) error {
 	d := NewDecoder(body)
 	for key := range d.Fields() {
-		if key != 1 {
-			continue
-		}
-		for range d.Items() {
-			var op KVOperation
-			for field := range d.Fields() {
-				if field == 0 {
-					op.Method = Method(d.Uint16())
-					continue
-				}
-				op.decodeField(&d, field)
-			}
-			b.Calls = append(b.Calls, op)
+		if key == 1 {
+			b.Calls = d.kvOperations()
 		}
 	}
 	return d.End()
+}
+
+// appendOperations writes calls, each a KVCall's fields with its method under
+// key 0
+func appendOperations(dst []byte, calls []KVOperation) []byte {
+	buf := AppendArray(dst, len(calls))
+	for _, call := range calls {
+		op := BeginMap(buf)
+		op.Uint(0, uint64(call.Method))
+		call.appendFields(&op)
+		buf = op.End()
+	}
+	return buf
+}
+
+func (d *Decoder) kvOperations() []KVOperation {
+	var calls []KVOperation
+	for range d.Items() {
+		var op KVOperation
+		for field := range d.Fields() {
+			if field == 0 {
+				op.Method = Method(d.Uint16())
+				continue
+			}
+			op.decodeField(d, field)
+		}
+		calls = append(calls, op)
+	}
+	return calls
+}
+
+// KVChanges are keys of one bucket a SQL batch writes after its statements
+// and its jobs, in the same transaction: the bucket opened with kv.open's in,
+// the batch's database, and each call a kv.set, kv.delete or kv.clear.
+type KVChanges struct {
+	Handle uint64
+	Calls  []KVOperation
+}
+
+func (c KVChanges) Append(dst []byte) []byte {
+	m := BeginMap(dst)
+	m.Uint(1, c.Handle)
+	m.Key(2)
+	m.SetBuf(appendOperations(m.Buf(), c.Calls))
+	return m.End()
+}
+
+func (c *KVChanges) Decode(body []byte) error {
+	d := NewDecoder(body)
+	c.decode(&d)
+	return d.End()
+}
+
+func (c *KVChanges) decode(d *Decoder) {
+	for key := range d.Fields() {
+		switch key {
+		case 1:
+			c.Handle = d.Uint()
+		case 2:
+			c.Calls = d.kvOperations()
+		}
+	}
 }
 
 // KVResults answers a batch or a view: an entry a call, in their order.

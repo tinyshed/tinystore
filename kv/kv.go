@@ -30,6 +30,7 @@ var errClosed = fmt.Errorf("kv: %w", tinystore.ErrClosed)
 type Store struct {
 	runtime     *tinystore.Store
 	file        *sqlite.File
+	hosted      bool // the file is a database's, In which the buckets live
 	log         *slog.Logger
 	now         func() time.Time
 	gate        admission.Gate
@@ -58,36 +59,74 @@ type openCounters struct {
 	memory     *memory
 }
 
-// Open opens kv.db inside the store. The store closes it and, unless it is
-// Manual, deletes expired keys every minute, and every ten seconds while the
-// last pass stopped at its bound with expired or cleared rows left.
-func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error) {
+// Open opens kv.db inside the store, or with Options.In a database's file.
+// The store closes it and, unless it is Manual, deletes expired keys every
+// minute, and every ten seconds while the last pass stopped at its bound with
+// expired or cleared rows left.
+func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error) {
+	if options.In != nil {
+		return openIn(ctx, store, options.In)
+	}
 	path, release, err := store.Claim(fileName)
 	if err != nil {
 		return nil, err
 	}
 
-	state, err := openEngine(ctx, store, path)
+	file, err := openFile(ctx, path, store.Readers(readers))
 	if err != nil {
 		release()
 		return nil, err
 	}
-
-	store.EveryEngine("kv", "kv expiry", expiryEvery, state.maintainInBackground)
-	store.EveryEngine("kv", "kv expiry backlog", catchUpEvery, state.catchUpInBackground)
+	state, err := openEngine(ctx, store, file, false)
+	if err != nil {
+		release()
+		return nil, errors.Join(err, file.Close())
+	}
 	state.log.Info("opened", "path", path)
 	return state, nil
 }
 
-// openEngine opens and migrates the file, reads its revision and hands the
-// engine to the store
-func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Store, error) {
-	file, err := openFile(ctx, path, store.Readers(readers))
-	if err != nil {
-		return nil, err
+// hosts are the databases' files a store keeps its buckets in, one store
+// each, so that two stores never take versions of one file's revision
+var hosts sync.Map // *sqlite.File → *Store
+
+// openIn keeps the buckets in a database's file, beside its rows: the tables
+// migrate with a history of their own, and the database keeps the file,
+// which it closes after this store, having opened before it.
+func openIn(ctx context.Context, store *tinystore.Store, db Database) (*Store, error) {
+	if store.Guest() {
+		return nil, fmt.Errorf("%w: kv opens only in the store that holds %s, which keeps its state",
+			tinystore.ErrInvalid, store.Dir())
 	}
+	file := db.SQLiteFile()
+	if file == nil {
+		return nil, fmt.Errorf("%w: kv: In a database that is closed", tinystore.ErrInvalid)
+	}
+	if _, taken := hosts.LoadOrStore(file, (*Store)(nil)); taken {
+		return nil, fmt.Errorf("%w: kv: the database holds another kv store", tinystore.ErrInUse)
+	}
+	scripts, err := fs.Sub(migrationFiles, "migrations")
+	if err == nil {
+		err = file.MigrateHosted(ctx, "kv", scripts)
+	}
+	var state *Store
+	if err == nil {
+		state, err = openEngine(ctx, store, file, true)
+	}
+	if err != nil {
+		hosts.Delete(file)
+		return nil, fmt.Errorf("kv: open in a database: %w", err)
+	}
+	hosts.Store(file, state)
+	state.log.Info("opened in a database")
+	return state, nil
+}
+
+// openEngine reads the file's revision, hands the engine to the store and has
+// it maintained
+func openEngine(ctx context.Context, store *tinystore.Store, file *sqlite.File, hosted bool) (*Store, error) {
 	state := &Store{
-		runtime: store, file: file, log: store.Logger("kv"), now: store.Now,
+		runtime: store, file: file, hosted: hosted, log: store.Logger("kv"), now: store.Now,
 		writes: admission.NewSlots(writeSlots), maintenance: make(chan struct{}, 1),
 		clearBound: clearAtOnce, expireBound: expiryBatch, counters: map[string]openCounters{},
 		configs:  map[string]*configHub{},
@@ -95,12 +134,15 @@ func openEngine(ctx context.Context, store *tinystore.Store, path string) (*Stor
 	}
 	state.maintenance <- struct{}{}
 	state.leave = state.gate.Leave
-	if err = state.loadRevision(ctx); err == nil {
+	err := state.loadRevision(ctx)
+	if err == nil {
 		err = store.Attach(state)
 	}
 	if err != nil {
-		return nil, errors.Join(err, file.Close())
+		return nil, err
 	}
+	store.EveryEngine("kv", "kv expiry", expiryEvery, state.maintainInBackground)
+	store.EveryEngine("kv", "kv expiry backlog", catchUpEvery, state.catchUpInBackground)
 	return state, nil
 }
 
@@ -120,8 +162,8 @@ func openFile(ctx context.Context, path string, readers int) (*sqlite.File, erro
 }
 
 const (
-	selectRevision = `select value from meta where name = 'revision'`
-	updateRevision = `update meta set value = ?1 where name = 'revision'`
+	selectRevision = `select value from _tinystore_kv_meta as meta where name = 'revision'`
+	updateRevision = `update _tinystore_kv_meta as meta set value = ?1 where name = 'revision'`
 )
 
 // loadRevision takes up the file's high-water mark, so that no version repeats
@@ -147,8 +189,12 @@ func (s *Store) nextRevision(ctx context.Context, w sqlite.Writer) (int64, error
 	return revision, err
 }
 
-// Snapshot copies kv.db into dir while the engine keeps working.
+// Snapshot copies kv.db into dir while the engine keeps working; buckets kept
+// In a database are in that database's copy.
 func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error) {
+	if s.hosted {
+		return nil, nil
+	}
 	schema, err := s.file.Snapshot(ctx, tinystore.SnapshotPath(dir, fileName))
 	if err != nil {
 		return nil, fmt.Errorf("snapshot kv: %w", err)
@@ -157,8 +203,8 @@ func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotF
 }
 
 // Close lets the work in flight finish, writes what LoseAtMost counters hold
-// and the renewals reads asked for, and closes kv.db; cancellation stops
-// waiting, not the cleanup. The store calls it: an application closes the
+// and the renewals reads asked for, and closes kv.db, or leaves a database's
+// file to it; cancellation stops waiting, not the cleanup. The store calls it: an application closes the
 // store instead.
 func (s *Store) Close(ctx context.Context) error {
 	drained, _ := s.gate.Close()
@@ -170,7 +216,13 @@ func (s *Store) Close(ctx context.Context) error {
 	s.closing.Do(func() {
 		_, countersErr := s.flushCounters(ctx)
 		_, renewalsErr := s.flushRenewals(ctx)
-		s.closeErr = errors.Join(countersErr, renewalsErr, s.file.Close())
+		var closeErr error
+		if s.hosted {
+			hosts.Delete(s.file)
+		} else {
+			closeErr = s.file.Close()
+		}
+		s.closeErr = errors.Join(countersErr, renewalsErr, closeErr)
 		s.log.Info("closed")
 	})
 	return s.closeErr

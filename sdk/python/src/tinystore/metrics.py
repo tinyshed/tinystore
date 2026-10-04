@@ -493,6 +493,12 @@ class Metrics:
         """
         if not unit and not help:
             return
+        try:
+            name_size = len(name.encode())
+        except UnicodeEncodeError:
+            raise InvalidError("a metric name must be UTF-8") from None
+        if name_size == 0 or name_size > 4096:
+            raise InvalidError(f"metric name {name!r}: 1 to 4096 bytes of UTF-8")
         if len((unit or "").encode()) > 32 or len((help or "").encode()) > 1024:
             raise InvalidError(f"the description of {name}: a unit of 32 bytes and help of 1024 at most")
         self._described[name] = Description(unit=unit or "", help=help or "")

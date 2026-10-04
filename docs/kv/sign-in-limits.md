@@ -1,69 +1,66 @@
 # Sign-in limits
 
-This page limits failed sign-ins with a KV quota: five failures per 15
-minutes and fifty per day, counted for each login and for each address. A
-correct password clears the login's failures. Every application with
-passwords needs this, and it takes one quota and a few lines.
+Use a KV quota to limit sign-in attempts before checking a password. This
+example allows five attempts per 15 minutes and fifty per day, per login
+and per address. Every attempt counts, including successful sign-ins.
 
-## Check, then count failures
+## Reserve an attempt before checking
 
 ```ts
-const failures = store.kv.quota('signin-failures', { burst: '5/15m', day: '50/24h' })
-const byLogin = failures.of('login')
-const byAddress = failures.of('address')
+const attempts = store.kv.quota('signin-attempts', { burst: '5/15m', day: '50/24h' })
+const byLogin = attempts.of('login')
+const byAddress = attempts.of('address')
 
 export async function signIn(login: string, address: string, password: string) {
-	for (const usage of [await byLogin.get(login), await byAddress.get(address)]) {
+	for (const check of [{ quota: byLogin, key: login }, { quota: byAddress, key: address }]) {
+		const usage = await check.quota.allow(check.key)
 		if (!usage.ok) {
-			return { status: 429, retryAfter: usage.retryAfter } // before the costly hash
+			return { status: 429, retryAfter: usage.retryAfter }
 		}
 	}
 	const user = await users.find(login)
 	if (user === undefined || !(await verify(user.passwordHash, password))) {
-		await byLogin.allow(login)
-		await byAddress.allow(address)
 		return { status: 401 }
 	}
-	await byLogin.delete(login) // a correct password clears the login's failures
+	await byLogin.delete(login) // a correct password clears this login's attempts
 	return { status: 200, user }
 }
 ```
 
 ```python
-failures = store.kv.quota("signin-failures", burst="5/15m", day="50/24h")
-by_login = failures.of("login")
-by_address = failures.of("address")
+attempts = store.kv.quota("signin-attempts", burst="5/15m", day="50/24h")
+by_login = attempts.of("login")
+by_address = attempts.of("address")
 
 
 async def sign_in(login: str, address: str, password: str) -> tuple[int, float]:
-    for usage in (await by_login.get(login), await by_address.get(address)):
+    for quota, key in ((by_login, login), (by_address, address)):
+        usage = await quota.allow(key)
         if not usage.ok:
-            return 429, usage.retry_after  # before the costly hash
+            return 429, usage.retry_after
     user = await users.find(login)
     if user is None or not verify(user.password_hash, password):
-        await by_login.allow(login)
-        await by_address.allow(address)
         return 401, 0
-    await by_login.delete(login)  # a correct password clears the login's failures
+    await by_login.delete(login)  # a correct password clears this login's attempts
     return 200, 0
 ```
 
 ```go
-failures, err := kv.OpenQuota(ctx, state, "signin-failures",
+attempts, err := kv.OpenQuota(ctx, state, "signin-attempts",
 	kv.Window("burst", 5, 15*time.Minute), kv.Window("day", 50, 24*time.Hour))
-byLogin, byAddress := failures.Of("login"), failures.Of("address")
+byLogin, byAddress := attempts.Of("login"), attempts.Of("address")
 
 func signIn(ctx context.Context, login, address, password string) (int, time.Duration, error) {
 	for _, check := range []struct {
 		quota *kv.Quota
 		key   string
 	}{{byLogin, login}, {byAddress, address}} {
-		usage, err := check.quota.Get(ctx, check.key)
+		usage, err := check.quota.Allow(ctx, check.key)
 		if err != nil {
 			return 0, 0, err
 		}
 		if !usage.OK {
-			return http.StatusTooManyRequests, usage.RetryAfter, nil // before the costly hash
+			return http.StatusTooManyRequests, usage.RetryAfter, nil
 		}
 	}
 	user, found, err := users.Find(ctx, login)
@@ -71,56 +68,62 @@ func signIn(ctx context.Context, login, address, password string) (int, time.Dur
 		return 0, 0, err
 	}
 	if !found || !verify(user.PasswordHash, password) {
-		if _, err = byLogin.Allow(ctx, login); err == nil {
-			_, err = byAddress.Allow(ctx, address)
-		}
-		return http.StatusUnauthorized, 0, err
+		return http.StatusUnauthorized, 0, nil
 	}
-	return http.StatusOK, 0, byLogin.Delete(ctx, login) // a correct password clears the login's failures
+	return http.StatusOK, 0, byLogin.Delete(ctx, login)
 }
 ```
 
-`get` reads a key's windows without counting anything, and `allow` counts one
-failure in every window at once. A full window answers `ok: false` with the
-time until it resets, which goes into a `Retry-After` header.
+Each `allow` checks and counts an attempt atomically. A full window returns
+`ok: false` with the time until it resets. Use that duration in a
+`Retry-After` header.
+
+The login and address are separate writes. If the address refuses an attempt,
+the login's count is kept. This can block a login sooner, but cannot admit
+more attempts than either limit allows.
 
 ## Check before you hash the password
 
-A password hash such as Argon2 is slow and takes memory on purpose. If you
-hashed first and checked the limit afterwards, an attacker could make your
-server hash as fast as they can send requests. Checking first with `get` costs
-one read, so a refused attempt never reaches the hash.
+A password hash such as Argon2 is slow and takes memory on purpose. Call
+`allow` before looking up the user or verifying the password. A refused
+attempt then performs neither operation.
 
-## Count failures only
+Do not replace `allow` with `get` followed by a later write. Several
+concurrent requests can all read an unused quota before any of them updates
+it, then all start checking passwords.
 
-Only a wrong password calls `allow`. A user who signs in correctly every day
-never comes near the limit, and a correct password deletes the login's
-failures with `delete`. The address keeps its count, because one address that
-guesses many accounts is the attack the address's limit stops.
+## Count every attempt
+
+Wrong passwords, successful checks and errors after admission all count.
+A correct password clears the login's count with `delete`. The address
+keeps its count, including successful attempts, so one address cannot reset
+its limit by signing into an account that it owns.
+
+Choose limits that fit legitimate sign-ins too. Users behind one shared
+address share its limit.
 
 ## Why a login and an address
 
-| Limit       | Stops                                    | Costs                                                 |
-|-------------|------------------------------------------|-------------------------------------------------------|
-| per login   | guessing one account from many addresses | the real user waits up to 15 minutes after five tries |
-| per address | one address guessing many accounts       | users behind one shared address share the limit       |
+| Limit       | Stops                                    | Shared by                 |
+|-------------|------------------------------------------|---------------------------|
+| per login   | guessing one account from many addresses | attempts for that login   |
+| per address | one address guessing many accounts       | users behind that address |
 
-`of` keeps the two counts apart inside one quota, so a login and an address
-with the same text never share a count. The windows reset on their own, and
-TinyStore deletes a key's data when all of its windows have reset, so the
-quota needs no cleanup job.
+`of` keeps the two counts apart inside one quota. A login and an address
+with the same text never share a count. The windows reset independently for
+each key, and TinyStore deletes a key after all of its windows reset.
 
 ## Limits and defaults
 
 |              |                                                      |
 |--------------|------------------------------------------------------|
-| Burst window | 5 failures per 15 minutes, per login and per address |
-| Daily window | 50 failures per 24 hours, per login and per address  |
-| Each `get`   | one read                                             |
-| Each `allow` | one write, saved to disk before it returns           |
+| Burst window | 5 attempts per 15 minutes, per login and per address |
+| Daily window | 50 attempts per 24 hours, per login and per address  |
+| Each allow   | one write, saved to disk before it returns           |
+| One attempt  | up to two allow calls, checked in order              |
 
-Change the numbers to fit your application. See [Quotas](quotas.md) for every
-option of a quota.
+Change the numbers to fit your application. See [Quotas](quotas.md) for
+every option.
 
 ## See also
 

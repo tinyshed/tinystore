@@ -39,6 +39,7 @@ from ._wire.messages import (
     JobsWorkers,
 )
 from .errors import InvalidError, error_of
+from .sql import batch_belongs_to, database_belongs_to
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
@@ -374,6 +375,8 @@ class QueueTx[V]:
 
 class Queue[V]:
     def __init__(self, link: Link, name: str, open_body: bytes, of: Any, in_: Database | None = None) -> None:
+        if in_ is not None and not database_belongs_to(in_, link):
+            raise InvalidError(f"queue {name}: its SQL database belongs to another store")
         self._link, self.name, self._open, self._of, self._in = link, name, open_body, of, in_
 
     def _decode(self, text: str) -> Any:
@@ -387,7 +390,7 @@ class Queue[V]:
 
     def with_tx(self, tx: SqlBatch) -> QueueTx[V]:
         """The queue's enqueue inside a batch of the database it lives in, opened in_: the job commits with its rows."""
-        if self._in is None or self._in.name != tx.database:
+        if self._in is None or self._in.name != tx.database or not batch_belongs_to(tx, self._link):
             lives = "jobs.db" if self._in is None else f"sql {self._in.name}"
             raise InvalidError(
                 f"the queue {self.name} lives in {lives}, not in sql {tx.database}: "

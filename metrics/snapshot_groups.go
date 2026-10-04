@@ -49,17 +49,19 @@ type groupBatch struct {
 // the group that starts at or before from may still hold samples of the range
 const groupDescriptorsQuery = `
 	select g.series_id, g.start_ts, g.end_ts, length(g.directory), g.clock_id
-	from json_each(?) ids join groups g on g.series_id = cast(ids.value as integer)
+	from json_each(?) ids join groups g on g.series_id = cast(json_extract(ids.value, '$[0]') as integer)
 	where g.start_ts >= coalesce(
 	      (select prior.start_ts from groups prior
-	       where prior.series_id = g.series_id and prior.start_ts <= ? order by prior.start_ts desc limit 1), ?)
-	  and g.start_ts < ? and g.end_ts >= ?
+	       where prior.series_id = g.series_id
+	         and prior.start_ts <= cast(json_extract(ids.value, '$[1]') as integer)
+	       order by prior.start_ts desc limit 1), cast(json_extract(ids.value, '$[1]') as integer))
+	  and g.start_ts < ? and g.end_ts >= cast(json_extract(ids.value, '$[1]') as integer)
 	order by g.series_id, g.start_ts limit cast(? as integer)`
 
 func (b *groupBatch) readDescriptors(ctx context.Context, snapshot snapshotRead, matched []registeredSeries) error {
-	ids := make([]int64, len(matched))
+	ids := make([][2]int64, len(matched))
 	for i, series := range matched {
-		ids[i] = series.id
+		ids[i] = [2]int64{series.id, snapshot.narrowedTo(snapshot.window(series.labels)).from}
 	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {
@@ -67,7 +69,7 @@ func (b *groupBatch) readDescriptors(ctx context.Context, snapshot snapshotRead,
 	}
 	tx, budget := snapshot.tx, snapshot.budget
 	remaining := budget.limits.Blocks - budget.groups + 1
-	arguments := []any{string(encoded), snapshot.from, snapshot.from, snapshot.to, snapshot.from, remaining}
+	arguments := []any{string(encoded), snapshot.to, remaining}
 	rows, err := tx.QueryContext(ctx, groupDescriptorsQuery, arguments...) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
 		return fmt.Errorf("find metric groups: %w", err)

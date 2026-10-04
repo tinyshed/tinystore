@@ -58,6 +58,14 @@ func (b *Bucket[V]) Clear(ctx context.Context) error
 
 Clear removes every key of this branch and of the branches under it. A branch of up to 10,000 keys is deleted in one transaction; a larger one is marked cleared at the file's revision, which hides its keys from every call at once, and Maintain deletes them 10,000 a transaction. A key written after the Clear is a new key. Inside Tx a branch over 10,000 keys is ErrLimit, since deleting it would hold the writer for seconds.
 
+### Bucket.Cleared
+
+```go
+func (b *Bucket[V]) Cleared(ctx context.Context) Change
+```
+
+Cleared is Clear as a change of a batch of the database the store lives in.
+
 ### Bucket.Delete
 
 ```go
@@ -65,6 +73,14 @@ func (b *Bucket[V]) Delete(ctx context.Context, key any, options ...Option) erro
 ```
 
 Delete removes key; an absent key is not an error, except to IfVersion.
+
+### Bucket.Deleted
+
+```go
+func (b *Bucket[V]) Deleted(ctx context.Context, key any, options ...Option) Change
+```
+
+Deleted is Delete as a change of a batch of the database the store lives in.
 
 ### Bucket.Get
 
@@ -164,6 +180,22 @@ func (b *Bucket[V]) WithTx(tx *Tx) *Bucket[V]
 
 WithTx is this bucket inside tx: its calls run in tx's transaction and see its writes, and after the function tx was given returns they are ErrClosed.
 
+### Bucket.Written
+
+```go
+func (b *Bucket[V]) Written(ctx context.Context, key any, value V, options ...Option) Change
+```
+
+Written is Set as a change of a batch of the database the store lives in, so that the key commits with the batch's rows or not at all:
+
+	err := db.Batch(ctx, func(b *sqldb.Batch) error {
+		b.Exec(`insert into users (id, email) values (?, ?)`, id, email)
+		b.Add(sessions.Written(ctx, token, Session{User: id}))
+		return nil
+	})
+
+The bucket's store must be opened In that database. The change takes free memory for its value and holds it until the batch ends. Memory that is not free is ErrLimit when the batch weighs the change.
+
 ## BucketOption
 
 ```go
@@ -193,6 +225,18 @@ func WithCodec[V any](codec Codec[V]) BucketOption
 ```
 
 WithCodec writes a bucket's values through codec instead of the bytes their type would get; a codec of another value type is ErrInvalid at OpenBucket.
+
+## Change
+
+```go
+type Change interface {
+	Bytes() (int, error)
+	Apply(ctx context.Context, file *sqlite.File, w sqlite.Writer) error
+	Done(err error)
+}
+```
+
+Change is a key a batch of the database the store lives in writes with its rows, which Written, Deleted and Cleared give out: see Options.In and sqldb's Batch.Add. A program does not call its methods.
 
 ## Codec
 
@@ -406,6 +450,16 @@ func (c *Counters) WithTx(tx *Tx) *Counters
 ```
 
 WithTx binds these counters to tx; LoseAtMost counters refuse calls through it.
+
+## Database
+
+```go
+type Database interface {
+	SQLiteFile() *sqlite.File
+}
+```
+
+Database is a file whose owner lets a kv store live in it, as sqldb's DB does.
 
 ## Entry
 
@@ -637,10 +691,14 @@ TTL gives the key d from now; see the rules of DefaultTTL.
 ## Options
 
 ```go
-type Options struct{}
+type Options struct {
+	// In keeps the store's buckets in a database's own file, an sqldb DB's,
+	// instead of kv.db, so that a batch of the database writes keys with its
+	// rows: see Bucket.Written. The database opens before the store and closes
+	// after it, and holds one kv store.
+	In Database
+}
 ```
-
-Options holds nothing a program sets yet; it is here so that an option can arrive without breaking a caller.
 
 ## Page
 
@@ -882,10 +940,10 @@ type Store struct {
 ### Open
 
 ```go
-func Open(ctx context.Context, store *tinystore.Store, _ Options) (*Store, error)
+func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error)
 ```
 
-Open opens kv.db inside the store. The store closes it and, unless it is Manual, deletes expired keys every minute, and every ten seconds while the last pass stopped at its bound with expired or cleared rows left.
+Open opens kv.db inside the store, or with Options.In a database's file. The store closes it and, unless it is Manual, deletes expired keys every minute, and every ten seconds while the last pass stopped at its bound with expired or cleared rows left.
 
 ### Store.Close
 
@@ -893,7 +951,7 @@ Open opens kv.db inside the store. The store closes it and, unless it is Manual,
 func (s *Store) Close(ctx context.Context) error
 ```
 
-Close lets the work in flight finish, writes what LoseAtMost counters hold and the renewals reads asked for, and closes kv.db; cancellation stops waiting, not the cleanup. The store calls it: an application closes the store instead.
+Close lets the work in flight finish, writes what LoseAtMost counters hold and the renewals reads asked for, and closes kv.db, or leaves a database's file to it; cancellation stops waiting, not the cleanup. The store calls it: an application closes the store instead.
 
 ### Store.Maintain
 
@@ -913,7 +971,7 @@ No read returns an expired or cleared key, whether Maintain has deleted it or no
 func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error)
 ```
 
-Snapshot copies kv.db into dir while the engine keeps working.
+Snapshot copies kv.db into dir while the engine keeps working; buckets kept In a database are in that database's copy.
 
 ### Store.Tx
 

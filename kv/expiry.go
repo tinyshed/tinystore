@@ -13,8 +13,9 @@ import (
 
 // the oldest expired keys first, through the expiry index, with the spilled
 // values they name
-const expireCells = `delete from cells where (bucket, path) in (
-		select bucket, path from cells where expires <= ?1 order by expires limit cast(?2 as integer)
+const expireCells = `delete from _tinystore_kv_cells as cells where (bucket, path) in (
+		select bucket, path from _tinystore_kv_cells as cells
+		where expires <= ?1 order by expires limit cast(?2 as integer)
 	) returning spill`
 
 // Maintenance is what one Maintain call did.

@@ -92,3 +92,21 @@ func TestSlotsHonourCancellation(t *testing.T) {
 	}
 	next()
 }
+
+func TestSlotsCanBeTakenWithoutWaiting(t *testing.T) {
+	slots := NewSlots(1)
+	release, taken := slots.TryTake()
+	if !taken {
+		t.Fatal("a free slot was refused")
+	}
+	if _, taken = slots.TryTake(); taken {
+		t.Fatal("a full slot admitted more work")
+	}
+	release()
+	release()
+	next, taken := slots.TryTake()
+	if !taken {
+		t.Fatal("a released slot was not free")
+	}
+	next()
+}

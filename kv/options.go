@@ -6,11 +6,22 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
-// Options holds nothing a program sets yet; it is here so that an option can
-// arrive without breaking a caller.
-type Options struct{}
+type Options struct {
+	// In keeps the store's buckets in a database's own file, an sqldb DB's,
+	// instead of kv.db, so that a batch of the database writes keys with its
+	// rows: see Bucket.Written. The database opens before the store and closes
+	// after it, and holds one kv store.
+	In Database
+}
+
+// Database is a file whose owner lets a kv store live in it, as sqldb's DB
+// does.
+type Database interface {
+	SQLiteFile() *sqlite.File
+}
 
 const (
 	pageSize      = 4 << 10         // at 1 KiB a row with a 256-byte value overflows its page

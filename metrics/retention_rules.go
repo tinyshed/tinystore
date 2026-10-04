@@ -89,8 +89,9 @@ func (r retention) applied() (string, error) {
 const (
 	appliedRetentionQuery = `select retention from store_state where id=1`
 	applyRetentionQuery   = `update store_state set retention=? where id=1`
-	namesFromQuery        = `select id, value from label_values where name='__name__' and value>=? order by value`
-	keepNameQuery         = `
+	namesFromQuery        = `select id, value from label_values
+		where name='__name__' and value>=? and value<? order by value`
+	keepNameQuery = `
 		update series_state set keep=?
 		where series_id in (select series_id from postings where label_id=?)`
 )
@@ -150,7 +151,8 @@ func (r retention) changedSince(stored string) ([]string, error) {
 
 // rekeep stores the keep of every series whose name starts with prefix.
 func (s *Store) rekeep(ctx context.Context, tx *sql.Tx, prefix string) error {
-	rows, err := tx.QueryContext(ctx, namesFromQuery, prefix) //nolint:rowserrcheck // EachRow checks Err
+	//nolint:rowserrcheck // EachRow checks Err.
+	rows, err := tx.QueryContext(ctx, namesFromQuery, prefix, prefixEnd(prefix))
 	if err != nil {
 		return fmt.Errorf("find names of %q: %w", prefix, err)
 	}

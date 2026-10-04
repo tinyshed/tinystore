@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import tinystore
-from tinystore._console import SECRETS, Line, encode_fields, json_line, pretty_line, redactor, words
+from tinystore._console import SECRETS, Line, encode_fields, hide_url_passwords, json_line, pretty_line, redactor, words
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -23,6 +23,19 @@ FILE = json.loads(
     (Path(__file__).parents[3] / "records" / "console" / "testdata" / "console.json").read_text(encoding="utf-8")
 )
 VECTORS = FILE["lines"]
+
+
+def test_url_passwords_are_hidden_through_json_escapes() -> None:
+    quote, slash = chr(34), chr(92)
+    uri = "postgres://ann:hunter2@db/app"
+    escaped = uri.replace("/", slash + "/")
+    unicode = uri.replace(":", slash + "u003a").replace("/", slash + "u002f").replace("@", slash + "u0040")
+    for value in (escaped, unicode):
+        spelled = quote + value + quote
+        assert json.loads(hide_url_passwords(spelled)) == "postgres://ann:[redacted]@db/app"
+        nested = '{"source":' + spelled + ',"n":9007199254740993}'
+        assert "hunter2" not in hide_url_passwords(nested)
+        assert "9007199254740993" in hide_url_passwords(nested)
 
 
 def test_secrets_are_the_vectors() -> None:

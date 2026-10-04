@@ -375,7 +375,7 @@ Enqueued is Enqueue as a change of a batch of the database the queues live in, s
 		return nil
 	})
 
-The queue's store must be opened In that database. The change takes the queue's turn and the memory its value needs now, and holds them until the batch ends; what goes wrong before, it answers when the batch weighs it.
+The queue's store must be opened In that database. The change takes free memory for its value and holds it until the batch ends. Memory that is not free is ErrLimit when the batch weighs the change.
 
 ### Queue.Get
 

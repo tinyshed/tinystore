@@ -26,9 +26,9 @@ type Change interface {
 //		return nil
 //	})
 //
-// The queue's store must be opened In that database. The change takes the
-// queue's turn and the memory its value needs now, and holds them until the
-// batch ends; what goes wrong before, it answers when the batch weighs it.
+// The queue's store must be opened In that database. The change takes free
+// memory for its value and holds it until the batch ends. Memory that is not
+// free is ErrLimit when the batch weighs the change.
 func (q *Queue[V]) Enqueued(ctx context.Context, value V, options ...EnqueueOption) Change {
 	c := &enqueuedJob{store: q.store, state: q.state}
 	var err error
@@ -57,7 +57,7 @@ func prepareEnqueued[V any](ctx context.Context, q *Queue[V], value V, options [
 	if weight > maxValue {
 		return e, nil, tooLarge(weight)
 	}
-	reserved, leave, err := q.enter(ctx, weight)
+	reserved, leave, err := q.enterChange(ctx, weight)
 	if err != nil {
 		return e, nil, err
 	}
@@ -69,6 +69,22 @@ func prepareEnqueued[V any](ctx context.Context, q *Queue[V], value V, options [
 	e.value = keep(encoded)
 	reserved.Shrink(int64(e.value.size()))
 	return e, leave, nil
+}
+
+func (q *Queue[V]) enterChange(ctx context.Context, bytes int) (*tinystore.Reservation, func(), error) {
+	release, err := q.store.admit(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	reserved, err := q.store.reserveNow(bytes)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return reserved, func() {
+		reserved.Release()
+		release()
+	}, nil
 }
 
 // enqueuedJob is one Enqueued: the job it writes, and the turn and memory it

@@ -2,6 +2,7 @@ package console
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"slices"
 	"strings"
@@ -71,6 +72,31 @@ func TestAPasswordInsideAURLIsHidden(t *testing.T) {
 }
 
 // a logger hides a URL's password unless told to keep it, in the store and on the console alike
+func TestURLPasswordsAreHiddenThroughJSONEscapes(t *testing.T) {
+	quote, slash := string(rune(34)), string(rune(92))
+	uri := "postgres://ann:hunter2@db/app"
+	escaped := strings.ReplaceAll(uri, "/", slash+"/")
+	unicodeEscaped := strings.NewReplacer(":", slash+"u003a", "/", slash+"u002f", "@", slash+"u0040").Replace(uri)
+	for _, text := range []string{escaped, unicodeEscaped} {
+		spelled := quote + text + quote
+		got := hideURLPasswords(spelled)
+		var decoded string
+		if err := json.Unmarshal([]byte(got), &decoded); err != nil || decoded != "postgres://ann:[redacted]@db/app" {
+			t.Fatalf("an escaped URL: %s: %v", got, err)
+		}
+		var out bytes.Buffer
+		slog.New(Handler("api", JSON, NoEnv, To(&out))).Info("connect", "source", json.RawMessage(spelled))
+		if strings.Contains(out.String(), "hunter2") {
+			t.Fatalf("the console exposed the password: %s", out.String())
+		}
+	}
+	spelled := "{" + quote + "source" + quote + ":" + quote + escaped + quote + "," + quote + "n" + quote + ":9007199254740993}"
+	got := hideURLPasswords(spelled)
+	if strings.Contains(got, "hunter2") || !strings.Contains(got, "9007199254740993") {
+		t.Fatalf("a nested URL changed an exact number: %s", got)
+	}
+}
+
 func TestAURLsPasswordIsHiddenUnlessKept(t *testing.T) {
 	var hidden, kept bytes.Buffer
 	slog.New(Handler("api", JSON, writeTo{&hidden})).Info("connect", "source", "postgres://ann:hunter2@db/app")

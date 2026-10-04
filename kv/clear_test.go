@@ -154,14 +154,14 @@ func TestAClearDoesNotResurrectCountersWaitingForTheFlush(t *testing.T) {
 
 // what makes a Clear fail: a statement it runs, or its commit
 const (
-	refuseClears = `create trigger refuse_delete before delete on cells
+	refuseClears = `create trigger refuse_delete before delete on _tinystore_kv_cells
 			begin select raise(abort, 'a refused Clear'); end;
-		create trigger refuse_mark before insert on branches
+		create trigger refuse_mark before insert on _tinystore_kv_branches
 			begin select raise(abort, 'a refused Clear'); end`
 	refuseCommits = `create table refused_parent (id integer primary key);
 		create table refused_child (parent integer references refused_parent (id) deferrable initially deferred);
-		create trigger refuse_delete after delete on cells begin insert into refused_child values (1); end;
-		create trigger refuse_mark after insert on branches begin insert into refused_child values (1); end`
+		create trigger refuse_delete after delete on _tinystore_kv_cells begin insert into refused_child values (1); end;
+		create trigger refuse_mark after insert on _tinystore_kv_branches begin insert into refused_child values (1); end`
 	acceptAgain = `drop trigger refuse_delete; drop trigger refuse_mark;
 		drop table if exists refused_child; drop table if exists refused_parent`
 )

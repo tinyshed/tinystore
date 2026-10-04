@@ -94,6 +94,7 @@ def bucket(
     *,
     default_ttl: Duration | None = None,
     sliding: Duration | None = None,
+    in_: Database | None = None,
 ) -> Bucket[Any]: ...
 @overload
 def bucket[V](
@@ -103,6 +104,7 @@ def bucket[V](
     *,
     default_ttl: Duration | None = None,
     sliding: Duration | None = None,
+    in_: Database | None = None,
 ) -> Bucket[V]: ...
 @overload
 def bucket(
@@ -112,6 +114,7 @@ def bucket(
     *,
     default_ttl: Duration | None = None,
     sliding: Duration | None = None,
+    in_: Database | None = None,
 ) -> Bucket[None]: ...
 def bucket(
     name: str,
@@ -120,10 +123,16 @@ def bucket(
     *,
     default_ttl: Duration | None = None,
     sliding: Duration | None = None,
+    in_: Database | None = None,
 ) -> Bucket[Any]: ...
 ```
 
 A bucket of values of one type: a type of the table above, or any JSON can hold.
+
+in_ keeps the bucket in a SQL database's file instead of kv.db, so that
+a batch of the database writes its keys with its rows:
+
+    sessions = store.kv.bucket("sessions", Session, in_=db)
 
 ### Kv.counters
 
@@ -267,10 +276,17 @@ The branch below this one that the owners name.
 ### Bucket.with_tx
 
 ```python
-def with_tx(tx: Batch | Tx) -> BucketTx[V]: ...
+def with_tx(tx: Batch | Tx | SqlBatch) -> BucketTx[V]: ...
 ```
 
 This bucket's calls inside a batch or a view, or inside a tx, whose reads answer at once.
+
+Inside a batch of the SQL database the bucket was opened in_, its set,
+delete and clear commit with the batch's rows or not at all:
+
+    async with db.batch() as tx:
+        tx.exec("insert into users (id, email) values (?, ?)", user_id, email)
+        sessions.with_tx(tx).set(token, Session(user=user_id))
 
 ### Bucket.get
 

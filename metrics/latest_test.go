@@ -3,6 +3,7 @@ package metrics
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"testing"
 	"time"
@@ -10,6 +11,42 @@ import (
 
 // A range bounds how stale a latest sample may be: a series that stopped
 // before it is left out rather than read as its last value.
+func TestLatestSpendsNoBudgetOnBlocksOlderThanItsHead(t *testing.T) {
+	for _, count := range []int{3, 20} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			store, _ := openTestStore(t, Options{})
+			var batches []Batch
+			for i := range count {
+				points := make([]Sample, 481)
+				for j := range points {
+					points[j] = Sample{At: testEpoch + int64(j), Value: float64(j)}
+				}
+				points[240].Value = math.Float64frombits(0x7ff8000000001234)
+				batches = append(batches, Batch{
+					Series: Series{Name: "cpu", Labels: Labels{"host": fmt.Sprint(i)}}, Samples: points,
+				})
+			}
+			if err := store.Ingest(t.Context(), batches); err != nil {
+				t.Fatal(err)
+			}
+			if sealed, err := store.Maintain(t.Context()); err != nil || sealed.SealedBlocks != count*2 {
+				t.Fatalf("sealed %+v: %v", sealed, err)
+			}
+			got, err := store.Latest(t.Context(), Range{
+				Name: "cpu", From: testEpoch, Limits: Limits{DecodedSamples: count},
+			})
+			if err != nil || len(got) != count {
+				t.Fatalf("the newest samples: %+v: %v", got, err)
+			}
+			for _, result := range got {
+				if len(result.Samples) != 1 || result.Samples[0] != (Sample{At: testEpoch + 480, Value: 480}) {
+					t.Fatalf("the head's newest sample: %+v", result)
+				}
+			}
+		})
+	}
+}
+
 func TestLatestLeavesOutASeriesOlderThanItsRange(t *testing.T) {
 	store, _ := openTestStore(t, Options{})
 	now := testEpoch + time.Hour.Milliseconds()

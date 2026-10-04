@@ -41,6 +41,26 @@ async def store(tmp_path: Path) -> AsyncIterator[tinystore.Store]:
         yield opened
 
 
+@dataclass(frozen=True)
+class Listener:
+    port: int = 8080
+
+
+_DEFAULT_LISTENER = Listener()
+
+
+@dataclass
+class FixedListener:
+    listener: Listener = fixed(_DEFAULT_LISTENER)  # noqa: RUF009 -- fixed returns dataclasses.field
+
+
+async def test_a_fixed_nested_dataclass_stays_fixed(store: tinystore.Store) -> None:
+    config = await store.kv.config("fixed-listener", FixedListener)
+    with pytest.raises(tinystore.InvalidError, match="fixed"):
+        await config.update({"listener": {"port": 9090}})
+    assert config.value.listener.port == 8080
+
+
 @pytest.mark.parametrize(("prefix", "path", "name"), VECTORS["names"])
 def test_a_variable_is_named_as_the_vectors_say(prefix: str, path: str, name: str) -> None:
     assert env_name(prefix, path) == name

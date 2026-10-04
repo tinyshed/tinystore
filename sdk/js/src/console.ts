@@ -358,6 +358,17 @@ function joinsTo(keyWords: string[], name: string): boolean {
  * "postgres://ann:[redacted]@db/app".
  */
 export function hideUrlPasswords(text: string): string {
+	if (!text.includes('://') && !text.includes('\\')) {
+		return text
+	}
+	return text.replace(/"(?:[^"\\]|\\.)*"/g, raw => {
+		const value: string = JSON.parse(raw)
+		const hidden = hideUrlTextPasswords(value)
+		return hidden === value ? raw : JSON.stringify(hidden)
+	})
+}
+
+function hideUrlTextPasswords(text: string): string {
 	let out = ''
 	let written = 0
 	for (let from = 0; from < text.length; ) {
@@ -383,11 +394,7 @@ function findPassword(text: string, start: number): [number, number, number] {
 	let i = start
 	while (i < text.length) {
 		const c = text[i] as string
-		if (c === '\\') {
-			i += 2
-			continue
-		}
-		if (c === '/' || c === '?' || c === '#' || c === '"' || c <= ' ') {
+		if (c === '/' || c === '?' || c === '#' || c <= ' ') {
 			break
 		}
 		if (c === '@') {

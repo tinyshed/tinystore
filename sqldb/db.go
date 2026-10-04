@@ -161,10 +161,14 @@ func asGuest(conn *sqlite3.Conn) error {
 	return conn.SetAuthorizer(guestAuthorizer)
 }
 
-func guestAuthorizer(action sqlite3.AuthorizerActionCode, name3rd, _, _, _ string) sqlite3.AuthorizerReturnCode {
+func guestAuthorizer(action sqlite3.AuthorizerActionCode, name, argument, _, _ string) sqlite3.AuthorizerReturnCode {
 	switch action {
 	case sqlite3.AUTH_INSERT, sqlite3.AUTH_UPDATE, sqlite3.AUTH_DELETE:
-		if strings.HasPrefix(strings.ToLower(name3rd), "_tinystore_") {
+		if guestProtectedTable(name) {
+			return sqlite3.AUTH_DENY
+		}
+	case sqlite3.AUTH_PRAGMA:
+		if argument != "" && guestSchemaPragma(name) {
 			return sqlite3.AUTH_DENY
 		}
 	case sqlite3.AUTH_CREATE_TABLE, sqlite3.AUTH_CREATE_INDEX, sqlite3.AUTH_CREATE_TRIGGER, sqlite3.AUTH_CREATE_VIEW,
@@ -173,6 +177,20 @@ func guestAuthorizer(action sqlite3.AuthorizerActionCode, name3rd, _, _, _ strin
 		return sqlite3.AUTH_DENY
 	}
 	return sqlite3.AUTH_OK
+}
+
+func guestProtectedTable(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasPrefix(name, "_tinystore_") || name == "sqlite_schema" || name == "sqlite_master" ||
+		name == "sqlite_temp_schema" || name == "sqlite_temp_master"
+}
+
+func guestSchemaPragma(name string) bool {
+	switch strings.ToLower(name) {
+	case "writable_schema", "schema_version", "application_id", "user_version":
+		return true
+	}
+	return false
 }
 
 // modulePackages are the imports that link a virtual table module, which
@@ -282,7 +300,7 @@ func mayOpen(path string, timing tuning) error {
 	if !timing.applyNone {
 		return nil
 	}
-	//nolint:gosec // the path Claim made inside the store
+	// #nosec G703 -- Claim validated this path inside the store.
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: the file is not there", ErrPending)
 	}

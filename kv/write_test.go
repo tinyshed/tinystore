@@ -291,7 +291,7 @@ func (s *testState) spilledRows(t *testing.T) int {
 	t.Helper()
 	var count int
 	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `select count(*) from spilled`).Scan(&count)
+		return tx.QueryRowContext(t.Context(), `select count(*) from _tinystore_kv_spilled as spilled`).Scan(&count)
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -24,6 +24,11 @@ so that Go, Python and this SDK read each other's buckets:
 
 ```ts
 interface BucketOptions {
+    /**
+     * keeps the bucket in a SQL database's file instead of kv.db, so that a
+     * batch of the database writes its keys with its rows: `bucket.withTx(tx)`
+     */
+    in?: Database
     /** the expiry a key gets when it is written without its own */
     defaultTtl?: Duration
     /** keeps a key this long from its last read; beside defaultTtl it is refused */
@@ -292,11 +297,18 @@ The branch below this one that the owners name.
 ### Bucket.withTx
 
 ```ts
-withTx(tx: Batch | Tx): BucketTx<V>
+withTx(tx: Batch | Tx | SqlBatch): BucketTx<V>
 ```
 
 The bucket's calls inside a batch or a view, whose promises settle with
 it, or inside a tx, whose reads answer at once and writes wait for it.
+Inside a batch of the SQL database the bucket was opened `in`, its
+set, delete and clear commit with the batch's rows or not at all:
+
+    await db.batch(tx => {
+      tx.exec`insert into users (id, email) values (${id}, ${email})`
+      sessions.withTx(tx).set(token, { user: id })
+    })
 
 ### Bucket.get
 
@@ -446,6 +458,14 @@ set(key: Key, value: V, options?: WriteOptions): Promise<void>
 ```ts
 delete(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<void>
 ```
+
+### BucketTx.clear
+
+```ts
+clear(): Promise<void>
+```
+
+Removes every key of this branch and of the branches under it.
 
 ### BucketTx.take
 

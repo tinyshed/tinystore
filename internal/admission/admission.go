@@ -84,3 +84,14 @@ func (s Slots) Take(ctx context.Context) (release func(), err error) {
 	}
 	return sync.OnceFunc(func() { <-s }), nil
 }
+
+// TryTake takes a free slot without waiting, for work that already holds
+// resources a caller occupying a slot may need.
+func (s Slots) TryTake() (release func(), taken bool) {
+	select {
+	case s <- struct{}{}:
+		return sync.OnceFunc(func() { <-s }), true
+	default:
+		return nil, false
+	}
+}

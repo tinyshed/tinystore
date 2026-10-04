@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
@@ -26,8 +27,8 @@ type Batch struct {
 // its methods name the store's own types. An engine gives one out, as a jobs
 // queue's Enqueued does.
 type Change interface {
-	// Bytes is what the change holds, counted against the group's bound, or
-	// why it cannot be written, which writes nothing of the batch.
+	// Bytes is memory already held by the change, counted against the group's
+	// bound. An error prevents the entire batch from running.
 	Bytes() (int, error)
 	// Apply writes the change with the batch's writer. file is the database's,
 	// which the change refuses when its tables are in another.
@@ -69,20 +70,20 @@ func (d *DB) Batch(ctx context.Context, build func(*Batch) error) (err error) {
 		return d.explain(err)
 	}
 
-	leave, err := d.admitWrite(ctx)
+	leave, err := d.admitBatch(ctx, len(b.changes) > 0)
 	if err != nil {
 		return err
 	}
 	defer leave()
-	held, err := d.hold(ctx, int64(weight), 0, true)
+	held, err := d.hold(ctx, int64(weight.statements), 0, len(b.changes) == 0)
 	if err != nil {
 		return err
 	}
 	defer held.release()
-	held.used = int64(weight)
+	held.used = int64(weight.statements)
 
 	var panicked any
-	err = d.file.UpdateGroupedAs(ctx, b.label(), weight, func(w sqlite.Writer) (err error) {
+	err = d.file.UpdateGroupedAs(ctx, b.label(), weight.statements+weight.changes, func(w sqlite.Writer) (err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				panicked, err = recovered, errPanicked
@@ -113,27 +114,49 @@ func (b *Batch) build(build func(*Batch) error) error {
 	return err
 }
 
-// arguments encodes every statement's arguments and weighs them and the
-// changes before any runs
-func (b *Batch) arguments() ([][]any, int, error) {
+type batchWeight struct{ statements, changes int }
+
+// arguments encodes and weighs the statements and changes before any runs.
+func (b *Batch) arguments() ([][]any, batchWeight, error) {
 	args := make([][]any, len(b.calls))
-	weight := 0
+	var weight batchWeight
 	for i, c := range b.calls {
 		encoded, err := c.arguments()
 		if err != nil {
-			return nil, 0, fmt.Errorf("statement %d of the batch: %w", i+1, err)
+			return nil, weight, fmt.Errorf("statement %d of the batch: %w", i+1, err)
 		}
 		args[i] = encoded
-		weight += weigh(encoded)
+		weight.statements += weigh(encoded)
 	}
 	for i, change := range b.changes {
 		bytes, err := change.Bytes()
 		if err != nil {
-			return nil, 0, fmt.Errorf("change %d of the batch: %w", i+1, err)
+			return nil, weight, fmt.Errorf("change %d of the batch: %w", i+1, err)
 		}
-		weight += bytes
+		weight.changes += bytes
 	}
 	return args, weight, nil
+}
+
+// Prepared changes hold memory before the batch enters. They must not wait
+// for slots held by writers that may be waiting for that memory.
+func (d *DB) admitBatch(ctx context.Context, changes bool) (func(), error) {
+	if !changes {
+		return d.admitWrite(ctx)
+	}
+	leave, err := d.admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	free, taken := d.writes.TryTake()
+	if !taken {
+		leave()
+		return nil, fmt.Errorf("%w: sql %q: no write slot is free for a batch of changes", tinystore.ErrLimit, d.name)
+	}
+	return func() {
+		free()
+		leave()
+	}, nil
 }
 
 // writeTo runs the statements until their callers' deadlines, as an Exec runs

@@ -249,7 +249,7 @@ func (s *testState) valueBytes(t *testing.T, bucket, key string) []byte {
 	t.Helper()
 	var kept []byte
 	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `select c.value from cells as c join buckets as b on b.id = c.bucket
+		return tx.QueryRowContext(t.Context(), `select c.value from _tinystore_kv_cells as c join _tinystore_kv_buckets as b on b.id = c.bucket
 			where b.name = ?1 and c.path = ?2`, bucket, appendKey(nil, key)).Scan(&kept)
 	})
 	if err != nil {
@@ -263,7 +263,7 @@ func (s *testState) valueType(t *testing.T, bucket, key string) string {
 	t.Helper()
 	var typed string
 	err := s.file.View(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `select typeof(c.value) from cells as c join buckets as b on b.id = c.bucket
+		return tx.QueryRowContext(t.Context(), `select typeof(c.value) from _tinystore_kv_cells as c join _tinystore_kv_buckets as b on b.id = c.bucket
 			where b.name = ?1 and c.path = ?2`, bucket, appendKey(nil, key)).Scan(&typed)
 	})
 	if err != nil {

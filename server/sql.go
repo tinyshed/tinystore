@@ -195,7 +195,7 @@ func sqlBatch(c *call) error {
 	if err != nil {
 		return err
 	}
-	if len(ask.Statements) == 0 && len(ask.Jobs) == 0 {
+	if len(ask.Statements) == 0 && len(ask.Jobs) == 0 && len(ask.KV) == 0 {
 		return fmt.Errorf("%w: a batch of no statements", tinystore.ErrInvalid)
 	}
 	ctx, cancel := c.session.statementContext(c.ctx)
@@ -208,11 +208,11 @@ func sqlBatch(c *call) error {
 		}
 	}
 
-	jobs, err := enqueuedIn(ctx, c.session, ask)
+	changes, err := changesIn(ctx, c.session, ask)
 	if err != nil {
 		return err
 	}
-	defer func() { jobs.release(err) }()
+	defer func() { changes.release(err) }()
 
 	results := make([]wire.SQLResult, len(ask.Statements))
 	run := func(tx *sqldb.Tx) error {
@@ -223,7 +223,7 @@ func sqlBatch(c *call) error {
 			}
 			results[i] = result
 		}
-		return jobs.addTo(ctx, tx, len(ask.Statements))
+		return changes.addTo(ctx, tx, len(ask.Statements))
 	}
 	if ask.Read {
 		err = handle.db.View(ctx, run)
@@ -236,20 +236,21 @@ func sqlBatch(c *call) error {
 	return respond(c, wire.SQLResults{Results: results})
 }
 
-// errNotRun is what a job a batch prepared is told when the batch ended
-// before its transaction took it
-var errNotRun = errors.New("server: the batch ended before its job was written")
+// errNotRun is what a job or a key a batch prepared is told when the batch
+// ended before its transaction took it
+var errNotRun = errors.New("server: the batch ended before its change was written")
 
-// preparedJobs are the jobs a batch enqueues after its statements, each a
-// change its transaction writes, and how many of them the transaction took
-type preparedJobs struct {
+// preparedChanges are the jobs and the keys a batch writes after its
+// statements, each a change its transaction writes, and how many of them the
+// transaction took
+type preparedChanges struct {
 	changes []sqldb.Change
 	added   int
 }
 
-// addTo gives the transaction each job, after the statements, which it tells
-// the transaction's outcome; a refused one is named after the statements
-func (p *preparedJobs) addTo(ctx context.Context, tx *sqldb.Tx, statements int) error {
+// addTo gives the transaction each change, after the statements, which it
+// tells the transaction's outcome; a refused one is named after the statements
+func (p *preparedChanges) addTo(ctx context.Context, tx *sqldb.Tx, statements int) error {
 	for _, change := range p.changes {
 		p.added++
 		if err := tx.Add(ctx, change); err != nil {
@@ -259,48 +260,63 @@ func (p *preparedJobs) addTo(ctx context.Context, tx *sqldb.Tx, statements int) 
 	return nil
 }
 
-// release tells each job the transaction never took that the batch ended
-func (p *preparedJobs) release(err error) {
+// release tells each change the transaction never took that the batch ended
+func (p *preparedChanges) release(err error) {
 	for _, change := range p.changes[p.added:] {
 		change.Done(cmp.Or(err, errNotRun))
 	}
 }
 
-// enqueuedIn prepares the jobs a batch enqueues after its statements. It makes
-// them before the transaction begins: a change waits for its queue's turn and
-// its value's memory, which a transaction holding the writer must not.
-func enqueuedIn(ctx context.Context, s *session, ask wire.SQLStatements) (jobs *preparedJobs, err error) {
-	jobs = &preparedJobs{}
-	if len(ask.Jobs) > 0 && ask.Read {
-		return nil, fmt.Errorf("%w: a job in a view, which reads", tinystore.ErrInvalid)
+// changesIn prepares the jobs and then the keys a batch writes after its
+// statements. It makes them before the transaction begins: a change waits for
+// its queue's or its bucket's turn and its value's memory, which a
+// transaction holding the writer must not.
+func changesIn(ctx context.Context, s *session, ask wire.SQLStatements) (changes *preparedChanges, err error) {
+	changes = &preparedChanges{}
+	if (len(ask.Jobs) > 0 || len(ask.KV) > 0) && ask.Read {
+		return nil, fmt.Errorf("%w: a job or a key in a view, which reads", tinystore.ErrInvalid)
 	}
 	defer func() {
 		if err != nil {
-			jobs.release(err)
+			changes.release(err)
 		}
 	}()
+	failed := func(err error) error { return opFailed(len(ask.Statements)+len(changes.changes), err) }
 	for _, batch := range ask.Jobs {
 		handle, err := s.jobsHandles.get(batch.Handle)
 		if err != nil {
-			return jobs, opFailed(len(ask.Statements)+len(jobs.changes), err)
+			return changes, failed(err)
 		}
 		queue, err := handle.queueOf("enqueue")
 		if err != nil {
-			return jobs, opFailed(len(ask.Statements)+len(jobs.changes), err)
+			return changes, failed(err)
 		}
 		for _, job := range batch.Jobs {
 			value, err := jobValue(job.Value)
 			if err != nil {
-				return jobs, opFailed(len(ask.Statements)+len(jobs.changes), err)
+				return changes, failed(err)
 			}
 			options, err := enqueueOptions(job)
 			if err != nil {
-				return jobs, opFailed(len(ask.Statements)+len(jobs.changes), err)
+				return changes, failed(err)
 			}
-			jobs.changes = append(jobs.changes, queue.Enqueued(ctx, value, options...))
+			changes.changes = append(changes.changes, queue.Enqueued(ctx, value, options...))
 		}
 	}
-	return jobs, nil
+	for _, keys := range ask.KV {
+		handle, err := s.kvHandles.get(keys.Handle)
+		if err != nil {
+			return changes, failed(err)
+		}
+		for _, call := range keys.Calls {
+			change, err := handle.change(ctx, call)
+			if err != nil {
+				return changes, failed(err)
+			}
+			changes.changes = append(changes.changes, change)
+		}
+	}
+	return changes, nil
 }
 
 // runBatched runs one statement of a batch: a read's rows, a write's rows

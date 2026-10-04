@@ -9,7 +9,7 @@ import { CancelledError, CorruptError, errorOf, InvalidError } from './errors.ts
 import { checkName, handleOn, type Page } from './handles.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { LostError, watch } from './session.ts'
-import type { Database, SqlBatch } from './sql.ts'
+import { batchBelongsTo, type Database, databaseBelongsTo, type SqlBatch } from './sql.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import {
 	JobsAnswer,
@@ -554,6 +554,9 @@ export class Queue<T> {
 		this.#open = open
 		this.#values = values as Values<T>
 		this.#in = inDatabase
+		if (inDatabase !== undefined && !databaseBelongsTo(inDatabase, link)) {
+			throw new InvalidError(`queue ${name}: its SQL database belongs to another store`)
+		}
 	}
 
 	/** The queue's handle, its database opened first when it lives in one, as the server needs. */
@@ -572,7 +575,11 @@ export class Queue<T> {
 	 *     })
 	 */
 	withTx(tx: SqlBatch): QueueTx<T> {
-		if (this.#in === undefined || this.#in.name !== tx.database) {
+		if (
+			this.#in === undefined ||
+			this.#in.name !== tx.database ||
+			!batchBelongsTo(tx, this.#link)
+		) {
 			const lives = this.#in === undefined ? 'jobs.db' : `sql ${this.#in.name}`
 			throw new InvalidError(
 				`the queue ${this.name} lives in ${lives}, not in sql ${tx.database}: ` +

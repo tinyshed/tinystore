@@ -41,7 +41,7 @@ Every engine wraps these, so errors.Is means the same in all of them.
 func FromCgroup(fraction float64) int64
 ```
 
-FromCgroup is fraction of the memory the process's container may use, for Options.Memory: cgroup v2's memory.max, or v1's memory.limit\_in\_bytes. It is 0, no budget, outside Linux and when the container sets no limit.
+FromCgroup is fraction of the memory the process's container may use, for Options.Memory: cgroup v2's memory.max, or v1's memory.limit\_in\_bytes, including the limits of its ancestors. It is 0, no budget, outside Linux and when the container sets no limit.
 
 	tinystore.Options{Memory: tinystore.FromCgroup(0.5)}  // half of a 32 MiB container: 16 MiB
 

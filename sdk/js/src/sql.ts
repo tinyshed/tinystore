@@ -13,6 +13,7 @@ import { watch } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import {
 	type JobsJob,
+	type KvOperation,
 	methods,
 	SqlColumns,
 	SqlDatabase,
@@ -173,6 +174,7 @@ export class Database {
 		this.#link = link
 		this.name = name
 		this.#open = open
+		databaseLinks.set(this, link)
 	}
 
 	handle(connection: Connection): Promise<number> {
@@ -315,14 +317,25 @@ export class Database {
 
 	async #run<T>(read: boolean, fn: (tx: SqlBatch) => T): Promise<Settled<T>> {
 		const tx = new SqlBatch(read, this.name)
-		const returned = fn(tx)
-		tx.close()
-		if (returned instanceof Promise && !tx.made(returned)) {
-			throw new InvalidError(
-				'a batch function returns before anything is sent; it cannot await inside',
-			)
+		batchLinks.set(tx, this.#link)
+		let returned: T
+		try {
+			returned = fn(tx)
+			if (returned instanceof Promise && !tx.made(returned)) {
+				returned.catch(() => {})
+				throw new InvalidError(
+					'a batch function returns before anything is sent; it cannot await inside',
+				)
+			}
+		} catch (err) {
+			for (const call of [...tx.statements, ...tx.jobs, ...tx.keys]) {
+				call.fail(err)
+			}
+			throw err
+		} finally {
+			tx.close()
 		}
-		if (tx.statements.length > 0 || tx.jobs.length > 0) {
+		if (tx.statements.length > 0 || tx.jobs.length > 0 || tx.keys.length > 0) {
 			await this.#send(read, tx)
 		}
 		return settle(returned)
@@ -337,6 +350,11 @@ export class Database {
 					const queue = await handleOn(connection, methods['jobs.open'], queued.open)
 					jobs.push({ handle: queue, jobs: [queued.job] })
 				}
+				const kv = []
+				for (const keyed of tx.keys) {
+					const bucket = await handleOn(connection, methods['kv.open'], keyed.open)
+					kv.push({ handle: bucket, calls: [keyed.operation] })
+				}
 				const body = await connection.session.call(
 					methods['sql.batch'],
 					SqlStatements.encode({
@@ -344,6 +362,7 @@ export class Database {
 						statements: tx.statements.map(s => s.statement),
 						read: read || undefined,
 						jobs: jobs.length > 0 ? jobs : undefined,
+						kv: kv.length > 0 ? kv : undefined,
 					}),
 				)
 				return SqlResults.decode(body).results ?? []
@@ -351,11 +370,11 @@ export class Database {
 			tx.statements.forEach((s, i) => {
 				s.settle(results[i] ?? {})
 			})
-			for (const queued of tx.jobs) {
+			for (const queued of [...tx.jobs, ...tx.keys]) {
 				queued.settle()
 			}
 		} catch (err) {
-			for (const s of [...tx.statements, ...tx.jobs]) {
+			for (const s of [...tx.statements, ...tx.jobs, ...tx.keys]) {
 				s.fail(err)
 			}
 			throw err
@@ -366,6 +385,17 @@ export class Database {
 type Result = ReturnType<typeof SqlResults.decode>['results'] extends (infer R)[] | undefined
 	? R
 	: never
+
+const batchLinks = new WeakMap<SqlBatch, Link>()
+const databaseLinks = new WeakMap<Database, Link>()
+
+export function batchBelongsTo(tx: SqlBatch, link: Link): boolean {
+	return batchLinks.get(tx) === link
+}
+
+export function databaseBelongsTo(database: Database, link: Link): boolean {
+	return databaseLinks.get(database) === link
+}
 
 interface Batched {
 	statement: Parameters<typeof SqlStatement.encode>[0]
@@ -382,6 +412,15 @@ interface Queued {
 	fail: (err: unknown) => void
 }
 
+/** A key a batch writes after its jobs, in a bucket that lives in its database. */
+interface Keyed {
+	/** the bucket's kv.open, whose handle the batch opens on its connection */
+	open: Uint8Array
+	operation: Parameters<typeof KvOperation.encode>[0]
+	settle: () => void
+	fail: (err: unknown) => void
+}
+
 /** The statements of a batch or a view, whose promises settle with it. */
 export class SqlBatch {
 	readonly read: boolean
@@ -389,6 +428,7 @@ export class SqlBatch {
 	readonly database: string
 	readonly statements: Batched[] = []
 	readonly jobs: Queued[] = []
+	readonly keys: Keyed[] = []
 	#done = false
 	readonly #made = new WeakSet<Promise<unknown>>()
 
@@ -416,6 +456,19 @@ export class SqlBatch {
 		}
 		const { promise, settle, fail } = this.#promise<void>()
 		this.jobs.push({ open, job, settle: () => settle(undefined), fail })
+		return promise
+	}
+
+	/**
+	 * Adds a key's write to the batch, for a bucket's withTx: a program writes
+	 * `bucket.withTx(tx).set(key, value)`, on a bucket opened `in` this database.
+	 */
+	writeKey(open: Uint8Array, operation: Keyed['operation']): Promise<void> {
+		if (this.read) {
+			throw new InvalidError('a key in a view, which reads')
+		}
+		const { promise, settle, fail } = this.#promise<void>()
+		this.keys.push({ open, operation, settle: () => settle(undefined), fail })
 		return promise
 	}
 

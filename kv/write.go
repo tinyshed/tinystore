@@ -12,28 +12,29 @@ import (
 
 var (
 	selectCell = `select version, expires, spill, ` + hidden("cells", 3) + `
-		from cells where bucket = ?1 and path = ?2`
-	takeCell = `delete from cells
+		from _tinystore_kv_cells as cells where bucket = ?1 and path = ?2`
+	takeCell = `delete from _tinystore_kv_cells as cells
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?4 = 0 or version = ?4)
 			and not ` + hidden("cells", 5) + `
 		returning version, expires, value, spill`
-	deleteCell = `delete from cells
+	deleteCell = `delete from _tinystore_kv_cells as cells
 		where bucket = ?1 and path = ?2
 			and (?4 = 0 or (version = ?4 and (expires is null or expires > ?3) and not ` + hidden("cells", 5) + `))
 		returning spill`
-	touchCell = `update cells set expires = ?4
+	touchCell = `update _tinystore_kv_cells as cells set expires = ?4
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and (?5 = 0 or version = ?5)
 			and not ` + hidden("cells", 6) + `
 		returning version`
 )
 
 const (
-	upsertCell = `insert into cells (bucket, path, version, expires, value, spill) values (?1, ?2, ?3, ?4, ?5, ?6)
+	upsertCell = `insert into _tinystore_kv_cells as cells (bucket, path, version, expires, value, spill)
+		values (?1, ?2, ?3, ?4, ?5, ?6)
 		on conflict (bucket, path) do update set
 			version = excluded.version, expires = excluded.expires, value = excluded.value, spill = excluded.spill`
-	insertSpilled = `insert into spilled (value) values (?1)`
-	deleteSpilled = `delete from spilled where id = ?1`
-	takeSpilled   = `delete from spilled where id = ?1 returning value`
+	insertSpilled = `insert into _tinystore_kv_spilled as spilled (value) values (?1)`
+	deleteSpilled = `delete from _tinystore_kv_spilled as spilled where id = ?1`
+	takeSpilled   = `delete from _tinystore_kv_spilled as spilled where id = ?1 returning value`
 )
 
 var errVersionMoved = fmt.Errorf("%w: the key is not live at the version given", tinystore.ErrConflict)
@@ -161,19 +162,22 @@ func (b *Bucket[V]) Delete(ctx context.Context, key any, options ...Option) erro
 		return b.fail(c, err)
 	}
 
-	err = b.write(ctx, 0, func(w sqlite.Writer) error {
-		var spill sql.NullInt64
-		deleteErr := sqlite.QueryRowByKey(ctx, w, deleteCell, c.args(b.id, c.path, c.now,
-			c.options.version.revision)...).Scan(&spill)
-		if errors.Is(deleteErr, sql.ErrNoRows) {
-			return c.absent()
-		}
-		if deleteErr != nil {
-			return deleteErr
-		}
-		return dropSpilled(ctx, w, spill)
-	})
+	err = b.write(ctx, 0, func(w sqlite.Writer) error { return b.deleteIn(ctx, w, c) })
 	return b.fail(c, err)
+}
+
+// deleteIn deletes the key c names with w, and the row its value spilled to.
+func (b *branch) deleteIn(ctx context.Context, w sqlite.Writer, c call) error {
+	var spill sql.NullInt64
+	err := sqlite.QueryRowByKey(ctx, w, deleteCell, c.args(b.id, c.path, c.now,
+		c.options.version.revision)...).Scan(&spill)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c.absent()
+	}
+	if err != nil {
+		return err
+	}
+	return dropSpilled(ctx, w, spill)
 }
 
 // Touch gives a live key a new expiry, kv.TTL's, kv.ExpireAt's or else the
@@ -208,11 +212,17 @@ func (b *Bucket[V]) Touch(ctx context.Context, key any, options ...Option) (bool
 // that memory what the row holds. A value its type measures over 1 MiB is
 // refused before anything is made.
 func (b *Bucket[V]) enterWith(ctx context.Context, value V, extra int) (place, stored, error) {
+	return b.keepValue(ctx, value, extra, b.enter)
+}
+
+func (b *Bucket[V]) keepValue(
+	ctx context.Context, value V, extra int, enter func(context.Context, int) (place, error),
+) (place, stored, error) {
 	weight := b.codec.weigh(value)
 	if weight > maxValue {
 		return place{}, stored{}, tooLarge(weight)
 	}
-	entered, err := b.enter(ctx, weight+extra)
+	entered, err := enter(ctx, weight+extra)
 	if err != nil {
 		return place{}, stored{}, err
 	}

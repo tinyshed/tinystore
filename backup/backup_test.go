@@ -402,6 +402,23 @@ func readManifestOf(t *testing.T, archive []byte) Manifest {
 
 // a guest backs up beside the store's owner: the databases it opened, and a
 // copy of every other engine's file it did not open; blobs it leaves to the owner
+func TestAHostFileCannotReplaceTheBackupManifest(t *testing.T) {
+	dir := t.TempDir()
+	store, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close(context.Background())
+	if err = os.WriteFile(filepath.Join(dir, manifestName), []byte("the application's manifest"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	err = Write(t.Context(), store, &archive, File(manifestName))
+	if !errors.Is(err, tinystore.ErrInvalid) || archive.Len() != 0 {
+		t.Fatalf("a host file took the manifest's name: %v, %d archive bytes", err, archive.Len())
+	}
+}
+
 func TestAGuestBacksUpEveryEngineButBlobs(t *testing.T) {
 	dir := t.TempDir()
 	owner, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true, Clock: func() time.Time { return epoch }})

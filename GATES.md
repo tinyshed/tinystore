@@ -25,6 +25,7 @@ module defines.
 - a guest takes no lock, claims SQL alone, and no other engine opens in it — `TestAGuestOpensNoOtherEngine`, `TestAGuestOpensNoQueuesOfADatabase` in `jobs`
 - a guest's batch is one commit its owner, another process, reads at once — `TestAGuestWritesBesideTheOwner` in `sqldb`
 - a guest applies no migration, changes no schema and writes none of the store's tables — `TestAGuestIsRefusedWhileAMigrationIsPending`, `TestAGuestWritesNoneOfTheStoresTables`
+- a guest cannot enable writable_schema or rewrite the system schema — `TestAGuestCannotRewriteTheSchema`
 - a guest backs up every engine's file it did not open, and leaves blobs to the owner — `TestAGuestBacksUpEveryEngineButBlobs`
 - a container's memory limit gives the store's budget, and no limit gives none — `TestFromCgroupIsAFractionOfTheContainersLimit`
 - every limit a LimitError names is an exported constant, the SDKs' limits the same names — `TestEveryLimitNameIsAnExportedConstant`, over `testdata/limits.json`; `are the names of testdata/limits.json, which Go's constants hold` in `sdk/js/test/wire.test.ts`, `test_limits_are_the_names_of_the_shared_file` in Python's
@@ -102,10 +103,15 @@ module defines.
 - first and last are a bucket's first and last samples bit for bit, from a summary as from raw, and a group adds them up — `TestTheLastOfABucketIsItsNewestSample`, `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`
 - latest is each series' newest sample in its range, which bounds its staleness — `TestLatestLeavesOutASeriesOlderThanItsRange`, `TestLatestIsTheLastSampleOfARead`, `TestLatestOverTheWire` in `server`; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `TestLatestDecodesAtMostOneChunkASeries`
+- latest pays no sample budget for blocks older than its selected head — `TestLatestSpendsNoBudgetOnBlocksOlderThanItsHead`
+- expired heads and blocks spend no sample or payload budget — `TestBatchedReadsSpendNothingOnExpiredSeries`
+- expiry selects bounded prefixes from both retention indexes — `TestExpirySelectsABoundedPrefixOfEachIndex`
+- a retention prefix reads no unrelated later names — `TestARetentionPrefixReadsOnlyItsNames`
 - a series keeps the retention of the longest prefix of its name, for ingest, reads, aggregates and expiry — `TestASeriesKeepsItsOwnRetention`, `TestASampleOlderThanItsSeriesRetentionIsRefused`
 - changed retention rules rewrite only the series of the prefixes that changed, and a changed Retention none — `TestAChangedRuleReachesTheSeriesOfItsPrefix`
 - a description is kept by name, replaced by the next and removed by an empty one — `TestADescriptionIsKeptByName`, `TestADescriptionOverTheWire` in `server`; `a description is kept by name, and an instrument's is written at its flush` in `sdk/js/test/records.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
 - an instrument describes the names it writes at its flush, a timer's sum and longest in milliseconds, and a failed flush keeps them — `TestAnInstrumentDescribesItsSeries`, `TestAFailedFlushKeepsItsDescriptionsForTheNext`
+- an invalid description keeps no good instrument out of a flush — `an invalid description cannot prevent good instruments from flushing` in Bun, `test_an_invalid_description_keeps_no_good_instrument_out` in Python
 - a group joins its series exactly and rounds once — `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined`
 - a whole-block summary spends no decoded-sample budget — `TestWholeExactBlocksNeedNoDecodedSampleBudget`
 - a malformed exact summary is refused — `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary`
@@ -126,6 +132,7 @@ module defines.
 - the engine's own lines reach the console from Info up, never the store — `TestTheEnginesOwnLinesReachTheConsoleAndNotTheStore`
 - a redacted field is kept nowhere — `TestARedactedFieldIsHiddenInTheStoreAndOnTheConsole`, and in both SDKs' suites
 - a secret is hidden whatever its key's spelling, and a counter that looks like one is not — `TestRedactHidesASecretWhateverItsKeySpelling`, `TestACounterNamedLikeASecretStaysVisible`, and the vectors of `records/console/testdata/console.json`, whose `secrets` each SDK's list equals
+- URL passwords are hidden through JSON escapes without rounding other numbers — `TestURLPasswordsAreHiddenThroughJSONEscapes`, with both SDKs' console tests
 - a URL's password inside a value is hidden unless kept — `TestAPasswordInsideAURLIsHidden`, `TestAURLsPasswordIsHiddenUnlessKept`; `test_a_urls_password_is_hidden_unless_kept` in Python's
 - a host that named its prefix reads only its own variables, a lookup only the host's function, NoEnv none — `TestAHostThatNamedItsPrefixIgnoresTheBareVariables`, `TestALookupIsTheOnlyEnvironmentRead`, `TestNoEnvReadsNothing`; `a logger that named its prefix reads its own variables and not the bare ones` in `sdk/js/test/console.test.ts`, `test_a_handler_that_named_its_prefix_ignores_the_bare_variables` in Python's
 - ReplaceAttr sees each attribute with its groups, and drops a zero one — `TestReplaceAttrChangesAndDropsAttributes`
@@ -246,6 +253,8 @@ module defines.
 
 ## KV
 
+- a key a batch of the database its store lives in writes commits with the batch's rows or not at all, a delete and a clear alike — `TestABucketInADatabaseCommitsWithItsRows`, `TestAKeyInAnSQLBatchCommitsWithItsRows` in `server`; `a key a batch writes commits with the rows or not at all` in `sdk/js/test/sql.test.ts`, `test_a_key_a_batch_writes_commits_with_the_rows_or_not_at_all` in Python's
+- a store In a database renews Sliding keys there, refuses a change of a bucket elsewhere or inside a Tx, and a database holds one — `TestSlidingExpiryWorksInADatabase`, `TestAChangeOfABucketElsewhereIsRefused`, `TestADatabaseHoldsOneKVStore`
 - a kv write that returned survives an abrupt exit — `TestAWriteThatReturnedSurvivesAnAbruptExit`, from many goroutines at once
 - an expired key is absent to every operation — `TestAnExpiredKeyIsAbsentToEveryOperation`
 - expiry past one pass's bound is taken in ten seconds — `TestAMaintainPastItsBoundIsFollowedSoon`, expired and cleared rows
@@ -255,6 +264,8 @@ module defines.
 - a stale claim cannot finish or delete the next — `TestAStaleClaimCannotFinishOrDeleteTheNext`
 - a kv Take whose value no longer decodes keeps it — `TestAFailedTakeKeepsItsValue`, a codec's panic and inside Tx included
 - a kv value comes back as it went in — `TestAValueComesBackAsItWentIn`, floats by their bits, a named one's NaN that signals too
+- prepared key changes hold their memory once and wait for none of their own slots — `TestABatchHoldsEachKeysMemoryOnce`, `TestABatchOfKeysDoesNotWaitForItsOwnWriteSlots`
+- a prepared key change refuses nil as an ordinary call does — `TestAChangeRefusesANilKeyAsItsOrdinaryCallDoes`
 - a `kv.Raw` is what its row holds, for every type — `TestARawValueIsWhatItsRowHolds`, an empty string as empty bytes and not nothing
 - an overflowing counter is refused, not rounded — `TestAnOverflowingCounterIsRefusedRatherThanRounded`
 - `LoseAtMost` loses no more than its interval — `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing
@@ -284,6 +295,8 @@ module defines.
 - a config change reaches every handle and watcher at once — `TestAChangeIsSeenByEveryHandleAtOnce`, `TestAConfigChangeReachesEveryWatcher` over the wire
 - a config change that fails its check, or sets a secret, keeps nothing — `TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing`
 - a fixed setting comes from the layers alone, and says where it came from — `TestAFixedFieldRefusesUpdateAndSaysWhereItCameFrom`; `a fixed field refuses update, ignores what was kept, and says where it came from` in `sdk/js/test/config.test.ts`, `test_a_fixed_field_refuses_update_ignores_what_was_kept_and_says_where_it_came_from` in Python's
+- a fixed nested dataclass keeps its fields fixed — `test_a_fixed_nested_dataclass_stays_fixed` in Python
+- the sign-in recipe admits no more parallel password checks than its quota — `TestQuotaAdmissionBoundsParallelPasswordChecks`
 - every variable that does not read, and every required setting missing, is said at once — `TestEveryBadVariableIsReportedAtOnce`; `every variable that does not read is said at once` in `sdk/js/test/config.test.ts`, `test_every_variable_that_does_not_read_is_said_at_once` in Python's
 - NAME_FILE gives a setting its file's text, and NAME beside it is refused — `TestASecretReadsItsFile`; `a variable's file is read when NAME_FILE names it, and both set is refused` in `sdk/js/test/config.test.ts`, `test_a_variables_file_is_read_when_name_file_names_it_and_both_set_is_refused` in Python's
 - a config's lookup is the only environment it reads — `TestAConfigsLookupIsTheOnlyEnvironmentRead`
@@ -304,6 +317,7 @@ module defines.
 ## Jobs
 
 - a job in a batch commits with its rows or not at all — `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn`
+- a job batch does not wait for write slots held by its own prepared changes — `TestAJobBatchDoesNotWaitForItsOwnWriteSlots`
 - a job a Tx adds commits with its rows, and lets go of its turn either way — `TestAJobInATxCommitsWithItsRows`
 - an Enqueue that returned survives an abrupt exit — `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once
 - a job runs at its time and not before — `TestAJobRunsAtItsTimeAndNotBefore`
@@ -374,6 +388,7 @@ module defines.
 ## Backups
 
 - a backup restores every engine — `TestABackupRestoresEveryEngine`
+- a host file cannot take the backup manifest's name — `TestAHostFileCannotReplaceTheBackupManifest`
 - a changed backup is refused and leaves nothing — `TestAChangedByteIsRefusedAndLeavesNothing`
 - a backup restores every object bit for bit — `TestABackupRestoresEveryObject`; past 4 GiB when `TINYSTORE_LARGE_BACKUP` is set
 - a backup holds a file of the host's only when it is named, and restores it checked — `TestABackupKeepsANamedHostFileAndRestoresIt`, `TestAHostFileOutsideTheStoreIsRefused`; over the wire `TestABackupOverTheWireKeepsANamedHostFile`, `TestBackupKeepsAFileItIsGiven` in `cmd/tinystore`, `a backup keeps a file of the application's only when files names it` in `sdk/js/test/backup.test.ts`, `test_a_backup_keeps_a_file_of_the_applications_only_when_files_names_it` in Python's
@@ -464,6 +479,7 @@ module defines.
 
 - a timer's measure answers, rethrows, and records either way — `a timer writes its count, sum and longest at each flush; measure answers and rethrows` in `sdk/js/test/records.test.ts`, `test_a_timer_writes_its_count_sum_and_longest_at_each_flush` in Python's
 - a Bun batch or view gives back what its function returns, answered — `a view and a batch give back what their function returns, its promises answered` in `sdk/js/test/kv.test.ts`, `a batch and a view give back what their function returns, its promises answered` in `sdk/js/test/sql.test.ts`
+- SQL batches reject buckets and queues of another store even when the database names match — `a batch rejects buckets and queues from another store with the same database name` in Bun, `test_a_batch_refuses_buckets_and_queues_of_another_store` in Python
 - a Bun logger's line never waits for the server — `a full logger drops and counts rather than wait` in `sdk/js/test/records.test.ts`
 - a Bun logger writes what filled its buffer during a write as that write ends — `what filled the buffer while a write ran goes as the write ends, not at the next second` in `sdk/js/test/logger.test.ts`
 - a Bun call under an aborted signal is refused — `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts`

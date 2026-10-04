@@ -15,6 +15,7 @@ import (
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/server/wire"
+	"github.com/tinyshed/tinystore/sqldb"
 )
 
 // kvHandle is a bucket of values, counters, a config, a limiter, once's
@@ -55,7 +56,7 @@ func kvOpen(c *call) error {
 	if err := ask.Decode(c.request); err != nil {
 		return err
 	}
-	state, err := c.session.server.kvStore(c.ctx)
+	state, err := c.session.server.kvStoreIn(c.ctx, ask.In)
 	if err != nil {
 		return err
 	}
@@ -153,6 +154,34 @@ func kvOne(c *call, method wire.Method) error {
 		return err
 	}
 	return respond(c, entry)
+}
+
+// change is one call of a SQL batch on a bucket of values kept in the
+// batch's database: a set, a delete or a clear, which the batch's transaction
+// writes with its rows
+func (h *kvHandle) change(ctx context.Context, call wire.KVOperation) (sqldb.Change, error) {
+	if h.values == nil {
+		return nil, fmt.Errorf("%w: kv: %q is not a bucket of values, which a SQL batch writes", tinystore.ErrInvalid,
+			h.name)
+	}
+	if call.IfAbsent {
+		return nil, fmt.Errorf("%w: kv: a set if absent in a SQL batch, which reads nothing", tinystore.ErrInvalid)
+	}
+	options, err := callOptions(call.KVCall)
+	if err != nil {
+		return nil, err
+	}
+	bucket := h.values.Of(owners(call.Owners)...)
+	switch call.Method {
+	case wire.KVSet:
+		return bucket.Written(ctx, call.Key, rawOf(call.Value), options...), nil
+	case wire.KVDelete:
+		return bucket.Deleted(ctx, call.Key, options...), nil
+	case wire.KVClear:
+		return bucket.Cleared(ctx), nil
+	}
+	return nil, fmt.Errorf("%w: kv: %#04x in a SQL batch, which takes set, delete and clear", tinystore.ErrInvalid,
+		uint16(call.Method))
 }
 
 // run is one call on a handle, inside tx when it is not nil

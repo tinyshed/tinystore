@@ -622,6 +622,21 @@ describe('metrics', () => {
 		expect(buckets.series).toBe(1)
 	})
 
+	test('an invalid description cannot prevent good instruments from flushing', async () => {
+		for (const name of ['', 'x'.repeat(4097), String.fromCharCode(0xd800)]) {
+			expect(() => store.metrics.counter(name, { help: 'requests' })).toThrow(InvalidError)
+		}
+		const description = { unit: 'count', help: 'requests' }
+		store.metrics.counter('described-good', description).inc()
+		description.unit = 'x'.repeat(100)
+		await store.metrics.flush()
+		expect((await store.metrics.read({ name: 'described-good', since: '1h' })).length).toBe(1)
+		expect(await store.metrics.description('described-good')).toEqual({
+			unit: 'count',
+			help: 'requests',
+		})
+	})
+
 	test('a drop removes a series', async () => {
 		expect(await store.metrics.drop({ name: 'cpu', labels: { host: 'web-1' } })).toEqual({
 			found: true,

@@ -21,7 +21,7 @@ func (s *Store) fetchHeads(
 	heads := make([]headSnapshot, len(matched))
 	for start := 0; start < len(matched); start += headReadBatch {
 		end := min(start+headReadBatch, len(matched))
-		batch := newHeadBatch(matched[start:end], heads[start:end])
+		batch := newHeadBatch(snapshot, matched[start:end], heads[start:end])
 		if err := s.readHeadDescriptors(ctx, snapshot, &batch); err != nil {
 			return nil, err
 		}
@@ -42,20 +42,23 @@ func (s *Store) fetchHeads(
 // caller's slice, so what the batch fills in, the caller has.
 type headBatch struct {
 	heads     []headSnapshot
+	windows   []seriesWindow
 	positions map[int64]int // series id → index in heads
 	packed    []int64       // series whose tail the range needs
 	sizes     map[int64]int // the tail size each descriptor promised
 }
 
-func newHeadBatch(matched []registeredSeries, heads []headSnapshot) headBatch {
+func newHeadBatch(snapshot snapshotRead, matched []registeredSeries, heads []headSnapshot) headBatch {
 	batch := headBatch{
 		heads:     heads,
+		windows:   make([]seriesWindow, len(matched)),
 		positions: make(map[int64]int, len(matched)),
 		packed:    make([]int64, 0, len(matched)),
 		sizes:     make(map[int64]int, len(matched)),
 	}
 	for i, series := range matched {
 		batch.positions[series.id] = i
+		batch.windows[i] = snapshot.window(series.labels)
 		heads[i].seriesID = series.id
 	}
 	return batch
@@ -98,7 +101,7 @@ func (s *Store) readHeadDescriptors(ctx context.Context, snapshot snapshotRead, 
 			return fmt.Errorf("%w: mutable descriptor identifier", ErrCorrupt)
 		}
 		seen[row.id] = true
-		return s.selectHead(snapshot, batch, position, row)
+		return s.selectHead(snapshot.narrowedTo(batch.windows[position]), batch, position, row)
 	})
 	if err != nil {
 		return err
@@ -186,13 +189,15 @@ func (b *headBatch) readTails(ctx context.Context, tx sqlite.Reader) error {
 // samples of the chunks the range needs.
 func (s *Store) parseSelectedHeads(snapshot snapshotRead, batch headBatch) error {
 	for _, id := range batch.packed {
-		head := &batch.heads[batch.positions[id]]
-		head.filtered, head.from, head.to = true, snapshot.from, snapshot.to
+		position := batch.positions[id]
+		head := &batch.heads[position]
+		read := snapshot.narrowedTo(batch.windows[position])
+		head.filtered, head.from, head.to = true, read.from, read.to
 		var err error
 		if head.chunks, err = s.parseHead(*head); err != nil {
 			return err
 		}
-		if err = snapshot.chargeHead(head); err != nil {
+		if err = read.chargeHead(head); err != nil {
 			return err
 		}
 	}

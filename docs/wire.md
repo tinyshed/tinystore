@@ -539,6 +539,7 @@ A bucket:
 | 9   | burst        | uint             | the requests a limiter lets through at once; rate when absent                                 |
 | 10  | once         | bool             | the answers `kv.run` keeps, a day unless default ttl says; get and delete read and forget one |
 | 11  | windows      | array of windows | a quota's, one to eight: a bucket with windows is a quota, which delete also takes            |
+| 12  | in           | str              | a SQL database's name, already opened; omitted for kv.db                                      |
 
 A window is `{1: name, 2: limit, 3: per}`: a key may use up to limit every per
 milliseconds from its first use, the name `[a-z][a-z0-9_]{0,31}`.
@@ -863,7 +864,7 @@ held as text travels as its text, whatever its column declares.
 
 Done is `{1: changes, 2: last id}`, the columns `{1: [name…]}` and a row
 `{1: [value…]}`. Statements are `{1: handle, 2: [statement…], 3: read, 4:
-[jobs…]}` and their results `{1: [result…]}`, a result being done, or `{3:
+[jobs…], 5: [kv…]}` and their results `{1: [result…]}`, a result being done, or `{3:
 columns, 4: [[value…]…]}` for a statement that returned rows.
 
 Each item of `jobs` has the shape of an enqueue's request, `{1: handle, 2:
@@ -872,6 +873,14 @@ writes the jobs after the statements, so a job commits with the rows it is
 about, or not at all. A job has no result. When a job fails, `what` names it as
 `call`, counted after the statements. A job in a view, or on a queue that lives
 in another file, is `invalid`.
+
+Each item of `kv` is `{1: handle, 2: [call…]}`, with the calls of
+`kv.batch`: each has its method under key 0 and the fields of a KV call.
+Its outer handle identifies the bucket. The calls may set, delete or clear
+keys in a bucket opened `in` this database, and run after the statements and
+jobs. A key change has no result. A read, a set-if-absent, a change in a view,
+or a bucket in another file is `invalid`. A failure's `what.call` counts
+key changes after the statements and jobs.
 
 A message past the agreed body is `limit`: a row a query downloads, or a
 batch's results, which travel in one message. A query holds its rows in the

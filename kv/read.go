@@ -13,13 +13,13 @@ import (
 )
 
 var (
-	selectLive = `select c.version, c.expires, c.value, c.spill, s.value from cells as c
-		left join spilled as s on s.id = c.spill
+	selectLive = `select c.version, c.expires, c.value, c.spill, s.value from _tinystore_kv_cells as c
+		left join _tinystore_kv_spilled as s on s.id = c.spill
 		where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ` + hidden("c", 4)
-	selectHas = `select version, expires from cells
+	selectHas = `select version, expires from _tinystore_kv_cells as cells
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hidden("cells", 4)
-	scanBranch = `select c.path, c.version, c.expires, c.value, c.spill, s.value from cells as c
-		left join spilled as s on s.id = c.spill
+	scanBranch = `select c.path, c.version, c.expires, c.value, c.spill, s.value from _tinystore_kv_cells as c
+		left join _tinystore_kv_spilled as s on s.id = c.spill
 		where c.bucket = ?1 and c.path > ?2 and c.path < ?3 and (c.expires is null or c.expires > ?4)
 			and not ` + hidden("c", 6) + `
 		order by c.path limit cast(?5 as integer)`

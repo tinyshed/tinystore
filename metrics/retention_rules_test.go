@@ -3,10 +3,93 @@ package metrics
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestBatchedReadsSpendNothingOnExpiredSeries(t *testing.T) {
+	for _, count := range []int{15, 16} {
+		for _, sealed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/sealed=%v", count, sealed), func(t *testing.T) {
+				now := testEpoch + time.Hour.Milliseconds()
+				store := keptStore(t, &now, map[string]time.Duration{"audit_": 3 * time.Hour})
+				var batches []Batch
+				for i := range count {
+					points := []Sample{{At: now, Value: 1}}
+					if sealed {
+						points = make([]Sample, 241)
+						for j := range points {
+							points[j] = Sample{At: now - 1000 + int64(j), Value: float64(j)}
+						}
+					}
+					batches = append(batches, Batch{
+						Series: Series{Name: "cpu", Labels: Labels{"host": fmt.Sprint(i)}}, Samples: points,
+					})
+				}
+				if err := store.Ingest(t.Context(), batches); err != nil {
+					t.Fatal(err)
+				}
+				if sealed {
+					if _, err := store.Maintain(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				now += 2 * time.Hour.Milliseconds()
+				request := Range{
+					Name: "cpu", Since: 4 * time.Hour,
+					Limits: Limits{DecodedSamples: 1, PayloadBytes: 1024},
+				}
+				if got, err := store.Read(t.Context(), request); err != nil || len(got) != 0 {
+					t.Fatalf("expired Read: %v: %v", got, err)
+				}
+				if got, err := store.Latest(t.Context(), request); err != nil || len(got) != 0 {
+					t.Fatalf("expired Latest: %v: %v", got, err)
+				}
+				got, err := store.Aggregate(t.Context(), AggregateRequest{
+					Range: request, Width: time.Hour, Op: AggregateSum,
+				})
+				if err != nil || len(got) != 0 {
+					t.Fatalf("expired Aggregate: %v: %v", got, err)
+				}
+			})
+		}
+	}
+}
+
+func TestARetentionPrefixReadsOnlyItsNames(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	for _, name := range []string{"api_requests", "cpu", "disk", "z_last", "ÿ_requests"} {
+		if err := store.Ingest(t.Context(), []Batch{{
+			Series: Series{Name: name}, Samples: []Sample{{At: testEpoch, Value: 1}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for prefix, want := range map[string]string{"api_": "api_requests", "ÿ": "ÿ_requests"} {
+		var found []string
+		err := store.file.View(t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(), namesFromQuery, prefix, prefixEnd(prefix))
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id int64
+				var name string
+				if err := rows.Scan(&id, &name); err != nil {
+					return err
+				}
+				found = append(found, name)
+			}
+			return rows.Err()
+		})
+		if err != nil || len(found) != 1 || found[0] != want {
+			t.Fatalf("%q found %v: %v", prefix, found, err)
+		}
+	}
+}
 
 func keptStore(t *testing.T, now *int64, rules map[string]time.Duration) *Store {
 	t.Helper()

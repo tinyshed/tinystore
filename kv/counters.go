@@ -63,24 +63,26 @@ func (c *Counters) WithTx(tx *Tx) *Counters {
 // REAL.
 var (
 	counterGone = `(cells.expires <= ?6 or ` + hidden("cells", 7) + `)`
-	addCounter  = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)
+	addCounter  = `insert into _tinystore_kv_cells as cells (bucket, path, version, expires, value)
+		values (?1, ?2, ?3, ?4, ?5)
 		on conflict (bucket, path) do update set
 			value   = iif(` + counterGone + `, excluded.value, cells.value + excluded.value),
 			expires = iif(` + counterGone + `, excluded.expires, cells.expires),
 			version = excluded.version
 		where ` + counterGone + ` or typeof(cells.value + excluded.value) = 'integer'
 		returning value`
-	maxCounter = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, max(?5, 0))
+	maxCounter = `insert into _tinystore_kv_cells as cells (bucket, path, version, expires, value)
+		values (?1, ?2, ?3, ?4, max(?5, 0))
 		on conflict (bucket, path) do update set
 			value   = iif(` + counterGone + `, excluded.value, max(cells.value, ?5)),
 			expires = iif(` + counterGone + `, excluded.expires, cells.expires),
 			version = excluded.version
 		returning value`
-	selectCounter = `select value from cells
+	selectCounter = `select value from _tinystore_kv_cells as cells
 		where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hidden("cells", 4)
 )
 
-const deleteCounter = `delete from cells where bucket = ?1 and path = ?2`
+const deleteCounter = `delete from _tinystore_kv_cells as cells where bucket = ?1 and path = ?2`
 
 // Add adds n to the counter under key and returns what it holds now. An
 // absent or expired counter starts from zero with the DefaultTTL of the

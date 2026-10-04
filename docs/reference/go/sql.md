@@ -159,8 +159,8 @@ Exec adds a statement to the batch; it runs when the batch does.
 
 ```go
 type Change interface {
-	// Bytes is what the change holds, counted against the group's bound, or
-	// why it cannot be written, which writes nothing of the batch.
+	// Bytes is memory already held by the change, counted against the group's
+	// bound. An error prevents the entire batch from running.
 	Bytes() (int, error)
 	// Apply writes the change with the batch's writer. file is the database's,
 	// which the change refuses when its tables are in another.

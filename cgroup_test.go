@@ -19,6 +19,22 @@ func TestFromCgroupIsAFractionOfTheContainersLimit(t *testing.T) {
 			"sys/fs/cgroup/app.slice/web.service/memory.max": file("67108864\n"),
 		}, 67108864},
 		"v2 without a limit": {fstest.MapFS{"sys/fs/cgroup/memory.max": file("max\n")}, 0},
+		"v2, a limited parent": {fstest.MapFS{
+			"proc/self/cgroup":                    file("0::/app/worker\n"),
+			"sys/fs/cgroup/app/worker/memory.max": file("max\n"),
+			"sys/fs/cgroup/app/memory.max":        file("33554432\n"),
+			"sys/fs/cgroup/memory.max":            file("max\n"),
+		}, 33554432},
+		"v2, the smallest ancestor": {fstest.MapFS{
+			"proc/self/cgroup":                    file("0::/app/worker\n"),
+			"sys/fs/cgroup/app/worker/memory.max": file("67108864\n"),
+			"sys/fs/cgroup/app/memory.max":        file("33554432\n"),
+			"sys/fs/cgroup/memory.max":            file("134217728\n"),
+		}, 33554432},
+		"v1, the process's own cgroup": {fstest.MapFS{
+			"proc/self/cgroup": file("5:cpu,cpuacct:/other\n7:memory:/app/worker\n"),
+			"sys/fs/cgroup/memory/app/worker/memory.limit_in_bytes": file("33554432\n"),
+		}, 33554432},
 		"v1":                 {fstest.MapFS{"sys/fs/cgroup/memory/memory.limit_in_bytes": file("33554432\n")}, 33554432},
 		"v1 without a limit": {fstest.MapFS{"sys/fs/cgroup/memory/memory.limit_in_bytes": file("9223372036854771712\n")}, 0},
 		"no cgroup":          {fstest.MapFS{}, 0},

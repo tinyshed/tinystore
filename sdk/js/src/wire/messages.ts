@@ -141,6 +141,7 @@ export const KvBucket = message('kv.bucket', {
 	burst: [9, uint],
 	once: [10, bool],
 	windows: [11, list(KvWindow)],
+	in: [12, str],
 })
 
 const kvCall = {
@@ -162,6 +163,8 @@ export const KvCall = message('kv.call', kvCall)
 export const KvOperation = message('kv.operation', { method: [0, uint], ...kvCall })
 
 export const KvCalls = message('kv.calls', { calls: [1, list(KvOperation)] })
+
+export const KvChanges = message('kv.changes', { handle: [1, uint], calls: [2, list(KvOperation)] })
 
 export const KvEntry = message('kv.entry', {
 	found: [1, bool],
@@ -361,6 +364,7 @@ export const SqlStatements = message('sql.statements', {
 	statements: [2, list(SqlStatement)],
 	read: [3, bool],
 	jobs: [4, list(JobsBatch)],
+	kv: [5, list(KvChanges)],
 })
 
 export const SqlDone = message('sql.done', { changes: [1, int], lastId: [2, int] })
@@ -519,6 +523,7 @@ export const messages = {
 	'kv.call': KvCall,
 	'kv.operation': KvOperation,
 	'kv.calls': KvCalls,
+	'kv.changes': KvChanges,
 	'kv.entry': KvEntry,
 	'kv.results': KvResults,
 	'kv.page': KvPage,

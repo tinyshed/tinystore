@@ -558,3 +558,79 @@ func TestAQueueInTheProgramsDatabaseIsTheProgramsOwn(t *testing.T) {
 		t.Fatalf("the program's queue holds %+v, %v: %v", entry, found, err)
 	}
 }
+
+// a key a batch writes in a bucket kept in its database commits with the
+// batch's rows or not at all, a deletion and a clear alike; a bucket
+// elsewhere, a view and a database no client opened are refused
+func TestAKeyInAnSQLBatchCommitsWithItsRows(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	_, err := conn.Call(t.Context(), wire.KVOpen, wire.KVBucket{Name: "sessions", In: "app"})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid {
+		t.Fatalf("a bucket in a database no client opened: %+v", failure)
+	}
+	app := openSQL(t, conn, wire.SQLDatabase{Name: "app", Migrations: []wire.SQLMigration{notesMigration}})
+	sessions := openKV(t, conn, wire.KVBucket{Name: "sessions", In: "app"})
+	set := func(key string) wire.KVOperation {
+		return wire.KVOperation{Method: wire.KVSet, KVCall: wire.KVCall{Key: key, Value: wire.KVValue{
+			Kind: wire.KVBytes, Bytes: []byte("note"),
+		}}}
+	}
+
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values ('kept')`}},
+		KV:         []wire.KVChanges{{Handle: sessions, Calls: []wire.KVOperation{set("K7Q2")}}},
+	})
+	if err != nil {
+		t.Fatalf("a note and its key: %v", err)
+	}
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values (null)`}},
+		KV:         []wire.KVChanges{{Handle: sessions, Calls: []wire.KVOperation{set("P9X4")}}},
+	})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid || failure.What["call"] != "0" {
+		t.Fatalf("a note that breaks a constraint, with its key: %+v", failure)
+	}
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle: app, Read: true, Statements: []wire.SQLStatement{{SQL: `select 1`}},
+		KV: []wire.KVChanges{{Handle: sessions, Calls: []wire.KVOperation{set("Z1A8")}}},
+	})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid {
+		t.Fatalf("a key in a view: %+v", failure)
+	}
+	elsewhere := openKV(t, conn, wire.KVBucket{Name: "elsewhere"})
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `insert into notes (title) values ('not without its key')`}},
+		KV:         []wire.KVChanges{{Handle: elsewhere, Calls: []wire.KVOperation{set("K7Q2")}}},
+	})
+	if failure := failureOf(err); failure.Code != wire.CodeInvalid || failure.What["call"] != "1" {
+		t.Fatalf("a key of a bucket in kv.db in the database's batch: %+v", failure)
+	}
+
+	if _, rows := mustQuery(t, conn, wire.SQLStatement{Handle: app, SQL: `select count(*) from notes`}); rows[0][0] !=
+		int64(1) {
+		t.Fatalf("%v notes after one batch kept and three refused", rows[0][0])
+	}
+	if kept := mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: sessions, Key: "K7Q2"}); !kept.Found {
+		t.Fatalf("the kept note's key: %+v", kept)
+	}
+	if dropped := mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: sessions, Key: "P9X4"}); dropped.Found {
+		t.Fatalf("the key of a note that broke a constraint: %+v", dropped)
+	}
+	_, err = sqlBatchErr(t, conn, wire.SQLStatements{
+		Handle:     app,
+		Statements: []wire.SQLStatement{{SQL: `delete from notes`}},
+		KV: []wire.KVChanges{{Handle: sessions, Calls: []wire.KVOperation{
+			{Method: wire.KVDelete, KVCall: wire.KVCall{Key: "K7Q2"}}, {Method: wire.KVClear},
+		}}},
+	})
+	if gone := mustKV(t, conn, wire.KVGet, wire.KVCall{Handle: sessions, Key: "K7Q2"}); err != nil || gone.Found {
+		t.Fatalf("a key deleted with the notes: %+v, %v", gone, err)
+	}
+	if used := ts.store.Memory().Used; used != 0 {
+		t.Fatalf("%d bytes still held once every batch ended", used)
+	}
+}

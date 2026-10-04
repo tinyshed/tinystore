@@ -142,6 +142,7 @@ KvBucket = message(
     burst=(9, uint),
     once=(10, bool_),
     windows=(11, list_(KvWindow)),
+    in_=(12, str_),
 )
 
 _kv_call = {
@@ -161,6 +162,7 @@ _kv_call = {
 KvCall = Message("kv.call", _kv_call)
 KvOperation = Message("kv.operation", {"method": (0, uint), **_kv_call})
 KvCalls = message("kv.calls", calls=(1, list_(KvOperation)))
+KvChanges = message("kv.changes", handle=(1, uint), calls=(2, list_(KvOperation)))
 
 KvEntry = message(
     "kv.entry",
@@ -336,6 +338,7 @@ SqlStatements = message(
     statements=(2, list_(SqlStatement)),
     read=(3, bool_),
     jobs=(4, list_(JobsBatch)),
+    kv=(5, list_(KvChanges)),
 )
 
 SqlDone = message("sql.done", changes=(1, int_), last_id=(2, int_))
@@ -486,6 +489,7 @@ MESSAGES: dict[str, Message] = {
         KvCall,
         KvOperation,
         KvCalls,
+        KvChanges,
         KvEntry,
         KvResults,
         KvPage,

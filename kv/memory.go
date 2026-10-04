@@ -256,7 +256,7 @@ func (s *shard) valueAt(path []byte, now int64) (int64, bool) {
 	return entry.valueAt(now), true
 }
 
-var selectCounterRow = `select value, expires from cells
+var selectCounterRow = `select value, expires from _tinystore_kv_cells as cells
 	where bucket = ?1 and path = ?2 and (expires is null or expires > ?3) and not ` + hidden("cells", 4)
 
 // readFile is the counter at c's path as the file has it, absent when the
@@ -284,7 +284,8 @@ type flushed struct {
 	entry *counter
 }
 
-const writeCounter = `insert into cells (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)
+const writeCounter = `insert into _tinystore_kv_cells as cells (bucket, path, version, expires, value)
+	values (?1, ?2, ?3, ?4, ?5)
 	on conflict (bucket, path) do update set
 		version = excluded.version, expires = excluded.expires, value = excluded.value`
 

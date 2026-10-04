@@ -560,12 +560,15 @@ export class Metrics {
 			return
 		}
 		const bytes = (text: string | undefined) => new TextEncoder().encode(text ?? '').length
+		if (name === '' || !name.isWellFormed() || bytes(name) > 4096) {
+			throw new InvalidError(`metric name ${JSON.stringify(name)}: 1 to 4096 bytes of UTF-8`)
+		}
 		if (bytes(description.unit) > 32 || bytes(description.help) > 1024) {
 			throw new InvalidError(
 				`the description of ${name}: a unit of 32 bytes and help of 1024 at most`,
 			)
 		}
-		this.#described.set(name, description)
+		this.#described.set(name, { ...description })
 	}
 
 	async #writeDescriptions(): Promise<void> {

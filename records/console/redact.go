@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"unicode"
 
@@ -230,6 +231,40 @@ func (r redactor) key(decoder *json.Decoder, object bool) ([]byte, bool, error) 
 //
 //	"see postgres://ann:hunter2@db:5432/app"  →  "see postgres://ann:[redacted]@db:5432/app"
 func hideURLPasswords(text string) string {
+	if !strings.Contains(text, "://") && !strings.ContainsRune(text, rune(92)) {
+		return text
+	}
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	var out strings.Builder
+	written, offset := 0, 0
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return text
+		}
+		end := int(decoder.InputOffset())
+		if value, ok := token.(string); ok {
+			if hidden := hideURLTextPasswords(value); hidden != value {
+				start := offset + strings.IndexByte(text[offset:end], '"')
+				out.WriteString(text[written:start])
+				out.Write(logline.AppendString(nil, hidden))
+				written = end
+			}
+		}
+		offset = end
+	}
+	if written == 0 {
+		return text
+	}
+	out.WriteString(text[written:])
+	return out.String()
+}
+
+func hideURLTextPasswords(text string) string {
 	var out strings.Builder
 	written := 0
 	for from := 0; from < len(text); {
@@ -261,11 +296,7 @@ func findPassword(text string, start int) (password, at, end int) {
 	i := start
 	for i < len(text) {
 		c := text[i]
-		if c == '\\' { // an escape of the JSON string, kept whole
-			i += 2
-			continue
-		}
-		if c == '/' || c == '?' || c == '#' || c == '"' || c <= ' ' {
+		if c == '/' || c == '?' || c == '#' || c <= ' ' {
 			break
 		}
 		if c == '@' {

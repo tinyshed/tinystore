@@ -86,11 +86,13 @@ var schema = map[string][]field{
 		{9, "burst", "uint"},
 		{10, "once", "bool"},
 		{11, "windows", "[]kv.window"},
+		{12, "in", "str"},
 	},
 	"kv.window":    {{1, "name", "str"}, {2, "limit", "uint"}, {3, "per", "uint"}},
 	"kv.call":      kvCall,
 	"kv.operation": append([]field{{0, "method", "uint"}}, kvCall...),
 	"kv.calls":     {{1, "calls", "[]kv.operation"}},
+	"kv.changes":   {{1, "handle", "uint"}, {2, "calls", "[]kv.operation"}},
 	"kv.entry": {
 		{1, "found", "bool"},
 		{2, "value", "kv value"},
@@ -224,7 +226,11 @@ var schema = map[string][]field{
 		{6, "rows", "bool"},
 	},
 	"sql.statements": {
-		{1, "handle", "uint"}, {2, "statements", "[]sql.statement"}, {3, "read", "bool"}, {4, "jobs", "[]jobs.batch"},
+		{1, "handle", "uint"},
+		{2, "statements", "[]sql.statement"},
+		{3, "read", "bool"},
+		{4, "jobs", "[]jobs.batch"},
+		{5, "kv", "[]kv.changes"},
 	},
 	"sql.done":    {{1, "changes", "int"}, {2, "last id", "int"}},
 	"sql.columns": {{1, "columns", "[]str"}},
@@ -510,6 +516,7 @@ func handshakeExamples() []example {
 func kvExamples() []example {
 	return []example{
 		of("a bucket of values that slide", "kv.bucket", wire.KVBucket{Name: "sessions", Sliding: 30 * 86_400_000}),
+		of("a bucket kept in a SQL database", "kv.bucket", wire.KVBucket{Name: "sessions", In: "app"}),
 		of("counters that live in memory for a second", "kv.bucket", wire.KVBucket{
 			Name: "login-attempts", Counters: true, DefaultTTL: 900_000, LoseAtMost: 1000,
 		}),
@@ -695,6 +702,15 @@ func sqlExamples() []example {
 				{SQL: "update notes set body = ? where id = ?", Args: []any{"milk", int64(7)}},
 			},
 			Jobs: []wire.JobsBatch{{Handle: 2, Jobs: []wire.JobsJob{{Value: `{"id":7}`, Key: "index:7"}}}},
+		}),
+		of("sql.batch of a user and the session it writes, one commit", "sql.statements", wire.SQLStatements{
+			Handle: 1, Statements: []wire.SQLStatement{
+				{SQL: "insert into users (id, email) values (?, ?)", Args: []any{int64(7), "ada@example.com"}},
+			},
+			KV: []wire.KVChanges{{Handle: 3, Calls: []wire.KVOperation{
+				{Method: wire.KVSet, KVCall: wire.KVCall{Key: "K7Q2", Value: raw("user 7"), TTL: 3_600_000}},
+				{Method: wire.KVDelete, KVCall: wire.KVCall{Key: "P9X4"}},
+			}}},
 		}),
 		of("sql.batch of reads from one snapshot", "sql.statements", wire.SQLStatements{
 			Handle: 1, Statements: []wire.SQLStatement{{SQL: "select count(*) from notes"}}, Read: true,

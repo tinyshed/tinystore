@@ -455,6 +455,71 @@ async def test_a_job_a_batch_enqueues_commits_with_the_rows_or_not_at_all(
             index.with_tx(tx).enqueue(5)
 
 
+async def test_a_key_a_batch_writes_commits_with_the_rows_or_not_at_all(store: tinystore.Store, tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "001_notes.sql").write_text("create table notes (id integer primary key, title text unique) strict;")
+    app = await store.sql("app", migrations=migrations)
+    sessions = store.kv.bucket("sessions", str, in_=app)
+
+    async with app.batch() as tx:
+        tx.exec("insert into notes (title) values ('signed in')")
+        sessions.with_tx(tx).set("K7Q2", "user 1")
+    with pytest.raises(ConflictError):
+        async with app.batch() as tx:
+            sessions.with_tx(tx).set("P9X4", "user 2")
+            tx.exec("insert into notes (title) values ('signed in')")
+    assert await sessions.get("K7Q2") == "user 1"
+    assert await sessions.get("P9X4") is None
+
+    async with app.batch() as tx:
+        tx.exec("delete from notes")
+        sessions.with_tx(tx).delete("K7Q2")
+    assert await sessions.get("K7Q2") is None
+    await sessions.set("Z1A8", "user 3")
+    async with app.batch() as tx:
+        sessions.with_tx(tx).clear()
+    assert await sessions.get("Z1A8") is None
+
+    with pytest.raises(InvalidError):
+        async with app.batch() as tx:
+            store.kv.bucket("elsewhere", str).with_tx(tx).set("K7Q2", "x")
+    with pytest.raises(InvalidError):
+        async with app.batch() as tx:
+            sessions.with_tx(tx).get("K7Q2")
+    with pytest.raises(InvalidError):
+        async with app.view() as tx:
+            sessions.with_tx(tx).set("K7Q2", "x")
+
+
+async def test_a_batch_refuses_buckets_and_queues_of_another_store(store: tinystore.Store, tmp_path: Path) -> None:
+    app = await store.sql("app")
+    sessions = store.kv.bucket("cross-store", str, in_=app)
+    queue = store.jobs.queue("cross-store", int, in_=app)
+    async with tinystore.open(tmp_path / "other", private=True) as other:
+        other_db = await other.sql("app")
+        with pytest.raises(InvalidError):
+            store.kv.bucket("wrong-store", str, in_=other_db)
+        with pytest.raises(InvalidError):
+            store.jobs.queue("wrong-store", int, in_=other_db)
+        with pytest.raises(InvalidError):
+            async with other_db.batch() as tx:
+                sessions.with_tx(tx).set("K7Q2", "user 1")
+        with pytest.raises(InvalidError):
+            async with other_db.batch() as tx:
+                queue.with_tx(tx).enqueue(1)
+        assert await other.kv.bucket("cross-store", str, in_=other_db).get("K7Q2") is None
+
+
+async def test_an_invalid_description_keeps_no_good_instrument_out(store: tinystore.Store) -> None:
+    for name in ("", "x" * 4097, chr(0xD800)):
+        with pytest.raises(InvalidError):
+            store.metrics.counter(name, help="requests")
+    store.metrics.counter("described-good", help="requests").inc()
+    await store.metrics.flush()
+    assert len(await store.metrics.read(name="described-good", since="1h")) == 1
+
+
 async def test_records_come_back_as_they_went_in(store: tinystore.Store) -> None:
     at = time.time_ns() // 1000 * 1000 + 123
     await store.records.append(

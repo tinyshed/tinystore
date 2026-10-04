@@ -243,15 +243,15 @@ func (s *Store) reserve(ctx context.Context, bytes int) (*tinystore.Reservation,
 	return reserved, err
 }
 
-// reserveNow holds a call's bytes if they are free at once, for a call inside
-// Tx: the writes holding memory wait for the writer it holds
+// reserveNow takes free memory for a transaction or a prepared change,
+// which must not wait for work that needs its resources.
 func (s *Store) reserveNow(bytes int) (*tinystore.Reservation, error) {
 	if bytes <= 0 {
 		return &nothingReserved, nil
 	}
 	reserved, err := s.runtime.ReserveNow(int64(bytes))
 	if err != nil {
-		return nil, fmt.Errorf("jobs: inside Tx, which holds the writer that the writes holding memory wait for: %w",
+		return nil, fmt.Errorf("jobs: memory is not free for a transaction or prepared change: %w",
 			err)
 	}
 	return reserved, nil

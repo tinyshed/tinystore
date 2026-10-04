@@ -77,8 +77,8 @@ func settle[V any](options []BucketOption) (settled[V], error) {
 }
 
 const (
-	selectBucket = `select id, kind from buckets where name = ?1`
-	insertBucket = `insert into buckets (name, kind) values (?1, ?2) returning id`
+	selectBucket = `select id, kind from _tinystore_kv_buckets as buckets where name = ?1`
+	insertBucket = `insert into _tinystore_kv_buckets as buckets (name, kind) values (?1, ?2) returning id`
 )
 
 // claimBucket finds a bucket by name or creates it, and refuses one of

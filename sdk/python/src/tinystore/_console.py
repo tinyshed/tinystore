@@ -286,6 +286,20 @@ def hide_url_passwords(text: str) -> str:
 
     "postgres://ann:hunter2@db/app" is "postgres://ann:[redacted]@db/app".
     """
+    if "://" not in text and "\\" not in text:
+        return text
+
+    def hide_string(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        value = cast("str", json.loads(raw))
+        hidden = _hide_url_text_passwords(value)
+        return raw if hidden == value else _string(hidden)
+
+    return re.sub(r'"(?:[^"\\]|\\.)*"', hide_string, text)
+
+
+def _hide_url_text_passwords(text: str) -> str:
+    """A decoded string with each URL's password hidden."""
     out: list[str] = []
     written = 0
     start = 0
@@ -310,10 +324,7 @@ def _find_password(text: str, start: int) -> tuple[int, int, int]:
     i = start
     while i < len(text):
         c = text[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c in '/?#"' or c <= " ":
+        if c in "/?#" or c <= " ":
             break
         if c == "@":
             at = i

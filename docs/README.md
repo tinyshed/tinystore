@@ -46,6 +46,7 @@ skill: .agents/skills/docs/SKILL.md.
 - [Once](kv/once.md)
 - [Configs](kv/configs.md)
 - [Transactions](kv/transactions.md)
+- [KV and your data](kv/your-data.md)
 
 ## Jobs
 

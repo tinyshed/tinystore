@@ -10,6 +10,7 @@ import { Limiter, type LimiterOptions, limiterOpen, type Rate } from './limiter.
 import { Once, type OnceOptions } from './once.ts'
 import { Quota, quotaOpen } from './quota.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
+import { batchBelongsTo, type Database, databaseBelongsTo, type SqlBatch } from './sql.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf } from './wire/codec.ts'
 import { KvBucket, KvCall, KvCalls, KvEntry, KvPage, KvResults, methods } from './wire/messages.ts'
@@ -41,6 +42,11 @@ interface KindValue {
 }
 
 export interface BucketOptions {
+	/**
+	 * keeps the bucket in a SQL database's file instead of kv.db, so that a
+	 * batch of the database writes its keys with its rows: `bucket.withTx(tx)`
+	 */
+	in?: Database
 	/** the expiry a key gets when it is written without its own */
 	defaultTtl?: Duration
 	/** keeps a key this long from its last read; beside defaultTtl it is refused */
@@ -197,12 +203,16 @@ export class Kv {
 		if (options?.defaultTtl !== undefined && options.sliding !== undefined) {
 			throw new InvalidError(`bucket ${name}: sliding and defaultTtl are one or the other`)
 		}
+		if (options?.in !== undefined && !databaseBelongsTo(options.in, this.#link)) {
+			throw new InvalidError(`bucket ${name}: its SQL database belongs to another store`)
+		}
 		const open = KvBucket.encode({
 			name,
 			defaultTtl: options?.defaultTtl === undefined ? undefined : ms(options.defaultTtl),
 			sliding: options?.sliding === undefined ? undefined : ms(options.sliding),
+			in: options?.in?.name,
 		})
-		return new Bucket(this.#link, name, open, values, [])
+		return new Bucket(this.#link, name, open, values, [], options?.in)
 	}
 
 	/** Counters, an int64 a key read as a number, 0 when absent. */
@@ -571,6 +581,7 @@ export class Bucket<V> {
 	readonly #open: Uint8Array
 	readonly #values: Values<V>
 	readonly #owners: (string | Uint8Array)[]
+	readonly #in: Database | undefined
 
 	constructor(
 		link: Link,
@@ -578,28 +589,62 @@ export class Bucket<V> {
 		open: Uint8Array,
 		values: Values<V>,
 		owners: (string | Uint8Array)[],
+		inDatabase?: Database,
 	) {
 		this.#link = link
 		this.name = name
 		this.#open = open
 		this.#values = values
 		this.#owners = owners
+		this.#in = inDatabase
 	}
 
 	/** The branch below this one that the owners name. */
 	of(...owners: Key[]): Bucket<V> {
-		return new Bucket(this.#link, this.name, this.#open, this.#values, [
-			...this.#owners,
-			...owners.map(ownerText),
-		])
+		return new Bucket(
+			this.#link,
+			this.name,
+			this.#open,
+			this.#values,
+			[...this.#owners, ...owners.map(ownerText)],
+			this.#in,
+		)
 	}
 
 	/**
 	 * The bucket's calls inside a batch or a view, whose promises settle with
 	 * it, or inside a tx, whose reads answer at once and writes wait for it.
+	 * Inside a batch of the SQL database the bucket was opened `in`, its
+	 * set, delete and clear commit with the batch's rows or not at all:
+	 *
+	 *     await db.batch(tx => {
+	 *       tx.exec`insert into users (id, email) values (${id}, ${email})`
+	 *       sessions.withTx(tx).set(token, { user: id })
+	 *     })
 	 */
-	withTx(tx: Batch | Tx): BucketTx<V> {
-		return new BucketTx(tx, this.#open, this.#values, this.#owners)
+	withTx(tx: Batch | Tx | SqlBatch): BucketTx<V> {
+		if (!isSqlBatch(tx)) {
+			return new BucketTx(tx, this.#open, this.#values, this.#owners)
+		}
+		if (
+			this.#in === undefined ||
+			this.#in.name !== tx.database ||
+			!batchBelongsTo(tx, this.#link)
+		) {
+			const lives = this.#in === undefined ? 'kv.db' : `sql ${this.#in.name}`
+			throw new InvalidError(
+				`the bucket ${this.name} lives in ${lives}, not in sql ${tx.database}: ` +
+					"open it with { in: db } to write it in that database's batches",
+			)
+		}
+		return new BucketTx(sqlWrites(tx), this.#open, this.#values, this.#owners)
+	}
+
+	// the bucket's handle, its database opened first when it lives in one, as
+	// the server needs
+	async #handle(connection: Connection): Promise<number> {
+		await this.#in?.handle(connection)
+		return handleOn(connection, methods['kv.open'], this.#open)
 	}
 
 	async #call(
@@ -608,7 +653,7 @@ export class Bucket<V> {
 		idempotence: 'read' | 'write',
 	) {
 		return this.#link.run(idempotence, async (connection: Connection) => {
-			const handle = await handleOn(connection, methods['kv.open'], this.#open)
+			const handle = await this.#handle(connection)
 			const body = KvCall.encode({
 				handle,
 				owners: this.#owners.length > 0 ? this.#owners : undefined,
@@ -717,7 +762,7 @@ export class Bucket<V> {
 		limit?: number
 	}): Promise<Page<Scanned<V>, string | Uint8Array>> {
 		const { items, page } = await this.#link.run('read', async connection => {
-			const handle = await handleOn(connection, methods['kv.open'], this.#open)
+			const handle = await this.#handle(connection)
 			const stream = await connection.session.open(
 				methods['kv.scan'],
 				KvCall.encode({
@@ -822,6 +867,11 @@ export class BucketTx<V> {
 		return this.#record('kv.delete', { key, ...writeFields(options) }, async () => {})
 	}
 
+	/** Removes every key of this branch and of the branches under it. */
+	clear(): Promise<void> {
+		return this.#record('kv.clear', {}, async () => {})
+	}
+
 	take(key: Key): Promise<V | undefined> {
 		return this.#record('kv.take', { key }, async e =>
 			e.found ? this.#values.decode(e.value) : undefined,
@@ -835,6 +885,26 @@ export class BucketTx<V> {
 			throw new InvalidError('a bucket whose values encode asynchronously takes no batch')
 		}
 		return raw
+	}
+}
+
+function isSqlBatch(tx: Batch | Tx | SqlBatch): tx is SqlBatch {
+	return typeof (tx as SqlBatch).writeKey === 'function'
+}
+
+// a SQL batch as a bucket's calls go through it: set, delete and clear, which
+// commit with the batch's rows; a read has no place in a batch of writes
+function sqlWrites(tx: SqlBatch): Recorder {
+	return {
+		record<T>(call: Omit<Recorded, 'settle'>): Promise<T> {
+			if (call.method !== 'kv.set' && call.method !== 'kv.delete' && call.method !== 'kv.clear') {
+				throw new InvalidError(
+					'a SQL batch writes keys with set, delete and clear; read them outside it',
+				)
+			}
+			// a write's promise settles with nothing, so the batch's own promise is its answer
+			return tx.writeKey(call.open, { method: methods[call.method], ...call.call }) as Promise<T>
+		},
 	}
 }
 

@@ -170,10 +170,10 @@ built.
 **One directory, a file per engine, unless the application joins two.**
 `metrics.db`, `records.db`, `jobs.db`, `kv.db`, `blobs/`, and `sql/<name>.db`
 for databases the application names. No engine waits on another's writer, and
-no write is atomic across two files. A jobs store opened `In` a database keeps
-its queues in that database's file, so that a `Batch` commits a job with the
-rows it is about: what shares a file shares its writer, by the application's
-choice and never by default. A guest engine's tables are `_tinystore_<engine>…`
+no write is atomic across two files. A jobs or a kv store opened `In` a
+database keeps its queues or its buckets in that database's file, so that a
+`Batch` commits a job or a key with the rows it is about: what shares a file
+shares its writer, by the application's choice and never by default. A guest engine's tables are `_tinystore_<engine>…`
 with a migration history of their own.
 
 **A guest opens beside the owner, and only SQL.** `Options.Guest` opens a

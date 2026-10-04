@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import typing
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -139,6 +140,7 @@ async def open_database(link: Link, name: str, migrations: Migrations | None) ->
 class Database:
     def __init__(self, link: Link, name: str, open_body: bytes) -> None:
         self._link, self.name, self._open = link, name, open_body
+        _database_links[self] = link
 
     async def handle(self, connection: Connection) -> int:
         return await handle_on(connection, METHODS["sql.open"], self._open)
@@ -226,14 +228,22 @@ class Database:
 
     def batch(self) -> SqlBatch:
         """Statements in one transaction, all or none, sent as the async with block ends; a failure names its call."""
-        return SqlBatch(self, False)
+        batch = SqlBatch(self, False)
+        _batch_links[batch] = self._link
+        return batch
 
     def view(self) -> SqlBatch:
         """Reads from one snapshot, sent as the async with block ends."""
-        return SqlBatch(self, True)
+        batch = SqlBatch(self, True)
+        _batch_links[batch] = self._link
+        return batch
 
     async def run_batch(
-        self, statements: list[dict[str, Any]], read: bool, jobs: list[tuple[bytes, dict[str, Any]]] | None = None
+        self,
+        statements: list[dict[str, Any]],
+        read: bool,
+        jobs: list[tuple[bytes, dict[str, Any]]] | None = None,
+        keys: list[tuple[bytes, dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
         async def attempt(connection: Connection) -> list[dict[str, Any]]:
             handle = await self.handle(connection)
@@ -241,10 +251,28 @@ class Database:
                 {"handle": await handle_on(connection, METHODS["jobs.open"], open_body), "jobs": [job]}
                 for open_body, job in jobs or []
             ]
-            body = SqlStatements.encode(handle=handle, statements=statements, read=read or None, jobs=queued or None)
+            kv = [
+                {"handle": await handle_on(connection, METHODS["kv.open"], open_body), "calls": [operation]}
+                for open_body, operation in keys or []
+            ]
+            body = SqlStatements.encode(
+                handle=handle, statements=statements, read=read or None, jobs=queued or None, kv=kv or None
+            )
             return SqlResults.decode(await connection.session.call(METHODS["sql.batch"], body)).get("results", [])
 
         return await self._link.run("read" if read else "write", attempt)
+
+
+_batch_links: weakref.WeakKeyDictionary[SqlBatch, Link] = weakref.WeakKeyDictionary()
+_database_links: weakref.WeakKeyDictionary[Database, Link] = weakref.WeakKeyDictionary()
+
+
+def batch_belongs_to(batch: SqlBatch, link: Link) -> bool:
+    return _batch_links.get(batch) is link
+
+
+def database_belongs_to(database: Database, link: Link) -> bool:
+    return _database_links.get(database) is link
 
 
 class SqlBatch:
@@ -256,6 +284,7 @@ class SqlBatch:
         """the database the batch runs in, whose queues alone take its jobs"""
         self._calls: list[tuple[dict[str, Any], Any, asyncio.Future[Any]]] = []
         self._jobs: list[tuple[bytes, dict[str, Any], asyncio.Future[None]]] = []
+        self._keys: list[tuple[bytes, dict[str, Any], asyncio.Future[None]]] = []
 
     def enqueue(self, open_body: bytes, job: dict[str, Any]) -> asyncio.Future[None]:
         """Adds a job after the statements, for a queue's with_tx: a program writes queue.with_tx(tx).enqueue(value)."""
@@ -263,6 +292,14 @@ class SqlBatch:
             raise InvalidError("a job in a view, which reads")
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._jobs.append((open_body, job, future))
+        return future
+
+    def write_key(self, open_body: bytes, operation: dict[str, Any]) -> asyncio.Future[None]:
+        """Adds a key's write after the jobs, for a bucket's with_tx: bucket.with_tx(tx).set(key, value)."""
+        if self._read:
+            raise InvalidError("a key in a view, which reads")
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._keys.append((open_body, operation, future))
         return future
 
     def _record(
@@ -298,14 +335,17 @@ class SqlBatch:
         return self
 
     async def __aexit__(self, kind: object, err: object, trace: object) -> None:
-        futures = [future for _, _, future in self._calls] + [future for _, _, future in self._jobs]
+        futures = [future for _, _, future in self._calls] + [future for _, _, future in self._jobs + self._keys]
         if err is not None or not futures:
             for future in futures:
                 future.cancel()
             return
         try:
             results = await self._db.run_batch(
-                [fields for fields, _, _ in self._calls], self._read, [(o, job) for o, job, _ in self._jobs]
+                [fields for fields, _, _ in self._calls],
+                self._read,
+                [(o, job) for o, job, _ in self._jobs],
+                [(o, operation) for o, operation, _ in self._keys],
             )
         except BaseException as failure:
             for future in futures:
@@ -317,5 +357,5 @@ class SqlBatch:
                 future.set_result(settle(of, result))
             except Exception as failure:
                 future.set_exception(failure)
-        for _, _, future in self._jobs:
+        for _, _, future in self._jobs + self._keys:
             future.set_result(None)

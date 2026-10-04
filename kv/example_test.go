@@ -154,35 +154,29 @@ func Example_attemptLimits() {
 	// false
 }
 
-// Failed sign-ins are counted per login and per address, five in fifteen
-// minutes and fifty a day, and checked before the password is hashed, which
-// is the costly part. A correct password clears the login's failures; the
-// address keeps its own.
-func Example_signInFailures() {
+// Sign-in attempts reserve their quota before the password is checked.
+// A correct password clears the login's attempts; the address keeps its own.
+func Example_signInAttempts() {
 	ctx := context.Background()
 	state, clock, done := exampleState()
 	defer done()
-	failures, err := kv.OpenQuota(ctx, state, "signin-failures",
+	attempts, err := kv.OpenQuota(ctx, state, "signin-attempts",
 		kv.Window("burst", 5, 15*time.Minute), kv.Window("day", 50, 24*time.Hour))
 	check(err)
-	byLogin, byAddress := failures.Of("login"), failures.Of("address")
+	byLogin, byAddress := attempts.Of("login"), attempts.Of("address")
 
 	signIn := func(login, address string, correct bool) string {
 		for _, refused := range []struct {
 			quota *kv.Quota
 			key   string
 		}{{byLogin, login}, {byAddress, address}} {
-			usage, getErr := refused.quota.Get(ctx, refused.key)
-			check(getErr)
+			usage, allowErr := refused.quota.Allow(ctx, refused.key)
+			check(allowErr)
 			if !usage.OK {
 				return fmt.Sprintf("429, retry after %s", usage.RetryAfter)
 			}
 		}
 		if !correct { // the password was hashed and did not match
-			_, err := byLogin.Allow(ctx, login)
-			check(err)
-			_, err = byAddress.Allow(ctx, address)
-			check(err)
 			return "401"
 		}
 		check(byLogin.Delete(ctx, login))

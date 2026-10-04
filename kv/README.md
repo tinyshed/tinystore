@@ -149,6 +149,13 @@ receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, 
   finds the store's sentinel in it. A bucket name is `[a-z0-9][a-z0-9_-]{0,63}`
   and keeps its kind: a name holding counters does not open for values.
 
+- **Keys can commit with SQL rows.** `Options.In` keeps this store's tables
+  in that database, under `_tinystore_kv…`. A batch adds `Written`,
+  `Deleted` or `Cleared` changes to commit its keys with its rows.
+  Preparing a change takes free memory without waiting and holds it until
+  the batch ends. Memory that is not free is `ErrLimit`; the whole batch
+  writes nothing. A batch owns one write slot regardless of its key count.
+
 ## Config
 
 - **Layers in the order given, each over the one before**: a `Defaults`, a

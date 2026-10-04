@@ -429,7 +429,9 @@ def _shape(of: type) -> tuple[dict[str, _Field], dict[str, Any]]:
     return {path: _Field(value, False, False, None) for path, value in _leaves_of(defaults)}, defaults
 
 
-def _dataclass_shape(of: type, given: Any, parent: str) -> tuple[dict[str, _Field], dict[str, Any]]:
+def _dataclass_shape(
+    of: type, given: Any, parent: str, inherited: _Mark | None = None
+) -> tuple[dict[str, _Field], dict[str, Any]]:
     """A dataclass's fields under parent, their defaults those of given when there is one."""
     fields: dict[str, _Field] = {}
     tree: dict[str, Any] = {}
@@ -438,12 +440,16 @@ def _dataclass_shape(of: type, given: Any, parent: str) -> tuple[dict[str, _Fiel
         path = f"{parent}.{f.name}" if parent else f.name
         kind = hints.get(f.name, Any)
         default = _default_of(f) if given is dataclasses.MISSING else getattr(given, f.name)
+        mark = f.metadata.get(_MARK) or _Mark(secret=False, variable=None)
+        if inherited is not None:
+            mark = _Mark(
+                secret=inherited.secret or mark.secret, variable=mark.variable, fixed=inherited.fixed or mark.fixed
+            )
         if dataclasses.is_dataclass(kind) and isinstance(kind, type):
             inner = default if isinstance(default, kind) else dataclasses.MISSING
-            inner_fields, tree[f.name] = _dataclass_shape(kind, inner, path)
+            inner_fields, tree[f.name] = _dataclass_shape(kind, inner, path, mark)
             fields |= inner_fields
             continue
-        mark = f.metadata.get(_MARK) or _Mark(secret=False, variable=None)
         if default is dataclasses.MISSING:
             fields[path] = _Field(_sample(kind), mark.secret, True, mark.variable, mark.fixed)
             continue

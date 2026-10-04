@@ -167,13 +167,19 @@ func (p *maintenancePass) flush(ctx context.Context) error {
 // the oldest sample plus its keep
 const expiryDueQuery = `
 	select series_id, keep from (
-		select series_id, keep, next_gc_ts + ? as due from series_state
-		where failed_at is null and next_gc_ts is not null and keep is null and next_gc_ts < ?
+		select series_id, keep, due from (
+			select series_id, keep, next_gc_ts + ?1 as due from series_state
+			where failed_at is null and next_gc_ts is not null and keep is null and next_gc_ts < ?2
+			order by next_gc_ts, series_id limit cast(?4 as integer)
+		)
 		union all
-		select series_id, keep, next_gc_ts + keep as due from series_state
-		where failed_at is null and next_gc_ts is not null and keep is not null and next_gc_ts + keep < ?
+		select series_id, keep, due from (
+			select series_id, keep, next_gc_ts + keep as due from series_state
+			where failed_at is null and next_gc_ts is not null and keep is not null and next_gc_ts + keep < ?3
+			order by next_gc_ts + keep, series_id limit cast(?4 as integer)
+		)
 	)
-	order by due, series_id limit cast(? as integer)`
+	order by due, series_id limit cast(?4 as integer)`
 
 // dueSeries is a series whose oldest sample is behind its cutoff.
 type dueSeries struct {

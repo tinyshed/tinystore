@@ -178,7 +178,7 @@ const hostEngine = "host"
 // checkHostFiles refuses a name outside the store's directory, and one an
 // engine's file or another name already takes
 func checkHostFiles(snapshot tinystore.Snapshot, names []string) error {
-	taken := map[string]bool{}
+	taken := map[string]bool{manifestName: true}
 	for _, file := range snapshot.Files {
 		taken[file.Name] = true
 	}

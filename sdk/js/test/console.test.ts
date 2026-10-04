@@ -9,6 +9,7 @@ import { fromEnv } from '../src/config.ts'
 import {
 	type ConsoleLine,
 	type ConsoleTime,
+	hideUrlPasswords,
 	jsonLine,
 	prettyLine,
 	redactor,
@@ -16,6 +17,24 @@ import {
 	words,
 } from '../src/console.ts'
 import { encodeFields, logger, newLogger } from '../src/logger.ts'
+
+test('a URL password is hidden through JSON escapes without changing other numbers', () => {
+	const quote = String.fromCharCode(34)
+	const slash = String.fromCharCode(92)
+	const uri = 'postgres://ann:hunter2@db/app'
+	const escaped = uri.replaceAll('/', slash + '/')
+	const unicode = uri
+		.replaceAll(':', slash + 'u003a')
+		.replaceAll('/', slash + 'u002f')
+		.replaceAll('@', slash + 'u0040')
+	for (const value of [escaped, unicode]) {
+		const json = quote + value + quote
+		expect(JSON.parse(hideUrlPasswords(json))).toBe('postgres://ann:[redacted]@db/app')
+		const nested = '{"source":' + json + ',"n":9007199254740993}'
+		expect(hideUrlPasswords(nested)).not.toContain('hunter2')
+		expect(hideUrlPasswords(nested)).toContain('9007199254740993')
+	}
+})
 
 interface Vector {
 	name: string

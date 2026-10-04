@@ -35,6 +35,42 @@ func expectUsage(t *testing.T, got QuotaUsage, err error, ok bool, left int64, w
 
 // one Allow counts in every window or in none: a window out of room refuses
 // the use, nothing is counted in the others, and the wait is until it resets
+func TestQuotaAdmissionBoundsParallelPasswordChecks(t *testing.T) {
+	state := openTestState(t, t.TempDir())
+	attempts := openTestQuota(t, state, "signin-attempts",
+		Window("burst", 5, 15*time.Minute), Window("day", 50, 24*time.Hour))
+	login, address := attempts.Of("login"), attempts.Of("address")
+	start := make(chan struct{})
+	var done sync.WaitGroup
+	var checked atomic.Int64
+	for range 20 {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			<-start
+			for _, check := range []struct {
+				quota *Quota
+				key   string
+			}{{login, "ann"}, {address, "192.0.2.1"}} {
+				usage, err := check.quota.Allow(t.Context(), check.key)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !usage.OK {
+					return
+				}
+			}
+			checked.Add(1)
+		}()
+	}
+	close(start)
+	done.Wait()
+	if checked.Load() != 5 {
+		t.Fatalf("20 attempts ran %d password checks, want 5", checked.Load())
+	}
+}
+
 func TestAQuotaCountsInEveryWindowOrInNone(t *testing.T) {
 	state := openTestState(t, t.TempDir())
 	ai := openTestQuota(t, state, "ai", Window("session", 3, 5*time.Hour), Window("weekly", 5, 7*24*time.Hour))

@@ -28,6 +28,7 @@ from .config import Config, FromEnv
 from .errors import ConflictError, CorruptError, InvalidError, OutcomeUnknownError
 from .limiter import Limiter, limiter_open
 from .quota import Quota, quota_open
+from .sql import batch_belongs_to, database_belongs_to
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 
     from ._session import Stream
     from ._wire.codec import Key, Raw
+    from .sql import Database, SqlBatch
 
 _MISSING: Any = object()
 _INT64 = (-(1 << 63), (1 << 63) - 1)
@@ -178,7 +180,13 @@ class Kv:
 
     @overload
     def bucket(
-        self, name: str, /, *, default_ttl: Duration | None = None, sliding: Duration | None = None
+        self,
+        name: str,
+        /,
+        *,
+        default_ttl: Duration | None = None,
+        sliding: Duration | None = None,
+        in_: Database | None = None,
     ) -> Bucket[Any]: ...
     @overload
     def bucket[V](
@@ -189,6 +197,7 @@ class Kv:
         *,
         default_ttl: Duration | None = None,
         sliding: Duration | None = None,
+        in_: Database | None = None,
     ) -> Bucket[V]: ...
     @overload
     def bucket(
@@ -199,6 +208,7 @@ class Kv:
         *,
         default_ttl: Duration | None = None,
         sliding: Duration | None = None,
+        in_: Database | None = None,
     ) -> Bucket[None]: ...
     def bucket(
         self,
@@ -208,17 +218,27 @@ class Kv:
         *,
         default_ttl: Duration | None = None,
         sliding: Duration | None = None,
+        in_: Database | None = None,
     ) -> Bucket[Any]:
-        """A bucket of values of one type: a type of the table above, or any JSON can hold."""
+        """A bucket of values of one type: a type of the table above, or any JSON can hold.
+
+        in_ keeps the bucket in a SQL database's file instead of kv.db, so that
+        a batch of the database writes its keys with its rows::
+
+            sessions = store.kv.bucket("sessions", Session, in_=db)
+        """
         check_name(name, "bucket")
         if default_ttl is not None and sliding is not None:
             raise InvalidError(f"bucket {name}: sliding and default_ttl are one or the other")
+        if in_ is not None and not database_belongs_to(in_, self._link):
+            raise InvalidError(f"bucket {name}: its SQL database belongs to another store")
         open_body = KvBucket.encode(
             name=name,
             default_ttl=None if default_ttl is None else ms(default_ttl),
             sliding=None if sliding is None else ms(sliding),
+            in_=None if in_ is None else in_.name,
         )
-        return Bucket(self._link, name, open_body, Any if of is _MISSING else of, ())
+        return Bucket(self._link, name, open_body, Any if of is _MISSING else of, (), in_)
 
     def counters(
         self,
@@ -474,26 +494,59 @@ def _place(open_body: bytes, fields: dict[str, Any]) -> str:
 class Bucket[V]:
     """A bucket's values under one branch of owners: sessions.of(user.id).get(token)."""
 
-    def __init__(self, link: Link, name: str, open_body: bytes, of: Any, owners: tuple[str | bytes, ...]) -> None:
-        self._link, self.name, self.open_body, self.value_type, self.owners = (
+    def __init__(
+        self,
+        link: Link,
+        name: str,
+        open_body: bytes,
+        of: Any,
+        owners: tuple[str | bytes, ...],
+        in_: Database | None = None,
+    ) -> None:
+        self._link, self.name, self.open_body, self.value_type, self.owners, self._in = (
             link,
             name,
             open_body,
             of,
             owners,
+            in_,
         )
 
     def of(self, *owners: Key) -> Bucket[V]:
         """The branch below this one that the owners name."""
-        return Bucket(self._link, self.name, self.open_body, self.value_type, (*self.owners, *map(owner_text, owners)))
+        owned = (*self.owners, *map(owner_text, owners))
+        return Bucket(self._link, self.name, self.open_body, self.value_type, owned, self._in)
 
-    def with_tx(self, tx: Batch | Tx) -> BucketTx[V]:
-        """This bucket's calls inside a batch or a view, or inside a tx, whose reads answer at once."""
-        return BucketTx(self, tx)
+    def with_tx(self, tx: Batch | Tx | SqlBatch) -> BucketTx[V]:
+        """This bucket's calls inside a batch or a view, or inside a tx, whose reads answer at once.
+
+        Inside a batch of the SQL database the bucket was opened in_, its set,
+        delete and clear commit with the batch's rows or not at all::
+
+            async with db.batch() as tx:
+                tx.exec("insert into users (id, email) values (?, ?)", user_id, email)
+                sessions.with_tx(tx).set(token, Session(user=user_id))
+        """
+        if not hasattr(tx, "write_key"):
+            return BucketTx(self, typing.cast("Batch | Tx", tx))
+        batch = typing.cast("SqlBatch", tx)
+        if self._in is None or self._in.name != batch.database or not batch_belongs_to(batch, self._link):
+            lives = "kv.db" if self._in is None else f"sql {self._in.name}"
+            raise InvalidError(
+                f"the bucket {self.name} lives in {lives}, not in sql {batch.database}: "
+                "open it with in_=db to write it in that database's batches"
+            )
+        return BucketTx(self, _SqlWrites(batch))
+
+    async def _handle(self, connection: Connection) -> int:
+        """The bucket's handle, its database opened first when it lives in one, as the server needs."""
+        if self._in is not None:
+            await self._in.handle(connection)
+        return await handle_on(connection, METHODS["kv.open"], self.open_body)
 
     async def _call(self, method: str, idempotence: Literal["read", "write"], **fields: Any) -> dict[str, Any]:
         async def attempt(connection: Connection) -> dict[str, Any]:
-            handle = await handle_on(connection, METHODS["kv.open"], self.open_body)
+            handle = await self._handle(connection)
             body = KvCall.encode(handle=handle, owners=list(self.owners) or None, **fields)
             return KvEntry.decode(await connection.session.call(METHODS[method], body))
 
@@ -592,7 +645,7 @@ class Bucket[V]:
         """One page of this branch's own keys in the byte order of their text, and the key the next begins after."""
 
         async def attempt(connection: Connection) -> tuple[list[bytes], bytes]:
-            handle = await handle_on(connection, METHODS["kv.open"], self.open_body)
+            handle = await self._handle(connection)
             body = KvCall.encode(handle=handle, owners=list(self.owners) or None, after=after, limit=limit)
             got = await download(connection, METHODS["kv.scan"], body)
             return got.items, got.trailer
@@ -616,7 +669,7 @@ class Bucket[V]:
 class BucketTx[V]:
     """A bucket's calls inside a batch, a view or a tx; each returns a future."""
 
-    def __init__(self, bucket: Bucket[V], tx: Batch | Tx) -> None:
+    def __init__(self, bucket: Bucket[V], tx: Batch | Tx | _SqlWrites) -> None:
         self._bucket, self._tx = bucket, tx
 
     def of(self, *owners: Key) -> BucketTx[V]:
@@ -655,9 +708,27 @@ class BucketTx[V]:
     def delete(self, key: Key, *, if_version: str | None = None) -> asyncio.Future[None]:
         return self._record("kv.delete", lambda _: None, key=key, **_write_fields(None, None, if_version))
 
+    def clear(self) -> asyncio.Future[None]:
+        """Removes every key of this branch and of the branches under it."""
+        return self._record("kv.clear", lambda _: None)
+
     def take(self, key: Key) -> asyncio.Future[V | None]:
         of = self._bucket.value_type
         return self._record("kv.take", lambda e: _decode(of, e.get("value")) if e.get("found") else None, key=key)
+
+
+class _SqlWrites:
+    """A SQL batch as a bucket's calls go through it: set, delete and clear, which commit with its rows."""
+
+    def __init__(self, batch: SqlBatch) -> None:
+        self._batch = batch
+
+    def record(
+        self, method: str, open_body: bytes, fields: dict[str, Any], decode: Callable[[dict[str, Any]], Any]
+    ) -> asyncio.Future[Any]:
+        if method not in ("kv.set", "kv.delete", "kv.clear"):
+            raise InvalidError("a SQL batch writes keys with set, delete and clear; read them outside it")
+        return self._batch.write_key(open_body, {"method": METHODS[method], **fields})
 
 
 class Counters:

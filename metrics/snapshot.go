@@ -108,7 +108,7 @@ func (s *Store) fetchBatched(
 		return nil, err
 	}
 
-	groups, err := fetchGroupRows(ctx, snapshot, matched)
+	groups, err := fetchGroupRows(ctx, snapshot, seriesNeedingBlocks(snapshot, matched, heads))
 	if err != nil {
 		return nil, err
 	}
@@ -137,26 +137,51 @@ func (s *Store) fetchEach(
 ) ([]seriesRead, error) {
 	reads := make([]seriesRead, 0, len(matched))
 	for _, series := range matched {
-		window := snapshot.window(series.labels)
-		read := snapshot.narrowedTo(window)
-		rows, err := read.groupsInRange(ctx, series.id)
+		read, err := s.fetchSeries(ctx, snapshot, series)
 		if err != nil {
 			return nil, err
 		}
-		blocks, err := s.decodeGroupRows(ctx, read, series.id, rows)
-		if err != nil {
-			return nil, err
-		}
-		head, err := s.fetchHead(ctx, read.tx, series.id, read.from, read.to, read.budget)
-		if err != nil {
-			return nil, err
-		}
-		if err = read.chargeHead(&head); err != nil {
-			return nil, err
-		}
-		reads = append(reads, seriesRead{series: series, window: window, blocks: blocks, head: head})
+		reads = append(reads, read)
 	}
 	return reads, nil
+}
+
+func (s *Store) fetchSeries(ctx context.Context, snapshot snapshotRead, series registeredSeries) (seriesRead, error) {
+	window := snapshot.window(series.labels)
+	read := snapshot.narrowedTo(window)
+	result := seriesRead{series: series, window: window}
+	var err error
+	result.head, err = s.fetchHead(ctx, read.tx, series.id, read.from, read.to, read.budget)
+	if err != nil {
+		return result, err
+	}
+	if err = read.chargeHead(&result.head); err != nil {
+		return result, err
+	}
+	if read.latest && result.head.count > 0 {
+		return result, nil
+	}
+	rows, err := read.groupsInRange(ctx, series.id)
+	if err != nil {
+		return result, err
+	}
+	result.blocks, err = s.decodeGroupRows(ctx, read, series.id, rows)
+	return result, err
+}
+
+// Every block precedes the head. An overlapping head either holds the newest
+// sample, or starts before From and leaves no older block inside the range.
+func seriesNeedingBlocks(read snapshotRead, matched []registeredSeries, heads []headSnapshot) []registeredSeries {
+	if !read.latest {
+		return matched
+	}
+	selected := make([]registeredSeries, 0, len(matched))
+	for i, series := range matched {
+		if heads[i].count == 0 {
+			selected = append(selected, series)
+		}
+	}
+	return selected
 }
 
 // window is one series' window: its range from its cutoff at now, and an
