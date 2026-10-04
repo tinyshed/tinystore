@@ -1,35 +1,67 @@
-// Command report prints what task size measured: the probe's target, its size
-// and what the import added over the baseline.
+// Command report prints what task size measured: each probe's target, its
+// size and what its imports added over the baseline, and fails when the
+// linker kept the canary's methods, which a reflect.Value.MethodByName with a
+// name it cannot see makes it keep.
 package main
 
 import (
+	"bytes"
+	"context"
 	"debug/buildinfo"
 	"fmt"
 	"os"
+	"os/exec"
 )
 
 const (
-	probePath    = "bin/sizeprobe"
 	baselinePath = "bin/sizeprobe-baseline"
+	symbolsPath  = "bin/sizeprobe-symbols" // the probe, its symbols kept for go tool nm
+	canary       = "linkaudit.Canary.Unreached"
 )
 
-func main() {
-	target, err := sameTarget(probePath, baselinePath)
-	if err != nil {
-		fail(err)
-	}
+// probes are what task size builds, each beside the baseline
+var probes = []struct{ path, what string }{
+	{"bin/sizeprobe", "every engine"},
+	{"bin/sizeprobe-sql", "one SQL database"},
+	{"bin/sizeprobe-search", "one SQL database with FTS5 and R*Tree"},
+	{"bin/sizeprobe-console", "the logger without the store"},
+}
 
-	probe, err := os.Stat(probePath)
-	if err != nil {
-		fail(err)
-	}
+func main() {
 	baseline, err := os.Stat(baselinePath)
 	if err != nil {
 		fail(err)
 	}
+	for _, probe := range probes {
+		target, targetErr := sameTarget(probe.path, baselinePath)
+		if targetErr != nil {
+			fail(targetErr)
+		}
+		built, statErr := os.Stat(probe.path)
+		if statErr != nil {
+			fail(statErr)
+		}
+		added := built.Size() - baseline.Size()
+		fmt.Printf("%s probe of %s: %d KiB, of which the import added %d KiB\n",
+			target, probe.what, built.Size()/1024, added/1024)
+	}
+	if err = checkCanary(); err != nil {
+		fail(err)
+	}
+	fmt.Println("method pruning: the canary's methods are gone")
+}
 
-	added := probe.Size() - baseline.Size()
-	fmt.Printf("%s probe: %d KiB, of which the import added %d KiB\n", target, probe.Size()/1024, added/1024)
+// checkCanary fails when the probe's symbols still hold the canary's method
+func checkCanary() error {
+	symbols, err := exec.CommandContext(context.Background(), "go", "tool", "nm", symbolsPath).Output()
+	if err != nil {
+		return fmt.Errorf("go tool nm %s: %w", symbolsPath, err)
+	}
+	if bytes.Contains(symbols, []byte(canary)) {
+		return fmt.Errorf("the probe holds %s: something links reflect.Value.MethodByName with a name "+
+			"the linker cannot see, which keeps every exported method of every program importing TinyStore", canary)
+	}
+	return nil
 }
 
 // sameTarget names the platform both binaries were built for. The promise is

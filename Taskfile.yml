@@ -92,7 +92,12 @@ tasks:
     cmds:
       - mkdir -p {{.BIN}}
       - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.PROBE}} ./internal/sizeprobe'
+      - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.PROBE}}-sql ./internal/sizeprobe/sql'
+      - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.PROBE}}-search ./internal/sizeprobe/search'
+      - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.PROBE}}-console ./internal/sizeprobe/console'
       - '{{.TARGET}} go build -trimpath -ldflags="-s -w" -o {{.BASELINE}} ./internal/sizeprobe/baseline'
+      # the canary is looked for in symbols, which -s strips
+      - '{{.TARGET}} go build -trimpath -o {{.PROBE}}-symbols ./internal/sizeprobe'
       - go run ./internal/sizeprobe/report
 
   lint:

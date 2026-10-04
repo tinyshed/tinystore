@@ -455,7 +455,13 @@ threshold to game; the point is that growth is visible and deliberate.
 **Nothing in the module calls `reflect.Value.MethodByName` with a non-constant
 name.** Doing so switches off the linker's method pruning for the whole program
 that imported us, measured at 3.4 MB on a program of Dashbin's size — a cost we
-would be charging to somebody else's binary.
+would be charging to somebody else's binary. `internal/linkaudit` is the
+canary: `task size` fails when the probe still holds a method nothing calls.
+
+**A program pays only for what it links.** SQLite's FTS5 and R*Tree are
+imports of their own, `sqldb/fts5` and `sqldb/rtree`, and the logger without
+the store is `records/console`, which links neither SQLite nor zstd. `task
+size` reports each beside the whole probe.
 
 ## Editing rules
 

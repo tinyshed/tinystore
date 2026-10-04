@@ -15,6 +15,7 @@ import (
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/blobs"
 	"github.com/tinyshed/tinystore/codec"
+	"github.com/tinyshed/tinystore/internal/linkaudit"
 	"github.com/tinyshed/tinystore/jobs"
 	"github.com/tinyshed/tinystore/kv"
 	"github.com/tinyshed/tinystore/metrics"
@@ -39,7 +40,7 @@ func main() {
 	if _, err = blocks.Decode(head, payload); err != nil {
 		panic(err)
 	}
-	fmt.Println(len(payload))
+	fmt.Println(len(payload), linkaudit.Canary{N: 1})
 	directory, err := os.MkdirTemp("", "tinystore-size-")
 	if err != nil {
 		panic(err)

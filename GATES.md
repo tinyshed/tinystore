@@ -8,6 +8,7 @@ module defines.
 
 ## The repository
 
+- nothing switches off the linker's method pruning — the canary step of `task size`, over `internal/linkaudit`
 - no cgo — `CGO_ENABLED=0` in the build, on all three CI platforms
 - the module carries only the engine — `TestTheModuleCarriesOnlyTheEngine`, over its own go.mod
 - importing this stays cheap — `task size` links a cgo-free linux/amd64 probe and reports what it cost
