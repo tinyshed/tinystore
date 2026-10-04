@@ -214,9 +214,10 @@ jobs:
             if [ "$package" != "$sdk" ]; then platforms+=("$package"); fi
           done
           # Until a release that is not a pre-release exists, latest follows the
-          # newest pre-release, or a plain `npm install` keeps the first one.
+          # newest pre-release too, or a plain `npm install` keeps the first one.
           stable=$(npm view @tinyshed/tinystore versions --json 2>/dev/null | node -p 'const v = JSON.parse(require("fs").readFileSync(0) || "[]"); [].concat(v).some(x => !x.includes("-"))')
-          if [ "$DIST_TAG" = next ] && [ "$stable" != true ]; then DIST_TAG=latest; fi
+          tags=("$DIST_TAG")
+          if [ "$DIST_TAG" = next ] && [ "$stable" != true ]; then tags+=(latest); fi
           for package in "${platforms[@]}" "$sdk"; do
             named=$(tar -xzOf "$package" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')
             if npm view "$named" version >/dev/null 2>&1; then
@@ -224,7 +225,7 @@ jobs:
             else
               npm publish "$package" --access public --provenance --tag "$DIST_TAG"
             fi
-            npm dist-tag add "$named" "$DIST_TAG"
+            for tag in "${tags[@]}"; do npm dist-tag add "$named" "$tag"; done
           done
 
   pypi:
