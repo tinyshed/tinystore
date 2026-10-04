@@ -475,7 +475,9 @@ func TestAnIdleReaderClosesAndTheNextReadOpensIt(t *testing.T) {
 	if idle := file.IdleReaders(); idle != 4 {
 		t.Fatalf("%d readers idle after a burst of four", idle)
 	}
-	for deadline := time.Now().Add(5 * time.Second); file.IdleReaders() > 1 && time.Now().Before(deadline); {
+	// a sweep takes readers off the idle list before it closes them
+	unused := func() bool { return file.IdleReaders() == 1 && file.reader.Stats().OpenConnections == 1 }
+	for deadline := time.Now().Add(5 * time.Second); !unused() && time.Now().Before(deadline); {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if idle, open := file.IdleReaders(), file.reader.Stats().OpenConnections; idle != 1 || open != 1 {
