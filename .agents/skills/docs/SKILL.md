@@ -34,13 +34,13 @@ greyed out. To add a page:
    `/docs/kv/quotas`, and an engine's overview `docs/kv/README.md` becomes
    `/docs/kv`.
 
-| Section                                | Files                             | What its pages cover                                                                                                                  |
-|----------------------------------------|-----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Start here                             | `docs/*.md`                       | what TinyStore is, a first program, how Go, Bun and Python connect to a store, a tour of every engine                                 |
-| SQL, KV, Jobs, Blobs, Records, Metrics | `docs/<engine>/`                  | `README.md` is the overview: what the engine is for, a short tour, and links to its other pages; then one page per feature            |
-| Running it                             | `docs/running/`                   | the sidecar, a remote server, the command line, AI agents, backups, testing, upgrading                                                |
-| How it works                           | `docs/concepts/`                  | durability, concurrency, time, memory and limits, errors, the files on disk: why the store behaves the way it does                    |
-| Reference                              | `docs/reference/`, `docs/wire.md` | tables to look things up: limits and defaults, links to the API references, and the wire protocol last, for people who write a client |
+| Section                                | Files                             | What its pages cover                                                                                                        |
+|----------------------------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| Start here                             | `docs/*.md`                       | what TinyStore is, a first program, how Go, Bun and Python connect to a store, a tour of every engine                       |
+| SQL, KV, Jobs, Blobs, Records, Metrics | `docs/<engine>/`                  | `README.md` is the overview: what the engine is for, a short tour, and links to its other pages; then one page per feature  |
+| Running it                             | `docs/running/`                   | the sidecar, a remote server, the command line, AI agents, backups, testing, upgrading                                      |
+| How it works                           | `docs/concepts/`                  | durability, concurrency, time, memory and limits, errors, the files on disk: why the store behaves the way it does          |
+| Reference                              | `docs/reference/`, `docs/wire.md` | tables to look things up: limits and defaults, the API reference, and the wire protocol last, for people who write a client |
 
 A feature gets its own page if a reader would search for it by name, such as
 Sessions, Quotas, Once or Steps. If a page needs more than six sections, split
@@ -211,6 +211,15 @@ ai, err := kv.OpenQuota(ctx, state, "ai",
 - **Run the code if you can.** A complete program on a page, like the one in
   Getting started, should be one you have run in all three languages.
 
+## The API pages
+
+`docs/reference/api.md` and `docs/reference/<language>/<engine>.md` are
+generated from the source by `task reference`, and the tests fail when they
+are stale. Never edit them: an API page says what the doc comments say, so
+fix a comment in the code and run `task reference`. A new engine, or a new
+module of one, is added to `web/src/lib/content/api.ts` and to `sources` in
+`reference.ts`. `web/AGENTS.md` says how each language is read.
+
 ## Written for agents too
 
 Agents read a page through `llms.txt`, `llms-full.txt` or the page's `.md`
@@ -330,4 +339,5 @@ git grep -n -i -E '\b(simply|just|easy|easily|powerful|seamless)\b' -- docs/
 - [ ] nothing that isn't built is described as working
 - [ ] the page's item in `docs/README.md` is a link
 - [ ] every sentence reads well the first time
+- [ ] `task reference` changes nothing, after a change to a public name or its comment
 - [ ] `task web` passes

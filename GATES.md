@@ -444,7 +444,8 @@ module defines.
 
 ## The docs site
 
-- a link in the docs that leads nowhere fails the site's build — `that leads nowhere is a problem` in `web/src/lib/content/links.test.ts`, and the prerender `task web` runs
+- a link in the docs that leads nowhere fails the site's build — `that leads nowhere is a problem` in `web/src/lib/content/links.test.ts`, `resolves and checks the links inside a table` in `web/src/lib/content/markdown.test.ts`, and the prerender `task web` runs
+- the API pages are what the Go, Bun and Python source says — `are what task reference writes from the source` in `web/src/lib/content/reference.test.ts`
 - every markdown table is aligned — `every table of the repository's markdown is aligned: task tables aligns them` in `web/src/lib/content/tables.test.ts`
 - a heading keeps the anchor GitHub gives it — `gives headings the ids GitHub gives them, a repeated one numbered` in `web/src/lib/content/outline.test.ts`
 - fences in three languages are one block, untitled ones of a language two — `a run in three languages is one block`, `two untitled fences of one language stay two blocks` in `web/src/lib/content/code.test.ts`

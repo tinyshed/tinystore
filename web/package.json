@@ -19,6 +19,7 @@
 		"lint": "biome lint .",
 		"test": "bun test",
 		"readme": "bun src/lib/content/readme.ts",
+		"reference": "bun src/lib/content/reference.ts",
 		"tables": "bun src/lib/content/tables.ts"
 	},
 	"dependencies": {

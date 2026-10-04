@@ -1,3 +1,4 @@
+import { type ApiLanguage, apiLanguages, apiPageOf } from './api'
 import type { Site } from './site'
 
 /**
@@ -7,8 +8,10 @@ import type { Site } from './site'
 export function llmsIndex(site: Site): string {
 	const lines = ['# TinyStore', '', `> ${site.summary}`, '']
 	lines.push(
-		'Every page below is also one file: llms-full.txt. Add .md to any page of the site',
-		'for its markdown.',
+		'Every guide below is also one file: llms-full.txt. The API pages, every public name',
+		'with its signature, are one file per language instead: ' +
+			apiLanguages.map(language => `${site.origin}/llms-${language}.txt`).join(', ') +
+			'. Add .md to any page of the site for its markdown.',
 		'',
 	)
 
@@ -32,10 +35,29 @@ export function llmsIndex(site: Site): string {
 	return `${lines.join('\n').trimEnd()}\n`
 }
 
-/** Every page's markdown in the index's order, each after the address it is read at. */
+/**
+ * Every guide's markdown in the index's order, each after the address it is
+ * read at. The API pages are left to llmsApi: three languages' signatures
+ * would double the file, and an agent needs one of them.
+ */
 export function llmsFull(site: Site): string {
+	return joined(
+		site,
+		site.pages.filter(page => page.hidden !== true && apiPageOf(page.file) === undefined),
+	)
+}
+
+/** One language's API pages as one file, llms-<language>.txt. */
+export function llmsApi(site: Site, language: ApiLanguage): string {
+	return joined(
+		site,
+		site.pages.filter(page => apiPageOf(page.file)?.language === language),
+	)
+}
+
+function joined(site: Site, pages: Site['pages']): string {
 	const parts = [`# TinyStore\n\n> ${site.summary}\n`]
-	for (const page of site.pages.filter(page => page.hidden !== true)) {
+	for (const page of pages) {
 		parts.push(`---\n\nSource: ${site.origin}${page.url}\n\n${page.markdown.trim()}\n`)
 	}
 	return parts.join('\n')

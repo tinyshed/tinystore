@@ -5,7 +5,8 @@
 	import Outline from '$lib/components/Outline.svelte'
 	import Pager from '$lib/components/Pager.svelte'
 	import Seo from '$lib/components/Seo.svelte'
-	import { rebase } from '$lib/href'
+	import { href, rebase } from '$lib/href'
+	import { setLanguage } from '$lib/prefs'
 
 	let { data } = $props()
 
@@ -82,12 +83,38 @@
 			<CopyPage markdown={page.markdown} />
 		</div>
 
-		<div class="prose" {@attach codeBlocks}>
+		{#if page.api !== undefined}
+			<div class="api-switch">
+				<nav class="pills" aria-label="Language">
+					{#each page.api.languages as version (version.key)}
+						<a
+							href={href(version.url)}
+							aria-current={version.key === page.api.language ? 'page' : undefined}
+							onclick={() => setLanguage(version.key)}>{version.label}</a
+						>
+					{/each}
+				</nav>
+				<nav class="pills" aria-label="Engine">
+					{#each page.api.engines as engine (engine.key)}
+						<a
+							href={href(engine.url)}
+							aria-current={engine.key === page.api.engine ? 'page' : undefined}>{engine.label}</a
+						>
+					{/each}
+				</nav>
+			</div>
+		{/if}
+
+		<div class="prose" class:api={page.api !== undefined} {@attach codeBlocks}>
 			{@html rebase(page.html)}
 		</div>
 
 		<p class="meta">
-			<a href={page.editUrl}>Edit this page on GitHub</a>
+			{#if page.api === undefined}
+				<a href={page.editUrl}>Edit this page on GitHub</a>
+			{:else}
+				<span>Generated from the source</span>
+			{/if}
 			{#if updated !== undefined}<span>Updated {updated}</span>{/if}
 		</p>
 
@@ -145,6 +172,39 @@
 		font-weight: 600;
 		line-height: 1.05;
 		letter-spacing: -0.045em;
+	}
+
+	.api-switch {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 10px 16px;
+		margin: 0 0 28px;
+	}
+
+	.pills {
+		display: inline-flex;
+		flex-wrap: wrap;
+		gap: 2px;
+		padding: 3px;
+		background: var(--ts-surface-2);
+		border: 1px solid var(--ts-border-2);
+		border-radius: 10px;
+	}
+
+	.pills a {
+		padding: 6px 12px;
+		color: var(--ts-muted-2);
+		border-radius: 7px;
+		font: 500 14px var(--ts-sans);
+	}
+
+	.pills a:hover {
+		color: var(--ts-text);
+	}
+
+	.pills a[aria-current='page'] {
+		color: var(--ts-text);
+		background: var(--ts-chip);
 	}
 
 	.meta {

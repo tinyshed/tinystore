@@ -467,3 +467,52 @@
 		line-height: 1.7;
 	}
 }
+
+/* An API page: a name per heading and its signature right under it, dense
+   enough to scan, with the copy button over the code instead of a bar. */
+
+.prose.api h2 {
+	margin: 64px 0 14px;
+	padding-bottom: 10px;
+	font: 600 22px / 1.3 var(--ts-mono);
+	letter-spacing: -0.01em;
+}
+
+.prose.api h3 {
+	margin: 34px 0 10px;
+	color: var(--ts-text);
+	font: 500 16px / 1.4 var(--ts-mono);
+	letter-spacing: 0;
+}
+
+.prose.api p,
+.prose.api li {
+	font-size: 16px;
+	line-height: 1.7;
+}
+
+.prose.api .code {
+	position: relative;
+	margin: 0 0 16px;
+	border-radius: 10px;
+}
+
+.prose.api .code-bar {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	min-height: 0;
+	padding: 0;
+	background: none;
+	border: 0;
+}
+
+.prose.api .code-title {
+	display: none;
+}
+
+.prose.api .code pre {
+	padding: 14px 48px 14px 18px;
+	font-size: 13.5px;
+	line-height: 1.65;
+}

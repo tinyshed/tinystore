@@ -3,14 +3,15 @@ import { join } from 'node:path'
 import type { Root } from 'mdast'
 
 import { calloutsFromAlerts } from './alerts'
+import { apiEngines, apiFile, apiLanguages } from './api'
 import { groupFences } from './code'
 import { createHighlight, type Highlight } from './highlight'
 import { landingFile, landingSummary } from './landing'
 import type { Links, Target } from './links'
 import { exportMarkdown, finish, type Problem, parse, toHast } from './markdown'
-import { type Index, indexFile, type NavSection, readIndex, urlOf } from './nav'
+import { type Index, indexFile, type NavSection, readIndex, slugOf, urlOf } from './nav'
 import { outline, type Section, sections } from './outline'
-import { checkout, editUrl, headCommit, lastChanged, sourceUrl } from './repo'
+import { checkout, editUrl, exists, headCommit, lastChanged, sourceUrl } from './repo'
 
 /** What kind of page a section of the index holds, which the search filters by. */
 export type Kind = 'guide' | 'reference' | 'design'
@@ -40,6 +41,8 @@ export interface Page {
 	next?: Neighbour
 	/** built, and listed nowhere: not in the sidebar, the search, the sitemap or llms.txt */
 	hidden?: true
+	/** an API page: in the search and the sitemap, and in the sidebar only through the API index */
+	unlisted?: true
 	/** the page as markdown that stands on its own: links absolute, the site's comments gone */
 	markdown: string
 	sections: Section[]
@@ -72,6 +75,7 @@ interface Entry {
 	section: string
 	kind: Kind
 	hidden?: boolean
+	unlisted?: boolean
 }
 
 let cached: { stamp: string; site: Promise<Site> } | undefined
@@ -98,7 +102,7 @@ async function buildSite(root: string): Promise<Site> {
 	const index = readIndex(indexTree, root, commit)
 
 	const drafts = await Promise.all(
-		entriesOf(index).map(entry =>
+		entriesOf(index, root).map(entry =>
 			draft(entry, entry.file === indexFile ? indexTree : parse(read(root, entry.file)), highlight),
 		),
 	)
@@ -134,8 +138,11 @@ async function buildSite(root: string): Promise<Site> {
 	}
 }
 
-/** The index itself, then every page it links, in its order, then the kitchen sink. */
-function entriesOf(index: Index): Entry[] {
+/**
+ * The index itself, then every page it links, in its order, then the API
+ * pages the index reaches through docs/reference/api.md, then the kitchen sink.
+ */
+function entriesOf(index: Index, root: string): Entry[] {
 	const linked = index.sections.flatMap(section =>
 		section.items.flatMap(item =>
 			item.kind === 'page'
@@ -153,8 +160,29 @@ function entriesOf(index: Index): Entry[] {
 	return [
 		{ file: indexFile, slug: '', section: '', kind: 'guide' },
 		...linked,
+		...apiEntries(root),
 		{ file: kitchenSink, slug: 'kitchen-sink', section: '', kind: 'guide', hidden: true },
 	]
+}
+
+function apiEntries(root: string): Entry[] {
+	return apiFiles().flatMap(file =>
+		exists(root, file) === 'file'
+			? [
+					{
+						file,
+						slug: slugOf(file),
+						section: 'Reference',
+						kind: 'reference' as const,
+						unlisted: true,
+					},
+				]
+			: [],
+	)
+}
+
+function apiFiles(): string[] {
+	return apiEngines.flatMap(engine => apiLanguages.map(language => apiFile(language, engine.slug)))
 }
 
 type Draft = Awaited<ReturnType<typeof draft>>
@@ -212,13 +240,16 @@ function finishPage(
 			markdown: exportMarkdown(page.tree, links, page.file, page.ids, built.origin),
 			sections: page.sections,
 			...(page.hidden === true ? { hidden: true as const } : {}),
+			...(page.unlisted === true ? { unlisted: true as const } : {}),
 		},
 	}
 }
 
 // the index's first page is the index itself, which has no neighbours of its own
 function linkNeighbours(pages: Page[]): void {
-	const listed = pages.filter(page => page.slug !== '' && page.hidden !== true)
+	const listed = pages.filter(
+		page => page.slug !== '' && page.hidden !== true && page.unlisted !== true,
+	)
 	listed.forEach((page, at) => {
 		const before = listed[at - 1]
 		const after = listed[at + 1]
@@ -254,6 +285,7 @@ function stampOf(root: string): string {
 			indexFile,
 			kitchenSink,
 			landingFile,
+			...apiFiles(),
 			...[...index.matchAll(/\]\(([^)#\s]+\.md)/g)].map(m => `docs/${m[1]}`),
 		]
 		return files

@@ -103,7 +103,7 @@ skill: .agents/skills/docs/SKILL.md.
 
 ## Reference
 
-- Go API
+- [API reference](reference/api.md)
 - [Bun and Node API](reference/bun.md)
 - [Python API](reference/python.md)
 - [Limits and defaults](reference/limits.md)

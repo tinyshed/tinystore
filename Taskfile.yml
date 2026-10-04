@@ -217,6 +217,14 @@ tasks:
       - bun install --frozen-lockfile
       - bun run readme
 
+  reference:
+    # the web tests fail when an API page is not what this writes
+    desc: Write the API pages in docs/reference/<language>/ from the Go, Bun and Python source
+    dir: web
+    cmds:
+      - bun install --frozen-lockfile
+      - bun run reference
+
   tidy:
     desc: Tidy every module file CI checks
     cmds:

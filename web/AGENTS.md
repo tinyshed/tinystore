@@ -10,7 +10,8 @@ particular to the site. How a page is written is the `docs` skill.
 
 Built: the landing page, a page for every file `docs/README.md` links, search,
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
-`llms-full.txt`, the sitemap, and the server with its analytics. The docs
+`llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
+the server with its analytics. The docs
 themselves are the design documents until the guides are written; `Metrics`
 under Store is the one guide, and the shape the others follow.
 
@@ -51,6 +52,25 @@ id GitHub gives it; the prerender then follows every link it renders.
 themes' colours into each token, so the page highlights and changes theme with
 no script. Every language of a block is in the HTML; `app.html` names the
 reader's language before the first paint and the stylesheet shows it.
+
+## The API pages are the source's
+
+`docs/reference/<language>/<engine>.md` and their index `docs/reference/api.md`
+are generated: `task reference` writes them, and `bun test` fails when one is
+not what the source says. Edit the doc comments, never the pages.
+
+| Language | Read by                                               | Public is                                     |
+|----------|-------------------------------------------------------|-----------------------------------------------|
+| Go       | `web/reference/go`, `go/doc` and its markdown printer | exported                                      |
+| Bun      | `src/lib/content/reference.ts`, the emitted `.d.ts`   | exported by `index.ts`, or a field of `Store` |
+| Python   | `web/reference/python.py`, `ast` without importing    | in `__all__`, or set on `Store` in `__init__` |
+
+An engine's modules in each language are `sources` in `reference.ts`, its
+name and guide `src/lib/content/api.ts`. The sidebar lists the index alone;
+the pages switch between languages and engines, and `llms-full.txt` leaves
+them to `llms-bun.txt`, `llms-python.txt` and `llms-go.txt`, one per
+language, since an agent needs one of the three. The test needs Go and
+Python 3.12 or later beside Bun, as CI's web job has them.
 
 ## The server
 
@@ -109,6 +129,7 @@ task web:dev      # the site on :5173, reloading as docs/ changes
 task web:serve    # the last build as production serves it, into web/data
 task web:image    # the image: tinystore, the server and the build
 task readme       # the landing page's words, written into the README
+task reference    # the API pages, written from the Go, Bun and Python source
 ```
 
 `SITE_ORIGIN` is the address the canonical links, the sitemap and llms.txt

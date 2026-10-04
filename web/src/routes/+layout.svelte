@@ -9,6 +9,7 @@
 	import MobileMenu from '$lib/components/MobileMenu.svelte'
 	import Search from '$lib/components/Search.svelte'
 	import { unbase } from '$lib/href'
+	import { sidebarPath } from '$lib/nav'
 
 	let { data, children } = $props()
 
@@ -45,6 +46,6 @@
 <MobileMenu
 	bind:open={menu}
 	nav={data.nav}
-	current={path}
+	current={sidebarPath(path)}
 	onsearch={() => (searching = true)}
 />

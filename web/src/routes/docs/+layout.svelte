@@ -3,6 +3,7 @@
 	import { page } from '$app/state'
 	import Sidebar from '$lib/components/Sidebar.svelte'
 	import { unbase } from '$lib/href'
+	import { sidebarPath } from '$lib/nav'
 	import { revealCurrent } from '$lib/reveal'
 
 	let { data, children } = $props()
@@ -14,7 +15,7 @@
 
 <div class="docs">
 	<aside class="sidebar" bind:this={sidebar}>
-		<Sidebar nav={data.nav} current={unbase(page.url.pathname)} />
+		<Sidebar nav={data.nav} current={sidebarPath(unbase(page.url.pathname))} />
 	</aside>
 	{@render children()}
 </div>
