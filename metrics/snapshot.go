@@ -34,6 +34,9 @@ type snapshotRead struct {
 	aggregate     *aggregateSelection
 	// planOnly charges every block to the budget and fetches no payload: a Plan.
 	planOnly bool
+	// latest takes a series' newest head chunk and newest block the range
+	// touches, the block undecoded when its directory holds its last sample.
+	latest bool
 }
 
 // smaller matches keep one query per series, as tinyshed/research's
@@ -61,7 +64,7 @@ func (s *Store) fetchSnapshotSpending(ctx context.Context, query rangeQuery) ([]
 		}
 		snapshot := snapshotRead{
 			tx: tx, from: query.from, to: query.to, budget: &budget,
-			aggregate: query.aggregate, planOnly: query.planOnly,
+			aggregate: query.aggregate, planOnly: query.planOnly, latest: query.latest,
 		}
 		if len(matched) >= batchedSeries {
 			snapshot.deferPayloads = true
@@ -127,6 +130,9 @@ func (s *Store) fetchEach(
 		if err != nil {
 			return nil, err
 		}
+		if err = snapshot.chargeHead(&head); err != nil {
+			return nil, err
+		}
 		reads = append(reads, seriesRead{series: series, blocks: blocks, head: head})
 	}
 	return reads, nil
@@ -179,11 +185,13 @@ func (r snapshotRead) groupsInRange(ctx context.Context, id int64) ([]groupRow, 
 }
 
 // decodeGroupRows checks each directory against its clock and keeps the live
-// blocks that overlap the range.
+// blocks that overlap the range, or for Latest the newest of them.
 func (s *Store) decodeGroupRows(
 	ctx context.Context, snapshot snapshotRead, id int64, rows []groupRow,
 ) ([]storedBlock, error) {
 	var blocks []storedBlock
+	var newest *blockGroup
+	newestSlot := 0
 	for _, row := range rows {
 		clock, err := loadClock(ctx, snapshot.tx, row.clockID, snapshot.budget)
 		if err != nil {
@@ -197,13 +205,21 @@ func (s *Store) decodeGroupRows(
 			if !group.isLive(slot) || block.head.End < snapshot.from || block.head.Start >= snapshot.to {
 				continue
 			}
+			if snapshot.latest {
+				newest, newestSlot = &group, slot
+				continue
+			}
 			if block, err = snapshot.takeBlock(ctx, &group, slot, block); err != nil {
 				return nil, err
 			}
 			blocks = append(blocks, block)
 		}
 	}
-	return blocks, nil
+	if newest == nil {
+		return blocks, nil
+	}
+	block, err := snapshot.takeBlock(ctx, newest, newestSlot, newest.blocks[newestSlot])
+	return []storedBlock{block}, err
 }
 
 // takeBlock charges one block to the budget and, unless the snapshot fetches
@@ -215,7 +231,7 @@ func (r snapshotRead) takeBlock(
 	if r.budget.blocks > r.budget.limits.Blocks {
 		return block, limit(LimitBlocks, r.budget.blocks, r.budget.limits.Blocks)
 	}
-	if r.aggregate != nil && r.aggregate.complete(block, r.to) {
+	if r.summarizes(block) {
 		block.summarized = true
 		r.budget.summarized++
 		return block, nil
@@ -233,6 +249,15 @@ func (r snapshotRead) takeBlock(
 		return block, nil
 	}
 	return block, readPayload(ctx, r.tx, &block)
+}
+
+// summarizes says the read needs only the block's directory: a whole block an
+// aggregate answers from its summary, or the last sample Latest takes.
+func (r snapshotRead) summarizes(block storedBlock) bool {
+	if r.latest {
+		return block.head.End < r.to && block.summary.valid
+	}
+	return r.aggregate != nil && r.aggregate.complete(block, r.to)
 }
 
 const payloadQuery = `select length(body),case when length(body)=? then body else null end from payloads where id=?`

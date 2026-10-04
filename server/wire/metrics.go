@@ -13,6 +13,7 @@ const (
 	MetricsAggregate Method = 0x0603
 	MetricsDrop      Method = 0x0604
 	MetricsExplain   Method = 0x0605
+	MetricsLatest    Method = 0x0606
 )
 
 // MetricsSeries is a series and samples of it: an item of ingest's request and

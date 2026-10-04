@@ -1,8 +1,8 @@
 # Aggregates
 
 An aggregate splits a time range into buckets and computes one value for each
-bucket: a count, a sum, a minimum, a maximum, an average, an increase, a rate
-or a change. Every value is computed exactly and rounded once at the end, and
+bucket: a count, a sum, a minimum, a maximum, an average, an increase, a rate,
+a change, or the first or last sample. Every value is computed exactly and rounded once at the end, and
 counter resets are handled for you.
 
 ## Requests per hour
@@ -58,10 +58,15 @@ samples it counted and how many counter resets it saw.
 | `increase`   | counters | how much the counter grew, resets included |
 | `rate`       | counters | the increase per second of the bucket      |
 | `delta`      | gauges   | the last sample minus the one before it    |
+| `first`      | any      | the first sample, exactly as it was stored |
+| `last`       | any      | the last sample, exactly as it was stored  |
 
 In Go, the operations are `metrics.AggregateCount`, `AggregateSum`,
 `AggregateMin`, `AggregateMax`, `AggregateAvg`, `AggregateIncrease`,
-`AggregateRate` and `AggregateDelta`.
+`AggregateRate`, `AggregateDelta`, `AggregateFirst` and `AggregateLast`.
+
+To get only the newest sample of each series, without buckets, use
+[`latest`](reading.md#the-latest-value).
 
 ## Counter resets
 
@@ -157,7 +162,9 @@ except the given ones, and `by: []` joins every series of the name into one.
 
 Each series is computed exactly first, and then the series are joined, and the
 result is rounded only once. A group's `avg` is the average of all samples of
-its series, not the average of the series' averages.
+its series, not the average of the series' averages. A group's `first` and
+`last` add up the first or last samples of its series: the total length of
+several queues at the end of each bucket, for example.
 
 ## Exact arithmetic
 

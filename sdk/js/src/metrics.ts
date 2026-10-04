@@ -123,10 +123,21 @@ export interface Range {
 /**
  * Each computed exactly and rounded once, a group's too: avg is the mean of
  * every sample, rate a counter's increase a second, delta how far a gauge
- * moved. An increase, a rate or a delta counts each step between samples in
+ * moved, first and last the bucket's first and last samples, which a group
+ * adds up. An increase, a rate or a delta counts each step between samples in
  * the bucket it ends in, so buckets add up to the whole range.
  */
-export type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate' | 'delta'
+export type AggregateOp =
+	| 'count'
+	| 'sum'
+	| 'min'
+	| 'max'
+	| 'avg'
+	| 'increase'
+	| 'rate'
+	| 'delta'
+	| 'first'
+	| 'last'
 
 /**
  * An aggregate's buckets and, to join series, what groups them: by these
@@ -340,8 +351,21 @@ export class Metrics {
 
 	/** Every sample of the series a range matches, exactly, read whole before the first leaves the server. */
 	async read(range: Range): Promise<Series[]> {
+		return this.#series(methods['metrics.read'], range)
+	}
+
+	/**
+	 * The newest sample of each series a range matches, one sample a series.
+	 * The range bounds how old it may be: a series without one in it is left
+	 * out, so a series that stopped reads as absent rather than as its last value.
+	 */
+	async latest(range: Range): Promise<Series[]> {
+		return this.#series(methods['metrics.latest'], range)
+	}
+
+	async #series(method: number, range: Range): Promise<Series[]> {
 		const got = await this.#link.run('read', connection =>
-			download(connection, methods['metrics.read'], MetricsRange.encode(rangeOf(range))),
+			download(connection, method, MetricsRange.encode(rangeOf(range))),
 		)
 		const pieces = got.items.map(item => {
 			const s = MetricsSeries.decode(item)

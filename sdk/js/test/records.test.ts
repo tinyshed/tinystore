@@ -388,6 +388,30 @@ describe('metrics', () => {
 		expect([looked?.buckets[0]?.value, looked?.buckets[0]?.lookback]).toEqual([10, true])
 	})
 
+	test("latest is each series' newest sample, and first and last a bucket's ends", async () => {
+		const now = Date.now()
+		await store.metrics.ingest([
+			{
+				name: 'depth',
+				kind: 'gauge',
+				labels: { queue: 'mail' },
+				samples: [
+					[now - 3000, 4],
+					[now - 1000, 7],
+				],
+			},
+			{ name: 'depth', kind: 'gauge', labels: { queue: 'sms' }, samples: [[now - 600_000, 2]] },
+		])
+		const latest = await store.metrics.latest({ name: 'depth', since: '1m' })
+		expect(latest.map(s => [s.labels.queue, s.times, Array.from(s.values)])).toEqual([
+			['mail', [now - 1000], [7]],
+		])
+		const range = { name: 'depth', match: { queue: 'mail' }, since: '1m', width: '1m' } as const
+		const [first] = await store.metrics.aggregate({ ...range, op: 'first' })
+		const [last] = await store.metrics.aggregate({ ...range, op: 'last' })
+		expect([first?.buckets[0]?.value, last?.buckets[0]?.value]).toEqual([4, 7])
+	})
+
 	test('instruments are ingested at a flush, the same labels in any order one series', async () => {
 		const requests = store.metrics.counter('http_requests_total')
 		requests.with({ route: '/notes', method: 'POST' }).inc()

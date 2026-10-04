@@ -138,6 +138,29 @@ milliseconds, ``to`` open when absent:
     await store.metrics.read(name="cpu", since="1h")
     await store.metrics.read(match={"host": "web-1"}, from_=start, to=end)
 
+### Metrics.latest
+
+```python
+async def latest(
+    *,
+    name: str | None = None,
+    match: Mapping[str, str] | None = None,
+    where: Mapping[str, Condition | str] | None = None,
+    since: Duration | None = None,
+    from_: datetime | int | None = None,
+    to: datetime | int | None = None,
+    limits: Mapping[str, int] | None = None,
+) -> list[Series]: ...
+```
+
+The newest sample of each series a range matches, one sample a series.
+
+The range bounds how old the sample may be: a series without one in
+it is left out, so a series that stopped reads as absent rather than
+as its last value:
+
+    await store.metrics.latest(name="cpu", since="5m")
+
 ### Metrics.aggregate
 
 ```python
@@ -161,7 +184,8 @@ async def aggregate(
 Buckets of a width from the range's start, each computed exactly and rounded once.
 
 avg is the mean of every sample, rate a counter's increase a second,
-delta how far a gauge moved. An increase, a rate or a delta counts
+delta how far a gauge moved, first and last the bucket's first and
+last samples, which a group adds up. An increase, a rate or a delta counts
 each step in the bucket it ends in, the first bucket's from the last
 sample up to lookback before the range, one width when None, so
 buckets add up to the whole range. by groups the series by those

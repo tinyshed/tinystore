@@ -75,6 +75,8 @@ const (
 	AggregateIncrease AggregateOp = "increase"
 	AggregateRate     AggregateOp = "rate"
 	AggregateDelta    AggregateOp = "delta"
+	AggregateFirst    AggregateOp = "first"
+	AggregateLast     AggregateOp = "last"
 )
 ```
 
@@ -84,6 +86,8 @@ Each operation is computed exactly and rounded once, a group's too:
 	increase  a counter's rise, its resets counted
 	rate      a counter's increase a second of the bucket
 	delta     a gauge's last sample less the one before the bucket
+	first     the bucket's first sample, bit for bit; a group adds its series' up
+	last      the bucket's last sample, bit for bit; a group adds its series' up
 
 Increase, rate and delta count each step between samples in the bucket it ends in, so adjacent buckets add up to the range.
 
@@ -518,6 +522,14 @@ func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error)
 ```
 
 Ingest stores every batch or none of them. A timestamp repeated within the call, or already waiting in the head, keeps the value supplied last.
+
+### Store.Latest
+
+```go
+func (s *Store) Latest(ctx context.Context, request Range) ([]Result, error)
+```
+
+Latest returns the newest sample of each series inside the range, which bounds how old the sample may be: a series without one is left out. It decodes one head chunk or one block a series at most, and no block when its directory holds the last sample.
 
 ### Store.ListMaintenanceFailures
 

@@ -140,12 +140,13 @@ interface Range {
 ## AggregateOp
 
 ```ts
-type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate' | 'delta'
+type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate' | 'delta' | 'first' | 'last'
 ```
 
 Each computed exactly and rounded once, a group's too: avg is the mean of
 every sample, rate a counter's increase a second, delta how far a gauge
-moved. An increase, a rate or a delta counts each step between samples in
+moved, first and last the bucket's first and last samples, which a group
+adds up. An increase, a rate or a delta counts each step between samples in
 the bucket it ends in, so buckets add up to the whole range.
 
 ## AggregateRange
@@ -222,6 +223,16 @@ read(range: Range): Promise<Series[]>
 ```
 
 Every sample of the series a range matches, exactly, read whole before the first leaves the server.
+
+### Metrics.latest
+
+```ts
+latest(range: Range): Promise<Series[]>
+```
+
+The newest sample of each series a range matches, one sample a series.
+The range bounds how old it may be: a series without one in it is left
+out, so a series that stopped reads as absent rather than as its last value.
 
 ### Metrics.aggregate
 

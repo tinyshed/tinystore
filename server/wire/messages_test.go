@@ -403,6 +403,7 @@ var methods = []struct {
 	{"metrics.aggregate", wire.MetricsAggregate},
 	{"metrics.drop", wire.MetricsDrop},
 	{"metrics.explain", wire.MetricsExplain},
+	{"metrics.latest", wire.MetricsLatest},
 }
 
 var codes = []wire.Code{

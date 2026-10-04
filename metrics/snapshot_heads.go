@@ -192,9 +192,18 @@ func (s *Store) parseSelectedHeads(snapshot snapshotRead, batch headBatch) error
 		if head.chunks, err = s.parseHead(*head); err != nil {
 			return err
 		}
-		if err = snapshot.budget.takeSamples(selectedHeadSamples(head.chunks, snapshot.from, snapshot.to)); err != nil {
+		if err = snapshot.chargeHead(head); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// chargeHead pays for the samples of the head chunks the read decodes: those
+// the range touches, or for Latest the newest of them alone.
+func (r snapshotRead) chargeHead(head *headSnapshot) error {
+	if r.latest {
+		head.from = newestChunkFrom(head.chunks, head.from, head.to)
+	}
+	return r.budget.takeSamples(selectedHeadSamples(head.chunks, head.from, head.to))
 }

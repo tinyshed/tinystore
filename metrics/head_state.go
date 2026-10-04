@@ -17,7 +17,8 @@ const headQuery = `
 	where series_id = ?`
 
 // fetchHead copies one head out of the read snapshot. With a budget it charges
-// the whole encoded tail, then only the samples of the chunks the range needs.
+// the whole encoded tail and splits it into chunks, whose samples the read
+// charges as it chooses them, through chargeHead.
 func (s *Store) fetchHead(
 	ctx context.Context, tx sqlite.Reader, id, from, to int64, budget *queryBudget,
 ) (headSnapshot, error) {
@@ -65,10 +66,8 @@ func (s *Store) fetchHead(
 	}
 
 	head.filtered, head.from, head.to = true, from, to
-	if head.chunks, err = s.parseHead(head); err != nil {
-		return head, err
-	}
-	return head, budget.takeSamples(selectedHeadSamples(head.chunks, from, to))
+	head.chunks, err = s.parseHead(head)
+	return head, err
 }
 
 func (s *Store) mutablePoints(ctx context.Context, tx sqlite.Reader, id int64) ([]Sample, error) {

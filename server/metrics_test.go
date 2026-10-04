@@ -43,9 +43,16 @@ func metricsDownload(t *testing.T, conn *client.Conn, method wire.Method, ask wi
 // readSeries reads a range, joining the pieces a series came in
 func readSeries(t *testing.T, conn *client.Conn, ask wire.MetricsRange) ([]wire.MetricsSeries, int, error) {
 	t.Helper()
+	return downloadedSeries(t, conn, wire.MetricsRead, ask)
+}
+
+func downloadedSeries(
+	t *testing.T, conn *client.Conn, method wire.Method, ask wire.MetricsRange,
+) ([]wire.MetricsSeries, int, error) {
+	t.Helper()
 	var found []wire.MetricsSeries
 	pieces := 0
-	err := metricsDownload(t, conn, wire.MetricsRead, ask, func(body []byte) error {
+	err := metricsDownload(t, conn, method, ask, func(body []byte) error {
 		var piece wire.MetricsSeries
 		if err := piece.Decode(body); err != nil {
 			return err
@@ -283,5 +290,29 @@ func TestDropSeriesOverTheWire(t *testing.T) {
 	if found, _, err := readSeries(t, conn, wire.MetricsRange{Matchers: cpu.Labels, From: now - 1, To: now + 1}); err !=
 		nil || len(found) != 0 {
 		t.Fatalf("a dropped series read as %+v, %v", found, err)
+	}
+}
+
+// Latest answers each series' newest sample in the range, one a DATA, and
+// leaves out a series that stopped before it.
+func TestLatestOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	now := time.Now().UnixMilli()
+	for host, times := range map[string][]int64{"web": {now - 2000, now - 1000}, "db": {now - 600_000}} {
+		series := wire.MetricsSeries{
+			Labels: map[string]string{"__name__": "cpu", "host": host}, Kind: "gauge",
+			Times: times, Values: make([]float64, len(times)),
+		}
+		series.Values[len(times)-1] = 0.5
+		if err := ingest(t, conn, series); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask := wire.MetricsRange{Matchers: map[string]string{"__name__": "cpu"}, From: now - 60_000, To: now + 1}
+	found, pieces, err := downloadedSeries(t, conn, wire.MetricsLatest, ask)
+	if err != nil || pieces != 1 || len(found) != 1 || found[0].Labels["host"] != "web" ||
+		!reflect.DeepEqual(found[0].Times, []int64{now - 1000}) || !reflect.DeepEqual(found[0].Values, []float64{0.5}) {
+		t.Fatalf("the latest of a minute: %+v, %d pieces: %v", found, pieces, err)
 	}
 }

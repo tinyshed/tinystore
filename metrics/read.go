@@ -90,6 +90,7 @@ type rangeQuery struct {
 	matchers         []label
 	conditions       []condition
 	planOnly         bool // a Plan: no payload fetched, nothing decoded
+	latest           bool // each series' newest sample alone
 	limits           Limits
 	origin, from, to int64
 	cutoff           int64 // retention's, read once a query

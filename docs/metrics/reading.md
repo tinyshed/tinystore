@@ -86,6 +86,42 @@ to look at every series. There are no regular expressions.
 Without a name, a `match` finds every series with those labels:
 `read({ match: { host: 'web-1' } })` returns every metric of host `web-1`.
 
+## The latest value
+
+```ts
+const cpu = await store.metrics.latest({ name: 'cpu', since: '5m' })
+
+for (const s of cpu) {
+	console.log(s.labels.host, s.values[0]) // the newest sample of the last 5 minutes
+}
+```
+
+```python
+cpu = await store.metrics.latest(name="cpu", since="5m")
+
+for s in cpu:
+    print(s.labels["host"], s.values[0])  # the newest sample of the last 5 minutes
+```
+
+```go
+cpu, err := stats.Latest(ctx, metrics.Range{Name: "cpu", Since: 5 * time.Minute})
+for _, r := range cpu {
+	fmt.Println(r.Series.Labels["host"], r.Samples[0].Value) // the newest sample of the last 5 minutes
+}
+```
+
+`latest` returns the newest sample of each matching series, one sample per
+series. Use it for a value that shows "now", such as the CPU of each host or
+the length of a queue.
+
+The range limits how old the sample can be. If a series has no sample in the
+range, `latest` leaves it out. So a host that went down disappears from the
+answer instead of showing its last value forever. With `to`, `latest` returns
+the newest sample before that time.
+
+`latest` decodes at most one small chunk of samples per series, so it stays
+cheap even for a long range.
+
 ## Know the cost before you ask
 
 ```ts

@@ -18,10 +18,14 @@ import (
 // first, which first and previous hold until then. A bucket that starts from
 // the sample before it, stepFrom, counts the step into its first sample, so
 // that the increases and deltas of adjacent buckets add up to the range's.
+//
+// First and last keep the sample itself in value, which a group of more than
+// one series, joined, replaces with the exact sum of theirs.
 type bucketAccumulator struct {
 	from, to                                    int64
-	count, resets                               int
+	count, resets, joined                       int
 	minimum, maximum, previousValue             float64
+	firstValue, value                           float64
 	first, previous, exact, current, difference big.Int
 	stepFrom, lookback, partial                 bool
 }
@@ -115,6 +119,14 @@ func (b *bucketAccumulator) add(value float64, op AggregateOp, kind Kind) error 
 		}
 		b.previous.Set(&b.current)
 		b.previousValue = value
+	case AggregateFirst:
+		if b.count == 0 {
+			b.first.Set(&b.current)
+			b.firstValue = value
+		}
+	case AggregateLast:
+		b.previous.Set(&b.current)
+		b.previousValue = value
 	}
 	b.count++
 	return nil
@@ -122,8 +134,15 @@ func (b *bucketAccumulator) add(value float64, op AggregateOp, kind Kind) error 
 
 // close ends a series' bucket: a delta is its last sample less its first.
 func (b *bucketAccumulator) close(op AggregateOp) {
-	if op == AggregateDelta {
+	switch op {
+	case AggregateDelta:
 		b.exact.Sub(&b.previous, &b.first)
+	case AggregateFirst:
+		b.exact.Set(&b.first)
+		b.value = b.firstValue
+	case AggregateLast:
+		b.exact.Set(&b.previous)
+		b.value = b.previousValue
 	}
 }
 
@@ -137,6 +156,10 @@ func (b *bucketAccumulator) join(other *bucketAccumulator) error {
 	} else {
 		b.minimum, b.maximum = math.Min(b.minimum, other.minimum), math.Max(b.maximum, other.maximum)
 	}
+	if b.joined == 0 {
+		b.value = other.value
+	}
+	b.joined++
 	b.count += other.count
 	b.resets += other.resets
 	b.exact.Add(&b.exact, &other.exact)
@@ -163,6 +186,11 @@ func (b *bucketAccumulator) result(op AggregateOp) AggregateBucket {
 		perSecond := new(big.Int).Mul(&b.exact, big.NewInt(1000))
 		result.Value, result.Overflow = roundedQuotient(perSecond, big.NewInt(b.to-b.from))
 		result.Resets = b.resets
+	case AggregateFirst, AggregateLast:
+		result.Value = b.value
+		if b.joined > 1 {
+			result.Value, result.Overflow = roundedExact(&b.exact)
+		}
 	}
 	return result
 }
@@ -233,7 +261,7 @@ func (s *Store) checkAggregate(request AggregateRequest) (rangeQuery, error) {
 	}
 	switch request.Op {
 	case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateAvg, AggregateIncrease, AggregateRate,
-		AggregateDelta:
+		AggregateDelta, AggregateFirst, AggregateLast:
 	default:
 		return rangeQuery{}, fmt.Errorf("%w: aggregate operation", ErrInvalid)
 	}

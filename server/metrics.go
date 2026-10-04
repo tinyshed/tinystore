@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"math"
@@ -18,6 +19,7 @@ func (s *Server) metricsMethods(methods map[wire.Method]handler) {
 	methods[wire.MetricsAggregate] = metricsAggregate
 	methods[wire.MetricsDrop] = metricsDrop
 	methods[wire.MetricsExplain] = metricsExplain
+	methods[wire.MetricsLatest] = metricsLatest
 }
 
 // metricsIngest stores its series' samples, all or none
@@ -44,11 +46,18 @@ func metricsIngest(c *call) error {
 	return respond(c, wire.Empty{})
 }
 
-// metricsRead is a download: a series a DATA, or several for one whose
-// samples pass what a body holds, then {}. The range is read whole, within its
-// limits, before the first series leaves, so that a slow client holds none of
-// the engine's readers.
-func metricsRead(c *call) error {
+func metricsRead(c *call) error { return downloadSeries(c, (*metrics.Store).Read) }
+
+// metricsLatest is read's download of each series' newest sample in the range
+func metricsLatest(c *call) error { return downloadSeries(c, (*metrics.Store).Latest) }
+
+type seriesReader func(*metrics.Store, context.Context, metrics.Range) ([]metrics.Result, error)
+
+// downloadSeries answers a range with the series read finds: a series a DATA,
+// or several for one whose samples pass what a body holds, then {}. The range
+// is read whole, within its limits, before the first series leaves, so that a
+// slow client holds none of the engine's readers.
+func downloadSeries(c *call, read seriesReader) error {
 	var ask wire.MetricsRange
 	if err := ask.Decode(c.request); err != nil {
 		return err
@@ -61,7 +70,7 @@ func metricsRead(c *call) error {
 	if err != nil {
 		return err
 	}
-	results, err := store.Read(c.ctx, request)
+	results, err := read(store, c.ctx, request)
 	if err != nil {
 		return err
 	}
@@ -271,7 +280,8 @@ func counted(n int) uint64 {
 // the operations an aggregate may ask for; another is a newer client's
 var aggregateOps = []metrics.AggregateOp{
 	metrics.AggregateCount, metrics.AggregateSum, metrics.AggregateMin, metrics.AggregateMax, metrics.AggregateAvg,
-	metrics.AggregateIncrease, metrics.AggregateRate, metrics.AggregateDelta,
+	metrics.AggregateIncrease, metrics.AggregateRate, metrics.AggregateDelta, metrics.AggregateFirst,
+	metrics.AggregateLast,
 }
 
 // unknownKind refuses a value of a known field that this server does not have,

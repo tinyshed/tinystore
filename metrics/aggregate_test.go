@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -677,5 +678,41 @@ func zeroPayloads(t *testing.T, store *Store) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// First and last are a bucket's first and last samples, bit for bit, from a
+// block's summary as from raw samples, -0 included; a group adds its series'
+// up, exactly, and rounds once.
+func TestTheLastOfABucketIsItsNewestSample(t *testing.T) {
+	store, _ := openTestStore(t, Options{})
+	one, two := testSeries(), testSeries()
+	two.Labels = Labels{"host": "two"}
+	points := make([]Sample, 481)
+	for i := range points {
+		points[i] = Sample{At: testEpoch + int64(i), Value: float64(i%7) + 0.25}
+	}
+	points[0].Value, points[479].Value, points[480].Value = 3.5, math.Copysign(0, -1), 1e16
+	others := slices.Clone(points)
+	others[480].Value = 1
+	ingestAndSeal(t, store, Batch{Series: one, Samples: points}, Batch{Series: two, Samples: others})
+
+	request := AggregateRequest{
+		Range: Range{Name: "cpu", Match: one.Labels, From: testEpoch, To: testEpoch + 481},
+		Width: 240 * time.Millisecond, Op: AggregateFirst,
+	}
+	first := aggregateBuckets(t, store, request)
+	request.Op = AggregateLast
+	last := aggregateBuckets(t, store, request)
+	if len(first) != 3 || first[0].Value != 3.5 || first[1].Value != points[240].Value || first[2].Value != 1e16 ||
+		len(last) != 3 || last[0].Value != points[239].Value || last[2].Value != 1e16 ||
+		math.Float64bits(last[1].Value) != math.Float64bits(math.Copysign(0, -1)) {
+		t.Fatalf("first %+v, last %+v", first, last)
+	}
+
+	request.Range.Match, request.By = nil, []string{}
+	joined, err := store.Aggregate(t.Context(), request)
+	if err != nil || len(joined) != 1 || joined[0].Buckets[2].Value != 1e16+1 || joined[0].Buckets[1].Value != 0 {
+		t.Fatalf("a group's last, the sum of its series' lasts: %+v: %v", joined, err)
 	}
 }

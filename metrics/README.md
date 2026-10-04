@@ -136,6 +136,13 @@ are this series'; those rows stay in the file, and
 `DroppedSeries.UnreadableGroups` counts such groups. Ingesting the same labels
 afterwards starts a new series.
 
+`Latest(ctx, range)` returns each matched series' newest sample inside the
+range, one `Sample` a `Result`, in `Read`'s series order; a series without one
+is left out, so the range is the bound on staleness. It decodes the newest
+head chunk the range touches, alone, or when the head holds no sample before
+`To`, the newest block the range touches; a block that ends before `To` with
+a valid summary answers from its directory, undecoded.
+
 `Stream(ctx, range, yield)` calls `yield` once per nonempty series, in the same
 series order and with the same exact owned samples as `Read`. It fetches one
 snapshot and closes the read transaction before the first callback. A callback
@@ -156,8 +163,10 @@ Op: metrics.AggregateSum})` returns one result per matched series and one value
 per nonempty bucket. Buckets start at `r.From`; retention clips contributing
 samples without shifting them, and the bucket it cuts reports `Partial`.
 `AggregateCount`, `AggregateMin`, `AggregateMax`, `AggregateAvg`,
-`AggregateIncrease`, `AggregateRate` and `AggregateDelta` are also available;
-increase and rate require a counter series, delta a gauge. These three count
+`AggregateIncrease`, `AggregateRate`, `AggregateDelta`, `AggregateFirst` and
+`AggregateLast` are also available; increase and rate require a counter
+series, delta a gauge. First and last are the bucket's first and last
+samples, bit for bit, and a group adds its series' up exactly. These three count
 each step between samples in the bucket it ends in, so adjacent buckets add up
 to the range: the first bucket steps from the newest sample up to `Lookback`
 before `r.From`, one `Width` when zero, and reports `Lookback`; a whole block

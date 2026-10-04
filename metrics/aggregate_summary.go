@@ -87,6 +87,18 @@ func (b *bucketAccumulator) mergeSummary(block storedBlock, op AggregateOp) erro
 		if err := b.mergeEnds(block); err != nil {
 			return err
 		}
+	case AggregateFirst:
+		if b.count == 0 {
+			b.firstValue = block.head.First
+			if err := finiteUnits(b.firstValue, &b.first); err != nil {
+				return err
+			}
+		}
+	case AggregateLast:
+		b.previousValue = block.summary.last
+		if err := finiteUnits(b.previousValue, &b.previous); err != nil {
+			return err
+		}
 	}
 	b.count += block.head.Count
 	return nil

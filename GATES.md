@@ -99,6 +99,9 @@ module defines.
 - an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range — `TestAnHourOfACounterIncreasesBy3585AtEveryWidth`, `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange`, `TestAggregateOverTheWire` in `server`; `an increase counts the step into each bucket, the first from before the range` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - the first bucket steps from the newest sample a lookback before the range, which a block's summary answers undecoded — `TestTheFirstBucketTakesItsStepFromBeforeTheRange`
 - a step from a sample retention expired is not counted, and its bucket is partial — `TestAStepFromAnExpiredSampleIsNotCounted`
+- first and last are a bucket's first and last samples bit for bit, from a summary as from raw, and a group adds them up — `TestTheLastOfABucketIsItsNewestSample`, `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`
+- latest is each series' newest sample in its range, which bounds its staleness — `TestLatestLeavesOutASeriesOlderThanItsRange`, `TestLatestIsTheLastSampleOfARead`, `TestLatestOverTheWire` in `server`; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
+- latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `TestLatestDecodesAtMostOneChunkASeries`
 - a group joins its series exactly and rounds once — `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined`
 - a whole-block summary spends no decoded-sample budget — `TestWholeExactBlocksNeedNoDecodedSampleBudget`
 - a malformed exact summary is refused — `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary`

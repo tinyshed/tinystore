@@ -81,6 +81,7 @@ export const methods = {
 	'metrics.aggregate': 0x0603,
 	'metrics.drop': 0x0604,
 	'metrics.explain': 0x0605,
+	'metrics.latest': 0x0606,
 } as const
 
 export type Method = keyof typeof methods

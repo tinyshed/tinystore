@@ -550,6 +550,16 @@ async def test_samples_come_back_bit_for_bit_and_aggregate_exactly(store: tinyst
     )
     assert (looked.buckets[0].value, looked.buckets[0].lookback) == (10, True)
 
+    await store.metrics.ingest(
+        {"name": "depth", "kind": "gauge", "labels": {"queue": "mail"}, "samples": [(now - 3000, 4), (now - 1000, 7)]},
+        {"name": "depth", "kind": "gauge", "labels": {"queue": "sms"}, "samples": [(now - 600_000, 2)]},
+    )
+    latest = await store.metrics.latest(name="depth", since="1m")
+    assert [(s.labels["queue"], s.times, list(s.values)) for s in latest] == [("mail", [now - 1000], [7])]
+    [first] = await store.metrics.aggregate(name="depth", match={"queue": "mail"}, since="1m", width="1m", op="first")
+    [last] = await store.metrics.aggregate(name="depth", match={"queue": "mail"}, since="1m", width="1m", op="last")
+    assert (first.buckets[0].value, last.buckets[0].value) == (4, 7)
+
     store.metrics.counter("http_requests_total").labels(route="/notes").inc()
     store.metrics.counter("http_requests_total").labels(route="/notes").inc(2)
     await store.metrics.flush()

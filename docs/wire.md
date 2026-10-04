@@ -995,13 +995,14 @@ drop of one that still reads is `conflict`.
 Metrics are one store of series, each named by its labels, so none opens a
 handle.
 
-| method   |           | request                                      | answer                                                  |
-|----------|-----------|----------------------------------------------|---------------------------------------------------------|
-| `0x0601` | ingest    | series and their samples, stored all or none | `{}`; `what` is a refused series' labels                |
-| `0x0602` | read      | a range                                      | a download: `{}`, a series a `DATA`, then `{}`          |
-| `0x0603` | aggregate | a range with a width and an operation        | a download: `{}`, a series' buckets a `DATA`, then `{}` |
-| `0x0604` | drop      | labels                                       | `{1: found, 2: unreadable groups}`                      |
-| `0x0605` | explain   | a range; with an operation, the aggregate's  | a plan                                                  |
+| method   |           | request                                      | answer                                                                                          |
+|----------|-----------|----------------------------------------------|-------------------------------------------------------------------------------------------------|
+| `0x0601` | ingest    | series and their samples, stored all or none | `{}`; `what` is a refused series' labels                                                        |
+| `0x0602` | read      | a range                                      | a download: `{}`, a series a `DATA`, then `{}`                                                  |
+| `0x0603` | aggregate | a range with a width and an operation        | a download: `{}`, a series' buckets a `DATA`, then `{}`                                         |
+| `0x0604` | drop      | labels                                       | `{1: found, 2: unreadable groups}`                                                              |
+| `0x0605` | explain   | a range; with an operation, the aggregate's  | a plan                                                                                          |
+| `0x0606` | latest    | a range                                      | a download: `{}`, a series' newest sample a `DATA`, then `{}`; a series without one is left out |
 
 A plan is what a read, or an aggregate when the range names an operation,
 would spend, found in one snapshot from the series, their block directories
@@ -1037,20 +1038,20 @@ the value given last for a time repeated.
 
 A range:
 
-| key    | field          | type                |                                                                                                                            |
-|--------|----------------|---------------------|----------------------------------------------------------------------------------------------------------------------------|
-| 1      | matchers       | a map of names      | the labels a series has, exactly, its name as `__name__`                                                                   |
-| 2, 3   | from, to       | int                 | unix milliseconds, to excluded; both required, 2^63−1 the open end                                                         |
-| 4      | limit series   | uint                | the series it matches; each limit narrows the server's                                                                     |
-| 5      | limit blocks   | uint                | the blocks it decodes                                                                                                      |
-| 6      | limit bytes    | uint                | the bytes it fetches                                                                                                       |
-| 7      | limit decoded  | uint                | the samples it decodes                                                                                                     |
-| 8      | limit answered | uint                | the samples or buckets it answers                                                                                          |
-| 9      | width          | uint                | aggregate's: milliseconds, the buckets starting at from                                                                    |
-| 10     | op             | str                 | aggregate's: `count`, `sum`, `min`, `max`, `avg`, `increase` or `rate`, a counter's alone, or `delta`, a gauge's           |
-| 11     | where          | array of conditions | labels beyond equality, each label once, in the byte order of its name                                                     |
-| 12, 13 | by, without    | array of str        | aggregate's: the labels a group keeps, or all but these; an empty `by` is sent and joins every series of a name            |
-| 14     | lookback       | uint                | aggregate's: milliseconds before from where an increase, a rate or a delta looks for its first step; the width when absent |
+| key    | field          | type                |                                                                                                                                   |
+|--------|----------------|---------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| 1      | matchers       | a map of names      | the labels a series has, exactly, its name as `__name__`                                                                          |
+| 2, 3   | from, to       | int                 | unix milliseconds, to excluded; both required, 2^63−1 the open end                                                                |
+| 4      | limit series   | uint                | the series it matches; each limit narrows the server's                                                                            |
+| 5      | limit blocks   | uint                | the blocks it decodes                                                                                                             |
+| 6      | limit bytes    | uint                | the bytes it fetches                                                                                                              |
+| 7      | limit decoded  | uint                | the samples it decodes                                                                                                            |
+| 8      | limit answered | uint                | the samples or buckets it answers                                                                                                 |
+| 9      | width          | uint                | aggregate's: milliseconds, the buckets starting at from                                                                           |
+| 10     | op             | str                 | aggregate's: `count`, `sum`, `min`, `max`, `avg`, `first`, `last`, `increase` or `rate`, a counter's alone, or `delta`, a gauge's |
+| 11     | where          | array of conditions | labels beyond equality, each label once, in the byte order of its name                                                            |
+| 12, 13 | by, without    | array of str        | aggregate's: the labels a group keeps, or all but these; an empty `by` is sent and joins every series of a name                   |
+| 14     | lookback       | uint                | aggregate's: milliseconds before from where an increase, a rate or a delta looks for its first step; the width when absent        |
 
 A condition:
 

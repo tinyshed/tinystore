@@ -125,6 +125,8 @@ type AggregateOp string
 //	increase  a counter's rise, its resets counted
 //	rate      a counter's increase a second of the bucket
 //	delta     a gauge's last sample less the one before the bucket
+//	first     the bucket's first sample, bit for bit; a group adds its series' up
+//	last      the bucket's last sample, bit for bit; a group adds its series' up
 //
 // Increase, rate and delta count each step between samples in the bucket it
 // ends in, so adjacent buckets add up to the range.
@@ -137,6 +139,8 @@ const (
 	AggregateIncrease AggregateOp = "increase"
 	AggregateRate     AggregateOp = "rate"
 	AggregateDelta    AggregateOp = "delta"
+	AggregateFirst    AggregateOp = "first"
+	AggregateLast     AggregateOp = "last"
 )
 
 // AggregateRequest asks for a Range's buckets Width long. By groups the
