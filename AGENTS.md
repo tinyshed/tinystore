@@ -176,6 +176,16 @@ rows it is about: what shares a file shares its writer, by the application's
 choice and never by default. A guest engine's tables are `_tinystore_<engine>…`
 with a migration history of their own.
 
+**A guest opens beside the owner, and only SQL.** `Options.Guest` opens a
+directory another process holds, without its `LOCK`, as a recovery command
+beside a running server does: nothing runs in the background, `Claim`
+refuses every engine's file but `sql/`, jobs refuse to open `In` a guest's
+database, and a guest's database applies no migration and its connections'
+authorizer refuses DDL and writes to `_tinystore_…`, since the owner checked
+the schema and keeps those tables' state in memory. SQLite's own locks share
+the writer between the two processes. A guest's backup copies the files it did
+not open by a read snapshot, and refuses a store with blobs.
+
 **Writes known before they run share a commit; a Tx does not.** A `Batch` is
 one savepoint of a grouped commit, built before it takes the writer, so the
 program's code never runs while a group waits. A `Tx` holds the writer alone

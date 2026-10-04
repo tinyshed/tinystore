@@ -31,6 +31,11 @@ func (s *Store) Claim(name string) (filePath string, release func(), err error) 
 		return "", nil, fmt.Errorf("%w: %q is not a name inside the store", ErrInvalid, name)
 	}
 
+	if s.guest && !strings.HasPrefix(name, "sql/") {
+		return "", nil, fmt.Errorf("%w: %s opens only in the store that holds %s; a guest opens SQL databases alone",
+			ErrInvalid, name, s.dir)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {

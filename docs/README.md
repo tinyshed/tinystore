@@ -90,6 +90,7 @@ skill: .agents/skills/docs/SKILL.md.
 - [The command line](running/cli.md)
 - [AI agents](running/agents.md)
 - [Backups](running/backups.md)
+- [A second process](running/guests.md)
 - [Testing](running/testing.md)
 - [Upgrading](running/upgrading.md)
 

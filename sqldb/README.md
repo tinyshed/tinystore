@@ -183,6 +183,11 @@ wrote internal/data/migrations/002_add_description.sql:
   children. Each is kept by its checksum: an edited, renamed or missing one, a
   file that has applied more than the binary knows, or another engine's file
   refuses to open, `ErrInvalid`.
+- **A guest store's database** (`tinystore.Options{Guest: true}`, a second
+  process beside the one holding the directory) opens as `ApplyNone` opens
+  one, never makes a file, and refuses DDL and writes to the store's
+  `_tinystore_…` tables as `ErrInvalid`; its writes wait up to five seconds for
+  the owner's writer, which SQLite's locks share between the processes.
 - **Reads run on up to eight readers**, `Readers(n)` at `Open` to say
   otherwise, and fewer when the store's `Options.Readers` bounds every
   engine's. A reader beyond one closes after a minute unused, and the next

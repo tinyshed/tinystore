@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ncruces/go-sqlite3"
+
 	"github.com/tinyshed/tinystore"
 	"github.com/tinyshed/tinystore/internal/admission"
 	"github.com/tinyshed/tinystore/internal/sqlite"
@@ -86,6 +88,7 @@ func Open(ctx context.Context, store *tinystore.Store, name string, migrations f
 	for _, option := range options {
 		option(&timing)
 	}
+	timing.applyNone = timing.applyNone || store.Guest()
 	return open(ctx, store, name, migrations, schema, timing)
 }
 
@@ -145,6 +148,31 @@ func open(
 
 	d.log.Info("opened", "path", path)
 	return d, nil
+}
+
+// asGuest registers the modules a connection of a guest store needs, and
+// refuses what a guest must not do: change the schema, which its owner checked
+// and compiled its statements against, or write the store's own tables, whose
+// owner keeps their state in memory, as jobs keeps its queues'.
+func asGuest(conn *sqlite3.Conn) error {
+	if err := sqlite.RegisterModules(conn); err != nil {
+		return err
+	}
+	return conn.SetAuthorizer(guestAuthorizer)
+}
+
+func guestAuthorizer(action sqlite3.AuthorizerActionCode, name3rd, _, _, _ string) sqlite3.AuthorizerReturnCode {
+	switch action {
+	case sqlite3.AUTH_INSERT, sqlite3.AUTH_UPDATE, sqlite3.AUTH_DELETE:
+		if strings.HasPrefix(strings.ToLower(name3rd), "_tinystore_") {
+			return sqlite3.AUTH_DENY
+		}
+	case sqlite3.AUTH_CREATE_TABLE, sqlite3.AUTH_CREATE_INDEX, sqlite3.AUTH_CREATE_TRIGGER, sqlite3.AUTH_CREATE_VIEW,
+		sqlite3.AUTH_CREATE_VTABLE, sqlite3.AUTH_DROP_TABLE, sqlite3.AUTH_DROP_INDEX, sqlite3.AUTH_DROP_TRIGGER,
+		sqlite3.AUTH_DROP_VIEW, sqlite3.AUTH_DROP_VTABLE, sqlite3.AUTH_ALTER_TABLE:
+		return sqlite3.AUTH_DENY
+	}
+	return sqlite3.AUTH_OK
 }
 
 // modulePackages are the imports that link a virtual table module, which
@@ -222,6 +250,9 @@ func openFile(
 	config.Statements, config.Waited = statements, d.waited
 	config.MaxLength = int(min(store.Memory().Capacity, math.MaxInt32))
 	config.Connected = sqlite.RegisterModules
+	if store.Guest() {
+		config.Connected = asGuest
+	}
 	file, err := sqlite.Open(ctx, path, config)
 	if err != nil {
 		return nil, fmt.Errorf("sql %q: open: %w", name, err)
@@ -251,6 +282,7 @@ func mayOpen(path string, timing tuning) error {
 	if !timing.applyNone {
 		return nil
 	}
+	//nolint:gosec // the path Claim made inside the store
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: the file is not there", ErrPending)
 	}

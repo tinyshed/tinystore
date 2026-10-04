@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/tinyshed/tinystore"
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // the manifest's own version; a reader refuses one it does not know
@@ -62,14 +63,61 @@ func File(name string) Option {
 }
 
 // Write copies every engine's file while the store keeps working, and writes
-// the copies, the files File names and their manifest to w as one zip.
+// the copies, the files File names and their manifest to w as one zip. A guest
+// store, a second process beside the one that holds the directory, copies
+// each engine's file it did not open by a read snapshot of its own; blobs back
+// up only in the store that holds them.
 func Write(ctx context.Context, store *tinystore.Store, w io.Writer, options ...Option) (err error) {
 	snapshot, err := store.Snapshot(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, snapshot.Remove()) }()
+	if store.Guest() {
+		if err = copyUnopened(ctx, store.Dir(), &snapshot); err != nil {
+			return err
+		}
+	}
 	return WriteSnapshot(ctx, snapshot, store.Now(), w, options...)
+}
+
+// enginesOnDisk are the engines' files a guest copies without opening them
+var enginesOnDisk = []struct{ name, engine string }{
+	{"kv.db", "kv"}, {"jobs.db", "jobs"}, {"records.db", "records"}, {"metrics.db", "metrics"},
+}
+
+// copyUnopened adds to snapshot a copy of every engine's file in dir that it
+// lacks, as the server copies a database no client opened
+func copyUnopened(ctx context.Context, dir string, snapshot *tinystore.Snapshot) error {
+	if _, err := os.Stat(filepath.Join(dir, "blobs")); err == nil {
+		return fmt.Errorf("%w: backup: a guest backs up no blobs; the store that holds %s does",
+			tinystore.ErrInvalid, dir)
+	}
+	files := slices.Clone(enginesOnDisk)
+	databases, err := filepath.Glob(filepath.Join(dir, "sql", "*.db"))
+	if err != nil {
+		return err
+	}
+	for _, database := range databases {
+		files = append(files, struct{ name, engine string }{"sql/" + filepath.Base(database), "sql"})
+	}
+	taken := map[string]bool{}
+	for _, file := range snapshot.Files {
+		taken[file.Name] = true
+	}
+	for _, file := range files {
+		source := filepath.Join(dir, filepath.FromSlash(file.name))
+		if _, statErr := os.Stat(source); taken[file.name] || statErr != nil {
+			continue
+		}
+		applied, copyErr := sqlite.Copy(ctx, source, filepath.Join(snapshot.Dir, filepath.FromSlash(file.name)))
+		if copyErr != nil {
+			return fmt.Errorf("backup %s: %w", file.name, copyErr)
+		}
+		copied := tinystore.SnapshotFile{Name: file.name, Engine: file.engine, Schema: applied}
+		snapshot.Files = append(snapshot.Files, copied)
+	}
+	return nil
 }
 
 // WriteSnapshot writes the copies a snapshot holds and their manifest to w as

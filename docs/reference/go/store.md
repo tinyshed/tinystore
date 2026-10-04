@@ -124,6 +124,14 @@ type Options struct {
 	// zero leaves each engine to its own per-call limits.
 	Memory int64
 
+	// Guest opens a directory another store holds, without its LOCK, as a
+	// second process beside a running program opens it to reset a password:
+	// nothing runs in the background, and only SQL databases open in it,
+	// applying no migration and changing no schema, nor the store's own tables.
+	// SQLite's locks share each file's writer between the two processes, and a
+	// guest's write waits up to five seconds for the owner's.
+	Guest bool
+
 	// Readers bounds the reader connections each engine's file opens under
 	// load, half a MiB each; zero leaves each engine its own count. A reader
 	// beyond one closes after a minute unused, whatever the bound.
@@ -300,6 +308,14 @@ func (s *Store) FlushSelfMetrics(ctx context.Context) error
 ```
 
 FlushSelfMetrics captures available reports and the store's memory budget once, then commits their samples together. It is a no-op when disabled or when no metrics engine is open. It reports reserved bytes, not process RSS.
+
+### Store.Guest
+
+```go
+func (s *Store) Guest() bool
+```
+
+Guest says whether the store was opened with Options.Guest.
 
 ### Store.Logger
 

@@ -79,6 +79,10 @@ var hosts sync.Map // *sqlite.File → *Store
 // migrate with a history of their own, and the database keeps the file,
 // which it closes after this store, having opened before it.
 func openIn(ctx context.Context, store *tinystore.Store, db Database) (*Store, error) {
+	if store.Guest() {
+		return nil, fmt.Errorf("%w: jobs open only in the store that holds %s, which keeps their state",
+			tinystore.ErrInvalid, store.Dir())
+	}
 	file := db.SQLiteFile()
 	if file == nil {
 		return nil, fmt.Errorf("%w: jobs: In a database that is closed", tinystore.ErrInvalid)

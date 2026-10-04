@@ -399,3 +399,72 @@ func readManifestOf(t *testing.T, archive []byte) Manifest {
 	}
 	return manifest
 }
+
+// a guest backs up beside the store's owner: the databases it opened, and a
+// copy of every other engine's file it did not open; blobs it leaves to the owner
+func TestAGuestBacksUpEveryEngineButBlobs(t *testing.T) {
+	dir := t.TempDir()
+	owner, err := tinystore.Open(t.Context(), dir, tinystore.Options{Manual: true, Clock: func() time.Time { return epoch }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close(context.Background())
+	cpu, err := metrics.Open(t.Context(), owner, metrics.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cpu.Ingest(t.Context(), []metrics.Batch{{
+		Series:  metrics.Series{Name: "temperature", Kind: metrics.Gauge},
+		Samples: []metrics.Sample{{At: epoch.UnixMilli(), Value: 21.5}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	app, err := sqldb.Open(t.Context(), owner, "app", migrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.Exec(t.Context(), `insert into notes (title) values ('kept')`); err != nil {
+		t.Fatal(err)
+	}
+
+	guest, err := tinystore.Open(t.Context(), dir, tinystore.Options{Guest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guest.Close(context.Background())
+	var archive bytes.Buffer
+	if err = Write(t.Context(), guest, &archive); err != nil {
+		t.Fatal(err)
+	}
+	restored := filepath.Join(t.TempDir(), "restored")
+	if err = Restore(t.Context(), restored, bytes.NewReader(archive.Bytes()), int64(archive.Len())); err != nil {
+		t.Fatal(err)
+	}
+	back, err := tinystore.Open(t.Context(), restored, tinystore.Options{Manual: true, Clock: func() time.Time { return epoch }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close(context.Background())
+	notes, err := sqldb.Open(t.Context(), back, "app", migrations, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title, readErr := sqldb.Scalar[string](t.Context(), notes, `select title from notes`); readErr != nil || title != "kept" {
+		t.Fatalf("sql: %q, %v", title, readErr)
+	}
+	temperatures, err := metrics.Open(t.Context(), back, metrics.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := temperatures.Read(t.Context(), metrics.Range{Name: "temperature", From: epoch.UnixMilli(), To: epoch.UnixMilli() + 1})
+	if err != nil || len(results) != 1 || results[0].Samples[0].Value != 21.5 {
+		t.Fatalf("metrics: %+v, %v", results, err)
+	}
+
+	if _, err = blobs.Open(t.Context(), owner, blobs.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = Write(t.Context(), guest, io.Discard); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a guest's backup of a store with blobs: %v", err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -180,6 +181,41 @@ func TestAJobInATxCommitsWithItsRows(t *testing.T) {
 		t.Fatalf("%d bytes still held after every change ended", used)
 	}
 	if err = index.Enqueue(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// a guest of a store whose queues live in its database writes the database's
+// rows, and opens none of the queues nor writes their tables, whose state the
+// owner keeps in memory
+func TestAGuestOpensNoQueuesOfADatabase(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	owner, _, index := openBatchStore(t, dir)
+	defer owner.Close(context.Background())
+	if err := index.Enqueue(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	guest, err := tinystore.Open(ctx, dir, tinystore.Options{Guest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guest.Close(context.Background())
+	db, err := sqldb.Open(ctx, guest, "app", batchMigrations, batchSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = jobs.Open(ctx, guest, jobs.Options{In: db}); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a guest's queues: %v", err)
+	}
+	if _, err = jobs.Open(ctx, guest, jobs.Options{}); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a guest's jobs.db: %v", err)
+	}
+	if _, err = db.Exec(ctx, `delete from _tinystore_jobs`); !errors.Is(err, tinystore.ErrInvalid) ||
+		!strings.Contains(err.Error(), "none of the store's own tables") {
+		t.Fatalf("a guest emptied the queues: %v", err)
+	}
+	if _, err = db.Exec(ctx, `insert into notes (body) values ('from the guest')`); err != nil {
 		t.Fatal(err)
 	}
 }

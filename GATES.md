@@ -22,6 +22,10 @@ module defines.
 
 ## The store
 
+- a guest takes no lock, claims SQL alone, and no other engine opens in it — `TestAGuestOpensNoOtherEngine`, `TestAGuestOpensNoQueuesOfADatabase` in `jobs`
+- a guest's batch is one commit its owner, another process, reads at once — `TestAGuestWritesBesideTheOwner` in `sqldb`
+- a guest applies no migration, changes no schema and writes none of the store's tables — `TestAGuestIsRefusedWhileAMigrationIsPending`, `TestAGuestWritesNoneOfTheStoresTables`
+- a guest backs up every engine's file it did not open, and leaves blobs to the owner — `TestAGuestBacksUpEveryEngineButBlobs`
 - a container's memory limit gives the store's budget, and no limit gives none — `TestFromCgroupIsAFractionOfTheContainersLimit`
 - every limit a LimitError names is an exported constant, the SDKs' limits the same names — `TestEveryLimitNameIsAnExportedConstant`, over `testdata/limits.json`; `are the names of testdata/limits.json, which Go's constants hold` in `sdk/js/test/wire.test.ts`, `test_limits_are_the_names_of_the_shared_file` in Python's
 - one store holds a directory — `TestASecondStoreOnTheSameDirectoryIsRefused`

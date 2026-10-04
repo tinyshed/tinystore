@@ -2,6 +2,7 @@ package tinystore
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -67,5 +68,35 @@ func TestLoggerNamesTheEngineAndNowIsTheStoresClock(t *testing.T) {
 	}
 	if !store.Now().Equal(at) {
 		t.Fatalf("now %v, want %v", store.Now(), at)
+	}
+}
+
+// a guest takes no lock and makes nothing, and claims an SQL database alone:
+// every other engine keeps state its owner holds in memory
+func TestAGuestOpensNoOtherEngine(t *testing.T) {
+	if _, err := Open(t.Context(), filepath.Join(t.TempDir(), "missing"), Options{Guest: true}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a guest of a directory that is not there: %v", err)
+	}
+	dir := t.TempDir()
+	guest, err := Open(t.Context(), dir, Options{Guest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guest.Close(context.Background())
+	if !guest.Guest() {
+		t.Fatal("a guest store says it is none")
+	}
+	if _, err = os.Stat(filepath.Join(dir, "LOCK")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a guest made LOCK: %v", err)
+	}
+	for _, name := range []string{"kv.db", "jobs.db", "records.db", "metrics.db", "blobs/"} {
+		if _, _, err = guest.Claim(name); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "a guest opens SQL databases alone") {
+			t.Errorf("a guest claimed %s: %v", name, err)
+		}
+	}
+	if _, release, err := guest.Claim("sql/app.db"); err != nil {
+		t.Fatalf("a guest's SQL database: %v", err)
+	} else {
+		release()
 	}
 }

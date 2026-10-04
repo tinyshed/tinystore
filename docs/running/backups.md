@@ -91,8 +91,10 @@ that database, the migration still runs when your program opens it.
 
 A Go program that keeps its store to itself holds the directory, so the
 command can't reach the store. Share the store with
-[`server.Share`](../languages.md#share-a-go-programs-store), or use
-`backup.Write` in the program.
+[`server.Share`](../languages.md#share-a-go-programs-store), use
+`backup.Write` in the program, or back up from a
+[second process](guests.md#back-up-beside-the-server) that opens the store as
+a guest.
 
 ## Restore
 

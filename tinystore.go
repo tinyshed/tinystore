@@ -29,6 +29,14 @@ type Options struct {
 	// zero leaves each engine to its own per-call limits.
 	Memory int64
 
+	// Guest opens a directory another store holds, without its LOCK, as a
+	// second process beside a running program opens it to reset a password:
+	// nothing runs in the background, and only SQL databases open in it,
+	// applying no migration and changing no schema, nor the store's own tables.
+	// SQLite's locks share each file's writer between the two processes, and a
+	// guest's write waits up to five seconds for the owner's.
+	Guest bool
+
 	// Readers bounds the reader connections each engine's file opens under
 	// load, half a MiB each; zero leaves each engine its own count. A reader
 	// beyond one closes after a minute unused, whatever the bound.
@@ -47,6 +55,7 @@ type Store struct {
 	lock    io.Closer
 	memory  *memory
 	readers int
+	guest   bool
 	self    *selfMetrics
 
 	background context.Context
@@ -70,6 +79,9 @@ func Open(ctx context.Context, dir string, options Options) (*Store, error) {
 	if dir == "" || options.Memory < 0 || options.Readers < 0 {
 		return nil, fmt.Errorf("%w: empty directory, negative memory or negative readers", ErrInvalid)
 	}
+	if options.Guest {
+		return openGuest(ctx, dir, options)
+	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
 	}
@@ -86,6 +98,27 @@ func Open(ctx context.Context, dir string, options Options) (*Store, error) {
 	store.logOpened()
 	return store, nil
 }
+
+// openGuest opens a store's directory beside the store that holds it, taking
+// no lock and making nothing: a guest of a directory that is not there is refused.
+func openGuest(ctx context.Context, dir string, options Options) (*Store, error) {
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("%w: a guest of %s, which is no store's directory", ErrInvalid, dir)
+	}
+	options.Manual, options.SelfMetrics = true, false
+	store := newStore(ctx, dir, options, nothingHeld{})
+	store.guest = true
+	store.logger.Info("store opened as a guest", "dir", dir)
+	return store, nil
+}
+
+// nothingHeld is a guest's lock, which holds nothing
+type nothingHeld struct{}
+
+func (nothingHeld) Close() error { return nil }
+
+// Guest says whether the store was opened with Options.Guest.
+func (s *Store) Guest() bool { return s.guest }
 
 func newStore(ctx context.Context, dir string, options Options, lock io.Closer) *Store {
 	store := &Store{

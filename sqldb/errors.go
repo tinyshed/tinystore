@@ -148,6 +148,9 @@ func (d *DB) explain(err error) error {
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrInvalid, d.name, err)
 	case sqlite3.TOOBIG:
 		return fmt.Errorf("%w: sql %q: %w", tinystore.ErrLimit, d.name, err)
+	case sqlite3.AUTH:
+		return fmt.Errorf("%w: sql %q: a guest changes no schema and writes none of the store's own tables: %w",
+			tinystore.ErrInvalid, d.name, err)
 	}
 	return fmt.Errorf("sql %q: %w", d.name, err)
 }
