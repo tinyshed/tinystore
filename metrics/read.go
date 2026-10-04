@@ -85,7 +85,8 @@ func (s *Store) readEach(ctx context.Context, request Range, yield func(Result) 
 
 // rangeQuery is a checked request: exact matchers, the limits it may spend and
 // its range, whose start retention may have moved forward from the origin it
-// was asked for.
+// was asked for. A read across series starts at the longest retention's
+// cutoff, and each series at its own, its window.
 type rangeQuery struct {
 	matchers         []label
 	conditions       []condition
@@ -93,12 +94,19 @@ type rangeQuery struct {
 	latest           bool // each series' newest sample alone
 	limits           Limits
 	origin, from, to int64
-	cutoff           int64 // retention's, read once a query
+	now              int64 // the store's clock, read once a query
+	cutoff           int64 // the longest retention's, at now
 	aggregate        *aggregateSelection
+
+	// steps reads each series from the newest sample at most lookback before
+	// origin, for an aggregate's first step.
+	steps    bool
+	lookback int64
 }
 
 func (s *Store) checkRange(request Range) (rangeQuery, error) {
-	origin, to, err := s.bounds(request)
+	now := s.now().UnixMilli()
+	origin, to, err := bounds(request, now)
 	if err != nil {
 		return rangeQuery{}, err
 	}
@@ -124,10 +132,10 @@ func (s *Store) checkRange(request Range) (rangeQuery, error) {
 	if err != nil {
 		return rangeQuery{}, err
 	}
-	cutoff := s.cutoff()
+	cutoff := earlier(now, s.retention.longest)
 	return rangeQuery{
 		matchers: matchers, conditions: conditions, limits: limits,
-		origin: origin, from: max(origin, cutoff), to: to, cutoff: cutoff,
+		origin: origin, from: max(origin, cutoff), to: to, now: now, cutoff: cutoff,
 	}, nil
 }
 
@@ -136,13 +144,13 @@ func (s *Store) checkRange(request Range) (rangeQuery, error) {
 //
 //	now 12:00, Since 1h            →  [11:00, open)
 //	From 09:00, To 10:00           →  [09:00, 10:00)
-func (s *Store) bounds(request Range) (from, to int64, err error) {
+func bounds(request Range, now int64) (from, to int64, err error) {
 	from, to = request.From, request.To
 	if request.Since != 0 {
 		if request.Since < 0 || request.From != 0 {
 			return 0, 0, fmt.Errorf("%w: a range starts Since before now or at From, not both", ErrInvalid)
 		}
-		from = earlier(s.now().UnixMilli(), request.Since.Milliseconds())
+		from = earlier(now, request.Since.Milliseconds())
 	}
 	if to == 0 {
 		to = math.MaxInt64
@@ -162,7 +170,7 @@ func (s *Store) yieldResults(
 	for _, read := range reads {
 		result := Result{Series: publicSeries(read.series.labels, read.series.kind)}
 		err := s.eachSample(ctx, read, func(point Sample) error {
-			if point.At < query.from || point.At >= query.to {
+			if point.At < read.window.from || point.At >= query.to {
 				return nil
 			}
 			if output == query.limits.OutputSamples {

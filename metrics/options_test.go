@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -63,7 +64,7 @@ func TestZeroOptionsTakeTheDefaults(t *testing.T) {
 		MaxBatchBytes: 4 << 20, MaintenanceSeries: 64, MaxReaders: 2, MaxConcurrentReads: 2, MaxConcurrentIngest: 1,
 		Limits: Limits{Series: 1000, Blocks: 4096, PayloadBytes: 16 << 20, DecodedSamples: 1 << 20, OutputSamples: 100000},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 }

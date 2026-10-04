@@ -57,7 +57,7 @@ func stagedTestGroups(t *testing.T, s *Store) ([]stagedPublication, []int64) {
 	}
 	staged := make([]stagedPublication, len(ids))
 	for i, id := range ids {
-		candidate, err := s.readCandidate(t.Context(), id, s.cutoff())
+		candidate, err := s.readCandidate(t.Context(), id, s.now().UnixMilli())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,7 +78,7 @@ func TestPublicationBatchRollsBackOneConflictingSeries(t *testing.T) {
 	if err := s.Ingest(t.Context(), []Batch{{Series: b, Samples: []Sample{{At: testEpoch + 1, Value: 99}}}}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.publishBatch(t.Context(), staged, s.cutoff())
+	result, err := s.publishBatch(t.Context(), staged)
 	if err != nil || result.SealedBlocks != 1 || result.Conflicts != 1 {
 		t.Fatalf("publication result: %+v, %v", result, err)
 	}
@@ -111,7 +111,7 @@ func TestPublicationBatchDoesNotCountRolledBackTransaction(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.publishBatch(t.Context(), staged, s.cutoff())
+	result, err := s.publishBatch(t.Context(), staged)
 	if err == nil || result.SealedBlocks != 0 {
 		t.Fatalf("failed batch counted publication: %+v, %v", result, err)
 	}

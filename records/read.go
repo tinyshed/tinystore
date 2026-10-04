@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/tinyshed/tinystore"
@@ -76,8 +77,11 @@ func (s *Store) All(ctx context.Context, query Query) iter.Seq2[Record, error] {
 type checkedQuery struct {
 	asked Query
 	// first and last are the range as nanoseconds, both ends included, the
-	// first clipped by one retention cutoff.
+	// first clipped by the longest retention's cutoff, and each stream's
+	// records by its own.
 	first, last int64
+	now         time.Time
+	options     *Options
 	streams     map[int64]bool // nil: every stream
 	levels      int64          // the level bits a block must share, zero for any
 	search      string         // Search folded to lower case
@@ -91,7 +95,7 @@ func (s *Store) checkQuery(query Query) (checkedQuery, error) {
 	if err != nil {
 		return checkedQuery{asked: query}, err
 	}
-	q := checkedQuery{asked: query}
+	q := checkedQuery{asked: query, now: s.now(), options: &s.opts}
 	if q.limit, err = checkLimit(query.Limit); err != nil {
 		return q, err
 	}
@@ -101,7 +105,7 @@ func (s *Store) checkQuery(query Query) (checkedQuery, error) {
 	if err = checkConditions(query); err != nil {
 		return q, err
 	}
-	if q.first, q.last, err = s.queryRange(query); err != nil {
+	if q.first, q.last, err = queryRange(query, s.opts.longestCutoff(q.now)); err != nil {
 		return q, err
 	}
 	if query.MinLevel != nil {
@@ -158,7 +162,7 @@ func (s *Store) since(query Query) (Query, error) {
 
 // queryRange turns [From, To) into both ends included; a zero From or To
 // leaves that end open, and retention's cutoff moves the first end forward
-func (s *Store) queryRange(query Query) (first, last int64, err error) {
+func queryRange(query Query, cutoff int64) (first, last int64, err error) {
 	if !query.From.IsZero() && !query.To.IsZero() && query.To.Before(query.From) {
 		return 0, 0, fmt.Errorf("%w: the range ends before it starts", tinystore.ErrInvalid)
 	}
@@ -173,11 +177,25 @@ func (s *Store) queryRange(query Query) (first, last int64, err error) {
 		}
 		last = to - 1
 	}
-	return max(first, s.cutoff()), last, nil
+	return max(first, cutoff), last, nil
 }
 
-func (s *Store) cutoff() int64 {
-	return unixNanos(s.now().Add(-s.opts.Retention))
+// cutoff is the oldest time a stream's records are kept at now.
+func (o *Options) cutoff(now time.Time, stream string) int64 {
+	keep, ruled := o.RetentionOf[stream]
+	if !ruled {
+		keep = o.Retention
+	}
+	return unixNanos(now.Add(-keep))
+}
+
+// longestCutoff is where a read across streams starts.
+func (o *Options) longestCutoff(now time.Time) int64 {
+	keep := o.Retention
+	for _, longer := range o.RetentionOf {
+		keep = max(keep, longer)
+	}
+	return unixNanos(now.Add(-keep))
 }
 
 // knownStreams resolves names to ids; a name no record ever had matches nothing
@@ -204,7 +222,7 @@ func (q *checkedQuery) reservation() int64 {
 func (q *checkedQuery) matches(r *Record) bool {
 	at, asked := r.At.UnixNano(), &q.asked
 	switch {
-	case at < q.first || at > q.last:
+	case at < q.first || at > q.last || len(q.options.RetentionOf) > 0 && at < q.options.cutoff(q.now, r.Stream):
 		return false
 	case len(asked.Names) > 0 && !slices.Contains(asked.Names, r.Name):
 		return false

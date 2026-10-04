@@ -13,6 +13,10 @@ type Options struct {
 	// zero.
 	Retention time.Duration
 
+	// RetentionOf keeps the records of a stream, named exactly, as long as its
+	// duration instead of Retention.
+	RetentionOf map[string]time.Duration
+
 	// ClockSkew is how far ahead of the store's clock a record's time may be;
 	// Append refuses a later one, which would hold its segment past retention.
 	// Ten minutes when zero.
@@ -78,6 +82,12 @@ func normalizeOptions(o Options) (Options, error) {
 	}
 	if o.Budget.Blocks < 0 || o.Budget.Bytes < 0 || o.Budget.Decoded < 0 {
 		return o, fmt.Errorf("%w: records budget may not be negative", tinystore.ErrInvalid)
+	}
+	for stream, keep := range o.RetentionOf {
+		if stream == "" || keep <= 0 {
+			return o, fmt.Errorf("%w: the retention of stream %q: a stream and a positive duration",
+				tinystore.ErrInvalid, stream)
+		}
 	}
 	o.Retention = orDefault(o.Retention, 14*24*time.Hour)
 	o.ClockSkew = orDefault(o.ClockSkew, 10*time.Minute)

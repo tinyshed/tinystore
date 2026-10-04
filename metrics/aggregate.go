@@ -224,8 +224,7 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 	if query.from >= query.to {
 		return []AggregateResult{}, nil
 	}
-	from := query.from // withLookback moves the read's start before it
-	steps := withLookback(request, &query)
+	withLookback(request, &query)
 
 	unreserve, err := s.reserve(ctx, func() (int64, error) { return aggregateReservation(query.limits) })
 	if err != nil {
@@ -240,8 +239,7 @@ func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]Aggr
 
 	aggregation := aggregation{
 		store: s, op: request.Op, origin: query.origin, width: request.Width.Milliseconds(),
-		from: from, to: query.to, limit: query.limits.OutputSamples, by: request.By, without: request.Without,
-		steps: steps,
+		to: query.to, limit: query.limits.OutputSamples, by: request.By, without: request.Without, steps: query.steps,
 	}
 	results, err := aggregation.fold(ctx, reads)
 	if err != nil {
@@ -275,30 +273,26 @@ func (s *Store) checkAggregate(request AggregateRequest) (rangeQuery, error) {
 // newest sample a lookback before the range when the operation counts steps
 // between samples: a bucket counts the step that ends in it, and the range's
 // first bucket the step from the last sample before it. A lookback that
-// retention cut leaves that step uncounted, and the bucket partial.
-func withLookback(request AggregateRequest, query *rangeQuery) (steps *lookback) {
+// retention cut leaves that step uncounted, and the bucket partial; each
+// series' window says where its own retention cuts it.
+func withLookback(request AggregateRequest, query *rangeQuery) {
 	query.aggregate = &aggregateSelection{origin: query.origin, width: request.Width.Milliseconds(), from: query.from}
 	switch request.Op {
 	case AggregateIncrease, AggregateRate, AggregateDelta:
 	default:
-		return nil
+		return
 	}
-	steps = &lookback{from: query.from}
-	if query.from > query.origin { // retention cut the range itself
-		return steps
+	query.steps, query.aggregate.steps = true, true
+	query.lookback = query.origin - cmp.Or(request.Lookback, request.Width).Milliseconds()
+	if query.lookback > query.origin { // past the smallest time
+		query.lookback = math.MinInt64
 	}
-	back := cmp.Or(request.Lookback, request.Width).Milliseconds()
-	start := query.origin - back
-	if start > query.origin { // past the smallest time
-		start = math.MinInt64
+	if query.from == query.origin { // retention cut no series' range
+		query.from = max(query.lookback, query.cutoff)
 	}
-	steps.from, steps.clipped = max(start, query.cutoff), start < query.cutoff
-	query.from = steps.from
-	query.aggregate.steps = true
-	return steps
 }
 
-// lookback is where an aggregate's read begins before its range, and whether
+// lookback is where a series' read begins before its range, and whether
 // retention cut it
 type lookback struct {
 	from    int64
@@ -347,10 +341,10 @@ type aggregation struct {
 	store         *Store
 	op            AggregateOp
 	origin, width int64
-	from, to      int64
+	to            int64
 	limit, output int
 	by, without   []string
-	steps         *lookback // nil unless the operation counts steps between samples
+	steps         bool // the operation counts steps between samples
 }
 
 func (a *aggregation) fold(ctx context.Context, reads []seriesRead) ([]AggregateResult, error) {
@@ -361,7 +355,10 @@ func (a *aggregation) fold(ctx context.Context, reads []seriesRead) ([]Aggregate
 		if err := a.checkKind(read.series.kind); err != nil {
 			return nil, err
 		}
-		series := seriesBuckets{aggregation: a, kind: read.series.kind}
+		series := seriesBuckets{aggregation: a, kind: read.series.kind, from: read.window.from}
+		if a.steps {
+			series.steps = &lookback{from: read.window.read, clipped: read.window.clipped}
+		}
 		if grouped {
 			series.group = a.groupOf(groups, publicSeries(read.series.labels, read.series.kind))
 		}
@@ -447,9 +444,7 @@ func (a *aggregation) groupResults(groups map[string]*bucketGroup) ([]AggregateR
 			if a.op == AggregateCount && uint64(joined.count) > 1<<53 { //nolint:gosec // a count is positive
 				return nil, fmt.Errorf("%w: exact count representation", ErrLimit)
 			}
-			bucket := joined.result(a.op)
-			bucket.Partial = bucket.Partial || bucket.From < a.from
-			buckets = append(buckets, bucket)
+			buckets = append(buckets, joined.result(a.op))
 		}
 		if len(buckets) > 0 {
 			results = append(results, AggregateResult{Series: group.series, Buckets: buckets})
@@ -465,6 +460,8 @@ func (a *aggregation) groupResults(groups map[string]*bucketGroup) ([]AggregateR
 type seriesBuckets struct {
 	*aggregation
 	kind        Kind
+	from        int64     // the series' samples count from here, where its retention cuts
+	steps       *lookback // nil unless the operation counts steps between samples
 	current     bucketAccumulator
 	previousAt  int64
 	hasPrevious bool

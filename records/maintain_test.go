@@ -2,6 +2,7 @@ package records
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -172,5 +173,40 @@ func TestRetentionRemovesWholeSegmentsAndClipsReads(t *testing.T) {
 	}
 	if stats := s.Stats(); stats.ExpiredSegments != 2 {
 		t.Fatalf("stats %+v", stats)
+	}
+}
+
+// A stream RetentionOf names keeps its records for its own duration: Append,
+// reads and expiry each take its cutoff, while every other stream keeps
+// Retention's. audit keeps three hours, api one.
+func TestAStreamKeepsItsOwnRetention(t *testing.T) {
+	s := openTestStore(t, t.TempDir(), Options{
+		Retention: time.Hour, RetentionOf: map[string]time.Duration{"audit": 3 * time.Hour},
+	}, tinystore.Options{})
+	now := s.clock.Now()
+	at := func(ago time.Duration) time.Time { return now.Add(-ago) }
+	s.append(t,
+		Record{Stream: "audit", Name: "login", At: at(150 * time.Minute)},
+		Record{Stream: "audit", Name: "login", At: at(10 * time.Minute)},
+		Record{Stream: "api", Name: "request", At: at(50 * time.Minute)},
+	)
+	err := s.Append(t.Context(), Record{Stream: "api", Name: "request", At: at(90 * time.Minute)})
+	if !errors.Is(err, tinystore.ErrTooOld) {
+		t.Fatalf("a record past api's hour: %v", err)
+	}
+	if got := s.readAll(t, Query{}); len(got) != 3 {
+		t.Fatalf("every stream inside its own retention: %d records", len(got))
+	}
+
+	s.clock.advance(time.Hour) // the first audit record is 3.5h old, the api one 1h50m
+	got := s.readAll(t, Query{})
+	if len(got) != 1 || got[0].Stream != "audit" || !got[0].At.Equal(at(10*time.Minute)) {
+		t.Fatalf("each stream past its own retention: %+v", got)
+	}
+	if work := s.maintain(t); work.ExpiredHeads == 0 {
+		t.Fatalf("api's records past its hour did not expire: %+v", work)
+	}
+	if got = s.readAll(t, Query{Streams: []string{"audit"}}); len(got) != 1 {
+		t.Fatalf("audit after expiry: %+v", got)
 	}
 }

@@ -28,9 +28,7 @@ func (s *Store) WriteSelf(ctx context.Context, measures []tinystore.Measure) err
 	}
 	now := s.now()
 	at := now.UnixMilli()
-	accepted := window{
-		cutoff: earlier(at, s.opts.Retention.Milliseconds()), horizon: later(at, s.opts.ClockSkew.Milliseconds()),
-	}
+	accepted := s.windowAt(at)
 	batches := make([]Batch, 0, len(measures))
 	for _, measure := range measures {
 		if len(measure.Engine) == 0 || len(measure.Engine) > 64 || len(measure.Name) == 0 || len(measure.Name) > 64 {

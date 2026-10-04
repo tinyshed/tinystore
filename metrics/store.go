@@ -28,6 +28,7 @@ type Store struct {
 	encoder, decoder                                        *codec.Codec
 	metadata                                                *metadataCodec
 	opts                                                    Options
+	retention                                               retention
 	now                                                     func() time.Time
 	gate                                                    admission.Gate
 	closed                                                  chan struct{}
@@ -144,14 +145,18 @@ func newStore(ctx context.Context, f *sqlite.File, opts Options) (*Store, error)
 	}
 	store := &Store{
 		file: f, encoder: encoder, decoder: decoder, metadata: metadata, opts: opts, now: time.Now,
-		log:    slog.New(slog.DiscardHandler),
-		closed: make(chan struct{}), maintenanceGate: make(chan struct{}, 1),
+		retention: newRetention(opts),
+		log:       slog.New(slog.DiscardHandler),
+		closed:    make(chan struct{}), maintenanceGate: make(chan struct{}, 1),
 		readSlots:   admission.NewSlots(opts.MaxConcurrentReads),
 		ingestSlots: admission.NewSlots(opts.MaxConcurrentIngest),
 	}
 	store.instruments.store = store
 	store.maintenanceGate <- struct{}{}
 	store.quarantined.Store(quarantined)
+	if err = store.resolveRetention(ctx); err != nil {
+		return nil, errors.Join(err, encoder.Close(), decoder.Close())
+	}
 	return store, nil
 }
 

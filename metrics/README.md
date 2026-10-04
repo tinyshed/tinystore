@@ -250,7 +250,16 @@ promises.
   ANDed exact equality predicates; absence is different from an empty value.
 - Retention defaults to 30 days. Lateness defaults to zero and follows the
   newest timestamp of the series. `ClockSkew` defaults to ten minutes. All
-  three must be whole milliseconds. Ingest rejects expired samples, samples
+  three must be whole milliseconds. `RetentionOf` keeps the series of names
+  that start with a prefix for its own duration, the longest prefix winning,
+  for ingest, reads and expiry alike: a series stores its rule's keep, null
+  for `Retention`, and is due for expiry by its oldest sample plus that keep,
+  each half of the due query on an index of its own. A read across series
+  starts at the longest retention's cutoff, and each series' window at its
+  own, its summaries and an aggregate's lookback with it. `Open` rewrites the
+  keep of only the series whose names start with a prefix that came, went or
+  changed since the rules last applied, through the names' postings; a changed
+  `Retention` rewrites none. Ingest rejects expired samples, samples
   behind the persisted frontier and samples more than `ClockSkew` ahead of the
   store's clock (`ErrTooNew`), so that one wrong clock cannot hold a series'
   watermark in the future.

@@ -162,7 +162,11 @@ batch, err := logs.Follow(ctx, cursor, 1000) // sealed segments, from a cursor t
 - Retention removes whole segments whose newest record is older than
   `Options.Retention` (fourteen days) by the store's clock, a merged segment
   with the places it holds, and head rows likewise; a read never returns an
-  older record, even from a segment only partly past it.
+  older record, even from a segment only partly past it. A stream
+  `Options.RetentionOf` names, exactly, keeps its own duration instead, for
+  `Append`'s window, every read and expiry alike: a read across streams starts
+  at the longest retention's cutoff and drops each record before its stream's,
+  and expiry looks each segment's and head row's stream up in one query.
 - Every operation reserves its weight in the store's memory: an append its
   input, a seal 24 MiB for a segment in flight, a read its budget's bytes, a
   decoded block and a page of records, and a follow those and the 4 MiB it

@@ -241,7 +241,7 @@ func TestChangedCandidateCannotPublish(t *testing.T) {
 	if err != nil || len(ids) != 1 {
 		t.Fatal(ids, err)
 	}
-	candidate, err := store.readCandidate(t.Context(), ids[0], store.cutoff())
+	candidate, err := store.readCandidate(t.Context(), ids[0], store.now().UnixMilli())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestChangedCandidateCannotPublish(t *testing.T) {
 	if err = store.Ingest(t.Context(), []Batch{{Series: testSeries(), Samples: points[1:2]}}); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.publish(t.Context(), candidate, group, store.cutoff()); !errors.Is(err, ErrConflict) {
+	if err = store.publish(t.Context(), candidate, group); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale publish: %v", err)
 	}
 	assertSamples(t, readAll(t, store), points)

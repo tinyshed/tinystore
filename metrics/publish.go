@@ -8,9 +8,9 @@ import (
 	"math"
 )
 
-func (s *Store) publish(ctx context.Context, candidate packingCandidate, group blockGroup, cutoff int64) error {
+func (s *Store) publish(ctx context.Context, candidate packingCandidate, group blockGroup) error {
 	return s.file.Update(ctx, func(tx *sql.Tx) error {
-		return s.publishTx(ctx, tx, candidate, group, cutoff)
+		return s.publishTx(ctx, tx, candidate, group)
 	})
 }
 
@@ -18,9 +18,7 @@ func (s *Store) publish(ctx context.Context, candidate packingCandidate, group b
 //
 // It checks that the head has not changed since the group was encoded, absorbs
 // preceding groups, stores payloads and the directory, then moves the frontier.
-func (s *Store) publishTx(
-	ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup, cutoff int64,
-) error {
+func (s *Store) publishTx(ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup) error {
 	if err := checkPackingVersion(ctx, tx, candidate); err != nil {
 		return err
 	}
@@ -41,7 +39,7 @@ func (s *Store) publishTx(
 		return err
 	}
 
-	return s.advanceFrontier(ctx, tx, candidate, group, cutoff)
+	return s.advanceFrontier(ctx, tx, candidate, group)
 }
 
 const packingVersionQuery = `select version from series_state where series_id=?`
@@ -128,9 +126,7 @@ const advanceFrontierQuery = `
 
 // advanceFrontier removes the sealed samples from the head and moves the
 // sealed frontier past the group, in the same transaction as the group.
-func (s *Store) advanceFrontier(
-	ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup, cutoff int64,
-) error {
+func (s *Store) advanceFrontier(ctx context.Context, tx *sql.Tx, candidate packingCandidate, group blockGroup) error {
 	existing, err := s.mutablePoints(ctx, tx, group.seriesID)
 	if err != nil {
 		return err
@@ -144,7 +140,7 @@ func (s *Store) advanceFrontier(
 	}
 
 	ready := 0
-	if s.headReady(remaining, candidate.maxSeen, cutoff) {
+	if s.headReady(remaining, candidate.maxSeen, candidate.cutoff) {
 		ready = 1
 	}
 	_, err = tx.ExecContext(ctx, advanceFrontierQuery, group.end+1, ready, group.modelScale, group.seriesID)
@@ -174,7 +170,7 @@ func publicationBytes(candidate packingCandidate, group blockGroup) int {
 
 // publishBatch publishes staged groups in one transaction; the counts move
 // only once it commits.
-func (s *Store) publishBatch(ctx context.Context, staged []stagedPublication, cutoff int64) (Maintenance, error) {
+func (s *Store) publishBatch(ctx context.Context, staged []stagedPublication) (Maintenance, error) {
 	if len(staged) == 0 {
 		return Maintenance{}, nil
 	}
@@ -182,7 +178,7 @@ func (s *Store) publishBatch(ctx context.Context, staged []stagedPublication, cu
 	var suspended []suspendedPublication
 	err := s.file.Update(ctx, func(tx *sql.Tx) error {
 		for _, item := range staged {
-			outcome, reason, err := s.publishIsolated(ctx, tx, item, cutoff)
+			outcome, reason, err := s.publishIsolated(ctx, tx, item)
 			if err != nil {
 				return err
 			}
@@ -217,13 +213,11 @@ const (
 
 // publishIsolated publishes one series inside a savepoint, so that a conflict
 // or a corrupt series undoes only its own changes and the batch goes on.
-func (s *Store) publishIsolated(
-	ctx context.Context, tx *sql.Tx, item stagedPublication, cutoff int64,
-) (Maintenance, string, error) {
+func (s *Store) publishIsolated(ctx context.Context, tx *sql.Tx, item stagedPublication) (Maintenance, string, error) {
 	if _, err := tx.ExecContext(ctx, savepointQuery); err != nil {
 		return Maintenance{}, "", fmt.Errorf("start series publication: %w", err)
 	}
-	publishErr := s.publishTx(ctx, tx, item.candidate, item.group, cutoff)
+	publishErr := s.publishTx(ctx, tx, item.candidate, item.group)
 	if publishErr == nil {
 		if _, err := tx.ExecContext(ctx, releaseSavepointQuery); err != nil {
 			return Maintenance{}, "", fmt.Errorf("finish series publication: %w", err)

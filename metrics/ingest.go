@@ -43,7 +43,7 @@ func (s *Store) ingest(ctx context.Context, batches []Batch, user bool, captured
 		return err
 	}
 
-	if err = s.commitIngest(ctx, input, accepted.cutoff); err != nil {
+	if err = s.commitIngest(ctx, input); err != nil {
 		return fmt.Errorf("ingest metrics: %w", err)
 	}
 	if user {
@@ -54,10 +54,10 @@ func (s *Store) ingest(ctx context.Context, batches []Batch, user bool, captured
 
 // commitIngest registers new series and rewrites every touched head in one
 // transaction, so a failure anywhere leaves the file as it was.
-func (s *Store) commitIngest(ctx context.Context, input []preparedBatch, cutoff int64) error {
+func (s *Store) commitIngest(ctx context.Context, input []preparedBatch) error {
 	return s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		for _, series := range input {
-			if err := s.writeSeries(ctx, tx, series, cutoff); err != nil {
+			if err := s.writeSeries(ctx, tx, series); err != nil {
 				return seriesError(series.labels, err)
 			}
 		}
@@ -65,12 +65,12 @@ func (s *Store) commitIngest(ctx context.Context, input []preparedBatch, cutoff 
 	})
 }
 
-func (s *Store) writeSeries(ctx context.Context, tx sqlite.Writer, series preparedBatch, cutoff int64) error {
+func (s *Store) writeSeries(ctx context.Context, tx sqlite.Writer, series preparedBatch) error {
 	id, err := s.resolveSeries(ctx, tx, series)
 	if err != nil {
 		return err
 	}
-	return s.writeHead(ctx, tx, id, series.samples, cutoff)
+	return s.writeHead(ctx, tx, id, series.samples, series.cutoff)
 }
 
 func (s *Store) writeHead(ctx context.Context, tx sqlite.Writer, id int64, incoming []Sample, cutoff int64) error {

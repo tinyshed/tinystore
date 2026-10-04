@@ -86,7 +86,7 @@ func (s *Store) askForFlush() {
 
 // fits is a line the format can keep, at a time the store's window accepts
 func (s *Store) fits(r *Record) bool {
-	return checkRecord(r) == nil && s.window(s.now()).check(r.At) == nil
+	return checkRecord(r) == nil && s.window(s.now()).check(r.At, r.Stream) == nil
 }
 
 // Flush writes what the handler has queued, and the records that writers of

@@ -54,6 +54,16 @@ func keptLabels(name string, labels Labels) ([]label, error) {
 	return kept, nil
 }
 
+// seriesName is the value of a series' __name__ label.
+func seriesName(labels []label) string {
+	for _, pair := range labels {
+		if pair.Name == metricName {
+			return pair.Value
+		}
+	}
+	return ""
+}
+
 // publicSeries is kept labels as the application names a series: its name
 // apart from its labels
 func publicSeries(kept []label, kind Kind) Series {
@@ -343,7 +353,8 @@ func (s *Store) registerSeries(
 		return 0, err
 	}
 
-	if err = initializeSeriesState(ctx, tx, id, batch.samples[0].At); err != nil {
+	keep := s.retention.stored(seriesName(batch.labels))
+	if err = initializeSeriesState(ctx, tx, id, batch.samples[0].At, keep); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -388,12 +399,12 @@ func indexSeries(ctx context.Context, tx sqlite.Writer, id int64, labelIDs []int
 }
 
 const (
-	insertSeriesStateQuery   = `insert into series_state(series_id,max_seen_ts) values(?,?)`
+	insertSeriesStateQuery   = `insert into series_state(series_id,max_seen_ts,keep) values(?,?,?)`
 	increaseCardinalityQuery = `update store_state set series_count=series_count+1 where id=1`
 )
 
-func initializeSeriesState(ctx context.Context, tx sqlite.Writer, id, first int64) error {
-	if _, err := tx.ExecContext(ctx, insertSeriesStateQuery, id, first); err != nil {
+func initializeSeriesState(ctx context.Context, tx sqlite.Writer, id, first int64, keep sql.NullInt64) error {
+	if _, err := tx.ExecContext(ctx, insertSeriesStateQuery, id, first, keep); err != nil {
 		return fmt.Errorf("initialize series state: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, increaseCardinalityQuery); err != nil {

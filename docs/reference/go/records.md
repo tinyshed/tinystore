@@ -176,6 +176,10 @@ type Options struct {
 	// zero.
 	Retention time.Duration
 
+	// RetentionOf keeps the records of a stream, named exactly, as long as its
+	// duration instead of Retention.
+	RetentionOf map[string]time.Duration
+
 	// ClockSkew is how far ahead of the store's clock a record's time may be;
 	// Append refuses a later one, which would hold its segment past retention.
 	// Ten minutes when zero.

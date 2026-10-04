@@ -17,10 +17,14 @@ const expireBatch = 64
 // left by the same kind of cutoff, so a segment retention has partly passed
 // answers only what it keeps.
 func (p *maintenancePass) expire(ctx context.Context) error {
+	cutoff, streams, err := p.cutoffs()
+	if err != nil {
+		return err
+	}
 	for {
-		removed, err := p.store.expireSegments(ctx, p.cutoff())
-		if err != nil {
-			return err
+		removed, expireErr := p.store.expireSegments(ctx, cutoff, streams)
+		if expireErr != nil {
+			return expireErr
 		}
 		p.result.ExpiredSegments += removed
 		p.store.expired.Add(unsigned(removed))
@@ -28,7 +32,7 @@ func (p *maintenancePass) expire(ctx context.Context) error {
 			break
 		}
 	}
-	removed, err := p.store.expireHeads(ctx, p.cutoff())
+	removed, err := p.store.expireHeads(ctx, cutoff, streams)
 	p.result.ExpiredHeads += removed
 	return err
 }
@@ -36,7 +40,8 @@ func (p *maintenancePass) expire(ctx context.Context) error {
 const (
 	selectExpiredSegments = `
 		select id, first_block, last_block from segments
-		where last_at < ? and holder is null
+		where holder is null and last_at < coalesce(
+			(select cutoff.value from json_each(?) cutoff where cutoff.key = cast(segments.stream as text)), ?)
 		order by id
 		limit cast(? as integer)`
 	deleteBlockFilters = `delete from block_filters where block between ? and ?`
@@ -51,11 +56,11 @@ type expiredSegment struct {
 	id, firstBlock, lastBlock int64
 }
 
-func (s *Store) expireSegments(ctx context.Context, cutoff int64) (int, error) {
+func (s *Store) expireSegments(ctx context.Context, cutoff int64, streams string) (int, error) {
 	var expired []expiredSegment
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
 		//nolint:rowserrcheck // EachRow checks Err
-		rows, err := tx.QueryContext(ctx, selectExpiredSegments, cutoff, expireBatch)
+		rows, err := tx.QueryContext(ctx, selectExpiredSegments, streams, cutoff, expireBatch)
 		if err != nil {
 			return err
 		}
@@ -98,7 +103,10 @@ func deleteExpiredSegment(ctx context.Context, tx sqlite.Writer, segment expired
 	return nil
 }
 
-const selectExpiredHeads = `select id, stream, late, count, input from heads where last_at < ?`
+const selectExpiredHeads = `
+	select id, stream, late, count, input from heads
+	where last_at < coalesce(
+		(select cutoff.value from json_each(?) cutoff where cutoff.key = cast(heads.stream as text)), ?)`
 
 // expiredHead is what leaves one head: its rows, their records and their input
 type expiredHead struct {
@@ -106,10 +114,10 @@ type expiredHead struct {
 	headWeight
 }
 
-func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
+func (s *Store) expireHeads(ctx context.Context, cutoff int64, streams string) (int, error) {
 	removed, gone := 0, []int64(nil)
 	err := s.file.UpdatePrepared(ctx, func(tx sqlite.Writer) error {
-		heads, err := expiredHeadRows(ctx, tx, cutoff)
+		heads, err := expiredHeadRows(ctx, tx, cutoff, streams)
 		if err != nil {
 			return err
 		}
@@ -136,9 +144,11 @@ func (s *Store) expireHeads(ctx context.Context, cutoff int64) (int, error) {
 	return removed, nil
 }
 
-func expiredHeadRows(ctx context.Context, tx sqlite.Writer, cutoff int64) (map[headKey]*expiredHead, error) {
+func expiredHeadRows(
+	ctx context.Context, tx sqlite.Writer, cutoff int64, streams string,
+) (map[headKey]*expiredHead, error) {
 	heads := map[headKey]*expiredHead{}
-	rows, err := tx.QueryContext(ctx, selectExpiredHeads, cutoff) //nolint:rowserrcheck // EachRow checks Err
+	rows, err := tx.QueryContext(ctx, selectExpiredHeads, streams, cutoff) //nolint:rowserrcheck // EachRow checks Err
 	if err != nil {
 		return nil, err
 	}

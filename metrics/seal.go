@@ -10,6 +10,7 @@ type packingCandidate struct {
 	modelScale        int
 	seriesID, version int64
 	maxSeen           int64
+	cutoff            int64 // the oldest time the series keeps
 	kind              Kind
 	points            []Sample
 }
@@ -33,28 +34,30 @@ func (s *Store) headReady(points []Sample, maxSeen, cutoff int64) bool {
 }
 
 const packingStateQuery = `
-	select s.kind, state.version, state.max_seen_ts, state.model_scale
+	select s.kind, state.version, state.max_seen_ts, state.model_scale, state.keep
 	from series s join series_state state on s.id = state.series_id
 	where s.id = ?`
 
-func (s *Store) readCandidate(ctx context.Context, id, cutoff int64) (packingCandidate, error) {
+func (s *Store) readCandidate(ctx context.Context, id, now int64) (packingCandidate, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.SnapshotTimeout)
 	defer cancel()
 	candidate := packingCandidate{seriesID: id}
 	var head headSnapshot
 	var watermark int64
 	err := s.file.View(ctx, func(tx *sql.Tx) error {
+		var keep sql.NullInt64
 		err := tx.QueryRowContext(ctx, packingStateQuery, id).
-			Scan(&candidate.kind, &candidate.version, &candidate.maxSeen, &candidate.modelScale)
+			Scan(&candidate.kind, &candidate.version, &candidate.maxSeen, &candidate.modelScale, &keep)
 		if err != nil {
 			return fmt.Errorf("read packing state: %w", err)
 		}
+		candidate.cutoff = s.retention.cutoffOf(now, keep)
 		if candidate.modelScale < -2 || candidate.modelScale > 15 {
 			return fmt.Errorf("%w: stored model hint", ErrCorrupt)
 		}
 		watermark = earlier(candidate.maxSeen, s.opts.Lateness.Milliseconds())
 		var readErr error
-		head, readErr = s.fetchHead(ctx, tx, id, cutoff, watermark, nil)
+		head, readErr = s.fetchHead(ctx, tx, id, candidate.cutoff, watermark, nil)
 		return readErr
 	})
 	if err != nil {
@@ -65,7 +68,7 @@ func (s *Store) readCandidate(ctx context.Context, id, cutoff int64) (packingCan
 		return candidate, err
 	}
 	for _, point := range points {
-		if point.At < cutoff {
+		if point.At < candidate.cutoff {
 			continue
 		}
 		if point.At >= watermark || len(candidate.points) == blockSamples*groupSlots {

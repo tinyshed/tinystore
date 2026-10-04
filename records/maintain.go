@@ -3,7 +3,9 @@ package records
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/tinyshed/tinystore/internal/sqlite"
@@ -49,9 +51,21 @@ type maintenancePass struct {
 	sealedStreams map[int64]bool
 }
 
-// cutoff is the oldest time retention keeps
-func (p *maintenancePass) cutoff() int64 {
-	return unixNanos(p.now.Add(-p.store.opts.Retention))
+// cutoffs is the oldest time retention keeps: Retention's, and as a JSON
+// object of stream ids those of the streams RetentionOf names, for SQLite to
+// look each row's stream up in
+func (p *maintenancePass) cutoffs() (fallback int64, streams string, err error) {
+	byID := map[string]int64{}
+	for stream := range p.store.opts.RetentionOf {
+		if id, ok := p.store.streams.id(stream); ok {
+			byID[strconv.FormatInt(id, 10)] = p.store.opts.cutoff(p.now, stream)
+		}
+	}
+	encoded, err := json.Marshal(byID)
+	if err != nil {
+		return 0, "", fmt.Errorf("records: encode the streams' cutoffs: %w", err)
+	}
+	return unixNanos(p.now.Add(-p.store.opts.Retention)), string(encoded), nil
 }
 
 // sealBefore is when a head's oldest row must have been written for it to seal however small

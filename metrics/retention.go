@@ -365,5 +365,3 @@ func later(at, delta int64) int64 {
 	}
 	return at + delta
 }
-
-func (s *Store) cutoff() int64 { return earlier(s.now().UnixMilli(), s.opts.Retention.Milliseconds()) }

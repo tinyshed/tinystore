@@ -235,9 +235,10 @@ choose page size with row size, and measure the file, not the payload.
 its labels.
 
 **A time is taken only inside its engine's window.** An engine that keeps an
-observation by its time accepts `[now − Retention, now + ClockSkew]`, `now`
-read once a call from `Store.Now()`; outside it is `ErrTooOld` or `ErrTooNew`
-naming the item. Without the upper edge one wrong clock holds a records
+observation by its time accepts `[now − its retention, now + ClockSkew]`, its
+retention `Retention` or what `RetentionOf` gives its stream or its name,
+`now` read once a call from `Store.Now()`; outside it is `ErrTooOld` or
+`ErrTooNew` naming the item. Without the upper edge one wrong clock holds a records
 segment past retention and a metrics watermark in the future for good.
 
 ## Architecture
@@ -294,7 +295,7 @@ quietly. A quiet tail stays in the durable, queryable head until it is worth
 packing or its samples expire. There is no forced closure on a wall clock.
 
 **Retention clips the read before a summary is chosen.** A query captures one
-cutoff and reads `[max(from, cutoff), to)`. A whole-block summary may be used
+`now`, and each series its cutoff at it, and reads `[max(from, cutoff), to)`. A whole-block summary may be used
 only when all its samples belong to that range and one requested aggregation
 bucket; otherwise raw is filtered first, including for counters. Ingest refuses
 a sample below either the cutoff or `sealed_before`. Retention removes expired

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/tinyshed/tinystore/internal/sqlite"
 )
 
 // Maintain performs a bounded retention pass, then seals eligible full microblocks.
@@ -25,7 +27,7 @@ func (s *Store) Maintain(ctx context.Context) (Maintenance, error) {
 	}
 	defer unreserve()
 
-	pass := maintenancePass{store: s, cutoff: s.cutoff()}
+	pass := maintenancePass{store: s, now: s.now().UnixMilli()}
 	if err = pass.expireDue(ctx); err != nil {
 		return pass.result, err
 	}
@@ -44,25 +46,25 @@ func (s *Store) holdMaintenance(ctx context.Context) (release func(), err error)
 	}
 }
 
-// maintenancePass is one Maintain call: its cutoff, the publications it has
-// staged but not yet written, and what it has done so far.
+// maintenancePass is one Maintain call: the time its cutoffs are taken at,
+// the publications it has staged but not yet written, and what it has done.
 type maintenancePass struct {
 	store       *Store
-	cutoff      int64
+	now         int64
 	staged      []stagedPublication
 	stagedBytes int
 	result      Maintenance
 }
 
 func (p *maintenancePass) expireDue(ctx context.Context) error {
-	due, err := p.store.expiryDue(ctx, p.cutoff)
+	due, err := p.store.expiryDue(ctx, p.now)
 	if err != nil {
 		return err
 	}
-	for _, id := range due {
-		expired, reclaimed, expireErr := p.store.expireSeries(ctx, id, p.cutoff)
+	for _, series := range due {
+		expired, reclaimed, expireErr := p.store.expireSeries(ctx, series.id, series.cutoff)
 		if expireErr != nil {
-			if err = p.isolate(ctx, id, "retention", expireErr); err != nil {
+			if err = p.isolate(ctx, series.id, "retention", expireErr); err != nil {
 				return err
 			}
 			continue
@@ -93,7 +95,7 @@ func (p *maintenancePass) sealReady(ctx context.Context) error {
 // seal encodes the safe prefix of one series outside the writer and stages it
 // for publication.
 func (p *maintenancePass) seal(ctx context.Context, id int64) error {
-	candidate, err := p.store.readCandidate(ctx, id, p.cutoff)
+	candidate, err := p.store.readCandidate(ctx, id, p.now)
 	if err != nil {
 		return p.isolate(ctx, id, "read head", err)
 	}
@@ -147,7 +149,7 @@ func (p *maintenancePass) stage(ctx context.Context, publication stagedPublicati
 }
 
 func (p *maintenancePass) flush(ctx context.Context) error {
-	committed, err := p.store.publishBatch(ctx, p.staged, p.cutoff)
+	committed, err := p.store.publishBatch(ctx, p.staged)
 	if err != nil {
 		return err
 	}
@@ -161,23 +163,50 @@ func (p *maintenancePass) flush(ctx context.Context) error {
 	return nil
 }
 
+// each half reads its own index: Retention's by the oldest sample, a rule's by
+// the oldest sample plus its keep
 const expiryDueQuery = `
-	select series_id from series_state
-	where failed_at is null and next_gc_ts is not null and next_gc_ts<?
-	order by next_gc_ts,series_id limit cast(? as integer)`
+	select series_id, keep from (
+		select series_id, keep, next_gc_ts + ? as due from series_state
+		where failed_at is null and next_gc_ts is not null and keep is null and next_gc_ts < ?
+		union all
+		select series_id, keep, next_gc_ts + keep as due from series_state
+		where failed_at is null and next_gc_ts is not null and keep is not null and next_gc_ts + keep < ?
+	)
+	order by due, series_id limit cast(? as integer)`
 
-// expiryDue finds the series whose oldest sample is behind the cutoff through
-// one indexed value per series.
-func (s *Store) expiryDue(ctx context.Context, cutoff int64) ([]int64, error) {
+// dueSeries is a series whose oldest sample is behind its cutoff.
+type dueSeries struct {
+	id, cutoff int64
+}
+
+// expiryDue finds the series whose oldest sample is behind their cutoff
+// through one indexed value per series.
+func (s *Store) expiryDue(ctx context.Context, now int64) ([]dueSeries, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.SnapshotTimeout)
 	defer cancel()
-	var ids []int64
+	var due []dueSeries
 	err := s.file.View(ctx, func(tx *sql.Tx) error {
-		var err error
-		ids, err = readSeriesIDs(ctx, tx, expiryDueQuery, cutoff, s.opts.MaintenanceSeries)
-		return err
+		rows, err := tx.QueryContext(ctx, expiryDueQuery, //nolint:rowserrcheck // EachRow checks Err
+			s.retention.fallback, earlier(now, s.retention.fallback), now, s.opts.MaintenanceSeries)
+		if err != nil {
+			return err
+		}
+		return sqlite.EachRow(rows, "series due", func(rows *sql.Rows) error {
+			var series dueSeries
+			var keep sql.NullInt64
+			if err := rows.Scan(&series.id, &keep); err != nil {
+				return err
+			}
+			series.cutoff = s.retention.cutoffOf(now, keep)
+			due = append(due, series)
+			return nil
+		})
 	})
-	return ids, err
+	if err != nil {
+		return nil, fmt.Errorf("find series due for expiry: %w", err)
+	}
+	return due, nil
 }
 
 const (

@@ -1,9 +1,12 @@
+-- retention is RetentionOf as the series' keep was last resolved, a JSON
+-- object of name prefixes and milliseconds
 create table store_state (
     id              integer primary key check (id = 1),
     series_count    integer not null check (series_count >= 0),
-    next_payload_id integer not null check (next_payload_id > 0)
+    next_payload_id integer not null check (next_payload_id > 0),
+    retention       text not null default '{}'
 ) strict;
-insert into store_state values (1, 0, 1);
+insert into store_state(id, series_count, next_payload_id) values (1, 0, 1);
 
 -- identity is '@' and the base64 SHA-256 of the canonical labels; label_ids are
 -- the gap-coded dictionary ids every digest match is confirmed against. The
@@ -43,10 +46,16 @@ create table series_state (
     head_start     integer,
     head_end       integer,
     failed_at      integer,
-    failure_reason text check (failure_reason is null or length(failure_reason) <= 1024)
+    failure_reason text check (failure_reason is null or length(failure_reason) <= 1024),
+    keep           integer check (keep is null or keep > 0)
 ) strict;
 create index series_ready on series_state(series_id) where ready = 1 and failed_at is null;
-create index series_due on series_state(next_gc_ts) where next_gc_ts is not null and failed_at is null;
+-- next_gc_ts is the oldest sample; a series kept by Retention is due when it
+-- passes the cutoff, one kept by a rule of RetentionOf when it passes its keep
+create index series_due on series_state(next_gc_ts)
+    where next_gc_ts is not null and failed_at is null and keep is null;
+create index series_due_kept on series_state(next_gc_ts + keep)
+    where next_gc_ts is not null and failed_at is null and keep is not null;
 create index series_failed on series_state(failed_at, series_id) where failed_at is not null;
 create index series_failed_id on series_state(series_id) where failed_at is not null;
 

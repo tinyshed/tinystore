@@ -12,6 +12,7 @@ type preparedBatch struct {
 	labels   []label
 	kind     Kind
 	samples  []Sample
+	cutoff   int64 // the oldest time the series keeps
 }
 
 // prepareIngest checks a call's batches and gathers them into one sorted run
@@ -38,16 +39,19 @@ func (s *Store) prepareIngest(batches []Batch, accepted window) ([]preparedBatch
 // window is the times one call accepts, read once from the store's clock:
 //
 //	now 12:00, Retention 30 days, ClockSkew 10 minutes → [12:00 thirty days ago, 12:10]
+//
+// A series kept by a rule of RetentionOf starts its window at its own keep.
 type window struct {
-	cutoff, horizon int64
+	now, horizon int64
+	retention    retention
 }
 
 func (s *Store) window() window {
-	now := s.now().UnixMilli()
-	return window{
-		cutoff:  earlier(now, s.opts.Retention.Milliseconds()),
-		horizon: later(now, s.opts.ClockSkew.Milliseconds()),
-	}
+	return s.windowAt(s.now().UnixMilli())
+}
+
+func (s *Store) windowAt(now int64) window {
+	return window{now: now, horizon: later(now, s.opts.ClockSkew.Milliseconds()), retention: s.retention}
 }
 
 // ingestInput is one call being checked against its sample and byte budgets.
@@ -91,7 +95,7 @@ func (in *ingestInput) add(batch Batch) error {
 	if err != nil {
 		return seriesError(labels, err)
 	}
-	if err = series.addAll(batch.Samples, in.accepted); err != nil {
+	if err = series.addAll(batch.Samples, in.accepted.horizon); err != nil {
 		return seriesError(labels, err)
 	}
 	return nil
@@ -100,7 +104,8 @@ func (in *ingestInput) add(batch Batch) error {
 func (in *ingestInput) seriesFor(identity string, labels []label, kind Kind) (*pendingSeries, error) {
 	series, found := in.series[identity]
 	if !found {
-		series = &pendingSeries{batch: preparedBatch{identity: identity, labels: labels, kind: kind}}
+		cutoff := in.accepted.retention.cutoff(in.accepted.now, seriesName(labels))
+		series = &pendingSeries{batch: preparedBatch{identity: identity, labels: labels, kind: kind, cutoff: cutoff}}
 		in.series[identity] = series
 	}
 	if series.batch.kind != kind {
@@ -137,15 +142,15 @@ type pendingSeries struct {
 	byTime map[int64]Sample // nil while every timestamp so far was newer than the last
 }
 
-func (p *pendingSeries) addAll(samples []Sample, accepted window) error {
+func (p *pendingSeries) addAll(samples []Sample, horizon int64) error {
 	for _, point := range samples {
 		switch {
 		case point.At == math.MaxInt64:
 			return fmt.Errorf("%w: MaxInt64 is reserved for the exclusive range bound", ErrInvalid)
-		case point.At < accepted.cutoff:
+		case point.At < p.batch.cutoff:
 			return fmt.Errorf("%w: retention cutoff", ErrTooOld)
-		case point.At > accepted.horizon:
-			return fmt.Errorf("%w: %d is past %d, the clock and its skew", ErrTooNew, point.At, accepted.horizon)
+		case point.At > horizon:
+			return fmt.Errorf("%w: %d is past %d, the clock and its skew", ErrTooNew, point.At, horizon)
 		}
 		p.add(point)
 	}

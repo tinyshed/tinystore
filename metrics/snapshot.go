@@ -11,8 +11,20 @@ import (
 
 type seriesRead struct {
 	series registeredSeries
+	window seriesWindow
 	blocks []storedBlock
 	head   headSnapshot
+}
+
+// seriesWindow is where one series' range and its read start: retention may
+// keep a series for less than the longest a read across series starts at
+//
+//	origin 10:00, the series kept from 10:20     range and read from 10:20
+//	origin 10:00, lookback 5m, kept from 09:00   range from 10:00, read from 09:55
+type seriesWindow struct {
+	from    int64 // the samples its range counts start here
+	read    int64 // what it reads starts here, earlier for a first step
+	clipped bool  // retention cut the read's lookback
 }
 
 type groupRow struct {
@@ -24,6 +36,11 @@ type groupRow struct {
 type snapshotRead struct {
 	tx       sqlite.Reader
 	from, to int64
+
+	// each series' window: its cutoff at now, and an aggregate's lookback
+	origin, now, lookback int64
+	steps                 bool
+	retention             retention
 
 	// budget is charged by each fetch.
 	budget *queryBudget
@@ -64,6 +81,7 @@ func (s *Store) fetchSnapshotSpending(ctx context.Context, query rangeQuery) ([]
 		}
 		snapshot := snapshotRead{
 			tx: tx, from: query.from, to: query.to, budget: &budget,
+			origin: query.origin, now: query.now, lookback: query.lookback, steps: query.steps, retention: s.retention,
 			aggregate: query.aggregate, planOnly: query.planOnly, latest: query.latest,
 		}
 		if len(matched) >= batchedSeries {
@@ -97,11 +115,12 @@ func (s *Store) fetchBatched(
 
 	reads := make([]seriesRead, 0, len(matched))
 	for i, series := range matched {
+		window := snapshot.window(series.labels)
 		var blocks []storedBlock
-		if blocks, err = s.decodeGroupRows(ctx, snapshot, series.id, groups[series.id]); err != nil {
+		if blocks, err = s.decodeGroupRows(ctx, snapshot.narrowedTo(window), series.id, groups[series.id]); err != nil {
 			return nil, err
 		}
-		reads = append(reads, seriesRead{series: series, blocks: blocks, head: heads[i]})
+		reads = append(reads, seriesRead{series: series, window: window, blocks: blocks, head: heads[i]})
 	}
 
 	if snapshot.planOnly {
@@ -118,24 +137,51 @@ func (s *Store) fetchEach(
 ) ([]seriesRead, error) {
 	reads := make([]seriesRead, 0, len(matched))
 	for _, series := range matched {
-		rows, err := snapshot.groupsInRange(ctx, series.id)
+		window := snapshot.window(series.labels)
+		read := snapshot.narrowedTo(window)
+		rows, err := read.groupsInRange(ctx, series.id)
 		if err != nil {
 			return nil, err
 		}
-		blocks, err := s.decodeGroupRows(ctx, snapshot, series.id, rows)
+		blocks, err := s.decodeGroupRows(ctx, read, series.id, rows)
 		if err != nil {
 			return nil, err
 		}
-		head, err := s.fetchHead(ctx, snapshot.tx, series.id, snapshot.from, snapshot.to, snapshot.budget)
+		head, err := s.fetchHead(ctx, read.tx, series.id, read.from, read.to, read.budget)
 		if err != nil {
 			return nil, err
 		}
-		if err = snapshot.chargeHead(&head); err != nil {
+		if err = read.chargeHead(&head); err != nil {
 			return nil, err
 		}
-		reads = append(reads, seriesRead{series: series, blocks: blocks, head: head})
+		reads = append(reads, seriesRead{series: series, window: window, blocks: blocks, head: head})
 	}
 	return reads, nil
+}
+
+// window is one series' window: its range from its cutoff at now, and an
+// aggregate's first step from the newest sample at most lookback before it
+// when retention left its range whole.
+func (r snapshotRead) window(labels []label) seriesWindow {
+	cutoff := r.retention.cutoff(r.now, seriesName(labels))
+	window := seriesWindow{from: max(r.origin, cutoff)}
+	window.read = window.from
+	if r.steps && window.from == r.origin {
+		window.read, window.clipped = max(r.lookback, cutoff), r.lookback < cutoff
+	}
+	return window
+}
+
+// narrowedTo is the read of one series in its window, whose blocks and
+// summaries start there rather than where the read across series starts.
+func (r snapshotRead) narrowedTo(window seriesWindow) snapshotRead {
+	r.from = max(r.from, window.read)
+	if r.aggregate != nil {
+		selection := *r.aggregate
+		selection.from = window.from
+		r.aggregate = &selection
+	}
+	return r
 }
 
 // the group that starts at or before from may still hold samples of the range

@@ -57,7 +57,7 @@ func checkBatch(batch []Record, accepted window) error {
 	for i := range batch {
 		err := checkRecord(&batch[i])
 		if err == nil {
-			err = accepted.check(batch[i].At)
+			err = accepted.check(batch[i].At, batch[i].Stream)
 		}
 		if err != nil {
 			return &RecordError{Index: i, Stream: batch[i].Stream, Name: batch[i].Name, Err: err}
@@ -73,22 +73,26 @@ func checkBatch(batch []Record, accepted window) error {
 	return nil
 }
 
-// window is the times one call accepts, read once from the store's clock:
+// window is the times one call accepts, read once from the store's clock,
+// a stream RetentionOf names from its own retention:
 //
 //	now 12:00, Retention 14 days, ClockSkew 10 minutes → [12:00 fourteen days ago, 12:10]
 type window struct {
-	oldest, newest int64
+	now     time.Time
+	newest  int64
+	options *Options
 }
 
 func (s *Store) window(now time.Time) window {
-	return window{oldest: unixNanos(now.Add(-s.opts.Retention)), newest: unixNanos(now.Add(s.opts.ClockSkew))}
+	return window{now: now, newest: unixNanos(now.Add(s.opts.ClockSkew)), options: &s.opts}
 }
 
-// check refuses a time the window does not hold, naming the edge it passed
-func (w window) check(at time.Time) error {
-	switch t := unixNanos(at); {
-	case t < w.oldest:
-		return fmt.Errorf("%w: time %s is before the retention cutoff %s", tinystore.ErrTooOld, at, timeOf(w.oldest))
+// check refuses a time the window does not hold for the stream, naming the
+// edge it passed
+func (w window) check(at time.Time, stream string) error {
+	switch t, oldest := unixNanos(at), w.options.cutoff(w.now, stream); {
+	case t < oldest:
+		return fmt.Errorf("%w: time %s is before the retention cutoff %s", tinystore.ErrTooOld, at, timeOf(oldest))
 	case t > w.newest:
 		return fmt.Errorf("%w: time %s is past %s, the store's clock and its skew", tinystore.ErrTooNew, at,
 			timeOf(w.newest))

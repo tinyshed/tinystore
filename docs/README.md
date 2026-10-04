@@ -99,6 +99,7 @@ skill: .agents/skills/docs/SKILL.md.
 - [Durability](concepts/durability.md)
 - [Concurrency](concepts/concurrency.md)
 - [Time](concepts/time.md)
+- [Retention](concepts/retention.md)
 - [Memory and limits](concepts/memory.md)
 - [Errors](concepts/errors.md)
 - [Files on disk](concepts/files.md)

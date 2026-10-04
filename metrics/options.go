@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"time"
+	"unicode/utf8"
 )
 
 type Limits struct {
@@ -15,7 +16,13 @@ type Limits struct {
 }
 
 type Options struct {
-	Retention           time.Duration
+	Retention time.Duration
+
+	// RetentionOf keeps the series of names that start with a prefix as long
+	// as its duration, the longest prefix a name starts with winning; every
+	// other series is kept for Retention.
+	RetentionOf map[string]time.Duration
+
 	Lateness            time.Duration
 	ClockSkew           time.Duration
 	MaxBlockSpan        time.Duration
@@ -78,6 +85,14 @@ func (o *Options) normalizeDurations() error {
 	}
 	if o.SnapshotTimeout < 0 || o.MaintenanceInterval < 0 || o.Flush < 0 {
 		return fmt.Errorf("%w: durations", ErrInvalid)
+	}
+	for prefix, keep := range o.RetentionOf {
+		if prefix == "" || len(prefix) > maxLabelValueBytes || !utf8.ValidString(prefix) {
+			return fmt.Errorf("%w: a retention prefix %q", ErrInvalid, prefix)
+		}
+		if keep <= 0 || !wholeMilliseconds(keep) {
+			return fmt.Errorf("%w: the retention of %q: a positive whole number of milliseconds", ErrInvalid, prefix)
+		}
 	}
 	return nil
 }

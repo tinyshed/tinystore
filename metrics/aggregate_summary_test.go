@@ -128,16 +128,15 @@ func rawAggregate(t *testing.T, store *Store, request AggregateRequest) []Aggreg
 	if err != nil {
 		t.Fatal(err)
 	}
-	from := query.from
-	steps := withLookback(request, &query)
+	withLookback(request, &query)
 	query.aggregate = nil // every block decoded, none answered from its summary
 	reads, err := store.fetchSnapshot(context.Background(), query)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := aggregation{
-		store: store, op: request.Op, origin: request.Range.From, width: request.Width.Milliseconds(),
-		from: from, to: query.to, limit: query.limits.OutputSamples, steps: steps,
+		store: store, op: request.Op, origin: query.origin, width: request.Width.Milliseconds(),
+		to: query.to, limit: query.limits.OutputSamples, steps: query.steps,
 	}
 	result, err := a.fold(t.Context(), reads)
 	if err != nil {

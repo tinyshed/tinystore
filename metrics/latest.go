@@ -46,7 +46,7 @@ func (s *Store) Latest(ctx context.Context, request Range) ([]Result, error) {
 func (s *Store) newestOfEach(ctx context.Context, query rangeQuery, reads []seriesRead) ([]Result, error) {
 	results := []Result{}
 	for _, read := range reads {
-		sample, found, err := s.newest(ctx, read, query.from, query.to)
+		sample, found, err := s.newest(ctx, read, read.window.from, query.to)
 		if err != nil {
 			return nil, err
 		}

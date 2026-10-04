@@ -326,7 +326,13 @@ MaintenanceFailure is a persisted diagnostic.
 
 ```go
 type Options struct {
-	Retention           time.Duration
+	Retention time.Duration
+
+	// RetentionOf keeps the series of names that start with a prefix as long
+	// as its duration, the longest prefix a name starts with winning; every
+	// other series is kept for Retention.
+	RetentionOf map[string]time.Duration
+
 	Lateness            time.Duration
 	ClockSkew           time.Duration
 	MaxBlockSpan        time.Duration
