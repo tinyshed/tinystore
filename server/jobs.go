@@ -116,6 +116,12 @@ func queueOptions(ask wire.JobsQueue) []jobs.QueueOption {
 	if ask.MaxRunning > 0 {
 		options = append(options, jobs.MaxRunning(int(min(ask.MaxRunning, 1<<31-1))))
 	}
+	if ask.MaxRunningInGroup > 0 {
+		options = append(options, jobs.MaxRunningInGroup(int(min(ask.MaxRunningInGroup, 1<<31-1))))
+	}
+	if ask.Rate > 0 || ask.Per > 0 {
+		options = append(options, jobs.Rate(int(min(ask.Rate, 1<<31-1)), durationOf(ask.Per)))
+	}
 	return options
 }
 
@@ -124,11 +130,16 @@ func durationOf(ms int64) time.Duration {
 }
 
 // repeatOf is a repeat as the engine takes it: a cron expression in a zone the
-// system knows by its name, or every so many milliseconds
+// system knows by its name, or every so many milliseconds, spread or not
 func repeatOf(r wire.Repeat) (jobs.Repeat, error) {
 	switch {
+	case r.Every > 0 && r.Cron == "" && r.Spread:
+		return jobs.Every(durationOf(r.Every), jobs.Spread()), nil
 	case r.Every > 0 && r.Cron == "":
 		return jobs.Every(durationOf(r.Every)), nil
+	case r.Spread:
+		return jobs.Repeat{}, fmt.Errorf("%w: jobs: spread is for a repeat every so many milliseconds",
+			tinystore.ErrInvalid)
 	case r.Cron != "" && r.Every == 0:
 		if r.Zone == "" {
 			return jobs.Repeat{}, fmt.Errorf("%w: jobs: a cron repeat names its zone", tinystore.ErrInvalid)
@@ -160,6 +171,12 @@ func enqueueOptions(job wire.JobsJob) ([]jobs.EnqueueOption, error) {
 			return nil, err
 		}
 		options = append(options, repeat)
+	}
+	if job.Move {
+		options = append(options, jobs.Move())
+	}
+	if job.Group != "" {
+		options = append(options, jobs.Group(job.Group))
 	}
 	return options, nil
 }

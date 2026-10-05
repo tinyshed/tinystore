@@ -23,6 +23,10 @@ interface QueueOptions {
     keepDone?: Duration
     /** the jobs that may run at once, across every worker of the store: no bound */
     maxRunning?: number
+    /** the jobs of one group, its enqueue's `group`, that may run at once: no bound */
+    maxRunningInGroup?: number
+    /** how many jobs may start in any span, across every worker of the store: `'30/s'` */
+    rate?: Rate
     /**
      * keeps the queue in this database's file instead of jobs.db, so that a
      * batch of the database commits a job with its rows: `queue.withTx(tx)`
@@ -42,10 +46,12 @@ type Repeat = {
     zone: string
 } | {
     every: Duration
+    spread?: boolean
 }
 ```
 
-When a job runs again: cron text in a zone by its name, a daily time, or every so often.
+When a job runs again: cron text in a zone by its name, a daily time, or
+every so often, which `spread` runs at a phase of each key's own.
 
 ## EnqueueOptions
 
@@ -58,6 +64,10 @@ interface EnqueueOptions {
     key?: string
     /** needs a key, since only a key stops it */
     repeat?: Repeat
+    /** sets the time of the key's job either way, later too: a running one runs again then; needs a key */
+    move?: boolean
+    /** the group whose running jobs the queue's `maxRunningInGroup` bounds */
+    group?: string
 }
 ```
 
@@ -335,11 +345,11 @@ Adds jobs in one transaction, all or none: a refused one names itself as `call`.
 ### Queue.update
 
 ```ts
-update(key: string, value: T, options?: Omit<EnqueueOptions, 'key'>): Promise<void>
+update(key: string, value: T, options?: Omit<EnqueueOptions, 'key' | 'move'>): Promise<void>
 ```
 
 Changes a job that waits or failed: its value and, when the options
-say, its time or repeat. A job a worker holds, done or absent is
+say, its time, repeat or group. A job a worker holds, done or absent is
 ConflictError.
 
 ### Queue.cancel

@@ -10,9 +10,10 @@ class Repeat:
     cron: str | None = None
     zone: str | None = None
     every: int | None = None
+    spread: bool = False
 ```
 
-When a job runs again: cron text in a zone by its name, or every so many milliseconds.
+When a job runs again: cron text in a zone by its name, or every so many milliseconds, spread or not.
 
 ### Repeat.fields
 
@@ -37,8 +38,10 @@ Every day at a time of the zone's clock: daily("03:10", "Europe/Moscow").
 ## every
 
 ```python
-def every(d: Duration) -> Repeat: ...
+def every(d: Duration, *, spread: bool = False) -> Repeat: ...
 ```
+
+Every so often; spread runs each key's job at a phase of its own: every("30s", spread=True).
 
 ## Enqueue
 
@@ -50,6 +53,8 @@ class Enqueue[V]:
     after: Duration | None = None
     key: str | None = None
     repeat: Repeat | None = None
+    move: bool = False
+    group: str | None = None
 ```
 
 A job for enqueue_all.
@@ -230,6 +235,8 @@ def queue[V](
     keep_failed: Duration | None = None,
     keep_done: Duration | None = None,
     max_running: int | None = None,
+    max_running_in_group: int | None = None,
+    rate: str | None = None,
     in_: Database | None = None,
 ) -> Queue[V]: ...
 ```
@@ -237,8 +244,10 @@ def queue[V](
 A queue of JSON values of one type; its policy is the options' and the server's defaults.
 
 max_running bounds the jobs that run at once across every worker of
-the store. in_ keeps the queue in a database's file instead of jobs.db,
-so that a batch of the database commits a job with its rows:
+the store, max_running_in_group those of one group, an enqueue's
+group, and rate how many start in any span: "30/s". in_ keeps the
+queue in a database's file instead of jobs.db, so that a batch of the
+database commits a job with its rows:
 
     index = store.jobs.queue("index", IndexNote, in_=db)
     async with db.batch() as tx:
@@ -284,10 +293,16 @@ async def enqueue(
     after: Duration | None = None,
     key: str | None = None,
     repeat: Repeat | None = None,
+    move: bool = False,
+    group: str | None = None,
 ) -> None: ...
 ```
 
 Adds a job; it returns once the job is in the file.
+
+move sets the time of the key's job either way, later too, and a
+running one's next run; group names the group whose running jobs the
+queue's max_running_in_group bounds.
 
 ### Queue.enqueue_all
 
@@ -307,6 +322,7 @@ async def update(
     at: datetime | None = None,
     after: Duration | None = None,
     repeat: Repeat | None = None,
+    group: str | None = None,
 ) -> None: ...
 ```
 

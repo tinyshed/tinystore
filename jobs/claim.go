@@ -88,6 +88,7 @@ type lease struct {
 	key     string
 	repeat  string
 	spill   sql.NullInt64
+	group   sql.NullString
 
 	mu        sync.Mutex
 	until     int64
@@ -258,9 +259,10 @@ const (
 		where queue = ?1 and next = ?2 and id = ?3`
 	keepDoneKey = `insert into _tinystore_jobs_done (queue, key, until) values (?1, ?2, ?3)
 		on conflict (queue, key) do update set until = excluded.until`
-	failJob = `insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill, ran, took)
-		select queue, id, key, at, ?4, ?5, ?6, value, spill, coalesce(?7, ran), coalesce(?8, took) from _tinystore_jobs
-		where queue = ?1 and next = ?2 and id = ?3`
+	failJob = `insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill, ran, took,
+			grp)
+		select queue, id, key, at, ?4, ?5, ?6, value, spill, coalesce(?7, ran), coalesce(?8, took), grp
+		from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3`
 	dropJobRow = `delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3`
 )
 
@@ -274,6 +276,9 @@ func (s settlement) write(ctx context.Context, w sqlite.Writer, now int64) (sett
 		return settled{until: until}, l.extend(ctx, w, until)
 	}
 	if err := l.drop(ctx, w); err != nil {
+		return settled{}, err
+	}
+	if err := l.freePlace(ctx, w, s.how); err != nil {
 		return settled{}, err
 	}
 	if s.how == acked {
@@ -302,6 +307,15 @@ func (l *lease) ackAlone(ctx context.Context, w sqlite.Writer, now int64) (settl
 	}
 	done, err := l.forget(ctx, w, spill, now)
 	return done, true, err
+}
+
+// freePlace gives the place a settled job took in its group to the group's
+// first parked job. A job given back is due at once and takes its place again.
+func (l *lease) freePlace(ctx context.Context, w sqlite.Writer, how outcome) error {
+	if how == givenBack || !l.group.Valid || l.queue.policy.maxInGroup == 0 {
+		return nil
+	}
+	return unparkOne(ctx, w, l.queue.id, l.group.String)
 }
 
 func (l *lease) extend(ctx context.Context, w sqlite.Writer, until int64) error {
@@ -516,7 +530,8 @@ func describe(cause error) string {
 // lease each, whose attempt counts the attempt a lease that ended held
 const (
 	claimJobs = `select next, id, key, at, attempt, repeat, value, spill,
-			coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0)
+			coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0),
+			grp
 		from _tinystore_jobs j
 		where queue = ?1 and next <= ?2
 			and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
@@ -525,7 +540,7 @@ const (
 		on conflict (id) do update set next = excluded.next, until = excluded.until,
 			attempt = max(_tinystore_jobs_leases.attempt, excluded.attempt - 1) + 1
 		returning attempt`
-	nextDue = `select next from _tinystore_jobs j where queue = ?1
+	nextDue = `select next from _tinystore_jobs j where queue = ?1 and next < ` + parkedFromText + `
 		and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
 		order by next, id limit 1`
 	earliestLease = `select min(until) from _tinystore_jobs_leases where queue = ?1 and until > ?2`
@@ -541,6 +556,7 @@ type claimedRow struct {
 	value                 []byte
 	spill                 sql.NullInt64
 	size                  int
+	group                 sql.NullString
 	until                 int64 // the lease's end
 }
 
@@ -548,6 +564,16 @@ type claiming struct {
 	queue, now, until  int64
 	limit, maxAttempts int
 	maxRunning         int // the jobs the queue's leases may hold at once, none when zero
+	maxInGroup         int // the jobs one group's leases may hold at once, none when zero
+	rate               *rateLog
+}
+
+// claimed is what a claim leased, the jobs it failed for good instead, and
+// whether it stopped at its bound of jobs parked with more due ones to look at
+type claimed struct {
+	rows      []claimedRow
+	abandoned []int64
+	more      bool
 }
 
 // claimRows leases up to limit due jobs until until, leaving the values they
@@ -558,36 +584,63 @@ type claiming struct {
 // names them.
 //
 // A queue with MaxRunning leases no more than its room, the writer counting
-// the live leases so that no two claims both see the last place free.
-func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed []claimedRow, abandoned []int64, err error) {
-	if c.limit, err = c.room(ctx, w); err != nil || c.limit == 0 {
-		return nil, nil, err
+// the live leases so that no two claims both see the last place free; one with
+// a Rate no more than the rate lets start.
+func claimRows(ctx context.Context, w sqlite.Writer, c claiming) (claimed, error) {
+	limit, err := c.room(ctx, w)
+	if err != nil || limit == 0 {
+		return claimed{}, err
 	}
-	rows, err := w.QueryContext(ctx, claimJobs, c.queue, c.now, c.limit) //nolint:rowserrcheck // EachRow checks Err
+	c.limit = c.rate.take(c.now, limit)
+	if c.limit == 0 {
+		return claimed{}, nil
+	}
+	var got claimed
+	if c.maxInGroup > 0 {
+		got, err = claimByGroup(ctx, w, c)
+	} else {
+		got, err = claimInOrder(ctx, w, c)
+	}
 	if err != nil {
-		return nil, nil, err
+		c.rate.giveBack(c.limit)
+		return claimed{}, err
+	}
+	c.rate.giveBack(c.limit - len(got.rows))
+	return got, nil
+}
+
+// claimInOrder leases the first limit due jobs in the order of their time
+func claimInOrder(ctx context.Context, w sqlite.Writer, c claiming) (claimed, error) {
+	due, err := dueRows(ctx, w, c, c.limit)
+	if err != nil {
+		return claimed{}, err
+	}
+	var got claimed
+	for i := range due {
+		if _, err = got.lease(ctx, w, c, &due[i]); err != nil {
+			return got, err
+		}
+	}
+	return got, nil
+}
+
+// dueRows reads up to limit due jobs no live lease holds, in the order of
+// their time
+func dueRows(ctx context.Context, w sqlite.Writer, c claiming, limit int) ([]claimedRow, error) {
+	rows, err := w.QueryContext(ctx, claimJobs, c.queue, c.now, limit) //nolint:rowserrcheck // EachRow checks Err
+	if err != nil {
+		return nil, err
 	}
 	var due []claimedRow
 	err = sqlite.EachRow(rows, "due jobs", func(rows *sql.Rows) error {
 		var row claimedRow
 		scanErr := rows.Scan(&row.next, &row.id, &row.key, &row.at, &row.attempt, &row.repeat, &row.value, &row.spill,
-			&row.size)
+			&row.size, &row.group)
 		row.until = c.until
 		due = append(due, row)
 		return scanErr
 	})
-	for i := range due {
-		if err != nil {
-			break
-		}
-		var leased bool
-		if leased, err = leaseRow(ctx, w, c, &due[i]); leased {
-			claimed = append(claimed, due[i])
-		} else if err == nil {
-			abandoned = append(abandoned, due[i].id)
-		}
-	}
-	return claimed, abandoned, err
+	return due, err
 }
 
 const dropLeaseRow = `delete from _tinystore_jobs_leases where id = ?1`
@@ -709,25 +762,25 @@ func (q *Queue[V]) Claim(ctx context.Context, options ...ClaimOption) (Job[V], b
 }
 
 // claimOne leases the next due job, passing over the jobs it fails for good
-// because their attempts all ended without a settlement
+// because their attempts all ended without a settlement, and those it parks
+// because their groups have no room
 func (q *Queue[V]) claimOne(ctx context.Context, lease time.Duration) (claimedRow, bool, error) {
 	for {
 		c := q.claiming(1, lease)
-		var claimed []claimedRow
-		var abandoned []int64
+		var got claimed
 		err := q.write(ctx, claimRowMemory, func(w sqlite.Writer) (writeErr error) {
-			claimed, abandoned, writeErr = claimRows(ctx, w, c)
+			got, writeErr = claimRows(ctx, w, c)
 			return writeErr
 		})
 		if err != nil {
 			return claimedRow{}, false, q.fail("", err)
 		}
-		q.state.abandoned(abandoned)
-		if len(claimed) > 0 {
+		q.state.abandoned(got.abandoned)
+		if len(got.rows) > 0 {
 			q.state.alarm.lower(c.until)
-			return claimed[0], true, nil
+			return got.rows[0], true, nil
 		}
-		if len(abandoned) == 0 {
+		if len(got.abandoned) == 0 && !got.more {
 			return claimedRow{}, false, nil
 		}
 	}
@@ -767,23 +820,28 @@ func (q *Queue[V]) jobOf(c claimedRow) Job[V] {
 		Key: c.key.String, At: time.UnixMilli(c.at), Attempt: int(c.attempt),
 		lease: &lease{
 			queue: q.state, store: q.store, next: c.next, id: c.id, attempt: c.attempt, at: c.at,
-			key: c.key.String, repeat: c.repeat.String, spill: c.spill, until: c.until,
+			key: c.key.String, repeat: c.repeat.String, spill: c.spill, group: c.group, until: c.until,
 		},
 	}
 }
 
 func (q *Queue[V]) claiming(limit int, lease time.Duration) claiming {
-	now := q.store.clock()
+	return q.state.claiming(q.store.clock(), limit, lease)
+}
+
+func (q *queueState) claiming(now int64, limit int, lease time.Duration) claiming {
 	return claiming{
-		queue: q.state.id, now: now, until: now + lease.Milliseconds(), limit: limit,
-		maxAttempts: q.state.policy.maxAttempts, maxRunning: q.state.policy.maxRunning,
+		queue: q.id, now: now, until: now + lease.Milliseconds(), limit: limit,
+		maxAttempts: q.policy.maxAttempts, maxRunning: q.policy.maxRunning, maxInGroup: q.policy.maxInGroup,
+		rate: q.rate,
 	}
 }
 
-// roomMade wakes the Work loops of a queue with MaxRunning once a settlement
-// has given a place back, since a claim that found none waits for that
+// roomMade wakes the Work loops of a queue with MaxRunning or
+// MaxRunningInGroup once a settlement has given a place back, since a claim
+// that found none, or parked the jobs of a full group, waits for that
 func (q *queueState) roomMade(now int64) {
-	if q.policy.maxRunning > 0 {
+	if q.policy.maxRunning > 0 || q.policy.maxInGroup > 0 {
 		q.alarm.lower(now)
 	}
 }

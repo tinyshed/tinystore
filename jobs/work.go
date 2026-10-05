@@ -38,7 +38,7 @@ func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]
 		return q.fail("", err)
 	}
 	hold := settings.workers * claimAhead
-	if q.state.policy.maxRunning > 0 {
+	if q.state.policy.bounded() {
 		hold = settings.workers
 	}
 	return q.work(ctx, handle, settings, hold)
@@ -123,7 +123,7 @@ func (l *workLoop[V]) run(ctx context.Context) error {
 }
 
 // loop claims and settles until ctx ends, the store closes, or, with
-// UntilIdle, nothing is due and nothing is held
+// UntilIdle, nothing more may start and nothing is held
 func (l *workLoop[V]) loop(ctx context.Context) error {
 	for {
 		l.gather()
@@ -132,27 +132,40 @@ func (l *workLoop[V]) loop(ctx context.Context) error {
 		}
 		now := l.q.store.clock()
 		l.extendDue(now)
-		want := 0
-		var read *alarmRead
-		if free := l.hold - len(l.holding) + l.finishing(); free > 0 {
-			if read = l.q.state.alarm.rung(now); read != nil {
-				want = min(free, claimBatch)
-			}
-		}
+		want, read, rated := l.wanted(now)
 		result, err := l.write(ctx, now, want)
 		l.answer(read, result, err)
 		if err != nil {
 			return err
 		}
 		l.dispatch(result)
-		if l.settings.untilIdle && l.idle(now) {
+		if l.settings.untilIdle && l.idle(now, rated) {
 			return nil
 		}
 		if want > 0 && result.full {
 			continue
 		}
-		l.wait(ctx, now)
+		l.wait(ctx, now, rated)
 	}
+}
+
+// wanted is how many jobs the loop claims at now: as many as it has workers
+// free, when the alarm says a job may be due. rated is when the queue's Rate
+// next lets a job start, when it lets none start now; the loop claims nothing
+// before it.
+func (l *workLoop[V]) wanted(now int64) (want int, read *alarmRead, rated int64) {
+	free := l.hold - len(l.holding) + l.finishing()
+	if free <= 0 {
+		return 0, nil, 0
+	}
+	room, next := l.q.state.rate.room(now)
+	if room == 0 {
+		return 0, nil, next
+	}
+	if read = l.q.state.alarm.rung(now); read == nil {
+		return 0, nil, 0
+	}
+	return min(free, claimBatch, room), read, 0
 }
 
 // answer ends the alarm read a claim made: a claim that found fewer jobs than
@@ -179,12 +192,13 @@ func (l *workLoop[V]) finishing() int {
 	return finished
 }
 
-// idle says the loop holds nothing, has nothing to write, and no job is due.
+// idle says the loop holds nothing, has nothing to write, and no job is due,
+// or the queue's Rate lets none start until rated.
 //
 // A loop whose workers were all busy has not asked the file, and its alarm,
 // which a claim that came back short set, still says a job may be due.
-func (l *workLoop[V]) idle(now int64) bool {
-	return len(l.holding) == 0 && len(l.pending) == 0 && !l.q.state.alarm.due(now)
+func (l *workLoop[V]) idle(now, rated int64) bool {
+	return len(l.holding) == 0 && len(l.pending) == 0 && (rated != 0 || !l.q.state.alarm.due(now))
 }
 
 func (l *workLoop[V]) stopped(ctx context.Context) error {
@@ -336,10 +350,7 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 			want = int(rows)
 		}
 	}
-	c := claiming{
-		queue: l.q.state.id, now: now, until: now + l.q.state.policy.lease.Milliseconds(), limit: want,
-		maxAttempts: l.q.state.policy.maxAttempts, maxRunning: l.q.state.policy.maxRunning,
-	}
+	c := l.q.state.claiming(now, want, l.q.state.policy.lease)
 	var result claimResult
 	var done []settled
 	var abandoned []int64
@@ -357,10 +368,12 @@ func (l *workLoop[V]) write(ctx context.Context, now int64, want int) (claimResu
 		if done, err = settleAll(ctx, w, l.pending, now); err != nil || want == 0 {
 			return err
 		}
-		if result.claimed, abandoned, err = claimRows(ctx, w, c); err != nil {
+		got, err := claimRows(ctx, w, c)
+		if err != nil {
 			return err
 		}
-		if result.full = len(result.claimed)+len(abandoned) == want; !result.full {
+		result.claimed, abandoned = got.rows, got.abandoned
+		if result.full = len(got.rows)+len(got.abandoned) == want || got.more; !result.full {
 			result.next, err = nextClaim(ctx, w, c)
 		}
 		return err
@@ -440,11 +453,15 @@ func (l *workLoop[V]) dispatch(result claimResult) {
 
 // wait sleeps until a handler returns, the alarm rings or is lowered, a held
 // lease needs extending, or the loop must stop. With every worker busy the
-// alarm does not wake it.
-func (l *workLoop[V]) wait(ctx context.Context, now int64) {
+// alarm does not wake it, and with the queue's Rate holding it back only the
+// time the rate names does.
+func (l *workLoop[V]) wait(ctx context.Context, now, rated int64) {
 	lowered, sleep := l.q.state.alarm.wait(now)
-	if len(l.holding) >= l.hold {
+	switch {
+	case len(l.holding) >= l.hold:
 		lowered, sleep = nil, longestAlarm
+	case rated != 0:
+		lowered, sleep = nil, rateWait(now, rated)
 	}
 	if extendIn, any := l.nextExtension(now); any {
 		sleep = min(sleep, extendIn)

@@ -144,6 +144,8 @@ attempt fails.
 
 - [Keys](keys.md): find, update and cancel a job, and enqueue a job only once.
 - [Schedules](schedules.md): jobs that repeat, by cron or every day at a time.
+- [Concurrency and rate limits](concurrency.md): limit the jobs that run at
+  once per queue and per customer, and the jobs that start per second.
 - [Watching a job](watching.md): show users their place in the queue and the
   progress of their job.
 - [Steps](steps.md): keep the finished steps of an AI agent across retries.
@@ -161,6 +163,7 @@ attempt fails.
 | Handler timeout        | 1 minute                              |
 | Failed jobs kept       | 7 days                                |
 | Waiting jobs per queue | 10,000,000                            |
+| Running jobs           | unlimited, unless you set a limit     |
 | A queue name           | `[a-z0-9][a-z0-9_-]{0,63}`            |
 
 ## See also

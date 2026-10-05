@@ -1,12 +1,15 @@
 -- jobs.db has 4 KiB pages, chosen when the file is created: a job's row is a
 -- few hundred bytes, and a value past 512 of them lives in spilled
 
--- kind: a queue or a schedule, and a name opened as the other is refused
+-- kind: a queue or a schedule, and a name opened as the other is refused;
+-- in_group: the MaxRunningInGroup it was last opened with, 0 for none, so that
+-- an open with another gives back every job parked under the old one
 create table _tinystore_jobs_queues (
     id   integer primary key,
     name text    not null unique,
     kind text    not null,
-    waiting integer not null default 0 check (waiting >= 0)
+    waiting integer not null default 0 check (waiting >= 0),
+    in_group integer not null default 0
 ) strict;
 
 -- a job that waits or runs, ordered by when it is due, so that the jobs due
@@ -15,7 +18,8 @@ create table _tinystore_jobs_queues (
 -- attempt: the attempts counted before its lease's; again: the earliest time an
 -- Enqueue asked of the job while it ran; repeat: a repeating job's cron text
 -- and zone; error: the last attempt's failure; ran and took: when the last run
--- a handler finished began, unix milliseconds, and its milliseconds
+-- a handler finished began, unix milliseconds, and its milliseconds; grp: the
+-- group whose running jobs MaxRunningInGroup bounds
 create table _tinystore_jobs (
     queue   integer not null,
     next    integer not null,
@@ -30,8 +34,15 @@ create table _tinystore_jobs (
     spill   integer,
     ran     integer,
     took    integer,
+    grp     text,
     primary key (queue, next, id)
 ) strict, without rowid;
+
+-- a due job whose group has no room is parked: its next moves 2^60 later, past
+-- every time a job may have, so that claims stop meeting it, and moves back
+-- when its group frees a place. The index holds the parked rows alone, a
+-- group's in their order; a query reaches it by naming the same bound.
+create index _tinystore_jobs_parked on _tinystore_jobs (queue, grp, next, id) where next >= 576460752303423488;
 
 -- the writer keeps MaxWaiting's count in one row, including every statement
 -- of a grouped write and every call in a Tx before it commits
@@ -64,7 +75,8 @@ create table _tinystore_jobs_leases (
     until   integer not null
 ) strict;
 
--- a job that failed for good, kept until its queue's KeepFailed has passed
+-- a job that failed for good, kept until its queue's KeepFailed has passed,
+-- with its group for the Enqueue or Update that starts it again
 create table _tinystore_jobs_failed (
     queue    integer not null,
     id       integer not null,
@@ -77,6 +89,7 @@ create table _tinystore_jobs_failed (
     spill    integer,
     ran      integer,
     took     integer,
+    grp      text,
     primary key (queue, id)
 ) strict, without rowid;
 

@@ -205,6 +205,7 @@ export const JobsRepeat = message('jobs.repeat', {
 	cron: [1, str],
 	zone: [2, str],
 	every: [3, uint],
+	spread: [4, bool],
 })
 
 export const JobsQueue = message('jobs.queue', {
@@ -219,6 +220,9 @@ export const JobsQueue = message('jobs.queue', {
 	schedule: [9, JobsRepeat],
 	maxRunning: [10, uint],
 	in: [11, str],
+	maxRunningInGroup: [12, uint],
+	rate: [13, uint],
+	per: [14, uint],
 })
 
 const jobsJob = {
@@ -227,6 +231,8 @@ const jobsJob = {
 	at: [3, int],
 	after: [4, uint],
 	repeat: [5, JobsRepeat],
+	move: [7, bool],
+	group: [8, str],
 } as const
 
 export const JobsJob = message('jobs.job', jobsJob)

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/bits"
 	"strconv"
@@ -15,17 +16,21 @@ import (
 // interval. It is kept as text, so that another language reads the same
 // schedule:
 //
-//	jobs.Daily("03:10", moscow)         10 3 * * * Europe/Moscow
-//	jobs.Cron("*/15 9-18 * * 1-5", tz)  */15 9-18 * * 1-5 America/New_York
-//	jobs.Every(15 * time.Minute)        @every 15m
+//	jobs.Daily("03:10", moscow)                          10 3 * * * Europe/Moscow
+//	jobs.Cron("*/15 9-18 * * 1-5", tz)                   */15 9-18 * * 1-5 America/New_York
+//	jobs.Every(15 * time.Minute)                         @every 15m
+//	jobs.Every(30*time.Second, jobs.Spread()), probe:7   @every 30s +6178ms
 type Repeat struct {
-	text  string
-	every time.Duration
-	cron  cron
-	err   error
+	text   string
+	every  time.Duration
+	phase  time.Duration // how long after each multiple of every it runs
+	spread bool          // the phase is its job's key's, taken when the job keeps it
+	cron   cron
+	err    error
 }
 
-// String is the repeat as jobs.db keeps it.
+// String is the repeat as jobs.db keeps it; a Spread interval's phase comes
+// with its job's key.
 func (r Repeat) String() string {
 	return r.text
 }
@@ -80,21 +85,77 @@ func Daily(clock string, zone *time.Location) Repeat {
 // Every repeats a job every d, at the multiples of d since the Unix epoch, so
 // that a restart does not shift it: Every(15*time.Minute) runs at :00, :15, :30
 // and :45. d is at least a second.
-func Every(d time.Duration) Repeat {
+func Every(d time.Duration, options ...EveryOption) Repeat {
 	if d < time.Second {
 		return Repeat{err: fmt.Errorf("%w: jobs: Every(%v): at least a second", tinystore.ErrInvalid, d)}
 	}
-	return Repeat{text: "@every " + spellInterval(d), every: d}
+	var said everySettings
+	for _, option := range options {
+		option(&said)
+	}
+	return Repeat{text: everyText(d, 0), every: d, spread: said.spread}
+}
+
+// EveryOption says where in its interval an Every runs.
+type EveryOption func(*everySettings)
+
+type everySettings struct{ spread bool }
+
+// Spread runs each key's job at a phase of its own within the interval, the
+// key's FNV-1a hash modulo d, so that the jobs of many keys repeating Every(d)
+// do not all run in the same instant. The phase is kept with the job, so a
+// restart does not shift it either:
+//
+//	Every(30*time.Second, Spread()), key probe:7   @every 30s +6178ms   at :06.178 and :36.178
+func Spread() EveryOption {
+	return func(s *everySettings) { s.spread = true }
+}
+
+// of is the repeat a job under key keeps: a Spread interval takes the key's
+// phase
+func (r Repeat) of(key string) Repeat {
+	if !r.spread {
+		return r
+	}
+	r.phase = phaseOf(key, r.every.Milliseconds())
+	r.text, r.spread = everyText(r.every, r.phase), false
+	return r
+}
+
+// phaseOf is a key's place within an interval of every milliseconds: its
+// FNV-1a hash modulo every
+func phaseOf(key string, every int64) time.Duration {
+	hash := fnv.New64a()
+	hash.Write([]byte(key))
+	return time.Duration(hash.Sum64()%uint64(every)) * time.Millisecond //nolint:gosec // every is positive, so is this
+}
+
+// everyText is an interval as jobs.db keeps it, with its phase when it has
+// one: @every 30s, @every 30s +6178ms
+func everyText(every, phase time.Duration) string {
+	if phase == 0 {
+		return "@every " + spellInterval(every)
+	}
+	return "@every " + spellInterval(every) + " +" + spellInterval(phase)
 }
 
 // next is the first time after after that the repeat runs
 func (r Repeat) next(after time.Time) time.Time {
 	if r.every > 0 {
-		step := r.every.Milliseconds()
-		return time.UnixMilli((after.UnixMilli()/step + 1) * step)
+		step, phase := r.every.Milliseconds(), r.phase.Milliseconds()
+		return time.UnixMilli((floorDiv(after.UnixMilli()-phase, step)+1)*step + phase)
 	}
 	t, _ := r.cron.next(after)
 	return t
+}
+
+// floorDiv is a / b rounded down for a positive b, where Go's / rounds toward
+// zero
+func floorDiv(a, b int64) int64 {
+	if a%b < 0 {
+		return a/b - 1
+	}
+	return a / b
 }
 
 // parseRepeat reads a repeat as jobs.db keeps it
@@ -103,15 +164,7 @@ func parseRepeat(text string) (Repeat, error) {
 		return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat exceeds %d bytes", tinystore.ErrCorrupt, maxRepeat)
 	}
 	if interval, found := strings.CutPrefix(text, "@every "); found {
-		d, err := parseInterval(interval)
-		if err != nil {
-			return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q: %w", tinystore.ErrCorrupt, text, err)
-		}
-		repeat := Every(d)
-		if repeat.err != nil {
-			return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q: %w", tinystore.ErrCorrupt, text, repeat.err)
-		}
-		return repeat, nil
+		return parseEvery(text, interval)
 	}
 	cut := strings.LastIndexByte(text, ' ')
 	if cut < 0 {
@@ -123,6 +176,28 @@ func parseRepeat(text string) (Repeat, error) {
 	}
 	repeat := Cron(text[:cut], zone)
 	return repeat, repeat.err
+}
+
+// parseEvery reads a kept interval, and its phase when it has one
+func parseEvery(text, interval string) (Repeat, error) {
+	interval, phaseText, phased := strings.Cut(interval, " +")
+	d, err := parseInterval(interval)
+	if err != nil {
+		return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q: %w", tinystore.ErrCorrupt, text, err)
+	}
+	repeat := Every(d)
+	if repeat.err != nil {
+		return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q: %w", tinystore.ErrCorrupt, text, repeat.err)
+	}
+	if !phased {
+		return repeat, nil
+	}
+	if repeat.phase, err = parseInterval(phaseText); err != nil || repeat.phase >= d {
+		return Repeat{}, fmt.Errorf("%w: jobs: a kept repeat %q has a phase outside its interval",
+			tinystore.ErrCorrupt, text)
+	}
+	repeat.text = everyText(d, repeat.phase)
+	return repeat, nil
 }
 
 func checkZone(zone *time.Location) error {

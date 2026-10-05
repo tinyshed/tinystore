@@ -579,3 +579,52 @@ func TestAJobsStepsOverTheWire(t *testing.T) {
 		t.Fatalf("the streamed job stayed: %+v", left)
 	}
 }
+
+// a queue's group bound, its rate, a job's group, a Move and a spread repeat
+// reach the engine over the wire, and a spread that is not an interval's, or
+// a Move without a key, is refused
+func TestJobsBoundsAndMovesOverTheWire(t *testing.T) {
+	ts := startTestServer(t, Options{})
+	conn := ts.dial(t, wire.Hello{})
+	refreshes := openQueue(t, conn, wire.JobsQueue{Name: "refreshes", MaxRunningInGroup: 1, Rate: 2, Per: 60_000})
+	if err := enqueueJobs(t, conn, refreshes,
+		wire.JobsJob{Value: `{"dataset":1}`, Key: "refresh:1", Group: "db:42"},
+		wire.JobsJob{Value: `{"dataset":2}`, Key: "refresh:2", Group: "db:42"},
+		wire.JobsJob{Value: `{"dataset":3}`, Key: "refresh:3", Group: "db:7"},
+		wire.JobsJob{Value: `{"dataset":4}`, Key: "refresh:4"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"refresh:1", "refresh:3"} {
+		if held := claim(t, conn, refreshes); !held.Found || held.Key != want {
+			t.Fatalf("a claim took %+v, not %s", held, want)
+		}
+	}
+	if held := claim(t, conn, refreshes); held.Found {
+		t.Fatalf("a claim past the rate took %+v", held)
+	}
+
+	checks := openQueue(t, conn, wire.JobsQueue{Name: "checks"})
+	later := time.Now().Add(time.Hour).UnixMilli()
+	for _, at := range []int64{later, later + 60_000} {
+		if err := enqueueJobs(t, conn, checks, wire.JobsJob{Value: `{}`, Key: "check:7", At: at, Move: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if entry := fetchJob(t, conn, checks, "check:7"); entry.At != later+60_000 {
+		t.Fatalf("a moved deadline: %+v", entry)
+	}
+	err := enqueueJobs(t, conn, checks,
+		wire.JobsJob{Value: `{}`, Key: "probe:7", Repeat: &wire.Repeat{Every: 30_000, Spread: true}})
+	if entry := fetchJob(t, conn, checks, "probe:7"); err != nil || entry.Repeat != "@every 30s +6178ms" {
+		t.Fatalf("a spread repeat: %+v, %v", entry, err)
+	}
+	for _, refused := range []wire.JobsJob{
+		{Value: `{}`, Key: "probe:8", Repeat: &wire.Repeat{Cron: "* * * * *", Zone: "UTC", Spread: true}},
+		{Value: `{}`, Move: true},
+	} {
+		if err := enqueueJobs(t, conn, checks, refused); codeOfError(err) != wire.CodeInvalid {
+			t.Fatalf("%+v: %v", refused, err)
+		}
+	}
+}

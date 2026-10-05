@@ -15,10 +15,15 @@ reminders, err := jobs.OpenQueue[Reminder](ctx, queues, "reminders")
 later, err := jobs.OpenQueue[Draft](ctx, queues, "send-later", jobs.MaxAttempts(20))
 pushes, err := jobs.OpenQueue[Push](ctx, queues, "pushes", jobs.KeepDone(time.Hour))
 videos, err := jobs.OpenQueue[Video](ctx, queues, "videos", jobs.MaxRunning(2))
+refreshes, err := jobs.OpenQueue[Refresh](ctx, queues, "refreshes", jobs.MaxRunningInGroup(2))
+sends, err := jobs.OpenQueue[Message](ctx, queues, "telegram", jobs.Rate(30, time.Second))
 purge, err := jobs.OpenSchedule(ctx, queues, "purge-deleted", jobs.Daily("03:10", moscow))
 
 err = reminders.Enqueue(ctx, Reminder{User: 42, Text: "call mom"}, jobs.At(evening))
 err = later.Enqueue(ctx, draft, jobs.At(nine), jobs.Key("chat:42:"+draft.ID))
+err = refreshes.Enqueue(ctx, refresh, jobs.Key("refresh:"+refresh.Dataset), jobs.Group("db:"+refresh.Database))
+err = checks.Enqueue(ctx, check, jobs.Key(check.ID), jobs.At(deadline), jobs.Move()) // each ping pushes it back
+err = probes.Enqueue(ctx, probe, jobs.Key(probe.ID), jobs.Every(30*time.Second, jobs.Spread()))
 page, err := later.Scan(ctx, jobs.Query{Prefix: "chat:42:"}) // "3 scheduled messages"
 cancelled, err := later.Cancel(ctx, "chat:42:"+draft.ID)     // false: sent already
 
@@ -85,11 +90,14 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   An `Enqueue` under a key whose job waits adds nothing and can bring it
   forward, never back; under one whose job runs it asks for one run more after
   this one; under a failed one it starts the job again, its attempts from zero.
-  `KeepDone(d)` remembers the keys of acknowledged jobs for `d`, and an
-  `Enqueue` under one of them adds nothing: a key runs once. Without it a key
-  is forgotten when its job is done.
+  With `Move()` it sets the waiting job's time either way, later too, the next
+  run of a running one to its time rather than the earliest asked, and adds a
+  job under a key without one; a `Move` needs a key. `KeepDone(d)` remembers
+  the keys of acknowledged jobs for `d`, and an `Enqueue` under one of them
+  adds nothing: a key runs once, a `Move` too. Without it a key is forgotten
+  when its job is done.
 - **`Update` changes a job that waits or failed**, its value and, when the
-  options say, its time or repeat. A job a worker holds, one done or
+  options say, its time, repeat or group. A job a worker holds, one done or
   cancelled, or an absent key is `tinystore.ErrConflict`.
 - **`Cancel` takes the job under a key**, whether it waits, runs or failed,
   and says whether there was one. A running job's handler sees its context end
@@ -124,6 +132,10 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   overlaps itself and a program down all night runs it once. It needs a key,
   since only a key stops it. `OpenSchedule` is a queue of `struct{}` holding
   one repeating job under the queue's name, with the program's repeat.
+  `Every(d, Spread())` runs each key's job at a phase of its own, the key's
+  FNV-1a hash modulo `d`, kept in the repeat's text (`@every 30s +6178ms`),
+  so that many keys repeating together do not run in one instant. A time is
+  in the years 1 to 9999.
 - **`Work` settles by what the handler returns**: nil acknowledges, an error
   retries, a panic is an error with its stack, and a handler that settled its
   job itself is left as it settled it. It holds two jobs a worker, the one
@@ -139,16 +151,35 @@ err = db.Batch(ctx, func(b *sqldb.Batch) error {
   cancellation, gives its job back without counting the attempt; one that
   returns nil or an error of its own settles as it returned, though `Work`
   ended meanwhile. `Work` starts its workers inside the call and
-  waits for them before it returns; `UntilIdle` returns once no job is due and
-  none runs.
+  waits for them before it returns; `UntilIdle` returns once no job is due, or
+  the queue's `Rate` lets none start, and none runs.
 - **`Claim` does not wait**: it leases the next due job, or says there is
   none. A `Job` from `Claim` is settled by `Ack`, `Retry`, `Fail`, `Snooze` or
   `Extend`; copies of a `Job` share its lease.
 - **`MaxRunning(n)` bounds the jobs that run at once**, across every `Work`
   loop and `Claim` of the store: past it a claim takes nothing until a job is
   settled or its lease ends, and a settlement wakes the loops waiting for a
-  place. A `Work` loop of such a queue claims no job ahead for a busy worker,
-  so that the jobs it holds are the ones running.
+  place. A `Work` loop of such a queue, or of one with `MaxRunningInGroup` or
+  `Rate`, claims no job ahead for a busy worker, so that the jobs it holds are
+  the ones running.
+- **`MaxRunningInGroup(n)` bounds each group's running jobs**, a job's group
+  being the `Group` it was enqueued with, 1 to 1024 bytes; a job without one
+  is not bound. A claim passes over a due job whose group's places are taken
+  and parks it: its row moves out of the claims' range, one write, so that
+  the next claim does not meet it again and one group's backlog cannot hold
+  back the groups behind it. A claim parks at most 1,000 and goes on in the
+  next. A job that leaves a place, settled, cancelled or failed for good for
+  its attempts, gives it to its group's first parked job, which then runs in
+  the order of its time; `Get` finds a parked job waiting at its time. A
+  queue opened with another bound gives back every job the old one parked. A
+  failed job keeps its group for the `Enqueue` or `Update` that starts it
+  again, unless the call names another.
+- **`Rate(n, per)` lets at most n jobs start in any span of `per`**, across
+  every `Work` loop and `Claim` of the store: past it a claim takes nothing
+  until the oldest start of the span is `per` old, and a `Work` loop sleeps
+  until then. The starts live in memory, about 1,024 entries whatever the
+  rate, a claim close to the one before counted at the later time, which
+  never lets more through; a restart forgets them.
 - **`Get` says where a job is.** Its `State` is `Waiting` until a handler, or
   a `Claim`'s caller, has it, `Running` while one does, `Failed` when it failed
   for good, and `Done` while `KeepDone` keeps its key; a job a `Work` loop
@@ -246,4 +277,4 @@ _, err = queues.Maintain(ctx)                       // removes failed jobs and d
 ## Not in the first version
 
 What [design/jobs.md](https://github.com/tinyshed/research/blob/main/tinystore/design/jobs.md) leaves for later: priority within a
-queue, a rate a queue may not pass, a job's history in records.
+queue, a job's history in records.

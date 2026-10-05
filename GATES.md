@@ -333,6 +333,14 @@ module defines.
 - a watch follows its job to its end — `TestAWatchFollowsItsJobToItsEnd`
 - a progress past 4 KiB is dropped in Go, refused by the SDKs — `TestAProgressPastItsBoundIsDropped`, `a progress JSON cannot write, or past 4 KiB, is refused` in `sdk/js/test/jobs.test.ts`
 - `MaxRunning` holds a queue to its places across loops and claims — `TestMaxRunningHoldsAQueueToItsPlaces`
+- `MaxRunningInGroup` holds each group to its places, and a settlement lets the group's next job run in its order — `TestAGroupBoundsItsRunningJobs`, `TestWorkRunsAGroupsJobsWithinItsBound`; over the wire `TestJobsBoundsAndMovesOverTheWire`, `a group bounds its running jobs, a rate its starts, move sets a time either way, and spread a phase` in `sdk/js/test/jobs.test.ts`, `test_a_group_bounds_its_running_jobs_a_rate_its_starts_and_move_and_spread_set_times` in Python's
+- a full group's backlog is parked once and holds back no other group — `TestABusyGroupDoesNotHoldBackTheGroupsBehindIt`, through the index `TestAGroupsParkedJobsAreFoundByTheirIndex`
+- a parked job keeps its time and key, and gets its group's place when a job leaves it cancelled or abandoned — `TestAParkedJobKeepsItsTimeAndItsKey`, `TestACancelledOrAbandonedJobGivesItsGroupItsPlace`
+- a queue opened with another group bound gives back what the old one parked, and a job started again keeps its group — `TestAChangedGroupBoundGivesBackTheParkedJobs`, `TestAJobStartedAgainKeepsItsGroup`
+- `Rate` lets no more than its count start in any span, across Claim and Work — `TestARateNeverLetsMoreThanItsCountStartInASpan`, `TestARateLetsItsStartsAgainASpanLater`, `TestAQueueRateBoundsItsClaims`, `TestWorkWaitsForItsRate`
+- `Move` sets a waiting job's time either way, a running one's next run, and adds a missing job — `TestMoveSetsATimeLaterThanTheOneWaiting`, `TestMoveCreatesAMissingJob`
+- `Spread` gives each key's interval a phase of its own, kept across a restart — `TestRepeatsOfManyKeysSpreadAcrossTheirInterval`, `TestASpreadRepeatKeepsItsPhaseAcrossARestart`
+- a time past the years a job keeps is refused — `TestATimePastTheYearsAJobKeepsIsRefused`
 - a job keeps its last run, over the wire too, and a run given back records none — `TestAJobKeepsItsLastRun`, `TestAJobsLastRunOverTheWire`, `a job keeps its last run: when it began and how long it took` in `sdk/js/test/jobs.test.ts`, `test_a_job_keeps_its_last_run` in Python's
 - a job whose lease ended runs again — `TestAJobWhoseLeaseEndedRunsAgain`
 - a step runs once in a run, across its attempts and a worker that died, and a lost lease keeps none — `TestAStepRunsOnceAcrossTheAttemptsOfARun`, `TestAStepOfALostLeaseKeepsNothing`

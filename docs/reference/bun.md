@@ -210,6 +210,19 @@ most ten times per second. `cancel` also stops a running job: its
 after that changes nothing. `maxRunning` limits how many jobs of the queue run
 at once, across all workers of the store.
 
+```ts
+const refreshes = store.jobs.queue<Refresh>('refreshes', { maxRunningInGroup: 2 })
+await refreshes.enqueue(refresh, { key: refresh.id, group: `db:${refresh.customer}` })
+
+const telegram = store.jobs.queue<Message>('telegram', { rate: '30/s' })
+await checks.enqueue(check, { key: check.id, after: '25h', move: true }) // each ping pushes it back
+await probes.enqueue(probe, { key: probe.id, repeat: { every: '30s', spread: true } })
+```
+
+`maxRunningInGroup` limits the running jobs of each `group`, and `rate` the
+jobs that start in any span. `move` sets the time of the key's job, later as
+well as earlier. `spread` runs each key's repeat at an offset of its own.
+
 A step stores its answer, so the next attempt of the same run doesn't run it
 again:
 
@@ -217,7 +230,8 @@ again:
 const hits = await job.step('search', () => search(q))
 ```
 
-See [Jobs](../jobs/README.md), [Watching a job](../jobs/watching.md) and
+See [Jobs](../jobs/README.md), [Concurrency and rate
+limits](../jobs/concurrency.md), [Watching a job](../jobs/watching.md) and
 [Steps](../jobs/steps.md).
 
 ## Blobs

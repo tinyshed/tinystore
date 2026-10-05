@@ -81,6 +81,14 @@ type EnqueueOption interface {
 }
 ```
 
+### Group
+
+```go
+func Group(name string) EnqueueOption
+```
+
+Group puts the job in a group of its queue, such as the customer database it works on, so that the queue's MaxRunningInGroup bounds the group's jobs that run at once. A group is 1 to 1024 bytes of text. A job keeps its group until an Update, or an Enqueue that starts it again after it failed, names another.
+
 ### Key
 
 ```go
@@ -88,6 +96,18 @@ func Key(key string) EnqueueOption
 ```
 
 Key names the job, so that Get, Update and Cancel find it and an Enqueue under a key whose job waits adds nothing; see the queue's rules for keys.
+
+### Move
+
+```go
+func Move() EnqueueOption
+```
+
+Move sets the time of the job under the Enqueue's key whatever it was: a waiting job moves later as well as earlier, a running one runs again at that time after this run, and a key without a job gets one. A deadline that each ping pushes back is then one call a ping:
+
+	checks.Enqueue(ctx, check, jobs.Key(id), jobs.At(now.Add(grace)), jobs.Move())
+
+In a queue with KeepDone a key still runs once.
 
 ## Entry
 
@@ -121,6 +141,24 @@ type Entry[V any] struct {
 ```
 
 Entry is a job as the queue holds it.
+
+## EveryOption
+
+```go
+type EveryOption func(*everySettings)
+```
+
+EveryOption says where in its interval an Every runs.
+
+### Spread
+
+```go
+func Spread() EveryOption
+```
+
+Spread runs each key's job at a phase of its own within the interval, the key's FNV-1a hash modulo d, so that the jobs of many keys repeating Every(d) do not all run in the same instant. The phase is kept with the job, so a restart does not shift it either:
+
+	Every(30*time.Second, Spread()), key probe:7   @every 30s +6178ms   at :06.178 and :36.178
 
 ## Job
 
@@ -359,7 +397,7 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 
 Enqueue adds a job that runs at jobs.At or jobs.After, or now, and returns once the job is in the file. A repeat needs a key.
 
-Under a key whose job waits it adds nothing, and can bring that job forward but never back. Under a key whose job runs it asks for one run more after it. Under a failed one it starts the job again.
+Under a key whose job waits it adds nothing, and can bring that job forward but never back, or with jobs.Move set its time either way. Under a key whose job runs it asks for one run more after it. Under a failed one it starts the job again.
 
 ### Queue.Enqueued
 
@@ -479,6 +517,14 @@ func MaxRunning(n int) QueueOption
 
 MaxRunning is how many of the queue's jobs may run at once, across every Work loop and Claim of the store; past it a claim takes nothing until a job is settled. A Work loop of such a queue claims no job ahead for a busy worker, so that its held jobs are the ones running.
 
+### MaxRunningInGroup
+
+```go
+func MaxRunningInGroup(n int) QueueOption
+```
+
+MaxRunningInGroup is how many jobs of one Group may run at once, across every Work loop and Claim of the store, while MaxRunning bounds the whole queue: no more than two refreshes of one customer's database at once. A claim passes over the jobs of a group whose places are taken, and they wait, in the order of their times, until the group has room. A job without a group is not bound.
+
 ### MaxWaiting
 
 ```go
@@ -486,6 +532,14 @@ func MaxWaiting(n int64) QueueOption
 ```
 
 MaxWaiting refuses a job past n in the queue with tinystore.ErrLimit, ten million unless it says. A loop that enqueues without end then stops at a limit and not at a full disk.
+
+### Rate
+
+```go
+func Rate(n int, per time.Duration) QueueOption
+```
+
+Rate lets at most n of the queue's jobs start in any span of per, across every Work loop and Claim of the store: Rate(30, time.Second) for an API that takes 30 messages a second. Past it a claim takes nothing until the oldest start of the span is per old. The starts are counted in memory, so a restart forgets those before it; per is at least a millisecond.
 
 ## Repeat
 
@@ -497,9 +551,10 @@ type Repeat struct {
 
 Repeat is when a job runs again: a cron expression in a named zone, or an interval. It is kept as text, so that another language reads the same schedule:
 
-	jobs.Daily("03:10", moscow)         10 3 * * * Europe/Moscow
-	jobs.Cron("*/15 9-18 * * 1-5", tz)  */15 9-18 * * 1-5 America/New_York
-	jobs.Every(15 * time.Minute)        @every 15m
+	jobs.Daily("03:10", moscow)                          10 3 * * * Europe/Moscow
+	jobs.Cron("*/15 9-18 * * 1-5", tz)                   */15 9-18 * * 1-5 America/New_York
+	jobs.Every(15 * time.Minute)                         @every 15m
+	jobs.Every(30*time.Second, jobs.Spread()), probe:7   @every 30s +6178ms
 
 ### Cron
 
@@ -522,7 +577,7 @@ Daily repeats a job every day at clock, "15:04", in zone.
 ### Every
 
 ```go
-func Every(d time.Duration) Repeat
+func Every(d time.Duration, options ...EveryOption) Repeat
 ```
 
 Every repeats a job every d, at the multiples of d since the Unix epoch, so that a restart does not shift it: Every(15\*time.Minute) runs at :00, :15, :30 and :45. d is at least a second.
@@ -533,7 +588,7 @@ Every repeats a job every d, at the multiples of d since the Unix epoch, so that
 func (r Repeat) String() string
 ```
 
-String is the repeat as jobs.db keeps it.
+String is the repeat as jobs.db keeps it; a Spread interval's phase comes with its job's key.
 
 ## SettleOption
 
@@ -644,7 +699,7 @@ After runs the job d from now.
 func At(t time.Time) TimeOption
 ```
 
-At runs the job at t by the store's clock; a time in the past runs it now.
+At runs the job at t by the store's clock; a time in the past runs it now. The year of t is 1 to 9999.
 
 ## Tx
 

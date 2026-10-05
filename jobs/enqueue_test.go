@@ -415,3 +415,76 @@ func keysKept(t *testing.T, queues *testQueues) int {
 	}
 	return count
 }
+
+// Move sets a waiting job's time either way, as a deadline each ping pushes
+// back does, and a key's job is brought forward without it but never back
+func TestMoveSetsATimeLaterThanTheOneWaiting(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	checks := openTestQueue[string](t, queues, "checks")
+	ten, eleven, nine := testStart.Add(10*time.Minute), testStart.Add(11*time.Minute), testStart.Add(9*time.Minute)
+	mustEnqueue(t, checks, "backup", Key("check:7"), At(ten))
+	mustEnqueue(t, checks, "backup", Key("check:7"), At(eleven), Move())
+	checkEntry(t, checks, "check:7", "backup", eleven)
+	mustEnqueue(t, checks, "backup", Key("check:7"), At(nine), Move())
+	checkEntry(t, checks, "check:7", "backup", nine)
+
+	queues.clock.advance(10 * time.Minute)
+	mustEnqueue(t, checks, "backup", Key("check:7"), After(5*time.Minute), Move())
+	nothingDue(t, checks)
+	queues.clock.advance(5 * time.Minute)
+	mustClaim(t, checks)
+
+	if err := checks.Enqueue(t.Context(), "backup", Move()); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a Move without a key: %v", err)
+	}
+	if err := checks.Update(t.Context(), "check:7", "backup", Move()); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a Move in an Update: %v", err)
+	}
+}
+
+// Move under a key without a job adds one, and under a running one sets the
+// time of its next run to the last Move's, later or earlier, unless the
+// queue keeps its keys once
+func TestMoveCreatesAMissingJob(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	checks := openTestQueue[string](t, queues, "checks")
+	mustEnqueue(t, checks, "backup", Key("check:7"), After(time.Minute), Move())
+	checkEntry(t, checks, "check:7", "backup", testStart.Add(time.Minute))
+
+	queues.clock.advance(time.Minute)
+	job := mustClaim(t, checks)
+	mustEnqueue(t, checks, "backup", Key("check:7"), After(time.Hour), Move())
+	mustEnqueue(t, checks, "backup", Key("check:7"), After(2*time.Hour), Move())
+	if err := job.Ack(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	checkEntry(t, checks, "check:7", "backup", testStart.Add(time.Minute+2*time.Hour))
+
+	once := openTestQueue[string](t, queues, "once", KeepDone(time.Hour))
+	mustEnqueue(t, once, "push", Key("push:1"))
+	job = mustClaim(t, once)
+	mustEnqueue(t, once, "push", Key("push:1"), After(time.Hour), Move())
+	if err := job.Ack(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if entry, _, err := once.Get(t.Context(), "push:1"); err != nil || entry.State != Done {
+		t.Fatalf("a key KeepDone keeps ran again for a Move: %+v, %v", entry, err)
+	}
+}
+
+// a time is from the year 1 to 9999, so that no time a job keeps reaches the
+// times parked jobs are moved to
+func TestATimePastTheYearsAJobKeepsIsRefused(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	later := openTestQueue[string](t, queues, "later")
+	for _, at := range []time.Time{time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC)} {
+		if err := later.Enqueue(t.Context(), "x", At(at)); !errors.Is(err, tinystore.ErrInvalid) {
+			t.Fatalf("At(%v): %v", at, err)
+		}
+	}
+	mustEnqueue(t, later, "x", At(time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)))
+	mustEnqueue(t, later, "now", Key("k"))
+	if err := mustClaim(t, later).Snooze(t.Context(), At(time.Date(20000, 1, 1, 0, 0, 0, 0, time.UTC))); !errors.Is(err, tinystore.ErrInvalid) {
+		t.Fatalf("a Snooze past the year 9999: %v", err)
+	}
+}

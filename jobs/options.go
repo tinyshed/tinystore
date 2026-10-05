@@ -90,9 +90,19 @@ type policy struct {
 	longest     time.Duration
 	maxWaiting  int64
 	maxRunning  int
+	maxInGroup  int
+	rate        int // the jobs that may start in any span of ratePer, none when zero
+	ratePer     time.Duration
 	keepFailed  time.Duration
 	keepDone    time.Duration
 	err         error
+}
+
+// bounded says the queue bounds the jobs it runs or starts, so that a Work
+// loop claims no job ahead for a busy worker: the jobs it holds are the ones
+// running
+func (p policy) bounded() bool {
+	return p.maxRunning > 0 || p.maxInGroup > 0 || p.rate > 0
 }
 
 func defaultPolicy() policy {
@@ -108,13 +118,16 @@ type claimSettings struct {
 }
 
 type enqueueSettings struct {
-	at     time.Time
-	after  time.Duration
-	timed  bool
-	key    string
-	keyed  bool
-	repeat *Repeat
-	err    error
+	at      time.Time
+	after   time.Duration
+	timed   bool
+	key     string
+	keyed   bool
+	repeat  *Repeat
+	move    bool
+	group   string
+	grouped bool
+	err     error
 }
 
 type settleSettings struct {
@@ -164,13 +177,29 @@ func (l leaseOption) claimOption(s *claimSettings) {
 
 func (o timeOption) enqueueOption(s *enqueueSettings) {
 	s.at, s.after, s.timed = o.at, o.after, true
+	if err := o.check(); err != nil {
+		s.err = err
+	}
 }
 
 func (o timeOption) settleOption(s *settleSettings) {
 	s.at, s.after, s.timed = o.at, o.after, true
+	if err := o.check(); err != nil {
+		s.err = err
+	}
+}
+
+// check refuses a time past the years a job's time is kept for, which lie
+// well before where parked jobs begin
+func (o timeOption) check() error {
+	if o.at.IsZero() || o.at.Year() >= 1 && o.at.Year() <= 9999 {
+		return nil
+	}
+	return fmt.Errorf("%w: jobs: a time in the year %d, not 1 to 9999", tinystore.ErrInvalid, o.at.Year())
 }
 
 // At runs the job at t by the store's clock; a time in the past runs it now.
+// The year of t is 1 to 9999.
 func At(t time.Time) TimeOption {
 	return timeOption{at: t}
 }
@@ -188,6 +217,31 @@ func Key(key string) EnqueueOption {
 			s.err = fmt.Errorf("%w: jobs: a key of %d bytes, not 1 to 1024", tinystore.ErrInvalid, len(key))
 		}
 		s.key, s.keyed = key, true
+	})
+}
+
+// Move sets the time of the job under the Enqueue's key whatever it was: a
+// waiting job moves later as well as earlier, a running one runs again at that
+// time after this run, and a key without a job gets one. A deadline that each
+// ping pushes back is then one call a ping:
+//
+//	checks.Enqueue(ctx, check, jobs.Key(id), jobs.At(now.Add(grace)), jobs.Move())
+//
+// In a queue with KeepDone a key still runs once.
+func Move() EnqueueOption {
+	return forEnqueues(func(s *enqueueSettings) { s.move = true })
+}
+
+// Group puts the job in a group of its queue, such as the customer database it
+// works on, so that the queue's MaxRunningInGroup bounds the group's jobs that
+// run at once. A group is 1 to 1024 bytes of text. A job keeps its group until
+// an Update, or an Enqueue that starts it again after it failed, names another.
+func Group(name string) EnqueueOption {
+	return forEnqueues(func(s *enqueueSettings) {
+		if name == "" || len(name) > maxKey {
+			s.err = fmt.Errorf("%w: jobs: a group of %d bytes, not 1 to 1024", tinystore.ErrInvalid, len(name))
+		}
+		s.group, s.grouped = name, true
 	})
 }
 
@@ -243,6 +297,34 @@ func MaxRunning(n int) QueueOption {
 			p.err = fmt.Errorf("%w: jobs: MaxRunning(%d)", tinystore.ErrInvalid, n)
 		}
 		p.maxRunning = n
+	})
+}
+
+// MaxRunningInGroup is how many jobs of one Group may run at once, across every
+// Work loop and Claim of the store, while MaxRunning bounds the whole queue: no
+// more than two refreshes of one customer's database at once. A claim passes
+// over the jobs of a group whose places are taken, and they wait, in the order
+// of their times, until the group has room. A job without a group is not bound.
+func MaxRunningInGroup(n int) QueueOption {
+	return forQueues(func(p *policy) {
+		if n < 1 {
+			p.err = fmt.Errorf("%w: jobs: MaxRunningInGroup(%d)", tinystore.ErrInvalid, n)
+		}
+		p.maxInGroup = n
+	})
+}
+
+// Rate lets at most n of the queue's jobs start in any span of per, across
+// every Work loop and Claim of the store: Rate(30, time.Second) for an API that
+// takes 30 messages a second. Past it a claim takes nothing until the oldest
+// start of the span is per old. The starts are counted in memory, so a
+// restart forgets those before it; per is at least a millisecond.
+func Rate(n int, per time.Duration) QueueOption {
+	return forQueues(func(p *policy) {
+		if n < 1 || per < time.Millisecond {
+			p.err = fmt.Errorf("%w: jobs: Rate(%d, %v)", tinystore.ErrInvalid, n, per)
+		}
+		p.rate, p.ratePer = n, per
 	})
 }
 

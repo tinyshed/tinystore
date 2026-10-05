@@ -53,6 +53,7 @@ skill: .agents/skills/docs/SKILL.md.
 - [Overview](jobs/README.md)
 - [Keys](jobs/keys.md)
 - [Schedules](jobs/schedules.md)
+- [Concurrency and rate limits](jobs/concurrency.md)
 - [Watching a job](jobs/watching.md)
 - [Steps](jobs/steps.md)
 - [Jobs and your data](jobs/your-data.md)

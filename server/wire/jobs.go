@@ -20,17 +20,20 @@ const (
 // schedule, a queue holding one repeating job under its name. A duration is
 // milliseconds, zero for the queue's default.
 type JobsQueue struct {
-	Name         string
-	Lease        int64
-	MaxAttempts  uint64
-	BackoffFirst int64
-	BackoffMost  int64
-	MaxWaiting   uint64
-	KeepFailed   int64
-	KeepDone     int64
-	Schedule     *Repeat
-	MaxRunning   uint64
-	In           string // the database whose file keeps the queue, which its sql.batch enqueues in
+	Name              string
+	Lease             int64
+	MaxAttempts       uint64
+	BackoffFirst      int64
+	BackoffMost       int64
+	MaxWaiting        uint64
+	KeepFailed        int64
+	KeepDone          int64
+	Schedule          *Repeat
+	MaxRunning        uint64
+	In                string // the database whose file keeps the queue, which its sql.batch enqueues in
+	MaxRunningInGroup uint64
+	Rate              uint64 // the jobs that may start in any Per milliseconds
+	Per               int64
 }
 
 func (q JobsQueue) Append(dst []byte) []byte {
@@ -49,6 +52,9 @@ func (q JobsQueue) Append(dst []byte) []byte {
 	}
 	optionalUint(&m, 10, q.MaxRunning)
 	optionalStr(&m, 11, q.In)
+	optionalUint(&m, 12, q.MaxRunningInGroup)
+	optionalUint(&m, 13, q.Rate)
+	optionalInt(&m, 14, q.Per)
 	return m.End()
 }
 
@@ -79,6 +85,12 @@ func (q *JobsQueue) Decode(body []byte) error {
 			q.MaxRunning = d.Uint()
 		case 11:
 			q.In = d.Str()
+		case 12:
+			q.MaxRunningInGroup = d.Uint()
+		case 13:
+			q.Rate = d.Uint()
+		case 14:
+			q.Per = d.Duration()
 		}
 	}
 	return d.End()
@@ -103,11 +115,13 @@ func optionalStr(m *Map, key uint64, s string) {
 }
 
 // Repeat is when a job runs again: a cron expression in a zone by its name,
-// or every so many milliseconds.
+// or every so many milliseconds. Spread runs each key's job of an interval at
+// a phase of its own.
 type Repeat struct {
-	Cron  string
-	Zone  string
-	Every int64
+	Cron   string
+	Zone   string
+	Every  int64
+	Spread bool
 }
 
 func (r Repeat) Append(dst []byte) []byte {
@@ -115,6 +129,9 @@ func (r Repeat) Append(dst []byte) []byte {
 	optionalStr(&m, 1, r.Cron)
 	optionalStr(&m, 2, r.Zone)
 	optionalInt(&m, 3, r.Every)
+	if r.Spread {
+		m.Bool(4, true)
+	}
 	return m.End()
 }
 
@@ -127,18 +144,23 @@ func (r *Repeat) decode(d *Decoder) {
 			r.Zone = d.Str()
 		case 3:
 			r.Every = d.Duration()
+		case 4:
+			r.Spread = d.Bool()
 		}
 	}
 }
 
 // JobsJob is a job to enqueue: its value as JSON text, its key, when it runs,
-// at a time or after a while, and how it repeats.
+// at a time or after a while, how it repeats, and its group. Move sets the
+// time of its key's job either way.
 type JobsJob struct {
 	Value  string
 	Key    string
 	At     int64 // unix milliseconds
 	After  int64 // milliseconds
 	Repeat *Repeat
+	Move   bool
+	Group  string
 }
 
 func (j JobsJob) appendFields(m *Map) {
@@ -150,6 +172,10 @@ func (j JobsJob) appendFields(m *Map) {
 		m.Key(5)
 		m.SetBuf(j.Repeat.Append(m.Buf()))
 	}
+	if j.Move {
+		m.Bool(7, true)
+	}
+	optionalStr(m, 8, j.Group)
 }
 
 func (j *JobsJob) decodeField(d *Decoder, key uint64) {
@@ -165,6 +191,10 @@ func (j *JobsJob) decodeField(d *Decoder, key uint64) {
 	case 5:
 		j.Repeat = &Repeat{}
 		j.Repeat.decode(d)
+	case 7:
+		j.Move = d.Bool()
+	case 8:
+		j.Group = d.Str()
 	}
 }
 

@@ -7,6 +7,7 @@ import { currentSignal } from './cancel.ts'
 import { type Connection, download, type Link } from './connection.ts'
 import { CancelledError, CorruptError, errorOf, InvalidError } from './errors.ts'
 import { checkName, handleOn, type Page } from './handles.ts'
+import { type Rate, rateOf } from './limiter.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { LostError, watch } from './session.ts'
 import { batchBelongsTo, type Database, databaseBelongsTo, type SqlBatch } from './sql.ts'
@@ -45,6 +46,10 @@ export interface QueueOptions {
 	keepDone?: Duration
 	/** the jobs that may run at once, across every worker of the store: no bound */
 	maxRunning?: number
+	/** the jobs of one group, its enqueue's `group`, that may run at once: no bound */
+	maxRunningInGroup?: number
+	/** how many jobs may start in any span, across every worker of the store: `'30/s'` */
+	rate?: Rate
 	/**
 	 * keeps the queue in this database's file instead of jobs.db, so that a
 	 * batch of the database commits a job with its rows: `queue.withTx(tx)`
@@ -52,11 +57,14 @@ export interface QueueOptions {
 	in?: Database
 }
 
-/** When a job runs again: cron text in a zone by its name, a daily time, or every so often. */
+/**
+ * When a job runs again: cron text in a zone by its name, a daily time, or
+ * every so often, which `spread` runs at a phase of each key's own.
+ */
 export type Repeat =
 	| { cron: string; zone: string }
 	| { daily: string; zone: string }
-	| { every: Duration }
+	| { every: Duration; spread?: boolean }
 
 export interface EnqueueOptions {
 	/** the job's time; one past runs now */
@@ -66,6 +74,10 @@ export interface EnqueueOptions {
 	key?: string
 	/** needs a key, since only a key stops it */
 	repeat?: Repeat
+	/** sets the time of the key's job either way, later too: a running one runs again then; needs a key */
+	move?: boolean
+	/** the group whose running jobs the queue's `maxRunningInGroup` bounds */
+	group?: string
 }
 
 /** done while keepDone keeps its key; cancelled only a watcher sees */
@@ -425,7 +437,7 @@ function schemaValues<S extends StandardSchemaV1>(schema: S): Values<unknown> {
 
 function repeatOf(r: Repeat): Parameters<typeof JobsQueue.encode>[0]['schedule'] {
 	if ('every' in r) {
-		return { every: ms(r.every) }
+		return { every: ms(r.every), spread: r.spread === true ? true : undefined }
 	}
 	if ('daily' in r) {
 		const time = /^(\d{1,2}):(\d{2})$/.exec(r.daily)
@@ -495,7 +507,21 @@ function queueFields(
 		keepDone: options?.keepDone === undefined ? undefined : ms(options.keepDone),
 		maxRunning: options?.maxRunning,
 		in: options?.in?.name,
+		maxRunningInGroup: options?.maxRunningInGroup,
+		...rateFields(options?.rate),
 	}
+}
+
+/** A queue's rate as jobs.open carries it: how many, and in how many milliseconds. */
+function rateFields(rate: Rate | undefined): { rate?: number; per?: number } {
+	if (rate === undefined) {
+		return {}
+	}
+	const { count, per } = rateOf(rate)
+	if (count < 1 || per < 1) {
+		throw new InvalidError(`a queue's rate of ${rate}`)
+	}
+	return { rate: count, per }
 }
 
 /** A job's fields as jobs.enqueue and a batch carry them. */
@@ -506,6 +532,8 @@ function jobFields<T>(values: Values<T>, value: T, options: EnqueueOptions | und
 		at: options?.at === undefined ? undefined : unixMs(options.at),
 		after: options?.after === undefined ? undefined : ms(options.after),
 		repeat: options?.repeat === undefined ? undefined : repeatOf(options.repeat),
+		move: options?.move === true ? true : undefined,
+		group: options?.group,
 	}
 }
 
@@ -608,16 +636,21 @@ export class Queue<T> {
 
 	/**
 	 * Changes a job that waits or failed: its value and, when the options
-	 * say, its time or repeat. A job a worker holds, done or absent is
+	 * say, its time, repeat or group. A job a worker holds, done or absent is
 	 * ConflictError.
 	 */
-	async update(key: string, value: T, options?: Omit<EnqueueOptions, 'key'>): Promise<void> {
+	async update(
+		key: string,
+		value: T,
+		options?: Omit<EnqueueOptions, 'key' | 'move'>,
+	): Promise<void> {
 		const change = {
 			value: this.#values.encode(value),
 			key,
 			at: options?.at === undefined ? undefined : unixMs(options.at),
 			after: options?.after === undefined ? undefined : ms(options.after),
 			repeat: options?.repeat === undefined ? undefined : repeatOf(options.repeat),
+			group: options?.group,
 		}
 		await this.#link.run('write', async connection => {
 			const handle = await this.#handle(connection)

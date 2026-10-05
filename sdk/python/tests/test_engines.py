@@ -8,6 +8,7 @@ import struct
 import time
 from array import array
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -205,6 +206,37 @@ async def test_a_queue_waits_changes_cancels_and_works(store: tinystore.Store) -
     assert job is not None and job.value == "x"
     await job.ack()
     assert await claimed.get("k") is None
+
+
+async def test_a_group_bounds_its_running_jobs_a_rate_its_starts_and_move_and_spread_set_times(
+    store: tinystore.Store,
+) -> None:
+    refreshes = store.jobs.queue("refreshes", int, max_running_in_group=1, rate="2/m")
+    await refreshes.enqueue_all(
+        [
+            tinystore.Enqueue(1, key="refresh:1", group="db:42"),
+            tinystore.Enqueue(2, key="refresh:2", group="db:42"),
+            tinystore.Enqueue(3, key="refresh:3", group="db:7"),
+            tinystore.Enqueue(4, key="refresh:4"),
+        ]
+    )
+    first, second = await refreshes.claim(), await refreshes.claim()
+    assert first is not None and second is not None and (first.key, second.key) == ("refresh:1", "refresh:3")
+    assert await refreshes.claim() is None  # the rate's two starts a minute are taken
+
+    checks = store.jobs.queue("checks", str)
+    later = datetime.fromtimestamp(int(time.time()) + 3600, UTC)
+    for at in (later, later + timedelta(minutes=1)):
+        await checks.enqueue("backup", key="check:7", at=at, move=True)
+    moved = await checks.get("check:7")
+    assert moved is not None and moved.at == later + timedelta(minutes=1)
+    await checks.enqueue("probe", key="probe:7", repeat=tinystore.every("30s", spread=True))
+    spread = await checks.get("probe:7")
+    assert spread is not None and spread.repeat == "@every 30s +6178ms"
+    with pytest.raises(InvalidError):
+        await checks.enqueue("backup", move=True)
+    with pytest.raises(InvalidError):
+        store.jobs.queue("rated", int, rate="0/s")
 
 
 async def test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer(

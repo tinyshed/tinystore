@@ -39,6 +39,7 @@ from ._wire.messages import (
     JobsWorkers,
 )
 from .errors import InvalidError, error_of
+from .limiter import rate_of
 from .sql import batch_belongs_to, database_belongs_to
 
 if TYPE_CHECKING:
@@ -54,14 +55,15 @@ _REPORT_EVERY = 0.1
 
 @dataclass(frozen=True, slots=True)
 class Repeat:
-    """When a job runs again: cron text in a zone by its name, or every so many milliseconds."""
+    """When a job runs again: cron text in a zone by its name, or every so many milliseconds, spread or not."""
 
     cron: str | None = None
     zone: str | None = None
     every: int | None = None
+    spread: bool = False
 
     def fields(self) -> dict[str, Any]:
-        return {"cron": self.cron, "zone": self.zone, "every": self.every}
+        return {"cron": self.cron, "zone": self.zone, "every": self.every, "spread": self.spread or None}
 
 
 def cron(expression: str, zone: str) -> Repeat:
@@ -76,8 +78,9 @@ def daily(at: str, zone: str) -> Repeat:
     return Repeat(cron=f"{int(found[2])} {int(found[1])} * * *", zone=zone)
 
 
-def every(d: Duration) -> Repeat:
-    return Repeat(every=ms(d))
+def every(d: Duration, *, spread: bool = False) -> Repeat:
+    """Every so often; spread runs each key's job at a phase of its own: every("30s", spread=True)."""
+    return Repeat(every=ms(d), spread=spread)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +92,8 @@ class Enqueue[V]:
     after: Duration | None = None
     key: str | None = None
     repeat: Repeat | None = None
+    move: bool = False
+    group: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,13 +311,17 @@ class Jobs:
         keep_failed: Duration | None = None,
         keep_done: Duration | None = None,
         max_running: int | None = None,
+        max_running_in_group: int | None = None,
+        rate: str | None = None,
         in_: Database | None = None,
     ) -> Queue[V]:
         """A queue of JSON values of one type; its policy is the options' and the server's defaults.
 
         max_running bounds the jobs that run at once across every worker of
-        the store. in_ keeps the queue in a database's file instead of jobs.db,
-        so that a batch of the database commits a job with its rows::
+        the store, max_running_in_group those of one group, an enqueue's
+        group, and rate how many start in any span: "30/s". in_ keeps the
+        queue in a database's file instead of jobs.db, so that a batch of the
+        database commits a job with its rows::
 
             index = store.jobs.queue("index", IndexNote, in_=db)
             async with db.batch() as tx:
@@ -320,7 +329,17 @@ class Jobs:
                 index.with_tx(tx).enqueue(IndexNote(note_id))
         """
         check_name(name, "queue")
-        fields = _policy(lease, max_attempts, backoff, max_waiting, keep_failed, keep_done, max_running)
+        fields = _policy(
+            lease,
+            max_attempts,
+            backoff,
+            max_waiting,
+            keep_failed,
+            keep_done,
+            max_running,
+            max_running_in_group,
+            rate,
+        )
         open_body = JobsQueue.encode(name=name, in_=None if in_ is None else in_.name, **fields)
         return Queue(self._link, name, open_body, of, in_)
 
@@ -341,6 +360,8 @@ def _policy(
     keep_failed: Duration | None = None,
     keep_done: Duration | None = None,
     max_running: int | None = None,
+    max_running_in_group: int | None = None,
+    rate: str | None = None,
 ) -> dict[str, Any]:
     return {
         "lease": None if lease is None else ms(lease),
@@ -351,7 +372,19 @@ def _policy(
         "keep_failed": None if keep_failed is None else ms(keep_failed),
         "keep_done": None if keep_done is None else ms(keep_done),
         "max_running": max_running,
+        "max_running_in_group": max_running_in_group,
+        **_rate(rate),
     }
+
+
+def _rate(rate: str | None) -> dict[str, Any]:
+    """A queue's rate as jobs.open carries it: how many, and in how many milliseconds."""
+    if rate is None:
+        return {}
+    count, per = rate_of(rate)
+    if count < 1 or per < 1:
+        raise InvalidError(f"a queue's rate of {rate}")
+    return {"rate": count, "per": per}
 
 
 class QueueTx[V]:
@@ -368,9 +401,11 @@ class QueueTx[V]:
         after: Duration | None = None,
         key: str | None = None,
         repeat: Repeat | None = None,
+        move: bool = False,
+        group: str | None = None,
     ) -> asyncio.Future[None]:
         """Adds a job to the batch; the future settles once the batch has committed."""
-        return self._tx.enqueue(self._open, self._job(value, at, after, key, repeat))
+        return self._tx.enqueue(self._open, self._job(Enqueue(value, at, after, key, repeat, move, group)))
 
 
 class Queue[V]:
@@ -398,15 +433,15 @@ class Queue[V]:
             )
         return QueueTx(tx, self._open, self._job)
 
-    def _job(
-        self, value: V, at: datetime | None, after: Duration | None, key: str | None, repeat: Repeat | None
-    ) -> dict[str, Any]:
+    def _job(self, job: Enqueue[V]) -> dict[str, Any]:
         return {
-            "value": "{}" if self._of is None else to_json(value),
-            "key": key,
-            "at": None if at is None else unix_ms(at),
-            "after": None if after is None else ms(after),
-            "repeat": None if repeat is None else repeat.fields(),
+            "value": "{}" if self._of is None else to_json(job.value),
+            "key": job.key,
+            "at": None if job.at is None else unix_ms(job.at),
+            "after": None if job.after is None else ms(job.after),
+            "repeat": None if job.repeat is None else job.repeat.fields(),
+            "move": job.move or None,
+            "group": job.group,
         }
 
     async def enqueue(
@@ -417,13 +452,20 @@ class Queue[V]:
         after: Duration | None = None,
         key: str | None = None,
         repeat: Repeat | None = None,
+        move: bool = False,
+        group: str | None = None,
     ) -> None:
-        """Adds a job; it returns once the job is in the file."""
-        await self.enqueue_all([Enqueue(value, at, after, key, repeat)])
+        """Adds a job; it returns once the job is in the file.
+
+        move sets the time of the key's job either way, later too, and a
+        running one's next run; group names the group whose running jobs the
+        queue's max_running_in_group bounds.
+        """
+        await self.enqueue_all([Enqueue(value, at, after, key, repeat, move, group)])
 
     async def enqueue_all(self, jobs: Iterable[Enqueue[V]]) -> None:
         """Adds jobs in one transaction, all or none; a refused one names itself as call."""
-        encoded = [self._job(j.value, j.at, j.after, j.key, j.repeat) for j in jobs]
+        encoded = [self._job(j) for j in jobs]
 
         async def attempt(connection: Connection) -> None:
             handle = await self._handle(connection)
@@ -439,6 +481,7 @@ class Queue[V]:
         at: datetime | None = None,
         after: Duration | None = None,
         repeat: Repeat | None = None,
+        group: str | None = None,
     ) -> None:
         """Changes a job that waits or failed; one a worker holds, done or absent is ConflictError."""
         change = {
@@ -446,6 +489,7 @@ class Queue[V]:
             "key": key,
             **_timing(at, after),
             "repeat": None if repeat is None else repeat.fields(),
+            "group": group,
         }
 
         async def attempt(connection: Connection) -> None:

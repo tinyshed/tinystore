@@ -117,6 +117,9 @@ videos are transcoded at once, even if ten processes call `work`. The queue
 counts running jobs on the server's single writer, so two workers can never
 both take the last free place.
 
+To limit the jobs of each customer, or the jobs that start per second, see
+[Concurrency and rate limits](concurrency.md).
+
 ## Cancel a running job
 
 ```ts
@@ -147,5 +150,7 @@ cancel changes nothing. A watch of the job ends with the `cancelled` state.
 ## See also
 
 - [Steps](steps.md): keep the results of long steps across retries.
+- [Concurrency and rate limits](concurrency.md): limit running jobs per
+  customer, and job starts per second.
 - [jobs/README.md](../../jobs/README.md): the full contract of `get` and
   `watch`.

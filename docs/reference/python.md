@@ -214,6 +214,19 @@ task is cancelled, and whatever it leaves behind changes nothing.
 `max_running` limits how many jobs of the queue run at once, across all
 workers of the store.
 
+```python
+refreshes = store.jobs.queue("refreshes", Refresh, max_running_in_group=2)
+await refreshes.enqueue(refresh, key=refresh.id, group=f"db:{refresh.customer}")
+
+telegram = store.jobs.queue("telegram", Message, rate="30/s")
+await checks.enqueue(check, key=check.id, after="25h", move=True)  # each ping pushes it back
+await probes.enqueue(probe, key=probe.id, repeat=tinystore.every("30s", spread=True))
+```
+
+`max_running_in_group` limits the running jobs of each `group`, and `rate`
+the jobs that start in any span. `move` sets the time of the key's job, later
+as well as earlier. `spread` runs each key's repeat at an offset of its own.
+
 A step stores its answer, so the next attempt of the same run doesn't run it
 again:
 
@@ -221,7 +234,8 @@ again:
 hits = await job.step("search", lambda: search(q))
 ```
 
-See [Jobs](../jobs/README.md), [Watching a job](../jobs/watching.md) and
+See [Jobs](../jobs/README.md), [Concurrency and rate
+limits](../jobs/concurrency.md), [Watching a job](../jobs/watching.md) and
 [Steps](../jobs/steps.md).
 
 ## Blobs

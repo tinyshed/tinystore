@@ -188,7 +188,7 @@ KvAllowance = message(
 KvConfigure = message("kv.configure", handle=(1, uint), set=(2, list_(str_)), reset=(3, list_(str_)))
 KvKept = message("kv.kept", changes=(1, uint), fields=(2, list_(str_)))
 
-JobsRepeat = message("jobs.repeat", cron=(1, str_), zone=(2, str_), every=(3, uint))
+JobsRepeat = message("jobs.repeat", cron=(1, str_), zone=(2, str_), every=(3, uint), spread=(4, bool_))
 
 JobsQueue = message(
     "jobs.queue",
@@ -203,6 +203,9 @@ JobsQueue = message(
     schedule=(9, JobsRepeat),
     max_running=(10, uint),
     in_=(11, str_),
+    max_running_in_group=(12, uint),
+    rate=(13, uint),
+    per=(14, uint),
 )
 
 _jobs_job = {
@@ -211,6 +214,8 @@ _jobs_job = {
     "at": (3, int_),
     "after": (4, uint),
     "repeat": (5, JobsRepeat),
+    "move": (7, bool_),
+    "group": (8, str_),
 }
 
 JobsJob = Message("jobs.job", _jobs_job)

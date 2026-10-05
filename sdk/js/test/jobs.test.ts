@@ -81,6 +81,30 @@ describe('a queue', () => {
 		expect(await q.get('a')).toBeUndefined()
 	})
 
+	test('a group bounds its running jobs, a rate its starts, move sets a time either way, and spread a phase', async () => {
+		const refreshes = store.jobs.queue<number>('refreshes', { maxRunningInGroup: 1, rate: '2/m' })
+		await refreshes.enqueueAll([
+			{ value: 1, key: 'refresh:1', group: 'db:42' },
+			{ value: 2, key: 'refresh:2', group: 'db:42' },
+			{ value: 3, key: 'refresh:3', group: 'db:7' },
+			{ value: 4, key: 'refresh:4' },
+		])
+		const first = await refreshes.claim()
+		const second = await refreshes.claim()
+		expect([first?.key, second?.key]).toEqual(['refresh:1', 'refresh:3'])
+		expect(await refreshes.claim()).toBeUndefined() // the rate's two starts a minute are taken
+
+		const checks = store.jobs.queue<string>('checks')
+		const later = Date.now() + 3_600_000
+		await checks.enqueue('backup', { key: 'check:7', at: new Date(later), move: true })
+		await checks.enqueue('backup', { key: 'check:7', at: new Date(later + 60_000), move: true })
+		expect((await checks.get('check:7'))?.at.getTime()).toBe(later + 60_000)
+		await checks.enqueue('probe', { key: 'probe:7', repeat: { every: '30s', spread: true } })
+		expect((await checks.get('probe:7'))?.repeat).toBe('@every 30s +6178ms')
+		expect(await caught(checks.enqueue('backup', { move: true }))).toBeInstanceOf(InvalidError)
+		expect(() => store.jobs.queue('rated', { rate: '0/s' })).toThrow(InvalidError)
+	})
+
 	test('scan pages the jobs under a prefix', async () => {
 		const q = store.jobs.queue<number>('scanned')
 		await q.enqueueAll(

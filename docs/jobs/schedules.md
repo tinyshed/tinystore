@@ -47,11 +47,12 @@ time the program opens it.
 
 ## Repeats
 
-| Repeat              | Bun                           | Python                              | Go                             |
-|---------------------|-------------------------------|-------------------------------------|--------------------------------|
-| every day at a time | `{ daily: '03:10', zone }`    | `tinystore.daily("03:10", zone)`    | `jobs.Daily("03:10", loc)`     |
-| a cron expression   | `{ cron: '0 9 * * 1', zone }` | `tinystore.cron("0 9 * * 1", zone)` | `jobs.Cron("0 9 * * 1", loc)`  |
-| every interval      | `{ every: '15m' }`            | `tinystore.every("15m")`            | `jobs.Every(15 * time.Minute)` |
+| Repeat                             | Bun                              | Python                                | Go                                          |
+|------------------------------------|----------------------------------|---------------------------------------|---------------------------------------------|
+| every day at a time                | `{ daily: '03:10', zone }`       | `tinystore.daily("03:10", zone)`      | `jobs.Daily("03:10", loc)`                  |
+| a cron expression                  | `{ cron: '0 9 * * 1', zone }`    | `tinystore.cron("0 9 * * 1", zone)`   | `jobs.Cron("0 9 * * 1", loc)`               |
+| every interval                     | `{ every: '15m' }`               | `tinystore.every("15m")`              | `jobs.Every(15 * time.Minute)`              |
+| every interval, at each key's time | `{ every: '30s', spread: true }` | `tinystore.every("30s", spread=True)` | `jobs.Every(30*time.Second, jobs.Spread())` |
 
 A cron expression has five fields: minute, hour, day of the month, month and
 day of the week. It supports `*`, ranges, steps and lists, and the shortcuts
@@ -103,6 +104,48 @@ Any job can repeat. A million users' daily digests are a million rows in the
 queue, each moving to its next evening when it is done, in each user's own
 time zone. A repeating job needs a key, because only the key can stop it:
 `cancel` ends it, and `update` changes its value or its repeat.
+
+## Spread many repeats
+
+```ts
+const probes = store.jobs.queue<Probe>('probes')
+
+for (const site of sites) {
+	await probes.enqueue({ url: site.url }, {
+		key: `probe:${site.id}`,
+		repeat: { every: '30s', spread: true },
+	})
+}
+```
+
+```python
+probes = store.jobs.queue("probes", Probe)
+
+for site in sites:
+    await probes.enqueue(
+        Probe(url=site.url),
+        key=f"probe:{site.id}",
+        repeat=tinystore.every("30s", spread=True),
+    )
+```
+
+```go
+probes, err := jobs.OpenQueue[Probe](ctx, queues, "probes")
+
+for _, site := range sites {
+	err = probes.Enqueue(ctx, Probe{URL: site.URL}, jobs.Key("probe:"+site.ID),
+		jobs.Every(30*time.Second, jobs.Spread()))
+}
+```
+
+Without `spread`, every job that repeats every 30 seconds runs at :00 and :30,
+so 300 probes start in the same instant. With `spread`, each key runs at its
+own offset within the interval, computed from the key. For example,
+`probe:7` runs at :06.178 and :36.178 of every minute.
+
+The offset is saved with the job, so a restart doesn't move it. `get` shows it
+in the job's repeat: `@every 30s +6178ms`. A schedule with `spread` takes the
+offset of its name.
 
 ## See the last run
 

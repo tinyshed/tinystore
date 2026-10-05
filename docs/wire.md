@@ -644,30 +644,37 @@ A job's value is its JSON as str, checked before it is kept; a schedule's is
 
 A queue:
 
-| key | field         | type     |                                                                                                                                                                                                             |
-|-----|---------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1   | name          | str      | `[a-z0-9][a-z0-9_-]{0,63}`                                                                                                                                                                                  |
-| 2   | lease         | uint     | milliseconds; 30 seconds when absent                                                                                                                                                                        |
-| 3   | max attempts  | uint     | 10 when absent                                                                                                                                                                                              |
-| 4   | backoff first | uint     | milliseconds, the first wait after a failure; a second when absent                                                                                                                                          |
-| 5   | backoff most  | uint     | milliseconds, the longest; an hour when absent                                                                                                                                                              |
-| 6   | max waiting   | uint     | ten million when absent                                                                                                                                                                                     |
-| 7   | keep failed   | uint     | milliseconds; seven days when absent                                                                                                                                                                        |
-| 8   | keep done     | uint     | milliseconds; absent forgets a key when its job is done                                                                                                                                                     |
-| 9   | schedule      | a repeat | a schedule rather than a queue                                                                                                                                                                              |
-| 10  | max running   | uint     | the jobs that may run at once, across every worker of the store; absent bounds none                                                                                                                         |
-| 11  | in            | str      | a database's name. The queue lives in that database's file instead of `jobs.db`, and the database's batches can enqueue on it. A client opens the database first, on any connection. Absent means `jobs.db` |
+| key | field                | type     |                                                                                                                                                                                                             |
+|-----|----------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1   | name                 | str      | `[a-z0-9][a-z0-9_-]{0,63}`                                                                                                                                                                                  |
+| 2   | lease                | uint     | milliseconds; 30 seconds when absent                                                                                                                                                                        |
+| 3   | max attempts         | uint     | 10 when absent                                                                                                                                                                                              |
+| 4   | backoff first        | uint     | milliseconds, the first wait after a failure; a second when absent                                                                                                                                          |
+| 5   | backoff most         | uint     | milliseconds, the longest; an hour when absent                                                                                                                                                              |
+| 6   | max waiting          | uint     | ten million when absent                                                                                                                                                                                     |
+| 7   | keep failed          | uint     | milliseconds; seven days when absent                                                                                                                                                                        |
+| 8   | keep done            | uint     | milliseconds; absent forgets a key when its job is done                                                                                                                                                     |
+| 9   | schedule             | a repeat | a schedule rather than a queue                                                                                                                                                                              |
+| 10  | max running          | uint     | the jobs that may run at once, across every worker of the store; absent bounds none                                                                                                                         |
+| 11  | in                   | str      | a database's name. The queue lives in that database's file instead of `jobs.db`, and the database's batches can enqueue on it. A client opens the database first, on any connection. Absent means `jobs.db` |
+| 12  | max running in group | uint     | the jobs of one group that may run at once, across every worker of the store; absent bounds none                                                                                                            |
+| 13  | rate                 | uint     | the jobs that may start in any span of per; absent bounds none                                                                                                                                              |
+| 14  | per                  | uint     | milliseconds, the rate's span, at least one                                                                                                                                                                 |
 
 A repeat is `{1: cron, 2: zone}`, five cron fields and the zone's name, or
-`{3: every}`, milliseconds, at least a second. A job, a batch's item:
+`{3: every, 4: spread}`, milliseconds, at least a second; spread true runs
+each key's job at a phase of its own within the interval, which the job's
+repeat text then shows, `@every 30s +6178ms`. A job, a batch's item:
 
-| key | field  | type     |                                         |
-|-----|--------|----------|-----------------------------------------|
-| 1   | value  | str      | its JSON                                |
-| 2   | key    | str      | 1 to 1024 bytes                         |
-| 3   | at     | int      | unix milliseconds; a time past runs now |
-| 4   | after  | uint     | milliseconds from now                   |
-| 5   | repeat | a repeat | needs a key                             |
+| key | field  | type     |                                                                                                                                              |
+|-----|--------|----------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| 1   | value  | str      | its JSON                                                                                                                                     |
+| 2   | key    | str      | 1 to 1024 bytes                                                                                                                              |
+| 3   | at     | int      | unix milliseconds; a time past runs now                                                                                                      |
+| 4   | after  | uint     | milliseconds from now                                                                                                                        |
+| 5   | repeat | a repeat | needs a key                                                                                                                                  |
+| 7   | move   | bool     | sets the time of its key's job either way: a waiting one moves, a running one runs again then, and a key without a job gets one; needs a key |
+| 8   | group  | str      | 1 to 1024 bytes: the group whose running jobs max running in group bounds                                                                    |
 
 A batch is `{1: handle, 2: [job…]}`; a change is a job's fields with the
 handle under key 6; a key is `{1: handle, 2: key}`. An entry:

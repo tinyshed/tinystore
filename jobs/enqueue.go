@@ -22,8 +22,9 @@ var (
 // once the job is in the file. A repeat needs a key.
 //
 // Under a key whose job waits it adds nothing, and can bring that job forward
-// but never back. Under a key whose job runs it asks for one run more after it.
-// Under a failed one it starts the job again.
+// but never back, or with jobs.Move set its time either way. Under a key whose
+// job runs it asks for one run more after it. Under a failed one it starts the
+// job again.
 func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOption) error {
 	e, err := q.prepare(options)
 	if err == nil {
@@ -60,6 +61,9 @@ func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOptio
 // names none, is tinystore.ErrConflict.
 func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...EnqueueOption) error {
 	e, err := q.prepare(append(options, Key(key)))
+	if err == nil && e.move {
+		err = fmt.Errorf("%w: jobs: Move in an Update, which sets the time it names itself", tinystore.ErrInvalid)
+	}
 	if err == nil {
 		e.id, err = q.newID(ctx)
 	}
@@ -100,7 +104,7 @@ func (q *Queue[V]) Cancel(ctx context.Context, key string) (bool, error) {
 	var taken int64 // the id of the job taken from the queue's rows
 	var failed bool
 	err := q.write(ctx, 0, func(w sqlite.Writer) (writeErr error) {
-		taken, failed, writeErr = cancel(ctx, w, q.state.id, key)
+		taken, failed, writeErr = cancel(ctx, w, q.state, key)
 		return writeErr
 	})
 	if err != nil {
@@ -125,7 +129,9 @@ type enqueued struct {
 	maxWaiting  int64
 	at, now     int64
 	timed       bool
+	move        bool
 	key, repeat sql.NullString
+	group       sql.NullString
 	value       kept
 	keepDone    bool
 }
@@ -134,20 +140,24 @@ func (q *Queue[V]) prepare(options []EnqueueOption) (enqueued, error) {
 	s, err := collectEnqueue(options)
 	e := enqueued{
 		queue: q.state.id, maxWaiting: q.state.policy.maxWaiting, now: q.store.clock(),
-		timed: s.timed, keepDone: q.state.policy.keepDone > 0,
-		key: sql.NullString{String: s.key, Valid: s.keyed},
+		timed: s.timed, move: s.move, keepDone: q.state.policy.keepDone > 0,
+		key:   sql.NullString{String: s.key, Valid: s.keyed},
+		group: sql.NullString{String: s.group, Valid: s.grouped},
 	}
 	switch {
 	case err != nil:
 		return e, err
 	case s.repeat != nil && !s.keyed:
 		return e, fmt.Errorf("%w: jobs: a repeat without a key, which alone could stop it", tinystore.ErrInvalid)
+	case s.move && !s.keyed:
+		return e, fmt.Errorf("%w: jobs: Move without a key, which names the job it moves", tinystore.ErrInvalid)
 	}
 	e.at = when(s.at, s.after, s.timed, e.now, e.now)
 	if s.repeat != nil {
-		e.repeat = sql.NullString{String: s.repeat.text, Valid: true}
+		repeat := s.repeat.of(s.key)
+		e.repeat = sql.NullString{String: repeat.text, Valid: true}
 		if !s.timed {
-			e.at = s.repeat.next(time.UnixMilli(e.now)).UnixMilli()
+			e.at = repeat.next(time.UnixMilli(e.now)).UnixMilli()
 		}
 	}
 	return e, nil
@@ -195,20 +205,21 @@ const (
 	leaseOf = `select 1 from _tinystore_jobs_leases where id = ?1 and until > ?2`
 	doneKey = `select 1 from _tinystore_jobs_done where queue = ?1 and key = ?2 and until > ?3`
 
-	insertJob = `insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill)
-		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7)`
+	insertJob = `insert into _tinystore_jobs (queue, next, id, key, at, attempt, repeat, value, spill, grp)
+		values (?1, ?2, ?3, ?4, ?2, 0, ?5, ?6, ?7, ?8)`
 	insertSpilled = `insert into _tinystore_jobs_spilled (id, value) values (?1, ?2)`
 	deleteSpilled = `delete from _tinystore_jobs_spilled where id = ?1`
 	bringForward  = `update _tinystore_jobs set next = ?4, at = ?4 where queue = ?1 and next = ?2 and id = ?3`
 	askAgain      = `update _tinystore_jobs set again = min(coalesce(again, ?4), ?4)
 		where queue = ?1 and next = ?2 and id = ?3`
-	dropFailed    = `delete from _tinystore_jobs_failed where queue = ?1 and key = ?2 returning spill`
+	runAgainAt    = `update _tinystore_jobs set again = ?4 where queue = ?1 and next = ?2 and id = ?3`
+	dropFailed    = `delete from _tinystore_jobs_failed where queue = ?1 and key = ?2 returning spill, grp`
 	updateWaiting = `update _tinystore_jobs
-		set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat)
+		set next = ?4, at = ?4, value = ?5, spill = ?6, repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
 		where queue = ?1 and next = ?2 and id = ?3`
 	cancelJob = `delete from _tinystore_jobs where (queue, next, id) in (
 			select k.queue, k.next, k.id from _tinystore_jobs_keys k where k.queue = ?1 and k.key = ?2)
-		returning id, spill`
+		returning id, spill, next, grp`
 	dropLeaseOf = `delete from _tinystore_jobs_leases where id = ?1`
 )
 
@@ -259,7 +270,7 @@ func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err 
 			return false, doneErr
 		}
 	}
-	if _, err = dropFailedJob(ctx, w, e.queue, e.key.String); err != nil {
+	if err = e.restartFailed(ctx, w); err != nil {
 		return false, err
 	}
 	if err = checkRoom(ctx, w, e); err != nil {
@@ -269,18 +280,22 @@ func enqueue(ctx context.Context, w sqlite.Writer, e enqueued) (added bool, err 
 }
 
 // onto is an Enqueue under a key whose job is there. A waiting job can come
-// forward, and a running one is asked for one run more, unless the queue keeps
-// its keys once.
+// forward, or with Move go to its time either way, and a running one is asked
+// for one run more, unless the queue keeps its keys once. A parked job is due
+// at the time it had before it was parked.
 func (e enqueued) onto(ctx context.Context, w sqlite.Writer, there row) error {
 	leased, err := leaseHeld(ctx, w, there.id, e.now)
+	due := dueOf(there.next)
 	switch {
 	case err != nil:
 		return err
 	case leased && e.keepDone:
 		return nil
+	case leased && e.move:
+		_, err = w.ExecContext(ctx, runAgainAt, e.queue, there.next, there.id, e.at)
 	case leased:
 		_, err = w.ExecContext(ctx, askAgain, e.queue, there.next, there.id, e.at)
-	case e.at < there.next:
+	case e.at < due || e.move && e.at != due:
 		if _, err = w.ExecContext(ctx, bringForward, e.queue, there.next, there.id, e.at); err == nil {
 			err = moveKeyTo(ctx, w, e.queue, e.key.String, e.at)
 		}
@@ -305,7 +320,7 @@ func update(ctx context.Context, w sqlite.Writer, e enqueued) (next int64, reque
 	case leased:
 		return 0, false, errNoLongerWaits
 	}
-	next = there.next
+	next = dueOf(there.next) // a parked job goes back to its time, and is parked again if its group is full
 	if e.timed || e.repeat.Valid {
 		next = e.at
 	}
@@ -315,7 +330,7 @@ func update(ctx context.Context, w sqlite.Writer, e enqueued) (next int64, reque
 	spill, err := spillValue(ctx, w, there.id, e.value)
 	if err == nil {
 		_, err = w.ExecContext(ctx, updateWaiting, e.queue, there.next, there.id, next, inlineBytes(e.value), spill,
-			e.repeat)
+			e.repeat, e.group)
 	}
 	if err == nil && next != there.next {
 		err = moveKeyTo(ctx, w, e.queue, e.key.String, next)
@@ -326,7 +341,7 @@ func update(ctx context.Context, w sqlite.Writer, e enqueued) (next int64, reque
 // requeue starts a failed job again with an Update's value, now unless it
 // named a time; with no failed job under the key there is nothing to update
 func requeue(ctx context.Context, w sqlite.Writer, e enqueued) (int64, bool, error) {
-	failed, err := dropFailedJob(ctx, w, e.queue, e.key.String)
+	failed, group, err := dropFailedJob(ctx, w, e.queue, e.key.String)
 	switch {
 	case err != nil:
 		return 0, false, err
@@ -336,34 +351,55 @@ func requeue(ctx context.Context, w sqlite.Writer, e enqueued) (int64, bool, err
 	if err := checkRoom(ctx, w, e); err != nil {
 		return 0, false, err
 	}
+	if !e.group.Valid {
+		e.group = group
+	}
 	return e.at, true, insertRow(ctx, w, e)
 }
 
+// restartFailed drops the failed job under an Enqueue's key, whose group the
+// job keeps unless the Enqueue names one
+func (e *enqueued) restartFailed(ctx context.Context, w sqlite.Writer) error {
+	_, group, err := dropFailedJob(ctx, w, e.queue, e.key.String)
+	if !e.group.Valid {
+		e.group = group
+	}
+	return err
+}
+
 // cancel deletes the job under a key, waiting or running, with its lease, the
-// value it spilled and its key, and answers its id; or the failed job under it
-func cancel(ctx context.Context, w sqlite.Writer, queue int64, key string) (taken int64, failed bool, err error) {
+// value it spilled and its key, and answers its id; or the failed job under it.
+// A job of a group that was not parked gives its place, or the one it was due
+// to take, to the group's first parked job.
+func cancel(ctx context.Context, w sqlite.Writer, q *queueState, key string) (taken int64, failed bool, err error) {
 	var spill sql.NullInt64
-	err = sqlite.QueryRowByKey(ctx, w, cancelJob, queue, key).Scan(&taken, &spill)
+	var next int64
+	var group sql.NullString
+	err = sqlite.QueryRowByKey(ctx, w, cancelJob, q.id, key).Scan(&taken, &spill, &next, &group)
 	switch {
 	case err == nil:
 		if _, err = w.ExecContext(ctx, dropLeaseOf, taken); err == nil {
 			err = dropSpilled(ctx, w, spill)
 		}
 		if err == nil {
-			_, err = w.ExecContext(ctx, dropKey, queue, key)
+			_, err = w.ExecContext(ctx, dropKey, q.id, key)
+		}
+		if err == nil && group.Valid && next < parkedFrom && q.policy.maxInGroup > 0 {
+			err = unparkOne(ctx, w, q.id, group.String)
 		}
 		return taken, false, err
 	case !errors.Is(err, sql.ErrNoRows):
 		return 0, false, err
 	}
-	failed, err = dropFailedJob(ctx, w, queue, key)
+	failed, _, err = dropFailedJob(ctx, w, q.id, key)
 	return 0, failed, err
 }
 
 func insertRow(ctx context.Context, w sqlite.Writer, e enqueued) error {
 	spill, err := spillValue(ctx, w, e.id, e.value)
 	if err == nil {
-		_, err = w.ExecContext(ctx, insertJob, e.queue, e.at, e.id, e.key, e.repeat, inlineBytes(e.value), spill)
+		_, err = w.ExecContext(ctx, insertJob, e.queue, e.at, e.id, e.key, e.repeat, inlineBytes(e.value), spill,
+			e.group)
 	}
 	if err == nil {
 		err = keepKey(ctx, w, e.queue, e.key, e.at, e.id)
@@ -396,17 +432,19 @@ func dropSpilled(ctx context.Context, w sqlite.Writer, spill sql.NullInt64) erro
 	return err
 }
 
-// dropFailedJob deletes the failed job under a key and its spilled value
-func dropFailedJob(ctx context.Context, w sqlite.Writer, queue int64, key string) (bool, error) {
+// dropFailedJob deletes the failed job under a key and its spilled value, and
+// answers its group
+func dropFailedJob(ctx context.Context, w sqlite.Writer, queue int64, key string) (bool, sql.NullString, error) {
 	var spill sql.NullInt64
-	err := sqlite.QueryRowByKey(ctx, w, dropFailed, queue, key).Scan(&spill)
+	var group sql.NullString
+	err := sqlite.QueryRowByKey(ctx, w, dropFailed, queue, key).Scan(&spill, &group)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return false, group, nil
 	}
 	if err != nil {
-		return false, err
+		return false, group, err
 	}
-	return true, dropSpilled(ctx, w, spill)
+	return true, group, dropSpilled(ctx, w, spill)
 }
 
 func findByKey(ctx context.Context, r sqlite.Reader, queue int64, key string) (row, bool, error) {

@@ -26,6 +26,7 @@ type queueState struct {
 	policy policy
 	alarm  *alarm
 	watch  *watching
+	rate   *rateLog // nil for a queue without a Rate
 	// waiting is how many jobs the queue holds.
 	waiting  atomic.Int64
 	failures *quietLog
@@ -84,12 +85,14 @@ func OpenSchedule(ctx context.Context, store *Store, name string, repeat Repeat,
 
 const (
 	registerQueue = `insert into _tinystore_jobs_queues (name, kind) values (?1, ?2) on conflict (name) do nothing`
-	queueNamed    = `select id, kind from _tinystore_jobs_queues where name = ?1`
+	queueNamed    = `select id, kind, in_group from _tinystore_jobs_queues where name = ?1`
 	countWaiting  = `select waiting from _tinystore_jobs_queues where id = ?1`
+	keepInGroup   = `update _tinystore_jobs_queues set in_group = ?2 where id = ?1`
 )
 
 // openQueue finds or registers a queue. The first time this process opens it,
-// it reads the count of the queue's jobs that the file keeps for MaxWaiting.
+// it reads the count of the queue's jobs that the file keeps for MaxWaiting,
+// and gives back the jobs parked under another MaxRunningInGroup than its own.
 // Its alarm rings at once, so the first Work loop reads the file.
 func (s *Store) openQueue(ctx context.Context, name, kind string, p policy) (*queueState, error) {
 	if !validName.MatchString(name) {
@@ -120,7 +123,7 @@ func (s *Store) openQueue(ctx context.Context, name, kind string, p policy) (*qu
 
 func (s *Store) registerQueue(ctx context.Context, name, kind string, p policy) (*queueState, error) {
 	state := &queueState{
-		name: name, kind: kind, policy: p, alarm: newAlarm(), watch: newWatching(),
+		name: name, kind: kind, policy: p, alarm: newAlarm(), watch: newWatching(), rate: newRateLog(p),
 		failures: newQuietLog(s.log, "jobs failed for good", name),
 		limits:   newQuietLog(s.log, "a queue past MaxWaiting refused jobs", name),
 		panics:   newQuietLog(s.log, "a handler panicked", name),
@@ -133,7 +136,11 @@ func (s *Store) registerQueue(ctx context.Context, name, kind string, p policy) 
 		if _, err := w.ExecContext(ctx, registerQueue, name, kind); err != nil {
 			return err
 		}
-		if err := sqlite.QueryRowByKey(ctx, w, queueNamed, name).Scan(&state.id, &stored); err != nil {
+		var inGroup int
+		if err := sqlite.QueryRowByKey(ctx, w, queueNamed, name).Scan(&state.id, &stored, &inGroup); err != nil {
+			return err
+		}
+		if err := keepGroupBound(ctx, w, state.id, inGroup, p.maxInGroup); err != nil {
 			return err
 		}
 		return sqlite.QueryRowByKey(ctx, w, countWaiting, state.id).Scan(&waiting)
@@ -146,6 +153,20 @@ func (s *Store) registerQueue(ctx context.Context, name, kind string, p policy) 
 	}
 	state.waiting.Store(waiting)
 	return state, nil
+}
+
+// keepGroupBound keeps the MaxRunningInGroup a queue opens with, and gives
+// back the jobs another one parked, since only a settlement in their group
+// would give them back otherwise: one place at a time, as the old bound did
+func keepGroupBound(ctx context.Context, w sqlite.Writer, queue int64, was, is int) error {
+	if was == is {
+		return nil
+	}
+	if err := unparkAll(ctx, w, queue); err != nil {
+		return err
+	}
+	_, err := w.ExecContext(ctx, keepInGroup, queue, is)
+	return err
 }
 
 // WithTx is the queue inside tx: its calls join the transaction. It works in
@@ -287,6 +308,7 @@ func (q *Queue[V]) keepRepeat(ctx context.Context, repeat Repeat) error {
 		return err
 	}
 	name := q.state.name
+	repeat = repeat.of(name)
 	now := q.store.clock()
 	next := repeat.next(q.store.now()).UnixMilli()
 	id, err := q.newID(ctx)

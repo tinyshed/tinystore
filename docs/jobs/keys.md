@@ -53,20 +53,70 @@ separate table of scheduled messages to keep in sync with the queue.
 
 ## Enqueue the same key again
 
-| The key's job is    | `enqueue(at: 9:00)`                                         |
-|---------------------|-------------------------------------------------------------|
-| waiting until 10:00 | moves it to 9:00. A key's job can move earlier, never later |
-| waiting until 8:00  | changes nothing: the job stays at 8:00                      |
-| running             | asks for one more run after this one, at 9:00               |
-| failed              | starts it again at 9:00, with its attempts reset            |
-| not there           | creates a new job at 9:00                                   |
+| The key's job is    | `enqueue(at: 9:00)`                              | `enqueue(at: 9:00, move)`                   |
+|---------------------|--------------------------------------------------|---------------------------------------------|
+| waiting until 10:00 | moves it to 9:00                                 | moves it to 9:00                            |
+| waiting until 8:00  | changes nothing: the job stays at 8:00           | moves it to 9:00                            |
+| running             | asks for one more run after this one, at 9:00    | the same, and the last `move` sets the time |
+| failed              | starts it again at 9:00, with its attempts reset | the same                                    |
+| not there           | creates a new job at 9:00                        | the same                                    |
 
-An `enqueue` of a waiting key adds nothing and keeps the old value. This is
-how a key stops duplicates: a user who taps "send" twice enqueues one job.
+An `enqueue` of a waiting key adds nothing and keeps the old value. Its time
+can move earlier, never later, unless you pass `move`. This is how a key stops
+duplicates: a user who taps "send" twice enqueues one job.
 
 When a job runs and the data it works on changes, enqueue its key again. The
 job then runs once more after the current run, so the handler sees the
 change. Several such enqueues during one run still mean only one more run.
+
+## Move a deadline
+
+```ts
+const checks = store.jobs.queue<Check>('checks')
+
+// each time the backup reports in
+await checks.enqueue(check, { key: `check:${check.id}`, after: '25h', move: true })
+
+await checks.work(async job => {
+	await alert(`backup ${job.value.id} has not reported for 25 hours`)
+})
+```
+
+```python
+checks = store.jobs.queue("checks", Check)
+
+# each time the backup reports in
+await checks.enqueue(check, key=f"check:{check.id}", after="25h", move=True)
+
+
+async def missed(job: tinystore.Job[Check]) -> None:
+    await alert(f"backup {job.value.id} has not reported for 25 hours")
+
+
+await checks.work(missed)
+```
+
+```go
+checks, err := jobs.OpenQueue[Check](ctx, queues, "checks")
+
+// each time the backup reports in
+err = checks.Enqueue(ctx, check, jobs.Key("check:"+check.ID), jobs.After(25*time.Hour), jobs.Move())
+
+err = checks.Work(ctx, func(ctx context.Context, job jobs.Job[Check]) error {
+	return alert(ctx, "backup "+job.Value.ID+" has not reported for 25 hours")
+})
+```
+
+This is a dead man's switch. Each report moves the job 25 hours later, so it
+runs only when the reports stop. With `move` (`jobs.Move()` in Go), an
+`enqueue` sets the time of the key's job whatever it was:
+
+- A waiting job moves to the new time, later as well as earlier.
+- A running job runs again at the new time after this run.
+- A key without a job gets a new one.
+
+`move` needs a key. In a queue with `keepDone`, a key still runs only once,
+even with `move`.
 
 ## Run a key only once
 

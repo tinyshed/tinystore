@@ -125,8 +125,11 @@ var schema = map[string][]field{
 		{9, "schedule", "jobs.repeat"},
 		{10, "max running", "uint"},
 		{11, "in", "str"},
+		{12, "max running in group", "uint"},
+		{13, "rate", "uint"},
+		{14, "per", "uint"},
 	},
-	"jobs.repeat": {{1, "cron", "str"}, {2, "zone", "str"}, {3, "every", "uint"}},
+	"jobs.repeat": {{1, "cron", "str"}, {2, "zone", "str"}, {3, "every", "uint"}, {4, "spread", "bool"}},
 	"jobs.job":    jobsJob,
 	"jobs.batch":  {{1, "handle", "uint"}, {2, "jobs", "[]jobs.job"}},
 	"jobs.change": append(slices.Clone(jobsJob), field{6, "handle", "uint"}),
@@ -343,7 +346,13 @@ var kvCall = []field{
 }
 
 var jobsJob = []field{
-	{1, "value", "str"}, {2, "key", "str"}, {3, "at", "int"}, {4, "after", "uint"}, {5, "repeat", "jobs.repeat"},
+	{1, "value", "str"},
+	{2, "key", "str"},
+	{3, "at", "int"},
+	{4, "after", "uint"},
+	{5, "repeat", "jobs.repeat"},
+	{7, "move", "bool"},
+	{8, "group", "str"},
 }
 
 // the methods by the names docs/wire.md gives them
@@ -588,12 +597,22 @@ func jobsExamples() []example {
 			Name: "purge", Schedule: &wire.Repeat{Cron: "10 3 * * *", Zone: "Europe/Moscow"},
 		}),
 		of("a queue kept in a database's file", "jobs.queue", wire.JobsQueue{Name: "index", In: "app"}),
+		of("a queue bounding each group, and its starts a second", "jobs.queue", wire.JobsQueue{
+			Name: "telegram", MaxRunningInGroup: 2, Rate: 30, Per: 1000,
+		}),
 		of("jobs.enqueue of a job at a time and one repeating every minute", "jobs.batch", wire.JobsBatch{
 			Handle: 1, Jobs: []wire.JobsJob{
 				{Value: `{"user":42}`, Key: "call:42", At: at},
 				{Value: `"ping"`, Key: "ping", After: 60_000, Repeat: &wire.Repeat{Every: 60_000}},
 			},
 		}),
+		of("jobs.enqueue of a deadline its key moves, a job in a group and a spread repeat", "jobs.batch",
+			wire.JobsBatch{Handle: 1, Jobs: []wire.JobsJob{
+				{Value: `{"check":7}`, Key: "check:7", After: 300_000, Move: true},
+				{Value: `{"dataset":3}`, Key: "refresh:3", Group: "db:42"},
+				{Value: `"probe"`, Key: "probe:7", Repeat: &wire.Repeat{Every: 30_000, Spread: true}},
+			}},
+		),
 		of("jobs.update of a value and a time", "jobs.change", wire.JobsChange{
 			Handle: 1, JobsJob: wire.JobsJob{Value: `{"user":43}`, Key: "call:42", At: at + 60_000},
 		}),

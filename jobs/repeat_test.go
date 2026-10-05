@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -243,4 +244,71 @@ func waitForState[V any](t *testing.T, queue *Queue[V], key string, state State)
 		}
 	}
 	t.Fatalf("%s did not become %s in five seconds", key, state)
+}
+
+// Spread runs each key's job at its own phase within the interval, its key's
+// FNV-1a hash modulo the interval, so that many keys repeating Every(d) do not
+// run in one instant, and a schedule takes the phase of its name
+//
+//	Every(30*time.Second, Spread()), key probe:7   @every 30s +6178ms   at :06.178 and :36.178
+func TestRepeatsOfManyKeysSpreadAcrossTheirInterval(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	probes := openTestQueue[string](t, queues, "probes")
+	mustEnqueue(t, probes, "probe", Key("probe:7"), Every(30*time.Second, Spread()))
+	entry, _, err := probes.Get(t.Context(), "probe:7")
+	if err != nil || entry.Repeat != "@every 30s +6178ms" || !entry.At.Equal(testStart.Add(6178*time.Millisecond)) {
+		t.Fatalf("probe:7 is kept as %+v: %v", entry, err)
+	}
+	if next := Every(30*time.Second, Spread()).of("probe:7").next(entry.At); !next.Equal(testStart.Add(36178 * time.Millisecond)) {
+		t.Fatalf("after :06.178 probe:7 runs at %v", next)
+	}
+
+	inSecond := map[int64]int{}
+	for i := range 300 {
+		key := fmt.Sprintf("probe:%d", i)
+		mustEnqueue(t, probes, "probe", Key(key), Every(30*time.Second, Spread()))
+		spread, _, getErr := probes.Get(t.Context(), key)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		inSecond[spread.At.Sub(testStart).Milliseconds()/1000]++
+	}
+	for second, count := range inSecond {
+		if second < 0 || second >= 30 || count > 25 {
+			t.Fatalf("%d of 300 keys run in second %d of the interval", count, second)
+		}
+	}
+
+	schedule, err := OpenSchedule(t.Context(), queues.Store, "refresh", Every(time.Minute, Spread()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, _, err := schedule.Get(t.Context(), "refresh"); err != nil || entry.Repeat != "@every 1m +50196ms" {
+		t.Fatalf("the schedule keeps %+v: %v", entry, err)
+	}
+}
+
+// a spread job keeps its phase in its row: it runs at it again after a
+// restart, and a phase the file holds outside its interval is corrupt
+func TestASpreadRepeatKeepsItsPhaseAcrossARestart(t *testing.T) {
+	queues := openTestQueues(t, t.TempDir())
+	probes := openTestQueue[string](t, queues, "probes")
+	mustEnqueue(t, probes, "probe", Key("probe:7"), Every(30*time.Second, Spread()))
+	queues.clock.advance(7 * time.Second)
+	if err := mustClaim(t, probes).Ack(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	queues = queues.reopen(t)
+	probes = openTestQueue[string](t, queues, "probes")
+	checkEntry(t, probes, "probe:7", "probe", testStart.Add(36178*time.Millisecond))
+	for _, text := range []string{"@every 30s +30s", "@every 30s +0ms", "@every 30s +soon"} {
+		if _, err := parseRepeat(text); !errors.Is(err, tinystore.ErrCorrupt) {
+			t.Errorf("kept repeat %q: %v", text, err)
+		}
+	}
+	if kept, err := parseRepeat("@every 1m +50196ms"); err != nil || kept.phase != 50196*time.Millisecond ||
+		kept.String() != "@every 1m +50196ms" {
+		t.Fatalf("a kept phase reads back as %+v: %v", kept, err)
+	}
 }
