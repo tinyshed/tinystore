@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use super::Route;
 use super::codec::{Message, Row};
 use super::protocol::{
     Empty, Failure, Handle, KvAllowance, KvAnswer, KvBranch, KvBucketOpen, KvCall, KvCheck, KvCount, KvCountersOpen,
@@ -37,17 +38,6 @@ enum Opened {
 }
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
-
-/// How a session runs a method: a point read at once on the caller's thread,
-/// a write queued for its group commit with no thread waiting on it, a run of
-/// once handed over, anything else on a worker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Route {
-    Inline,
-    Submit,
-    Handover,
-    Worker,
-}
 
 pub(crate) fn route(called: u16) -> Route {
     match called {

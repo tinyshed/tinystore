@@ -5,6 +5,8 @@ use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use super::claim::Lease;
+use super::engine::Jobs;
 use super::run::Run;
 use super::values::check_size;
 use crate::sqlite::sql_error;
@@ -26,22 +28,10 @@ where
     E: From<Error>,
 {
     let describe = || format!("{}: step {name:?}", run.describe());
-    if name.is_empty() || name.len() > MAX_NAME {
-        return Err(Error::invalid(format!("a step's name is 1 to {MAX_NAME} bytes")).within(describe()).into());
-    }
     if run.lease.cancelled() {
         return Err(Error::new(ErrorKind::Conflict, "the job was cancelled while it ran").within(describe()).into());
     }
-    let job = run.lease.id;
-    let kept: Option<Vec<u8>> = run
-        .jobs
-        .file()
-        .read(|c| {
-            c.prepare_cached(FIND_STEP)
-                .and_then(|mut select| select.query_row(params![job, name], |row| row.get(0)).optional())
-                .map_err(|error| sql_error("a step's kept answer", error))
-        })
-        .map_err(|error| error.within(describe()))?;
+    let kept = kept(&run.jobs, &run.lease, name).map_err(|error| error.within(describe()))?;
     if let Some(kept) = kept {
         return serde_json::from_slice(&kept).map_err(|error| {
             Error::invalid("it kept an answer that no longer reads").with_source(error).within(describe()).into()
@@ -55,15 +45,41 @@ where
 fn keep<T: Serialize>(run: &Run, name: &str, answer: &T) -> Result<()> {
     let encoded =
         serde_json::to_vec(answer).map_err(|error| Error::invalid("an answer JSON cannot write").with_source(error))?;
+    keep_encoded(&run.jobs, &run.lease, name, encoded)
+}
+
+/// The answer a job's run kept under a step's name, as JSON; none for a step
+/// not yet kept.
+pub(crate) fn kept(jobs: &Jobs, lease: &Lease, name: &str) -> Result<Option<Vec<u8>>> {
+    check_name(name)?;
+    let job = lease.id;
+    jobs.file().read(|c| {
+        c.prepare_cached(FIND_STEP)
+            .and_then(|mut select| select.query_row(params![job, name], |row| row.get(0)).optional())
+            .map_err(|error| sql_error("a step's kept answer", error))
+    })
+}
+
+/// Keeps a step's answer, JSON, while the lease of the attempt keeping it
+/// holds the job; one whose lease another claim took is a `conflict`.
+pub(crate) fn keep_encoded(jobs: &Jobs, lease: &Lease, name: &str, encoded: Vec<u8>) -> Result<()> {
+    check_name(name)?;
     check_size(encoded.len(), "an answer")?;
-    let (job, attempt, now, name) = (run.lease.id, run.lease.attempt, run.jobs.now(), name.to_owned());
-    let kept = run.jobs.file().write(encoded.len(), move |tx| {
+    let (job, attempt, now, name) = (lease.id, lease.attempt, jobs.now(), name.to_owned());
+    let kept = jobs.file().write(encoded.len(), move |tx| {
         tx.prepare_cached(KEEP_STEP)
             .and_then(|mut insert| insert.execute(params![job, name, encoded, now, attempt]))
             .map_err(|error| sql_error("a step's answer", error))
     })?;
     if kept == 0 {
         return Err(Error::new(ErrorKind::Conflict, "the job's lease ended and another claim took it"));
+    }
+    Ok(())
+}
+
+fn check_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > MAX_NAME {
+        return Err(Error::invalid(format!("a step's name is 1 to {MAX_NAME} bytes")));
     }
     Ok(())
 }

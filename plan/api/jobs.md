@@ -9,8 +9,9 @@ after its owner asked, a cleanup every night. This book is the API before the
 code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) the words
 both books share. TypeScript comes first; Python, Go and Rust follow where
 they spell something differently. The Rust column is built
-(`crates/tinystore/src/jobs`), all but `watch`, transactions, and queues
-opened from an SQL database, which come with the wire and with sqldb.
+(`crates/tinystore/src/jobs`) and protocol 2 carries it
+(`protocol/jobs.wire`), all but `watch`, which comes next, and transactions
+and queues opened from an SQL database, which come with sqldb.
 
 ## What a newcomer learns
 

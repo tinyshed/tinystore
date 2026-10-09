@@ -132,6 +132,11 @@ impl<V> Queue<V>
 where
     V: Serialize + DeserializeOwned + Send + 'static,
 {
+    /// The same queue, its values read as another type: the wire's raw JSON.
+    pub(crate) fn retyped<W>(&self) -> Queue<W> {
+        Queue { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData }
+    }
+
     pub(crate) fn open(store: &Store, name: &str, kind: Kind, policy: Policy) -> Result<Queue<V>> {
         let jobs = Jobs::of(store)?;
         let state = jobs.queue(name, kind, policy)?;

@@ -9,6 +9,7 @@
 //! }
 //! method 0x0102 kv.get(kv.Call) -> kv.Entry
 //! method 0x010a kv.list(kv.List) -> download kv.Entry until kv.Page
+//! method 0x0209 jobs.work(jobs.Work) -> exchange jobs.Held for jobs.Answer
 //! ```
 
 use std::collections::HashSet;
@@ -82,6 +83,9 @@ pub(crate) enum Answer {
     /// One message that ends the stream, or hands the run to the client, whose
     /// last DATA is the same message.
     Handover(String),
+    /// Items both ways after an empty RESPONSE: the server's DATA are `out`,
+    /// the client's `back`, until each side ends its own.
+    Exchange { out: String, back: String },
 }
 
 /// Why a schema did not parse, and where.
@@ -202,6 +206,7 @@ impl Method {
         match &self.answer {
             Answer::Call(answer) | Answer::Handover(answer) => named.push(answer),
             Answer::Download { item, trailer } => named.extend([item.as_str(), trailer.as_str()]),
+            Answer::Exchange { out, back } => named.extend([out.as_str(), back.as_str()]),
         }
         named
     }
@@ -276,7 +281,8 @@ fn method(code: &str) -> Result<Method, String> {
             Answer::Download { item: (*item).to_owned(), trailer: (*trailer).to_owned() }
         }
         ["handover", answer] => Answer::Handover((*answer).to_owned()),
-        _ => return Err(format!("an answer that is a message, a download or a handover: {answer}")),
+        ["exchange", out, "for", back] => Answer::Exchange { out: (*out).to_owned(), back: (*back).to_owned() },
+        _ => return Err(format!("an answer that is a message, a download, a handover or an exchange: {answer}")),
     };
     Ok(Method { id, name: name.trim().to_owned(), request: request.trim().to_owned(), answer })
 }

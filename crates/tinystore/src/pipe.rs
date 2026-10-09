@@ -195,5 +195,8 @@ fn leave(dir: &Path) {
 }
 
 #[cfg(test)]
+#[path = "pipe_fixture.rs"]
+pub(crate) mod fixture;
+#[cfg(test)]
 #[path = "pipe_tests.rs"]
 mod tests;

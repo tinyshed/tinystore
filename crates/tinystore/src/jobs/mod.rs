@@ -52,6 +52,10 @@ pub use run::{Outcome, Run, When};
 pub use schedule::{Schedule, ScheduleBuilder};
 pub use work::Worker;
 
+pub(crate) use claim::{How, Lease};
+pub(crate) use steps::{keep_encoded, kept};
+pub(crate) use work::{Answers, Ended, Hand, Remote, RemoteWork, read_value, start_remote};
+
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod queue_tests;

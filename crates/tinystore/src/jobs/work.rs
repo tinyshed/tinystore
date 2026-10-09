@@ -73,6 +73,16 @@ impl Inbox {
         std::mem::take(&mut self.lock().finished)
     }
 
+    /// Sleeps until a handler finishes or `sleep` passes: a stopping loop's
+    /// wait for its handlers, which the stop it already saw does not cut short.
+    fn wait_finished(&self, sleep: Duration) {
+        let state = self.lock();
+        let _ = self
+            .changed
+            .wait_timeout_while(state, sleep, |state| state.finished.is_empty())
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+
     /// Sleeps until a handler finishes, the alarm is lowered, the worker
     /// stops, or `sleep` passes.
     fn wait(&self, sleep: Duration) {
@@ -94,6 +104,19 @@ impl Wake for Inbox {
         self.lock().woken = true;
         self.changed.notify_all();
     }
+}
+
+/// Where a worker's loop hands the jobs it claims: its handler threads, or a
+/// client across the wire. Either answers each job through the worker's
+/// inbox.
+pub(crate) trait Hand: Send + Sync {
+    /// Takes a job, answered later through the inbox; or answers it at once,
+    /// none for one a cancel took, which settles nothing.
+    fn hand(&self, lease: Arc<Lease>) -> std::result::Result<(), Option<How>>;
+
+    /// Takes nothing more, and answers the jobs it was handed and had not
+    /// started, which go back uncounted.
+    fn close(&self) -> Vec<Arc<Lease>>;
 }
 
 /// The claimed jobs on their way to the handlers, which read their values.
@@ -134,6 +157,17 @@ impl Feed {
     }
 }
 
+impl Hand for Feed {
+    fn hand(&self, lease: Arc<Lease>) -> std::result::Result<(), Option<How>> {
+        self.push(lease);
+        Ok(())
+    }
+
+    fn close(&self) -> Vec<Arc<Lease>> {
+        Feed::close(self)
+    }
+}
+
 /// One worker's loop: the jobs it holds, which its handlers run, and the
 /// settlements it has yet to write.
 struct Loop {
@@ -142,7 +176,7 @@ struct Loop {
     /// Jobs it may hold: running, or claimed for a handler still busy.
     hold: usize,
     inbox: Arc<Inbox>,
-    feed: Arc<Feed>,
+    hand: Arc<dyn Hand>,
     holding: HashMap<i64, Arc<Lease>>,
     pending: Vec<(Arc<Lease>, How)>,
     /// Jobs handed to the handlers and not yet finished.
@@ -163,14 +197,14 @@ struct ClaimResult {
 }
 
 impl Loop {
-    fn new(jobs: Arc<Jobs>, queue: Arc<QueueState>, local: usize, inbox: Arc<Inbox>, feed: Arc<Feed>) -> Loop {
+    fn new(jobs: Arc<Jobs>, queue: Arc<QueueState>, local: usize, inbox: Arc<Inbox>, hand: Arc<dyn Hand>) -> Loop {
         let hold = if queue.policy.bounded() { local } else { local * 2 };
         Loop {
             jobs,
             queue,
             hold,
             inbox,
-            feed,
+            hand,
             holding: HashMap::new(),
             pending: Vec::new(),
             in_hand: 0,
@@ -185,17 +219,37 @@ impl Loop {
     /// they answered.
     fn run(&mut self) -> Result<usize> {
         let looped = self.cycle();
-        for lease in self.feed.close() {
+        for lease in self.hand.close() {
             self.in_hand -= 1;
             self.pending.push((lease, How::GiveBack));
         }
+        let drained = self.drain();
+        looped.and(drained).map(|()| self.finished)
+    }
+
+    /// Waits for the handlers under way, each bounded by its timeout and a
+    /// grace, writing what they answer as it comes and extending the leases
+    /// they still run on, so that no other claim takes a job a handler runs.
+    fn drain(&mut self) -> Result<()> {
         let deadline = Instant::now() + self.queue.policy.timeout + GRACE;
-        while self.in_hand > 0 && Instant::now() < deadline {
-            self.inbox.wait(deadline.saturating_duration_since(Instant::now()).min(LONGEST_SLEEP));
+        loop {
             self.gather();
+            let now = self.jobs.now();
+            let left = deadline.saturating_duration_since(Instant::now());
+            if self.in_hand == 0 || left.is_zero() {
+                return self.write(now, 0).map(drop);
+            }
+            self.extend_due(now);
+            let sleep = match self.write(now, 0) {
+                Ok(_) => self.next_extension(now).map_or(LONGEST_SLEEP, |at| span(at - now)),
+                Err(error) if error.kind() == ErrorKind::Closed => return Err(error),
+                Err(error) => {
+                    self.queue.writes.observe(&self.queue.name, &error.to_string());
+                    RETRY_WRITE
+                }
+            };
+            self.inbox.wait_finished(sleep.min(left).min(LONGEST_SLEEP));
         }
-        let last = self.write(self.jobs.now(), 0).map(drop);
-        looped.and(last).map(|()| self.finished)
     }
 
     fn cycle(&mut self) -> Result<()> {
@@ -358,8 +412,11 @@ impl Loop {
             let lease = Arc::new(lease);
             self.holding.insert(lease.id, Arc::clone(&lease));
             self.queue.hold(&lease);
-            self.in_hand += 1;
-            self.feed.push(lease);
+            match self.hand.hand(Arc::clone(&lease)) {
+                Ok(()) => self.in_hand += 1,
+                Err(Some(how)) => self.pending.push((lease, how)),
+                Err(None) => self.let_go(&lease),
+            }
         }
     }
 
@@ -379,15 +436,20 @@ impl Loop {
             None if self.holding.len() >= self.hold => LONGEST_SLEEP,
             None => self.queue.alarm.sleep(now),
         };
-        let half = millis(LEASE) / 2;
-        if let Some(first) =
-            self.holding.values().filter(|lease| !lease.settled()).map(|lease| lease.until() - half).min()
-        {
+        if let Some(first) = self.next_extension(now) {
             sleep = sleep.min(span(first - now));
         }
         if !sleep.is_zero() {
             self.inbox.wait(sleep);
         }
+    }
+
+    /// When the first lease held is due to be extended: half a lease before it
+    /// ends.
+    fn next_extension(&self, now: i64) -> Option<i64> {
+        let half = millis(LEASE) / 2;
+        let first = self.holding.values().filter(|lease| !lease.settled()).map(|lease| lease.until() - half).min();
+        first.map(|first| first.max(now))
     }
 }
 
@@ -478,13 +540,16 @@ pub struct Worker {
 /// What a worker's threads share with the handle and the engine that stop it.
 pub(crate) struct Running {
     inbox: Arc<Inbox>,
-    feed: Arc<Feed>,
+    hand: Arc<dyn Hand>,
     looping: Mutex<Option<JoinHandle<()>>>,
     handlers: Mutex<Vec<JoinHandle<()>>>,
-    /// Handler threads that have not yet ended.
-    alive: Arc<(Mutex<usize>, Condvar)>,
+    alive: Alive,
     stopped: AtomicBool,
 }
+
+/// Handler threads that have not yet ended, and the signal each gives as it
+/// ends.
+type Alive = Arc<(Mutex<usize>, Condvar)>;
 
 impl Running {
     pub(crate) fn stopped(&self) -> bool {
@@ -502,7 +567,7 @@ impl Running {
         if let Some(looping) = looping.filter(|handle| handle.thread().id() != thread::current().id()) {
             let _ = looping.join();
         }
-        self.feed.close();
+        self.hand.close();
         let (alive, ended) = &*self.alive;
         let alive = alive.lock().unwrap_or_else(PoisonError::into_inner);
         let (alive, _) =
@@ -574,29 +639,117 @@ where
             }
         }
     }
-    let mut looped = Loop::new(Arc::clone(jobs), Arc::clone(queue), local, Arc::clone(&inbox), Arc::clone(&feed));
+    let hand: Arc<dyn Hand> = feed;
+    let looped = Loop::new(Arc::clone(jobs), Arc::clone(queue), local, inbox, hand);
+    let running = run_loop(looped, (handlers, alive), None)?;
+    Ok(Worker { running })
+}
+
+/// Where the answers for the jobs a client's worker holds go: its loop's
+/// inbox. The client answers each job it was sent, and a cancel answers one
+/// it took, so that each is answered once.
+#[derive(Clone, Default)]
+pub(crate) struct Answers(Arc<Inbox>);
+
+impl Answers {
+    /// How the job's run ended; none for one a cancel took, which settles
+    /// nothing.
+    pub(crate) fn answer(&self, lease: Arc<Lease>, how: Option<How>) {
+        self.0.finish(lease, how);
+    }
+}
+
+/// A worker whose handlers are a client's: its loop runs on a thread of the
+/// store's and hands its jobs to `hand`, and their answers come back through
+/// its [`Answers`].
+pub(crate) struct Remote {
+    running: Arc<Running>,
+}
+
+impl Remote {
+    /// Takes no job more and returns: the loop gives back the jobs it holds
+    /// and has not handed over, and writes the answers that still come.
+    pub(crate) fn halt(&self) {
+        self.running.inbox.stop();
+    }
+
+    /// Halts the worker and waits for its loop to write what was answered; a
+    /// job handed and not yet answered holds the stop up to the queue's
+    /// timeout and a grace.
+    pub(crate) fn stop(&self) {
+        self.running.stop();
+    }
+}
+
+impl fmt::Debug for Remote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Remote")
+    }
+}
+
+/// What a client's worker asks of its loop.
+pub(crate) struct RemoteWork {
+    /// The client's handlers.
+    pub(crate) local: usize,
+    /// Whether the loop ends once nothing is due and nothing is held: `runDue`.
+    pub(crate) until_idle: bool,
+    pub(crate) answers: Answers,
+    pub(crate) hand: Arc<dyn Hand>,
+    pub(crate) ended: Ended,
+}
+
+/// Hears, on the loop's thread, how a loop ended: the jobs its handlers
+/// finished, or why it stopped.
+pub(crate) type Ended = Box<dyn FnOnce(Result<usize>) + Send>;
+
+pub(crate) fn start_remote(jobs: &Arc<Jobs>, queue: &Arc<QueueState>, work: RemoteWork) -> Result<Remote> {
+    if jobs.closed() {
+        return Err(Error::closed(queue.describe()));
+    }
+    let RemoteWork { local, until_idle, answers, hand, ended } = work;
+    let inbox = Arc::clone(&answers.0);
+    queue.alarm.subscribe(Arc::downgrade(&inbox) as Weak<dyn Wake>);
+    let mut looped = Loop::new(Arc::clone(jobs), Arc::clone(queue), local, inbox, hand);
+    looped.until_idle = until_idle;
+    let running = run_loop(looped, (Vec::new(), Alive::default()), Some(ended))?;
+    Ok(Remote { running })
+}
+
+/// Starts a worker's loop on a thread of the store's, which the engine stops
+/// at close; `ended` hears how the loop ended.
+fn run_loop(
+    mut looped: Loop,
+    (handlers, alive): (Vec<JoinHandle<()>>, Alive),
+    ended: Option<Ended>,
+) -> Result<Arc<Running>> {
+    let (jobs, queue) = (Arc::clone(&looped.jobs), Arc::clone(&looped.queue));
+    let (inbox, hand) = (Arc::clone(&looped.inbox), Arc::clone(&looped.hand));
     let describe = queue.describe();
     let looping = thread::Builder::new()
         .name(format!("tinystore-jobs-{}", queue.name))
         .spawn(move || {
-            if let Err(error) = looped.run() {
+            let ran = looped.run();
+            if let Err(error) = &ran {
                 tracing::warn!(target: "tinystore", queue = %describe, %error, "a worker stopped on an error");
+            }
+            if let Some(ended) = ended {
+                ended(ran);
             }
         })
         .map_err(|error| {
-            feed.close();
+            hand.close();
             Error::io(format!("{}: a worker's thread", queue.describe()), error)
         })?;
     let running = Arc::new(Running {
         inbox,
-        feed,
+        hand,
         looping: Mutex::new(Some(looping)),
         handlers: Mutex::new(handlers),
         alive,
         stopped: AtomicBool::new(false),
     });
     jobs.keep_worker(&running);
-    Ok(Worker { running })
+    Ok(running)
 }
 
 /// Runs what is due when it starts and what falls due meanwhile on `local`
@@ -614,7 +767,8 @@ where
         for _ in 0..local {
             scope.spawn(|| serve(jobs, queue, &feed, &inbox, handler));
         }
-        let mut looped = Loop::new(Arc::clone(jobs), Arc::clone(queue), local, Arc::clone(&inbox), Arc::clone(&feed));
+        let hand: Arc<dyn Hand> = Arc::clone(&feed) as Arc<dyn Hand>;
+        let mut looped = Loop::new(Arc::clone(jobs), Arc::clone(queue), local, Arc::clone(&inbox), hand);
         looped.until_idle = true;
         let ran = looped.run();
         feed.close();

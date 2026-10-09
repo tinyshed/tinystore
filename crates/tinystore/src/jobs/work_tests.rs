@@ -173,6 +173,39 @@ fn a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_start
 }
 
 #[test]
+fn a_stopping_worker_writes_each_answer_as_its_handler_gives_it() {
+    let f = fixture();
+    let pushes = f.store.queue::<Push>("pushes").open().unwrap();
+    pushes.id("fast").add(&Push { user: 1 }).unwrap();
+    pushes.id("slow").add(&Push { user: 2 }).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let ((fast_tx, fast_rx), (slow_tx, slow_rx)) = (mpsc::channel::<()>(), mpsc::channel::<()>());
+    let (fast_rx, slow_rx) = (Mutex::new(fast_rx), Mutex::new(slow_rx));
+    let worker = pushes
+        .concurrency(2)
+        .work(move |push: Push, _run| -> Result<()> {
+            started_tx.send(push.user).unwrap();
+            let release = if push.user == 1 { &fast_rx } else { &slow_rx };
+            release.lock().unwrap().recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let mut started = [started_rx.recv().unwrap(), started_rx.recv().unwrap()];
+    started.sort_unstable();
+    assert_eq!(started, [1, 2], "both run at once");
+
+    let stopping = thread::spawn(move || worker.stop());
+    thread::sleep(Duration::from_millis(20));
+    fast_tx.send(()).unwrap();
+    eventually(|| pushes.get("fast").unwrap().is_none());
+    assert!(!stopping.is_finished(), "the slow handler still holds the stop");
+    assert_eq!(pushes.get("slow").unwrap().map(|job| job.state), Some(State::Running));
+    slow_tx.send(()).unwrap();
+    stopping.join().unwrap();
+    assert!(pushes.get("slow").unwrap().is_none());
+}
+
+#[test]
 fn jobs_due_together_are_claimed_and_settled_in_batches() {
     let f = fixture();
     let pushes = f.store.queue::<Push>("pushes").open().unwrap();

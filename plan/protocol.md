@@ -88,7 +88,8 @@ method 0x0131 kv.once.run(kv.Call) -> handover kv.Answer
 
 A field without `?` is absent at its zero value and reads back as it. A
 method's shape follows its arrow: one message, `handover T` for a run handed
-to the client and its answer back, and `download T until U` for items as
+to the client and its answer back, `exchange T for U` for items both ways, a
+worker's jobs out and its answers back, and `download T until U` for items as
 `DATA` and a trailer, which records and blobs will use. `Failure` is the
 schema's own message, the one a stream that failed ends with, so that no
 schema leaves it out.
@@ -135,6 +136,36 @@ imports be.
 | `kv.once.run`                                  | handle, under, key                                                                                   | both ways: the kept answer, or the run handed over and its answer back                       |
 | `kv.once.get`, `.delete`                       | handle, under, key                                                                                   | the answer; found                                                                            |
 | `kv.tx`                                        | checks: a read's version or absence; writes: set, create, take, delete, expire, clear, counters' add | each write's answer; a failed check or write names its place                                 |
+
+## jobs
+
+| Method                        | Request                                                                          | Answer                                                                                         |
+|-------------------------------|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| `jobs.queue.open`             | name, attempts, backoff, timeout, concurrency, rate, dedupe, keep, max waiting   | a handle                                                                                       |
+| `jobs.schedule.open`          | name, every or a cron and its time zone, attempts, backoff, timeout              | a handle on the schedule's one job, which no add, set or update takes                          |
+| `jobs.add`, `.set`, `.update` | handle, id, value as JSON, at or delay, group, every or a cron and its time zone | changed: whether an add added and an update changed; a set says nothing                        |
+| `jobs.cancel`                 | handle, id                                                                       | changed: whether there was a job                                                               |
+| `jobs.get`                    | handle, id                                                                       | the job: found, value, state, at, attempt, ahead, progress, error, group, repeat, its last run |
+| `jobs.list`                   | handle, prefix, state, after, limit                                              | a page: its jobs, as many as the limit asks and the body holds, and where the next starts      |
+| `jobs.work`                   | handle, concurrency, until idle                                                  | both ways: held jobs out, answers back                                                         |
+| `jobs.step`, `.keep`          | a run, a step's name; keep's answer as JSON                                      | the answer kept, found false for none; nothing                                                 |
+
+`jobs.work` is a worker whose handlers are the client's. The server runs the
+queue's loop on a thread of the store's, claiming as every worker does, and
+sends each job it hands over as a held job, its run numbered on the
+connection, no more unanswered at once than the client's `concurrency` and
+within the stream's credit. The client answers each on the same stream: done,
+retry, snooze, fail, or back, uncounted; a time as a delay counts on the
+server's clock. A progress settles nothing.
+
+- **A cancel** of a job the client holds sends it again, `cancelled`, so that
+  its handler stops; what the client says of it after settles nothing.
+- **A stop**, or the server's `GOAWAY`, hands no job more, and the server ends
+  the stream once the jobs in hand are answered and written. With `untilIdle`
+  it ends once nothing is due and nothing is held, which is `runDue`.
+- **The client's `DATA`·END**, a `CANCEL` or a connection that ends fails the
+  attempt of each job the client holds, as a worker that died would, and the
+  jobs it was never sent go back uncounted.
 
 ## The server
 

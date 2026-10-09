@@ -1,125 +1,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
+use super::fixture::{Client, answered};
 use super::*;
 use crate::wire::codec::{Message, Row};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Failure as Failed, GoAway, Handle, Hello, KvAnswer, KvBucketOpen, KvCall, KvCheck, KvEntry, KvOnceOpen,
-    KvOp, KvTx, KvTxResults, KvWritten, METHODS, ServerClock, Welcome, method,
+    Empty, Failure as Failed, Handle, Hello, KvAnswer, KvCall, KvCheck, KvEntry, KvOnceOpen, KvOp, KvTx, KvTxResults,
+    KvWritten, METHODS, ServerClock, method,
 };
-
-/// A client's side of a pipe: frames out, frames back, as an SDK speaks.
-struct Client {
-    pipe: Pipe,
-    reader: frame::Reader,
-    /// Frames read while waiting for another stream's.
-    early: Vec<Frame>,
-    next_stream: u32,
-}
-
-impl Client {
-    fn connect(dir: &Path) -> Client {
-        Client::over(Pipe::open(dir, None).unwrap())
-    }
-
-    fn over(pipe: Pipe) -> Client {
-        Client { pipe, reader: frame::Reader::default(), early: Vec::new(), next_stream: 0 }
-    }
-
-    fn open(dir: &Path) -> Client {
-        let mut client = Client::connect(dir);
-        let welcome = client.hello(2).unwrap();
-        assert_eq!(welcome.protocol, 2);
-        client
-    }
-
-    /// Says HELLO in `protocol`, and returns the WELCOME or the GOAWAY.
-    fn hello(&mut self, protocol: u64) -> std::result::Result<Welcome, GoAway> {
-        self.greet(Hello { protocol, client: "test/0".to_owned(), ..Hello::default() })
-    }
-
-    fn greet(&mut self, hello: Hello) -> std::result::Result<Welcome, GoAway> {
-        self.write(Frame::new(Kind::Hello, 0, hello.encode()));
-        let answer = self.read();
-        match answer.kind {
-            Kind::Welcome => Ok(Welcome::decode(&answer.body).unwrap()),
-            Kind::GoAway => Err(GoAway::decode(&answer.body).unwrap()),
-            other => panic!("a {other:?} for HELLO"),
-        }
-    }
-
-    fn write(&mut self, frame: Frame) {
-        let mut bytes = Vec::new();
-        frame.encode_into(&mut bytes);
-        let ready = self.pipe.send(&bytes);
-        self.reader.push(&ready);
-    }
-
-    fn read(&mut self) -> Frame {
-        loop {
-            if let Some(frame) = self.reader.next(1 << 22).unwrap() {
-                return frame;
-            }
-            let bytes = self.pipe.recv(Duration::from_secs(10));
-            assert!(!bytes.is_empty(), "the pipe answered nothing within ten seconds");
-            self.reader.push(&bytes);
-        }
-    }
-
-    /// The next frame on `stream`, keeping those of other streams for later.
-    fn next_on(&mut self, stream: u32) -> Frame {
-        if let Some(at) = self.early.iter().position(|frame| frame.stream == stream) {
-            return self.early.remove(at);
-        }
-        loop {
-            let frame = self.read();
-            match frame.kind {
-                Kind::Credit => {}
-                _ if frame.stream == stream => return frame,
-                _ => self.early.push(frame),
-            }
-        }
-    }
-
-    /// Sends a call and returns its stream.
-    fn start(&mut self, called: u16, request: &impl Message) -> u32 {
-        self.next_stream += 1;
-        let frame = Frame { method: called, ..Frame::new(Kind::Request, self.next_stream, request.encode()) };
-        self.write(frame.ending());
-        self.next_stream
-    }
-
-    /// Asks for a run of once: its REQUEST leaves the stream open for the
-    /// answer the client sends back when the run is handed to it.
-    fn run(&mut self, request: &KvCall) -> u32 {
-        self.next_stream += 1;
-        let body = request.encode();
-        self.write(Frame { method: method::KV_ONCE_RUN, ..Frame::new(Kind::Request, self.next_stream, body) });
-        self.next_stream
-    }
-
-    /// Calls a method and returns its answer, or its error.
-    fn call<A: Message>(&mut self, called: u16, request: &impl Message) -> std::result::Result<A, Failed> {
-        let stream = self.start(called, request);
-        let answer = self.next_on(stream);
-        assert_eq!(answer.kind, Kind::Response);
-        assert_ne!(answer.flags & frame::END, 0, "a call's answer ends its stream");
-        answered(&answer)
-    }
-
-    fn bucket(&mut self, name: &str) -> u64 {
-        let open = KvBucketOpen { name: name.to_owned(), ..KvBucketOpen::default() };
-        self.call::<Handle>(method::KV_BUCKET_OPEN, &open).unwrap().handle
-    }
-}
-
-fn answered<A: Message>(frame: &Frame) -> std::result::Result<A, Failed> {
-    match frame.flags & frame::ERROR {
-        0 => Ok(A::decode(&frame.body).unwrap()),
-        _ => Err(Failed::decode(&frame.body).unwrap()),
-    }
-}
 
 #[test]
 fn a_client_sets_and_gets_a_key_through_the_pipe() {

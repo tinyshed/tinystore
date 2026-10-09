@@ -20,7 +20,8 @@ jobs = ["dep:jiff"]
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "limits"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 serde = { version = "1.0.229", default-features = false, features = ["std"] }
-serde_json = "1.0.151"
+# raw_value: a job's JSON from another language is checked and kept as it came
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 # a cron's wall clock in its IANA zone: the system's zone database first, the
 # bundled one where there is none, on Windows and in a slim container
 jiff = { version = "0.2.38", optional = true, features = ["tzdb-bundle-always"] }

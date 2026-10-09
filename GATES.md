@@ -362,7 +362,7 @@ module defines.
 - a handler settles its job by what it returns, a panic an error with its message — `a_handler_settles_its_job_by_what_it_returns`, `a_panic_is_an_error_with_its_message` in `jobs::work_tests`
 - jobs due together are claimed and settled in batches — `jobs_due_together_are_claimed_and_settled_in_batches` in `jobs::work_tests`
 - a Work loop lets go of a lease another claim took — `TestWorkLetsGoOfALeaseAnotherClaimTook`, without writing again at once
-- a stopping worker waits for its handlers and gives back what it had not started, uncounted — `a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_started`, `a_worker_runs_jobs_on_the_stores_threads_until_it_stops` in `jobs::work_tests`
+- a stopping worker waits for its handlers, writing what they answer as it comes, and gives back what it had not started, uncounted — `a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_started`, `a_worker_runs_jobs_on_the_stores_threads_until_it_stops` in `jobs::work_tests`
 - a worker its program let go of still stops when the store closes — `a_worker_its_program_let_go_of_still_stops_when_the_store_closes` in `jobs::work_tests`
 - a job value comes back as the JSON it went in — `a_value_comes_back_as_the_json_it_went_in` in `jobs::queue_tests`
 - a value that no longer reads fails its job, not its queue — `a_value_that_no_longer_reads_fails_its_job_not_its_queue` in `jobs::queue_tests`
@@ -414,8 +414,15 @@ module defines.
 - a backup over the wire holds every engine on disk, and makes none that is not — `TestABackupOverTheWireHoldsEveryEngineOnDisk`; `TestBackupWritesAZipThatRestoreTakesBack` in `cmd/tinystore`; `a backup is one zip of every engine, which restore takes back into an empty directory` in `sdk/js/test/backup.test.ts`, `test_a_backup_is_one_zip_of_every_engine_which_restore_takes_back` in Python's
 - a download holds the store's memory until its last DATA — `TestADownloadHoldsTheStoresMemoryUntilItsLastData`
 - a watch ends with its client's side — `TestAWatchEndsWithItsClientsSide`
-- a remote worker's job is watched, and its handler told of a cancel — `TestAJobWatchFollowsARemoteWorkersJob`, `a watch follows a job up its queue, through its progress, to a cancel its handler sees` in `sdk/js/test/jobs.test.ts`, `test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees` in Python's
-- a remote worker's steps are kept across a run's attempts, claimed or on a work stream — `TestAJobsStepsOverTheWire`, `a step runs once in a run: the attempt after a failure gets its kept answer` in `sdk/js/test/jobs.test.ts`, `test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer` in Python's
+- a remote worker's job is watched through its progress — `TestAJobWatchFollowsARemoteWorkersJob`, `a watch follows a job up its queue, through its progress, to a cancel its handler sees` in `sdk/js/test/jobs.test.ts`, `test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees` in Python's
+- a remote worker's handler is told of a cancel, and what it answers after settles nothing — `a_cancel_of_a_job_the_client_holds_tells_its_handler_and_settles_nothing` in `wire::jobs`
+- a remote worker's steps are kept across a run's attempts — `a_step_one_attempt_kept_is_found_by_the_next` in `wire::jobs`, `a step runs once in a run: the attempt after a failure gets its kept answer` in `sdk/js/test/jobs.test.ts`, `test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer` in Python's
+- a remote worker holds no more jobs than its handlers, sent within its client's credit — `a_client_works_a_queue_one_job_at_a_time_for_each_handler`, `the_server_sends_a_worker_no_more_than_the_credit_its_client_granted` in `wire::jobs`
+- a remote worker stopped, or whose server closes, takes no job more and ends once the jobs in hand are answered, those never sent given back uncounted — `a_stopped_worker_takes_no_job_more_and_gives_back_those_it_never_sent`, `a_closing_server_hands_its_workers_no_job_more` in `wire::jobs`
+- a job a remote worker holds when it ends or its client leaves fails that attempt — `a_job_the_client_holds_when_its_worker_ends_fails_that_attempt`, `a_client_that_leaves_with_a_job_in_hand_fails_that_attempt` in `wire::jobs`
+- a job's value travels as the JSON it was, and one that is not JSON is refused before it is kept — `a_client_adds_finds_and_cancels_jobs_by_their_ids`, `a_value_that_is_not_json_is_refused_before_it_is_kept` in `wire::jobs`
+- a remote worker's progress shows while its job runs, and one past 4 KiB fails its stream — `what_a_handler_reports_shows_while_its_job_runs` in `wire::jobs`
+- a schedule opened over the wire keeps its one job, which no add takes — `a_schedule_opened_over_the_wire_keeps_its_one_job` in `wire::jobs`
 - a frame past its agreed size is refused unread — `TestAFrameLargerThanAgreedIsRefusedUnread`, `FuzzFrames` in `server/wire`
 - a body the profile does not allow is refused — `FuzzMessages`, a refused vector for each rule
 - a request is understood whole or refused, naming the field, its message and the server's version — `a_field_the_core_does_not_know_is_unimplemented_and_named` in `pipe::tests`, `a_field_of_another_type_is_refused_by_its_name` in `wire::codec`
@@ -426,7 +433,7 @@ module defines.
 - every message is a vector, every field by its name — `every_vector_of_the_schema_reads_and_writes_its_own_bytes` in `wire::codec` and `protocol 2` in `sdk/js/test/protocol.test.ts`, over `testdata/wire/protocol.json`
 - every codec and vector is what `protocol/*.wire` writes — `protocol --check`, `just protocol-check` and CI's quality job
 - the largest kv or jobs value travels in one body — `TestTheLargestValueTravelsInOneBody`
-- a work stream asked to end when idle ends — `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`
+- a work stream asked to end when idle ends — `a_worker_until_idle_runs_what_is_due_and_then_its_stream_ends` in `wire::jobs`
 - an extend on a work stream is refused, not an ack — `TestAnExtendOnAWorkStreamIsRefused`
 - a client past its credit is cut off, the reader never waits — `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection`
 - every stream ends with one final frame — `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up

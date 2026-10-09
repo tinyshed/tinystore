@@ -105,6 +105,10 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    pub(crate) fn queue(&self) -> &Queue<()> {
+        &self.queue
+    }
+
     /// When it runs next and how its last run went: what a page of cron jobs
     /// shows.
     pub fn get(&self) -> Result<Option<Job<()>>> {

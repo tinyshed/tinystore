@@ -157,6 +157,511 @@
     },
     {
       "fields": {
+        "group": {
+          "uint": "207"
+        },
+        "total": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02cccf",
+      "message": "jobs.Concurrency",
+      "name": "jobs.Concurrency with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Concurrency",
+      "name": "jobs.Concurrency with no field"
+    },
+    {
+      "fields": {
+        "initial": {
+          "uint": "1500"
+        },
+        "max": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8201cd05dc02cd05dc",
+      "message": "jobs.Backoff",
+      "name": "jobs.Backoff with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Backoff",
+      "name": "jobs.Backoff with no field"
+    },
+    {
+      "fields": {
+        "count": {
+          "uint": "107"
+        },
+        "per": {
+          "uint": "1500"
+        }
+      },
+      "hex": "82016b02cd05dc",
+      "message": "jobs.Rate",
+      "name": "jobs.Rate with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Rate",
+      "name": "jobs.Rate with no field"
+    },
+    {
+      "fields": {
+        "attempts": {
+          "uint": "207"
+        },
+        "backoff": {
+          "fields": {
+            "initial": {
+              "uint": "1500"
+            },
+            "max": {
+              "uint": "1500"
+            }
+          }
+        },
+        "concurrency": {
+          "fields": {
+            "group": {
+              "uint": "207"
+            },
+            "total": {
+              "uint": "107"
+            }
+          }
+        },
+        "dedupe": {
+          "uint": "1500"
+        },
+        "keep": {
+          "uint": "1500"
+        },
+        "maxWaiting": {
+          "uint": "907"
+        },
+        "name": {
+          "str": "name"
+        },
+        "rate": {
+          "fields": {
+            "count": {
+              "uint": "107"
+            },
+            "per": {
+              "uint": "1500"
+            }
+          }
+        },
+        "timeout": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8901a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b",
+      "message": "jobs.QueueOpen",
+      "name": "jobs.QueueOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.QueueOpen",
+      "name": "jobs.QueueOpen with no field"
+    },
+    {
+      "fields": {
+        "attempts": {
+          "uint": "507"
+        },
+        "backoff": {
+          "fields": {
+            "initial": {
+              "uint": "1500"
+            },
+            "max": {
+              "uint": "1500"
+            }
+          }
+        },
+        "cron": {
+          "str": "cron"
+        },
+        "every": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        },
+        "timeZone": {
+          "str": "timeZone"
+        },
+        "timeout": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8701a46e616d6502cd05dc03a463726f6e04a874696d655a6f6e6505cd01fb068201cd05dc02cd05dc07cd05dc",
+      "message": "jobs.ScheduleOpen",
+      "name": "jobs.ScheduleOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.ScheduleOpen",
+      "name": "jobs.ScheduleOpen with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "cron": {
+          "str": "cron"
+        },
+        "delay": {
+          "uint": "1500"
+        },
+        "every": {
+          "uint": "1500"
+        },
+        "group": {
+          "str": "group"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "id": {
+          "str": "id"
+        },
+        "timeZone": {
+          "str": "timeZone"
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "89016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e65",
+      "message": "jobs.Call",
+      "name": "jobs.Call with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Call",
+      "name": "jobs.Call with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "id": {
+          "str": "id"
+        }
+      },
+      "hex": "82016b02a26964",
+      "message": "jobs.Id",
+      "name": "jobs.Id with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Id",
+      "name": "jobs.Id with no field"
+    },
+    {
+      "fields": {
+        "changed": {
+          "bool": true
+        }
+      },
+      "hex": "8101c3",
+      "message": "jobs.Changed",
+      "name": "jobs.Changed with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Changed",
+      "name": "jobs.Changed with no field"
+    },
+    {
+      "fields": {
+        "ahead": {
+          "uint": "707"
+        },
+        "at": {
+          "int": "1790000000000"
+        },
+        "attempt": {
+          "uint": "607"
+        },
+        "endedAt": {
+          "int": "1790000000000"
+        },
+        "error": {
+          "str": "error"
+        },
+        "found": {
+          "bool": true
+        },
+        "group": {
+          "str": "group"
+        },
+        "id": {
+          "str": "id"
+        },
+        "progress": {
+          "str": "{\"a\":1}"
+        },
+        "repeat": {
+          "str": "repeat"
+        },
+        "startedAt": {
+          "int": "1790000000000"
+        },
+        "state": {
+          "str": "state"
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "8d01c302a2696403a77b2261223a317d04a5737461746505cf000001a0c4506c0006cd025f07cd02c308a77b2261223a317d09a56572726f720aa567726f75700ba67265706561740ccf000001a0c4506c000dcf000001a0c4506c00",
+      "message": "jobs.Job",
+      "name": "jobs.Job with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Job",
+      "name": "jobs.Job with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "str": "after"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "limit": {
+          "uint": "507"
+        },
+        "prefix": {
+          "str": "prefix"
+        },
+        "state": {
+          "str": "state"
+        }
+      },
+      "hex": "85016b02a670726566697803a5737461746504a5616674657205cd01fb",
+      "message": "jobs.List",
+      "name": "jobs.List with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.List",
+      "name": "jobs.List with no field"
+    },
+    {
+      "fields": {
+        "jobs": {
+          "list": [
+            {
+              "fields": {
+                "ahead": {
+                  "uint": "707"
+                },
+                "at": {
+                  "int": "1790000000000"
+                },
+                "attempt": {
+                  "uint": "607"
+                },
+                "endedAt": {
+                  "int": "1790000000000"
+                },
+                "error": {
+                  "str": "error"
+                },
+                "found": {
+                  "bool": true
+                },
+                "group": {
+                  "str": "group"
+                },
+                "id": {
+                  "str": "id"
+                },
+                "progress": {
+                  "str": "{\"a\":1}"
+                },
+                "repeat": {
+                  "str": "repeat"
+                },
+                "startedAt": {
+                  "int": "1790000000000"
+                },
+                "state": {
+                  "str": "state"
+                },
+                "value": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          ]
+        },
+        "next": {
+          "str": "next"
+        }
+      },
+      "hex": "8201918d01c302a2696403a77b2261223a317d04a5737461746505cf000001a0c4506c0006cd025f07cd02c308a77b2261223a317d09a56572726f720aa567726f75700ba67265706561740ccf000001a0c4506c000dcf000001a0c4506c0002a46e657874",
+      "message": "jobs.Page",
+      "name": "jobs.Page with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Page",
+      "name": "jobs.Page with no field"
+    },
+    {
+      "fields": {
+        "concurrency": {
+          "uint": "207"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "untilIdle": {
+          "bool": true
+        }
+      },
+      "hex": "83016b02cccf03c3",
+      "message": "jobs.Work",
+      "name": "jobs.Work with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Work",
+      "name": "jobs.Work with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "attempt": {
+          "uint": "507"
+        },
+        "cancelled": {
+          "bool": true
+        },
+        "group": {
+          "str": "group"
+        },
+        "id": {
+          "str": "id"
+        },
+        "run": {
+          "uint": "107"
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "87016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd01fb06a567726f757007c3",
+      "message": "jobs.Held",
+      "name": "jobs.Held with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Held",
+      "name": "jobs.Held with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "delay": {
+          "uint": "1500"
+        },
+        "error": {
+          "str": "error"
+        },
+        "how": {
+          "str": "how"
+        },
+        "progress": {
+          "str": "{\"a\":1}"
+        },
+        "run": {
+          "uint": "107"
+        }
+      },
+      "hex": "86016b02a3686f7703cf000001a0c4506c0004a56572726f7205a77b2261223a317d06cd05dc",
+      "message": "jobs.Answer",
+      "name": "jobs.Answer with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Answer",
+      "name": "jobs.Answer with no field"
+    },
+    {
+      "fields": {
+        "answer": {
+          "str": "{\"a\":1}"
+        },
+        "name": {
+          "str": "name"
+        },
+        "run": {
+          "uint": "107"
+        }
+      },
+      "hex": "83016b02a46e616d6503a77b2261223a317d",
+      "message": "jobs.Step",
+      "name": "jobs.Step with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Step",
+      "name": "jobs.Step with no field"
+    },
+    {
+      "fields": {
+        "answer": {
+          "str": "{\"a\":1}"
+        },
+        "found": {
+          "bool": true
+        }
+      },
+      "hex": "8201c302a77b2261223a317d",
+      "message": "jobs.Kept",
+      "name": "jobs.Kept with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Kept",
+      "name": "jobs.Kept with no field"
+    },
+    {
+      "fields": {
         "idle": {
           "uint": "1500"
         },
@@ -852,6 +1357,17 @@
     }
   ],
   "methods": {
+    "jobs.add": 515,
+    "jobs.cancel": 518,
+    "jobs.get": 519,
+    "jobs.keep": 523,
+    "jobs.list": 520,
+    "jobs.queue.open": 513,
+    "jobs.schedule.open": 514,
+    "jobs.set": 516,
+    "jobs.step": 522,
+    "jobs.update": 517,
+    "jobs.work": 521,
     "kv.allow": 290,
     "kv.bucket.open": 257,
     "kv.clear": 265,

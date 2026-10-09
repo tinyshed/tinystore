@@ -83,6 +83,18 @@ pub(crate) struct Lease {
     /// The value when the row held it; a spilled one is read outside the writer.
     pub(crate) inline: Option<Vec<u8>>,
     state: Mutex<LeaseState>,
+    on_cancel: CancelHook,
+}
+
+/// What a cancel of the job tells whoever runs it beyond this process's
+/// threads: a client's worker, whose handler stops on it.
+#[derive(Default)]
+struct CancelHook(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl std::fmt::Debug for CancelHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CancelHook")
+    }
 }
 
 #[derive(Debug, Default)]
@@ -124,10 +136,30 @@ impl Lease {
         self.lock().began.is_some()
     }
 
-    /// Marks the lease of a job a cancel took: it settles nothing.
+    /// Marks the lease of a job a cancel took: it settles nothing, and what
+    /// runs it is told.
     pub(crate) fn cancel(&self) {
         let mut state = self.lock();
         (state.settled, state.lost, state.cancelled) = (true, true, true);
+        drop(state);
+        let hook = self.on_cancel.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Calls `hook` when a cancel takes the job, at once when one has.
+    pub(crate) fn when_cancelled(&self, hook: Box<dyn FnOnce() + Send>) {
+        if self.cancelled() {
+            return hook();
+        }
+        *self.on_cancel.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook);
+        // a cancel between the check and the hook's keeping finds no hook
+        if self.cancelled()
+            && let Some(hook) = self.on_cancel.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+        {
+            hook();
+        }
     }
 
     pub(crate) fn cancelled(&self) -> bool {
@@ -353,6 +385,7 @@ impl Claimed {
             group: row.group,
             inline: row.value,
             state: Mutex::new(state),
+            on_cancel: CancelHook::default(),
         });
         Ok(true)
     }

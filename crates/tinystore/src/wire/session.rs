@@ -5,9 +5,12 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+use super::Route;
 use super::codec::Message;
 use super::frame::{self, Frame, Kind};
-use super::kv::{self, Route, Run};
+#[cfg(feature = "jobs")]
+use super::jobs;
+use super::kv::{self, Run};
 use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome, method};
 use super::workers::Workers;
 use crate::clock::from_unix_millis;
@@ -48,6 +51,8 @@ struct Shared {
     store: Store,
     workers: Arc<Workers>,
     kv: kv::Handles,
+    #[cfg(feature = "jobs")]
+    jobs: jobs::Handles,
     input: Mutex<Input>,
     output: Mutex<Output>,
     /// Clients' runs of once, by stream, from the REQUEST to the last frame.
@@ -75,6 +80,8 @@ struct Input {
     reader: frame::Reader,
     /// The largest body both sides agreed, once WELCOME went out.
     max_body: Option<usize>,
+    /// The DATA bytes the client takes on a stream before it grants more.
+    stream_credit: u64,
     /// REQUEST and DATA bytes read since credit last went back.
     released: u64,
     /// GOAWAY went out: a REQUEST after it is answered `unavailable`, unrun.
@@ -98,6 +105,8 @@ impl Session {
             store,
             workers,
             kv: kv::Handles::default(),
+            #[cfg(feature = "jobs")]
+            jobs: jobs::Handles::default(),
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
@@ -151,7 +160,8 @@ impl Session {
         std::mem::take(&mut output.bytes)
     }
 
-    /// Tells the client the server is closing; the streams running finish.
+    /// Tells the client the server is closing; the streams running finish, and
+    /// its workers take no job more but answer those they hold.
     pub(crate) fn go_away(&self) {
         let mut input = self.shared.lock_input();
         if input.ended || input.going_away {
@@ -160,6 +170,8 @@ impl Session {
         input.going_away = true;
         let body = GoAway { code: "unavailable".to_owned(), message: "the server is closing".to_owned() }.encode();
         self.shared.send(&[Frame::new(Kind::GoAway, 0, body)]);
+        #[cfg(feature = "jobs")]
+        self.shared.jobs.halt_works();
     }
 
     pub(crate) fn streams(&self) -> usize {
@@ -177,7 +189,10 @@ impl Session {
     }
 
     /// Ends the session: calls under way finish, what they answer is dropped,
-    /// and the runs handed to the client are let go.
+    /// the runs handed to the client are let go, and its workers end, the jobs
+    /// they held failing their attempt. It waits for the workers to write
+    /// that, so that a store closing with its last pipe finds them stopped
+    /// rather than waits out their timeout.
     pub(crate) fn end(&self) {
         self.shared.lock_input().ended = true;
         let mut output = self.shared.lock_output();
@@ -187,6 +202,10 @@ impl Session {
         self.shared.ready.notify_all();
         let runs = std::mem::take(&mut *self.shared.lock_runs());
         drop(runs);
+        #[cfg(feature = "jobs")]
+        for work in self.shared.jobs.take_works() {
+            work.end();
+        }
     }
 }
 
@@ -199,8 +218,7 @@ impl Shared {
             (Some(_), Kind::Data) => self.data(input, frame),
             (Some(_), Kind::Cancel) => self.cancel(frame.stream),
             (Some(_), Kind::Ping) => self.send(&[Frame::new(Kind::Pong, 0, frame.body)]),
-            // calls answer in one message, within the body agreed, and send no DATA a client grants credit for
-            (Some(_), Kind::Credit) => {}
+            (Some(_), Kind::Credit) => self.credit(&frame),
             (Some(_), Kind::GoAway) => self.finish(input),
             (Some(_), kind) => self.go_away(input, "protocol", &format!("a {kind:?} from a client")),
         }
@@ -233,6 +251,7 @@ impl Shared {
         let stream_credit = hello.stream_credit.unwrap_or(CLIENT_STREAM_CREDIT);
         let max_body = MAX_BODY.min(client_most).min(stream_credit);
         input.max_body = Some(max_body as usize);
+        input.stream_credit = stream_credit;
         let proof = hello.challenge.zip(self.connect.prove.as_ref()).map(|(challenge, prove)| prove(&challenge));
         self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, capability, proof))]);
     }
@@ -251,7 +270,7 @@ impl Shared {
             in_flight: IN_FLIGHT,
             connection_credit: CONNECTION_CREDIT,
             stream_credit: STREAM_CREDIT,
-            engines: vec!["kv".to_owned()],
+            engines: engines(),
             now: unix_millis(self.store.now()),
             proof,
         };
@@ -284,7 +303,7 @@ impl Shared {
                     let done = move |answered| answering.answer(stream, answered);
                     let queued = guarded(|| {
                         kv::submit(&shared.kv, method, &body, done);
-                        Ok(Vec::new())
+                        Ok(())
                     });
                     if let Err(failure) = queued {
                         shared.answer(stream, Err(failure));
@@ -297,12 +316,40 @@ impl Shared {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || shared.run_once(stream, asked, body)));
             }
+            #[cfg(feature = "jobs")]
+            Route::Exchange => self.exchange(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
                     shared.answer(stream, guarded(|| shared.call(method, &body, max_body)));
                 }));
             }
+        }
+    }
+
+    /// Starts a client's worker: the stream's `RESPONSE`, then the jobs it
+    /// hands the client and the client's answers, as DATA both ways.
+    #[cfg(feature = "jobs")]
+    fn exchange(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let (sending, finishing) = (Arc::downgrade(self), Arc::downgrade(self));
+        let send: jobs::Sender = Arc::new(move |body| {
+            if let Some(shared) = sending.upgrade() {
+                shared.send(&[Frame::new(Kind::Data, stream, body)]);
+            }
+        });
+        let finish: jobs::Finisher = Arc::new(move |last| {
+            if let Some(shared) = finishing.upgrade() {
+                shared.end_stream(stream, last);
+            }
+        });
+        let max_body = input.max_body.unwrap_or(HELLO_MOST);
+        let link = jobs::Link { send, finish, credit: input.stream_credit, max_body };
+        match guarded(|| jobs::work(&self.jobs, stream, body, link)) {
+            Ok(work) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                work.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
         }
     }
 
@@ -347,11 +394,15 @@ impl Shared {
         }
     }
 
-    /// A client's DATA: the last of a run handed over, its answer to keep. A
-    /// DATA of a stream no longer in use is dropped, its credit still given
-    /// back.
+    /// A client's DATA: an item of its worker's stream, or the last of a run
+    /// handed over, its answer to keep. A DATA of a stream no longer in use is
+    /// dropped, its credit still given back.
     fn data(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
+        #[cfg(feature = "jobs")]
+        if let Some(work) = self.jobs.work(frame.stream) {
+            return self.work_data(&work, &frame);
+        }
         if frame.flags & frame::END == 0 {
             return;
         }
@@ -373,9 +424,56 @@ impl Shared {
         }));
     }
 
+    /// A client's item on its worker's stream: an answer, a progress or a
+    /// stop. Its END ends the worker, and the server's DATA·END follows once
+    /// what was answered is written; an item that is not one fails the stream.
+    #[cfg(feature = "jobs")]
+    fn work_data(self: &Arc<Self>, work: &jobs::Work, frame: &Frame) {
+        if let Some(granted) = work.release(frame.body.len() as u64, STREAM_CREDIT) {
+            self.send(&[Frame::new(Kind::Credit, frame.stream, granted.to_le_bytes().to_vec())]);
+        }
+        let ended = frame.flags & frame::END != 0;
+        let item = if ended && frame.body.is_empty() { Ok(()) } else { guarded(|| work.item(&frame.body)) };
+        match (item, ended) {
+            (Ok(()), false) => {}
+            (Ok(()), true) => self.end_work(frame.stream, Ok(Empty {}.encode())),
+            (Err(failure), _) => self.end_work(frame.stream, Err(failure)),
+        }
+    }
+
+    /// Ends a client's worker off this thread, and its stream with `last` once
+    /// the worker wrote what was answered.
+    #[cfg(feature = "jobs")]
+    fn end_work(self: &Arc<Self>, stream: u32, last: std::result::Result<Vec<u8>, Failure>) {
+        let Some(work) = self.jobs.take_work(stream) else {
+            return;
+        };
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || {
+            work.end();
+            shared.end_stream(stream, last);
+        }));
+    }
+
+    /// A client's grant of DATA on a stream: a worker's sends what waited for
+    /// it. No other stream sends DATA a client grants credit for: a call
+    /// answers in one message, within the body agreed.
+    #[cfg_attr(not(feature = "jobs"), expect(unused_variables, reason = "only a jobs worker's stream takes credit"))]
+    fn credit(&self, frame: &Frame) {
+        #[cfg(feature = "jobs")]
+        if let (Some(work), Ok(granted)) = (self.jobs.work(frame.stream), <[u8; 4]>::try_from(frame.body.as_slice())) {
+            work.grant(u32::from_le_bytes(granted));
+        }
+    }
+
     /// Lets go of a client's run of once, answering `cancelled`; a call
-    /// cancelled runs to its end, short as a call is.
-    fn cancel(&self, stream: u32) {
+    /// cancelled runs to its end, short as a call is. A worker cancelled ends
+    /// as its END would end it, the jobs it held failing their attempt.
+    fn cancel(self: &Arc<Self>, stream: u32) {
+        #[cfg(feature = "jobs")]
+        if self.jobs.work(stream).is_some() {
+            return self.end_work(stream, Err(Failure::cancelled("the client cancelled its worker")));
+        }
         let mut runs = self.lock_runs();
         let cancelled = Failure::cancelled("the client cancelled the run");
         match runs.remove(&stream) {
@@ -449,6 +547,8 @@ impl Shared {
     fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
         match method >> 8 {
             0x01 => kv::call(&self.store, &self.kv, method, body, max_body),
+            #[cfg(feature = "jobs")]
+            0x02 => jobs::call(&self.store, &self.jobs, method, body, max_body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -509,16 +609,25 @@ fn still_asking(runs: &HashMap<u32, ClientRun>, stream: u32, asked: u64) -> bool
     matches!(runs.get(&stream), Some(ClientRun::Asking(asking)) if *asking == asked)
 }
 
-/// How a method runs: kv's say theirs; every other engine's runs on a worker.
+/// How a method runs: kv's and jobs' say theirs; every other engine's runs on
+/// a worker.
 fn route(method: u16) -> Route {
     match method >> 8 {
         0x01 => kv::route(method),
+        #[cfg(feature = "jobs")]
+        0x02 => jobs::route(method),
         _ => Route::Worker,
     }
 }
 
+/// The engines this server serves.
+fn engines() -> Vec<String> {
+    let jobs = cfg!(feature = "jobs").then_some("jobs");
+    [Some("kv"), jobs].into_iter().flatten().map(str::to_owned).collect()
+}
+
 /// A call that panics answers `internal` rather than leaving its stream open.
-fn guarded(call: impl FnOnce() -> std::result::Result<Vec<u8>, Failure>) -> std::result::Result<Vec<u8>, Failure> {
+fn guarded<T>(call: impl FnOnce() -> std::result::Result<T, Failure>) -> std::result::Result<T, Failure> {
     catch_unwind(AssertUnwindSafe(call)).unwrap_or_else(|_| Err(Failure::internal("a call panicked")))
 }
 

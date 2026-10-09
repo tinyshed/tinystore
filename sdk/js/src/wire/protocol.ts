@@ -16,6 +16,17 @@ import {
 } from './codec.ts'
 
 export const methods = {
+	'jobs.queue.open': 0x0201,
+	'jobs.schedule.open': 0x0202,
+	'jobs.add': 0x0203,
+	'jobs.set': 0x0204,
+	'jobs.update': 0x0205,
+	'jobs.cancel': 0x0206,
+	'jobs.get': 0x0207,
+	'jobs.list': 0x0208,
+	'jobs.work': 0x0209,
+	'jobs.step': 0x020a,
+	'jobs.keep': 0x020b,
 	'kv.bucket.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,
@@ -123,6 +134,218 @@ export const Handle = message('Handle', {
  * A message with nothing to say.
  */
 export const Empty = message('Empty', {})
+
+/**
+ * How many jobs of a queue run at once: in all, across every worker of the
+ * store, and in each group.
+ */
+export const JobsConcurrency = message('jobs.Concurrency', {
+	total: [1, uint],
+	group: [2, uint],
+})
+
+/**
+ * The wait before a retry: initial, doubling each time up to max.
+ */
+export const JobsBackoff = message('jobs.Backoff', {
+	initial: [1, uint],
+	max: [2, uint],
+})
+
+/**
+ * Jobs started in any span of per.
+ */
+export const JobsRate = message('jobs.Rate', {
+	count: [1, uint],
+	per: [2, uint],
+})
+
+/**
+ * Opens a queue; an option left out takes its default.
+ */
+export const JobsQueueOpen = message('jobs.QueueOpen', {
+	/** [a-z0-9][a-z0-9_-]{0,63} */
+	name: [1, str],
+	/** 10 when absent, the first run counted */
+	attempts: [2, uint],
+	/** 1 s doubling to 1 h when absent */
+	backoff: [3, JobsBackoff],
+	/** how long one run may take: a minute when absent */
+	timeout: [4, uint],
+	/** one at a time in each worker when absent */
+	concurrency: [5, JobsConcurrency],
+	rate: [6, JobsRate],
+	/** how long a done job's id stays taken */
+	dedupe: [7, uint],
+	/** how long a failed job stays: a week when absent */
+	keep: [8, uint],
+	/** ten million when absent */
+	maxWaiting: [9, uint],
+})
+
+/**
+ * Opens a schedule: one repeating job the code owns, under its name, whose
+ * repeat replaces the one kept.
+ */
+export const JobsScheduleOpen = message('jobs.ScheduleOpen', {
+	name: [1, str],
+	every: [2, uint],
+	/** five fields, with timeZone */
+	cron: [3, str],
+	/** an IANA name, UTC among them */
+	timeZone: [4, str],
+	attempts: [5, uint],
+	backoff: [6, JobsBackoff],
+	timeout: [7, uint],
+})
+
+/**
+ * A call on one job: an add, a set or an update.
+ */
+export const JobsCall = message('jobs.Call', {
+	handle: [1, uint],
+	/** 1 to 1024 bytes; a set and an update need one */
+	id: [2, str],
+	value: [3, str],
+	at: [4, int],
+	/** from now; not beside at */
+	delay: [5, uint],
+	group: [6, str],
+	/** a repeat, which needs an id */
+	every: [7, uint],
+	cron: [8, str],
+	timeZone: [9, str],
+})
+
+/**
+ * The job under an id.
+ */
+export const JobsId = message('jobs.Id', {
+	handle: [1, uint],
+	id: [2, str],
+})
+
+/**
+ * Whether a call did what it asked: an add added, an update changed, a cancel
+ * found a job.
+ */
+export const JobsChanged = message('jobs.Changed', {
+	changed: [1, bool],
+})
+
+/**
+ * A job as its queue holds it.
+ */
+export const JobsJob = message('jobs.Job', {
+	found: [1, bool],
+	id: [2, str],
+	value: [3, str],
+	/** scheduled, waiting, running, done, failed or cancelled */
+	state: [4, str],
+	/** when it runs next; for one done or failed, when its last run was for */
+	at: [5, int],
+	attempt: [6, uint],
+	/** the jobs that run before a waiting one, up to 10,000 */
+	ahead: [7, uint],
+	progress: [8, str],
+	error: [9, str],
+	group: [10, str],
+	/** as the job keeps it: @every 30s +6178ms, 10 3 * * * Europe/Berlin */
+	repeat: [11, str],
+	/** the last run a handler finished */
+	startedAt: [12, int],
+	endedAt: [13, int],
+})
+
+/**
+ * A page of a queue's jobs: those whose ids start with a prefix, in the byte
+ * order of their ids, or with no prefix and the failed state, the last failed
+ * first.
+ */
+export const JobsList = message('jobs.List', {
+	handle: [1, uint],
+	prefix: [2, str],
+	/** scheduled, waiting, running or failed */
+	state: [3, str],
+	/** the page before's next */
+	after: [4, str],
+	/** 100 when absent, 1000 at most */
+	limit: [5, uint],
+})
+
+export const JobsPage = message('jobs.Page', {
+	jobs: [1, list(JobsJob)],
+	next: [2, str],
+})
+
+/**
+ * Starts the queue's worker for the client: the server claims its jobs as they
+ * fall due and hands each over as a held job, no more at once than the
+ * client's handlers, and the client answers each. A stop, or the server's
+ * GOAWAY, hands no job more, and the server ends the stream with DATA·END once
+ * the jobs the client holds are answered and written. The client's DATA·END
+ * ends the worker at once, the attempt of a job it still holds failing.
+ */
+export const JobsWork = message('jobs.Work', {
+	handle: [1, uint],
+	/** the handlers the client runs at once, 1024 at most: the queue's total, or one */
+	concurrency: [2, uint],
+	/** runDue: the server ends the stream once no job is due and none is held */
+	untilIdle: [3, bool],
+})
+
+/**
+ * A job the server hands the client's worker. Its run's number names it to the
+ * answer, a step and a keep; a cancel sends it again, cancelled, so that its
+ * handler stops.
+ */
+export const JobsHeld = message('jobs.Held', {
+	run: [1, uint],
+	id: [2, str],
+	value: [3, str],
+	/** when the run was due */
+	at: [4, int],
+	/** the first being 1 */
+	attempt: [5, uint],
+	group: [6, str],
+	cancelled: [7, bool],
+})
+
+/**
+ * The client's answer for a held job: how its run ended, or how far it got,
+ * which settles nothing; or a stop, which names no run. An answer for a job a
+ * cancel took settles nothing.
+ */
+export const JobsAnswer = message('jobs.Answer', {
+	run: [1, uint],
+	/** done, retry, snooze, fail, back, progress or stop */
+	how: [2, str],
+	/** when a retry or a snooze runs again; a retry without one waits its backoff */
+	at: [3, int],
+	/** why a retry or a failure */
+	error: [4, str],
+	/** 4 KiB at most */
+	progress: [5, str],
+	/** from now on the server's clock; not beside at */
+	delay: [6, uint],
+})
+
+/**
+ * A step of a held job's run: jobs.step asks for its kept answer, jobs.keep
+ * keeps one.
+ */
+export const JobsStep = message('jobs.Step', {
+	run: [1, uint],
+	/** 1 to 256 bytes */
+	name: [2, str],
+	/** jobs.keep's: 1 MiB at most */
+	answer: [3, str],
+})
+
+export const JobsKept = message('jobs.Kept', {
+	found: [1, bool],
+	answer: [2, str],
+})
 
 /**
  * Opens a bucket of values by key. Its keys expire ttl after they are written,

@@ -4,6 +4,8 @@
 
 pub(crate) mod codec;
 pub(crate) mod frame;
+#[cfg(feature = "jobs")]
+mod jobs;
 mod kv;
 mod message;
 pub(crate) mod msgpack;
@@ -14,3 +16,17 @@ mod workers;
 
 pub(crate) use session::Session;
 pub use session::Wake;
+
+/// How a session runs a method: a point read at once on the caller's thread,
+/// a write queued for its group commit with no thread waiting on it, a run of
+/// once handed over, a worker whose jobs and answers are the stream's items,
+/// anything else on a worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Inline,
+    Submit,
+    Handover,
+    #[cfg(feature = "jobs")]
+    Exchange,
+    Worker,
+}

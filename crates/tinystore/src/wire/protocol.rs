@@ -199,6 +199,603 @@ impl Message for Empty {
     }
 }
 
+/// How many jobs of a queue run at once: in all, across every worker of the
+/// store, and in each group.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsConcurrency {
+    pub(crate) total: Option<u64>,
+    pub(crate) group: Option<u64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsConcurrency {
+    const NAME: &'static str = "jobs.Concurrency";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsConcurrency {
+            total: fields.get(1, "total", codec::uint)?,
+            group: fields.get(2, "group", codec::uint)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.given(1, self.total.as_ref().map(codec::uint_value));
+        out.given(2, self.group.as_ref().map(codec::uint_value));
+    }
+}
+
+/// The wait before a retry: initial, doubling each time up to max.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsBackoff {
+    /// Milliseconds.
+    pub(crate) initial: u64,
+    /// Milliseconds.
+    pub(crate) max: u64,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsBackoff {
+    const NAME: &'static str = "jobs.Backoff";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsBackoff {
+            initial: fields.get(1, "initial", codec::uint)?.unwrap_or_default(),
+            max: fields.get(2, "max", codec::uint)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.initial));
+        out.put(2, codec::uint_value(&self.max));
+    }
+}
+
+/// Jobs started in any span of per.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsRate {
+    pub(crate) count: u64,
+    /// Milliseconds.
+    pub(crate) per: u64,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsRate {
+    const NAME: &'static str = "jobs.Rate";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsRate {
+            count: fields.get(1, "count", codec::uint)?.unwrap_or_default(),
+            per: fields.get(2, "per", codec::uint)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.count));
+        out.put(2, codec::uint_value(&self.per));
+    }
+}
+
+/// Opens a queue; an option left out takes its default.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsQueueOpen {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    /// 10 when absent, the first run counted.
+    pub(crate) attempts: Option<u64>,
+    /// 1 s doubling to 1 h when absent.
+    pub(crate) backoff: Option<JobsBackoff>,
+    /// How long one run may take: a minute when absent. Milliseconds.
+    pub(crate) timeout: Option<u64>,
+    /// One at a time in each worker when absent.
+    pub(crate) concurrency: Option<JobsConcurrency>,
+    pub(crate) rate: Option<JobsRate>,
+    /// How long a done job's id stays taken. Milliseconds.
+    pub(crate) dedupe: Option<u64>,
+    /// How long a failed job stays: a week when absent. Milliseconds.
+    pub(crate) keep: Option<u64>,
+    /// Ten million when absent.
+    pub(crate) max_waiting: Option<u64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsQueueOpen {
+    const NAME: &'static str = "jobs.QueueOpen";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsQueueOpen {
+            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
+            attempts: fields.get(2, "attempts", codec::uint)?,
+            backoff: fields.get(3, "backoff", codec::message::<JobsBackoff>)?,
+            timeout: fields.get(4, "timeout", codec::uint)?,
+            concurrency: fields.get(5, "concurrency", codec::message::<JobsConcurrency>)?,
+            rate: fields.get(6, "rate", codec::message::<JobsRate>)?,
+            dedupe: fields.get(7, "dedupe", codec::uint)?,
+            keep: fields.get(8, "keep", codec::uint)?,
+            max_waiting: fields.get(9, "maxWaiting", codec::uint)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::str_value(&self.name));
+        out.given(2, self.attempts.as_ref().map(codec::uint_value));
+        out.given(3, self.backoff.as_ref().map(codec::message_value));
+        out.given(4, self.timeout.as_ref().map(codec::uint_value));
+        out.given(5, self.concurrency.as_ref().map(codec::message_value));
+        out.given(6, self.rate.as_ref().map(codec::message_value));
+        out.given(7, self.dedupe.as_ref().map(codec::uint_value));
+        out.given(8, self.keep.as_ref().map(codec::uint_value));
+        out.given(9, self.max_waiting.as_ref().map(codec::uint_value));
+    }
+}
+
+/// Opens a schedule: one repeating job the code owns, under its name, whose
+/// repeat replaces the one kept.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsScheduleOpen {
+    pub(crate) name: String,
+    /// Milliseconds.
+    pub(crate) every: Option<u64>,
+    /// Five fields, with timeZone.
+    pub(crate) cron: Option<String>,
+    /// An IANA name, UTC among them.
+    pub(crate) time_zone: Option<String>,
+    pub(crate) attempts: Option<u64>,
+    pub(crate) backoff: Option<JobsBackoff>,
+    /// Milliseconds.
+    pub(crate) timeout: Option<u64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsScheduleOpen {
+    const NAME: &'static str = "jobs.ScheduleOpen";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsScheduleOpen {
+            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
+            every: fields.get(2, "every", codec::uint)?,
+            cron: fields.get(3, "cron", codec::str)?,
+            time_zone: fields.get(4, "timeZone", codec::str)?,
+            attempts: fields.get(5, "attempts", codec::uint)?,
+            backoff: fields.get(6, "backoff", codec::message::<JobsBackoff>)?,
+            timeout: fields.get(7, "timeout", codec::uint)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::str_value(&self.name));
+        out.given(2, self.every.as_ref().map(codec::uint_value));
+        out.given(3, self.cron.as_ref().map(codec::str_value));
+        out.given(4, self.time_zone.as_ref().map(codec::str_value));
+        out.given(5, self.attempts.as_ref().map(codec::uint_value));
+        out.given(6, self.backoff.as_ref().map(codec::message_value));
+        out.given(7, self.timeout.as_ref().map(codec::uint_value));
+    }
+}
+
+/// A call on one job: an add, a set or an update.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsCall {
+    pub(crate) handle: u64,
+    /// 1 to 1024 bytes; a set and an update need one.
+    pub(crate) id: Option<String>,
+    pub(crate) value: String,
+    /// Unix milliseconds.
+    pub(crate) at: Option<i64>,
+    /// From now; not beside at. Milliseconds.
+    pub(crate) delay: Option<u64>,
+    pub(crate) group: Option<String>,
+    /// A repeat, which needs an id. Milliseconds.
+    pub(crate) every: Option<u64>,
+    pub(crate) cron: Option<String>,
+    pub(crate) time_zone: Option<String>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsCall {
+    const NAME: &'static str = "jobs.Call";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsCall {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            id: fields.get(2, "id", codec::str)?,
+            value: fields.get(3, "value", codec::str)?.unwrap_or_default(),
+            at: fields.get(4, "at", codec::int)?,
+            delay: fields.get(5, "delay", codec::uint)?,
+            group: fields.get(6, "group", codec::str)?,
+            every: fields.get(7, "every", codec::uint)?,
+            cron: fields.get(8, "cron", codec::str)?,
+            time_zone: fields.get(9, "timeZone", codec::str)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.given(2, self.id.as_ref().map(codec::str_value));
+        out.put(3, codec::str_value(&self.value));
+        out.given(4, self.at.as_ref().map(codec::int_value));
+        out.given(5, self.delay.as_ref().map(codec::uint_value));
+        out.given(6, self.group.as_ref().map(codec::str_value));
+        out.given(7, self.every.as_ref().map(codec::uint_value));
+        out.given(8, self.cron.as_ref().map(codec::str_value));
+        out.given(9, self.time_zone.as_ref().map(codec::str_value));
+    }
+}
+
+/// The job under an id.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsId {
+    pub(crate) handle: u64,
+    pub(crate) id: String,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsId {
+    const NAME: &'static str = "jobs.Id";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsId {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            id: fields.get(2, "id", codec::str)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.put(2, codec::str_value(&self.id));
+    }
+}
+
+/// Whether a call did what it asked: an add added, an update changed, a cancel
+/// found a job.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsChanged {
+    pub(crate) changed: bool,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsChanged {
+    const NAME: &'static str = "jobs.Changed";
+    const KEYS: &'static [u64] = &[1];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsChanged {
+            changed: fields.get(1, "changed", codec::bool)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::bool_value(&self.changed));
+    }
+}
+
+/// A job as its queue holds it.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsJob {
+    pub(crate) found: bool,
+    pub(crate) id: Option<String>,
+    pub(crate) value: Option<String>,
+    /// Scheduled, waiting, running, done, failed or cancelled.
+    pub(crate) state: String,
+    /// When it runs next; for one done or failed, when its last run was for. Unix milliseconds.
+    pub(crate) at: Option<i64>,
+    pub(crate) attempt: u64,
+    /// The jobs that run before a waiting one, up to 10,000.
+    pub(crate) ahead: u64,
+    pub(crate) progress: Option<String>,
+    pub(crate) error: Option<String>,
+    pub(crate) group: Option<String>,
+    /// As the job keeps it: @every 30s +6178ms, 10 3 * * * Europe/Berlin.
+    pub(crate) repeat: Option<String>,
+    /// The last run a handler finished. Unix milliseconds.
+    pub(crate) started_at: Option<i64>,
+    /// Unix milliseconds.
+    pub(crate) ended_at: Option<i64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsJob {
+    const NAME: &'static str = "jobs.Job";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsJob {
+            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
+            id: fields.get(2, "id", codec::str)?,
+            value: fields.get(3, "value", codec::str)?,
+            state: fields.get(4, "state", codec::str)?.unwrap_or_default(),
+            at: fields.get(5, "at", codec::int)?,
+            attempt: fields.get(6, "attempt", codec::uint)?.unwrap_or_default(),
+            ahead: fields.get(7, "ahead", codec::uint)?.unwrap_or_default(),
+            progress: fields.get(8, "progress", codec::str)?,
+            error: fields.get(9, "error", codec::str)?,
+            group: fields.get(10, "group", codec::str)?,
+            repeat: fields.get(11, "repeat", codec::str)?,
+            started_at: fields.get(12, "startedAt", codec::int)?,
+            ended_at: fields.get(13, "endedAt", codec::int)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::bool_value(&self.found));
+        out.given(2, self.id.as_ref().map(codec::str_value));
+        out.given(3, self.value.as_ref().map(codec::str_value));
+        out.put(4, codec::str_value(&self.state));
+        out.given(5, self.at.as_ref().map(codec::int_value));
+        out.put(6, codec::uint_value(&self.attempt));
+        out.put(7, codec::uint_value(&self.ahead));
+        out.given(8, self.progress.as_ref().map(codec::str_value));
+        out.given(9, self.error.as_ref().map(codec::str_value));
+        out.given(10, self.group.as_ref().map(codec::str_value));
+        out.given(11, self.repeat.as_ref().map(codec::str_value));
+        out.given(12, self.started_at.as_ref().map(codec::int_value));
+        out.given(13, self.ended_at.as_ref().map(codec::int_value));
+    }
+}
+
+/// A page of a queue's jobs: those whose ids start with a prefix, in the byte
+/// order of their ids, or with no prefix and the failed state, the last failed
+/// first.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsList {
+    pub(crate) handle: u64,
+    pub(crate) prefix: Option<String>,
+    /// Scheduled, waiting, running or failed.
+    pub(crate) state: Option<String>,
+    /// The page before's next.
+    pub(crate) after: Option<String>,
+    /// 100 when absent, 1000 at most.
+    pub(crate) limit: Option<u64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsList {
+    const NAME: &'static str = "jobs.List";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsList {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            prefix: fields.get(2, "prefix", codec::str)?,
+            state: fields.get(3, "state", codec::str)?,
+            after: fields.get(4, "after", codec::str)?,
+            limit: fields.get(5, "limit", codec::uint)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.given(2, self.prefix.as_ref().map(codec::str_value));
+        out.given(3, self.state.as_ref().map(codec::str_value));
+        out.given(4, self.after.as_ref().map(codec::str_value));
+        out.given(5, self.limit.as_ref().map(codec::uint_value));
+    }
+}
+
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsPage {
+    pub(crate) jobs: Vec<JobsJob>,
+    pub(crate) next: Option<String>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsPage {
+    const NAME: &'static str = "jobs.Page";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsPage {
+            jobs: fields.get(1, "jobs", codec::list(codec::message::<JobsJob>))?.unwrap_or_default(),
+            next: fields.get(2, "next", codec::str)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::list_value(&self.jobs, codec::message_value));
+        out.given(2, self.next.as_ref().map(codec::str_value));
+    }
+}
+
+/// Starts the queue's worker for the client: the server claims its jobs as they
+/// fall due and hands each over as a held job, no more at once than the
+/// client's handlers, and the client answers each. A stop, or the server's
+/// GOAWAY, hands no job more, and the server ends the stream with DATA·END once
+/// the jobs the client holds are answered and written. The client's DATA·END
+/// ends the worker at once, the attempt of a job it still holds failing.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsWork {
+    pub(crate) handle: u64,
+    /// The handlers the client runs at once, 1024 at most: the queue's total, or one.
+    pub(crate) concurrency: Option<u64>,
+    /// RunDue: the server ends the stream once no job is due and none is held.
+    pub(crate) until_idle: bool,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsWork {
+    const NAME: &'static str = "jobs.Work";
+    const KEYS: &'static [u64] = &[1, 2, 3];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsWork {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            concurrency: fields.get(2, "concurrency", codec::uint)?,
+            until_idle: fields.get(3, "untilIdle", codec::bool)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.given(2, self.concurrency.as_ref().map(codec::uint_value));
+        out.put(3, codec::bool_value(&self.until_idle));
+    }
+}
+
+/// A job the server hands the client's worker. Its run's number names it to the
+/// answer, a step and a keep; a cancel sends it again, cancelled, so that its
+/// handler stops.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsHeld {
+    pub(crate) run: u64,
+    pub(crate) id: Option<String>,
+    pub(crate) value: Option<String>,
+    /// When the run was due. Unix milliseconds.
+    pub(crate) at: i64,
+    /// The first being 1.
+    pub(crate) attempt: u64,
+    pub(crate) group: Option<String>,
+    pub(crate) cancelled: bool,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsHeld {
+    const NAME: &'static str = "jobs.Held";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsHeld {
+            run: fields.get(1, "run", codec::uint)?.unwrap_or_default(),
+            id: fields.get(2, "id", codec::str)?,
+            value: fields.get(3, "value", codec::str)?,
+            at: fields.get(4, "at", codec::int)?.unwrap_or_default(),
+            attempt: fields.get(5, "attempt", codec::uint)?.unwrap_or_default(),
+            group: fields.get(6, "group", codec::str)?,
+            cancelled: fields.get(7, "cancelled", codec::bool)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.run));
+        out.given(2, self.id.as_ref().map(codec::str_value));
+        out.given(3, self.value.as_ref().map(codec::str_value));
+        out.put(4, codec::int_value(&self.at));
+        out.put(5, codec::uint_value(&self.attempt));
+        out.given(6, self.group.as_ref().map(codec::str_value));
+        out.put(7, codec::bool_value(&self.cancelled));
+    }
+}
+
+/// The client's answer for a held job: how its run ended, or how far it got,
+/// which settles nothing; or a stop, which names no run. An answer for a job a
+/// cancel took settles nothing.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsAnswer {
+    pub(crate) run: u64,
+    /// Done, retry, snooze, fail, back, progress or stop.
+    pub(crate) how: String,
+    /// When a retry or a snooze runs again; a retry without one waits its backoff. Unix milliseconds.
+    pub(crate) at: Option<i64>,
+    /// Why a retry or a failure.
+    pub(crate) error: Option<String>,
+    /// 4 KiB at most.
+    pub(crate) progress: Option<String>,
+    /// From now on the server's clock; not beside at. Milliseconds.
+    pub(crate) delay: Option<u64>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsAnswer {
+    const NAME: &'static str = "jobs.Answer";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsAnswer {
+            run: fields.get(1, "run", codec::uint)?.unwrap_or_default(),
+            how: fields.get(2, "how", codec::str)?.unwrap_or_default(),
+            at: fields.get(3, "at", codec::int)?,
+            error: fields.get(4, "error", codec::str)?,
+            progress: fields.get(5, "progress", codec::str)?,
+            delay: fields.get(6, "delay", codec::uint)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.run));
+        out.put(2, codec::str_value(&self.how));
+        out.given(3, self.at.as_ref().map(codec::int_value));
+        out.given(4, self.error.as_ref().map(codec::str_value));
+        out.given(5, self.progress.as_ref().map(codec::str_value));
+        out.given(6, self.delay.as_ref().map(codec::uint_value));
+    }
+}
+
+/// A step of a held job's run: jobs.step asks for its kept answer, jobs.keep
+/// keeps one.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsStep {
+    pub(crate) run: u64,
+    /// 1 to 256 bytes.
+    pub(crate) name: String,
+    /// Jobs.keep's: 1 MiB at most.
+    pub(crate) answer: Option<String>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsStep {
+    const NAME: &'static str = "jobs.Step";
+    const KEYS: &'static [u64] = &[1, 2, 3];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsStep {
+            run: fields.get(1, "run", codec::uint)?.unwrap_or_default(),
+            name: fields.get(2, "name", codec::str)?.unwrap_or_default(),
+            answer: fields.get(3, "answer", codec::str)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.run));
+        out.put(2, codec::str_value(&self.name));
+        out.given(3, self.answer.as_ref().map(codec::str_value));
+    }
+}
+
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsKept {
+    pub(crate) found: bool,
+    pub(crate) answer: Option<String>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsKept {
+    const NAME: &'static str = "jobs.Kept";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsKept {
+            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
+            answer: fields.get(2, "answer", codec::str)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::bool_value(&self.found));
+        out.given(2, self.answer.as_ref().map(codec::str_value));
+    }
+}
+
 /// Opens a bucket of values by key. Its keys expire ttl after they are written,
 /// or idle after they were last read or written; not both.
 #[cfg(feature = "kv")]
@@ -912,6 +1509,28 @@ impl Message for ServerClock {
 
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_QUEUE_OPEN: u16 = 0x0201;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_SCHEDULE_OPEN: u16 = 0x0202;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_ADD: u16 = 0x0203;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_SET: u16 = 0x0204;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_UPDATE: u16 = 0x0205;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_CANCEL: u16 = 0x0206;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_GET: u16 = 0x0207;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_LIST: u16 = 0x0208;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_WORK: u16 = 0x0209;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_STEP: u16 = 0x020a;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_KEEP: u16 = 0x020b;
     #[cfg(feature = "kv")]
     pub(crate) const KV_BUCKET_OPEN: u16 = 0x0101;
     #[cfg(feature = "kv")]
@@ -971,6 +1590,28 @@ pub(crate) mod method {
 /// Every method, its name and number, for the test that the server answers each.
 #[cfg(test)]
 pub(crate) const METHODS: &[(&str, u16)] = &[
+    #[cfg(feature = "jobs")]
+    ("jobs.queue.open", 0x0201),
+    #[cfg(feature = "jobs")]
+    ("jobs.schedule.open", 0x0202),
+    #[cfg(feature = "jobs")]
+    ("jobs.add", 0x0203),
+    #[cfg(feature = "jobs")]
+    ("jobs.set", 0x0204),
+    #[cfg(feature = "jobs")]
+    ("jobs.update", 0x0205),
+    #[cfg(feature = "jobs")]
+    ("jobs.cancel", 0x0206),
+    #[cfg(feature = "jobs")]
+    ("jobs.get", 0x0207),
+    #[cfg(feature = "jobs")]
+    ("jobs.list", 0x0208),
+    #[cfg(feature = "jobs")]
+    ("jobs.work", 0x0209),
+    #[cfg(feature = "jobs")]
+    ("jobs.step", 0x020a),
+    #[cfg(feature = "jobs")]
+    ("jobs.keep", 0x020b),
     #[cfg(feature = "kv")]
     ("kv.bucket.open", 0x0101),
     #[cfg(feature = "kv")]
@@ -1038,6 +1679,38 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure
         "Failure" => Failure::decode(body).map(|message| message.encode()),
         "Handle" => Handle::decode(body).map(|message| message.encode()),
         "Empty" => Empty::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Concurrency" => JobsConcurrency::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Backoff" => JobsBackoff::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Rate" => JobsRate::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.QueueOpen" => JobsQueueOpen::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.ScheduleOpen" => JobsScheduleOpen::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Call" => JobsCall::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Id" => JobsId::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Changed" => JobsChanged::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Job" => JobsJob::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.List" => JobsList::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Page" => JobsPage::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Work" => JobsWork::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Held" => JobsHeld::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Answer" => JobsAnswer::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Step" => JobsStep::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Kept" => JobsKept::decode(body).map(|message| message.encode()),
         #[cfg(feature = "kv")]
         "kv.BucketOpen" => KvBucketOpen::decode(body).map(|message| message.encode()),
         #[cfg(feature = "kv")]
