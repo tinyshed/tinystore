@@ -14,10 +14,10 @@ interface Case {
 	name: string
 	table: string
 	steps?: Step[]
-	update?: Record<string, unknown>
+	update?: [string, unknown][]
 	delete?: true
-	insert?: Record<string, unknown>[]
-	upsert?: [Record<string, unknown>, { conflict: string; update: string[]; where?: unknown }]
+	insert?: [string, unknown][][]
+	upsert?: [[string, unknown][], { conflict: string; update: string[]; where?: unknown }]
 	count?: true
 	text: string
 	values: unknown[]
@@ -115,16 +115,17 @@ describe('the query vectors', () => {
 			const query = (vector.steps ?? []).reduce(apply, table as Query<Record<string, unknown>>)
 			let statement: { text: string; values: readonly SqlArg[] }
 			if (vector.update !== undefined) {
-				await query.update(written(vector.update))
+				await query.update(written(Object.fromEntries(vector.update)))
 				statement = recorder.last!
 			} else if (vector.delete) {
 				await query.delete()
 				statement = recorder.last!
 			} else if (vector.insert !== undefined) {
-				await table.insert(vector.insert)
+				await table.insert(vector.insert.map(row => Object.fromEntries(row)))
 				statement = recorder.last!
 			} else if (vector.upsert !== undefined) {
-				const [row, options] = vector.upsert
+				const [pairs, options] = vector.upsert
+				const row = Object.fromEntries(pairs)
 				await table.upsert(row, {
 					...options,
 					where: options.where === undefined ? undefined : conditionOf(options.where),

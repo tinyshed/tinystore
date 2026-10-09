@@ -9,10 +9,10 @@ section; Python, Go and Rust follow where they spell something differently.
 The Rust core builds databases, their migrations, reads, writes, batches and
 transactions (`crates/tinystore/src/sql`), protocol 2 serves them
 (`protocol/sql.wire`), and the Bun SDK has all of it with its tables and
-query builder (`sdk/js/src/sql.ts`, `query.ts`), which
-`testdata/sql/queries.json` holds every SDK to; Rust's tables and builder,
-`include`, and the Python and Go SDKs come next. The Go engine at `e81a050` and research's design of it
-are the reference for what it promises.
+query builder (`sdk/js/src/sql.ts`, `query.ts`), as the Rust core has
+them (`query.rs`), both held to `testdata/sql/queries.json`; `include` and
+the Python and Go SDKs come next. The Go engine at `e81a050` and research's
+design of it are the reference for what it promises.
 
 What changed from the Go engine: queries can be built without writing their
 text by hand, in every language; `batch` takes a list of statements and

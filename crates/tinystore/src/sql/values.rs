@@ -484,3 +484,210 @@ impl ser::Serializer for Byte {
         newtype_struct newtype_variant seq tuple tuple_struct tuple_variant map struct struct_variant
     }
 }
+
+/// A row as an insert writes it: each field of a struct, or each entry of a
+/// map, its column's name and its value, in their order.
+pub(crate) fn row_of<T: Serialize + ?Sized>(row: &T) -> Result<Vec<(String, Value)>, String> {
+    row.serialize(RowWriter).map_err(|refusal| refusal.to_string())
+}
+
+/// What writes a row: a struct or a map, nothing else.
+struct RowWriter;
+
+/// A row's fields as they come.
+#[derive(Default)]
+struct Fields {
+    columns: Vec<(String, Value)>,
+    key: Option<String>,
+}
+
+fn not_a_row() -> Refusal {
+    Refusal::Refused("a row is a struct or a map of its columns".to_owned())
+}
+
+impl ser::Serializer for RowWriter {
+    type Ok = Vec<(String, Value)>;
+    type Error = Refusal;
+    type SerializeSeq = Impossible<Self::Ok, Refusal>;
+    type SerializeTuple = Impossible<Self::Ok, Refusal>;
+    type SerializeTupleStruct = Impossible<Self::Ok, Refusal>;
+    type SerializeTupleVariant = Impossible<Self::Ok, Refusal>;
+    type SerializeMap = Fields;
+    type SerializeStruct = Fields;
+    type SerializeStructVariant = Impossible<Self::Ok, Refusal>;
+
+    fn serialize_map(self, _: Option<usize>) -> Result<Fields, Refusal> {
+        Ok(Fields::default())
+    }
+
+    fn serialize_struct(self, _: &'static str, _: usize) -> Result<Fields, Refusal> {
+        Ok(Fields::default())
+    }
+
+    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<Self::Ok, Refusal> {
+        value.serialize(self)
+    }
+
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _: &'static str, value: &T) -> Result<Self::Ok, Refusal> {
+        value.serialize(self)
+    }
+
+    fn serialize_bool(self, _: bool) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_i8(self, _: i8) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_i16(self, _: i16) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_i32(self, _: i32) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_i64(self, _: i64) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_u8(self, _: u8) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_u16(self, _: u16) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_u32(self, _: u32) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_u64(self, _: u64) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_f32(self, _: f32) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_f64(self, _: f64) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_char(self, _: char) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_str(self, _: &str) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_none(self) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_unit(self) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: &T,
+    ) -> Result<Self::Ok, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<Self::SerializeTupleStruct, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeTupleVariant, Refusal> {
+        Err(not_a_row())
+    }
+
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeStructVariant, Refusal> {
+        Err(not_a_row())
+    }
+}
+
+impl Fields {
+    fn push<T: Serialize + ?Sized>(&mut self, name: String, value: &T) -> Result<(), Refusal> {
+        let value = to_value(value).map_err(|why| Refusal::Refused(format!("{name}: {why}")))?;
+        self.columns.push((name, value));
+        Ok(())
+    }
+}
+
+impl ser::SerializeStruct for Fields {
+    type Ok = Vec<(String, Value)>;
+    type Error = Refusal;
+
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, key: &'static str, value: &T) -> Result<(), Refusal> {
+        self.push(key.to_owned(), value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Refusal> {
+        Ok(self.columns)
+    }
+}
+
+impl ser::SerializeMap for Fields {
+    type Ok = Vec<(String, Value)>;
+    type Error = Refusal;
+
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Refusal> {
+        match key.serialize(Scalar)? {
+            Value::Text(name) => {
+                self.key = Some(name);
+                Ok(())
+            }
+            _ => Err(Refusal::Refused("a row's columns are named by text".to_owned())),
+        }
+    }
+
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Refusal> {
+        let name = self.key.take().unwrap_or_default();
+        self.push(name, value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Refusal> {
+        Ok(self.columns)
+    }
+}

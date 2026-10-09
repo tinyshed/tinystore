@@ -24,6 +24,8 @@
 mod database;
 mod engine;
 mod migrations;
+mod pieces;
+mod query;
 mod rows;
 mod run;
 mod statement;
@@ -32,6 +34,8 @@ mod values;
 
 pub use database::{Database, DatabaseBuilder, Done};
 pub use migrations::Migrations;
+pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};
+pub use query::{Direction, Page, Query, Table, Upsert};
 pub use statement::Sql;
 pub use tx::Tx;
 
@@ -42,3 +46,6 @@ pub(crate) use values::Value;
 #[cfg(test)]
 #[path = "database_tests.rs"]
 mod database_tests;
+#[cfg(test)]
+#[path = "query_tests.rs"]
+mod query_tests;

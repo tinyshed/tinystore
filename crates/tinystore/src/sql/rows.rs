@@ -63,6 +63,19 @@ impl Rows {
         self.values
     }
 
+    /// What a test's runner answers: no row, or a scalar's zero.
+    #[cfg(test)]
+    pub(crate) fn answered(wanted: super::run::Wanted) -> Rows {
+        match wanted {
+            super::run::Wanted::Scalar => Rows { columns: Arc::from([String::new()]), values: vec![Value::Integer(0)] },
+            _ => Rows { columns: Arc::from([]), values: Vec::new() },
+        }
+    }
+
+    pub(crate) fn value_at(&self, at: usize) -> &Value {
+        &self.values[at]
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.values.len().checked_div(self.columns.len()).unwrap_or(0)
     }

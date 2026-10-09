@@ -24,11 +24,24 @@ pub struct Sql {
     values: Vec<Value>,
     /// Why a value could not be one, told when the statement runs.
     refused: Option<String>,
+    /// Whether it stands beside others in an and or an or without
+    /// parentheses: one column's comparison.
+    bare: bool,
 }
 
 impl Sql {
     pub fn new(text: impl Into<String>) -> Sql {
-        Sql { text: text.into(), values: Vec::new(), refused: None }
+        Sql { text: text.into(), values: Vec::new(), refused: None, bare: false }
+    }
+
+    /// A piece the builder made, its values made already.
+    pub(crate) fn piece(text: String, values: Vec<Value>, bare: bool) -> Sql {
+        Sql { text, values, refused: None, bare }
+    }
+
+    /// A piece that could not be one, told when its statement runs.
+    pub(crate) fn refused(why: String) -> Sql {
+        Sql { text: String::new(), values: Vec::new(), refused: Some(why), bare: true }
     }
 
     /// The value of the next `?`. A value SQLite would change, a NaN or an
@@ -47,7 +60,19 @@ impl Sql {
 
     /// A statement whose values arrived as SQLite keeps them, from the wire.
     pub(crate) fn with_values(text: String, values: Vec<Value>) -> Sql {
-        Sql { text, values, refused: None }
+        Sql { text, values, refused: None, bare: false }
+    }
+
+    pub(crate) fn is_bare(&self) -> bool {
+        self.bare
+    }
+
+    pub(crate) fn why_refused(&self) -> Option<&str> {
+        self.refused.as_deref()
+    }
+
+    pub(crate) fn into_parts(self) -> (String, Vec<Value>, Option<String>) {
+        (self.text, self.values, self.refused)
     }
 
     pub fn text(&self) -> &str {
