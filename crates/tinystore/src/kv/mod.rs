@@ -24,6 +24,10 @@ pub use engine::Maintenance;
 pub use path::Key;
 pub use value::{Bytes, Value};
 
+pub(crate) use bucket::Put;
+pub(crate) use cells::Cell;
+pub(crate) use value::Raw;
+
 use crate::{Result, Store};
 
 /// Deletes what expired and what large clears hid. The store runs it every

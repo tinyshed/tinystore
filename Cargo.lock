@@ -288,6 +288,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinystore-ffi"
+version = "0.0.0"
+dependencies = [
+ "tinystore",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"

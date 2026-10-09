@@ -3,7 +3,7 @@ import { open as openFile, rename, rm } from 'node:fs/promises'
 
 import { Blobs } from './blobs.ts'
 import { Clock } from './clock.ts'
-import { Link, privateChild, remote, sidecar } from './connection.ts'
+import { embedded, Link, privateChild, remote, sidecar } from './connection.ts'
 import { ClosedError, InvalidError } from './errors.ts'
 import { Jobs } from './jobs.ts'
 import { Kv } from './kv.ts'
@@ -23,6 +23,13 @@ export interface OpenOptions {
 	 * scripts, one process alone.
 	 */
 	private?: boolean
+	/**
+	 * The core inside this process, loaded from its library, rather than a
+	 * server beside it: no process and no socket. Bun alone for now.
+	 */
+	embedded?: boolean
+	/** The core's library for `embedded`: TINYSTORE_LIBRARY when absent. */
+	library?: string | undefined
 	/** The tinystore binary: TINYSTORE_BIN, this platform's package, or PATH's when absent. */
 	binary?: string
 	/**
@@ -200,9 +207,11 @@ export async function openWith(
 	}
 	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
 	const link = new Link(
-		options.private === true
-			? privateChild(runtime, dir, binary, clock)
-			: sidecar(runtime, dir, binary, idle),
+		options.embedded === true
+			? embedded(runtime, dir, () => findLibrary(options.library))
+			: options.private === true
+				? privateChild(runtime, dir, binary, clock)
+				: sidecar(runtime, dir, binary, idle),
 	)
 	await link.connection()
 	return new Store(link)
@@ -251,6 +260,17 @@ function findBinary(runtime: Runtime, given: string | undefined): string {
 		throw new ClosedError(
 			`no tinystore binary: @tinyshed/tinystore-${process.platform}-${process.arch} is not installed; ` +
 				'install it, put tinystore on PATH, or set TINYSTORE_BIN',
+		)
+	}
+	return found
+}
+
+/** The core's library an embedded store loads. */
+function findLibrary(library: string | undefined): string {
+	const found = library ?? process.env.TINYSTORE_LIBRARY
+	if (found === undefined || found === '') {
+		throw new InvalidError(
+			'an embedded store needs the core library: pass library or set TINYSTORE_LIBRARY',
 		)
 	}
 	return found

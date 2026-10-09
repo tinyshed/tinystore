@@ -102,6 +102,16 @@ pub struct Entry<V> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Version(i64);
 
+impl Version {
+    pub(crate) fn new(revision: i64) -> Version {
+        Version(revision)
+    }
+
+    pub(crate) fn revision(self) -> i64 {
+        self.0
+    }
+}
+
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -177,23 +187,22 @@ impl Write {
 }
 
 /// How a write treats the key it finds.
-#[derive(Clone, Copy, Debug)]
-enum Put {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Put {
     Always,
     OnlyNew,
 }
 
-impl<V: Value> Bucket<V> {
-    /// The same bucket seen from the branch `owner` names under this one:
-    /// `sessions.of(user_id).clear()` signs a user out everywhere.
-    pub fn of(&self, owner: impl Key) -> Bucket<V> {
-        let branch = match &self.branch {
-            Ok(branch) => branch.of(&owner.text()).map_err(|error| error.to_string()),
-            Err(invalid) => Err(invalid.clone()),
-        };
-        Bucket { branch, ..self.clone() }
-    }
+/// What a write left: whether it wrote, and the version and expiry the key
+/// has now, its own when a create found a live key there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Stamp {
+    pub(crate) written: bool,
+    pub(crate) version: Version,
+    pub(crate) expires: Option<i64>,
+}
 
+impl<V: Value> Bucket<V> {
     /// Writes `value` under `key`. A key that is there keeps its expiry; a new
     /// one takes the bucket's.
     pub fn set(&self, key: impl Key, value: &V) -> Result<()> {
@@ -226,18 +235,6 @@ impl<V: Value> Bucket<V> {
         found.map(|cell| self.entry_of(&key, cell)).transpose()
     }
 
-    pub fn has(&self, key: impl Key) -> Result<bool> {
-        let key = key.text();
-        if matches!(self.expiry, Expiry::Idle(_)) {
-            return Ok(self.read_cell(&key)?.is_some());
-        }
-        let (id, path, now) = (self.id, self.path(&key)?, self.kv.now());
-        self.kv
-            .file()
-            .read(|connection| cells::has(connection, id, &path, now))
-            .map_err(|error| error.within(self.shown_key(&key)))
-    }
-
     /// Reads `key` and removes it in one commit: of two callers taking the same
     /// key, one gets the value.
     pub fn take(&self, key: impl Key) -> Result<Option<V>> {
@@ -248,56 +245,6 @@ impl<V: Value> Bucket<V> {
         let key = key.text();
         let taken = self.remove(&key, write)?;
         taken.map(|cell| self.decode(&key, &cell.raw)).transpose()
-    }
-
-    /// Removes `key` and says whether a live key was there.
-    pub fn delete(&self, key: impl Key) -> Result<bool> {
-        self.delete_with(key, Write::default())
-    }
-
-    pub fn delete_with(&self, key: impl Key, write: Write) -> Result<bool> {
-        Ok(self.remove(&key.text(), write)?.is_some())
-    }
-
-    /// Gives a live key a new expiry, `ttl` from now, as Redis's EXPIRE does,
-    /// keeping its value and version; says whether the key was there.
-    pub fn expire(&self, key: impl Key, ttl: Duration) -> Result<bool> {
-        self.expire_with(key, Write::default().ttl(ttl))
-    }
-
-    pub fn expire_with(&self, key: impl Key, write: Write) -> Result<bool> {
-        let key = key.text();
-        let now = self.kv.now();
-        let expires = write
-            .expires(now)
-            .ok_or_else(|| Error::invalid("an expiry needs a ttl or a time").within(self.shown_key(&key)))?;
-        let (id, path, if_version) = (self.id, self.path(&key)?, write.if_version);
-        self.write(&key, 0, move |tx, _| {
-            let Some(found) = live_at(tx, id, &path, now, if_version)? else {
-                return Ok(false);
-            };
-            cells::set_expires(tx, id, &path, Some(expires))?;
-            Ok(found.live)
-        })
-    }
-
-    /// Removes every key of this branch and of the branches under it, at once
-    /// for every reader, however many there are.
-    pub fn clear(&self) -> Result<()> {
-        let branch = self.branch()?;
-        let (id, prefix, everything) = (self.id, branch.prefix().to_vec(), branch.everything());
-        let revision = self.kv.revision();
-        let shown = self.shown_branch();
-        self.kv
-            .file()
-            .write(0, move |tx| {
-                if cells::delete_under(tx, id, (&everything.0, &everything.1), CLEAR_BOUND)? {
-                    return Ok(());
-                }
-                let cleared = next_version(&revision, tx)?;
-                cells::mark_cleared(tx, id, &prefix, cleared)
-            })
-            .map_err(|error| error.within(shown))
     }
 
     /// One page of this branch's own keys, after `after` when it continues
@@ -331,25 +278,130 @@ impl<V: Value> Bucket<V> {
     }
 
     fn put(&self, key: &str, value: &V, write: Write, put: Put) -> Result<bool> {
-        let raw = self.encode(key, value)?;
+        let raw = value::encode(value).map_err(|mismatch| {
+            Error::invalid(format!("a value it cannot keep: {mismatch}")).within(self.shown_key(key))
+        })?;
+        Ok(self.put_raw(key, raw, write, put)?.written)
+    }
+
+    fn entry_of(&self, key: &str, cell: Cell) -> Result<Entry<V>> {
+        Ok(Entry {
+            key: key.to_owned(),
+            value: self.decode(key, &cell.raw)?,
+            version: Version(cell.version),
+            expires_at: cell.expires.map(time_of),
+        })
+    }
+
+    fn decode(&self, key: &str, raw: &Raw) -> Result<V> {
+        value::decode(raw).map_err(|mismatch| {
+            Error::corrupt(format!("its value does not read as the bucket's type: {mismatch}"))
+                .within(self.shown_key(key))
+        })
+    }
+}
+
+/// What a bucket does whatever its type: the calls that make no value, and
+/// the row-level ones the wire's handles use.
+impl<V> Bucket<V> {
+    /// The same bucket seen from the branch `owner` names under this one:
+    /// `sessions.of(user_id).clear()` signs a user out everywhere.
+    pub fn of(&self, owner: impl Key) -> Bucket<V> {
+        let branch = match &self.branch {
+            Ok(branch) => branch.of(&owner.text()).map_err(|error| error.to_string()),
+            Err(invalid) => Err(invalid.clone()),
+        };
+        Bucket { branch, ..self.clone() }
+    }
+
+    pub fn has(&self, key: impl Key) -> Result<bool> {
+        let key = key.text();
+        if matches!(self.expiry, Expiry::Idle(_)) {
+            return Ok(self.read_cell(&key)?.is_some());
+        }
+        let (id, path, now) = (self.id, self.path(&key)?, self.kv.now());
+        self.kv
+            .file()
+            .read(|connection| cells::has(connection, id, &path, now))
+            .map_err(|error| error.within(self.shown_key(&key)))
+    }
+
+    /// Removes `key` and says whether a live key was there.
+    pub fn delete(&self, key: impl Key) -> Result<bool> {
+        self.delete_with(key, Write::default())
+    }
+
+    pub fn delete_with(&self, key: impl Key, write: Write) -> Result<bool> {
+        Ok(self.remove(&key.text(), write)?.is_some())
+    }
+
+    /// Gives a live key a new expiry, `ttl` from now, as Redis's EXPIRE does,
+    /// keeping its value and version; says whether the key was there.
+    pub fn expire(&self, key: impl Key, ttl: Duration) -> Result<bool> {
+        self.expire_with(key, Write::default().ttl(ttl))
+    }
+
+    pub fn expire_with(&self, key: impl Key, write: Write) -> Result<bool> {
+        let key = key.text();
+        let now = self.kv.now();
+        let expires = write
+            .expires(now)
+            .ok_or_else(|| Error::invalid("an expiry needs a ttl or a time").within(self.shown_key(&key)))?;
+        let (id, path, if_version) = (self.id, self.path(&key)?, write.if_version);
+        self.write(&key, 0, move |tx, _| {
+            if live_at(tx, id, &path, now, if_version)?.is_none() {
+                return Ok(false);
+            }
+            cells::set_expires(tx, id, &path, Some(expires))?;
+            Ok(true)
+        })
+    }
+
+    /// Removes every key of this branch and of the branches under it, at once
+    /// for every reader, however many there are.
+    pub fn clear(&self) -> Result<()> {
+        let branch = self.branch()?;
+        let (id, prefix, everything) = (self.id, branch.prefix().to_vec(), branch.everything());
+        let revision = self.kv.revision();
+        let shown = self.shown_branch();
+        self.kv
+            .file()
+            .write(0, move |tx| {
+                if cells::delete_under(tx, id, (&everything.0, &everything.1), CLEAR_BOUND)? {
+                    return Ok(());
+                }
+                let cleared = next_version(&revision, tx)?;
+                cells::mark_cleared(tx, id, &prefix, cleared)
+            })
+            .map_err(|error| error.within(shown))
+    }
+
+    /// Writes a row's value under `key`, as `put` says, and stamps it.
+    pub(crate) fn put_raw(&self, key: &str, raw: Raw, write: Write, put: Put) -> Result<Stamp> {
+        if raw.len() > MAX_VALUE {
+            let too_large = Error::limit(format!("a value of {} bytes, over {MAX_VALUE}", raw.len()));
+            return Err(too_large.within(self.shown_key(key)));
+        }
         let now = self.kv.now();
         let (id, path, given, default) = (self.id, self.path(key)?, write.expires(now), self.default_expires(now));
         let if_version = write.if_version;
         self.write(key, raw.len(), move |tx, revision| {
             let current = cells::current(tx, id, &path, now)?;
             let live = current.filter(|current| current.live);
-            if matches!(put, Put::OnlyNew) && live.is_some() {
-                return Ok(false);
+            if let (Put::OnlyNew, Some(live)) = (put, live) {
+                return Ok(Stamp { written: false, version: Version(live.version), expires: live.expires });
             }
             check_version(live.map(|live| live.version), if_version)?;
             let expires = given.or(live.map_or(default, |live| live.expires));
             let version = next_version(revision, tx)?;
             cells::put(tx, id, &path, (version, expires), &raw, current.and_then(|current| current.spill))?;
-            Ok(true)
+            Ok(Stamp { written: true, version: Version(version), expires })
         })
     }
 
-    fn remove(&self, key: &str, write: Write) -> Result<Option<Cell>> {
+    /// Removes a live key, at the version asked when one is, and hands back its
+    /// cell.
+    pub(crate) fn remove(&self, key: &str, write: Write) -> Result<Option<Cell>> {
         let now = self.kv.now();
         let (id, path, if_version) = (self.id, self.path(key)?, write.if_version);
         self.write(key, 0, move |tx, _| {
@@ -364,7 +416,7 @@ impl<V: Value> Bucket<V> {
 
     /// Reads a live cell, renewing an idle bucket's key once a thirtieth of its
     /// term has passed since it last was.
-    fn read_cell(&self, key: &str) -> Result<Option<Cell>> {
+    pub(crate) fn read_cell(&self, key: &str) -> Result<Option<Cell>> {
         let (id, path, now) = (self.id, self.path(key)?, self.kv.now());
         let found = self
             .kv
@@ -399,34 +451,6 @@ impl<V: Value> Bucket<V> {
     ) -> Result<T> {
         let revision = self.kv.revision();
         self.kv.file().write(bytes, move |tx| work(tx, &revision)).map_err(|error| error.within(self.shown_key(key)))
-    }
-
-    fn entry_of(&self, key: &str, cell: Cell) -> Result<Entry<V>> {
-        Ok(Entry {
-            key: key.to_owned(),
-            value: self.decode(key, &cell.raw)?,
-            version: Version(cell.version),
-            expires_at: cell.expires.map(time_of),
-        })
-    }
-
-    fn encode(&self, key: &str, value: &V) -> Result<Raw> {
-        let raw = value::encode(value).map_err(|mismatch| {
-            Error::invalid(format!("a value it cannot keep: {mismatch}")).within(self.shown_key(key))
-        })?;
-        if raw.len() > MAX_VALUE {
-            return Err(
-                Error::limit(format!("a value of {} bytes, over {MAX_VALUE}", raw.len())).within(self.shown_key(key))
-            );
-        }
-        Ok(raw)
-    }
-
-    fn decode(&self, key: &str, raw: &Raw) -> Result<V> {
-        value::decode(raw).map_err(|mismatch| {
-            Error::corrupt(format!("its value does not read as the bucket's type: {mismatch}"))
-                .within(self.shown_key(key))
-        })
     }
 
     fn path(&self, key: &str) -> Result<Vec<u8>> {

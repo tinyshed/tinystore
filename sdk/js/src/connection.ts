@@ -64,6 +64,13 @@ export class Connection {
 		return connection
 	}
 
+	/** Shakes hands over a pipe to the core in this process. */
+	static async overPipe(session: Session, transport: Transport): Promise<Connection> {
+		const connection = new Connection(session, transport)
+		await connection.#handshake()
+		return connection
+	}
+
 	/**
 	 * Shakes hands over a private child's stdin and stdout. Closing waits for
 	 * the child's exit, since until then it holds the directory: its LOCK, and
@@ -370,6 +377,23 @@ export function privateChild(
 			child.kill()
 			throw new ClosedError(`the private server did not start: ${(err as Error).message}`)
 		}
+	}
+}
+
+/**
+ * The core in this process, through its C ABI: no server and no socket, the
+ * frames handed to the library and back. Bun alone, through bun:ffi.
+ */
+export function embedded(runtime: Runtime, dir: string, library: () => string): Dialer {
+	return async () => {
+		const { openPipe } = await import('./runtime/pipe.ts')
+		let session: Session | undefined
+		const transport = openPipe(library(), resolve(dir), {
+			data: bytes => session?.receive(bytes),
+			end: err => session?.end(err),
+		})
+		session = new Session(bytes => transport.write(bytes), { client: runtime.client })
+		return await Connection.overPipe(session, transport)
 	}
 }
 

@@ -10,9 +10,11 @@ mod error;
 #[cfg(feature = "kv")]
 pub mod kv;
 mod memory;
+pub mod pipe;
 mod schedule;
 pub(crate) mod sqlite;
 mod store;
+pub(crate) mod wire;
 
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
 pub use error::{Error, ErrorKind, Result};

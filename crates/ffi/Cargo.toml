@@ -1,0 +1,19 @@
+[package]
+name = "tinystore-ffi"
+description = "TinyStore's C ABI: five functions that carry the wire's frames to a store in this process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+# tinystore_ffi.dll, libtinystore_ffi.so and .dylib for bun:ffi, the .a for cgo
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tinystore = { path = "../tinystore" }
+
+[lints]
+workspace = true
