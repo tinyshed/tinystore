@@ -331,3 +331,35 @@ fn sqlite_counts_the_memory_it_holds() {
     insert(&file, "a").unwrap();
     assert!(crate::sqlite::memory_used() > 0);
 }
+
+#[test]
+fn writes_submitted_while_a_commit_runs_return_at_once_and_share_the_next() {
+    let (_dir, file) = open(Config::default());
+    let before = file.commits();
+    let (answers, answered) = mpsc::channel();
+    let submit = |file: &File, n: usize, answers: mpsc::Sender<Result<()>>| {
+        let value = format!("v{n}");
+        let write = move |tx: &Tx<'_>| {
+            tx.execute("insert into t (v) values (?1)", [&value]).map_err(|error| sql_error("insert", error))
+        };
+        file.submit(4, write, move |answer| answers.send(answer.map(|_| ())).unwrap());
+    };
+    let held = lock(&file.writer);
+    let leader = {
+        let (file, answers) = (Arc::clone(&file), answers.clone());
+        // with no commit running, the first submission leads, and waits for the writer
+        thread::spawn(move || submit(&file, 0, answers))
+    };
+    wait_until(|| file.group.waiting() == 1);
+    for n in 1..500 {
+        submit(&file, n, answers.clone());
+    }
+    assert_eq!(file.group.waiting(), 500, "a submission returns at once while a leader runs");
+    drop(held);
+    leader.join().unwrap();
+    for _ in 0..500 {
+        answered.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    }
+    assert_eq!(count(&file), 500);
+    assert!(file.commits() - before <= 2, "{} commits for 500 writes", file.commits() - before);
+}

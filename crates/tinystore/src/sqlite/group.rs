@@ -12,6 +12,9 @@ use crate::{Error, ErrorKind, Result};
 
 pub(crate) type Work = Box<dyn FnOnce(&Tx<'_>) -> Result<()> + Send>;
 
+/// What a submitted write calls with its answer, on the thread that commits it.
+pub(crate) type Done = Box<dyn FnOnce(Result<()>) + Send>;
+
 /// A leader gathers for at most a quarter of the last commit, and never more
 /// than `GATHER_MOST`.
 ///
@@ -36,6 +39,11 @@ const ROLLBACK_TO: &str = "rollback to grouped";
 /// caller still waiting. A commit's sync is shared by the writes that arrived
 /// while the last one ran, and no thread is started: callers take turns.
 ///
+/// A submitted write has no caller waiting: it is answered through its `done`,
+/// on the leader's thread, and a leader that finds one at the front of the
+/// queue leads on, since nobody else would. So a host with one thread and many
+/// writes in flight, an event loop, fills a commit without a thread a write.
+///
 /// research's design/group-commit-contract.md is the contract.
 pub(crate) struct Group {
     queue: Mutex<Queue>,
@@ -58,6 +66,8 @@ struct Queue {
 struct Write {
     bytes: usize,
     work: Mutex<Option<Work>>,
+    /// A submitted write's answer goes here rather than to a waiting caller.
+    done: Mutex<Option<Done>>,
     turn: Mutex<Turn>,
     changed: Condvar,
 }
@@ -98,6 +108,18 @@ impl Group {
         write.take_answer()
     }
 
+    /// Queues `work` and returns at once, `done` called with its answer once
+    /// its commit ends. When no commit runs, this caller's thread commits the
+    /// queue first, as long as submitted writes keep arriving at its front.
+    pub(crate) fn submit(&self, writer: &Mutex<Connection>, bytes: usize, work: Work, done: Done) {
+        let write = Arc::new(Write::submitted(bytes, work, done));
+        match self.enqueue(&write) {
+            Ok(true) => self.lead(writer),
+            Ok(false) => {}
+            Err(error) => write.answer(Err(error)),
+        }
+    }
+
     /// Refuses new writes and answers those still waiting; a commit under way
     /// finishes and answers its own.
     pub(crate) fn close(&self) {
@@ -127,19 +149,26 @@ impl Group {
         Ok(true)
     }
 
+    /// Commits batches until the write at the front has a caller of its own to
+    /// lead, or the queue is empty.
     fn lead(&self, writer: &Mutex<Connection>) {
-        let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
-        let batch = self.gather();
-        let started = Instant::now();
-        let answers = commit(&connection, &batch);
-        let held = started.elapsed();
-        drop(connection);
-        if !batch.is_empty() {
-            self.commits.fetch_add(1, Ordering::Relaxed);
-        }
-        self.hand_off(batch.len(), held);
-        for (write, answer) in batch.iter().zip(answers) {
-            write.answer(answer);
+        loop {
+            let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
+            let batch = self.gather();
+            let started = Instant::now();
+            let answers = commit(&connection, &batch);
+            let held = started.elapsed();
+            drop(connection);
+            if !batch.is_empty() {
+                self.commits.fetch_add(1, Ordering::Relaxed);
+            }
+            let leads_on = self.hand_off(batch.len(), held);
+            for (write, answer) in batch.iter().zip(answers) {
+                write.answer(answer);
+            }
+            if !leads_on {
+                return;
+            }
         }
     }
 
@@ -173,13 +202,22 @@ impl Group {
         batch
     }
 
-    fn hand_off(&self, answered: usize, held: Duration) {
+    /// Passes the lead to the caller of the write at the front, and says
+    /// whether this thread leads on because that write was submitted.
+    fn hand_off(&self, answered: usize, held: Duration) -> bool {
         let mut queue = self.lock();
         queue.last_answered = answered;
         queue.last_held = held;
         match queue.waiting.front() {
-            Some(next) => next.promote(),
-            None => queue.leading = false,
+            Some(next) if next.is_submitted() => true,
+            Some(next) => {
+                next.promote();
+                false
+            }
+            None => {
+                queue.leading = false;
+                false
+            }
         }
     }
 
@@ -190,7 +228,16 @@ impl Group {
 
 impl Write {
     fn new(bytes: usize, work: Work) -> Self {
-        Self { bytes, work: Mutex::new(Some(work)), turn: Mutex::new(Turn::Waiting), changed: Condvar::new() }
+        let (done, turn) = (Mutex::new(None), Mutex::new(Turn::Waiting));
+        Self { bytes, work: Mutex::new(Some(work)), done, turn, changed: Condvar::new() }
+    }
+
+    fn submitted(bytes: usize, work: Work, done: Done) -> Self {
+        Self { done: Mutex::new(Some(done)), ..Self::new(bytes, work) }
+    }
+
+    fn is_submitted(&self) -> bool {
+        self.done.lock().unwrap_or_else(PoisonError::into_inner).is_some()
     }
 
     /// Blocks until the write leads or is answered; true when it leads.
@@ -214,6 +261,10 @@ impl Write {
     }
 
     fn answer(&self, answer: Result<()>) {
+        let done = self.done.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(done) = done {
+            return done(answer);
+        }
         *self.lock_turn() = Turn::Answered(Some(answer));
         self.changed.notify_one();
     }

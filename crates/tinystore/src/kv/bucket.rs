@@ -1,6 +1,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::cells::{self, Cell, MAX_VALUE};
@@ -378,14 +379,39 @@ impl<V> Bucket<V> {
 
     /// Writes a row's value under `key`, as `put` says, and stamps it.
     pub(crate) fn put_raw(&self, key: &str, raw: Raw, write: Write, put: Put) -> Result<Stamp> {
+        let (bytes, work) = self.put_work(key, raw, write, put)?;
+        self.write(key, bytes, work)
+    }
+
+    /// `put_raw` without waiting: `done` gets the stamp once the commit ends.
+    pub(crate) fn put_raw_then(
+        &self,
+        key: &str,
+        (raw, write, put): (Raw, Write, Put),
+        done: impl FnOnce(Result<Stamp>) + Send + 'static,
+    ) {
+        match self.put_work(key, raw, write, put) {
+            Ok((bytes, work)) => self.submit(key, bytes, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    /// The write a put commits, and the bytes it adds to its commit.
+    fn put_work(
+        &self,
+        key: &str,
+        raw: Raw,
+        write: Write,
+        put: Put,
+    ) -> Result<(usize, impl FnOnce(&crate::sqlite::Tx<'_>, &AtomicI64) -> Result<Stamp> + Send + 'static)> {
         if raw.len() > MAX_VALUE {
             let too_large = Error::limit(format!("a value of {} bytes, over {MAX_VALUE}", raw.len()));
             return Err(too_large.within(self.shown_key(key)));
         }
         let now = self.kv.now();
         let (id, path, given, default) = (self.id, self.path(key)?, write.expires(now), self.default_expires(now));
-        let if_version = write.if_version;
-        self.write(key, raw.len(), move |tx, revision| {
+        let (if_version, bytes) = (write.if_version, raw.len());
+        let work = move |tx: &crate::sqlite::Tx<'_>, revision: &AtomicI64| {
             let current = cells::current(tx, id, &path, now)?;
             let live = current.filter(|current| current.live);
             if let (Put::OnlyNew, Some(live)) = (put, live) {
@@ -396,15 +422,38 @@ impl<V> Bucket<V> {
             let version = next_version(revision, tx)?;
             cells::put(tx, id, &path, (version, expires), &raw, current.and_then(|current| current.spill))?;
             Ok(Stamp { written: true, version: Version(version), expires })
-        })
+        };
+        Ok((bytes, work))
     }
 
     /// Removes a live key, at the version asked when one is, and hands back its
     /// cell.
     pub(crate) fn remove(&self, key: &str, write: Write) -> Result<Option<Cell>> {
+        let work = self.remove_work(key, write)?;
+        self.write(key, 0, work)
+    }
+
+    /// `remove` without waiting: `done` gets the cell once the commit ends.
+    pub(crate) fn remove_then(
+        &self,
+        key: &str,
+        write: Write,
+        done: impl FnOnce(Result<Option<Cell>>) + Send + 'static,
+    ) {
+        match self.remove_work(key, write) {
+            Ok(work) => self.submit(key, 0, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    fn remove_work(
+        &self,
+        key: &str,
+        write: Write,
+    ) -> Result<impl FnOnce(&crate::sqlite::Tx<'_>, &AtomicI64) -> Result<Option<Cell>> + Send + 'static> {
         let now = self.kv.now();
         let (id, path, if_version) = (self.id, self.path(key)?, write.if_version);
-        self.write(key, 0, move |tx, _| {
+        Ok(move |tx: &crate::sqlite::Tx<'_>, _: &AtomicI64| {
             let Some(found) = live_at(tx, id, &path, now, if_version)? else {
                 return Ok(None);
             };
@@ -442,12 +491,27 @@ impl<V> Bucket<V> {
         Ok(cell)
     }
 
+    /// Queues a write on kv.db's writer and returns; `done` gets its answer,
+    /// naming the key in its errors.
+    fn submit<T: Send + 'static>(
+        &self,
+        key: &str,
+        bytes: usize,
+        work: impl FnOnce(&crate::sqlite::Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static,
+        done: impl FnOnce(Result<T>) + Send + 'static,
+    ) {
+        let revision = self.kv.revision();
+        let shown = self.shown_key(key);
+        let answered = move |answer: Result<T>| done(answer.map_err(|error| error.within(shown)));
+        self.kv.file().submit(bytes, move |tx| work(tx, &revision), answered);
+    }
+
     /// Runs a write on kv.db's writer, naming the key in its errors.
     fn write<T: Send + 'static>(
         &self,
         key: &str,
         bytes: usize,
-        work: impl FnOnce(&crate::sqlite::Tx<'_>, &std::sync::atomic::AtomicI64) -> Result<T> + Send + 'static,
+        work: impl FnOnce(&crate::sqlite::Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let revision = self.kv.revision();
         self.kv.file().write(bytes, move |tx| work(tx, &revision)).map_err(|error| error.within(self.shown_key(key)))

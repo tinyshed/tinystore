@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use rusqlite::Connection;
 
 use super::connection::{self, Role, execute, sql_error};
-use super::group::{BEGIN, COMMIT, Group, ROLLBACK, Work};
+use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Config, Tx};
@@ -67,6 +67,37 @@ impl File {
         lock(&slot)
             .take()
             .ok_or_else(|| Error::internal(format!("{}: a write committed without its value", self.describe())))
+    }
+
+    /// `write` without waiting: it queues the write and returns, and `done` is
+    /// called with the value, or the error, on the thread that commits it. For
+    /// hosts whose one thread holds many writes in flight; `done` must not
+    /// block, since the commits after it wait for it.
+    pub(crate) fn submit<T, F, D>(&self, bytes: usize, write: F, done: D)
+    where
+        F: FnOnce(&Tx<'_>) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+        D: FnOnce(Result<T>) + Send + 'static,
+    {
+        if let Err(error) = self.refuse_when_closed("a write") {
+            return done(Err(error));
+        }
+        let slot = Arc::new(Mutex::new(None));
+        let filled = Arc::clone(&slot);
+        let work: Work = Box::new(move |tx| {
+            let value = write(tx)?;
+            *lock(&filled) = Some(value);
+            Ok(())
+        });
+        let describe = self.describe();
+        let answered: Done = Box::new(move |answer| {
+            let value = answer.map_err(|error| error.within(&describe)).and_then(|()| {
+                let missing = || Error::internal(format!("{describe}: a write committed without its value"));
+                lock(&slot).take().ok_or_else(missing)
+            });
+            done(value);
+        });
+        self.group.submit(&self.writer, bytes, work, answered);
     }
 
     /// Runs `work` in a transaction that holds the writer alone, for reads that

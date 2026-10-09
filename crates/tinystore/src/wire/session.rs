@@ -12,7 +12,9 @@ use crate::{Result, Store, unix_millis};
 
 const PROTOCOL: u64 = 1;
 const MAX_BODY: u64 = 4 << 20;
-const IN_FLIGHT: u64 = 64;
+/// Streams a client may have open at once: as many writes as one grouped
+/// commit carries, so an event loop with many writes in flight fills commits.
+const IN_FLIGHT: u64 = 1024;
 /// Bytes of REQUEST bodies a client may send before credit comes back.
 const CONNECTION_CREDIT: u64 = 8 << 20;
 const STREAM_CREDIT: u64 = 2 << 20;
@@ -94,7 +96,15 @@ impl Session {
         }
     }
 
-    /// The bytes the client is owed, waiting up to `wait` for the first.
+    /// The bytes ready now, leaving a wake already called to run: the host's
+    /// read after a write, which a wake in flight answers anyway, so that a
+    /// host writing often is not woken once a commit.
+    pub(crate) fn take_ready(&self) -> Vec<u8> {
+        std::mem::take(&mut self.shared.lock_output().bytes)
+    }
+
+    /// The bytes the client is owed, waiting up to `wait` for the first; the
+    /// next bytes ready wake the host again.
     pub(crate) fn take(&self, wait: Duration) -> Vec<u8> {
         let deadline = Instant::now() + wait;
         let mut output = self.shared.lock_output();
@@ -174,21 +184,42 @@ impl Shared {
             .encode()
     }
 
-    /// Runs a call on the store's workers and answers it on its stream.
+    /// Answers a call as its method's route says: a point read before this
+    /// returns, a write once its group commits, anything else on a worker.
     fn request(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
-        let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || {
-            let answered =
-                catch_unwind(AssertUnwindSafe(|| shared.call(frame.method, &frame.body))).unwrap_or_else(|_| {
-                    Err(Failure { code: "internal", message: "a call panicked".to_owned(), what: Vec::new() })
-                });
-            let response = match answered {
-                Ok(body) => Frame::new(Kind::Response, frame.stream, body).ending(),
-                Err(failure) => Frame::new(Kind::Response, frame.stream, failure.encode()).failing(),
-            };
-            shared.send(&[response]);
-        }));
+        let (method, stream) = (frame.method, frame.stream);
+        match route(method) {
+            kv::Route::Inline => self.answer(stream, guarded(|| self.call(method, &frame.body))),
+            kv::Route::Submit => {
+                let shared = Arc::clone(self);
+                self.workers.run(Box::new(move || {
+                    let answering = Arc::clone(&shared);
+                    let done = move |answered| answering.answer(stream, answered);
+                    let queued = guarded(|| {
+                        kv::submit(&shared.kv, method, &frame.body, done);
+                        Ok(Vec::new())
+                    });
+                    if let Err(failure) = queued {
+                        shared.answer(stream, Err(failure));
+                    }
+                }));
+            }
+            kv::Route::Worker => {
+                let shared = Arc::clone(self);
+                self.workers.run(Box::new(move || {
+                    shared.answer(stream, guarded(|| shared.call(method, &frame.body)));
+                }));
+            }
+        }
+    }
+
+    fn answer(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
+        let response = match answered {
+            Ok(body) => Frame::new(Kind::Response, stream, body).ending(),
+            Err(failure) => Frame::new(Kind::Response, stream, failure.encode()).failing(),
+        };
+        self.send(&[response]);
     }
 
     fn call(&self, method: u16, body: &[u8]) -> std::result::Result<Vec<u8>, Failure> {
@@ -243,6 +274,20 @@ impl Shared {
     fn lock_output(&self) -> MutexGuard<'_, Output> {
         self.output.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// How a method runs: kv's say theirs; every other engine's runs on a worker.
+fn route(method: u16) -> kv::Route {
+    match method >> 8 {
+        0x01 => kv::route(method),
+        _ => kv::Route::Worker,
+    }
+}
+
+/// A call that panics answers `internal` rather than leaving its stream open.
+fn guarded(call: impl FnOnce() -> std::result::Result<Vec<u8>, Failure>) -> std::result::Result<Vec<u8>, Failure> {
+    catch_unwind(AssertUnwindSafe(call))
+        .unwrap_or_else(|_| Err(Failure { code: "internal", message: "a call panicked".to_owned(), what: Vec::new() }))
 }
 
 /// An integer as the profile writes it: unsigned when it is not negative.

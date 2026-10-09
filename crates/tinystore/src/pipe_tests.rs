@@ -112,3 +112,38 @@ fn pipes_on_one_directory_share_its_store_until_the_last_closes() {
     drop(second);
     Store::open(dir.path(), Options::default()).unwrap().close().unwrap();
 }
+
+/// Two thousand sets in flight at once through a pipe, with no host language:
+/// where the time goes when the Bun numbers disappoint. Run by hand:
+/// cargo test --release -p tinystore pipe::tests::sets_in_flight -- --ignored --nocapture
+#[test]
+#[ignore = "a timing, not a check"]
+fn sets_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let (_, opened) = client.call(0x0101, vec![(1, Value::Str("smoke".to_owned()))]);
+    let handle = field(&opened, 1).unwrap().clone();
+    for pass in 0..5 {
+        let started = std::time::Instant::now();
+        let mut bytes = Vec::new();
+        for n in 0..2000u32 {
+            let key = Value::Str(format!("p{pass}-{n}"));
+            let body = map(vec![(1, handle.clone()), (3, key), (4, Value::Bin(vec![b'x'; 100]))]);
+            Frame { method: 0x0104, ..Frame::new(Kind::Request, n + 1, body) }.ending().encode_into(&mut bytes);
+        }
+        client.reader.push(&client.pipe.send(&bytes));
+        let mut answered = 0;
+        while answered < 2000 {
+            match client.reader.next(1 << 22).unwrap() {
+                Some(frame) if frame.kind == Kind::Response => answered += 1,
+                Some(_) => {}
+                None => {
+                    let ready = client.pipe.recv(Duration::from_secs(10));
+                    client.reader.push(&ready);
+                }
+            }
+        }
+        let seconds = started.elapsed().as_secs_f64();
+        println!("pass {pass}: {:.0} sets/s", 2000.0 / seconds);
+    }
+}

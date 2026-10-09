@@ -44,7 +44,7 @@ impl Pipe {
     /// Hands frames to the store and returns the frames ready at once.
     pub fn send(&self, frames: &[u8]) -> Vec<u8> {
         self.session.receive(frames);
-        self.session.take(Duration::ZERO)
+        self.session.take_ready()
     }
 
     /// The frames ready since, waiting up to `wait` for the first.

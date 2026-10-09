@@ -24,7 +24,7 @@ pub use engine::Maintenance;
 pub use path::Key;
 pub use value::{Bytes, Value};
 
-pub(crate) use bucket::Put;
+pub(crate) use bucket::{Put, Stamp};
 pub(crate) use cells::Cell;
 pub(crate) use value::Raw;
 

@@ -11,7 +11,7 @@ use super::message::{Answer, Failure, Fields};
 use super::msgpack::Value;
 use super::session::int;
 use crate::Store;
-use crate::kv::{Bucket, Cell, Put, Raw, Version, Write};
+use crate::kv::{Bucket, Cell, Put, Raw, Stamp, Version, Write};
 
 const OPEN: u16 = 0x0101;
 const GET: u16 = 0x0102;
@@ -36,6 +36,50 @@ pub(crate) struct Handles {
 }
 
 type Answered = Result<Vec<u8>, Failure>;
+
+/// How a session runs a method: a point read at once on the caller's thread,
+/// a write queued for its group commit with no thread waiting on it, anything
+/// else on a worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Inline,
+    Submit,
+    Worker,
+}
+
+pub(crate) fn route(method: u16) -> Route {
+    match method {
+        GET | HAS => Route::Inline,
+        SET | DELETE | TAKE => Route::Submit,
+        _ => Route::Worker,
+    }
+}
+
+/// Queues a write and returns; `done` gets its answer on the thread that
+/// commits it.
+pub(crate) fn submit(handles: &Handles, method: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let prepared = || -> Result<_, Failure> {
+        let fields = Fields::decode(body, CALL_FIELDS)?;
+        let bucket = handles.bucket(&fields)?;
+        let (key, write) = (key(&fields)?, write(&fields)?);
+        Ok((fields, bucket, key, write))
+    };
+    let (fields, bucket, key, write) = match prepared() {
+        Ok(prepared) => prepared,
+        Err(failure) => return done(Err(failure)),
+    };
+    match method {
+        SET => match set_args(&fields, write) {
+            Ok(args) => bucket.put_raw_then(&key, args, move |stamp| done(stamp.map(stamped).map_err(Failure::from))),
+            Err(failure) => done(Err(failure)),
+        },
+        DELETE => bucket.remove_then(&key, write, move |cell| {
+            done(cell.map(|_| Answer::default().encode()).map_err(Failure::from));
+        }),
+        TAKE => bucket.remove_then(&key, write, move |cell| done(cell.map(taken).map_err(Failure::from))),
+        other => done(Err(Failure::unimplemented(format!("method {other:#06x}")))),
+    }
+}
 
 pub(crate) fn call(store: &Store, handles: &Handles, method: u16, body: &[u8]) -> Answered {
     if method == OPEN {
@@ -95,14 +139,28 @@ fn read(bucket: &Bucket<()>, fields: &Fields, only_found: bool) -> Answered {
 
 fn set(bucket: &Bucket<()>, fields: &Fields) -> Answered {
     let key = key(fields)?;
+    let (raw, write, put) = set_args(fields, write(fields)?)?;
+    Ok(stamped(bucket.put_raw(&key, raw, write, put)?))
+}
+
+/// What a set writes, and whether only a key that is not there.
+fn set_args(fields: &Fields, write: Write) -> Result<(Raw, Write, Put), Failure> {
     let raw = raw_of(fields.value(4))?;
     let put = if fields.bool(8, "if absent")? { Put::OnlyNew } else { Put::Always };
-    let stamp = bucket.put_raw(&key, raw, write(fields)?, put)?;
+    Ok((raw, write, put))
+}
+
+fn stamped(stamp: Stamp) -> Vec<u8> {
     let answer = Answer::default()
         .put(1, Value::Bool(stamp.written))
         .put(3, version_value(stamp.version))
         .put(4, stamp.expires.map_or(Value::Nil, int));
-    Ok(answer.encode())
+    answer.encode()
+}
+
+fn taken(cell: Option<Cell>) -> Vec<u8> {
+    let found = Value::Bool(cell.is_some());
+    Answer::default().put(1, found).put(2, cell.map_or(Value::Nil, |cell| value_of(cell.raw))).encode()
 }
 
 fn delete(bucket: &Bucket<()>, fields: &Fields) -> Answered {
@@ -111,11 +169,7 @@ fn delete(bucket: &Bucket<()>, fields: &Fields) -> Answered {
 }
 
 fn take(bucket: &Bucket<()>, fields: &Fields) -> Answered {
-    let cell = bucket.remove(&key(fields)?, write(fields)?)?;
-    let answer = Answer::default()
-        .put(1, Value::Bool(cell.is_some()))
-        .put(2, cell.map_or(Value::Nil, |cell| value_of(cell.raw)));
-    Ok(answer.encode())
+    Ok(taken(bucket.remove(&key(fields)?, write(fields)?)?))
 }
 
 fn touch(bucket: &Bucket<()>, fields: &Fields) -> Answered {
