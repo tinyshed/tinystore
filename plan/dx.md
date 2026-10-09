@@ -97,6 +97,7 @@ Decided words are settled; draft words wait for their engine's book.
 | `run`                              | a handler's call on a job: its attempt, its steps, its answers                    | jobs                   | `job`, which also named the record                  | draft   |
 | `runDue`                           | runs what is due, then returns                                                    | jobs                   | `untilIdle: true`, `drain`, which deletes in BullMQ | draft   |
 | `tx`, `with`                       | a transaction that reads, then writes; `tx.with(handle)` takes a handle in        | every engine           | `batch()` in Bun and Python, `withTx`               | draft   |
+| `batch`                            | statements known before they run, written as one in a shared commit               | sql                    | `db.Batch(func)` in Go, `exec([…])` in a draft      | draft   |
 | `list`, `all`                      | an array in memory; an iterator over pages                                        | every engine           | `All` meant both                                    | draft   |
 | `db.bucket`, `db.queue`            | kv and jobs opened from an SQL database live in its file and commit with its rows | kv, jobs               | `In`, `in`, `in_`, `database: db`                   | decided |
 | `openBeside`                       | opens a directory another process holds, SQL only                                 | root                   | `Guest: true`                                       | draft   |

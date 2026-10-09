@@ -102,6 +102,15 @@ reviewers or the survey questioned: `dedupe` rather than
 `timeZone` where most libraries assume UTC, since a required zone can be
 relaxed later without breaking a caller and a default cannot be tightened.
 
+**17. The sqldb book is accepted** ([api/sqldb.md](api/sqldb.md)), after a
+newcomer check and two reviews. SQL stays SQL, and a query builder in every
+SDK writes the SQL a person would, without its own wire calls; `batch` is a
+list of statements in a shared commit and `tx` a function that holds the
+writer five seconds at most and runs once; `all`, `one` and `scalar` take a
+write with `returning`, routed by what SQLite says of the statement; `include`
+waits for a prototype. Whether kv's `store.tx` over the wire stops running its
+function again is a decision of its own.
+
 ## Open
 
 - The order of config layers: the draft in
