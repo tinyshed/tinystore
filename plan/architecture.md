@@ -140,11 +140,11 @@ kind is one wire code and one error class in every SDK.
 
 **Durability.** A setting of each engine:
 
-| Value         | What a commit does                                                  | Survives                                        | Default for      |
-|---------------|---------------------------------------------------------------------|-------------------------------------------------|------------------|
-| `'full'`      | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
-| `'os'`        | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
-| an interval   | kept in memory, written every interval                              | everything but the last interval                | kv rate limits   |
+| Value       | What a commit does                                                  | Survives                                        | Default for      |
+|-------------|---------------------------------------------------------------------|-------------------------------------------------|------------------|
+| `'full'`    | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
+| `'os'`      | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
+| an interval | kept in memory, written every interval                              | everything but the last interval                | kv rate limits   |
 
 ## Config
 

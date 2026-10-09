@@ -1,0 +1,864 @@
+{
+  "about": "Every message of protocol 2, written by crates/protocol from protocol/*.wire: its bytes, and its fields by their names in the schema, each typed as bool, uint, int, float (its bits in hex), str, bin (hex), list, names or fields, a nested message. A field a vector leaves out is absent from its bytes, and reads back at its zero value. `just protocol` writes it again.",
+  "messages": [
+    {
+      "fields": {
+        "challenge": {
+          "bin": "01ff"
+        },
+        "client": {
+          "str": "client"
+        },
+        "maxBody": {
+          "uint": "407"
+        },
+        "protocol": {
+          "uint": "107"
+        },
+        "streamCredit": {
+          "uint": "507"
+        },
+        "token": {
+          "str": "token"
+        }
+      },
+      "hex": "86016b02a6636c69656e7403a5746f6b656e04cd019705cd01fb06c40201ff",
+      "message": "Hello",
+      "name": "Hello with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "Hello",
+      "name": "Hello with no field"
+    },
+    {
+      "fields": {
+        "capability": {
+          "str": "capability"
+        },
+        "connectionCredit": {
+          "uint": "707"
+        },
+        "engines": {
+          "list": [
+            {
+              "str": "engines"
+            }
+          ]
+        },
+        "inFlight": {
+          "uint": "607"
+        },
+        "instance": {
+          "bin": "01ff"
+        },
+        "maxBody": {
+          "uint": "507"
+        },
+        "now": {
+          "int": "1790000000000"
+        },
+        "proof": {
+          "bin": "01ff"
+        },
+        "protocol": {
+          "uint": "107"
+        },
+        "server": {
+          "str": "server"
+        },
+        "streamCredit": {
+          "uint": "807"
+        }
+      },
+      "hex": "8b016b02a673657276657203c40201ff04aa6361706162696c69747905cd01fb06cd025f07cd02c308cd03270991a7656e67696e65730acf000001a0c4506c000bc40201ff",
+      "message": "Welcome",
+      "name": "Welcome with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "Welcome",
+      "name": "Welcome with no field"
+    },
+    {
+      "fields": {
+        "code": {
+          "str": "code"
+        },
+        "message": {
+          "str": "message"
+        }
+      },
+      "hex": "8201a4636f646502a76d657373616765",
+      "message": "GoAway",
+      "name": "GoAway with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "GoAway",
+      "name": "GoAway with no field"
+    },
+    {
+      "fields": {
+        "code": {
+          "str": "code"
+        },
+        "message": {
+          "str": "message"
+        },
+        "what": {
+          "names": {
+            "a": {
+              "str": "what"
+            }
+          }
+        }
+      },
+      "hex": "8301a4636f646502a76d6573736167650381a161a477686174",
+      "message": "Failure",
+      "name": "Failure with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "Failure",
+      "name": "Failure with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "Handle",
+      "name": "Handle with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "Handle",
+      "name": "Handle with no field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "Empty",
+      "name": "Empty with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "Empty",
+      "name": "Empty with no field"
+    },
+    {
+      "fields": {
+        "idle": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        },
+        "ttl": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8301a46e616d6502cd05dc03cd05dc",
+      "message": "kv.BucketOpen",
+      "name": "kv.BucketOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.BucketOpen",
+      "name": "kv.BucketOpen with no field"
+    },
+    {
+      "fields": {
+        "expiresAt": {
+          "int": "1790000000000"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "ifVersion": {
+          "bin": "01ff"
+        },
+        "key": {
+          "str": "k"
+        },
+        "n": {
+          "int": "9007199254740993"
+        },
+        "ttl": {
+          "uint": "1500"
+        },
+        "under": {
+          "list": [
+            {
+              "str": "k"
+            }
+          ]
+        },
+        "value": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "88016b0291a16b03a16b04c40201ff05cd05dc06cf000001a0c4506c0007c40201ff08cf0020000000000001",
+      "message": "kv.Call",
+      "name": "kv.Call with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Call",
+      "name": "kv.Call with no field"
+    },
+    {
+      "fields": {
+        "expiresAt": {
+          "int": "1790000000000"
+        },
+        "found": {
+          "bool": true
+        },
+        "key": {
+          "str": "k"
+        },
+        "value": {
+          "bin": "01ff"
+        },
+        "version": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8501c302c40201ff03c40201ff04cf000001a0c4506c0005a16b",
+      "message": "kv.Entry",
+      "name": "kv.Entry with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Entry",
+      "name": "kv.Entry with no field"
+    },
+    {
+      "fields": {
+        "expiresAt": {
+          "int": "1790000000000"
+        },
+        "version": {
+          "bin": "01ff"
+        },
+        "written": {
+          "bool": true
+        }
+      },
+      "hex": "8301c302c40201ff03cf000001a0c4506c00",
+      "message": "kv.Written",
+      "name": "kv.Written with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Written",
+      "name": "kv.Written with no field"
+    },
+    {
+      "fields": {
+        "found": {
+          "bool": true
+        }
+      },
+      "hex": "8101c3",
+      "message": "kv.Found",
+      "name": "kv.Found with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Found",
+      "name": "kv.Found with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "under": {
+          "list": [
+            {
+              "str": "k"
+            }
+          ]
+        }
+      },
+      "hex": "82016b0291a16b",
+      "message": "kv.Branch",
+      "name": "kv.Branch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Branch",
+      "name": "kv.Branch with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "str": "k"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "limit": {
+          "uint": "407"
+        },
+        "under": {
+          "list": [
+            {
+              "str": "k"
+            }
+          ]
+        }
+      },
+      "hex": "84016b0291a16b03a16b04cd0197",
+      "message": "kv.List",
+      "name": "kv.List with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.List",
+      "name": "kv.List with no field"
+    },
+    {
+      "fields": {
+        "entries": {
+          "list": [
+            {
+              "fields": {
+                "expiresAt": {
+                  "int": "1790000000000"
+                },
+                "found": {
+                  "bool": true
+                },
+                "key": {
+                  "str": "k"
+                },
+                "value": {
+                  "bin": "01ff"
+                },
+                "version": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "next": {
+          "str": "k"
+        }
+      },
+      "hex": "8201918501c302c40201ff03c40201ff04cf000001a0c4506c0005a16b02a16b",
+      "message": "kv.Page",
+      "name": "kv.Page with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Page",
+      "name": "kv.Page with no field"
+    },
+    {
+      "fields": {
+        "durability": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        },
+        "ttl": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8301a46e616d6502cd05dc03cd05dc",
+      "message": "kv.CountersOpen",
+      "name": "kv.CountersOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.CountersOpen",
+      "name": "kv.CountersOpen with no field"
+    },
+    {
+      "fields": {
+        "value": {
+          "int": "9007199254740993"
+        }
+      },
+      "hex": "8101cf0020000000000001",
+      "message": "kv.Count",
+      "name": "kv.Count with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Count",
+      "name": "kv.Count with no field"
+    },
+    {
+      "fields": {
+        "burst": {
+          "uint": "407"
+        },
+        "name": {
+          "str": "name"
+        },
+        "per": {
+          "uint": "1500"
+        },
+        "rate": {
+          "uint": "207"
+        }
+      },
+      "hex": "8401a46e616d6502cccf03cd05dc04cd0197",
+      "message": "kv.RateLimitOpen",
+      "name": "kv.RateLimitOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.RateLimitOpen",
+      "name": "kv.RateLimitOpen with no field"
+    },
+    {
+      "fields": {
+        "limit": {
+          "uint": "207"
+        },
+        "name": {
+          "str": "name"
+        },
+        "per": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8301a46e616d6502cccf03cd05dc",
+      "message": "kv.Window",
+      "name": "kv.Window with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Window",
+      "name": "kv.Window with no field"
+    },
+    {
+      "fields": {
+        "name": {
+          "str": "name"
+        },
+        "windows": {
+          "list": [
+            {
+              "fields": {
+                "limit": {
+                  "uint": "207"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "per": {
+                  "uint": "1500"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8201a46e616d6502918301a46e616d6502cccf03cd05dc",
+      "message": "kv.QuotaOpen",
+      "name": "kv.QuotaOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.QuotaOpen",
+      "name": "kv.QuotaOpen with no field"
+    },
+    {
+      "fields": {
+        "left": {
+          "uint": "407"
+        },
+        "limit": {
+          "uint": "307"
+        },
+        "name": {
+          "str": "name"
+        },
+        "resetsAt": {
+          "int": "1790000000000"
+        },
+        "used": {
+          "uint": "207"
+        }
+      },
+      "hex": "8501a46e616d6502cccf03cd013304cd019705cf000001a0c4506c00",
+      "message": "kv.WindowUse",
+      "name": "kv.WindowUse with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.WindowUse",
+      "name": "kv.WindowUse with no field"
+    },
+    {
+      "fields": {
+        "left": {
+          "uint": "207"
+        },
+        "ok": {
+          "bool": true
+        },
+        "retryAt": {
+          "int": "1790000000000"
+        },
+        "windows": {
+          "list": [
+            {
+              "fields": {
+                "left": {
+                  "uint": "407"
+                },
+                "limit": {
+                  "uint": "307"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "resetsAt": {
+                  "int": "1790000000000"
+                },
+                "used": {
+                  "uint": "207"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8401c302cccf03cf000001a0c4506c0004918501a46e616d6502cccf03cd013304cd019705cf000001a0c4506c00",
+      "message": "kv.Allowance",
+      "name": "kv.Allowance with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Allowance",
+      "name": "kv.Allowance with no field"
+    },
+    {
+      "fields": {
+        "keep": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8201a46e616d6502cd05dc",
+      "message": "kv.OnceOpen",
+      "name": "kv.OnceOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.OnceOpen",
+      "name": "kv.OnceOpen with no field"
+    },
+    {
+      "fields": {
+        "found": {
+          "bool": true
+        },
+        "value": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8201c302c40201ff",
+      "message": "kv.Answer",
+      "name": "kv.Answer with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Answer",
+      "name": "kv.Answer with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "key": {
+          "str": "k"
+        },
+        "under": {
+          "list": [
+            {
+              "str": "k"
+            }
+          ]
+        },
+        "version": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "84016b0291a16b03a16b04c40201ff",
+      "message": "kv.Check",
+      "name": "kv.Check with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Check",
+      "name": "kv.Check with no field"
+    },
+    {
+      "fields": {
+        "call": {
+          "fields": {
+            "expiresAt": {
+              "int": "1790000000000"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "ifVersion": {
+              "bin": "01ff"
+            },
+            "key": {
+              "str": "k"
+            },
+            "n": {
+              "int": "9007199254740993"
+            },
+            "ttl": {
+              "uint": "1500"
+            },
+            "under": {
+              "list": [
+                {
+                  "str": "k"
+                }
+              ]
+            },
+            "value": {
+              "bin": "01ff"
+            }
+          }
+        },
+        "method": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b0288016b0291a16b03a16b04c40201ff05cd05dc06cf000001a0c4506c0007c40201ff08cf0020000000000001",
+      "message": "kv.Op",
+      "name": "kv.Op with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Op",
+      "name": "kv.Op with no field"
+    },
+    {
+      "fields": {
+        "checks": {
+          "list": [
+            {
+              "fields": {
+                "handle": {
+                  "uint": "107"
+                },
+                "key": {
+                  "str": "k"
+                },
+                "under": {
+                  "list": [
+                    {
+                      "str": "k"
+                    }
+                  ]
+                },
+                "version": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "writes": {
+          "list": [
+            {
+              "fields": {
+                "call": {
+                  "fields": {
+                    "expiresAt": {
+                      "int": "1790000000000"
+                    },
+                    "handle": {
+                      "uint": "107"
+                    },
+                    "ifVersion": {
+                      "bin": "01ff"
+                    },
+                    "key": {
+                      "str": "k"
+                    },
+                    "n": {
+                      "int": "9007199254740993"
+                    },
+                    "ttl": {
+                      "uint": "1500"
+                    },
+                    "under": {
+                      "list": [
+                        {
+                          "str": "k"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "bin": "01ff"
+                    }
+                  }
+                },
+                "method": {
+                  "uint": "107"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "82019184016b0291a16b03a16b04c40201ff029182016b0288016b0291a16b03a16b04c40201ff05cd05dc06cf000001a0c4506c0007c40201ff08cf0020000000000001",
+      "message": "kv.Tx",
+      "name": "kv.Tx with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Tx",
+      "name": "kv.Tx with no field"
+    },
+    {
+      "fields": {
+        "count": {
+          "int": "9007199254740993"
+        },
+        "expiresAt": {
+          "int": "1790000000000"
+        },
+        "found": {
+          "bool": true
+        },
+        "value": {
+          "bin": "01ff"
+        },
+        "version": {
+          "bin": "01ff"
+        },
+        "written": {
+          "bool": true
+        }
+      },
+      "hex": "8601c302c303c40201ff04c40201ff05cf000001a0c4506c0006cf0020000000000001",
+      "message": "kv.Outcome",
+      "name": "kv.Outcome with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Outcome",
+      "name": "kv.Outcome with no field"
+    },
+    {
+      "fields": {
+        "outcomes": {
+          "list": [
+            {
+              "fields": {
+                "count": {
+                  "int": "9007199254740993"
+                },
+                "expiresAt": {
+                  "int": "1790000000000"
+                },
+                "found": {
+                  "bool": true
+                },
+                "value": {
+                  "bin": "01ff"
+                },
+                "version": {
+                  "bin": "01ff"
+                },
+                "written": {
+                  "bool": true
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918601c302c303c40201ff04c40201ff05cf000001a0c4506c0006cf0020000000000001",
+      "message": "kv.TxResults",
+      "name": "kv.TxResults with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.TxResults",
+      "name": "kv.TxResults with no field"
+    }
+  ],
+  "methods": {
+    "kv.allow": 290,
+    "kv.bucket.open": 257,
+    "kv.clear": 265,
+    "kv.counters.add": 273,
+    "kv.counters.clear": 276,
+    "kv.counters.delete": 275,
+    "kv.counters.get": 274,
+    "kv.counters.open": 272,
+    "kv.create": 261,
+    "kv.delete": 263,
+    "kv.expire": 264,
+    "kv.get": 258,
+    "kv.has": 259,
+    "kv.list": 266,
+    "kv.once.delete": 307,
+    "kv.once.get": 306,
+    "kv.once.open": 304,
+    "kv.once.run": 305,
+    "kv.peek": 291,
+    "kv.quota.open": 289,
+    "kv.rateLimit.open": 288,
+    "kv.refund": 293,
+    "kv.reset": 292,
+    "kv.set": 260,
+    "kv.take": 262,
+    "kv.tx": 320
+  },
+  "protocol": 2
+}

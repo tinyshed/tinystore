@@ -1,0 +1,19 @@
+[package]
+name = "tinystore-protocol"
+description = "Writes the wire protocol's codecs for every language, and its vectors, from protocol/*.wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "protocol"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0.151"
+
+[lints]
+workspace = true

@@ -24,7 +24,7 @@ of `testdata/wire/vectors.json`:
   to a method without a table of its own.
 - **One schema is the source.** `protocol/<engine>.wire` declares every message
   and method. A generator writes the codecs of Rust, TypeScript, Python and Go
-  from it, and `testdata/wire/messages.json`, a vector of every message, so
+  from it, and `testdata/wire/protocol.json`, a vector of every message, so
   that an SDK cannot drift from the server: the hand-written declarations of
   protocol 1 drifted in each SDK.
 - **Handles a kind.** `kv.bucket.open`, `kv.counters.open`,
@@ -33,8 +33,15 @@ of `testdata/wire/vectors.json`:
 - **A transaction across the wire is a checked batch.** A host never holds the
   writer while it awaits: the SDK reads at once, keeps what each read found,
   and sends the writes in one `kv.tx` with a check of each read, a version or
-  an absence; the server applies all or none, and a failed check names the
-  read, which the SDK runs again.
+  an absence; the server applies all or none, and a failure names its place
+  in `what`, `check` or `write` and its index, so that the SDK runs the
+  function again only when a read changed.
+- **A run is handed over.** `kv.once.run` is a stream whose `REQUEST` leaves
+  the client's side open: a kept answer ends it in the `RESPONSE`; otherwise
+  the `RESPONSE` hands the run to the client, which sends what to keep, or
+  nothing when its function failed, as its last `DATA`, and the server ends
+  the stream once it is kept. A run held elsewhere answers when that one ends;
+  a `CANCEL`, or a connection that ends, lets the run go to the next caller.
 - **A decision is an answer.** A job's handler returns `snooze`, `retry` or
   `fail` as the outcome of its run, which `jobs.work` carries back.
 
@@ -62,7 +69,8 @@ message kv.Call {
 
 method 0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
 method 0x0102 kv.get(kv.Call) -> kv.Entry
-method 0x010a kv.list(kv.ListCall) -> download kv.Entry until kv.Page
+method 0x010a kv.list(kv.List) -> kv.Page
+method 0x0131 kv.once.run(kv.Call) -> handover kv.Answer
 ```
 
 | Type                                         | On the wire                               | Rust                                             | TypeScript                                                        |
@@ -79,48 +87,54 @@ method 0x010a kv.list(kv.ListCall) -> download kv.Entry until kv.Page
 | `T?`                                         | absent when not given                     | `Option<T>`                                      | `T \| undefined`                                                  |
 
 A field without `?` is absent at its zero value and reads back as it. A
-method's shape follows its arrow: one message, `download T until U` for items
-as `DATA` and a trailer, `upload` for bytes in, `both` for a run handed over.
+method's shape follows its arrow: one message, `handover T` for a run handed
+to the client and its answer back, and `download T until U` for items as
+`DATA` and a trailer, which records and blobs will use. `Failure` is the
+schema's own message, the one a stream that failed ends with, so that no
+schema leaves it out.
 
 ## The generator
 
 `crates/protocol`, a binary nothing ships, reads `protocol/*.wire` and writes:
 
-| Output                                  | For                                                                                                                                   |
-|-----------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/tinystore/src/wire/messages.rs` | the session's request and answer types, decoded whole or refused                                                                      |
-| `sdk/js/src/wire/messages.ts`           | the Bun and Node SDK                                                                                                                  |
-| `sdk/python/…/messages.py`              | the Python SDK                                                                                                                        |
-| the Go SDK's `messages.go`              | the Go SDK, in phase 4                                                                                                                |
-| `testdata/wire/messages.json`           | a vector of every message, each field at a value of its type and every optional one absent and present, which every SDK's suite reads |
-| the method tables of `docs/wire.md`     | the guide to the protocol                                                                                                             |
+| Output                                  | For                                                                                                                      |
+|-----------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `crates/tinystore/src/wire/protocol.rs` | the session's request and answer types, decoded whole or refused; built                                                  |
+| `sdk/js/src/wire/protocol.ts`           | the Bun and Node SDK; built                                                                                              |
+| `testdata/wire/protocol.json`           | a vector of every message, each field at a value of its type and then none at all, which Rust and every SDK's suite read |
+| `sdk/python/…/protocol.py`              | the Python SDK, with it                                                                                                  |
+| the Go SDK's `protocol.go`              | the Go SDK, in phase 4                                                                                                   |
+| the method tables of `docs/wire.md`     | the guide to the protocol, when it is rewritten                                                                          |
 
 Every output is committed, `just protocol` writes them again, and CI fails when
-they are not what the schema writes.
+they are not what the schema writes (`just protocol-check`). The Rust file is
+left out of rustfmt, and the TypeScript one imports every codec, used or not,
+so that a change of the schema never moves its header; biome lets its unused
+imports be.
 
 ## kv
 
-| Method                                         | Request                                                                                              | Answer                                                                 |
-|------------------------------------------------|------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
-| `kv.bucket.open`                               | name, ttl or idle                                                                                    | a handle                                                               |
-| `kv.get`                                       | handle, under, key                                                                                   | entry: found, value, version, expires at                               |
-| `kv.has`                                       | handle, under, key                                                                                   | found                                                                  |
-| `kv.set`                                       | call: value, ttl or expires at, if version                                                           | version, expires at                                                    |
-| `kv.create`                                    | call: value, ttl or expires at                                                                       | created; the version and expiry the key has                            |
-| `kv.take`                                      | call: if version                                                                                     | found, value                                                           |
-| `kv.delete`                                    | call: if version                                                                                     | found                                                                  |
-| `kv.expire`                                    | call: ttl or expires at, if version                                                                  | found                                                                  |
-| `kv.clear`                                     | handle, under                                                                                        | —                                                                      |
-| `kv.list`                                      | handle, under, after, limit                                                                          | a download: an entry a `DATA`, then where the next page starts         |
-| `kv.counters.open`                             | name, ttl, durability                                                                                | a handle                                                               |
-| `kv.counters.add`, `.get`, `.delete`, `.clear` | handle, under, key, n                                                                                | the value; found                                                       |
-| `kv.rateLimit.open`                            | name, rate, per, burst                                                                               | a handle                                                               |
-| `kv.quota.open`                                | name, windows                                                                                        | a handle                                                               |
-| `kv.allow`, `kv.peek`, `kv.reset`, `kv.refund` | handle, under, key, n                                                                                | an allowance: ok, left, retry at, windows                              |
-| `kv.once.open`                                 | name, keep                                                                                           | a handle                                                               |
-| `kv.once.run`                                  | handle, under, key                                                                                   | both ways: the kept answer, or the run handed over and its answer back |
-| `kv.once.get`, `.delete`                       | handle, under, key                                                                                   | the answer; found                                                      |
-| `kv.tx`                                        | checks: a read's version or absence; writes: set, create, take, delete, expire, clear, counters' add | each write's answer; a failed check or write names its place           |
+| Method                                         | Request                                                                                              | Answer                                                                                       |
+|------------------------------------------------|------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| `kv.bucket.open`                               | name, ttl or idle                                                                                    | a handle                                                                                     |
+| `kv.get`                                       | handle, under, key                                                                                   | entry: found, value, version, expires at                                                     |
+| `kv.has`                                       | handle, under, key                                                                                   | found                                                                                        |
+| `kv.set`                                       | call: value, ttl or expires at, if version                                                           | version, expires at                                                                          |
+| `kv.create`                                    | call: value, ttl or expires at                                                                       | created; the version and expiry the key has                                                  |
+| `kv.take`                                      | call: if version                                                                                     | found, value                                                                                 |
+| `kv.delete`                                    | call: if version                                                                                     | found                                                                                        |
+| `kv.expire`                                    | call: ttl or expires at, if version                                                                  | found                                                                                        |
+| `kv.clear`                                     | handle, under                                                                                        | —                                                                                            |
+| `kv.list`                                      | handle, under, after, limit                                                                          | a page: its entries, as many as the limit asks and the body holds, and where the next starts |
+| `kv.counters.open`                             | name, ttl, durability                                                                                | a handle                                                                                     |
+| `kv.counters.add`, `.get`, `.delete`, `.clear` | handle, under, key, n                                                                                | the value; found                                                                             |
+| `kv.rateLimit.open`                            | name, rate, per, burst                                                                               | a handle                                                                                     |
+| `kv.quota.open`                                | name, windows                                                                                        | a handle                                                                                     |
+| `kv.allow`, `kv.peek`, `kv.reset`, `kv.refund` | handle, under, key, n                                                                                | an allowance: ok, left, retry at, windows                                                    |
+| `kv.once.open`                                 | name, keep                                                                                           | a handle                                                                                     |
+| `kv.once.run`                                  | handle, under, key                                                                                   | both ways: the kept answer, or the run handed over and its answer back                       |
+| `kv.once.get`, `.delete`                       | handle, under, key                                                                                   | the answer; found                                                                            |
+| `kv.tx`                                        | checks: a read's version or absence; writes: set, create, take, delete, expire, clear, counters' add | each write's answer; a failed check or write names its place                                 |
 
 ## Open
 

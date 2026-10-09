@@ -20,7 +20,7 @@ test('a private store runs on the clock it is given, which moves only forward', 
 	await using store = await open(dir, { private: true, clock: new Date('2026-10-03T09:00:00Z') })
 	expect((await store.clock.now()).toISOString()).toBe('2026-10-03T09:00:00.000Z')
 
-	const codes = store.kv.bucket<number>('codes')
+	const codes = store.bucket<number>('codes')
 	await codes.set('K7Q2', 42, { ttl: '15m' })
 	const reminders = store.jobs.queue<{ userId: number }>('reminders')
 	await reminders.enqueue({ userId: 42 }, { after: '1h' })

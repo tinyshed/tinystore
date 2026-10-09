@@ -34,15 +34,29 @@ fmt:
 fmt-check:
     cargo fmt --all --check
 
+# write the protocol's codecs and vectors again from protocol/*.wire
+protocol:
+    cargo run --locked -p tinystore-protocol
+
+# fail when a file the schema writes is not what it writes
+protocol-check:
+    cargo run --locked -p tinystore-protocol -- --check
+
 # build the core's library that bun:ffi loads
 library:
     cargo build --release --locked -p tinystore-ffi
 
-# run the Bun SDK over the core in its own process, through bun:ffi
+# run the Bun SDK over the core in its own process, through bun:ffi, and its codecs against the vectors
 [working-directory: 'sdk/js']
 pipe: library
     bun install --frozen-lockfile
-    bun test test/pipe.test.ts
+    bun test test/pipe.test.ts test/kv.test.ts test/protocol.test.ts
+
+# lint and typecheck the Bun SDK
+[working-directory: 'sdk/js']
+sdk-check:
+    bun install --frozen-lockfile
+    bun run check
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
@@ -65,7 +79,7 @@ tables:
     bun run tables
 
 # everything CI gates on
-check: fmt-check lint test pipe lint-actions
+check: fmt-check lint test protocol-check pipe sdk-check lint-actions
 
 # remove build output
 clean:

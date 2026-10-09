@@ -253,10 +253,10 @@ describe('status and cancelling', () => {
 		stopped.abort()
 		expect(await caught(withSignal(stopped.signal, () => store.records.scan({})))).toBeDefined()
 		expect(
-			await caught(withSignal(stopped.signal, () => store.kv.bucket('signals').get('k'))),
+			await caught(withSignal(stopped.signal, () => store.bucket('signals').get('k'))),
 		).toBeDefined()
 		const fine = await withSignal(new AbortController().signal, () =>
-			store.kv.bucket('signals').get('k'),
+			store.bucket('signals').get('k'),
 		)
 		expect(fine).toBeUndefined()
 	})

@@ -3,17 +3,37 @@ import { open as openFile, rename, rm } from 'node:fs/promises'
 
 import { Blobs } from './blobs.ts'
 import { Clock } from './clock.ts'
+import { Config, type ConfigLayer, type ConfigValue } from './config.ts'
 import { embedded, Link, privateChild, remote, sidecar } from './connection.ts'
 import { ClosedError, InvalidError } from './errors.ts'
 import { Jobs } from './jobs.ts'
-import { Kv } from './kv.ts'
+import {
+	Bucket,
+	type BucketOptions,
+	bucketOpen,
+	Counters,
+	type CountersOptions,
+	countersOpen,
+	type Values,
+	valuesOf,
+} from './kv.ts'
+import {
+	Quota,
+	quotaOpen,
+	type Rate,
+	RateLimit,
+	type RateLimitOptions,
+	rateLimitOpen,
+} from './limits.ts'
 import { Metrics } from './metrics.ts'
+import { Once, type OnceOptions, onceOpen } from './once.ts'
 import { Records } from './records.ts'
 import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import { type Database, openDatabase, type SqlOptions } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
+import { runTx, type Tx } from './tx.ts'
 import { Backup, methods } from './wire/messages.ts'
 
 export interface OpenOptions {
@@ -73,7 +93,6 @@ export interface ConnectOptions {
  * a Go program closes its tinystore.Store: `await using store = await open(dir)`.
  */
 export class Store implements AsyncDisposable {
-	readonly kv: Kv
 	readonly jobs: Jobs
 	readonly blobs: Blobs
 	readonly records: Records
@@ -81,15 +100,90 @@ export class Store implements AsyncDisposable {
 	/** The test's clock of a private store opened with `clock`; on any other, its calls are InvalidError. */
 	readonly clock: Clock
 	readonly #link: Link
+	readonly #configs = new Set<Config<object>>()
 
 	constructor(link: Link) {
 		this.#link = link
 		this.clock = new Clock(link)
-		this.kv = new Kv(link)
 		this.jobs = new Jobs(link)
 		this.blobs = new Blobs(link)
 		this.records = new Records(link)
 		this.metrics = new Metrics(link)
+	}
+
+	/**
+	 * A bucket of values by key, JSON unless `type` says otherwise:
+	 *
+	 *     const sessions = store.bucket<Session>('sessions', { idle: '30d' })
+	 *     const codes = store.bucket<number>('login-codes', { ttl: '15m', type: 'int' })
+	 *     const seen = store.bucket('stripe-events', { ttl: '7d' })   // keys alone: a set
+	 */
+	bucket<T = unknown>(name: string, options?: BucketOptions): Bucket<T> {
+		const values = valuesOf(options?.type) as Values<T>
+		return new Bucket<T>(this.#link, name, bucketOpen(name, options), values, [])
+	}
+
+	/** Numbers by key that only add up: `store.counters('login-attempts', { ttl: '15m' })`. */
+	counters(name: string, options?: CountersOptions): Counters {
+		return new Counters(this.#link, name, countersOpen(name, options), [])
+	}
+
+	/** A smooth rate of requests a key: `store.rateLimit('api', { rate: '100/s', burst: 20 })`. */
+	rateLimit(name: string, options: RateLimitOptions): RateLimit {
+		return new RateLimit(this.#link, name, rateLimitOpen(name, options), [])
+	}
+
+	/**
+	 * Uses by key in named windows, each counted from a key's first use, all
+	 * of them or none: `store.quota('ai', { daily: '100/1d', weekly: '300/7d' })`.
+	 */
+	quota<W extends string>(name: string, windows: Record<W, Rate>): Quota<W> {
+		return new Quota<W>(this.#link, name, quotaOpen(name, windows), [])
+	}
+
+	/** A function run once a key, its JSON answer kept a day unless `keep` says: `store.once<Receipt>('charges')`. */
+	once<T = unknown>(name: string, options?: OnceOptions): Once<T> {
+		return new Once<T>(this.#link, name, onceOpen(name, options), [])
+	}
+
+	/**
+	 * Runs fn as one transaction over the handles it takes in with
+	 * `tx.with(handle)`, and gives back what fn returns. Reads go at once;
+	 * writes commit together when fn returns, after a check that nothing it
+	 * read has changed, and fn runs again when something did, five times at
+	 * most, so it does nothing else that must happen once.
+	 *
+	 *     await store.tx(async tx => {
+	 *       const left = (await tx.with(stock).get(sku)) ?? 0
+	 *       if (left < 1) throw new SoldOut()
+	 *       await tx.with(stock).set(sku, left - 1)
+	 *     })
+	 */
+	tx<T>(fn: (tx: Tx) => T | Promise<T>): Promise<T> {
+		return runTx(this.#link, fn)
+	}
+
+	/**
+	 * The config name, shaped and typed as its defaults, then each layer over
+	 * the one before: a file's values, `fromEnv`, and what update kept over
+	 * them all. It resolves once the store's state is read, and follows every
+	 * change from then on, whoever makes it, until the store closes.
+	 */
+	async config<D extends object>(
+		name: string,
+		defaults: D,
+		...layers: ConfigLayer<ConfigValue<D>>[]
+	): Promise<Config<ConfigValue<D>>> {
+		const config = new Config<ConfigValue<D>>(this.#link, name, defaults)
+		await config.lay(layers)
+		this.#configs.add(config as unknown as Config<object>)
+		try {
+			await config.start()
+		} catch (err) {
+			this.#configs.delete(config as unknown as Config<object>)
+			throw err
+		}
+		return config
 	}
 
 	/**
@@ -171,7 +265,9 @@ export class Store implements AsyncDisposable {
 	async close(): Promise<void> {
 		await this.metrics.stop()
 		await this.records.stop()
-		this.kv.stop()
+		for (const config of this.#configs) {
+			config.stop()
+		}
 		await this.#link.close()
 	}
 

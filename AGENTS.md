@@ -31,15 +31,15 @@ should be a fact a ten-second grep would answer.
 | runtime        | the store and its `LOCK`, the clock, the memory budget, background work, errors, the engine registry; a store closes at `close` or at its last handle's drop                  | [plan/architecture.md](plan/architecture.md) |
 | SQLite adapter | the pinned build, one writer a file with grouped commits that callers lead or that answer through a completion, `query_only` readers that close when idle, checked migrations | [plan/architecture.md](plan/architecture.md) |
 | kv             | buckets of any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears; counters, rate limits, quotas, `once`, transactions                            | [plan/api/kv.md](plan/api/kv.md)             |
-| wire           | frames, the MessagePack profile, a session apart from its transport; kv's methods of protocol 1                                                                               | [docs/wire.md](docs/wire.md)                 |
+| wire           | frames, the MessagePack profile, a session apart from its transport; protocol 2, its messages written from `protocol/*.wire`, with kv's every method                          | [plan/protocol.md](plan/protocol.md)         |
 | pipe and FFI   | a connection in memory to the store in this process, and five C functions over it                                                                                             | [plan/ffi.md](plan/ffi.md)                   |
-| Bun SDK        | opens a store embedded through bun:ffi; its other calls still reach the Go sidecar                                                                                            | [plan/ffi.md](plan/ffi.md)                   |
+| Bun SDK        | kv as its book has it, over protocol 2, in a store opened embedded through bun:ffi; its other engines still speak protocol 1 to the Go sidecar                                | [plan/api/kv.md](plan/api/kv.md)             |
 
 Not built: jobs, sql, blobs, records, metrics, backup, config and the logger
-in the core, the server, the command, the Node, Python and Go bindings, the
-protocol in the new vocabulary. [plan/phases.md](plan/phases.md) has their
-order and what closes each phase. The guides in [docs/](docs/README.md) and
-the SDKs still describe the Go release candidates, and promise nothing for
+in the core, the server, the command, the Node, Python and Go bindings,
+protocol 2's codecs for Python and Go. [plan/phases.md](plan/phases.md) has
+their order and what closes each phase. The guides in [docs/](docs/README.md)
+and the SDKs still describe the Go release candidates, and promise nothing for
 this branch.
 
 Nothing is released, so nothing is compatible: formats, schemas, the protocol
@@ -51,26 +51,29 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path                           | What it is                                                                                       |
-|--------------------------------|--------------------------------------------------------------------------------------------------|
-| `crates/tinystore/`            | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features |
-| `crates/tinystore/src/sqlite/` | the SQLite every engine stands on; no engine vocabulary                                          |
-| `crates/tinystore/src/kv/`     | kv: buckets, counters, rate limits, quotas, `once`, transactions                                 |
-| `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                           |
-| `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                         |
-| `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                 |
-| `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                         |
-| `testdata/wire/`               | the protocol's vectors, which Rust and every SDK read                                            |
-| `plan/`                        | the rewrite: decisions, evidence, architecture, the API books, phases                            |
-| `docs/`, `web/`                | the guides and the docs site, built from `main`                                                  |
-| `.agents/skills/`              | how recurring work is done; `.claude/skills/` points to it                                       |
+| Path                           | What it is                                                                                           |
+|--------------------------------|------------------------------------------------------------------------------------------------------|
+| `crates/tinystore/`            | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features     |
+| `crates/tinystore/src/sqlite/` | the SQLite every engine stands on; no engine vocabulary                                              |
+| `crates/tinystore/src/kv/`     | kv: buckets, counters, rate limits, quotas, `once`, transactions                                     |
+| `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                               |
+| `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                             |
+| `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                     |
+| `crates/protocol/`             | the generator: `protocol/*.wire` to the Rust and TypeScript codecs and the vectors; nothing ships it |
+| `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                             |
+| `protocol/`                    | the wire protocol's schema, a file an engine, which every codec and vector is written from           |
+| `testdata/wire/`               | the protocol's vectors, which Rust and every SDK read                                                |
+| `plan/`                        | the rewrite: decisions, evidence, architecture, the API books, phases                                |
+| `docs/`, `web/`                | the guides and the docs site, built from `main`                                                      |
+| `.agents/skills/`              | how recurring work is done; `.claude/skills/` points to it                                           |
 
 ## Crates
 
 One library crate, `tinystore`, so that a Rust program writes `tinystore::kv`
 and one crate is published (decision 14). A crate of its own exists only for a
 separate artifact: `crates/ffi` today, `crates/cli`, `crates/node` and
-`crates/python` later.
+`crates/python` later, and `crates/protocol`, a tool that writes code and
+ships in nothing.
 
 - **Each engine is a cargo feature**, `kv` the default today. A program links
   the engines it opens and nothing else. An engine adds its calls to `Store`
@@ -377,7 +380,9 @@ just test        # every crate's tests
 just lint        # clippy, a warning failing it
 just fmt         # rustfmt
 just check       # everything CI gates on
-just pipe        # the Bun SDK over the core, through bun:ffi
+just pipe        # the Bun SDK over the core, through bun:ffi, and its codecs against the vectors
+just sdk-check   # the Bun SDK's lint and types
+just protocol    # every codec and vector written again from protocol/*.wire
 just test-linux  # clippy and the tests in a Linux container, for a host that is not Linux
 just tables      # every markdown table aligned
 ```

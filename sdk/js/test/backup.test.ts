@@ -13,7 +13,7 @@ test('a backup is one zip of every engine, which restore takes back into an empt
 	const zip = join(mkdtempSync(join(tmpdir(), 'tinystore-zip-')), 'backup.zip')
 	{
 		await using store = await open(dir, { private: true })
-		await store.kv.bucket<string>('codes').set('K7Q2', 'kept across the backup')
+		await store.bucket<string>('codes').set('K7Q2', 'kept across the backup')
 		await store.backup(zip)
 	}
 	expect(existsSync(zip)).toBe(true)
@@ -23,7 +23,7 @@ test('a backup is one zip of every engine, which restore takes back into an empt
 	const restore = Bun.spawnSync([process.env.TINYSTORE_BIN ?? '', 'restore', zip, restored])
 	expect(restore.exitCode).toBe(0)
 	await using back = await open(restored, { private: true })
-	expect(await back.kv.bucket<string>('codes').get('K7Q2')).toBe('kept across the backup')
+	expect(await back.bucket<string>('codes').get('K7Q2')).toBe('kept across the backup')
 })
 
 test("a backup keeps a file of the application's only when files names it", async () => {

@@ -13,7 +13,6 @@ import {
 	fromEnv,
 	InvalidError,
 	open,
-	type Rate,
 	required,
 	type StandardSchemaV1,
 	type Store,
@@ -80,7 +79,7 @@ describe('a config', () => {
 		process.env.LAYERS_LIMITS_ON = 'true'
 		process.env.LAYERS_DATABASE_URL = 'postgres://secret'
 		const file = { port: 5000, limits: { burst: 20 } }
-		const cfg = await store.kv.config('layers', defaults, file, fromEnv('LAYERS', dotenv))
+		const cfg = await store.config('layers', defaults, file, fromEnv('LAYERS', dotenv))
 		expect(cfg.value).toEqual({
 			port: 3000,
 			dbUrl: 'postgres://secret',
@@ -95,7 +94,7 @@ describe('a config', () => {
 		expect(sources['limits.burst']?.from).toBe('file')
 		expect(sources.dbUrl).toEqual({ path: 'dbUrl', value: '***', from: 'env LAYERS_DATABASE_URL' })
 
-		const again = await store.kv.config('layers', defaults, file, fromEnv('LAYERS', dotenv))
+		const again = await store.config('layers', defaults, file, fromEnv('LAYERS', dotenv))
 		expect([again.value.port, again.value.limits.rps]).toEqual([4000, 50])
 		await cfg.reset('port')
 		expect(cfg.value.port).toBe(3000)
@@ -105,14 +104,14 @@ describe('a config', () => {
 
 	test('reads no variable without fromEnv, and a layer after it goes over it', async () => {
 		process.env.ORDER_PORT = '3000'
-		const none = await store.kv.config('order', { port: 8080 })
-		const last = await store.kv.config('order', { port: 8080 }, fromEnv('ORDER'), { port: 9000 })
+		const none = await store.config('order', { port: 8080 })
+		const last = await store.config('order', { port: 8080 }, fromEnv('ORDER'), { port: 9000 })
 		expect([none.value.port, last.value.port]).toEqual([8080, 9000])
 	})
 
 	test('a change through one config reaches another of its name at once', async () => {
-		const first = await store.kv.config('shared', defaults)
-		const second = await store.kv.config('shared', defaults)
+		const first = await store.config('shared', defaults)
+		const second = await store.config('shared', defaults)
 		const seen: number[] = []
 		second.watch(c => seen.push(c.port))
 		await first.update({ port: 9090 })
@@ -136,9 +135,9 @@ describe('a config', () => {
 				},
 			},
 		}
-		const cfg = await store.kv.config('checked', defaults, validate(ports))
+		const cfg = await store.config('checked', defaults, validate(ports))
 		// @ts-expect-error: a schema is no file's values; it checks through validate
-		expect(await caught(store.kv.config('checked', defaults, ports))).toBeInstanceOf(InvalidError)
+		expect(await caught(store.config('checked', defaults, ports))).toBeInstanceOf(InvalidError)
 		expect(await caught(cfg.update({ port: 70000 }))).toBeInstanceOf(InvalidError)
 		expect(await caught(cfg.update({ dbUrl: 'leaked' }))).toBeInstanceOf(InvalidError)
 		expect(cfg.value.port).toBe(8080)
@@ -154,18 +153,18 @@ describe('a config', () => {
 		delete process.env.REQUIRED_DATABASE_URL
 		process.env.REQUIRED_REGION = 'eu'
 		process.env.REQUIRED_WORKERS = '0'
-		const err = await caught(store.kv.config('required', settings, fromEnv('REQUIRED')))
+		const err = await caught(store.config('required', settings, fromEnv('REQUIRED')))
 		expect(err).toBeInstanceOf(InvalidError)
 		expect(String(err)).toContain('url is required: set REQUIRED_DATABASE_URL')
-		expect(String(await caught(store.kv.config('required', settings)))).toContain('url is required')
+		expect(String(await caught(store.config('required', settings)))).toContain('url is required')
 
 		process.env.REQUIRED_DATABASE_URL = ''
-		expect(await caught(store.kv.config('required', settings, fromEnv('REQUIRED')))).toBeInstanceOf(
+		expect(await caught(store.config('required', settings, fromEnv('REQUIRED')))).toBeInstanceOf(
 			InvalidError,
 		)
 
 		process.env.REQUIRED_DATABASE_URL = 'postgres://secret'
-		const cfg = await store.kv.config('required', settings, fromEnv('REQUIRED'))
+		const cfg = await store.config('required', settings, fromEnv('REQUIRED'))
 		const value: { url: string; region: string; workers: number } = cfg.value
 		expect(value).toEqual({ url: 'postgres://secret', region: 'eu', workers: 0 })
 		expect(await caught(cfg.update({ region: '' }))).toBeInstanceOf(InvalidError)
@@ -174,9 +173,9 @@ describe('a config', () => {
 	})
 
 	test('a kept value that no longer fits its field, or names a secret, is left out and named', async () => {
-		const older = await store.kv.config('changed', { port: 8080, token: '' })
+		const older = await store.config('changed', { port: 8080, token: '' })
 		await older.update({ port: 4000, token: 'leaked' })
-		const newer = await store.kv.config('changed', {
+		const newer = await store.config('changed', {
 			port: 'eighty',
 			token: secret('CHANGED_TOKEN', 'safe'),
 		})
@@ -188,7 +187,7 @@ describe('a config', () => {
 
 	test('a variable that is not its field kind is refused, naming it', async () => {
 		process.env.BAD_PORT = 'abc'
-		const err = await caught(store.kv.config('bad', defaults, fromEnv('BAD')))
+		const err = await caught(store.config('bad', defaults, fromEnv('BAD')))
 		expect(err).toBeInstanceOf(InvalidError)
 		expect(String(err)).toContain('BAD_PORT')
 	})
@@ -196,7 +195,7 @@ describe('a config', () => {
 	test('every variable that does not read is said at once', async () => {
 		process.env.EVERY_PORT = 'eighty'
 		process.env.EVERY_LIMITS_ON = 'yes'
-		const err = String(await caught(store.kv.config('every', defaults, fromEnv('EVERY'))))
+		const err = String(await caught(store.config('every', defaults, fromEnv('EVERY'))))
 		expect(err).toContain('EVERY_PORT: "eighty" is no number')
 		expect(err).toContain('EVERY_LIMITS_ON: "yes" is not true or false')
 		delete process.env.EVERY_PORT
@@ -206,7 +205,7 @@ describe('a config', () => {
 	test('a fixed field refuses update, ignores what was kept, and says where it came from', async () => {
 		const settings = { addr: fixed(':8080'), instance: 'dashbin' }
 		process.env.FIXED_ADDR = ':9090'
-		const cfg = await store.kv.config('fixed', settings, fromEnv('FIXED'))
+		const cfg = await store.config('fixed', settings, fromEnv('FIXED'))
 		expect(String(await caught(cfg.update({ addr: ':1' })))).toContain('addr is fixed')
 		await cfg.update({ instance: 'eu-1' })
 		expect(cfg.value).toEqual({ addr: ':9090', instance: 'eu-1' })
@@ -222,36 +221,15 @@ describe('a config', () => {
 		const file = join(dir, 'smtp')
 		writeFileSync(file, 'hunter2\n')
 		process.env.FILED_PASSWORD_FILE = file
-		const cfg = await store.kv.config('filed', { password: secret() }, fromEnv('FILED'))
+		const cfg = await store.config('filed', { password: secret() }, fromEnv('FILED'))
 		expect(cfg.value.password).toBe('hunter2')
 		expect(cfg.sources()[0]?.from).toBe('env FILED_PASSWORD_FILE')
 		process.env.FILED_PASSWORD = 'other'
 		const err = String(
-			await caught(store.kv.config('filed', { password: secret() }, fromEnv('FILED'))),
+			await caught(store.config('filed', { password: secret() }, fromEnv('FILED'))),
 		)
 		expect(err).toContain('both FILED_PASSWORD and FILED_PASSWORD_FILE are set')
 		delete process.env.FILED_PASSWORD
 		delete process.env.FILED_PASSWORD_FILE
-	})
-})
-
-describe('a limiter', () => {
-	test('lets its burst through, then says how long to wait, each key and branch apart', async () => {
-		const limit = store.kv.limiter('api', { rate: '2/m' })
-		const tenant = limit.of('tenant-7')
-		expect(await tenant.allow('user-1')).toEqual({ ok: true, left: 1, retryAfter: 0 })
-		expect(await tenant.allow('user-1')).toEqual({ ok: true, left: 0, retryAfter: 0 })
-		const third = await tenant.allow('user-1')
-		expect(third.ok).toBe(false)
-		expect(third.retryAfter).toBeGreaterThan(29_000)
-		expect((await limit.allow('user-1')).ok).toBe(true)
-		expect(await caught(tenant.allow('user-2', 3))).toBeInstanceOf(InvalidError)
-	})
-
-	test('refuses a rate it cannot read, its type before its call', () => {
-		// @ts-expect-error: 'fast' spells no rate, which the type sees as it is written
-		expect(() => store.kv.limiter('bad', { rate: 'fast' })).toThrow(InvalidError)
-		expect(() => store.kv.limiter('bad', { rate: '100/5x' as Rate })).toThrow(InvalidError)
-		expect(() => store.kv.limiter('bad', { rate: '5/10s', burst: 0 })).toThrow(InvalidError)
 	})
 })

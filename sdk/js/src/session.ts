@@ -27,9 +27,9 @@ import {
 	kindName,
 	parseHeader,
 } from './wire/frame.ts'
-import { Failure, GoAway, Hello, Welcome } from './wire/messages.ts'
+import { Failure, GoAway, Hello, Welcome } from './wire/protocol.ts'
 
-export const protocol = 1
+export const protocol = 2
 
 /** What this client lets the server send on a stream before it grants more: a body at least. */
 export const downloadWindow = 2 << 20

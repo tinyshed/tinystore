@@ -15,6 +15,7 @@
 //! ```
 
 mod allowance;
+mod batch;
 mod bucket;
 mod buffer;
 mod cells;
@@ -44,8 +45,11 @@ pub use rate_limit::{RateLimit, RateLimitBuilder};
 pub use tx::{Tx, TxBucket, TxCounters, TxHandle};
 pub use value::{Bytes, Value};
 
+pub(crate) use batch::{Batch, Outcome, Place};
 pub(crate) use bucket::{Put, Stamp, WriteOptions};
 pub(crate) use cells::Cell;
+pub(crate) use once::{Hand, Handed, hand, rows as once_rows};
+pub(crate) use path::MAX_PATH as MAX_KEY;
 pub(crate) use value::Raw;
 
 use crate::{Result, Store};

@@ -305,15 +305,16 @@ module defines.
 - a variable is read by its field's type, or refused naming it — `TestAVariableIsReadByItsFieldsType`
 - a config keeps only JSON within its bounds — `TestARawConfigKeepsOnlyJSONWithinItsBounds`
 - variables and `.env` files read alike in every language — `TestVariablesAndDotenvFilesAreTheVectors`, over `kv/testdata/config.json`, which both SDKs' suites read
-- a rate limit lets its burst through, then its rate — `a_rate_limit_lets_a_burst_through_then_its_rate`, `requests_asked_together_pass_together_or_not_at_all`, `peek_uses_nothing_and_reset_gives_a_key_its_whole_burst` in `kv::rate_limit`; over the wire, `TestALimiterOverTheWire` at `e81a050`
+- a rate limit lets its burst through, then its rate — `a_rate_limit_lets_a_burst_through_then_its_rate`, `requests_asked_together_pass_together_or_not_at_all`, `peek_uses_nothing_and_reset_gives_a_key_its_whole_burst` in `kv::rate_limit`; over the wire, `a rate limit lets its burst through, then says when to try again, each key and branch apart` in `sdk/js/test/kv.test.ts`
 - a rate limit's times outlive a reopen, a quiet key is forgotten — `a_rate_limits_times_outlive_a_restart`, `a_quiet_key_is_forgotten_once_its_time_has_come` in `kv::rate_limit`
 - requests racing for a key pass no more than the burst — `requests_racing_for_a_key_pass_no_more_than_the_burst` in `kv::rate_limit`
-- a quota counts a use in every window or in none, racing uses included — `a_use_counts_in_every_window_or_in_none`, `uses_racing_for_a_key_pass_no_more_than_its_limit` in `kv::quota`; over the wire and in the SDKs, `TestAQuotaOverTheWire` and the SDK tests at `e81a050`
+- a quota counts a use in every window or in none, racing uses included — `a_use_counts_in_every_window_or_in_none`, `uses_racing_for_a_key_pass_no_more_than_its_limit` in `kv::quota`; over the wire, `a quota counts in every window or in none, and gives uses back` in `sdk/js/test/kv.test.ts`
 - a quota's window starts at a key's first use after the last ended — `a_window_starts_at_the_first_use_after_the_last_ended` in `kv::quota`
 - a quota's `peek` counts nothing, a refund never goes below nothing, its windows outlive a reopen — `peek_counts_nothing_and_a_refund_never_goes_below_nothing`, `a_quotas_windows_outlive_a_restart_and_follow_its_new_windows` in `kv::quota`
 - a quota that cannot count is refused at open — `a_quota_that_cannot_count_does_not_open` in `kv::quota`
 - a once key's function runs once and its answer is kept — `a_run_keeps_its_answer_and_runs_a_key_once`, `an_error_keeps_nothing_and_a_panic_lets_its_key_go` in `kv::once`
-- a run of a key waits for the one running it, every client's — `a_run_waits_for_the_run_of_its_key_and_takes_its_answer`, `a_run_after_one_that_failed_runs_its_own_function` in `kv::once`; over the wire and in the SDKs, `TestAOnceRunsAKeyOnceOverTheWire` and the SDK tests at `e81a050`
+- a run of a key waits for the one running it, every client's — `a_run_waits_for_the_run_of_its_key_and_takes_its_answer`, `a_run_after_one_that_failed_runs_its_own_function` in `kv::once`; over the wire, `a_run_of_once_is_handed_to_the_client_and_its_answer_kept_for_the_next` in `pipe::tests` and `runs of one key at once run its function once, and each gets its answer` in `sdk/js/test/kv.test.ts`
+- a run handed to a client that failed, cancelled or left lets the next caller run — `a_run_that_failed_or_was_cancelled_hands_the_key_to_the_next_caller`, `a_run_cancelled_while_it_waits_is_never_handed_the_key` in `pipe::tests`, `an error keeps nothing, so the next run runs again` in `sdk/js/test/kv.test.ts`
 - a call made around a kv transaction from inside it fails rather than waits or misreads — `a_call_made_around_a_transaction_from_inside_it_fails_rather_than_waits` in `kv::tx`
 - a call that fails inside a kv transaction leaves it as it was before the call — `a_key_call_inside_a_transaction_commits_with_it`, `a_transaction_commits_what_it_wrote_or_nothing` in `kv::tx`
 - of two transactions taking the last item, one gets it — `of_two_transactions_taking_the_last_item_one_gets_it` in `kv::tx`
@@ -417,10 +418,13 @@ module defines.
 - a remote worker's steps are kept across a run's attempts, claimed or on a work stream — `TestAJobsStepsOverTheWire`, `a step runs once in a run: the attempt after a failure gets its kept answer` in `sdk/js/test/jobs.test.ts`, `test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer` in Python's
 - a frame past its agreed size is refused unread — `TestAFrameLargerThanAgreedIsRefusedUnread`, `FuzzFrames` in `server/wire`
 - a body the profile does not allow is refused — `FuzzMessages`, a refused vector for each rule
-- a request is understood whole or refused, naming the field and the server's version — `TestARequestWithAFieldTheServerDoesNotKnowIsRefused`, `TestAMessageReadsWhatItKnowsAndNamesWhatItDoesNot`
+- a request is understood whole or refused, naming the field, its message and the server's version — `a_field_the_core_does_not_know_is_unimplemented_and_named` in `pipe::tests`, `a_field_of_another_type_is_refused_by_its_name` in `wire::codec`
+- every method of the schema is answered — `every_method_of_the_schema_is_answered` in `pipe::tests`
+- a client of protocol 1 is told the server's protocol and turned away — `a_client_of_protocol_one_is_refused_with_goaway` in `pipe::tests`
 - a client newer than its server speaks the server's protocol — `TestAClientOfANewerProtocolIsWelcomedInTheServers`
 - the vectors are the bytes — `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`
-- every message is a vector, every field by its name — `TestMessageVectors`: `messages.json` is what the Go types write, each schema field in one
+- every message is a vector, every field by its name — `every_vector_of_the_schema_reads_and_writes_its_own_bytes` in `wire::codec` and `protocol 2` in `sdk/js/test/protocol.test.ts`, over `testdata/wire/protocol.json`
+- every codec and vector is what `protocol/*.wire` writes — `protocol --check`, `just protocol-check` and CI's quality job
 - the largest kv or jobs value travels in one body — `TestTheLargestValueTravelsInOneBody`
 - a work stream asked to end when idle ends — `TestAWorkStreamUntilIdleEndsOnceNoJobIsDue`
 - an extend on a work stream is refused, not an ack — `TestAnExtendOnAWorkStreamIsRefused`
@@ -435,7 +439,7 @@ module defines.
 - a remote connection needs its token — `TestARemoteConnectionNeedsItsToken`
 - a pipe's name has one owner — `TestAPipesNameHasOneOwner`, on Windows
 - a kv batch is one transaction — `TestAKVBatchRollsBackWhenOneOfItsCallsFails`
-- a read that names what it read fails once its key changed, in a batch too — `TestAReadThatNamesWhatItReadFailsOnceTheKeyChanged`
+- a kv transaction across the wire applies its writes or names the read that changed, and the SDK runs it again — `a_transaction_applies_its_writes_or_names_the_read_that_changed` in `pipe::tests`, `a key read that changed before the commit runs the function again` in `sdk/js/test/kv.test.ts`
 - Go and a wire client read each other's kv buckets — `TestAWireClientAndAGoProgramReadEachOthersBuckets`
 - a remote worker's outcomes settle its jobs — `TestARemoteWorkerSettlesByItsOutcomes`, a retry counted
 - a lost connection aborts uploads, fails attempts in hand — `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand`, `TestALostWorkerFailsTheAttemptsInItsHands`

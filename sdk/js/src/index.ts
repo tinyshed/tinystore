@@ -33,19 +33,16 @@ export type {
 	WorkOptions,
 } from './jobs.ts'
 export type {
-	Batch,
 	Bucket,
 	BucketOptions,
-	BucketTx,
-	CounterOptions,
 	Counters,
+	CountersOptions,
 	Entry,
-	Kind,
-	Scanned,
-	Tx,
+	Page as KvPage,
+	ValueType,
 	WriteOptions,
 } from './kv.ts'
-export type { Allowance, Limiter, LimiterOptions, Rate } from './limiter.ts'
+export type { Allowance, Quota, Rate, RateLimit, RateLimitOptions, WindowUse } from './limits.ts'
 export { type ConsoleOut, type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,
@@ -69,7 +66,6 @@ export {
 	type Timer,
 } from './metrics.ts'
 export type { Once, OnceOptions } from './once.ts'
-export type { Quota, QuotaUsage, WindowUsage } from './quota.ts'
 export {
 	type Cursor,
 	type Damage,
@@ -105,4 +101,5 @@ export {
 } from './store.ts'
 export type { Duration, DurationText, Time } from './time.ts'
 export { type Trace, withTrace } from './trace.ts'
+export type { Tx, TxBucket, TxCounters } from './tx.ts'
 export type { Key } from './wire/codec.ts'

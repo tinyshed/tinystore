@@ -65,9 +65,9 @@ test('the runtime is Node’s, and finds what is on PATH', () => {
 test('a store opens through its sidecar under Node, and again through the one running', async () => {
 	const dir = join(scratch, 'sidecar')
 	const first = await open(dir, { idle: '2s' })
-	await first.kv.bucket<string>('notes').set('a', 'written under Node')
+	await first.bucket<string>('notes').set('a', 'written under Node')
 	const second = await open(dir)
-	assert.equal(await second.kv.bucket<string>('notes').get('a'), 'written under Node')
+	assert.equal(await second.bucket<string>('notes').get('a'), 'written under Node')
 	await second.close()
 	await first.close()
 })
@@ -86,8 +86,8 @@ test('a private child serves its parent under Node, and frees its directory when
 test('a remote server is reached over TCP with its token under Node', async () => {
 	const { endpoint, token } = await serveRemote('tcp', [])
 	const store = await connect(endpoint, { token })
-	await store.kv.bucket<number>('counts').set('n', 42)
-	assert.equal(await store.kv.bucket<number>('counts').get('n'), 42)
+	await store.bucket<number>('counts').set('n', 42)
+	assert.equal(await store.bucket<number>('counts').get('n'), 42)
 	await store.close()
 	await assert.rejects(connect(endpoint, { token: 'not-the-token' }))
 })
@@ -107,8 +107,8 @@ test('a remote server is reached over TLS, its certificate checked, under Node',
 	const ca = readFileSync(certificate.cert, 'utf8')
 	for (const tls of [{ ca, serverName: 'localhost' }, { ca }]) {
 		const store = await connect(endpoint, { token, tls })
-		await store.kv.bucket<string>('notes').set('t', 'over TLS')
-		assert.equal(await store.kv.bucket<string>('notes').get('t'), 'over TLS')
+		await store.bucket<string>('notes').set('t', 'over TLS')
+		assert.equal(await store.bucket<string>('notes').get('t'), 'over TLS')
 		await store.close()
 	}
 	await assert.rejects(connect(endpoint, { token }), 'a certificate nobody vouches for was trusted')

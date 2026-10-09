@@ -211,67 +211,20 @@ describe('jobs in the database', () => {
 	})
 })
 
-describe('kv in the database', () => {
-	test('a batch rejects buckets and queues from another store with the same database name', async () => {
+describe('queues in the database', () => {
+	test('a batch rejects queues from another store with the same database name', async () => {
 		const otherDir = mkdtempSync(join(tmpdir(), 'tinystore-sql-other-'))
 		const other = await open(otherDir, { private: true })
 		try {
 			const otherDB = await other.sql('app')
-			expect(() => store.kv.bucket('wrong-store', 'string', { in: otherDB })).toThrow(InvalidError)
 			expect(() => store.jobs.queue<number>('wrong-store', { in: otherDB })).toThrow(InvalidError)
-			const sessions = store.kv.bucket('cross-store', 'string', { in: app })
 			const queue = store.jobs.queue<number>('cross-store', { in: app })
-			expect(
-				await caught(otherDB.batch(tx => sessions.withTx(tx).set('K7Q2', 'user 1'))),
-			).toBeInstanceOf(InvalidError)
 			expect(await caught(otherDB.batch(tx => queue.withTx(tx).enqueue(1)))).toBeInstanceOf(
 				InvalidError,
 			)
-			expect(
-				await other.kv.bucket('cross-store', 'string', { in: otherDB }).get('K7Q2'),
-			).toBeUndefined()
 		} finally {
 			await other.close()
 			rmSync(otherDir, { recursive: true, force: true })
 		}
-	})
-
-	test('a key a batch writes commits with the rows or not at all', async () => {
-		const sessions = store.kv.bucket<string>('sessions', { in: app })
-		await app.batch(tx => {
-			tx.exec("insert into notes (author_id, title) values (1, 'signed in')")
-			sessions.withTx(tx).set('K7Q2', 'user 1')
-		})
-		const failed = await caught(
-			app.batch(tx => {
-				sessions.withTx(tx).set('P9X4', 'user 2')
-				tx.exec("insert into notes (author_id, title) values (1, 'signed in')")
-			}),
-		)
-		expect(failed).toBeInstanceOf(ConflictError)
-		expect(await sessions.get('K7Q2')).toBe('user 1')
-		expect(await sessions.get('P9X4')).toBeUndefined()
-
-		await app.batch(tx => {
-			tx.exec("delete from notes where title = 'signed in'")
-			sessions.withTx(tx).delete('K7Q2')
-		})
-		expect(await sessions.get('K7Q2')).toBeUndefined()
-		await sessions.set('Z1A8', 'user 3')
-		await app.batch(tx => {
-			sessions.withTx(tx).clear()
-		})
-		expect(await sessions.get('Z1A8')).toBeUndefined()
-
-		const elsewhere = store.kv.bucket<string>('elsewhere')
-		expect(await caught(app.batch(tx => elsewhere.withTx(tx).set('K7Q2', 'x')))).toBeInstanceOf(
-			InvalidError,
-		)
-		expect(await caught(app.batch(tx => sessions.withTx(tx).get('K7Q2')))).toBeInstanceOf(
-			InvalidError,
-		)
-		expect(await caught(app.view(tx => sessions.withTx(tx).set('K7Q2', 'x')))).toBeInstanceOf(
-			InvalidError,
-		)
 	})
 })

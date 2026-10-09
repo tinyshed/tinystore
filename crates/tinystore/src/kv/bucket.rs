@@ -463,6 +463,20 @@ impl<V> Bucket<V> {
         Ok(Some(cell))
     }
 
+    /// One page of this branch's own rows, each with its key, read in one
+    /// snapshot; the wire's pages, whose values stay rows.
+    pub(crate) fn list_rows(&self, limit: usize, after: Option<&str>) -> Result<Vec<(String, Cell)>> {
+        let limit = limit.clamp(1, PAGE_KEYS);
+        let rows = self
+            .scope
+            .kv
+            .file()
+            .read(|connection| self.page_rows(connection, limit, after))
+            .map_err(|error| error.within(self.scope.shown_branch()))?;
+        let branch = self.scope.branch()?;
+        rows.into_iter().map(|(path, cell)| Ok((branch.key_of(&path)?, cell))).collect()
+    }
+
     /// A page of this branch's own rows on `connection`, by path.
     pub(crate) fn page_rows(
         &self,

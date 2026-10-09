@@ -2,10 +2,13 @@
 //! session that answers them, and each engine's messages. The server's
 //! sockets and the FFI's pipe carry the same frames through the same session.
 
+pub(crate) mod codec;
 pub(crate) mod frame;
 mod kv;
 mod message;
 pub(crate) mod msgpack;
+#[rustfmt::skip]
+pub(crate) mod protocol;
 mod session;
 mod workers;
 

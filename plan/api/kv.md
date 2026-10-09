@@ -63,8 +63,9 @@ let seen = store.bucket::<()>("stripe-events").ttl(Duration::from_hours(24 * 7))
   booleans as integers, floats bit for bit (`-0`, NaN payloads and infinities
   included), nothing for a set, JSON for the rest. TypeScript loses the type at
   run time, so `type` names it for the few that are not JSON: `'string'`,
-  `'bytes'`, `'int'`, `'float'`, `'bool'`. In Rust the type parameter is
-  enough: anything serde reads and writes.
+  `'bytes'`, `'int'`, `'float'`, `'bool'`, and `'bigint'` for integers past
+  what a number holds exactly. In Rust the type parameter is enough: anything
+  serde reads and writes.
 - Go spells it `kv.Bucket[T](store, …)` because a Go method takes no type
   parameter.
 
@@ -119,7 +120,9 @@ settings.key("home").if_version(entry.version).set(&next)?;      // a Conflict e
 - A version is the revision of kv.db that wrote the value; it never repeats,
   across deletes, expiry and restarts. It compares only for equality.
 - `ifVersion` works on `set`, `take`, `delete` and `expire`. A key that changed,
-  expired or was deleted since is a conflict.
+  expired or was deleted since is a conflict. In TypeScript it takes a version
+  and never `undefined`, so `{ ifVersion: entry?.version }` does not compile:
+  an absent key would write without a check.
 - To write only a key that is not there, use `create`.
 - In Rust a call with options is a chain on its key that ends in its verb:
   `.key(k)`, then `.ttl(d)`, `.expires_at(t)` or `.if_version(v)`, then `.set`,
@@ -278,7 +281,11 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
 - Across the pipe and the network a transaction never holds the writer while
   the host awaits: its reads go at once, its writes are sent together when the
   function returns, with a check that nothing it read has changed, and the
-  function runs again when something did.
+  function runs again when something did, five times at most before
+  `conflict`. A read after a write in the same transaction sees the write. A
+  write answers what the commit will do as the reads saw it: `create` and
+  `add` say whether they will write, `take` and `delete` what was there, and
+  a counter's `add` gives no count, which only the commit knows.
 - Writes that need no reads need no transaction: separate calls already share
   commits.
 - Python spells it `tx.with_(stock)`, `with` being a keyword there.
@@ -365,6 +372,21 @@ asked, so that a key reused with another order is a conflict, as Stripe's
 idempotency keys are; `retryAt` or a span, `retryAfter`, which an HTTP header
 wants; whether `durability: '1s'`, which a newcomer read as how long counts
 are kept, needs another word.
+
+## Third check, 9 October
+
+A Haiku agent read ten TypeScript call sites of the SDK as built, with four
+facts about it and nothing else.
+
+| It found                                                                      | Change                                                              |
+|-------------------------------------------------------------------------------|---------------------------------------------------------------------|
+| `{ ifVersion: entry?.version }` writes without a check when the key is absent | `ifVersion` takes a version, never `undefined`: it does not compile |
+| a read after a write in a transaction taken to see the old value              | the book says a read sees the transaction's own writes              |
+
+Still open: `durability: '1s'`, read a second time as how long counts are kept,
+with `flushEvery` proposed; `if (await api.allow(id))`, always true since an
+answer is an object; `expire(key, date)` beside `expire(key, '2h')`, where
+Redis has `EXPIREAT`; `add`, which puts a key in a set and adds to a counter.
 
 ## Was, in Go
 

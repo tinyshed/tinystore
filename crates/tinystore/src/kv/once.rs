@@ -5,10 +5,10 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
-use super::bucket::{Bucket, Expiry};
+use super::bucket::{Bucket, Expiry, Put, WriteOptions};
 use super::path::Key;
 use super::scope::{Kind, Scope};
-use super::value::Value;
+use super::value::{Raw, Value};
 use crate::{Error, Result, Store};
 
 /// How long an answer is kept unless `keep` says.
@@ -46,6 +46,76 @@ impl<V: Value> OnceBuilder<V> {
         }
         let scope = Scope::open(&self.store, &self.name, Kind::Once)?;
         Ok(Once { answers: Bucket::new(scope, Expiry::Ttl(self.keep)) })
+    }
+}
+
+/// Once's answers as rows, for the wire: a client runs the function, and the
+/// store keeps what it answered under the key for `keep`.
+pub(crate) fn rows(store: &Store, name: &str, keep: Option<Duration>) -> Result<Bucket<()>> {
+    let keep = keep.unwrap_or(KEEP);
+    if keep.is_zero() {
+        return Err(Error::invalid("a keep of zero").within(format!("kv once {name}")));
+    }
+    let scope = Scope::open(store, name, Kind::Once)?;
+    Ok(Bucket::new(scope, Expiry::Ttl(keep)))
+}
+
+/// What a client's run of a key starts with.
+pub(crate) enum Hand {
+    /// The answer kept under the key.
+    Kept(Raw),
+    /// The run is the client's: it runs its function and keeps what it answers.
+    Yours(Handed),
+    /// Another run holds the key; the waiter is called once it ends.
+    Wait,
+}
+
+/// Starts a client's run of `key` on once's rows: the answer kept, or the run
+/// handed over, or, while another run holds the key, a wait that calls `waiter`
+/// once it ends, when the client asks again.
+pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Hand> {
+    if let Some(cell) = answers.read_cell(key)? {
+        return Ok(Hand::Kept(cell.raw));
+    }
+    let running = (answers.scope.id, answers.scope.path(key)?);
+    if !answers.scope.kv.runs().claim_or_wait(running.clone(), None, waiter)? {
+        return Ok(Hand::Wait);
+    }
+    let handed = Handed { answers: answers.clone(), key: key.to_owned(), running };
+    match answers.read_cell(key)? {
+        Some(cell) => Ok(Hand::Kept(cell.raw)),
+        None => Ok(Hand::Yours(handed)),
+    }
+}
+
+/// A run of a key a client was handed; dropping it lets the runs waiting for
+/// the key go on, keeping nothing.
+pub(crate) struct Handed {
+    answers: Bucket<()>,
+    key: String,
+    running: (i64, Vec<u8>),
+}
+
+impl Handed {
+    /// Keeps the client's answer, or nothing when its function failed, and
+    /// lets the key go.
+    pub(crate) fn keep(self, answer: Option<Raw>) -> Result<()> {
+        match answer {
+            Some(raw) => self.answers.put_raw(&self.key, raw, WriteOptions::default(), Put::Always).map(|_| ()),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for Handed {
+    fn drop(&mut self) {
+        self.answers.scope.kv.runs().release(&self.running);
+    }
+}
+
+impl fmt::Debug for Handed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Handed({})", self.answers.scope.shown_key(&self.key))
     }
 }
 

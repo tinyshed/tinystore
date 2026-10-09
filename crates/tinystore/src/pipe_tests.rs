@@ -1,31 +1,50 @@
 use super::*;
+use crate::wire::codec::{Message, Row};
 use crate::wire::frame::{self, Frame, Kind};
-use crate::wire::msgpack::{self, Value};
+use crate::wire::protocol::{
+    Empty, Failure as Failed, GoAway, Handle, Hello, KvAnswer, KvBucketOpen, KvCall, KvCheck, KvEntry, KvOnceOpen,
+    KvOp, KvTx, KvTxResults, KvWritten, METHODS, Welcome, method,
+};
 
 /// A client's side of a pipe: frames out, frames back, as an SDK speaks.
 struct Client {
     pipe: Pipe,
     reader: frame::Reader,
+    /// Frames read while waiting for another stream's.
+    early: Vec<Frame>,
     next_stream: u32,
 }
 
 impl Client {
-    fn open(dir: &Path) -> Client {
+    fn connect(dir: &Path) -> Client {
         let pipe = Pipe::open(dir, None).unwrap();
-        let mut client = Client { pipe, reader: frame::Reader::default(), next_stream: 0 };
-        let hello = map(vec![(1, Value::Uint(1)), (2, Value::Str("test/0".to_owned()))]);
-        client.write(Frame::new(Kind::Hello, 0, hello));
-        let welcome = client.read();
-        assert_eq!(welcome.kind, Kind::Welcome);
+        Client { pipe, reader: frame::Reader::default(), early: Vec::new(), next_stream: 0 }
+    }
+
+    fn open(dir: &Path) -> Client {
+        let mut client = Client::connect(dir);
+        let welcome = client.hello(2).unwrap();
+        assert_eq!(welcome.protocol, 2);
         client
     }
 
-    fn write(&mut self, frame: Frame) -> Vec<u8> {
+    /// Says HELLO in `protocol`, and returns the WELCOME or the GOAWAY.
+    fn hello(&mut self, protocol: u64) -> std::result::Result<Welcome, GoAway> {
+        let hello = Hello { protocol, client: "test/0".to_owned(), ..Hello::default() };
+        self.write(Frame::new(Kind::Hello, 0, hello.encode()));
+        let answer = self.read();
+        match answer.kind {
+            Kind::Welcome => Ok(Welcome::decode(&answer.body).unwrap()),
+            Kind::GoAway => Err(GoAway::decode(&answer.body).unwrap()),
+            other => panic!("a {other:?} for HELLO"),
+        }
+    }
+
+    fn write(&mut self, frame: Frame) {
         let mut bytes = Vec::new();
         frame.encode_into(&mut bytes);
         let ready = self.pipe.send(&bytes);
         self.reader.push(&ready);
-        bytes
     }
 
     fn read(&mut self) -> Frame {
@@ -39,55 +58,118 @@ impl Client {
         }
     }
 
-    /// Calls a method and returns its answer's fields, or its error's.
-    fn call(&mut self, method: u16, fields: Vec<(u64, Value)>) -> (bool, Vec<(Value, Value)>) {
+    /// The next frame on `stream`, keeping those of other streams for later.
+    fn next_on(&mut self, stream: u32) -> Frame {
+        if let Some(at) = self.early.iter().position(|frame| frame.stream == stream) {
+            return self.early.remove(at);
+        }
+        loop {
+            let frame = self.read();
+            match frame.kind {
+                Kind::Credit => {}
+                _ if frame.stream == stream => return frame,
+                _ => self.early.push(frame),
+            }
+        }
+    }
+
+    /// Sends a call and returns its stream.
+    fn start(&mut self, called: u16, request: &impl Message) -> u32 {
         self.next_stream += 1;
-        let request = Frame { method, ..Frame::new(Kind::Request, self.next_stream, map(fields)) }.ending();
-        self.write(request);
-        let answer = self.read();
-        assert_eq!((answer.kind, answer.stream), (Kind::Response, self.next_stream));
-        let Value::Map(pairs) = msgpack::decode(&answer.body).unwrap() else { panic!("an answer that is not a map") };
-        (answer.flags & frame::ERROR == 0, pairs)
+        let frame = Frame { method: called, ..Frame::new(Kind::Request, self.next_stream, request.encode()) };
+        self.write(frame.ending());
+        self.next_stream
+    }
+
+    /// Asks for a run of once: its REQUEST leaves the stream open for the
+    /// answer the client sends back when the run is handed to it.
+    fn run(&mut self, request: &KvCall) -> u32 {
+        self.next_stream += 1;
+        let body = request.encode();
+        self.write(Frame { method: method::KV_ONCE_RUN, ..Frame::new(Kind::Request, self.next_stream, body) });
+        self.next_stream
+    }
+
+    /// Calls a method and returns its answer, or its error.
+    fn call<A: Message>(&mut self, called: u16, request: &impl Message) -> std::result::Result<A, Failed> {
+        let stream = self.start(called, request);
+        let answer = self.next_on(stream);
+        assert_eq!(answer.kind, Kind::Response);
+        assert_ne!(answer.flags & frame::END, 0, "a call's answer ends its stream");
+        answered(&answer)
+    }
+
+    fn bucket(&mut self, name: &str) -> u64 {
+        let open = KvBucketOpen { name: name.to_owned(), ..KvBucketOpen::default() };
+        self.call::<Handle>(method::KV_BUCKET_OPEN, &open).unwrap().handle
     }
 }
 
-fn map(fields: Vec<(u64, Value)>) -> Vec<u8> {
-    msgpack::encode(&Value::Map(fields.into_iter().map(|(key, value)| (Value::Uint(key), value)).collect()))
-}
-
-fn field(pairs: &[(Value, Value)], number: u64) -> Option<&Value> {
-    pairs.iter().find(|(key, _)| *key == Value::Uint(number)).map(|(_, value)| value)
+fn answered<A: Message>(frame: &Frame) -> std::result::Result<A, Failed> {
+    match frame.flags & frame::ERROR {
+        0 => Ok(A::decode(&frame.body).unwrap()),
+        _ => Err(Failed::decode(&frame.body).unwrap()),
+    }
 }
 
 #[test]
 fn a_client_sets_and_gets_a_key_through_the_pipe() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
-    let (ok, opened) = client.call(0x0101, vec![(1, Value::Str("sessions".to_owned()))]);
-    assert!(ok);
-    let handle = field(&opened, 1).unwrap().clone();
+    let handle = client.bucket("sessions");
+    let token = KvCall { handle, under: vec!["7".to_owned()], key: "token".to_owned(), ..KvCall::default() };
 
-    let owners = Value::Array(vec![Value::Str("7".to_owned())]);
-    let key = Value::Str("token".to_owned());
-    let set = vec![(1, handle.clone()), (2, owners.clone()), (3, key.clone()), (4, Value::Bin(b"hello".to_vec()))];
-    let (ok, stamp) = client.call(0x0104, set);
-    assert!(ok, "{stamp:?}");
-    assert_eq!(field(&stamp, 1), Some(&Value::Bool(true)));
+    let set = KvCall { value: Some(Row::Bin(b"hello".to_vec())), ..token.clone() };
+    let written: KvWritten = client.call(method::KV_SET, &set).unwrap();
+    assert!(written.written);
 
-    let (ok, entry) = client.call(0x0102, vec![(1, handle), (2, owners), (3, key)]);
-    assert!(ok);
-    assert_eq!(field(&entry, 1), Some(&Value::Bool(true)));
-    assert_eq!(field(&entry, 2), Some(&Value::Bin(b"hello".to_vec())));
-    assert_eq!(field(&entry, 3), field(&stamp, 3), "the version the set gave");
+    let entry: KvEntry = client.call(method::KV_GET, &token).unwrap();
+    assert_eq!((entry.found, entry.value), (true, Some(Row::Bin(b"hello".to_vec()))));
+    assert_eq!(entry.version, Some(written.version), "the version the set gave");
+}
+
+#[test]
+fn every_method_of_the_schema_is_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    for &(name, called) in METHODS {
+        let stream = client.start(called, &Empty {});
+        let answer = client.next_on(stream);
+        if let Err(failed) = answered::<Empty>(&answer) {
+            assert_ne!(failed.code, "unimplemented", "{name}: {}", failed.message);
+        }
+    }
 }
 
 #[test]
 fn a_method_the_core_does_not_have_is_unimplemented() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
-    let (ok, failure) = client.call(0x0601, vec![]);
-    assert!(!ok);
-    assert_eq!(field(&failure, 1), Some(&Value::Str("unimplemented".to_owned())));
+    let failed = client.call::<Empty>(0x0601, &Empty {}).unwrap_err();
+    assert_eq!(failed.code, "unimplemented");
+}
+
+#[test]
+fn a_field_the_core_does_not_know_is_unimplemented_and_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = client.bucket("sessions");
+    let mut body = KvCall { handle, key: "a".to_owned(), ..KvCall::default() }.encode();
+    body[0] += 1; // one more pair in the map: field 99, a nil
+    body.extend_from_slice(&[99, 0xc0]);
+    client.next_stream += 1;
+    client.write(Frame { method: method::KV_GET, ..Frame::new(Kind::Request, client.next_stream, body) }.ending());
+    let failed = answered::<Empty>(&client.next_on(client.next_stream)).unwrap_err();
+    assert_eq!(failed.code, "unimplemented");
+    assert!(failed.message.contains("field 99 of kv.Call"), "{}", failed.message);
+}
+
+#[test]
+fn a_client_of_protocol_one_is_refused_with_goaway() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::connect(dir.path());
+    let refused = client.hello(1).unwrap_err();
+    assert_eq!(refused.code, "protocol");
 }
 
 #[test]
@@ -99,6 +181,101 @@ fn a_frame_before_hello_ends_the_pipe_with_goaway() {
     let mut reader = frame::Reader::default();
     reader.push(&pipe.send(&bytes));
     assert_eq!(reader.next(1 << 20).unwrap().unwrap().kind, Kind::GoAway);
+}
+
+#[test]
+fn a_run_of_once_is_handed_to_the_client_and_its_answer_kept_for_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let open = KvOnceOpen { name: "charges".to_owned(), ..KvOnceOpen::default() };
+    let handle = client.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap().handle;
+    let charge = KvCall { handle, key: "order-1".to_owned(), ..KvCall::default() };
+
+    let first = client.run(&charge);
+    let handed = client.next_on(first);
+    assert_eq!((handed.kind, handed.flags), (Kind::Response, 0), "the run is the client's, its stream open");
+    assert!(!KvAnswer::decode(&handed.body).unwrap().found);
+    let second = client.run(&charge);
+
+    let charged = KvAnswer { found: true, value: Some(Row::Int(42)) };
+    client.write(Frame::new(Kind::Data, first, charged.encode()).ending());
+    let kept = client.next_on(first);
+    assert_eq!((kept.kind, kept.flags), (Kind::Data, frame::END));
+
+    let waited = client.next_on(second);
+    assert_eq!((waited.kind, waited.flags), (Kind::Response, frame::END), "the second caller ran nothing");
+    assert_eq!(KvAnswer::decode(&waited.body).unwrap(), charged);
+}
+
+#[test]
+fn a_run_that_failed_or_was_cancelled_hands_the_key_to_the_next_caller() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let open = KvOnceOpen { name: "charges".to_owned(), ..KvOnceOpen::default() };
+    let handle = client.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap().handle;
+    let charge = KvCall { handle, key: "order-1".to_owned(), ..KvCall::default() };
+
+    let failed = client.run(&charge);
+    assert_eq!(client.next_on(failed).flags, 0);
+    client.write(Frame::new(Kind::Data, failed, KvAnswer::default().encode()).ending());
+    assert_eq!(client.next_on(failed).flags, frame::END, "nothing kept");
+
+    let cancelled = client.run(&charge);
+    assert_eq!(client.next_on(cancelled).flags, 0, "handed again after the failure");
+    client.write(Frame::new(Kind::Cancel, cancelled, Vec::new()));
+    let ended = client.next_on(cancelled);
+    assert_eq!((ended.kind, ended.flags), (Kind::Data, frame::END | frame::ERROR));
+    assert_eq!(Failed::decode(&ended.body).unwrap().code, "cancelled");
+
+    let third = client.run(&charge);
+    assert_eq!(client.next_on(third).flags, 0, "handed again after the cancel");
+}
+
+#[test]
+fn a_run_cancelled_while_it_waits_is_never_handed_the_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let open = KvOnceOpen { name: "charges".to_owned(), ..KvOnceOpen::default() };
+    let handle = client.call::<Handle>(method::KV_ONCE_OPEN, &open).unwrap().handle;
+    let charge = KvCall { handle, key: "order-1".to_owned(), ..KvCall::default() };
+
+    let first = client.run(&charge);
+    assert_eq!(client.next_on(first).flags, 0);
+    let waiting = client.run(&charge);
+    client.write(Frame::new(Kind::Cancel, waiting, Vec::new()));
+    let cancelled = client.next_on(waiting);
+    assert_eq!((cancelled.kind, cancelled.flags), (Kind::Response, frame::END | frame::ERROR));
+
+    client.write(Frame::new(Kind::Data, first, KvAnswer::default().encode()).ending());
+    assert_eq!(client.next_on(first).flags, frame::END, "nothing kept");
+    let next = client.run(&charge);
+    assert_eq!(client.next_on(next).flags, 0, "the key is the next caller's, not the cancelled one's");
+}
+
+#[test]
+fn a_transaction_applies_its_writes_or_names_the_read_that_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = client.bucket("stock");
+    let key = |key: &str| KvCall { handle, key: key.to_owned(), ..KvCall::default() };
+    let set = |name: &str, n: i64| KvOp {
+        method: method::KV_SET.into(),
+        call: KvCall { value: Some(Row::Int(n)), ..key(name) },
+    };
+    let read: KvWritten = client.call(method::KV_SET, &KvCall { value: Some(Row::Int(5)), ..key("apples") }).unwrap();
+
+    let check = KvCheck { handle, key: "apples".to_owned(), version: Some(read.version.clone()), ..KvCheck::default() };
+    let tx = KvTx { checks: vec![check.clone()], writes: vec![set("apples", 4), set("baskets", 1)] };
+    let results: KvTxResults = client.call(method::KV_TX, &tx).unwrap();
+    assert!(results.outcomes.iter().all(|outcome| outcome.written));
+
+    let absent = KvCheck { handle, key: "pears".to_owned(), ..KvCheck::default() };
+    let stale = KvTx { checks: vec![absent, check], writes: vec![set("apples", 3)] };
+    let failed = client.call::<KvTxResults>(method::KV_TX, &stale).unwrap_err();
+    assert_eq!(failed.code, "conflict");
+    assert_eq!(failed.what.unwrap().get("check").map(String::as_str), Some("1"), "the second read changed");
+    let apples: KvEntry = client.call(method::KV_GET, &key("apples")).unwrap();
+    assert_eq!(apples.value, Some(Row::Int(4)), "nothing of the failed transaction was written");
 }
 
 #[test]
@@ -121,15 +298,20 @@ fn pipes_on_one_directory_share_its_store_until_the_last_closes() {
 fn sets_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
-    let (_, opened) = client.call(0x0101, vec![(1, Value::Str("smoke".to_owned()))]);
-    let handle = field(&opened, 1).unwrap().clone();
+    let handle = client.bucket("smoke");
     for pass in 0..5 {
         let started = std::time::Instant::now();
         let mut bytes = Vec::new();
         for n in 0..2000u32 {
-            let key = Value::Str(format!("p{pass}-{n}"));
-            let body = map(vec![(1, handle.clone()), (3, key), (4, Value::Bin(vec![b'x'; 100]))]);
-            Frame { method: 0x0104, ..Frame::new(Kind::Request, n + 1, body) }.ending().encode_into(&mut bytes);
+            let set = KvCall {
+                handle,
+                key: format!("p{pass}-{n}"),
+                value: Some(Row::Bin(vec![b'x'; 100])),
+                ..KvCall::default()
+            };
+            Frame { method: method::KV_SET, ..Frame::new(Kind::Request, n + 1, set.encode()) }
+                .ending()
+                .encode_into(&mut bytes);
         }
         client.reader.push(&client.pipe.send(&bytes));
         let mut answered = 0;

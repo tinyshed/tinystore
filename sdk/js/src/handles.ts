@@ -1,7 +1,7 @@
 import type { Connection } from './connection.ts'
 import { InvalidError } from './errors.ts'
 import type { Key } from './wire/codec.ts'
-import { Handle } from './wire/messages.ts'
+import { Handle } from './wire/protocol.ts'
 
 /**
  * The handle an open answers on a connection, opened once a connection: the

@@ -40,7 +40,7 @@ test('a sidecar of an older release is stopped, and every client moves to the on
 	const dir = mkdtempSync(join(tmpdir(), 'tinystore-replace-'))
 	const serve = join(dir, 'server', 'SERVE')
 	const first = await open(dir, { idle: '1s' })
-	const notes = first.kv.bucket<string>('notes')
+	const notes = first.bucket<string>('notes')
 	await notes.set('a', 'kept across the replacement')
 	const old = JSON.parse(readFileSync(serve, 'utf8'))
 	expect(old.sidecar).toBe(true)

@@ -58,7 +58,7 @@ jobs:
           bun-version: 1.4.2
 
       # TINYSTORE_BIN keeps the suite's preload from building the Go server
-      # the pipe test does not use
+      # these tests do not use
       - name: Bun over the core, through bun:ffi
         shell: bash
         working-directory: sdk/js
@@ -69,7 +69,7 @@ jobs:
             *) library=libtinystore_ffi.so ;;
           esac
           bun install --frozen-lockfile
-          TINYSTORE_BIN=unused TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library" bun test test/pipe.test.ts
+          TINYSTORE_BIN=unused TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library" bun test test/pipe.test.ts test/kv.test.ts test/protocol.test.ts
 
   quality:
     name: quality
@@ -82,6 +82,20 @@ jobs:
 
       - name: Formatting
         run: cargo fmt --all --check
+
+      # every codec and vector is what protocol/*.wire writes
+      - name: Protocol
+        run: cargo run --locked -p tinystore-protocol -- --check
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: The Bun SDK's lint and types
+        working-directory: sdk/js
+        run: |
+          bun install --frozen-lockfile
+          bun run check
 
       # a release workflow that does not parse fails only when a release needs it
       - name: Workflows

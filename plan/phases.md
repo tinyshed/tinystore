@@ -14,7 +14,8 @@ says so. Mark a task done in the commit that does it.
 - [ ] CI building and testing it on Linux, macOS and Windows: written, with the Bun pipe on all three, and green once the branch is pushed.
 - [x] The kv book's first draft and one newcomer check ([api/kv.md](api/kv.md)).
 - [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the jobs book is drafted and in its check.
-- [ ] The protocol's schema in the new vocabulary, and the generator of message types for Rust, TypeScript, Python and Go.
+- [x] Protocol 2: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
+- [ ] The generator's Python and Go codecs, with their SDKs.
 
 **Gate:** the jobs and kv books pass the newcomer check and the owner accepts
 them; the workspace builds and tests on three operating systems.
@@ -27,10 +28,10 @@ them; the workspace builds and tests on three operating systems.
 - [ ] Config and the logger in the core, with the `tracing` layer.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
-- [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's open, get, has, set, delete, take, touch and clear.
-- [ ] kv's scan, batch, view and the rest of its methods; downloads under credit; CANCEL.
+- [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.
+- [x] kv's pages within the agreed body, transactions as a checked batch, `once` handed over to the client, and a `CANCEL` that lets a handed run go.
 - [ ] The server: sockets, named pipes, stdio, TCP and TLS, SERVE, as `tinystore serve`.
-- [x] The pipe: the C ABI and bun:ffi; the Bun SDK opens a store `embedded` and its kv calls pass.
+- [x] The pipe: the C ABI and bun:ffi; the Bun SDK's kv is the book's over protocol 2, and its suite passes `embedded`.
 - [ ] napi-rs, PyO3 and cgo over the same five functions; the Python and Go SDKs.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
@@ -47,6 +48,7 @@ taken against Go `e81a050` and written up as a research round.
 
 ## 2. sqldb, jobs, blobs
 
+- [ ] Downloads and uploads under credit, which blobs and records need.
 - [ ] sqldb: tables from types, checked migrations, typed reads, `tx` in the protocol, FTS5 and R*Tree features.
 - [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching.
 - [ ] blobs: objects inline or a file each, checked reads, scrub.

@@ -36,6 +36,18 @@
 			}
 		}
 	},
+	"overrides": [
+		{
+			"includes": ["src/wire/protocol.ts"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noUnusedImports": "off"
+					}
+				}
+			}
+		}
+	],
 	"javascript": {
 		"formatter": {
 			"bracketSpacing": true,

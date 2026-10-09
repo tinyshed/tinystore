@@ -1,21 +1,26 @@
+use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use super::codec::Message;
 use super::frame::{self, Frame, Kind};
-use super::kv;
-use super::message::{Answer, Failure, Fields};
-use super::msgpack::Value;
+use super::kv::{self, Route, Run};
+use super::protocol::{Failure, GoAway, Hello, Welcome};
 use super::workers::Workers;
+use crate::kv::Handed;
 use crate::{Result, Store, unix_millis};
 
-const PROTOCOL: u64 = 1;
+/// The protocol this server speaks, the second: a client of the first is
+/// refused, since nothing of it was released.
+const PROTOCOL: u64 = 2;
 const MAX_BODY: u64 = 4 << 20;
 /// Streams a client may have open at once: as many writes as one grouped
 /// commit carries, so an event loop with many writes in flight fills commits.
 const IN_FLIGHT: u64 = 1024;
-/// Bytes of REQUEST bodies a client may send before credit comes back.
+/// Bytes of REQUEST and DATA bodies a client may send before credit comes back.
 const CONNECTION_CREDIT: u64 = 8 << 20;
 const STREAM_CREDIT: u64 = 2 << 20;
 /// What a client grants a stream when its HELLO does not say.
@@ -41,8 +46,21 @@ struct Shared {
     kv: kv::Handles,
     input: Mutex<Input>,
     output: Mutex<Output>,
+    /// Clients' runs of once, by stream, from the REQUEST to the last frame.
+    runs: Mutex<HashMap<u32, ClientRun>>,
+    /// Numbers each run's asking, so that a wait that ends after its stream
+    /// was cancelled, and its number named again, finds another run there.
+    asked: AtomicU64,
     ready: Condvar,
     wake: Option<Wake>,
+}
+
+/// Where a client's run of once stands.
+enum ClientRun {
+    /// Asking for its key, or waiting for the run that holds it.
+    Asking(u64),
+    /// Handed to the client, until its last DATA, a CANCEL or the session's end.
+    Handed(Handed),
 }
 
 #[derive(Default)]
@@ -50,7 +68,7 @@ struct Input {
     reader: frame::Reader,
     /// The largest body both sides agreed, once WELCOME went out.
     max_body: Option<usize>,
-    /// REQUEST bytes read since credit last went back.
+    /// REQUEST and DATA bytes read since credit last went back.
     released: u64,
     ended: bool,
 }
@@ -71,6 +89,8 @@ impl Session {
             kv: kv::Handles::default(),
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
+            runs: Mutex::new(HashMap::new()),
+            asked: AtomicU64::new(0),
             ready: Condvar::new(),
             wake,
         };
@@ -119,8 +139,8 @@ impl Session {
         std::mem::take(&mut output.bytes)
     }
 
-    /// Ends the session: calls under way finish, and what they answer is
-    /// dropped.
+    /// Ends the session: calls under way finish, what they answer is dropped,
+    /// and the runs handed to the client are let go.
     pub(crate) fn end(&self) {
         self.shared.lock_input().ended = true;
         let mut output = self.shared.lock_output();
@@ -128,6 +148,8 @@ impl Session {
         output.bytes.clear();
         drop(output);
         self.shared.ready.notify_all();
+        let runs = std::mem::take(&mut *self.shared.lock_runs());
+        drop(runs);
     }
 }
 
@@ -137,67 +159,67 @@ impl Shared {
             (None, Kind::Hello) => self.welcome(input, &frame.body),
             (None, kind) => self.go_away(input, "protocol", &format!("a {kind:?} before HELLO")),
             (Some(_), Kind::Request) => self.request(input, frame),
+            (Some(_), Kind::Data) => self.data(input, frame),
+            (Some(_), Kind::Cancel) => self.cancel(frame.stream),
             (Some(_), Kind::Ping) => self.send(&[Frame::new(Kind::Pong, 0, frame.body)]),
-            // calls are short and end on their own; downloads arrive with scan
-            (Some(_), Kind::Cancel | Kind::Credit) => {}
+            // calls answer in one message, within the body agreed, and send no DATA a client grants credit for
+            (Some(_), Kind::Credit) => {}
             (Some(_), Kind::GoAway) => self.finish(input),
             (Some(_), kind) => self.go_away(input, "protocol", &format!("a {kind:?} from a client")),
         }
     }
 
-    /// Answers HELLO with what the connection agrees: the older protocol of
-    /// the two, and the smallest body either side takes.
+    /// Answers HELLO with what the connection agrees: protocol 2, and the
+    /// smallest body either side takes.
     fn welcome(&self, input: &mut Input, body: &[u8]) {
-        let hello = match Fields::decode(body, &[1, 2, 3, 4, 5, 6]) {
+        let hello = match Hello::decode(body) {
             Ok(hello) => hello,
             Err(failure) => return self.go_away(input, "protocol", &failure.message),
         };
-        let agreed = |hello: &Fields| -> std::result::Result<u64, Failure> {
-            let protocol = hello.uint(1, "protocol")?.unwrap_or(0);
-            if protocol < PROTOCOL {
-                return Err(Failure::invalid(format!("protocol {protocol}, older than {PROTOCOL}")));
-            }
-            let client_most = hello.uint(4, "max body")?.unwrap_or(MAX_BODY);
-            let stream_credit = hello.uint(5, "stream credit")?.unwrap_or(CLIENT_STREAM_CREDIT);
-            Ok(MAX_BODY.min(client_most).min(stream_credit))
-        };
-        let max_body = match agreed(&hello) {
-            Ok(max_body) => max_body,
-            Err(failure) => return self.go_away(input, "protocol", &failure.message),
-        };
+        if hello.protocol < PROTOCOL {
+            let refused = format!("protocol {}, older than {PROTOCOL}, the one this server speaks", hello.protocol);
+            return self.go_away(input, "protocol", &refused);
+        }
+        let client_most = hello.max_body.unwrap_or(MAX_BODY);
+        let stream_credit = hello.stream_credit.unwrap_or(CLIENT_STREAM_CREDIT);
+        let max_body = MAX_BODY.min(client_most).min(stream_credit);
         input.max_body = Some(max_body as usize);
         self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body))]);
     }
 
     fn welcome_body(&self, max_body: u64) -> Vec<u8> {
-        Answer::default()
-            .put(1, Value::Uint(PROTOCOL))
-            .put(2, Value::Str(env!("CARGO_PKG_VERSION").to_owned()))
-            .put(3, Value::Bin(instance()))
-            .put(4, Value::Str("admin".to_owned()))
-            .put(5, Value::Uint(max_body))
-            .put(6, Value::Uint(IN_FLIGHT))
-            .put(7, Value::Uint(CONNECTION_CREDIT))
-            .put(8, Value::Uint(STREAM_CREDIT))
-            .put(9, Value::Array(vec![Value::Str("kv".to_owned())]))
-            .put(10, int(unix_millis(self.store.now())))
-            .encode()
+        let welcome = Welcome {
+            protocol: PROTOCOL,
+            server: env!("CARGO_PKG_VERSION").to_owned(),
+            instance: instance(),
+            capability: "admin".to_owned(),
+            max_body,
+            in_flight: IN_FLIGHT,
+            connection_credit: CONNECTION_CREDIT,
+            stream_credit: STREAM_CREDIT,
+            engines: vec!["kv".to_owned()],
+            now: unix_millis(self.store.now()),
+            proof: None,
+        };
+        welcome.encode()
     }
 
     /// Answers a call as its method's route says: a point read before this
-    /// returns, a write once its group commits, anything else on a worker.
+    /// returns, a write once its group commits, a run of once handed over,
+    /// anything else on a worker.
     fn request(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
-        let (method, stream) = (frame.method, frame.stream);
+        let max_body = input.max_body.unwrap_or(HELLO_MOST);
+        let (method, stream, body) = (frame.method, frame.stream, frame.body);
         match route(method) {
-            kv::Route::Inline => self.answer(stream, guarded(|| self.call(method, &frame.body))),
-            kv::Route::Submit => {
+            Route::Inline => self.answer(stream, guarded(|| self.call(method, &body, max_body))),
+            Route::Submit => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
                     let answering = Arc::clone(&shared);
                     let done = move |answered| answering.answer(stream, answered);
                     let queued = guarded(|| {
-                        kv::submit(&shared.kv, method, &frame.body, done);
+                        kv::submit(&shared.kv, method, &body, done);
                         Ok(Vec::new())
                     });
                     if let Err(failure) = queued {
@@ -205,12 +227,101 @@ impl Shared {
                     }
                 }));
             }
-            kv::Route::Worker => {
+            Route::Handover => {
+                let asked = self.asked.fetch_add(1, Ordering::Relaxed);
+                self.lock_runs().insert(stream, ClientRun::Asking(asked));
+                let shared = Arc::clone(self);
+                self.workers.run(Box::new(move || shared.run_once(stream, asked, body)));
+            }
+            Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
-                    shared.answer(stream, guarded(|| shared.call(method, &frame.body)));
+                    shared.answer(stream, guarded(|| shared.call(method, &body, max_body)));
                 }));
             }
+        }
+    }
+
+    /// Starts a client's run of a once key: its kept answer ends the stream, a
+    /// run handed over waits for the client's last DATA, and a run held
+    /// elsewhere asks again once it ends. A run cancelled meanwhile goes back.
+    fn run_once(self: &Arc<Self>, stream: u32, asked: u64, body: Vec<u8>) {
+        if !still_asking(&self.lock_runs(), stream, asked) {
+            return;
+        }
+        let again = {
+            let (shared, body) = (Arc::clone(self), body.clone());
+            Box::new(move || {
+                let asking = Arc::clone(&shared);
+                shared.workers.run(Box::new(move || asking.run_once(stream, asked, body)));
+            })
+        };
+        let started = catch_unwind(AssertUnwindSafe(|| kv::run(&self.kv, &body, again)))
+            .unwrap_or_else(|_| Err(Failure::internal("a call panicked")));
+        // the answer leaves under the lock, so that a CANCEL either finds the
+        // run or comes after this stream's frames
+        let mut runs = self.lock_runs();
+        if !still_asking(&runs, stream, asked) {
+            drop(runs);
+            drop(started);
+            return;
+        }
+        match started {
+            Ok(Run::Answered(answer)) => {
+                runs.remove(&stream);
+                self.answer(stream, Ok(answer));
+            }
+            Ok(Run::Handed(handed, answer)) => {
+                runs.insert(stream, ClientRun::Handed(handed));
+                self.send(&[Frame::new(Kind::Response, stream, answer)]);
+            }
+            Ok(Run::Waiting) => {}
+            Err(failure) => {
+                runs.remove(&stream);
+                self.answer(stream, Err(failure));
+            }
+        }
+    }
+
+    /// A client's DATA: the last of a run handed over, its answer to keep. A
+    /// DATA of a stream no longer in use is dropped, its credit still given
+    /// back.
+    fn data(self: &Arc<Self>, input: &mut Input, frame: Frame) {
+        self.release(input, frame.body.len() as u64);
+        if frame.flags & frame::END == 0 {
+            return;
+        }
+        let handed = {
+            let mut runs = self.lock_runs();
+            match runs.remove(&frame.stream) {
+                Some(ClientRun::Handed(handed)) => handed,
+                Some(asking) => {
+                    runs.insert(frame.stream, asking);
+                    return;
+                }
+                None => return,
+            }
+        };
+        let (shared, stream, body) = (Arc::clone(self), frame.stream, frame.body);
+        self.workers.run(Box::new(move || {
+            let kept = guarded(|| kv::kept(handed, &body));
+            shared.end_stream(stream, kept);
+        }));
+    }
+
+    /// Lets go of a client's run of once, answering `cancelled`; a call
+    /// cancelled runs to its end, short as a call is.
+    fn cancel(&self, stream: u32) {
+        let mut runs = self.lock_runs();
+        let cancelled = Failure::cancelled("the client cancelled the run");
+        match runs.remove(&stream) {
+            Some(ClientRun::Asking(_)) => self.answer(stream, Err(cancelled)),
+            Some(ClientRun::Handed(handed)) => {
+                self.end_stream(stream, Err(cancelled));
+                drop(runs);
+                drop(handed);
+            }
+            None => {}
         }
     }
 
@@ -222,9 +333,18 @@ impl Shared {
         self.send(&[response]);
     }
 
-    fn call(&self, method: u16, body: &[u8]) -> std::result::Result<Vec<u8>, Failure> {
+    /// Ends a stream whose RESPONSE went out already, with its last DATA.
+    fn end_stream(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
+        let data = match answered {
+            Ok(body) => Frame::new(Kind::Data, stream, body).ending(),
+            Err(failure) => Frame::new(Kind::Data, stream, failure.encode()).failing(),
+        };
+        self.send(&[data]);
+    }
+
+    fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
         match method >> 8 {
-            0x01 => kv::call(&self.store, &self.kv, method, body),
+            0x01 => kv::call(&self.store, &self.kv, method, body, max_body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -239,8 +359,8 @@ impl Shared {
     }
 
     fn go_away(&self, input: &mut Input, code: &str, message: &str) {
-        let body = Answer::default().put(1, Value::Str(code.to_owned())).put(2, Value::Str(message.to_owned()));
-        self.send(&[Frame::new(Kind::GoAway, 0, body.encode())]);
+        let body = GoAway { code: code.to_owned(), message: message.to_owned() }.encode();
+        self.send(&[Frame::new(Kind::GoAway, 0, body)]);
         self.finish(input);
     }
 
@@ -274,36 +394,40 @@ impl Shared {
     fn lock_output(&self) -> MutexGuard<'_, Output> {
         self.output.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn lock_runs(&self) -> MutexGuard<'_, HashMap<u32, ClientRun>> {
+        self.runs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Whether the run asked as `asked` is still the one on its stream.
+fn still_asking(runs: &HashMap<u32, ClientRun>, stream: u32, asked: u64) -> bool {
+    matches!(runs.get(&stream), Some(ClientRun::Asking(asking)) if *asking == asked)
 }
 
 /// How a method runs: kv's say theirs; every other engine's runs on a worker.
-fn route(method: u16) -> kv::Route {
+fn route(method: u16) -> Route {
     match method >> 8 {
         0x01 => kv::route(method),
-        _ => kv::Route::Worker,
+        _ => Route::Worker,
     }
 }
 
 /// A call that panics answers `internal` rather than leaving its stream open.
 fn guarded(call: impl FnOnce() -> std::result::Result<Vec<u8>, Failure>) -> std::result::Result<Vec<u8>, Failure> {
-    catch_unwind(AssertUnwindSafe(call))
-        .unwrap_or_else(|_| Err(Failure { code: "internal", message: "a call panicked".to_owned(), what: Vec::new() }))
-}
-
-/// An integer as the profile writes it: unsigned when it is not negative.
-pub(crate) fn int(value: i64) -> Value {
-    u64::try_from(value).map_or(Value::Int(value), Value::Uint)
+    catch_unwind(AssertUnwindSafe(call)).unwrap_or_else(|_| Err(Failure::internal("a call panicked")))
 }
 
 /// Sixteen bytes that differ for each session: the process's random hasher
 /// keys, over the time and an address.
 fn instance() -> Vec<u8> {
     let state = RandomState::new();
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
     let mut bytes = Vec::with_capacity(16);
     for half in 0..2u8 {
         let mut hasher = state.build_hasher();
         hasher.write_u8(half);
-        hasher.write_u128(Instant::now().elapsed().as_nanos());
+        hasher.write_u128(now);
         hasher.write_usize(&bytes as *const _ as usize);
         bytes.extend_from_slice(&hasher.finish().to_le_bytes());
     }
