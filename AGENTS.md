@@ -1,5 +1,12 @@
 # TinyStore
 
+> **This branch, `rust`, is the Rust rewrite.** Read [plan/](plan/README.md)
+> first: what is decided, what it stands on, and the order of work. The rules
+> below still hold where they speak of storage, the runtime, editing and
+> commits. Where they speak of Go modules, cgo, `task` and the packages'
+> READMEs, they describe the Go reference at `e81a050`, and plan/ replaces them
+> until this file is rewritten in phase 0.
+
 An embedded data runtime for Go, on SQLite: exact metrics first, then records,
 SQL databases the application owns, KV, blobs and jobs, in one directory with a
 file per engine, bounded memory, no daemon and no cgo. It is a library, so the

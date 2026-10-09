@@ -1,0 +1,136 @@
+# The API's vocabulary
+
+The rewrite is the one chance to fix the names, because every name changes
+anyway. The vocabulary is decided before the code, one engine at a time, in
+an API book the owner accepts.
+
+## What is wrong today
+
+An inventory of `e81a050`: 827 exported names in Go (`tinystore` 70,
+`metrics` 178, `records` 120, `records/console` 21, `sqldb` 90, `kv` 148,
+`jobs` 112, `blobs` 76, `backup` 12), 135 top-level exports and 209 class
+members in Bun, 72 names and 173 class members in Python.
+
+| Word     | What it means today                                                                                                  |
+|----------|----------------------------------------------------------------------------------------------------------------------|
+| `Batch`  | four things: sqldb's group commit, metrics' ingest input, records' follow result, and Bun's and Python's transaction |
+| `Query`  | four structs with four sets of fields: records, kv, jobs, blobs                                                      |
+| `Store`  | the directory and every engine's handle; sqldb calls its handle `DB`                                                 |
+| `Every`  | a background loop on the store and a repeat in jobs                                                                  |
+| `Rate`   | kv's limiter, jobs' starts, and quota windows written `'100/5h'`                                                     |
+| `Claim`  | reserving a file for an engine, and leasing a job                                                                    |
+| `Keep`   | keeping finished jobs, and keeping a step's answer                                                                   |
+| `Change` | three identical interfaces in kv, jobs and sqldb                                                                     |
+| `All`    | an iterator in kv, jobs, blobs and records, a slice in sqldb                                                         |
+
+Bare numbers mean different units: `every: 30` is 30 ms in Bun and 30 s in
+Python; `took` and `retryAfter` are milliseconds in Bun and seconds in Python;
+Python reads an integer time as nanoseconds in records and milliseconds in
+metrics.
+
+The worst names, the ones a newcomer misreads first: `move: true`,
+`maxRunningInGroup`, `spread: true`, `after` (Go's `time.After` returns a
+channel), `key` (identity and deduplication at once), `keepDone`,
+`untilIdle`, `loseAtMost`, `sliding`, `Written`, `Enqueued`, `In`, `Guest`,
+`Manual`, `SelfMetrics`, `Readers` beside `MaxReaders`, `Lookback`.
+
+## Rules
+
+- **One concept, one word,** in every engine and every language.
+- **A name is at most two words.** A third word means the concept wants a
+  nested option or a verb of its own.
+- **A flag never changes what a call does.** Another behaviour is another verb
+  (`reschedule`, `drain`), an enumeration, or another constructor. A boolean
+  only turns a feature on or off.
+- **Time is typed:** text such as `'30s'`, `Duration`, `timedelta`, `Date`,
+  `datetime`. A bare number is refused, as input and as output.
+- **Storage words stay inside:** head, segment, block, seal, merge, lease,
+  claim, lookback, watermark.
+- **Take the word people already know:** BullMQ (`add`, `delay`,
+  `concurrency`), Redis (`ttl`, `publish`), S3 (`ifMatch`), Prometheus
+  (`rate`, `increase`), `tracing` and `slog`.
+- **What engine authors use lives in a module of its own,** away from the
+  application's names.
+- **Nesting is welcome when it gathers related settings under one known word
+  and has a short form:** `concurrency: 8` or
+  `concurrency: { total: 8, perGroup: 2 }`.
+
+## The newcomer check
+
+A helper agent that has read nothing about TinyStore gets one call site from
+a book, a line or a few, and says in one sentence what it does and what it
+returns. The book keeps the answer beside the call. A wrong or hesitant answer
+means a rename, never a comment. A book is accepted when every call site in it
+passes and the owner agrees.
+
+## Words
+
+Decided words are settled; draft words wait for their engine's book.
+
+| Word                               | Means                                                  | Where                  | Was                                          | State   |
+|------------------------------------|--------------------------------------------------------|------------------------|----------------------------------------------|---------|
+| `channels`, `publish`, `subscribe` | messages between parts of an application               | runtime                | signals, an idea                             | decided |
+| `durability`                       | `'full'`, `'os'` or an interval                        | every engine           | FULL only, `loseAtMost`                      | decided |
+| `concurrency`                      | how many run at once: `8` or `{ total, perGroup }`     | jobs                   | `maxRunning`, `maxRunningInGroup`, `workers` | decided |
+| `rate`                             | starts or calls a span, as text `'30/s'`               | jobs, kv limiter       | `Rate(n, per)` in Go                         | decided |
+| `keep`                             | how long finished or old things stay                   | jobs, records, metrics | `keepDone`, `Retention`                      | draft   |
+| `ttl`                              | when a key expires                                     | kv                     | the same                                     | draft   |
+| `idle`                             | expires after a span without reads or writes           | kv                     | `sliding`                                    | draft   |
+| `id`                               | a job's identity; adding an id that waits adds nothing | jobs                   | `key`                                        | draft   |
+| `group`                            | jobs that share a `perGroup` limit                     | jobs                   | the same                                     | draft   |
+| `add`                              | puts a job in a queue                                  | jobs                   | `enqueue`                                    | draft   |
+| `delay`, `at`                      | when a job runs: after a span, at a time               | jobs                   | `after`, `at`                                | draft   |
+| `every`, `cron`                    | repeats: an interval spread by id, or the wall clock   | jobs                   | `every` with `spread: true`                  | draft   |
+| `reschedule`                       | sets a job's time either way, adding it when missing   | jobs                   | `move: true`                                 | draft   |
+| `drain`                            | runs the queue until nothing is due                    | jobs                   | `untilIdle: true`                            | draft   |
+| `tx`                               | a transaction that reads, then writes                  | every engine           | `batch()` in Bun and Python                  | draft   |
+| `list`, `all`                      | an array in memory; an iterator over pages             | every engine           | `All` meant both                             | draft   |
+| `database`                         | the sql database kv or jobs keep their tables in       | kv, jobs               | `In`, `in`, `in_`                            | draft   |
+| `openBeside`                       | opens a directory another process holds, SQL only      | root                   | `Guest: true`                                | draft   |
+| `background`                       | `false` stops all periodic work                        | root                   | `Manual: true`                               | draft   |
+
+## jobs, today and the draft
+
+```ts
+// today, from docs/jobs
+const refreshes = store.jobs.queue<Refresh>('refreshes', { maxRunning: 8, maxRunningInGroup: 2 })
+await refreshes.enqueue({ dataset: 3 }, { key: 'refresh:3', group: 'db:42' })
+await checks.enqueue(check, { key: `check:${check.id}`, after: '25h', move: true })
+await probes.enqueue({ url }, { key: `probe:${id}`, repeat: { every: '30s', spread: true } })
+const pushes = store.jobs.queue<Push>('pushes', { keepDone: '1h' })
+await reminders.work(remind, { untilIdle: true })
+```
+
+```ts
+// draft
+const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, perGroup: 2 } })
+await refreshes.add({ dataset: 3 }, { id: 'refresh:3', group: 'db:42' })
+await checks.reschedule(`check:${check.id}`, check, { delay: '25h' })
+await probes.add({ url }, { id: `probe:${id}`, every: '30s' })   // ids spread over the interval
+const pushes = store.queue<Push>('pushes', { keep: { done: '1h' } })
+await reminders.drain(remind)
+```
+
+- `every` spreads ids over the interval by itself, which is almost always
+  wanted; `cron` is the wall clock. `spread` disappears.
+- A newcomer learns seven concepts instead of seventeen, all known from
+  BullMQ: a queue, a job and its id, when it runs, the handler, retries,
+  limits, how long to keep it.
+
+## Each language's spelling
+
+| Language   | Options                                                | Time                             | Nested settings                                 |
+|------------|--------------------------------------------------------|----------------------------------|-------------------------------------------------|
+| TypeScript | an object, camelCase                                   | `'30s'`, `Date`                  | `{ concurrency: { total: 8, perGroup: 2 } }`    |
+| Python     | keyword arguments, snake_case                          | `'30s'`, `timedelta`, `datetime` | `concurrency=Concurrency(total=8, per_group=2)` |
+| Go         | functional options on calls, structs for nested values | `time.Duration`, `time.Time`     | `jobs.Concurrency{Total: 8, PerGroup: 2}`       |
+| Rust       | builders                                               | `Duration`, a timestamp type     | `.concurrency(8).per_group(2)`                  |
+
+## The API books
+
+One book an engine, `plan/api/<engine>.md`, written before the engine's code:
+the concepts a newcomer needs, every call site in Rust, TypeScript, Python and
+Go, every option with its default, every error and what to do about it. jobs
+first, kv second, then each engine before its phase. The protocol's schema is
+written from the accepted book, and the SDKs' types are generated from the
+schema.
