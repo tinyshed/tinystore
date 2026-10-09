@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::any::{Any, TypeId};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
@@ -54,6 +55,9 @@ struct Inner {
     memory: Arc<Memory>,
     scheduler: Scheduler,
     engines: Mutex<Vec<Arc<dyn Engine>>>,
+    /// The engine of each kind this store has open, which every handle of that
+    /// engine shares: one `kv.db` writer however many buckets open.
+    open: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     claims: Mutex<HashSet<String>>,
     closed: AtomicBool,
 }
@@ -71,6 +75,7 @@ impl Store {
             memory: Memory::new(options.memory.unwrap_or(u64::MAX)),
             scheduler: Scheduler::new(options.background),
             engines: Mutex::new(Vec::new()),
+            open: Mutex::new(HashMap::new()),
             claims: Mutex::new(HashSet::new()),
             closed: AtomicBool::new(false),
             dir,
@@ -90,13 +95,15 @@ impl Store {
         &self.inner.memory
     }
 
-    /// Closes every engine, the last opened first, stops background work and
-    /// lets go of the directory. The first engine that fails to close is the
-    /// error; the others still close. A second call does nothing.
+    /// Stops background work, waiting for the task under way, closes every
+    /// engine, the last opened first, and lets go of the directory. The first
+    /// engine that fails to close is the error; the others still close. A
+    /// second call does nothing.
     pub fn close(&self) -> Result<()> {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+        self.inner.scheduler.stop();
         let engines = std::mem::take(&mut *lock(&self.inner.engines));
         let mut first_failure = None;
         for engine in engines.iter().rev() {
@@ -104,7 +111,7 @@ impl Store {
                 first_failure.get_or_insert(error);
             }
         }
-        self.inner.scheduler.stop();
+        lock(&self.inner.open).clear();
         drop(lock(&self.inner.lock).take());
         first_failure.map_or(Ok(()), |error| Err(error.within(self.describe())))
     }
@@ -122,6 +129,19 @@ impl Store {
 }
 
 impl Host for Store {
+    fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
+        self.refuse_when_closed("an engine opening")?;
+        let mut engines = lock(&self.inner.open);
+        if let Some(engine) = engines.get(&TypeId::of::<E>()) {
+            let engine = Arc::clone(engine);
+            return Ok(engine.downcast::<E>().expect("an engine is kept under its own type"));
+        }
+        let engine = open(self)?;
+        self.attach(Arc::clone(&engine) as Arc<dyn Engine>)?;
+        engines.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
+        Ok(engine)
+    }
+
     fn attach(&self, engine: Arc<dyn Engine>) -> Result<()> {
         self.refuse_when_closed("an engine opening")?;
         lock(&self.inner.engines).push(engine);

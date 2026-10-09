@@ -17,6 +17,10 @@ pub trait Engine: Send + Sync + 'static {
 
 /// The store's calls for the engines opened against it.
 pub trait Host {
+    /// The engine of type `E` this store has open, or the one `open` makes and
+    /// the store then closes at its own close; every handle shares it.
+    fn engine<E: Engine>(&self, open: impl FnOnce(&crate::Store) -> Result<Arc<E>>) -> Result<Arc<E>>;
+
     /// Closes `engine` when the store closes, the last attached first.
     fn attach(&self, engine: Arc<dyn Engine>) -> Result<()>;
 

@@ -8,14 +8,22 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = ["kv"]
+# Each engine is a feature: a program links the engines it opens.
+kv = []
+
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the
 # flags in .cargo/config.toml, and nothing loaded at run time.
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "limits"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+serde = { version = "1.0.229", default-features = false, features = ["std"] }
+serde_json = "1.0.151"
 
 [dev-dependencies]
 tempfile = "3.27"
+serde = { version = "1.0.229", features = ["derive"] }
 
 [lints]
 workspace = true
