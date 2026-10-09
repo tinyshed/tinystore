@@ -73,6 +73,7 @@ impl Run {
             );
         }
         self.lease.set_progress(value);
+        self.queue.watchers.changed();
         Ok(())
     }
 

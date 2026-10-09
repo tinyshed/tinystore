@@ -348,6 +348,7 @@ impl Loop {
             return Ok(ClaimResult { leases: Vec::new(), abandoned: Vec::new(), full: false, next: None });
         }
         let pending = self.pending.clone();
+        let seen = pending.iter().any(|(_, how)| !matches!(how, How::Extend { .. }));
         let queue = Arc::clone(&self.queue);
         let until = now + millis(LEASE);
         let (settled, result) = self.jobs.file().write(0, move |tx| {
@@ -368,6 +369,9 @@ impl Loop {
             Ok((settled, ClaimResult { leases, abandoned, full, next }))
         })?;
         self.settled(settled, now);
+        if seen || !result.leases.is_empty() || !result.abandoned.is_empty() {
+            self.queue.watchers.changed();
+        }
         for _ in &result.abandoned {
             self.queue.failures.observe(&self.queue.name, "its attempts ended without a settlement");
         }
@@ -491,6 +495,7 @@ where
     if !lease.begin(jobs.now()) {
         return None;
     }
+    queue.watchers.changed();
     let run = Run::new(Arc::clone(lease), Arc::clone(queue), Arc::clone(jobs));
     let answered = catch_unwind(AssertUnwindSafe(|| handler(value, &run)));
     if lease.cancelled() {

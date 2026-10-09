@@ -40,6 +40,7 @@ mod schedule;
 mod state;
 mod steps;
 mod values;
+mod watch;
 mod work;
 mod write;
 
@@ -50,15 +51,20 @@ pub use queue::{All, Claimed, Queue, QueueBuilder, Workers};
 pub use read::{Filter, Job, LastRun, PAGE_JOBS, Page, State};
 pub use run::{Outcome, Run, When};
 pub use schedule::{Schedule, ScheduleBuilder};
+pub use watch::Watch;
 pub use work::Worker;
 
 pub(crate) use claim::{How, Lease};
 pub(crate) use steps::{keep_encoded, kept};
+pub(crate) use watch::{Hears, Report, Seen, Subscription};
 pub(crate) use work::{Answers, Ended, Hand, Remote, RemoteWork, read_value, start_remote};
 
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod queue_tests;
+#[cfg(test)]
+#[path = "watch_tests.rs"]
+mod watch_tests;
 #[cfg(test)]
 #[path = "work_tests.rs"]
 mod work_tests;

@@ -158,6 +158,7 @@ fn keep_repeat(queue: &Queue<()>, repeat: &Repeat) -> Result<()> {
         .write(0, move |tx| register(tx, &state, (id, now, next), &text, &value))
         .map_err(|error| queue.fail(None, error))?;
     queue.state.alarm.lower(next);
+    queue.state.watchers.changed();
     Ok(())
 }
 

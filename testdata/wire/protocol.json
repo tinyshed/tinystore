@@ -1367,6 +1367,7 @@
     "jobs.set": 516,
     "jobs.step": 522,
     "jobs.update": 517,
+    "jobs.watch": 524,
     "jobs.work": 521,
     "kv.allow": 290,
     "kv.bucket.open": 257,

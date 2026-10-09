@@ -1531,6 +1531,8 @@ pub(crate) mod method {
     pub(crate) const JOBS_STEP: u16 = 0x020a;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_KEEP: u16 = 0x020b;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_WATCH: u16 = 0x020c;
     #[cfg(feature = "kv")]
     pub(crate) const KV_BUCKET_OPEN: u16 = 0x0101;
     #[cfg(feature = "kv")]
@@ -1612,6 +1614,8 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
     ("jobs.step", 0x020a),
     #[cfg(feature = "jobs")]
     ("jobs.keep", 0x020b),
+    #[cfg(feature = "jobs")]
+    ("jobs.watch", 0x020c),
     #[cfg(feature = "kv")]
     ("kv.bucket.open", 0x0101),
     #[cfg(feature = "kv")]

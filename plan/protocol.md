@@ -149,6 +149,7 @@ imports be.
 | `jobs.list`                   | handle, prefix, state, after, limit                                              | a page: its jobs, as many as the limit asks and the body holds, and where the next starts      |
 | `jobs.work`                   | handle, concurrency, until idle                                                  | both ways: held jobs out, answers back                                                         |
 | `jobs.step`, `.keep`          | a run, a step's name; keep's answer as JSON                                      | the answer kept, found false for none; nothing                                                 |
+| `jobs.watch`                  | handle, id                                                                       | a download: the job as it is, then again each time it changes, until it ends                   |
 
 `jobs.work` is a worker whose handlers are the client's. The server runs the
 queue's loop on a thread of the store's, claiming as every worker does, and
@@ -166,6 +167,13 @@ server's clock. A progress settles nothing.
 - **The client's `DATA`·END**, a `CANCEL` or a connection that ends fails the
   attempt of each job the client holds, as a worker that died would, and the
   jobs it was never sent go back uncounted.
+
+`jobs.watch` reads the job again at every commit of its queue and sends it
+when its state, place, attempt, time, progress or error changed; a client
+behind is sent the latest, within its credit. The job's end is its last DATA,
+done, failed or `cancelled`, and the stream's `DATA`·END follows; an id with
+no job ends the stream at once, and the server's `GOAWAY` ends it
+`unavailable`, to watch again on another connection.
 
 ## The server
 

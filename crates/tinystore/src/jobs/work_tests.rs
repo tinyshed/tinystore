@@ -173,6 +173,25 @@ fn a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_start
 }
 
 #[test]
+fn a_worker_runs_a_job_its_moved_clock_made_due_at_once() {
+    let f = fixture();
+    let pushes = f.store.queue::<Push>("pushes").open().unwrap();
+    let (ran_tx, ran_rx) = mpsc::channel();
+    let worker = pushes
+        .work(move |push: Push, _run| -> Result<()> {
+            ran_tx.send(push.user).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    pushes.delay(HOUR).add(&Push { user: 7 }).unwrap();
+    assert!(ran_rx.recv_timeout(Duration::from_millis(100)).is_err(), "not before its time");
+    f.advance(HOUR);
+    let ran = ran_rx.recv_timeout(Duration::from_secs(5));
+    assert_eq!(ran, Ok(7), "run once the clock moved, not when the worker's minute of sleep ends");
+    worker.stop();
+}
+
+#[test]
 fn a_stopping_worker_writes_each_answer_as_its_handler_gives_it() {
     let f = fixture();
     let pushes = f.store.queue::<Push>("pushes").open().unwrap();

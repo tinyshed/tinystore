@@ -23,8 +23,8 @@ use super::protocol::{
 };
 use crate::clock::from_unix_millis;
 use crate::jobs::{
-    Answers, Concurrency, Ended, Filter, Hand, How, Job, JobCall, Lease, Queue, Remote, RemoteWork, State,
-    keep_encoded, kept, read_value, start_remote,
+    Answers, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, Remote, RemoteWork, Report,
+    Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
 };
 use crate::{Error, ErrorKind, Store, unix_millis};
 
@@ -39,8 +39,14 @@ pub(crate) type Sender = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 /// Ends a work stream with its last frame.
 pub(crate) type Finisher = Arc<dyn Fn(Answered) + Send + Sync>;
 
+/// Runs a task on the session's workers, off the thread that asked.
+pub(crate) type Spawn = Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
+
 /// A connection's workers, by stream.
 type Works = Mutex<HashMap<u32, Arc<Work>>>;
+
+/// A connection's watches, by stream.
+type Watches = Mutex<HashMap<u32, Arc<Watching>>>;
 
 /// A progress, as JSON, is at most this long: memory keeps it while its job
 /// runs.
@@ -51,6 +57,7 @@ const MAX_HANDLERS: u64 = 1024;
 pub(crate) fn route(called: u16) -> Route {
     match called {
         method::JOBS_WORK => Route::Exchange,
+        method::JOBS_WATCH => Route::Watch,
         _ => Route::Worker,
     }
 }
@@ -61,6 +68,7 @@ pub(crate) struct Handles {
     open: Mutex<HashMap<u64, Opened>>,
     last: AtomicU64,
     works: Arc<Works>,
+    watches: Arc<Watches>,
     /// The last run given: a run's number names its job on the connection, to
     /// its answer, a step and a keep.
     runs: Arc<AtomicU64>,
@@ -285,8 +293,9 @@ fn state_of(name: &str) -> Result<State, Failure> {
 /// What a work stream needs of its connection.
 pub(crate) struct Link {
     pub(crate) send: Sender,
-    /// Ends the stream when the worker's loop ended by itself.
+    /// Ends the stream with its last frame, when the server ends it.
     pub(crate) finish: Finisher,
+    pub(crate) spawn: Spawn,
     /// The DATA bytes the client's HELLO lets the server send before it grants
     /// more.
     pub(crate) credit: u64,
@@ -597,6 +606,7 @@ impl Stream {
     /// the client's to answer; one a cancel took first goes nowhere.
     fn flush(&self) {
         let mut taken = Vec::new();
+        let mut began = false;
         let mut state = self.lock();
         let now = self.queue.jobs.now();
         while state.begun && !state.ended {
@@ -635,9 +645,13 @@ impl Stream {
                     holding.sent = true;
                 }
                 (self.link.send)(body);
+                began = true;
             }
         }
         drop(state);
+        if began {
+            self.queue.state.watchers.changed();
+        }
         for lease in taken {
             self.answers.answer(lease, None);
         }
@@ -674,6 +688,7 @@ impl Stream {
         if let Some(holding) = self.lock().held.get(&run).filter(|holding| holding.sent) {
             holding.lease.set_progress(report);
         }
+        self.queue.state.watchers.changed();
         Ok(())
     }
 
@@ -752,6 +767,28 @@ impl Handles {
         self.lock_works().drain().map(|(_, work)| work).collect()
     }
 
+    /// Credit the client granted a stream for the server's DATA: a worker's or
+    /// a watch's.
+    pub(crate) fn grant(&self, stream: u32, credit: u32) {
+        if let Some(work) = self.work(stream) {
+            return work.grant(credit);
+        }
+        let watch = locked(&self.watches).get(&stream).cloned();
+        if let Some(watch) = watch {
+            watch.grant(credit);
+        }
+    }
+
+    /// Takes the watch on a stream out of use, its stream's last frame to come.
+    pub(crate) fn take_watch(&self, stream: u32) -> Option<Arc<Watching>> {
+        locked(&self.watches).remove(&stream)
+    }
+
+    /// Takes every watch out of use: the connection ends, or the server closes.
+    pub(crate) fn take_watches(&self) -> Vec<Arc<Watching>> {
+        locked(&self.watches).drain().map(|(_, watch)| watch).collect()
+    }
+
     /// Halts every worker: the server is closing.
     pub(crate) fn halt_works(&self) {
         let works: Vec<Arc<Work>> = self.lock_works().values().cloned().collect();
@@ -769,8 +806,184 @@ impl Handles {
     }
 }
 
-fn locked(works: &Works) -> MutexGuard<'_, HashMap<u32, Arc<Work>>> {
-    works.lock().unwrap_or_else(PoisonError::into_inner)
+fn locked<T>(by_stream: &Mutex<HashMap<u32, T>>) -> MutexGuard<'_, HashMap<u32, T>> {
+    by_stream.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A client's watch of a job: the job as it is, then again each time it
+/// changes, until it ends. Its reads run on the session's workers, one at a
+/// time, and only the latest report waits when the client's credit is spent.
+pub(crate) struct Watching {
+    me: Weak<Watching>,
+    number: u32,
+    watches: Weak<Watches>,
+    queue: Queue<Raw>,
+    key: String,
+    link: Link,
+    /// The watcher's place among the queue's, given up when the watch ends.
+    sub: Mutex<Option<Subscription>>,
+    /// What the reads saw; one read runs at a time.
+    seen: Mutex<Seen<Raw>>,
+    state: Mutex<WatchState>,
+}
+
+#[derive(Default)]
+struct WatchState {
+    credit: u64,
+    /// A read is queued or under way, and a change came since it began.
+    reading: bool,
+    again: bool,
+    /// The latest report, waiting for credit, and whether the watch ends with it.
+    report: Option<(Vec<u8>, bool)>,
+    begun: bool,
+    ended: bool,
+}
+
+/// Starts the watch a `jobs.watch` asks for. It reads nothing until
+/// [`Watching::begin`], once the stream's `RESPONSE` went out.
+pub(crate) fn watch(handles: &Handles, number: u32, body: &[u8], link: Link) -> Result<Arc<Watching>, Failure> {
+    let asked = JobsId::decode(body)?;
+    let queue = handles.opened(asked.handle)?.queue;
+    let watching = Arc::new_cyclic(|me: &Weak<Watching>| {
+        let waking = me.clone();
+        let hears: Hears = Arc::new(move || {
+            if let Some(watching) = waking.upgrade() {
+                watching.wake();
+            }
+        });
+        let sub = Subscription::new(&queue.state, &asked.id, hears);
+        Watching {
+            me: me.clone(),
+            number,
+            watches: Arc::downgrade(&handles.watches),
+            queue,
+            key: asked.id,
+            sub: Mutex::new(Some(sub)),
+            seen: Mutex::new(Seen::default()),
+            state: Mutex::new(WatchState { credit: link.credit, ..WatchState::default() }),
+            link,
+        }
+    });
+    locked(&handles.watches).insert(number, Arc::clone(&watching));
+    Ok(watching)
+}
+
+impl Watching {
+    /// Reads the job a first time: the stream's `RESPONSE` went out.
+    pub(crate) fn begin(&self) {
+        self.lock().begun = true;
+        self.wake();
+    }
+
+    /// Credit the client granted the stream for the server's DATA.
+    pub(crate) fn grant(&self, credit: u32) {
+        self.lock().credit += u64::from(credit);
+        self.flush();
+    }
+
+    /// Ends the watch without a frame: the client cancelled it or left. Says
+    /// whether it was still going.
+    pub(crate) fn end(&self) -> bool {
+        if std::mem::replace(&mut self.lock().ended, true) {
+            return false;
+        }
+        drop(self.sub.lock().unwrap_or_else(PoisonError::into_inner).take());
+        if let Some(watches) = self.watches.upgrade() {
+            locked(&watches).remove(&self.number);
+        }
+        true
+    }
+
+    /// Ends the watch and its stream with `last`, unless it ended already.
+    pub(crate) fn close(&self, last: Answered) {
+        if self.end() {
+            (self.link.finish)(last);
+        }
+    }
+
+    /// Asks for a read, off this thread, since a change the queue committed
+    /// may be one the client sees; one asked for while a read runs follows it.
+    fn wake(&self) {
+        let mut state = self.lock();
+        if !state.begun || state.ended {
+            return;
+        }
+        if std::mem::replace(&mut state.reading, true) {
+            state.again = true;
+            return;
+        }
+        drop(state);
+        let me = self.me.clone();
+        (self.link.spawn)(Box::new(move || {
+            if let Some(watching) = me.upgrade() {
+                watching.read();
+            }
+        }));
+    }
+
+    /// Reads the job again until no change came meanwhile, and sends what the
+    /// client has not seen.
+    fn read(&self) {
+        loop {
+            let read = {
+                let sub = self.sub.lock().unwrap_or_else(PoisonError::into_inner);
+                let Some(sub) = sub.as_ref() else {
+                    return;
+                };
+                self.seen.lock().unwrap_or_else(PoisonError::into_inner).read(&self.queue, &self.key, sub)
+            };
+            match read {
+                Ok(Report::Changed(job)) => {
+                    let last = matches!(job.state, State::Done | State::Failed | State::Cancelled);
+                    match within(job_of(job).encode(), self.link.max_body) {
+                        Ok(body) => {
+                            self.lock().report = Some((body, last));
+                            self.flush();
+                        }
+                        Err(failure) => return self.close(Err(failure)),
+                    }
+                }
+                Ok(Report::Same) => {}
+                Ok(Report::Over) => {
+                    if self.lock().report.is_none() {
+                        return self.close(Ok(Empty {}.encode()));
+                    }
+                }
+                Err(error) => return self.close(Err(Failure::from(error))),
+            }
+            let mut state = self.lock();
+            if !std::mem::replace(&mut state.again, false) || state.ended {
+                state.reading = false;
+                return;
+            }
+        }
+    }
+
+    /// Sends the latest report when the client's credit takes it, and ends
+    /// the stream after the last.
+    fn flush(&self) {
+        let mut state = self.lock();
+        if state.ended {
+            return;
+        }
+        let Some((body, last)) = state.report.take() else {
+            return;
+        };
+        if body.len() as u64 > state.credit {
+            state.report = Some((body, last));
+            return;
+        }
+        state.credit -= body.len() as u64;
+        (self.link.send)(body);
+        drop(state);
+        if last {
+            self.close(Ok(Empty {}.encode()));
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, WatchState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// An answer within the body agreed: a larger one is `limit`.

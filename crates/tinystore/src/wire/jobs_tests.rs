@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::pipe::fixture::Client;
+use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
@@ -58,6 +58,20 @@ fn how(run: u64, how: &str) -> JobsAnswer {
 fn end(client: &mut Client, stream: u32) -> Frame {
     client.write(Frame::new(Kind::Data, stream, Vec::new()).ending());
     client.next_on(stream)
+}
+
+/// Watches a job, the stream open once the `RESPONSE` came.
+fn watch(client: &mut Client, handle: u64, id: &str) -> u32 {
+    let stream = client.start(method::JOBS_WATCH, &JobsId { handle, id: id.to_owned() });
+    let started = client.next_on(stream);
+    assert_eq!((started.kind, started.flags), (Kind::Response, 0), "the watch stays open");
+    stream
+}
+
+fn seen(client: &mut Client, stream: u32) -> JobsJob {
+    let frame = client.next_on(stream);
+    assert_eq!((frame.kind, frame.flags), (Kind::Data, 0), "the job as it is now, the watch open");
+    JobsJob::decode(&frame.body).unwrap()
 }
 
 #[test]
@@ -325,6 +339,74 @@ fn a_closing_server_hands_its_workers_no_job_more() {
     assert!(jobs.get("e1").unwrap().is_none(), "the job in hand was answered");
     let second = jobs.get("e2").unwrap().unwrap();
     assert_eq!((second.state, second.attempt), (crate::jobs::State::Waiting, 0));
+    store.close().unwrap();
+}
+
+#[test]
+fn a_watch_follows_its_job_through_a_client_worker_to_its_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "videos");
+    add(&mut client, &job(handle, "v1", "null"));
+    let watched = watch(&mut client, handle, "v1");
+    assert_eq!(seen(&mut client, watched).state, "waiting", "the job as it is first");
+
+    let stream = work(&mut client, handle, None);
+    let run = held(&mut client, stream).run;
+    assert_eq!(seen(&mut client, watched).state, "running");
+    answer(&mut client, stream, &JobsAnswer { progress: Some("0.5".to_owned()), ..how(run, "progress") });
+    assert_eq!(seen(&mut client, watched).progress.as_deref(), Some("0.5"));
+    answer(&mut client, stream, &how(run, "done"));
+    assert_eq!(seen(&mut client, watched).state, "done");
+    let last = client.next_on(watched);
+    assert_eq!((last.kind, last.flags), (Kind::Data, frame::END), "the watch ends with its job");
+
+    assert_eq!(end(&mut client, stream).flags, frame::END);
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+}
+
+#[test]
+fn a_watch_ends_cancelled_with_its_job_and_at_once_with_no_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "videos");
+    add(&mut client, &JobsCall { delay: Some(3_600_000), ..job(handle, "v1", "null") });
+    let watched = watch(&mut client, handle, "v1");
+    assert_eq!(seen(&mut client, watched).state, "scheduled");
+
+    let id = JobsId { handle, id: "v1".to_owned() };
+    assert!(client.call::<JobsChanged>(method::JOBS_CANCEL, &id).unwrap().changed);
+    assert_eq!(seen(&mut client, watched).state, "cancelled");
+    assert_eq!(client.next_on(watched).flags, frame::END);
+
+    let nothing = watch(&mut client, handle, "never");
+    let last = client.next_on(nothing);
+    assert_eq!((last.kind, last.flags), (Kind::Data, frame::END), "an id with no job ends its watch at once");
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+}
+
+#[test]
+fn a_watch_the_client_cancels_or_its_server_leaves_ends_with_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    client.hello(2).unwrap();
+    let handle = queue(&mut client, "videos");
+    add(&mut client, &JobsCall { delay: Some(3_600_000), ..job(handle, "v1", "null") });
+
+    let cancelled = watch(&mut client, handle, "v1");
+    seen(&mut client, cancelled);
+    client.write(Frame::new(Kind::Cancel, cancelled, Vec::new()));
+    let last = client.next_on(cancelled);
+    assert_eq!(answered::<Empty>(&last).unwrap_err().code, "cancelled");
+
+    let left = watch(&mut client, handle, "v1");
+    seen(&mut client, left);
+    client.pipe.go_away();
+    let last = client.next_on(left);
+    assert_eq!(answered::<Empty>(&last).unwrap_err().code, "unavailable", "watch again on another connection");
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+    drop(client);
     store.close().unwrap();
 }
 

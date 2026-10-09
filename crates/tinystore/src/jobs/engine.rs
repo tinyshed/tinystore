@@ -171,7 +171,21 @@ impl Engine for Jobs {
         for worker in workers {
             worker.stop();
         }
-        self.file.close()
+        let closed = self.file.close();
+        // a watcher waiting for a change reads again, and hears the store closed
+        for queue in self.open_queues() {
+            queue.watchers.changed();
+        }
+        closed
+    }
+
+    /// Wakes every worker and watcher to read the clock again, so that a job
+    /// the test made due runs now rather than when a worker's sleep ends.
+    fn clock_moved(&self) {
+        for queue in self.open_queues() {
+            queue.alarm.wake();
+            queue.watchers.changed();
+        }
     }
 }
 

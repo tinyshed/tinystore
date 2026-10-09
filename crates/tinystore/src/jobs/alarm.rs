@@ -57,12 +57,8 @@ impl Alarm {
             return;
         }
         state.at = at;
-        state.waiters.retain(|waiter| waiter.strong_count() > 0);
-        let waiters: Vec<_> = state.waiters.iter().filter_map(Weak::upgrade).collect();
         drop(state);
-        for waiter in waiters {
-            waiter.wake();
-        }
+        self.wake();
     }
 
     /// Starts a read of the file when a job may be due at `now`.
@@ -111,6 +107,17 @@ impl Alarm {
 
     pub(crate) fn subscribe(&self, waiter: Weak<dyn Wake>) {
         self.lock().waiters.push(waiter);
+    }
+
+    /// Wakes every worker waiting, to read the clock again: a test moved it.
+    pub(crate) fn wake(&self) {
+        let mut state = self.lock();
+        state.waiters.retain(|waiter| waiter.strong_count() > 0);
+        let waiters: Vec<_> = state.waiters.iter().filter_map(Weak::upgrade).collect();
+        drop(state);
+        for waiter in waiters {
+            waiter.wake();
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {

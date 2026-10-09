@@ -171,7 +171,12 @@ impl Session {
         let body = GoAway { code: "unavailable".to_owned(), message: "the server is closing".to_owned() }.encode();
         self.shared.send(&[Frame::new(Kind::GoAway, 0, body)]);
         #[cfg(feature = "jobs")]
-        self.shared.jobs.halt_works();
+        {
+            self.shared.jobs.halt_works();
+            for watch in self.shared.jobs.take_watches() {
+                watch.close(Err(Failure::unavailable("the server is closing; watch again on another connection")));
+            }
+        }
     }
 
     pub(crate) fn streams(&self) -> usize {
@@ -203,8 +208,13 @@ impl Session {
         let runs = std::mem::take(&mut *self.shared.lock_runs());
         drop(runs);
         #[cfg(feature = "jobs")]
-        for work in self.shared.jobs.take_works() {
-            work.end();
+        {
+            for watch in self.shared.jobs.take_watches() {
+                watch.end();
+            }
+            for work in self.shared.jobs.take_works() {
+                work.end();
+            }
         }
     }
 }
@@ -318,6 +328,8 @@ impl Shared {
             }
             #[cfg(feature = "jobs")]
             Route::Exchange => self.exchange(input, stream, &body),
+            #[cfg(feature = "jobs")]
+            Route::Watch => self.watch(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -331,7 +343,32 @@ impl Shared {
     /// hands the client and the client's answers, as DATA both ways.
     #[cfg(feature = "jobs")]
     fn exchange(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
-        let (sending, finishing) = (Arc::downgrade(self), Arc::downgrade(self));
+        match guarded(|| jobs::work(&self.jobs, stream, body, self.link(input, stream))) {
+            Ok(work) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                work.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
+    /// Starts a client's watch of a job: the stream's `RESPONSE`, then a DATA
+    /// each time the job changes, until it ends.
+    #[cfg(feature = "jobs")]
+    fn watch(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        match guarded(|| jobs::watch(&self.jobs, stream, body, self.link(input, stream))) {
+            Ok(watch) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                watch.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
+    /// What a stream the server sends DATA on needs of the session.
+    #[cfg(feature = "jobs")]
+    fn link(self: &Arc<Self>, input: &Input, stream: u32) -> jobs::Link {
+        let (sending, finishing, spawning) = (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
         let send: jobs::Sender = Arc::new(move |body| {
             if let Some(shared) = sending.upgrade() {
                 shared.send(&[Frame::new(Kind::Data, stream, body)]);
@@ -342,15 +379,13 @@ impl Shared {
                 shared.end_stream(stream, last);
             }
         });
-        let max_body = input.max_body.unwrap_or(HELLO_MOST);
-        let link = jobs::Link { send, finish, credit: input.stream_credit, max_body };
-        match guarded(|| jobs::work(&self.jobs, stream, body, link)) {
-            Ok(work) => {
-                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
-                work.begin();
+        let spawn: jobs::Spawn = Arc::new(move |task| {
+            if let Some(shared) = spawning.upgrade() {
+                shared.workers.run(task);
             }
-            Err(failure) => self.answer(stream, Err(failure)),
-        }
+        });
+        let max_body = input.max_body.unwrap_or(HELLO_MOST);
+        jobs::Link { send, finish, spawn, credit: input.stream_credit, max_body }
     }
 
     /// Starts a client's run of a once key: its kept answer ends the stream, a
@@ -455,24 +490,29 @@ impl Shared {
         }));
     }
 
-    /// A client's grant of DATA on a stream: a worker's sends what waited for
-    /// it. No other stream sends DATA a client grants credit for: a call
-    /// answers in one message, within the body agreed.
-    #[cfg_attr(not(feature = "jobs"), expect(unused_variables, reason = "only a jobs worker's stream takes credit"))]
+    /// A client's grant of DATA on a stream: a worker's or a watch's sends
+    /// what waited for it. No other stream sends DATA a client grants credit
+    /// for: a call answers in one message, within the body agreed.
+    #[cfg_attr(not(feature = "jobs"), expect(unused_variables, reason = "only jobs' streams take credit"))]
     fn credit(&self, frame: &Frame) {
         #[cfg(feature = "jobs")]
-        if let (Some(work), Ok(granted)) = (self.jobs.work(frame.stream), <[u8; 4]>::try_from(frame.body.as_slice())) {
-            work.grant(u32::from_le_bytes(granted));
+        if let Ok(granted) = <[u8; 4]>::try_from(frame.body.as_slice()) {
+            self.jobs.grant(frame.stream, u32::from_le_bytes(granted));
         }
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
     /// cancelled runs to its end, short as a call is. A worker cancelled ends
-    /// as its END would end it, the jobs it held failing their attempt.
+    /// as its END would end it, the jobs it held failing their attempt, and a
+    /// watch cancelled ends.
     fn cancel(self: &Arc<Self>, stream: u32) {
         #[cfg(feature = "jobs")]
         if self.jobs.work(stream).is_some() {
             return self.end_work(stream, Err(Failure::cancelled("the client cancelled its worker")));
+        }
+        #[cfg(feature = "jobs")]
+        if let Some(watch) = self.jobs.take_watch(stream) {
+            return watch.close(Err(Failure::cancelled("the client cancelled its watch")));
         }
         let mut runs = self.lock_runs();
         let cancelled = Failure::cancelled("the client cancelled the run");
@@ -519,8 +559,9 @@ impl Shared {
             (Some(_), Some(_)) => return Err(Failure::invalid("a clock set and moved in one call")),
             (Some(at), None) => clock.set(from_unix_millis(at))?,
             (None, Some(advance)) => clock.advance(Duration::from_millis(advance)),
-            (None, None) => {}
+            (None, None) => return Ok(ServerClock { at: Some(unix_millis(clock.now())), advance: None }.encode()),
         }
+        self.store.clock_moved();
         Ok(ServerClock { at: Some(unix_millis(clock.now())), advance: None }.encode())
     }
 

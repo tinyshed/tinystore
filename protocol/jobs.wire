@@ -166,3 +166,4 @@ method 0x0208 jobs.list(jobs.List) -> jobs.Page
 method 0x0209 jobs.work(jobs.Work) -> exchange jobs.Held for jobs.Answer
 method 0x020a jobs.step(jobs.Step) -> jobs.Kept
 method 0x020b jobs.keep(jobs.Step) -> Empty
+method 0x020c jobs.watch(jobs.Id) -> download jobs.Job until Empty

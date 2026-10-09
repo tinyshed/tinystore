@@ -188,6 +188,52 @@ for (const way of ways) {
 			expect(await exports.get('export:9')).toBeUndefined()
 		})
 
+		test('a watch follows its job through its progress to its end, and an id with no job yields nothing', async () => {
+			const clips = store.queue<{ clip: number }>('clips')
+			await clips.add({ clip: 1 }, { id: 'clip:1' })
+			const seen: string[] = []
+			const watching = (async () => {
+				for await (const job of clips.watch('clip:1')) {
+					seen.push(job.progress === undefined ? job.state : `${job.state} ${job.progress}`)
+				}
+			})()
+			await until(() => seen.length > 0)
+			let release!: () => void
+			const released = new Promise<void>(resolve => {
+				release = resolve
+			})
+			const worker = clips.work(async (_, run) => {
+				run.setProgress(0.5)
+				await released
+			})
+			await until(() => seen.at(-1) === 'running 0.5')
+			release()
+			await watching
+			expect([seen[0], seen.at(-1)]).toEqual(['waiting', 'done 0.5'])
+			await worker.stop()
+
+			const nothing: unknown[] = []
+			for await (const job of clips.watch('clip:never')) {
+				nothing.push(job)
+			}
+			expect(nothing).toEqual([])
+		})
+
+		test('a watch of a job a cancel took ends cancelled', async () => {
+			const clips = store.queue<{ clip: number }>('clips')
+			await clips.add({ clip: 2 }, { id: 'clip:2', delay: '1h' })
+			const states: string[] = []
+			const watching = (async () => {
+				for await (const job of clips.watch('clip:2')) {
+					states.push(job.state)
+				}
+			})()
+			await until(() => states.length > 0)
+			expect(await clips.cancel('clip:2')).toBe(true)
+			await watching
+			expect(states).toEqual(['scheduled', 'cancelled'])
+		})
+
 		test('a schedule keeps its one job, and a cron needs a time zone', async () => {
 			const nightly = store.schedule(
 				'nightly',

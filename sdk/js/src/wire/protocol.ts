@@ -27,6 +27,7 @@ export const methods = {
 	'jobs.work': 0x0209,
 	'jobs.step': 0x020a,
 	'jobs.keep': 0x020b,
+	'jobs.watch': 0x020c,
 	'kv.bucket.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,

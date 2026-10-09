@@ -9,6 +9,7 @@ use super::alarm::Alarm;
 use super::claim::Lease;
 use super::policy::Policy;
 use super::rate::RateLog;
+use super::watch::Watchers;
 
 /// What a name is: a queue of jobs, or a schedule's one repeating job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub(crate) struct QueueState {
     pub(crate) policy: Policy,
     pub(crate) alarm: Alarm,
     pub(crate) rate: Option<RateLog>,
+    pub(crate) watchers: Watchers,
     /// The jobs this process's leases hold, by job id: running, or claimed for
     /// a handler still busy with the one before.
     held: Mutex<HashMap<i64, Arc<Lease>>>,
@@ -58,6 +60,7 @@ impl QueueState {
             policy,
             alarm: Alarm::new(),
             rate: policy.rate.map(|(count, per)| RateLog::new(count, per)),
+            watchers: Watchers::default(),
             held: Mutex::new(HashMap::new()),
             keys_after: Mutex::new(String::new()),
             failures: Quiet::new("jobs failed for good"),

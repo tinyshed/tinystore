@@ -11,8 +11,7 @@ both books share. TypeScript comes first; Python, Go and Rust follow where
 they spell something differently. The Rust and TypeScript columns are
 built, the core in `crates/tinystore/src/jobs`, protocol 2 in
 `protocol/jobs.wire` and the Bun SDK in `sdk/js/src/jobs.ts`, all but
-`watch`, which comes next, and transactions and queues opened from an SQL
-database, which come with sqldb.
+transactions and queues opened from an SQL database, which come with sqldb.
 
 ## What a newcomer learns
 

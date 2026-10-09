@@ -31,6 +31,12 @@ impl Fixture {
         self.store.now()
     }
 
+    /// Moves the clock on, and tells the store, as a test's `server.clock` does.
+    pub(crate) fn advance(&self, by: Duration) {
+        self.clock.advance(by);
+        self.store.clock_moved();
+    }
+
     /// Closes the store and opens the directory again, on the same clock.
     pub(crate) fn reopen(&mut self) {
         self.store.close().unwrap();

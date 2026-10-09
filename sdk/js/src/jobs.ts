@@ -7,12 +7,12 @@
 
 import { FailureLog, messageOf } from './background.ts'
 import type { Connection, Idempotence, Link } from './connection.ts'
-import { CancelledError, CorruptError, InvalidError } from './errors.ts'
+import { CancelledError, CorruptError, InvalidError, UnavailableError } from './errors.ts'
 import { checkName, handleOn } from './handles.ts'
 import { type Rate, rateOf } from './limits.ts'
 import { sayOwn } from './logger.ts'
 import { check, type StandardSchemaV1 } from './schema.ts'
-import type { Stream } from './session.ts'
+import { LostError, type Stream } from './session.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import type { Read, Written } from './wire/codec.ts'
 import {
@@ -502,6 +502,66 @@ async function jobOf<T>(source: Source<T>, found: Read<typeof JobsJob.fields>): 
 	}
 }
 
+/**
+ * Follows the job under id over the server's watch, until the stream's last
+ * DATA. A lost connection or a server going away watches again, and the
+ * first report of the new watch is left out when it shows what was seen.
+ */
+async function* watchJob<T>(source: Source<T>, id: string): AsyncGenerator<Job<T>> {
+	let last: Read<typeof JobsJob.fields> | undefined
+	for (;;) {
+		const stream = await source.link.run('read', connection => openWatch(connection, source, id))
+		try {
+			for (;;) {
+				const event = await stream.next()
+				stream.consumed(event.body.length)
+				if (event.end) {
+					return
+				}
+				const found = JobsJob.decode(event.body)
+				if (last === undefined || !showsTheSame(last, found)) {
+					last = found
+					yield await jobOf(source, found)
+				}
+			}
+		} catch (err) {
+			if (!(err instanceof LostError || err instanceof UnavailableError)) {
+				throw err
+			}
+		} finally {
+			stream.cancel()
+		}
+	}
+}
+
+/** Opens a watch of the job under id, once its RESPONSE came. */
+async function openWatch<T>(
+	connection: Connection,
+	source: Source<T>,
+	id: string,
+): Promise<Stream> {
+	const handle = await handleOn(connection, source.openMethod, source.open)
+	const stream = await connection.session.open(
+		methods['jobs.watch'],
+		JobsId.encode({ handle, id }),
+		true,
+	)
+	await stream.next()
+	return stream
+}
+
+/** Whether two reports show a watcher the same: the job's state, place, attempt, time, progress and error. */
+function showsTheSame(a: Read<typeof JobsJob.fields>, b: Read<typeof JobsJob.fields>): boolean {
+	return (
+		a.state === b.state &&
+		a.ahead === b.ahead &&
+		a.attempt === b.attempt &&
+		a.at === b.at &&
+		a.progress === b.progress &&
+		a.error === b.error
+	)
+}
+
 /** A queue of jobs of one type, run in the order of their time: open it with `store.queue(name)`. */
 export class Queue<T> {
 	readonly name: string
@@ -573,6 +633,19 @@ export class Queue<T> {
 	 */
 	get(id: string): Promise<Job<T> | undefined> {
 		return getJob(this.#source, id)
+	}
+
+	/**
+	 * The job under id as it is, then again each time its state, place,
+	 * attempt, time, progress or error changes; it ends with the job: done,
+	 * failed, or cancelled, a state only a watcher sees. An id with no job
+	 * yields nothing. A watch whose connection is lost watches again on the
+	 * next; a job that ended meanwhile ends it without its last state.
+	 *
+	 *     for await (const job of videos.watch(id)) send(job.state, job.ahead, job.progress)
+	 */
+	watch(id: string): AsyncGenerator<Job<T>> {
+		return watchJob(this.#source, id)
 	}
 
 	/** A page of the queue's jobs whose ids start with a prefix, or of its failed ones. */

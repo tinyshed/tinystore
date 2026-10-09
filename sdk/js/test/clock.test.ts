@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { InvalidError, open } from '../src/index.ts'
+import { until } from './ways.ts'
 
 async function caught(promise: Promise<unknown>): Promise<unknown> {
 	return promise.then(
@@ -41,6 +42,23 @@ test('a private store runs on the clock it is given, which moves only forward', 
 	)
 	const set = await store.clock.set(new Date('2026-10-04T00:00:00Z'))
 	expect(set.toISOString()).toBe('2026-10-04T00:00:00.000Z')
+})
+
+test('a running worker runs at once a job the moved clock made due', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'tinystore-clock-'))
+	await using store = await open(dir, { private: true, clock: new Date('2026-10-03T09:00:00Z') })
+	const reminders = store.queue<{ userId: number }>('reminders')
+	await reminders.add({ userId: 1 })
+	await reminders.add({ userId: 42 }, { delay: '1h' })
+	const ran: number[] = []
+	const worker = reminders.work(async ({ userId }) => {
+		ran.push(userId)
+	})
+	await until(() => ran.length === 1) // the worker runs, and sleeps until the later job
+	await store.clock.advance('1h')
+	await until(() => ran.length === 2)
+	expect(ran).toEqual([1, 42])
+	await worker.stop()
 })
 
 test("a clock is a private store's, and a store on the system's time refuses to move one", async () => {

@@ -171,20 +171,31 @@ where
         let cancelled = self
             .jobs
             .file()
-            .write(0, move |tx| write::cancel(tx, &queue, &key))
-            .map_err(|error| self.fail(Some(&id), error))?;
-        match cancelled {
+            .write(0, move |tx| {
+                let cancelled = write::cancel(tx, &queue, &key)?;
+                queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
+                Ok(cancelled)
+            })
+            .map_err(|error| {
+                self.state.watchers.cancelled(&id, false);
+                self.fail(Some(&id), error)
+            })?;
+        let found = match cancelled {
             Cancelled::Job(job) => {
                 if let Some(lease) = self.state.held(job) {
                     lease.cancel();
                     self.state.release(&lease);
                 }
                 self.state.room_made(self.jobs.now());
-                Ok(true)
+                true
             }
-            Cancelled::Failed => Ok(true),
-            Cancelled::Nothing => Ok(false),
+            Cancelled::Failed => true,
+            Cancelled::Nothing => false,
+        };
+        if found {
+            self.state.watchers.changed();
         }
+        Ok(found)
     }
 
     /// Where the job under `id` is: scheduled, waiting and how many jobs are
@@ -291,6 +302,7 @@ where
                     Err(error) => return Err(self.fail(lease.key.as_deref(), error)),
                 };
                 if lease.begin(now) {
+                    self.state.watchers.changed();
                     return Ok(Some(Claimed { value, run }));
                 }
                 continue; // a cancel took it as it was claimed
@@ -314,6 +326,7 @@ where
             .map_err(|error| self.fail(id.as_deref(), error))?;
         if added {
             self.state.alarm.lower(at);
+            self.state.watchers.changed();
         }
         Ok(added)
     }
@@ -332,6 +345,7 @@ where
             .write(call.value.len(), move |tx| write::set(tx, &queue, &call))
             .map_err(|error| self.fail(Some(key), error))?;
         self.state.alarm.lower(set.due);
+        self.state.watchers.changed();
         Ok(())
     }
 
@@ -349,6 +363,7 @@ where
             .map_err(|error| self.fail(Some(key), error))?;
         if let Some(due) = due {
             self.state.alarm.lower(due);
+            self.state.watchers.changed();
         }
         Ok(due.is_some())
     }
@@ -426,6 +441,7 @@ impl<V> Claimed<V> {
         let settled = jobs.file().write(0, move |tx| claim::settle(tx, &kept, &settling, &how, now))?;
         lease.apply(&settled, false);
         queue.release(lease);
+        queue.watchers.changed();
         if let Some(due) = settled.due {
             queue.alarm.lower(due);
         }

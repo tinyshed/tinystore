@@ -13,6 +13,10 @@ pub trait Engine: Send + Sync + 'static {
     /// Closes the engine. A second call, or a call after the engine closed by
     /// itself, does nothing.
     fn close(&self) -> Result<()>;
+
+    /// The store's clock was moved by hand, as a test moves it: what sleeps
+    /// until a time reads the clock again.
+    fn clock_moved(&self) {}
 }
 
 /// The store's calls for the engines opened against it.

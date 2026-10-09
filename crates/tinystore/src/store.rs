@@ -103,6 +103,16 @@ impl Store {
         self.inner.clock.now()
     }
 
+    /// Tells every engine that a test moved the store's clock by hand, so
+    /// that what sleeps until a time reads it again: a worker waiting for a
+    /// job due in an hour runs it once the clock is an hour on.
+    pub fn clock_moved(&self) {
+        let engines = lock(&self.inner.engines).clone();
+        for engine in engines {
+            engine.clock_moved();
+        }
+    }
+
     pub fn memory(&self) -> &Arc<Memory> {
         &self.inner.memory
     }
