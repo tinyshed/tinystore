@@ -8,7 +8,7 @@ says so. Mark a task done in the commit that does it.
 
 - [x] The research read and the owner's decisions written down ([decisions.md](decisions.md)).
 - [x] This plan.
-- [ ] The Go engines leave the tree; `e81a050` stays the reference.
+- [x] The Go engines leave the tree; `e81a050` stays the reference.
 - [ ] AGENTS.md rewritten for the Rust repository: shape, crates, `unsafe`, features, checks.
 - [ ] A Cargo workspace with the crates of [architecture.md](architecture.md), building on Linux, macOS and Windows in CI.
 - [ ] The API book for jobs, then kv ([dx.md](dx.md#the-api-books)).
