@@ -7,8 +7,11 @@ the code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) and
 [jobs.md](jobs.md) the words all three share. TypeScript comes first in each
 section; Python, Go and Rust follow where they spell something differently.
 The Rust core builds databases, their migrations, reads, writes, batches and
-transactions (`crates/tinystore/src/sql`); tables, the builder, the protocol
-and the SDKs come next. The Go engine at `e81a050` and research's design of it
+transactions (`crates/tinystore/src/sql`), protocol 2 serves them
+(`protocol/sql.wire`), and the Bun SDK has all of it with its tables and
+query builder (`sdk/js/src/sql.ts`, `query.ts`), which
+`testdata/sql/queries.json` holds every SDK to; Rust's tables and builder,
+`include`, and the Python and Go SDKs come next. The Go engine at `e81a050` and research's design of it
 are the reference for what it promises.
 
 What changed from the Go engine: queries can be built without writing their
@@ -412,9 +415,9 @@ await notes.where(sql`created_at < ${cutoff}`).delete()
   else. Quoting keeps SQL out, not a column the request should not see: a
   request picks from the program's own sorts, as above, since an order shows
   something of what it orders.
-- `select`, `join`, `leftJoin` and `having` take SQL text, which TypeScript
-  takes only as text written in the code: a `string` that came from elsewhere
-  does not compile, and goes through `sql` or `sql.ident`.
+- `select`, `join`, `leftJoin` and `having` take SQL text, written by the
+  program and never by a request: what a request chooses goes through
+  `orderBy`, `sql.ident` or a value.
 - `select<T>` names the shape of the row it gives; Go spells it
   `sqldb.Select[T](query, …)`, a Go method taking no type parameter. A join
   without `select` reads the first table's columns, `o.*`, so that a name both

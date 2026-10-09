@@ -70,7 +70,7 @@ jobs:
           bun install --frozen-lockfile
           export TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library"
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
-          bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/clock.test.ts test/protocol.test.ts
+          bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/protocol.test.ts
 
   quality:
     name: quality

@@ -236,6 +236,13 @@ module defines.
 - a database opens without migrations as it is, checking nothing — `a_database_opens_without_migrations_as_it_is` in `sql::database_tests`; `a database opens without migrations as it is, and refuses a migration changed after it was applied` in `sdk/js/test/sql.test.ts`, `test_a_database_opens_without_migrations_empty_to_try_a_query` in Python's
 - a database's name cannot leave `sql/` or meet another on a file system that folds case — `a_name_that_could_leave_sql_or_meet_another_is_refused` in `sql::database_tests`
 - a database closes with its store, and a handle that outlives it is closed — `a_database_closes_with_its_store` in `sql::database_tests`
+- every SDK's query builder writes the same statement from the same steps: groups, lists, `null`, a `?` in a string, joins, names a request chooses, writes — `the query vectors` in `sdk/js/test/queries.test.ts`, over `testdata/sql/queries.json`
+- a table inserts rows and gives them back in their types — `a table inserts rows and gives them back in their types` in `sdk/js/test/sql.test.ts`
+- an update or a delete changes what its condition says, and refuses every row, an empty condition and `undefined` — `an update or a delete changes what its condition says, and refuses every row` in `sdk/js/test/sql.test.ts`
+- an upsert sets only what it names, and only on the row its owner holds — `an upsert sets only what it names, on the row its owner holds` in `sdk/js/test/sql.test.ts`
+- a page reads after the last row of the one before, and a cursor only its own query — `a page reads after the last row of the one before, and only its own query` in `sdk/js/test/sql.test.ts`
+- a join reads its first table's columns, a query in a piece is a subquery — `a join reads its first table, a query in a piece is a subquery, and a plan explains it` in `sdk/js/test/sql.test.ts`
+- a table inside a transaction writes with it and rolls back with it — `a table inside a transaction writes with it, and rolls back with it` in `sdk/js/test/sql.test.ts`
 
 ## SQLite under every engine
 

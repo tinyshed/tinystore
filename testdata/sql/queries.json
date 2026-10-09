@@ -1,0 +1,192 @@
+{
+  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}.",
+  "queries": [
+    {
+      "name": "equal values in the order of their names, a group of alternatives, an order and a limit",
+      "table": "orders",
+      "steps": [
+        { "where": { "equal": { "status": "pending", "deleted": false } } },
+        { "where": { "or": [{ "sql": ["amount >= ?", 1000] }, { "equal": { "priority": "high" } }] } },
+        { "orderBy": ["created_at", "desc"] },
+        { "limit": 50 }
+      ],
+      "text": "select * from \"orders\" where \"deleted\" = ? and \"status\" = ? and (amount >= ? or \"priority\" = ?) order by \"created_at\" desc limit cast(? as integer)",
+      "values": [0, "pending", 1000, "high", 50]
+    },
+    {
+      "name": "a piece of SQL beside others goes in parentheses",
+      "table": "orders",
+      "steps": [
+        { "where": { "equal": { "tenant_id": 7 } } },
+        { "where": { "sql": ["total >= ? or total is null", 100] } }
+      ],
+      "text": "select * from \"orders\" where \"tenant_id\" = ? and (total >= ? or total is null)",
+      "values": [7, 100]
+    },
+    {
+      "name": "a piece of SQL alone stands as it is",
+      "table": "orders",
+      "steps": [{ "where": { "sql": ["total between ? and ?", 100, 5000] } }],
+      "text": "select * from \"orders\" where total between ? and ?",
+      "values": [100, 5000]
+    },
+    {
+      "name": "null is is null",
+      "table": "documents",
+      "steps": [{ "where": { "equal": { "deleted_at": null } } }],
+      "text": "select * from \"documents\" where \"deleted_at\" is null",
+      "values": []
+    },
+    {
+      "name": "a list is in, one value of any length",
+      "table": "orders",
+      "steps": [{ "where": { "equal": { "status": ["pending", "paid"] } } }],
+      "text": "select * from \"orders\" where \"status\" in (select value from json_each(?))",
+      "values": ["[\"pending\",\"paid\"]"]
+    },
+    {
+      "name": "an empty list finds nothing, and is the same statement",
+      "table": "orders",
+      "steps": [{ "where": { "equal": { "status": [] } } }],
+      "text": "select * from \"orders\" where \"status\" in (select value from json_each(?))",
+      "values": ["[]"]
+    },
+    {
+      "name": "groups inside groups, their values in the order they are written",
+      "table": "documents",
+      "steps": [
+        {
+          "where": {
+            "and": [
+              { "or": [{ "equal": { "owner_id": 7 } }, { "equal": { "is_public": true } }] },
+              { "sql": ["deleted_at is null"] }
+            ]
+          }
+        }
+      ],
+      "text": "select * from \"documents\" where ((\"owner_id\" = ? or \"is_public\" = ?) and deleted_at is null)",
+      "values": [7, 1]
+    },
+    {
+      "name": "a piece with an or of its own, inside a group, goes in parentheses",
+      "table": "documents",
+      "steps": [{ "where": { "and": [{ "sql": ["owner_id = ? or is_public = 1", 7] }, { "equal": { "deleted": false } }] } }],
+      "text": "select * from \"documents\" where ((owner_id = ? or is_public = 1) and \"deleted\" = ?)",
+      "values": [7, 0]
+    },
+    {
+      "name": "an empty or finds nothing, and an empty and everything",
+      "table": "orders",
+      "steps": [{ "where": { "or": [] } }, { "where": { "and": [] } }],
+      "text": "select * from \"orders\" where 0 and 1",
+      "values": []
+    },
+    {
+      "name": "a ? in a string or a comment is not a placeholder",
+      "table": "notes",
+      "steps": [{ "where": { "sql": ["title <> '?' -- why?\n and id = ?", 5] } }],
+      "text": "select * from \"notes\" where title <> '?' -- why?\n and id = ?",
+      "values": [5]
+    },
+    {
+      "name": "a join without select reads the first table's columns",
+      "table": "orders as o",
+      "steps": [
+        { "join": ["users as u", "u.id = o.user_id"] },
+        { "where": { "equal": { "u.email": "ada@example.com" } } }
+      ],
+      "text": "select \"o\".* from \"orders\" as \"o\" join \"users\" as \"u\" on u.id = o.user_id where \"u\".\"email\" = ?",
+      "values": ["ada@example.com"]
+    },
+    {
+      "name": "a left join's condition keeps its values in its on",
+      "table": "orders as o",
+      "steps": [
+        { "leftJoin": ["users as u", { "sql": ["u.id = o.user_id and u.active = ?", true] }] },
+        { "select": "o.id, o.total, u.email" }
+      ],
+      "text": "select o.id, o.total, u.email from \"orders\" as \"o\" left join \"users\" as \"u\" on u.id = o.user_id and u.active = ?",
+      "values": [1]
+    },
+    {
+      "name": "a select, its groups and a condition on them",
+      "table": "orders",
+      "steps": [
+        { "select": "user_id, sum(total) as total" },
+        { "groupBy": ["user_id"] },
+        { "having": { "sql": ["sum(total) > ?", 100] } }
+      ],
+      "text": "select user_id, sum(total) as total from \"orders\" group by \"user_id\" having sum(total) > ?",
+      "values": [100]
+    },
+    {
+      "name": "a name a request chooses is quoted, each part on its own",
+      "table": "orders",
+      "steps": [{ "orderBy": ["a\"b", "desc"] }, { "orderBy": ["u.created_at", "asc"] }],
+      "text": "select * from \"orders\" order by \"a\"\"b\" desc, \"u\".\"created_at\" asc",
+      "values": []
+    },
+    {
+      "name": "a limit and an offset compile once",
+      "table": "orders",
+      "steps": [{ "limit": 20 }, { "offset": 40 }],
+      "text": "select * from \"orders\" limit cast(? as integer) offset cast(? as integer)",
+      "values": [20, 40]
+    },
+    {
+      "name": "an offset without a limit",
+      "table": "orders",
+      "steps": [{ "offset": 40 }],
+      "text": "select * from \"orders\" limit -1 offset cast(? as integer)",
+      "values": [40]
+    },
+    {
+      "name": "a JSON list holding a value",
+      "table": "notes",
+      "steps": [{ "where": { "has": ["tags", "urgent"] } }],
+      "text": "select * from \"notes\" where exists (select 1 from json_each(\"tags\") where value = ?)",
+      "values": ["urgent"]
+    },
+    {
+      "name": "an update sets values and pieces of SQL, where its condition says",
+      "table": "notes",
+      "steps": [{ "where": { "equal": { "id": "n1" } } }],
+      "update": { "done": true, "views": { "sql": ["views + 1"] } },
+      "text": "update \"notes\" set \"done\" = ?, \"views\" = views + 1 where \"id\" = ?",
+      "values": [1, "n1"]
+    },
+    {
+      "name": "a delete deletes where its condition says",
+      "table": "notes",
+      "steps": [{ "where": { "sql": ["created_at < ?", 1791547200000] } }],
+      "delete": true,
+      "text": "delete from \"notes\" where created_at < ?",
+      "values": [1791547200000]
+    },
+    {
+      "name": "rows inserted as one statement, given back as the file keeps them",
+      "table": "notes",
+      "insert": [{ "id": "n1", "title": "Buy milk" }, { "id": "n2", "title": "Call mom" }],
+      "text": "insert into \"notes\" (\"id\", \"title\") values (?, ?), (?, ?) returning *",
+      "values": ["n1", "Buy milk", "n2", "Call mom"]
+    },
+    {
+      "name": "an upsert sets only what it names, on the row its owner holds",
+      "table": "notes",
+      "upsert": [
+        { "id": "n1", "title": "Buy oat milk", "author_id": 42 },
+        { "conflict": "id", "update": ["title"], "where": { "equal": { "author_id": 42 } } }
+      ],
+      "text": "insert into \"notes\" (\"id\", \"title\", \"author_id\") values (?, ?, ?) on conflict (\"id\") do update set \"title\" = excluded.\"title\" where \"author_id\" = ? returning *",
+      "values": ["n1", "Buy oat milk", 42, 42]
+    },
+    {
+      "name": "a count counts every match, without the order and the limit",
+      "table": "orders",
+      "steps": [{ "where": { "equal": { "status": "paid" } } }, { "orderBy": ["created_at", "desc"] }, { "limit": 50 }],
+      "count": true,
+      "text": "select count(*) from \"orders\" where \"status\" = ?",
+      "values": ["paid"]
+    }
+  ]
+}

@@ -11,6 +11,8 @@ import type { Connection, Idempotence, Link } from './connection.ts'
 import { download } from './connection.ts'
 import { errorOf, InvalidError } from './errors.ts'
 import { checkName, handleOn } from './handles.ts'
+import { Table, type TableOptions } from './query.ts'
+import type { StandardSchemaV1 } from './schema.ts'
 import type { Stream } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import {
@@ -68,12 +70,80 @@ export type Statement = [text: string | TemplateStringsArray | Sql, ...values: u
 export class Sql {
 	readonly text: string
 	readonly values: readonly SqlArg[]
+	/** whether it stands beside others in an and or an or without parentheses: one column's comparison */
+	readonly bare: boolean
 
 	/** Pieces come from `sql`. */
-	constructor(text: string, values: readonly SqlArg[]) {
+	constructor(text: string, values: readonly SqlArg[], bare = false) {
 		this.text = text
 		this.values = values
+		this.bare = bare
 	}
+}
+
+/** Whether text is one group in parentheses, or a bare 0 or 1, which may stand beside others as it is. */
+export function grouped(text: string): boolean {
+	if (!text.startsWith('(') || !text.endsWith(')')) {
+		return /^[01]$/.test(text)
+	}
+	let depth = 0
+	for (let at = 0; at < text.length; at++) {
+		if (text[at] === '(') depth++
+		if (text[at] === ')') depth--
+		if (depth === 0 && at < text.length - 1) {
+			return false
+		}
+	}
+	return true
+}
+
+/** Pieces joined with and or or, each in parentheses unless it may stand as it is. */
+export function joinedWith(pieces: readonly Sql[], joiner: string): Sql {
+	const several = pieces.length > 1
+	return new Sql(
+		pieces
+			.map(each =>
+				several && !each.bare && !standsAlone(each.text) ? `(${each.text})` : each.text,
+			)
+			.join(` ${joiner} `),
+		pieces.flatMap(each => each.values),
+	)
+}
+
+/**
+ * Whether a piece of SQL keeps its meaning beside others in an and or an or:
+ * one group, or text with no and or or of its own outside quotes, comments
+ * and parentheses, which would bind with its neighbours'.
+ */
+export function standsAlone(text: string): boolean {
+	if (grouped(text)) {
+		return true
+	}
+	let depth = 0
+	for (let at = 0; at < text.length; at++) {
+		const c = text[at]!
+		if (c === "'" || c === '"' || c === '`') {
+			at = closing(text, at, c)
+		} else if (c === '-' && text[at + 1] === '-') {
+			at = text.indexOf('\n', at)
+			if (at < 0) break
+		} else if (c === '/' && text[at + 1] === '*') {
+			at = text.indexOf('*/', at + 2)
+			if (at < 0) break
+			at++
+		} else if (c === '(') {
+			depth++
+		} else if (c === ')') {
+			depth--
+		} else if (depth === 0 && /[a-z]/i.test(c) && !/[a-z0-9_$]/i.test(text[at - 1] ?? '')) {
+			const word = /^[a-z_][a-z0-9_$]*/i.exec(text.slice(at))![0]
+			if (/^(and|or)$/i.test(word)) {
+				return false
+			}
+			at += word.length - 1
+		}
+	}
+	return true
 }
 
 /** Something that writes itself as SQL inside another piece: a table's query. */
@@ -185,10 +255,8 @@ function group(conditions: Condition[], joiner: 'or' | 'and', empty: string): Sq
 	if (pieces.length === 0) {
 		return new Sql(empty, [])
 	}
-	return new Sql(
-		`(${pieces.map(each => each.text).join(` ${joiner} `)})`,
-		pieces.flatMap(each => each.values),
-	)
+	const joined = joinedWith(pieces, joiner)
+	return new Sql(`(${joined.text})`, joined.values)
 }
 
 /** A condition as a piece of SQL: equal values written in the order of their columns' names. */
@@ -215,13 +283,13 @@ function equal(name: string, value: unknown): Sql {
 		)
 	}
 	if (value === null) {
-		return new Sql(`${column} is null`, [])
+		return new Sql(`${column} is null`, [], true)
 	}
 	if (Array.isArray(value)) {
 		const list = sql.list(value)
-		return new Sql(`${column} in ${list.text}`, list.values)
+		return new Sql(`${column} in ${list.text}`, list.values, true)
 	}
-	return new Sql(`${column} = ?`, [cellOf(value, name)])
+	return new Sql(`${column} = ?`, [cellOf(value, name)], true)
 }
 
 /** A name as SQL quotes it: "u"."created_at", each part on its own. */
@@ -548,6 +616,22 @@ export class Database implements Runner {
 		}
 	}
 
+	/**
+	 * A table of the database, typed where it opens: its rows' inserts and
+	 * upserts, and queries built without SQL text. It costs nothing until its
+	 * first call; open each once, in the module that owns it.
+	 *
+	 *     const notes = db.table<Note>('notes', { types: { done: 'bool', created_at: 'time' } })
+	 */
+	table<S extends StandardSchemaV1>(
+		name: string,
+		options: TableOptions & { schema: S },
+	): Table<StandardSchemaV1.InferOutput<S>>
+	table<T = Row>(name: string, options?: TableOptions): Table<T>
+	table(name: string, options?: TableOptions): Table<unknown> {
+		return new Table(this, name, options)
+	}
+
 	/** Statements known before they run, written as one: all of them or none, in a shared commit. */
 	async batch(statements: readonly Sql[]): Promise<Done[]> {
 		const texts = statements.map(each => {
@@ -656,6 +740,11 @@ export class SqlTx implements Runner {
 
 	async exec(...statement: Statement): Promise<Done> {
 		return this.#call(statementOf(statement), 'exec').then(answer => doneOf(answer.done ?? {}))
+	}
+
+	/** A table inside the transaction: its calls are the transaction's. */
+	table<T = Row>(name: string, options?: TableOptions): Table<T> {
+		return new Table<T>(this, name, options)
 	}
 
 	async rows(statement: Sql, want: Want): Promise<Answered> {

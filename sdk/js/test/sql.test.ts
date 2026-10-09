@@ -193,5 +193,178 @@ for (const way of ways) {
 			const error = await caught(app.all`select zeroblob(70 * 1024 * 1024)`)
 			expect(error).toBeInstanceOf(LimitError)
 		})
+
+		interface Typed {
+			id: string
+			author_id: number
+			title: string
+			done: boolean
+			tags: string[]
+			created_at: Date
+			raw: Uint8Array | null
+		}
+		const types = { done: 'bool', tags: 'json', created_at: 'time' } as const
+
+		test('a table inserts rows and gives them back in their types', async () => {
+			const notes = app.table<Typed>('notes', { types })
+			const at = new Date(1_791_547_200_123)
+			const note = await notes.insert({
+				id: 'tb1',
+				author_id: 5,
+				title: 'Buy milk',
+				done: false,
+				tags: ['home'],
+				created_at: at,
+			})
+			expect(note).toEqual({
+				id: 'tb1',
+				author_id: 5,
+				title: 'Buy milk',
+				done: false,
+				tags: ['home'],
+				created_at: at,
+				raw: null,
+			})
+			const two = await notes.insert([
+				{ id: 'tb2', author_id: 5, title: 'Call mom', done: true, tags: [], created_at: at },
+				{ id: 'tb3', author_id: 5, title: 'Read', done: false, tags: ['books'], created_at: at },
+			])
+			expect(two.map(row => row.done)).toEqual([true, false])
+			expect(await notes.where({ author_id: 5, done: false }).count()).toBe(2)
+			const titles = await notes
+				.where({ author_id: 5 })
+				.orderBy('id', 'desc')
+				.select<{ title: string }>('title')
+				.all()
+			expect(titles).toEqual([{ title: 'Read' }, { title: 'Call mom' }, { title: 'Buy milk' }])
+			const taken = await caught(
+				notes.insert({ id: 'tb1', author_id: 5, title: 'again', created_at: at }),
+			)
+			expect(taken).toBeInstanceOf(ConflictError)
+			let seen = 0
+			for await (const row of notes.where({ author_id: 5 }).where(sql.has('tags', 'home')).each()) {
+				expect(row.tags).toEqual(['home'])
+				seen++
+			}
+			expect(seen).toBe(1)
+		})
+
+		test('an update or a delete changes what its condition says, and refuses every row', async () => {
+			const notes = app.table<Typed>('notes', { types })
+			await notes.insert({ id: 'ud1', author_id: 6, title: 'a', created_at: new Date() })
+			await notes.insert({ id: 'ud2', author_id: 6, title: 'b', created_at: new Date() })
+			const updated = await notes
+				.where({ id: 'ud1' })
+				.update({ done: true, title: sql`title || '!'` })
+			expect(updated.changes).toBe(1)
+			expect(await notes.where({ id: 'ud1' }).one()).toMatchObject({ done: true, title: 'a!' })
+
+			expect(await caught(notes.delete())).toBeInstanceOf(InvalidError)
+			expect(await caught(notes.where({}).delete())).toBeInstanceOf(InvalidError)
+			expect(await caught(notes.where(sql.and()).update({ title: 'x' }))).toBeInstanceOf(
+				InvalidError,
+			)
+			expect(() => notes.where({ author_id: undefined })).toThrow(InvalidError)
+			expect(
+				await caught(notes.where({ id: 'ud1' }).update({ title: undefined as unknown as string })),
+			).toBeInstanceOf(InvalidError)
+			expect((await notes.where({ author_id: 6, done: true }).delete()).changes).toBe(1)
+			expect(await notes.where({ author_id: 6 }).count()).toBe(1)
+		})
+
+		test('an upsert sets only what it names, on the row its owner holds', async () => {
+			const notes = app.table<Typed>('notes', { types })
+			const options = { conflict: 'id', update: ['title'] as const, where: { author_id: 1 } }
+			const made = await notes.upsert(
+				{ id: 'up1', author_id: 1, title: 'mine', created_at: new Date() },
+				options,
+			)
+			expect(made?.title).toBe('mine')
+			const changed = await notes.upsert(
+				{ id: 'up1', author_id: 1, title: 'still mine', done: true },
+				options,
+			)
+			expect([changed?.title, changed?.done]).toEqual(['still mine', false])
+			const stolen = await notes.upsert(
+				{ id: 'up1', author_id: 2, title: 'stolen' },
+				{ ...options, where: { author_id: 2 } },
+			)
+			expect(stolen).toBeUndefined()
+			expect((await notes.where({ id: 'up1' }).one())?.title).toBe('still mine')
+		})
+
+		test('a page reads after the last row of the one before, and only its own query', async () => {
+			const notes = app.table<Typed>('notes', { types })
+			for (let n = 0; n < 5; n++) {
+				await notes.insert({
+					id: `pg${n}`,
+					author_id: 8,
+					title: `${n}`,
+					created_at: new Date(1000 + Math.floor(n / 2)),
+				})
+			}
+			const query = notes
+				.where({ author_id: 8 })
+				.orderBy('created_at', 'desc')
+				.orderBy('id', 'desc')
+			const first = await query.list({ limit: 2 })
+			const second = await query.list({ limit: 2, after: first.next })
+			const third = await query.list({ limit: 2, after: second.next })
+			expect([first, second, third].flatMap(page => page.rows.map(row => row.id))).toEqual([
+				'pg4',
+				'pg3',
+				'pg2',
+				'pg1',
+				'pg0',
+			])
+			expect(third.next).toBeUndefined()
+			const other = notes
+				.where({ author_id: 9 })
+				.orderBy('created_at', 'desc')
+				.orderBy('id', 'desc')
+			expect(await caught(other.list({ limit: 2, after: first.next }))).toBeInstanceOf(InvalidError)
+		})
+
+		test('a join reads its first table, a query in a piece is a subquery, and a plan explains it', async () => {
+			const library = await store.database('library', {
+				migrations: {
+					'0001_books.sql': `create table authors (id integer primary key, name text not null, active integer not null) strict;
+						create table books (id integer primary key, author_id integer not null, title text not null) strict;`,
+				},
+			})
+			await library.batch([
+				sql`insert into authors (id, name, active) values (1, 'Le Guin', 1), (2, 'Lem', 0)`,
+				sql`insert into books (id, author_id, title) values (1, 1, 'The Dispossessed'), (2, 2, 'Solaris')`,
+			])
+			const books = await library
+				.table<{ id: number; title: string }>('books as b')
+				.join('authors as a', 'a.id = b.author_id')
+				.where({ 'a.active': 1 })
+				.all()
+			expect(books).toEqual([{ id: 1, author_id: 1, title: 'The Dispossessed' } as never])
+			const written = library.table('books as b').select('1').where('b.author_id = a.id')
+			const writers = await library
+				.table<{ name: string }>('authors as a')
+				.where(sql`exists ${written}`)
+				.orderBy('name')
+				.all()
+			expect(writers.map(writer => writer.name)).toEqual(['Le Guin', 'Lem'])
+			const plan = await library.table('books').where({ author_id: 1 }).explain()
+			expect(plan.length).toBeGreaterThan(0)
+		})
+
+		test('a table inside a transaction writes with it, and rolls back with it', async () => {
+			const refused = await caught(
+				app.tx(async tx => {
+					await tx
+						.table<Typed>('notes', { types })
+						.insert({ id: 'tx1', author_id: 4, title: 'a', created_at: new Date() })
+					expect(await tx.table('notes').where({ id: 'tx1' }).count()).toBe(1)
+					throw new Error('changed my mind')
+				}),
+			)
+			expect((refused as Error).message).toBe('changed my mind')
+			expect(await app.table('notes').where({ id: 'tx1' }).count()).toBe(0)
+		})
 	})
 }

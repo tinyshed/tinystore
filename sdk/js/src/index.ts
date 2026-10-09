@@ -73,6 +73,7 @@ export {
 	type Timer,
 } from './metrics.ts'
 export type { Once, OnceOptions } from './once.ts'
+export type { ColumnType, Query, RowPage, Table, TableOptions, UpsertOptions } from './query.ts'
 export {
 	type Cursor,
 	type Damage,
