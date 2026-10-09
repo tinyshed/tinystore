@@ -63,7 +63,9 @@ Python through PyO3. All three expose the same four functions.
 
 **11. jobs' limits nest.** `concurrency: { total: 8, perGroup: 2 }`, with
 `concurrency: 8` as the short form of `{ total: 8 }`. `rate` stays beside it:
-it answers how often a job may start, not how many may run.
+it answers how often a job may start, not how many may run. Later the same
+day the owner shortened `perGroup` to `group`, since inside `concurrency` it
+can only be a limit: `concurrency: { total: 8, group: 2 }`.
 
 **12. New modules come after parity.** Channels and locks in phase 5,
 indexes in phase 6. Compute is not a module: each operation lives beside its

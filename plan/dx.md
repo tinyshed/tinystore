@@ -54,7 +54,7 @@ channel), `key` (identity and deduplication at once), `keepDone`,
   application's names.
 - **Nesting is welcome when it gathers related settings under one known word
   and has a short form:** `concurrency: 8` or
-  `concurrency: { total: 8, perGroup: 2 }`.
+  `concurrency: { total: 8, group: 2 }`.
 - **Names on the store say what a thing is, not which engine keeps it:**
   `store.bucket`, `store.counters`, `store.queue`, never `store.kv.bucket`.
   Where it lives is said by what opened it: the store, or an SQL database
@@ -77,7 +77,7 @@ Decided words are settled; draft words wait for their engine's book.
 |------------------------------------|-----------------------------------------------------------------------------------|------------------------|-----------------------------------------------------|---------|
 | `channels`, `publish`, `subscribe` | messages between parts of an application                                          | runtime                | signals, an idea                                    | decided |
 | `durability`                       | `'full'`, `'os'` or an interval                                                   | every engine           | FULL only, `loseAtMost`                             | decided |
-| `concurrency`                      | how many run at once: `8` or `{ total, perGroup }`                                | jobs                   | `maxRunning`, `maxRunningInGroup`, `workers`        | decided |
+| `concurrency`                      | how many run at once: `8` or `{ total, group }`                                   | jobs                   | `maxRunning`, `maxRunningInGroup`, `workers`        | decided |
 | `rate`                             | starts or calls a span, as text `'30/s'`                                          | jobs, kv limiter       | `Rate(n, per)` in Go                                | decided |
 | `peek`, `reset`                    | a limit's answer without using it; forgetting a key                               | kv limits              | `Get`, `Delete`, `check`                            | draft   |
 | `keep`                             | how long failed or old things stay                                                | jobs, records, metrics | `keepFailed`, `Retention`                           | draft   |
@@ -86,7 +86,7 @@ Decided words are settled; draft words wait for their engine's book.
 | `idle`                             | expires after a span without reads or writes                                      | kv                     | `sliding`                                           | draft   |
 | `under`                            | a branch: whose keys these are, cleared in one call                               | kv                     | `Of`, `of`                                          | draft   |
 | `id`                               | a job's identity; adding an id that waits adds nothing                            | jobs                   | `key`                                               | draft   |
-| `group`                            | jobs that share a `perGroup` limit                                                | jobs                   | the same                                            | draft   |
+| `group`                            | jobs that share a group's `concurrency`                                           | jobs                   | the same                                            | draft   |
 | `add`                              | puts a job in a queue                                                             | jobs                   | `enqueue`                                           | draft   |
 | `delay`, `at`                      | when a job runs: after a span, at a time                                          | jobs                   | `after`, `at`                                       | draft   |
 | `every`, `cron`                    | repeats: an interval spread by id, or the wall clock                              | jobs                   | `every` with `spread: true`                         | draft   |
@@ -112,7 +112,7 @@ await reminders.work(remind, { untilIdle: true })
 
 ```ts
 // draft
-const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, perGroup: 2 } })
+const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, group: 2 } })
 await refreshes.add({ dataset: 3 }, { id: 'refresh:3', group: 'db:42' })
 await checks.set(`check:${check.id}`, check, { delay: '25h' })
 await probes.add({ url }, { id: `probe:${id}`, every: '30s' })   // ids spread over the interval
@@ -128,12 +128,12 @@ await reminders.runDue(remind)
 
 ## Each language's spelling
 
-| Language   | Options                                                | Time                             | Nested settings                                 |
-|------------|--------------------------------------------------------|----------------------------------|-------------------------------------------------|
-| TypeScript | an object, camelCase                                   | `'30s'`, `Date`                  | `{ concurrency: { total: 8, perGroup: 2 } }`    |
-| Python     | keyword arguments, snake_case                          | `'30s'`, `timedelta`, `datetime` | `concurrency=Concurrency(total=8, per_group=2)` |
-| Go         | functional options on calls, structs for nested values | `time.Duration`, `time.Time`     | `jobs.Concurrency{Total: 8, PerGroup: 2}`       |
-| Rust       | builders                                               | `Duration`, a timestamp type     | `.concurrency(8).per_group(2)`                  |
+| Language   | Options                                                | Time                             | Nested settings                                |
+|------------|--------------------------------------------------------|----------------------------------|------------------------------------------------|
+| TypeScript | an object, camelCase                                   | `'30s'`, `Date`                  | `{ concurrency: { total: 8, group: 2 } }`      |
+| Python     | keyword arguments, snake_case                          | `'30s'`, `timedelta`, `datetime` | `concurrency=Concurrency(total=8, group=2)`    |
+| Go         | functional options on calls, structs for nested values | `time.Duration`, `time.Time`     | `jobs.Concurrency{Total: 8, Group: 2}`         |
+| Rust       | builders                                               | `Duration`, a timestamp type     | `.concurrency(Concurrency::total(8).group(2))` |
 
 ## The API books
 

@@ -81,7 +81,7 @@ target.
 ## 5. Channels and locks
 
 - [ ] Channels: publish and subscribe, after-commit delivery, gap events, through the server.
-- [ ] Leases and semaphores on kv; jobs' `perGroup` on them.
+- [ ] Leases and semaphores on kv; jobs' group concurrency on them.
 
 **Gate:** a message published in a transaction that rolls back is never
 delivered; a subscriber that falls behind receives a gap event.

@@ -30,7 +30,7 @@ names, `insert … on conflict do nothing`, so that twice is harmless.
 ```ts
 const reminders = store.queue<Reminder>('reminders')
 const emails = store.queue<Email>('emails', { attempts: 20, backoff: { initial: '5s', max: '30m' } })
-const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, perGroup: 2 } })
+const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, group: 2 } })
 const telegram = store.queue<Message>('telegram', { rate: '30/s' })
 const pushes = store.queue<Push>('pushes', { dedupe: '1h' })
 ```
@@ -38,19 +38,19 @@ const pushes = store.queue<Push>('pushes', { dedupe: '1h' })
 ```python
 reminders = store.queue("reminders", Reminder)
 emails = store.queue("emails", Email, attempts=20, backoff=Backoff(initial="5s", max="30m"))
-refreshes = store.queue("refreshes", Refresh, concurrency=Concurrency(total=8, per_group=2))
+refreshes = store.queue("refreshes", Refresh, concurrency=Concurrency(total=8, group=2))
 ```
 
 ```go
 reminders, err := jobs.Queue[Reminder](store, "reminders")
 emails, err := jobs.Queue[Email](store, "emails", jobs.Attempts(20), jobs.Backoff{Initial: 5 * time.Second, Max: 30 * time.Minute})
-refreshes, err := jobs.Queue[Refresh](store, "refreshes", jobs.Concurrency{Total: 8, PerGroup: 2})
+refreshes, err := jobs.Queue[Refresh](store, "refreshes", jobs.Concurrency{Total: 8, Group: 2})
 ```
 
 ```rust
 let reminders = store.queue::<Reminder>("reminders").open()?;
 let emails = store.queue::<Email>("emails").attempts(20).backoff(Duration::from_secs(5), Duration::from_mins(30)).open()?;
-let refreshes = store.queue::<Refresh>("refreshes").concurrency(8).per_group(2).open()?;
+let refreshes = store.queue::<Refresh>("refreshes").concurrency(Concurrency::total(8).group(2)).open()?;
 let telegram = store.queue::<Message>("telegram").rate(30, Duration::from_secs(1)).open()?;
 ```
 
@@ -59,7 +59,7 @@ let telegram = store.queue::<Message>("telegram").rate(30, Duration::from_secs(1
 | `attempts`    | 10                             | runs a job gets before it fails for good, the first run counted                                         |
 | `backoff`     | `{ initial: '1s', max: '1h' }` | the wait before a retry: `initial`, doubling each time up to `max`, a tenth longer or shorter at random |
 | `timeout`     | `'1m'`                         | how long one run may take before it is told to stop and fails                                           |
-| `concurrency` | none                           | jobs running at once across every worker of the store: `8`, or `{ total: 8, perGroup: 2 }`              |
+| `concurrency` | none                           | jobs running at once across every worker of the store: `8`, or `{ total: 8, group: 2 }`                 |
 | `rate`        | none                           | jobs started in a span: `'30/s'`                                                                        |
 | `dedupe`      | none                           | how long a done job's id makes `add` add nothing                                                        |
 | `keep`        | `'7d'`                         | how long a failed job stays, with its error, to be found and started again                              |
@@ -208,13 +208,13 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").open
 ## Limits
 
 ```ts
-const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, perGroup: 2 } })
+const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, group: 2 } })
 await refreshes.add({ dataset: 3 }, { id: 'refresh:3', group: 'db:42' })
 const telegram = store.queue<Message>('telegram', { rate: '30/s' })
 ```
 
 - `concurrency: 8` runs at most eight jobs of the queue at once, across every
-  worker and claim of the store, whatever their `workers`. `perGroup: 2` runs
+  worker and claim of the store, whatever their `workers`. `group: 2` runs
   at most two of each group: one customer's backlog cannot hold back the
   others. A group bounds how many run; it does not order its jobs.
 - `rate: '30/s'` starts at most 30 jobs in any second, as an API's limit asks.
@@ -349,7 +349,7 @@ attempts, as Inngest's `step.run` does.
 | `Every(d, Spread())`, `Every(d)`                | `every`, spread by id always                                         |
 | `Cron`, `Daily` with a `*time.Location`         | `cron` with a `timeZone`; `@daily` and the rest as shortcuts         |
 | `OpenSchedule`                                  | `store.schedule`                                                     |
-| `MaxRunning`, `MaxRunningInGroup`, `Workers`    | `concurrency: { total, perGroup }`; `workers` on `work`              |
+| `MaxRunning`, `MaxRunningInGroup`, `Workers`    | `concurrency: { total, group }`; `workers` on `work`                 |
 | `Rate(n, per)`                                  | `rate: '30/s'`                                                       |
 | `MaxAttempts`, `Backoff(first, most)`           | `attempts`, `backoff: { initial, max }`                              |
 | `KeepDone`, `KeepFailed`                        | `dedupe`, `keep`                                                     |

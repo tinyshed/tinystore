@@ -199,7 +199,7 @@ before the commit is final. Other processes subscribe through the server.
 Durable delivery is a job or a records follow, not a channel.
 
 **Locks (phase 5).** Leases with a time to live, and semaphores, kept in kv's
-file. jobs' `perGroup` is one of them, so the two share a word and an
+file. jobs' `concurrency.group` is one of them, so the two share a word and an
 implementation.
 
 **Indexes (phase 6).** Declared in sqldb's schema: full text over columns,
