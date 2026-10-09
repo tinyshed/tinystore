@@ -7,6 +7,8 @@
 mod clock;
 pub mod engine;
 mod error;
+#[cfg(feature = "jobs")]
+pub mod jobs;
 #[cfg(feature = "kv")]
 pub mod kv;
 mod memory;

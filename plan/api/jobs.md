@@ -8,7 +8,9 @@ background, a push to every member of a group, an account deleted thirty days
 after its owner asked, a cleanup every night. This book is the API before the
 code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) the words
 both books share. TypeScript comes first; Python, Go and Rust follow where
-they spell something differently. Nothing of it is built in Rust yet.
+they spell something differently. The Rust column is built
+(`crates/tinystore/src/jobs`), all but `watch`, transactions, and queues
+opened from an SQL database, which come with the wire and with sqldb.
 
 ## What a newcomer learns
 
@@ -231,8 +233,10 @@ pushes.work(|push: Push, run| match provider.send(&push) {
   `store.close()` stops every worker so.
 - Every attempt is counted before it runs, so a job that crashes the process
   every time still fails for good after its attempts.
-- A run past `timeout` is told to stop and fails. A handler stopped because its
-  worker stopped gives its job back, the attempt not counted.
+- A run past `timeout` is told to stop: its signal aborts, `run.stopped()`
+  turns true, and what the handler returns then settles the job as ever. A
+  worker that stops gives back the jobs it held for busy handlers, their
+  attempts not counted, and waits for the handlers under way.
 - `runDue(handler)` runs what is due when it starts and what falls due
   meanwhile, then returns; it never waits for a later job. Tests, scripts and
   commands use it.

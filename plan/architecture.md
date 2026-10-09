@@ -127,8 +127,9 @@ before SQLite initializes) or `sqlite3_status64`, which phase 1 measures
 against each other; page caches are small and per connection.
 
 **Background work.** Only the store starts threads that outlive a call: the
-scheduler's timer, the writers if phase 1 chooses them, the pipe's workers.
-`background: false` stops all periodic work, for tests.
+scheduler's timer, the writers if phase 1 chooses them, the pipe's workers,
+and a jobs worker's loop and handlers, which its `stop` and the store's close
+end. `background: false` stops all periodic work, for tests.
 
 **Time.** `Store::now()` is the one clock, injectable; tests use a clock that
 only moves forward, which the server lets an SDK move, as today.

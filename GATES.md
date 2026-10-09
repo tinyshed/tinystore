@@ -326,53 +326,53 @@ module defines.
 - a job in a batch commits with its rows or not at all — `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn`
 - a job batch does not wait for write slots held by its own prepared changes — `TestAJobBatchDoesNotWaitForItsOwnWriteSlots`
 - a job a Tx adds commits with its rows, and lets go of its turn either way — `TestAJobInATxCommitsWithItsRows`
-- an Enqueue that returned survives an abrupt exit — `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once
-- a job runs at its time and not before — `TestAJobRunsAtItsTimeAndNotBefore`
+- an add that returned survives an abrupt exit — `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once; a clean reopen `an_added_job_survives_a_reopen` in `jobs::queue_tests`
+- a job runs at its time and not before, in the order of its time — `a_job_runs_at_its_time_and_not_before`, `jobs_run_in_the_order_of_their_time_equal_times_in_the_order_added` in `jobs::queue_tests`
 - a write during a Work loop's read is not lost, nor keeps it awake — `TestAWriteDuringAnAlarmReadCannotBeLost`, `TestALaterWriteDuringAnAlarmReadLetsTheLoopSleep`
-- a jobs Scan finds exactly the keys under its prefix — `TestScanFindsOnlyTheKeysUnderAPrefixNoRuneEnds`
-- a key names one job, and enqueuing it only brings it forward — `TestAKeyNamesOneJobAndARepeatOnlyBringsItForward`
-- an enqueue while its job runs asks for one run more — `TestAnEnqueueWhileItsJobRunsAsksForOneRunMore`
-- `KeepDone` makes a key run once — `TestKeepDoneMakesAKeyRunOnce`
-- `Update` changes only a job that still waits — `TestUpdateChangesOnlyAWaitingJob`
-- `Cancel` says whether there was a job, and stops a running one's handler — `TestCancelSaysWhetherItCameInTime`, `TestCancelStopsTheHandlerOfARunningJob`
+- a page finds exactly the ids under its prefix — `list_reads_the_ids_under_a_prefix_a_page_at_a_time` in `jobs::queue_tests`, `a_prefixs_end_is_the_first_text_past_every_text_it_starts` in `jobs::read`
+- an id names one job, and add adds only to a free one — `add_adds_only_to_an_id_that_is_free`, `add_of_an_id_whose_job_runs_adds_nothing` in `jobs::queue_tests`
+- a set while its job runs asks one run more, with its value — `set_of_a_running_job_runs_it_once_more_with_its_value` in `jobs::queue_tests`
+- `dedupe` keeps a done id taken until its span passes — `dedupe_keeps_a_done_id_taken_until_its_span_passes` in `jobs::queue_tests`
+- `update` changes only a job that has not started, and says whether it did — `update_changes_only_a_job_that_has_not_started` in `jobs::queue_tests`
+- `cancel` says whether there was a job, and tells a running one's handler to stop — `cancel_says_whether_there_was_a_job_and_tells_a_running_handler_to_stop` in `jobs::queue_tests`
 - a job claimed ahead for a busy worker waits, and a cancel keeps it from starting — `TestAJobHeldForABusyWorkerWaitsAndCancelKeepsItFromStarting`
-- `Get` says where a job is and how many jobs run before it — `TestGetSaysWhereAJobIsAndHowManyRunBeforeIt`, `TestAJobWhoseLeaseEndedWaitsAgain`
+- `get` says where a job is and how many jobs run before it — `get_says_where_a_job_is_and_how_many_run_before_it` in `jobs::queue_tests`
 - a watch follows its job to its end — `TestAWatchFollowsItsJobToItsEnd`
-- a progress past 4 KiB is dropped in Go, refused by the SDKs — `TestAProgressPastItsBoundIsDropped`, `a progress JSON cannot write, or past 4 KiB, is refused` in `sdk/js/test/jobs.test.ts`
-- `MaxRunning` holds a queue to its places across loops and claims — `TestMaxRunningHoldsAQueueToItsPlaces`
-- `MaxRunningInGroup` holds each group to its places, and a settlement lets the group's next job run in its order — `TestAGroupBoundsItsRunningJobs`, `TestWorkRunsAGroupsJobsWithinItsBound`; over the wire `TestJobsBoundsAndMovesOverTheWire`, `a group bounds its running jobs, a rate its starts, move sets a time either way, and spread a phase` in `sdk/js/test/jobs.test.ts`, `test_a_group_bounds_its_running_jobs_a_rate_its_starts_and_move_and_spread_set_times` in Python's
+- a progress past 4 KiB is refused — `a_progress_past_4_kib_is_refused` in `jobs::queue_tests`; `a progress JSON cannot write, or past 4 KiB, is refused` in `sdk/js/test/jobs.test.ts`
+- a queue's total holds it to its places across workers and claims — `a_total_holds_a_queue_to_its_places_across_claims` in `jobs::work_tests`
+- a group's bound holds each group to its places, and a settlement or a cancel gives the group's next job its place — `a_group_bounds_its_running_jobs_and_holds_back_no_other_group`, `a_job_cancelled_while_it_runs_gives_its_groups_place_to_the_next` in `jobs::work_tests`; over the wire `TestJobsBoundsAndMovesOverTheWire`, `a group bounds its running jobs, a rate its starts, move sets a time either way, and spread a phase` in `sdk/js/test/jobs.test.ts`
 - a full group's backlog is parked once and holds back no other group — `TestABusyGroupDoesNotHoldBackTheGroupsBehindIt`, through the index `TestAGroupsParkedJobsAreFoundByTheirIndex`
-- a parked job keeps its time and key, and gets its group's place when a job leaves it cancelled or abandoned — `TestAParkedJobKeepsItsTimeAndItsKey`, `TestACancelledOrAbandonedJobGivesItsGroupItsPlace`
 - a queue opened with another group bound gives back what the old one parked, and a job started again keeps its group — `TestAChangedGroupBoundGivesBackTheParkedJobs`, `TestAJobStartedAgainKeepsItsGroup`
-- `Rate` lets no more than its count start in any span, across Claim and Work — `TestARateNeverLetsMoreThanItsCountStartInASpan`, `TestARateLetsItsStartsAgainASpanLater`, `TestAQueueRateBoundsItsClaims`, `TestWorkWaitsForItsRate`
-- `Move` sets a waiting job's time either way, a running one's next run, and adds a missing job — `TestMoveSetsATimeLaterThanTheOneWaiting`, `TestMoveCreatesAMissingJob`
-- `Spread` gives each key's interval a phase of its own, kept across a restart — `TestRepeatsOfManyKeysSpreadAcrossTheirInterval`, `TestASpreadRepeatKeepsItsPhaseAcrossARestart`
-- a time past the years a job keeps is refused — `TestATimePastTheYearsAJobKeepsIsRefused`
-- a job keeps its last run, over the wire too, and a run given back records none — `TestAJobKeepsItsLastRun`, `TestAJobsLastRunOverTheWire`, `a job keeps its last run: when it began and how long it took` in `sdk/js/test/jobs.test.ts`, `test_a_job_keeps_its_last_run` in Python's
-- a job whose lease ended runs again — `TestAJobWhoseLeaseEndedRunsAgain`
-- a step runs once in a run, across its attempts and a worker that died, and a lost lease keeps none — `TestAStepRunsOnceAcrossTheAttemptsOfARun`, `TestAStepOfALostLeaseKeepsNothing`
-- a run that ends takes its steps along, and a repeat's next run starts without them — `TestStepsGoWithTheirRun`, `TestAStepsNameAndAnswerAreBounded`
-- a stale lease settles nothing — `TestAStaleLeaseSettlesNothing`
-- a job that kills its process fails after its attempts — `TestAJobThatKillsItsProcessFailsAfterItsAttempts`
-- a retry waits longer each time, then fails for good — `TestARetryWaitsLongerEachTimeThenFailsForGood`
-- a snooze counts no attempt — `TestASnoozeCountsNoAttempt`
-- a repeating job neither overlaps nor piles up — `TestARepeatingJobNeitherOverlapsNorPilesUp`
-- a schedule keeps its zone across daylight saving — `TestAScheduleKeepsItsZoneAcrossDaylightSaving`
-- `Work` settles by what the handler returns — `TestWorkSettlesByWhatTheHandlerReturns`, `UntilIdle` with one worker included
-- jobs due together are claimed in batches — `TestJobsDueTogetherAreClaimedInBatches`
+- an update of a parked job gives it back its time — `an_update_of_a_parked_job_gives_it_back_its_time` in `jobs::work_tests`
+- a rate lets no more than its count start in any span — `a_rate_never_lets_more_than_its_count_start_in_a_span`, `starts_given_back_start_again` in `jobs::rate`, `a_rate_lets_no_more_than_its_count_start_in_a_span` in `jobs::work_tests`
+- `set` makes an id's job its value at its time, whatever it was, and the job takes its id along — `set_makes_the_ids_job_this_value_at_this_time_whatever_it_was` in `jobs::queue_tests`
+- `every` gives each id's interval a phase of its own, kept in its text — `an_interval_gives_each_id_a_phase_of_its_own_kept_in_its_text` in `jobs::repeat`, `ids_repeating_together_run_each_at_a_phase_of_its_own` in `jobs::queue_tests`
+- a time past the years a job keeps is refused — `a_time_outside_the_years_a_job_keeps_is_refused` in `jobs::queue_tests`
+- a call that cannot be kept is `invalid` and names the queue and the id — `a_call_that_cannot_be_kept_is_invalid_and_says_why`, `a_name_keeps_its_kind_and_one_process_its_options` in `jobs::queue_tests`
+- a job keeps its last run — `get_says_where_a_job_is_and_how_many_run_before_it`, `dedupe_keeps_a_done_id_taken_until_its_span_passes` in `jobs::queue_tests`; over the wire `TestAJobsLastRunOverTheWire`, `a job keeps its last run: when it began and how long it took` in `sdk/js/test/jobs.test.ts`
+- a job whose lease ended runs again, and its stale lease settles nothing — `a_job_whose_lease_ended_runs_again_and_its_stale_lease_settles_nothing` in `jobs::work_tests`
+- a step runs once in a run, across its attempts, and a lost lease keeps none — `a_step_runs_once_across_the_attempts_of_a_run` in `jobs::work_tests`; `TestAStepOfALostLeaseKeepsNothing`
+- a run that ends takes its steps along, and a repeat's next run starts without them — `a_run_that_ends_takes_its_steps_along_and_a_repeats_next_run_starts_without_them` in `jobs::work_tests`; `TestAStepsNameAndAnswerAreBounded`
+- a job that kills its process fails after its attempts — `a_job_that_kills_its_process_fails_after_its_attempts` in `jobs::work_tests`
+- a retry waits longer each time, then fails for good — `a_retry_waits_longer_each_time_then_fails_for_good` in `jobs::work_tests`, `a_retry_waits_longer_each_time_within_a_tenth_either_way` in `jobs::claim`
+- a snooze counts no attempt — `a_handler_settles_its_job_by_what_it_returns` in `jobs::work_tests`
+- a repeating job neither overlaps nor piles up — `a_repeating_job_neither_overlaps_nor_piles_up` in `jobs::queue_tests`
+- a cron keeps its zone across daylight saving — `a_time_daylight_saving_skips_runs_when_the_skip_ends`, `a_time_daylight_saving_repeats_runs_once` in `jobs::cron`, `a_cron_runs_on_its_zones_wall_clock` in `jobs::queue_tests`
+- a schedule keeps the code's repeat each time it opens — `a_schedule_keeps_the_codes_repeat_each_time_it_opens` in `jobs::queue_tests`
+- a handler settles its job by what it returns, a panic an error with its message — `a_handler_settles_its_job_by_what_it_returns`, `a_panic_is_an_error_with_its_message` in `jobs::work_tests`
+- jobs due together are claimed and settled in batches — `jobs_due_together_are_claimed_and_settled_in_batches` in `jobs::work_tests`
 - a Work loop lets go of a lease another claim took — `TestWorkLetsGoOfALeaseAnotherClaimTook`, without writing again at once
-- a handler stopped by `Close` gives its job back uncounted — `TestCloseGivesRunningJobsBackUncounted`
-- a handler that returns as `Work` ends settles as it returned — `TestAHandlerThatReturnsAsWorkEndsSettlesAsItReturned`, done, failed, stopped
-- a job value comes back as the JSON it went in — `TestAValueComesBackAsTheJSONItWentIn`
-- a value that no longer reads fails its job, not its queue — `TestAValueThatNoLongerReadsFailsItsJob`, through Claim and Work
-- a queue past `MaxWaiting` refuses the next job — `TestAQueuePastMaxWaitingRefusesTheNextJob`
-- concurrent enqueues cannot pass `MaxWaiting` — `TestConcurrentEnqueuesCannotPassMaxWaiting`
-- a failed job is kept, then removed — `TestAFailedJobIsKeptThenRemoved`
-- a jobs Scan page holds at most its jobs and bytes — `TestAScanPageHoldsAtMostItsBytes`, spilled values counted
-- a job's key left behind names nothing, then is dropped — `TestAKeyLeftBehindNamesNothingAndMaintenanceDropsIt`
-- a job that moves takes its key along — `TestAMovedJobTakesItsKeyAlong`
+- a stopping worker waits for its handlers and gives back what it had not started, uncounted — `a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_started`, `a_worker_runs_jobs_on_the_stores_threads_until_it_stops` in `jobs::work_tests`
+- a worker its program let go of still stops when the store closes — `a_worker_its_program_let_go_of_still_stops_when_the_store_closes` in `jobs::work_tests`
+- a job value comes back as the JSON it went in — `a_value_comes_back_as_the_json_it_went_in` in `jobs::queue_tests`
+- a value that no longer reads fails its job, not its queue — `a_value_that_no_longer_reads_fails_its_job_not_its_queue` in `jobs::queue_tests`
+- a queue past `maxWaiting` refuses the next job — `a_queue_past_max_waiting_refuses_the_next_job` in `jobs::queue_tests`
+- concurrent adds cannot pass `maxWaiting` — `TestConcurrentEnqueuesCannotPassMaxWaiting`
+- a failed job is kept, then removed — `a_failed_job_is_kept_then_removed` in `jobs::queue_tests`
+- a page holds at most its jobs and bytes — `TestAScanPageHoldsAtMostItsBytes`, spilled values counted
+- an id a job left behind names nothing, then is dropped — `an_id_a_done_job_left_behind_names_nothing_and_maintenance_drops_it` in `jobs::queue_tests`
 - jobs hold values in the store's memory — `TestStoreMemoryBoundsEnqueuesReadsAndHandlers`
-- an Enqueue waiting for memory has written nothing — `TestAnEnqueueWaitingForMemoryHasWrittenNothing`
+- an add waiting for memory has written nothing — `TestAnEnqueueWaitingForMemoryHasWrittenNothing`
 - a jobs Tx takes only the memory that is free — `TestATransactionTakesOnlyTheMemoryThatIsFree`
 
 ## Blobs
