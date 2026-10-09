@@ -72,6 +72,15 @@ data and is built for a real caller ([architecture.md](architecture.md)).
 **13. Only Opus writes Rust.** Helper agents gather facts, run checks and do
 chores; they never write or edit Rust code.
 
+**14. One library crate, not a crate a layer.** The owner found
+`tinystore-core`, `tinystore-sqlite` and the rest odd to read. The runtime, the
+SQLite adapter, the engines, the wire and the server are modules of one crate,
+`tinystore`, behind features; crates of their own exist only for separate
+artifacts: `crates/cli`, `crates/ffi`, `crates/node`, `crates/python`. What
+separate crates enforced is kept by lints and a test: `unsafe` is denied
+everywhere but `sqlite::memory` and the FFI, and no engine module imports
+another.
+
 ## Open
 
 - The order of config layers: the draft in

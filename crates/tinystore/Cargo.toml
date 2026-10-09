@@ -1,0 +1,21 @@
+[package]
+name = "tinystore"
+description = "An embedded data runtime on SQLite: KV, jobs, SQL, blobs, records and metrics in one directory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The SQLite build is pinned: the bundled amalgamation of this exact release, the
+# flags in .cargo/config.toml, and nothing loaded at run time.
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "limits"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3.27"
+
+[lints]
+workspace = true

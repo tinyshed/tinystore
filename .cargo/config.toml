@@ -1,0 +1,6 @@
+[env]
+# Flags for the bundled SQLite, beside the ones libsqlite3-sys sets. Double-quoted
+# strings are identifiers only, so a misspelled column is an error, not a string.
+# Linux builds add HAVE_FDATASYNC in CI and the release: without it the Unix VFS
+# calls fsync, which cost a 64 KiB set 1.5x (research kv-optimization-2026-10-09).
+LIBSQLITE3_FLAGS = "SQLITE_DQS=0"

@@ -43,18 +43,31 @@ Rust program                Bun · Node · Python · Go program
 
 ## Crates
 
-| Crate                                                                        | What it holds                                                                                 |
-|------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
-| `tinystore`                                                                  | the facade: `Store` and the engines behind features                                           |
-| `tinystore-core`                                                             | Store, LOCK, clock, memory budget, scheduler, errors, config, logger                          |
-| `tinystore-sqlite`                                                           | the SQLite build, writer and group commit, readers, statements, migrations, memory · `unsafe` |
-| `tinystore-codec`                                                            | the metrics block codec and its entropy coders, in safe Rust                                  |
-| `tinystore-kv`, `-jobs`, `-sql`, `-blobs`, `-records`, `-metrics`, `-backup` | the engines; none imports another                                                             |
-| `tinystore-wire`                                                             | the message schema, the MessagePack profile, the sans-IO session, dispatch                    |
-| `tinystore-server`                                                           | tokio: sockets, named pipes, stdio, TCP and TLS, SERVE, tokens                                |
-| `tinystore-ffi`                                                              | the C ABI, as `staticlib` for Go and `cdylib` for Bun · `unsafe`                              |
-| `tinystore-node`, `tinystore-python`                                         | napi-rs and PyO3 over the same four functions                                                 |
-| `tinystore-cli`                                                              | the `tinystore` executable: serve, status, logs, mcp, backup, restore, migrate                |
+One library, `tinystore`, holds the runtime, the SQLite adapter, every engine,
+the wire and the server, as modules behind cargo features: a Rust program
+writes `tinystore::kv`, and one crate is published. A crate of its own exists
+only where a separate artifact does.
+
+| Folder              | Package            | What it holds                                                                  |
+|---------------------|--------------------|--------------------------------------------------------------------------------|
+| `crates/tinystore/` | `tinystore`        | the library: modules below                                                     |
+| `crates/cli/`       | `tinystore-cli`    | the `tinystore` executable: serve, status, logs, mcp, backup, restore, migrate |
+| `crates/ffi/`       | `tinystore-ffi`    | the C ABI, as `staticlib` for Go and `cdylib` for Bun · `unsafe`               |
+| `crates/node/`      | `tinystore-node`   | napi-rs over the same four functions                                           |
+| `crates/python/`    | `tinystore-python` | PyO3 over the same four functions                                              |
+
+| Module in `tinystore`                                        | What it holds                                                                                 |
+|--------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| the root                                                     | Store, LOCK, clock, memory budget, background work, errors                                    |
+| `engine`                                                     | what an engine uses of its store; applications never import it                                |
+| `sqlite`                                                     | the SQLite build, writer and group commit, readers, statements, migrations, memory · `unsafe` |
+| `codec`                                                      | the metrics block codec and its entropy coders, in safe Rust                                  |
+| `kv`, `jobs`, `sql`, `blobs`, `records`, `metrics`, `backup` | the engines, each a feature; none imports another, which a test checks                        |
+| `wire`                                                       | the message schema, the MessagePack profile, the sans-IO session, dispatch                    |
+| `server`                                                     | tokio: sockets, named pipes, stdio, TCP and TLS, SERVE, tokens; a feature                     |
+
+`unsafe_code` is denied for the whole workspace; `sqlite::memory` and the FFI
+crates allow it, each block with a SAFETY comment.
 
 The SDKs stay where they are: `sdk/js` and `sdk/python` gain the pipe as a
 transport, and the Go SDK takes the root module path,
@@ -69,7 +82,7 @@ transport, and the Go SDK takes the root module path,
 | Entropy coders     | our own huff0 and FSE                                 | safe Rust, golden vectors; or a format that needs neither                                  |
 | MessagePack        | rmp 0.8                                               | under the protocol's own profile, as the Go codec is today                                 |
 | Directory lock     | `std::fs::File::lock`                                 | stable since Rust 1.89                                                                     |
-| Server             | tokio 1                                               | only in `tinystore-server`                                                                 |
+| Server             | tokio 1                                               | only behind the `server` feature                                                           |
 | Rust logs, metrics | `tracing`, `metrics`                                  | a layer and a recorder, so a Rust program uses the ecosystem's macros                      |
 | Tests              | proptest, insta, cargo-fuzz, nextest, loom or shuttle | [tests.md](tests.md)                                                                       |
 
