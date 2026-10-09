@@ -42,7 +42,7 @@ import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import type { StandardSchemaV1 } from './schema.ts'
-import { type Database, openDatabase, type SqlOptions } from './sql.ts'
+import { type Database, type DatabaseOptions, openDatabase } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { runTx, type Tx } from './tx.ts'
 import { Backup, methods } from './wire/messages.ts'
@@ -248,13 +248,14 @@ export class Store implements AsyncDisposable {
 	}
 
 	/**
-	 * Opens a database of the application's own, sql/<name>.db. The first open
-	 * in the server, on an admin connection, applies its migrations; every
-	 * later one checks them against what the file applied. Without migrations
-	 * it opens the file as it is, an empty one if there is none, and checks
-	 * nothing.
+	 * The application's database name, sql/<name>.db, once its migrations
+	 * are applied and checked: a migration that fails, or one changed after
+	 * it was applied, is told here, at the start. Without migrations the file
+	 * opens as it is, an empty one when there is none.
+	 *
+	 *     const db = await store.database('app', { migrations: `${import.meta.dir}/migrations` })
 	 */
-	sql(name: string, options?: SqlOptions): Promise<Database> {
+	database(name: string, options?: DatabaseOptions): Promise<Database> {
 		return openDatabase(this.#link, name, options)
 	}
 

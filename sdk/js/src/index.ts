@@ -86,16 +86,19 @@ export {
 	type RecordsQuery,
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
-export type {
-	Database,
-	Done,
-	Migrations,
-	Row,
-	SqlArg,
-	SqlBatch,
-	SqlOptions,
-	SqlValue,
-	Statement,
+export {
+	type Database,
+	type DatabaseOptions,
+	type Done,
+	type Migrations,
+	type Row,
+	Sql,
+	type SqlArg,
+	type SqlTag,
+	type SqlTx,
+	type SqlValue,
+	type Statement,
+	sql,
 } from './sql.ts'
 export {
 	type BackupOptions,
