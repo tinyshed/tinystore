@@ -92,6 +92,16 @@ writer by the application's choice, and commits with its rows in `db.tx`. The
 handle is the same type either way. Whether it reads `db.bucket` or
 `db.kv.bucket` waits for the kv book.
 
+**16. The jobs book is accepted** in its second version
+([api/jobs.md](api/jobs.md)): a handler gets the value and then the run, and
+returns its answer; `add` writes only a free id and `set` makes the id's job
+what it says; one word, `concurrency`, bounds the store and a worker; a
+schedule is given with its handler. The owner kept three choices the
+reviewers or the survey questioned: `dedupe` rather than
+`idempotencyWindow`, `step` rather than `checkpoint`, and a cron that needs a
+`timeZone` where most libraries assume UTC, since a required zone can be
+relaxed later without breaking a caller and a default cannot be tightened.
+
 ## Open
 
 - The order of config layers: the draft in

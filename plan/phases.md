@@ -13,7 +13,7 @@ says so. Mark a task done in the commit that does it.
 - [x] A Cargo workspace with the crates of [architecture.md](architecture.md): builds and tests on Windows and in a Linux container (`rust:1.99`).
 - [ ] CI building and testing it on Linux, macOS and Windows: written, with the Bun pipe on all three, and green once the branch is pushed.
 - [x] The kv book's first draft and one newcomer check ([api/kv.md](api/kv.md)).
-- [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the jobs book is drafted and in its check.
+- [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the owner accepted the jobs book on 9 October, after a survey of job libraries and a second newcomer round.
 - [x] Protocol 2: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
 - [ ] The generator's Python and Go codecs, with their SDKs.
 

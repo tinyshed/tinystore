@@ -86,12 +86,15 @@ Decided words are settled; draft words wait for their engine's book.
 | `ttl`                              | when a key expires                                                                | kv                     | the same                                            | draft   |
 | `idle`                             | expires after a span without reads or writes                                      | kv                     | `sliding`                                           | draft   |
 | `under`                            | a branch: whose keys these are, cleared in one call                               | kv                     | `Of`, `of`                                          | draft   |
-| `id`                               | a job's identity; adding an id that waits adds nothing                            | jobs                   | `key`                                               | draft   |
+| `id`                               | a job's identity; adding an id that is taken adds nothing                         | jobs                   | `key`                                               | draft   |
 | `group`                            | jobs that share a group's `concurrency`                                           | jobs                   | the same                                            | draft   |
 | `add`                              | puts a job in a queue                                                             | jobs                   | `enqueue`                                           | draft   |
 | `delay`, `at`                      | when a job runs: after a span, at a time                                          | jobs                   | `after`, `at`                                       | draft   |
-| `every`, `cron`                    | repeats: an interval spread by id, or the wall clock                              | jobs                   | `every` with `spread: true`                         | draft   |
+| `every`, `cron`                    | repeats: an interval spread by id, or the wall clock of a time zone               | jobs                   | `every` with `spread: true`                         | draft   |
 | `set`                              | makes an id's job this value at this time, whatever it was                        | jobs                   | `move: true`, `reschedule`                          | draft   |
+| `update`                           | changes a job that has not started, and says whether it did                       | jobs                   | `Update`, which threw a conflict                    | draft   |
+| `schedule`                         | a repeat the code owns, given with its handler                                    | jobs                   | `OpenSchedule`                                      | draft   |
+| `run`                              | a handler's call on a job: its attempt, its steps, its answers                    | jobs                   | `job`, which also named the record                  | draft   |
 | `runDue`                           | runs what is due, then returns                                                    | jobs                   | `untilIdle: true`, `drain`, which deletes in BullMQ | draft   |
 | `tx`, `with`                       | a transaction that reads, then writes; `tx.with(handle)` takes a handle in        | every engine           | `batch()` in Bun and Python, `withTx`               | draft   |
 | `list`, `all`                      | an array in memory; an iterator over pages                                        | every engine           | `All` meant both                                    | draft   |
@@ -116,9 +119,10 @@ await reminders.work(remind, { untilIdle: true })
 const refreshes = store.queue<Refresh>('refreshes', { concurrency: { total: 8, group: 2 } })
 await refreshes.add({ dataset: 3 }, { id: 'refresh:3', group: 'db:42' })
 await checks.set(`check:${check.id}`, check, { delay: '25h' })
-await probes.add({ url }, { id: `probe:${id}`, every: '30s' })   // ids spread over the interval
+await probes.set(`probe:${id}`, { url }, { every: '30s' })       // ids spread over the interval
 const pushes = store.queue<Push>('pushes', { dedupe: '1h' })
 await reminders.runDue(remind)
+reminders.work(async ({ userId, text }, run) => push(userId, text))
 ```
 
 - `every` spreads ids over the interval by itself, which is almost always
