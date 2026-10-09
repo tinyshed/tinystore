@@ -14,7 +14,7 @@ use crate::{Clock, Error, Result, Store, unix_millis};
 
 /// jobs.db's schema, a step a file; until `v0.1.0` the first step is edited
 /// rather than a second added.
-const MIGRATIONS: &[Migration] = &[Migration { version: 1, sql: include_str!("migrations/0001_schema.sql") }];
+const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// How often the store removes what the queues keep no longer.
 const MAINTENANCE: Duration = Duration::from_secs(60);

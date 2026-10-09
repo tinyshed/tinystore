@@ -15,7 +15,7 @@ use crate::{Clock, Error, Result, Store, unix_millis};
 
 /// kv.db's schema, a step a file; until `v0.1.0` the first step is edited
 /// rather than a second added.
-const MIGRATIONS: &[Migration] = &[Migration { version: 1, sql: include_str!("migrations/0001_schema.sql") }];
+const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// Expired cells a maintenance transaction deletes, and transactions a call.
 const EXPIRE_BATCH: usize = 10_000;

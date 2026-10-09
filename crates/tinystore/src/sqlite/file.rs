@@ -13,6 +13,9 @@ use super::readers::Readers;
 use super::{Config, Tx};
 use crate::{Error, ErrorKind, Result};
 
+const FOREIGN_KEYS_OFF: &str = "pragma foreign_keys = off";
+const FOREIGN_KEYS_ON: &str = "pragma foreign_keys = on";
+
 thread_local! {
     /// The files whose writer this thread holds in a transaction, by address.
     static HELD: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
@@ -120,14 +123,22 @@ impl File {
         self.refuse_when_closed("a transaction")?;
         self.refuse_inside_a_transaction("a transaction", "would wait for the writer the transaction holds")?;
         let connection = lock(&self.writer);
-        execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
+        self.transaction_on(&connection, work)
+    }
+
+    fn transaction_on<T, E: From<Error>>(
+        &self,
+        connection: &Connection,
+        work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        execute(connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let _held = Held::enter(self.address());
-        let mut open = Open { connection: &connection, finished: false };
-        let value = work(&Tx::new(&connection))?;
+        let mut open = Open { connection, finished: false };
+        let value = work(&Tx::new(connection))?;
         open.finished = true;
-        execute(&connection, COMMIT).map_err(|error| {
+        execute(connection, COMMIT).map_err(|error| {
             if !connection.is_autocommit() {
-                let _ = execute(&connection, ROLLBACK);
+                let _ = execute(connection, ROLLBACK);
             }
             Error::new(ErrorKind::OutcomeUnknown, format!("{}: a transaction's commit", self.describe()))
                 .with_source(error)
@@ -151,6 +162,25 @@ impl File {
 
     pub(crate) fn migrate(&self, history: &str, migrations: &[Migration]) -> Result<()> {
         self.transaction(|tx| migrate::apply(tx, history, migrations)).map_err(|error| error.within(self.describe()))
+    }
+
+    /// Applies migrations as `migrate` does, with foreign keys off while they
+    /// run and checked before the commit, as SQLite's procedure for changing a
+    /// table asks: with them on, rebuilding a parent table deletes its
+    /// children through `on delete cascade`, and nothing says so.
+    pub(crate) fn migrate_checked(&self, history: &str, migrations: &[Migration]) -> Result<()> {
+        self.refuse_when_closed("a migration")?;
+        self.refuse_inside_a_transaction("a migration", "would wait for the writer the transaction holds")?;
+        let connection = lock(&self.writer);
+        let what = || format!("{}: {history}: foreign keys", self.describe());
+        // foreign_keys cannot change inside a transaction, so it changes around one.
+        execute(&connection, FOREIGN_KEYS_OFF).map_err(|error| sql_error(what(), error))?;
+        let applied = self.transaction_on(&connection, |tx| {
+            migrate::apply(tx, history, migrations)?;
+            migrate::check_foreign_keys(tx, history)
+        });
+        let restored = execute(&connection, FOREIGN_KEYS_ON).map_err(|error| sql_error(what(), error));
+        applied.map_err(|error| error.within(self.describe())).and(restored)
     }
 
     /// Closes the readers left unused for too long; the store runs it now and

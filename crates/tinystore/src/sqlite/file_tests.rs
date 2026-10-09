@@ -269,8 +269,8 @@ fn a_read_waits_for_a_busy_reader_and_then_gives_up() {
     file.read(|_| Ok(())).unwrap();
 }
 
-const STEP_ONE: Migration = Migration { version: 1, sql: "create table a (x integer)" };
-const STEP_TWO: Migration = Migration { version: 2, sql: "create table b (y integer)" };
+const STEP_ONE: Migration = Migration::of(1, "0001_a.sql", "create table a (x integer)");
+const STEP_TWO: Migration = Migration::of(2, "0002_b.sql", "create table b (y integer)");
 
 #[test]
 fn migrations_apply_once_in_order() {
@@ -296,9 +296,13 @@ fn a_migration_the_program_does_not_have_or_has_edited_is_refused() {
     let older = file.migrate("test", &[STEP_ONE]).unwrap_err();
     assert!(older.to_string().contains("a newer program"), "{older}");
 
-    let edited = Migration { version: 1, sql: "create table a (x text)" };
+    let edited = Migration::of(1, "0001_a.sql", "create table a (x text)");
     let error = file.migrate("test", &[edited, STEP_TWO]).unwrap_err();
-    assert!(error.to_string().contains("was edited"), "{error}");
+    assert!(error.to_string().contains("0001_a.sql changed after it was applied"), "{error}");
+
+    let renamed = Migration::of(1, "0001_letters.sql", "create table a (x integer)");
+    let error = file.migrate("test", &[renamed, STEP_TWO]).unwrap_err();
+    assert!(error.to_string().contains("was renamed"), "{error}");
 
     let gap = file.migrate("other", &[STEP_TWO]).unwrap_err();
     assert_eq!(gap.kind(), ErrorKind::Invalid);

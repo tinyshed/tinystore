@@ -14,6 +14,8 @@ pub mod kv;
 mod memory;
 pub mod pipe;
 mod schedule;
+#[cfg(feature = "sql")]
+pub mod sql;
 pub(crate) mod sqlite;
 mod store;
 pub(crate) mod wire;

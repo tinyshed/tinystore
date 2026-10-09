@@ -9,10 +9,11 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kv", "jobs"]
+default = ["kv", "jobs", "sql"]
 # Each engine is a feature: a program links the engines it opens.
 kv = []
 jobs = ["dep:jiff"]
+sql = []
 
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the

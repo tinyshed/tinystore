@@ -1,14 +1,15 @@
 # sqldb: the API book
 
 Accepted by the owner, 10 October 2026, after a newcomer check and two
-reviews (below). The
-application's own relational data: its tables, joins, reports and
-transactions, in SQLite files it owns. This book is the API before the code;
-[dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) and
+reviews (below). The application's own relational data: its tables, joins,
+reports and transactions, in SQLite files it owns. This book is the API before
+the code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) and
 [jobs.md](jobs.md) the words all three share. TypeScript comes first in each
 section; Python, Go and Rust follow where they spell something differently.
-Nothing of it is built in Rust yet: the Go engine at `e81a050` and research's
-design of it are the reference for what it promises.
+The Rust core builds databases, their migrations, reads, writes, batches and
+transactions (`crates/tinystore/src/sql`); tables, the builder, the protocol
+and the SDKs come next. The Go engine at `e81a050` and research's design of it
+are the reference for what it promises.
 
 What changed from the Go engine: queries can be built without writing their
 text by hand, in every language; `batch` takes a list of statements and
@@ -513,11 +514,13 @@ let placed = db.tx(|tx| -> Result<bool, ShopError> {
   writes wait for it. A read inside sees the transaction's own writes, and two
   transactions cannot both take the last item.
 - A transaction holds the writer five seconds at most, in the program's process
-  as across the network: past them it rolls back and is `limit`. The core's
-  own timer rolls it back and frees the writer, so a client stuck in an
-  `await`, or gone, holds nothing past the bound. Inside one,
-  call nothing that waits on the world, an HTTP request or a queue's answer: a
-  rollback cannot take back what it did.
+  as across the network: past them it rolls back and is `limit`. Over the
+  pipe and the network the core's own timer rolls it back and frees the
+  writer, so a client stuck in an `await`, or gone, holds nothing past the
+  bound; in Rust the function runs on the program's own thread, and the bound
+  fails its next call and its end. Inside one, call nothing that waits on the
+  world, an HTTP request or a queue's answer: a rollback cannot take back what
+  it did.
 - `tx.with(handle)` takes a bucket or a queue of the same database in, so that
   a job or a key commits with the rows; a call around the transaction from
   inside it, `db.exec` or `emails.add`, is `invalid`, since it would wait for

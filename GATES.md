@@ -196,32 +196,36 @@ module defines.
 
 ## SQL
 
-- an application's read cannot write — `TestAReadCannotWriteAndSaysWhereToWrite`
+- a read runs on a reader that cannot write, and a write with `returning` on the writer, its rows given once its commit is durable — `a_write_with_returning_runs_on_the_writer_and_gives_its_rows_once_durable`, `one_given_two_rows_of_a_write_rolls_the_write_back`, `a_constraint_failing_after_rows_came_rolls_the_whole_write_back` in `sql::database_tests`
 - an application's writes share a commit, fail alone — `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone`
-- a batch commits whole in its group, and fails alone — `TestABatchCommitsTogetherAndFailsAlone`, `TestABatchThatDoesNotBuildWritesNothing`
-- an applied migration cannot change under the file — `TestMigrationsApplyOnceAndAChangedOneRefuses`
-- a migration rebuilding a parent keeps its children — `TestARebuiltTableKeepsItsChildren`, `TestMigrationsRunWithoutForeignKeysAndCheckThemBeforeCommit`
+- a batch commits whole in its group, and fails alone — `a_batch_writes_all_of_its_statements_or_none` in `sql::database_tests`
+- an applied migration cannot change under the file, nor be renamed, missing or put before another — `a_database_applies_each_migration_once_and_checks_them_at_every_open`, `a_migration_changed_renamed_missing_or_out_of_order_refuses_to_open` in `sql::database_tests`
+- a migration rebuilding a parent keeps its children, and one leaving a row without its parent refuses — `migrations_run_without_foreign_keys_and_leave_none_broken` in `sql::database_tests`
 - a schema is the SQL it prints — `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`
 - a declaration that cannot be a table fails at start — `TestADeclarationThatCannotBeATableFailsAtStart`
-- an sqldb value comes back as it went in — `TestEveryValueComesBackAsItWentIn`, `TestArgumentsAreWrittenByTheirGoType`
+- an sqldb value comes back as it went in — `a_row_reads_as_the_programs_type_and_each_value_as_it_went_in` in `sql::database_tests`
 - sixteen bytes of a type sqldb does not know are bytes — `TestOnlyAKnownUUIDTypeIsText`
 - the standard library's uuid is text, as a field and as an argument — `TestAStandardLibraryUUIDIsKeptAsText`
 - FTS5 and R*Tree work in an application's file and its snapshot — `TestFullTextAndRTreeTablesWorkInTheFileAndItsSnapshot`
 - a virtual table of a module the program did not link is refused, naming its import — `TestAVirtualTableOfAModuleNotLinkedIsRefused`, `TestModuleOfReadsTheModule`
 - a virtual table's shadow tables are not the application's — `TestAVirtualTablesShadowsAreNotTheSchemas`
-- a value that does not decode names column and field — `TestAValueThatDoesNotDecodeNamesItsColumnAndField`
-- a numbered SQL parameter without its argument is refused — `TestAStatementWithNumberedParametersNeedsEveryArgument`
-- a value SQLite would change is refused — `TestAValueSQLiteWouldChangeIsRefused`: NaN, `uint64` past `int64`, a day no calendar has
+- a value that does not decode names its column — `a_value_that_does_not_read_as_its_field_names_its_column` in `sql::database_tests`
+- a placeholder without its value is refused, rather than read as `NULL` — `a_value_sqlite_would_change_is_refused_and_every_placeholder_takes_one` in `sql::database_tests`
+- a value SQLite would change is refused — `a_value_sqlite_would_change_is_refused_and_every_placeholder_takes_one` in `sql::database_tests`: NaN, `u64` past `i64`
 - `Insert` writes every field but the generated ones — `TestInsertWritesEveryFieldButTheGeneratedOnes`, `TestInsertReturnsWhatTheDatabaseGenerated`
 - `Open` checks the file and changes nothing — `TestOpenChecksTheFileAgainstTheSchemaAndChangesNothing`, `TestOpenNamesEachDifferenceOfStructure`
 - an expression spelled otherwise never refuses a file — `TestOpenDoesNotRefuseAnExpressionSpelledOtherwise`
 - a partial unique index is declared and checked, its condition's spelling a line — `TestAPartialUniqueIndexIsDeclaredAndChecked`, `TestOpenRefusesAPartialIndexWithTheDeclaredName`
 - a long transaction fails no grouped write behind it — `TestALongTransactionFailsNoWriteBehindIt`, `TestALongTransactionFailsNoGroupedWriteBehindIt`
-- a call on the DB inside its own Tx ends with its context — `TestACallOnTheDBInsideItsOwnTxEndsWithItsContext`
+- a call around a transaction from inside it is refused rather than waits — `a_call_around_a_transaction_from_inside_it_is_invalid` in `sql::database_tests`
+- a transaction sees its own writes, rolls back on an error, and a call that fails leaves it as before the call — `a_transaction_sees_its_writes_and_rolls_back_on_an_error` in `sql::database_tests`
+- a transaction past its five seconds rolls back — `a_transaction_past_its_bound_rolls_back` in `sql::database_tests`
 - an sqldb snapshot ends at its bound and says so — `TestEachHoldsOneSnapshotAndOneRow`, `TestASnapshotHeldPastItsBoundSaysSo`
-- a constraint says its kind — `TestAConstraintSaysItsKind`
+- a key already held is a conflict, and any other constraint invalid — `a_key_already_held_is_a_conflict_and_another_constraint_is_invalid` in `sql::database_tests`
+- a write says what it changed, and the rowid of its own insert alone — `exec_says_what_it_changed_and_the_rowid_of_its_insert` in `sql::database_tests`
 - a statement is compiled once a connection — `TestAStatementIsCompiledOnceAConnection`, `TestAConnectionKeepsTheStatementsItsFileWasOpenedWith`
-- sqldb holds the store's memory before it decodes — `TestStoreMemoryBoundsReadsAndWrites`, `TestAllPastItsBoundRefuses`
+- sqldb holds the store's memory before it decodes — `TestStoreMemoryBoundsReadsAndWrites`
+- a read past 64 MiB is a limit — `reading_past_the_bound_is_a_limit` in `sql::database_tests`
 - a schema check writes a migration only when asked — `TestCheckSchemaFindsWhatIsMissingAndWritesOnlyWhenAsked`, `TestTwoChecksOfOneNameFail`
 - an ambiguous change is a draft that does not run — `TestAnAmbiguousChangeIsADraftThatDoesNotRun`
 - a database no one opened is copied without opening it — `TestCopyTakesADatabaseNoOneOpened` in `sqldb`
@@ -229,7 +233,9 @@ module defines.
 - `ApplyNone` and `Migrated` apply nothing — `TestApplyNoneAndMigratedApplyNothing`, `TestVerifyChecksTheHistoryAndRunsNothing`
 - a statement SQLite refuses is `ErrInvalid` — `TestAStatementSQLiteRefusesIsInvalid`, a missing argument included
 - sqldb reads rows without a struct — `TestQueryReadsRowsAsSQLiteReturnsThem`
-- a database opens without migrations as it is, checking nothing — `TestADatabaseOpensWithoutMigrations`, `TestClaimStampsAFreshFileAndRunsNothing`; `a database opens without migrations, empty, to try a query` in `sdk/js/test/sql.test.ts`, `test_a_database_opens_without_migrations_empty_to_try_a_query` in Python's
+- a database opens without migrations as it is, checking nothing — `a_database_opens_without_migrations_as_it_is` in `sql::database_tests`; `a database opens without migrations, empty, to try a query` in `sdk/js/test/sql.test.ts`, `test_a_database_opens_without_migrations_empty_to_try_a_query` in Python's
+- a database's name cannot leave `sql/` or meet another on a file system that folds case — `a_name_that_could_leave_sql_or_meet_another_is_refused` in `sql::database_tests`
+- a database closes with its store, and a handle that outlives it is closed — `a_database_closes_with_its_store` in `sql::database_tests`
 
 ## SQLite under every engine
 

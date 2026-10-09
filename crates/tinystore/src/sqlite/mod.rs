@@ -22,7 +22,7 @@ use std::ops::Deref;
 use rusqlite::Connection;
 
 pub(crate) use config::{Config, Durability, GroupLimits};
-pub(crate) use connection::sql_error;
+pub(crate) use connection::{execute, sql_error};
 pub(crate) use file::File;
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
