@@ -26,7 +26,7 @@ them; the workspace builds and tests on three operating systems.
 - [x] The runtime: Store, LOCK, clock, memory budget, background work, errors, the engine registry.
 - [ ] Config and the logger in the core, with the `tracing` layer.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
-- [ ] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
+- [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's open, get, has, set, delete, take, touch and clear.
 - [ ] kv's scan, batch, view and the rest of its methods; downloads under credit; CANCEL.
 - [ ] The server: sockets, named pipes, stdio, TCP and TLS, SERVE, as `tinystore serve`.

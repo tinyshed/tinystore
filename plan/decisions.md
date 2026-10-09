@@ -81,6 +81,15 @@ separate crates enforced is kept by lints and a test: `unsafe` is denied
 everywhere but `sqlite::memory` and the FFI, and no engine module imports
 another.
 
+**15. Keys and jobs that commit with rows are opened from the database.**
+The owner found `{ in: db }` an awkward way to say where a bucket lives. A
+bucket or a queue opened from the store lives in the store's own file, kv.db
+or jobs.db, with a writer of its own; one opened from an application's
+database, `db.bucket('sessions')`, lives in that database's file, shares its
+writer by the application's choice, and commits with its rows in `db.tx`. The
+handle is the same type either way. Whether it reads `db.bucket` or
+`db.kv.bucket` waits for the kv book.
+
 ## Open
 
 - The order of config layers: the draft in

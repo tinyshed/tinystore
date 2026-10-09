@@ -38,6 +38,7 @@ module defines.
 - a reservation shrinks to what its work holds — `TestAReservationShrinksToWhatItHolds`
 - work holding a writer never waits for memory — `TestAReservationThatCannotWaitTakesOnlyWhatIsFree`
 - a limit names which, what the call wanted and the bound — `TestALimitErrorNamesItsBoundAndIsItsKind`, `TestWholeExactBlocksNeedNoDecodedSampleBudget`
+- a store dropped without close closes its engines and lets go of its directory — `a_store_dropped_without_close_closes_its_engines_and_lets_go` in `store`
 
 ## Codec
 
@@ -256,37 +257,37 @@ module defines.
 - a key a batch of the database its store lives in writes commits with the batch's rows or not at all, a delete and a clear alike — `TestABucketInADatabaseCommitsWithItsRows`, `TestAKeyInAnSQLBatchCommitsWithItsRows` in `server`; `a key a batch writes commits with the rows or not at all` in `sdk/js/test/sql.test.ts`, `test_a_key_a_batch_writes_commits_with_the_rows_or_not_at_all` in Python's
 - a store In a database renews Sliding keys there, refuses a change of a bucket elsewhere or inside a Tx, and a database holds one — `TestSlidingExpiryWorksInADatabase`, `TestAChangeOfABucketElsewhereIsRefused`, `TestADatabaseHoldsOneKVStore`
 - a kv write that returned survives an abrupt exit — `TestAWriteThatReturnedSurvivesAnAbruptExit`, from many goroutines at once
-- an expired key is absent to every operation — `TestAnExpiredKeyIsAbsentToEveryOperation`
+- an expired key is absent to every operation — `an_expired_key_is_absent_to_every_call` in `kv::bucket`
 - expiry past one pass's bound is taken in ten seconds — `TestAMaintainPastItsBoundIsFollowedSoon`, expired and cleared rows
-- a default TTL is given once, at creation — `TestADefaultTTLIsGivenOnceAtCreation`
-- an integer key is its decimal text — `TestAnIntegerKeyIsItsDecimalText`
-- a kv version never repeats — `TestAVersionNeverRepeatsAfterDeleteExpiryOrReopen`
-- a stale claim cannot finish or delete the next — `TestAStaleClaimCannotFinishOrDeleteTheNext`
-- a kv Take whose value no longer decodes keeps it — `TestAFailedTakeKeepsItsValue`, a codec's panic and inside Tx included
-- a kv value comes back as it went in — `TestAValueComesBackAsItWentIn`, floats by their bits, a named one's NaN that signals too
+- a default TTL is given once, at creation — `a_set_keeps_the_expiry_a_live_key_has_and_expire_gives_a_new_one` in `kv::bucket`
+- an integer key is its decimal text — `an_integer_key_is_its_decimal_spelling` in `kv::path`, `a_value_comes_back_as_its_type` in `kv::bucket`
+- a kv version never repeats — `a_version_never_repeats_across_a_delete_and_a_reopen` in `kv::bucket`
+- a stale claim cannot finish or delete the next — `a_write_at_a_stale_version_is_a_conflict_naming_its_key`, `a_key_call_says_its_expiry_and_version_before_its_last_step` in `kv::bucket`
+- a kv take whose value no longer decodes keeps it — `a_take_whose_value_no_longer_reads_keeps_it` in `kv::bucket`, `a_take_that_fails_inside_a_transaction_keeps_its_value_and_the_rest_goes_on` in `kv::tx`
+- a kv value comes back as it went in — `a_value_comes_back_as_its_type` in `kv::bucket`, `a_float_keeps_its_bits` in `kv::value`
 - prepared key changes hold their memory once and wait for none of their own slots — `TestABatchHoldsEachKeysMemoryOnce`, `TestABatchOfKeysDoesNotWaitForItsOwnWriteSlots`
 - a prepared key change refuses nil as an ordinary call does — `TestAChangeRefusesANilKeyAsItsOrdinaryCallDoes`
-- a `kv.Raw` is what its row holds, for every type — `TestARawValueIsWhatItsRowHolds`, an empty string as empty bytes and not nothing
-- an overflowing counter is refused, not rounded — `TestAnOverflowingCounterIsRefusedRatherThanRounded`
+- a row keeps a value by its type, for every type — `a_primitive_is_kept_as_its_row`, `a_compound_value_is_kept_as_json` in `kv::value`
+- an overflowing counter is refused, not rounded — `an_overflowing_counter_is_refused_rather_than_rounded` in `kv::counters`, in memory too
 - `LoseAtMost` loses no more than its interval — `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing
-- counters of one name keep their numbers one way — `TestCountersOpenAgainOnlyAsTheyWereOpened`
-- a `LoseAtMost` counter joins no transaction — `TestALoseAtMostCounterRefusesATransaction`
-- counters in memory stay within their bound — `TestCountersInMemoryStayWithinTheirBound`, `TestFailedChangesStayWithinTheBound`
+- counters of one name keep their numbers one way — `counters_of_a_name_count_one_way_in_a_process` in `kv::counters`
+- a counter kept in memory joins no transaction — `counters_join_a_transaction_unless_they_live_in_memory` in `kv::tx`
+- counters in memory stay within their bound — `counters_in_memory_stay_within_their_bound` in `kv::counters`
 - cold counters arriving together pass no bound — `TestColdCountersArrivingTogetherStayWithinTheBound`
 - a failed flush refuses new counters, loses none held — `TestAFailedFlushRefusesNewCountersRatherThanHoldThem`
-- a kv Clear empties a branch and those under it — `TestClearEmptiesTheBranchAndThoseUnderIt`, over the bound and under it
+- a kv clear empties a branch and those under it — `clearing_a_branch_removes_the_branches_under_it_and_no_other`, `a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them` in `kv::bucket`
 - a cleared key is absent to every operation — `TestAClearedKeyIsAbsentToEveryOperation`
 - a mark hides what lies under it at every depth — `TestAMarkHidesWhatLiesUnderItAtEveryDepth`, deeper than the lookups included
-- a Clear never brings back counters waiting to flush — `TestAClearDoesNotResurrectCountersWaitingForTheFlush`
+- a clear never brings back counters waiting to flush — `a_clear_of_counters_in_memory_never_brings_them_back` in `kv::counters`
 - a failed Clear keeps what counters wait to flush — `TestAFailedClearKeepsTheCountersWaitingForTheFlush`
 - a Clear whose commit fails lets go as a crash would — `TestAClearWhoseCommitFailsLetsGoAsACrashWould`
 - Clears beside changes and flushes keep branches apart — `TestClearsBesideChangesAndFlushesKeepTheirBranchesApart`
 - a Clear inside Tx deletes what it clears or refuses — `TestAClearInATransactionOverTheBoundIsRefused`
 - a call inside a kv Tx or View waits for no memory — `TestTxAndViewWaitForNoMemoryTheCallsWaitingForThemHold`
 - kv holds the store's memory before it makes a value — `TestStoreMemoryBoundsWritesReadsAndScans`, `TestAWriteWaitingForMemoryHasEncodedNothing`
-- a sliding read writes at most once per refresh — `TestASlidingReadWritesAtMostOncePerRefresh`
-- a renewal never extends a newer incarnation of its key — `TestARenewalDoesNotExtendANewerIncarnation`, bound to version and expiry
-- a key read in its last minute is renewed at once — `TestAReadNearItsExpiryRenewsAtOnce`
+- an idle key's read waits for no commit, and asks for one renewal a refresh — `a_read_of_an_idle_key_waits_for_no_commit`, `an_idle_key_lives_on_while_it_is_read` in `kv::bucket`
+- a renewal never extends a newer incarnation of its key — `a_renewal_never_extends_a_key_written_again_since_its_read` in `kv::bucket`
+- a key read in its last minute is renewed at once — `an_idle_key_read_in_its_last_minute_is_renewed_before_the_read_returns` in `kv::bucket`
 - kv's All holds no snapshot between its pages — `TestAllWalksEveryKeyAPageAtATime`
 - a kv page ends before the value that passes its bytes — `TestAPageEndsBeforeTheValueThatPassesItsBytes`
 - a config is its defaults, its environment, then what was kept, across a restart — `TestAConfigIsItsDefaultsThenItsEnvironmentThenWhatWasKept`, in both SDKs' suites too
@@ -296,7 +297,7 @@ module defines.
 - a config change that fails its check, or sets a secret, keeps nothing — `TestAChangeThatFailsItsCheckOrSetsASecretKeepsNothing`
 - a fixed setting comes from the layers alone, and says where it came from — `TestAFixedFieldRefusesUpdateAndSaysWhereItCameFrom`; `a fixed field refuses update, ignores what was kept, and says where it came from` in `sdk/js/test/config.test.ts`, `test_a_fixed_field_refuses_update_ignores_what_was_kept_and_says_where_it_came_from` in Python's
 - a fixed nested dataclass keeps its fields fixed — `test_a_fixed_nested_dataclass_stays_fixed` in Python
-- the sign-in recipe admits no more parallel password checks than its quota — `TestQuotaAdmissionBoundsParallelPasswordChecks`
+- the sign-in recipe admits no more parallel password checks than its quota — `a_sign_in_admits_no_more_password_checks_than_its_quotas` in `kv::quota`
 - every variable that does not read, and every required setting missing, is said at once — `TestEveryBadVariableIsReportedAtOnce`; `every variable that does not read is said at once` in `sdk/js/test/config.test.ts`, `test_every_variable_that_does_not_read_is_said_at_once` in Python's
 - NAME_FILE gives a setting its file's text, and NAME beside it is refused — `TestASecretReadsItsFile`; `a variable's file is read when NAME_FILE names it, and both set is refused` in `sdk/js/test/config.test.ts`, `test_a_variables_file_is_read_when_name_file_names_it_and_both_set_is_refused` in Python's
 - a config's lookup is the only environment it reads — `TestAConfigsLookupIsTheOnlyEnvironmentRead`
@@ -304,15 +305,20 @@ module defines.
 - a variable is read by its field's type, or refused naming it — `TestAVariableIsReadByItsFieldsType`
 - a config keeps only JSON within its bounds — `TestARawConfigKeepsOnlyJSONWithinItsBounds`
 - variables and `.env` files read alike in every language — `TestVariablesAndDotenvFilesAreTheVectors`, over `kv/testdata/config.json`, which both SDKs' suites read
-- a limiter lets its burst through, then its rate — `TestALimiterLetsABurstThroughThenItsRate`, `TestAllowNTakesAllOrNoneAndNeverPastTheBurst`, `TestALimiterOverTheWire`
-- a limiter's times outlive a reopen, a quiet key is forgotten — `TestALimiterKeepsItsTimesAcrossAReopen`, `TestAQuietKeyIsForgottenOnceItsTimeHasCome`
-- requests racing for a key pass no more than the burst — `TestRequestsRacingForAKeyPassNoMoreThanTheBurst`
-- a quota counts a use in every window or in none, racing uses included — `TestAQuotaCountsInEveryWindowOrInNone`, `TestUsesRacingForAKeyPassNoMoreThanItsLimit`, `TestAQuotaOverTheWire`, `a use counts in every window or in none, and a refund gives it back` in `sdk/js/test/kv.test.ts`, `test_a_quota_counts_a_use_in_every_window_or_in_none` in Python's
-- a quota's window starts at a key's first use after the last ended — `TestAWindowStartsAtTheFirstUseAfterTheLastEnded`
-- a quota's `Get` counts nothing, a refund never goes below nothing, its windows outlive a reopen — `TestGetRefundAndDeleteChangeWhatTheySay`
-- a quota that cannot count is refused at open — `TestAQuotaThatCannotCountIsRefused`
-- a once key's function runs once and its answer is kept — `TestARunKeepsItsAnswerAndRunsAKeyOnce`, `TestAnErrorKeepsNothingAndTheNextRunRunsAgain`
-- a run of a key waits for the one running it, every client's — `TestARunWaitsForTheRunOfItsKey`, `TestAWaitingRunEndsWithItsContextAndAnAnswerOutlivesIt`, `TestAOnceRunsAKeyOnceOverTheWire`, `a key runs once: a call meanwhile waits for its answer, and a throw keeps nothing` in `sdk/js/test/kv.test.ts`, `test_a_once_key_runs_once_and_a_call_meanwhile_waits_for_its_answer` in Python's
+- a rate limit lets its burst through, then its rate — `a_rate_limit_lets_a_burst_through_then_its_rate`, `requests_asked_together_pass_together_or_not_at_all`, `peek_uses_nothing_and_reset_gives_a_key_its_whole_burst` in `kv::rate_limit`; over the wire, `TestALimiterOverTheWire` at `e81a050`
+- a rate limit's times outlive a reopen, a quiet key is forgotten — `a_rate_limits_times_outlive_a_restart`, `a_quiet_key_is_forgotten_once_its_time_has_come` in `kv::rate_limit`
+- requests racing for a key pass no more than the burst — `requests_racing_for_a_key_pass_no_more_than_the_burst` in `kv::rate_limit`
+- a quota counts a use in every window or in none, racing uses included — `a_use_counts_in_every_window_or_in_none`, `uses_racing_for_a_key_pass_no_more_than_its_limit` in `kv::quota`; over the wire and in the SDKs, `TestAQuotaOverTheWire` and the SDK tests at `e81a050`
+- a quota's window starts at a key's first use after the last ended — `a_window_starts_at_the_first_use_after_the_last_ended` in `kv::quota`
+- a quota's `peek` counts nothing, a refund never goes below nothing, its windows outlive a reopen — `peek_counts_nothing_and_a_refund_never_goes_below_nothing`, `a_quotas_windows_outlive_a_restart_and_follow_its_new_windows` in `kv::quota`
+- a quota that cannot count is refused at open — `a_quota_that_cannot_count_does_not_open` in `kv::quota`
+- a once key's function runs once and its answer is kept — `a_run_keeps_its_answer_and_runs_a_key_once`, `an_error_keeps_nothing_and_a_panic_lets_its_key_go` in `kv::once`
+- a run of a key waits for the one running it, every client's — `a_run_waits_for_the_run_of_its_key_and_takes_its_answer`, `a_run_after_one_that_failed_runs_its_own_function` in `kv::once`; over the wire and in the SDKs, `TestAOnceRunsAKeyOnceOverTheWire` and the SDK tests at `e81a050`
+- a call made around a kv transaction from inside it fails rather than waits or misreads — `a_call_made_around_a_transaction_from_inside_it_fails_rather_than_waits` in `kv::tx`
+- a call that fails inside a kv transaction leaves it as it was before the call — `a_key_call_inside_a_transaction_commits_with_it`, `a_transaction_commits_what_it_wrote_or_nothing` in `kv::tx`
+- of two transactions taking the last item, one gets it — `of_two_transactions_taking_the_last_item_one_gets_it` in `kv::tx`
+- a run of a key inside its own run fails rather than waits — `a_run_of_a_key_inside_its_own_run_fails_rather_than_waits` in `kv::once`
+- counters kept in memory reach the file at a flush, at close, and when the store is dropped unclosed — `counters_in_memory_reach_the_file_at_a_flush_and_at_close`, `counters_in_memory_reach_the_file_when_the_store_is_dropped_unclosed` in `kv::counters`
 
 ## Jobs
 

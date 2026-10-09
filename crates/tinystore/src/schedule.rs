@@ -89,7 +89,9 @@ impl Scheduler {
         self.shared.lock().stopped = true;
         self.shared.changed.notify_all();
         let handle = self.thread.lock().unwrap_or_else(PoisonError::into_inner).take();
-        if let Some(handle) = handle {
+        // A task that drops the store's last handle stops the scheduler from its
+        // own thread, which ends once the task returns rather than being joined.
+        if let Some(handle) = handle.filter(|handle| handle.thread().id() != thread::current().id()) {
             // A panic in a task was caught where it ran; this join cannot carry one.
             let _ = handle.join();
         }

@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, SystemTime};
 
 use crate::engine::{Claim, Engine, Host};
@@ -42,10 +42,21 @@ impl fmt::Debug for Options {
 
 /// One directory of engine files, held by one store at a time through its
 /// `LOCK`. Engines open against a store and close with it, the last opened
-/// first.
+/// first: at `close`, or when the last clone of the store is dropped.
 #[derive(Clone)]
 pub struct Store {
     inner: Arc<Inner>,
+}
+
+/// A store that its engines reach without keeping it open: an engine holds
+/// this, so that dropping the application's last handle closes the store.
+#[derive(Clone, Debug)]
+pub(crate) struct WeakStore(Weak<Inner>);
+
+impl WeakStore {
+    pub(crate) fn upgrade(&self) -> Option<Store> {
+        self.0.upgrade().map(|inner| Store { inner })
+    }
 }
 
 struct Inner {
@@ -58,7 +69,8 @@ struct Inner {
     /// The engine of each kind this store has open, which every handle of that
     /// engine shares: one `kv.db` writer however many buckets open.
     open: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
-    claims: Mutex<HashSet<String>>,
+    /// Shared with each claim's release, which must not keep the store open.
+    claims: Arc<Mutex<HashSet<String>>>,
     closed: AtomicBool,
 }
 
@@ -76,7 +88,7 @@ impl Store {
             scheduler: Scheduler::new(options.background),
             engines: Mutex::new(Vec::new()),
             open: Mutex::new(HashMap::new()),
-            claims: Mutex::new(HashSet::new()),
+            claims: Arc::default(),
             closed: AtomicBool::new(false),
             dir,
         };
@@ -98,26 +110,21 @@ impl Store {
     /// Stops background work, waiting for the task under way, closes every
     /// engine, the last opened first, and lets go of the directory. The first
     /// engine that fails to close is the error; the others still close. A
-    /// second call does nothing.
+    /// second call does nothing, and neither does the last clone's drop after.
     pub fn close(&self) -> Result<()> {
-        if self.inner.closed.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
-        self.inner.scheduler.stop();
-        let engines = std::mem::take(&mut *lock(&self.inner.engines));
-        let mut first_failure = None;
-        for engine in engines.iter().rev() {
-            if let Err(error) = engine.close() {
-                first_failure.get_or_insert(error);
-            }
-        }
-        lock(&self.inner.open).clear();
-        drop(lock(&self.inner.lock).take());
-        first_failure.map_or(Ok(()), |error| Err(error.within(self.describe())))
+        self.inner.close()
+    }
+
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.inner.clock)
+    }
+
+    pub(crate) fn downgrade(&self) -> WeakStore {
+        WeakStore(Arc::downgrade(&self.inner))
     }
 
     fn describe(&self) -> String {
-        format!("store {}", self.inner.dir.display())
+        self.inner.describe()
     }
 
     fn refuse_when_closed(&self, what: &str) -> Result<()> {
@@ -158,11 +165,44 @@ impl Host for Store {
         if !lock(&self.inner.claims).insert(name.to_owned()) {
             return Err(Error::new(ErrorKind::InUse, format!("{}: {name} is already open", self.describe())));
         }
-        let store = self.clone();
+        let claims = Arc::clone(&self.inner.claims);
         let release = Box::new(move |name: &str| {
-            lock(&store.inner.claims).remove(name);
+            lock(&claims).remove(name);
         });
         Ok(Claim::new(name, self.inner.dir.join(name), release))
+    }
+}
+
+impl Inner {
+    fn close(&self) -> Result<()> {
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.scheduler.stop();
+        let engines = std::mem::take(&mut *lock(&self.engines));
+        let mut first_failure = None;
+        for engine in engines.iter().rev() {
+            if let Err(error) = engine.close() {
+                first_failure.get_or_insert(error);
+            }
+        }
+        lock(&self.open).clear();
+        drop(lock(&self.lock).take());
+        first_failure.map_or(Ok(()), |error| Err(error.within(self.describe())))
+    }
+
+    fn describe(&self) -> String {
+        format!("store {}", self.dir.display())
+    }
+}
+
+impl Drop for Inner {
+    /// Closes a store its application dropped without closing, so that what
+    /// engines hold in memory is written and the directory is let go.
+    fn drop(&mut self) {
+        if let Err(error) = self.close() {
+            tracing::warn!(target: "tinystore", %error, "a store dropped without close did not close cleanly");
+        }
     }
 }
 
@@ -268,6 +308,20 @@ mod tests {
         drop(claim);
         store.claim("kv.db").unwrap();
         store.close().unwrap();
+    }
+
+    #[test]
+    fn a_store_dropped_without_close_closes_its_engines_and_lets_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options::default()).unwrap();
+        let closed = Arc::new(Mutex::new(Vec::new()));
+        store.attach(Arc::new(Recorder { name: "kv", closed: Arc::clone(&closed) })).unwrap();
+        let clone = store.clone();
+        drop(store);
+        assert!(lock(&closed).is_empty(), "a clone still holds it open");
+        drop(clone);
+        assert_eq!(*lock(&closed), ["kv"]);
+        Store::open(dir.path(), Options::default()).unwrap().close().unwrap();
     }
 
     #[test]

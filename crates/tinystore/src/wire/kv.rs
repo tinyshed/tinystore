@@ -11,7 +11,7 @@ use super::message::{Answer, Failure, Fields};
 use super::msgpack::Value;
 use super::session::int;
 use crate::Store;
-use crate::kv::{Bucket, Cell, Put, Raw, Stamp, Version, Write};
+use crate::kv::{Bucket, Cell, Put, Raw, Stamp, Version, WriteOptions};
 
 const OPEN: u16 = 0x0101;
 const GET: u16 = 0x0102;
@@ -144,7 +144,7 @@ fn set(bucket: &Bucket<()>, fields: &Fields) -> Answered {
 }
 
 /// What a set writes, and whether only a key that is not there.
-fn set_args(fields: &Fields, write: Write) -> Result<(Raw, Write, Put), Failure> {
+fn set_args(fields: &Fields, write: WriteOptions) -> Result<(Raw, WriteOptions, Put), Failure> {
     let raw = raw_of(fields.value(4))?;
     let put = if fields.bool(8, "if absent")? { Put::OnlyNew } else { Put::Always };
     Ok((raw, write, put))
@@ -173,7 +173,7 @@ fn take(bucket: &Bucket<()>, fields: &Fields) -> Answered {
 }
 
 fn touch(bucket: &Bucket<()>, fields: &Fields) -> Answered {
-    let found = bucket.expire_with(key(fields)?, write(fields)?)?;
+    let found = bucket.expire_as(&key(fields)?, write(fields)?)?;
     Ok(Answer::default().put(1, Value::Bool(found)).encode())
 }
 
@@ -187,7 +187,7 @@ impl Handles {
             .cloned()
             .ok_or_else(|| Failure::invalid(format!("handle {handle} names no bucket this connection opened")))?;
         for owner in fields.array(2, "owners")? {
-            bucket = bucket.of(text_of(owner, "an owner")?);
+            bucket = bucket.under(text_of(owner, "an owner")?);
         }
         Ok(bucket)
     }
@@ -215,8 +215,8 @@ fn text_of(value: &Value, what: &str) -> Result<String, Failure> {
 }
 
 /// What a call asks of a write: its expiry and the version the key must be at.
-fn write(fields: &Fields) -> Result<Write, Failure> {
-    let mut write = Write::default();
+fn write(fields: &Fields) -> Result<WriteOptions, Failure> {
+    let mut write = WriteOptions::default();
     if let Some(ttl) = fields.uint(5, "ttl")? {
         write = write.ttl(Duration::from_millis(ttl));
     }

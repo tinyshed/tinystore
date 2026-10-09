@@ -89,20 +89,31 @@ transport, and the Go SDK takes the root module path,
 ## The runtime model
 
 **Files.** One directory, a file per engine: `kv.db`, `jobs.db`,
-`records.db`, `metrics.db`, `sql/<name>.db`, `blobs/`. kv and jobs may live in
-the application's database instead (`database: db`), so that a transaction
-commits a key or a job with the rows it is about. The directory's `LOCK` lets
-one store open it; a recovery tool opens it beside the owner, SQL only.
+`records.db`, `metrics.db`, `sql/<name>.db`, `blobs/`. A bucket or a queue
+opened from an application's database instead of the store, `db.bucket(…)`,
+`db.queue(…)`, lives in that database's file, so that a transaction commits a
+key or a job with the rows it is about. The directory's `LOCK` lets one store
+open it; a recovery tool opens it beside the owner, SQL only.
 
 **The writer.** One write connection a file, and grouped commits: writes that
 arrive while a commit runs share the next one, each in a savepoint, and a
-failed write rolls back alone. Two shapes are to be measured in phase 1: a
-leader among the callers, as in Go, with a store thread leading the writes that
-come through the pipe; or one writer thread a file that commits and completes
-every write. The pipe needs completions without a blocked host thread either
-way. research's
+failed write rolls back alone. A leader among the callers commits the queue,
+as in Go; a write that comes through the pipe carries a completion instead of
+a waiting caller, and the thread that queued it leads while such writes keep
+arriving at the front. research's
 [group-commit-contract.md](https://github.com/tinyshed/research/blob/main/tinystore/design/group-commit-contract.md)
 is the contract.
+
+**Waiting.** Whatever in the core waits — a commit, another run of a `once`
+key, later a job to claim or a message to deliver — has a form that takes a
+completion and returns at once, and the blocking Rust call is that form plus a
+wait. The pipe answers through completions only, so a host's event loop never
+blocks and no store thread is held by a host: a write is queued with its
+completion, a run waiting for another is a callback on its end, a watch is a
+callback after a commit. A host gets its answers through `recv`, woken by
+`wake`. A transaction is the exception that proves it: across a language
+boundary it never holds the writer while the host awaits, so the SDKs commit
+what a function read and wrote as one checked batch.
 
 **Readers.** A pool a file, `query_only`, every pragma set on every
 connection. One stays open; the others close after a minute unused. Each
@@ -129,11 +140,11 @@ kind is one wire code and one error class in every SDK.
 
 **Durability.** A setting of each engine:
 
-| Value    | What a commit does                                                  | Survives                                        | Default for      |
-|----------|---------------------------------------------------------------------|-------------------------------------------------|------------------|
-| `'full'` | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
-| `'os'`   | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
-| `'1s'`   | kept in memory, written every interval                              | nothing past the last write                     | kv counters      |
+| Value         | What a commit does                                                  | Survives                                        | Default for      |
+|---------------|---------------------------------------------------------------------|-------------------------------------------------|------------------|
+| `'full'`      | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
+| `'os'`        | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
+| an interval   | kept in memory, written every interval                              | everything but the last interval                | kv rate limits   |
 
 ## Config
 

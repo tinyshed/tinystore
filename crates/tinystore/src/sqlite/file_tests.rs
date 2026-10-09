@@ -310,7 +310,7 @@ fn durability_sets_how_far_a_commit_goes() {
         let config = Config { durability, ..Config::default() };
         let (_dir, file) = open(config);
         let (mode, level) = file
-            .transaction(|tx| {
+            .transaction(|tx| -> Result<(String, i64)> {
                 let mode: String = tx
                     .pragma_query_value(None, "journal_mode", |row| row.get(0))
                     .map_err(|error| sql_error("journal_mode", error))?;

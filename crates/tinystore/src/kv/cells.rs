@@ -5,8 +5,8 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::value::Raw;
+use crate::Result;
 use crate::sqlite::sql_error;
-use crate::{Error, Result};
 
 /// A value over this many bytes lives in a row of its own, so that a page of
 /// cells keeps many keys and a scan of keys does not read every big value.
@@ -32,6 +32,13 @@ const SELECT_LIVE: &str = concat!(
         where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ",
     hidden!()
 );
+/// Whether a cell met by an upsert is gone: expired, or hidden by a clear.
+macro_rules! gone {
+    () => {
+        concat!("(c.expires <= ?6 or ", hidden!(), ")")
+    };
+}
+
 const SELECT_HAS: &str = concat!(
     "select 1 from _tinystore_kv_cells as c
         where c.bucket = ?1 and c.path = ?2 and (c.expires is null or c.expires > ?3) and not ",
@@ -53,6 +60,24 @@ const UPSERT: &str = "insert into _tinystore_kv_cells as c (bucket, path, versio
     values (?1, ?2, ?3, ?4, ?5, ?6)
     on conflict (bucket, path) do update set
         version = excluded.version, expires = excluded.expires, value = excluded.value, spill = excluded.spill";
+/// A counter's add in one statement: a counter gone starts again from the
+/// number added, with a new expiry, and a live one keeps its own. A sum past
+/// the int64 range updates nothing, since SQLite would make it a REAL.
+const ADD: &str = concat!(
+    "insert into _tinystore_kv_cells as c (bucket, path, version, expires, value) values (?1, ?2, ?3, ?4, ?5)
+    on conflict (bucket, path) do update set
+        value = iif(",
+    gone!(),
+    ", excluded.value, c.value + excluded.value),
+        expires = iif(",
+    gone!(),
+    ", excluded.expires, c.expires),
+        version = excluded.version
+    where ",
+    gone!(),
+    " or typeof(c.value + excluded.value) = 'integer'
+    returning value"
+);
 const INSERT_SPILLED: &str = "insert into _tinystore_kv_spilled (value) values (?1)";
 const DELETE_SPILLED: &str = "delete from _tinystore_kv_spilled where id = ?1";
 const DELETE_CELL: &str = "delete from _tinystore_kv_cells where bucket = ?1 and path = ?2";
@@ -180,10 +205,32 @@ pub(crate) fn set_expires(connection: &Connection, bucket: i64, path: &[u8], exp
     execute(connection, UPDATE_EXPIRES, params![bucket, path, expires], "an expiry")
 }
 
-/// Moves a key's expiry on, unless it was written or touched since it was read.
-pub(crate) fn renew(connection: &Connection, bucket: i64, path: &[u8], seen: (i64, i64), expires: i64) -> Result<()> {
+/// Moves a key's expiry on, unless it was written or touched since it was
+/// read, and says whether it did.
+pub(crate) fn renew(connection: &Connection, bucket: i64, path: &[u8], seen: (i64, i64), expires: i64) -> Result<bool> {
     let (version, seen_expires) = seen;
-    execute(connection, RENEW, params![bucket, path, version, seen_expires, expires], "a renewal")
+    let changed = connection
+        .prepare_cached(RENEW)
+        .and_then(|mut renew| renew.execute(params![bucket, path, version, seen_expires, expires]))
+        .map_err(|error| sql_error("a renewal", error))?;
+    Ok(changed > 0)
+}
+
+/// Adds `n` to the counter at `path` and returns its sum, or `None` when the
+/// sum passes the int64 range and nothing changed.
+pub(crate) fn add(
+    connection: &Connection,
+    bucket: i64,
+    path: &[u8],
+    stamp: (i64, Option<i64>),
+    n: i64,
+    now: i64,
+) -> Result<Option<i64>> {
+    let (version, expires) = stamp;
+    connection
+        .prepare_cached(ADD)
+        .and_then(|mut add| add.query_row(params![bucket, path, version, expires, n, now], |row| row.get(0)).optional())
+        .map_err(|error| sql_error("an add", error))
 }
 
 /// A page of a branch's own live cells, by path.
@@ -269,20 +316,21 @@ pub(crate) fn keep_revision(connection: &Connection, revision: i64) -> Result<()
     execute(connection, KEEP_REVISION, params![revision], "the revision")
 }
 
-/// The bucket of `name`, made the first time, refused when it plays another role.
-pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<i64> {
+/// The row of `name`, made with `role` the first time: its id and the role it
+/// holds.
+pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<(i64, String)> {
     let found: Option<(i64, String)> = connection
         .prepare_cached(SELECT_BUCKET)
         .and_then(|mut select| select.query_row(params![name], |row| Ok((row.get(0)?, row.get(1)?))).optional())
         .map_err(|error| sql_error("its record", error))?;
-    match found {
-        Some((id, found)) if found == role => Ok(id),
-        Some((_, found)) => Err(Error::invalid(format!("it holds {found}, not {role}"))),
-        None => connection
-            .prepare_cached(INSERT_BUCKET)
-            .and_then(|mut insert| insert.query_row(params![name, role], |row| row.get(0)))
-            .map_err(|error| sql_error("its record", error)),
+    if let Some(found) = found {
+        return Ok(found);
     }
+    let id = connection
+        .prepare_cached(INSERT_BUCKET)
+        .and_then(|mut insert| insert.query_row(params![name, role], |row| row.get(0)))
+        .map_err(|error| sql_error("its record", error))?;
+    Ok((id, role.to_owned()))
 }
 
 /// A row's value: a spilled value when the cell names one, else what the cell

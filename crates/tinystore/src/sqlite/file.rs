@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +12,11 @@ use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Config, Tx};
 use crate::{Error, ErrorKind, Result};
+
+thread_local! {
+    /// The files whose writer this thread holds in a transaction, by address.
+    static HELD: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
 
 /// One SQLite file: one writer whose commits are grouped, and a pool of
 /// readers. Every engine's file is one of these.
@@ -56,6 +62,7 @@ impl File {
         T: Send + 'static,
     {
         self.refuse_when_closed("a write")?;
+        self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")?;
         let slot = Arc::new(Mutex::new(None));
         let filled = Arc::clone(&slot);
         let work: Work = Box::new(move |tx| {
@@ -79,7 +86,10 @@ impl File {
         T: Send + 'static,
         D: FnOnce(Result<T>) + Send + 'static,
     {
-        if let Err(error) = self.refuse_when_closed("a write") {
+        let refused = self.refuse_when_closed("a write").and_then(|()| {
+            self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")
+        });
+        if let Err(error) = refused {
             return done(Err(error));
         }
         let slot = Arc::new(Mutex::new(None));
@@ -103,10 +113,15 @@ impl File {
     /// Runs `work` in a transaction that holds the writer alone, for reads that
     /// decide what to write. It commits when `work` succeeds and rolls back
     /// when it fails or panics, and it pays its own sync.
-    pub(crate) fn transaction<T>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T>) -> Result<T> {
+    ///
+    /// A write to this file from inside `work`, other than through its `Tx`,
+    /// would wait for the writer `work` holds: it fails `Invalid` instead.
+    pub(crate) fn transaction<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         self.refuse_when_closed("a transaction")?;
+        self.refuse_inside_a_transaction("a transaction", "would wait for the writer the transaction holds")?;
         let connection = lock(&self.writer);
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
+        let _held = Held::enter(self.address());
         let mut open = Open { connection: &connection, finished: false };
         let value = work(&Tx::new(&connection))?;
         open.finished = true;
@@ -120,9 +135,17 @@ impl File {
         Ok(value)
     }
 
-    /// Runs `read` on a reader, in one snapshot of the file.
+    /// Whether this thread holds the file's writer in a transaction.
+    pub(crate) fn held_here(&self) -> bool {
+        HELD.with(|held| held.borrow().contains(&self.address()))
+    }
+
+    /// Runs `read` on a reader, in one snapshot of the file. A read from inside
+    /// a transaction of the file would not see what the transaction wrote: it
+    /// fails `Invalid` instead.
     pub(crate) fn read<T>(&self, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         self.refuse_when_closed("a read")?;
+        self.refuse_inside_a_transaction("a read", "would not see what the transaction wrote")?;
         self.readers.read(read)
     }
 
@@ -166,8 +189,43 @@ impl File {
         Ok(())
     }
 
+    fn refuse_inside_a_transaction(&self, what: &str, why: &str) -> Result<()> {
+        if !self.held_here() {
+            return Ok(());
+        }
+        Err(Error::invalid(format!(
+            "{}: {what} from inside a transaction of the file {why}: make it through the transaction",
+            self.describe()
+        )))
+    }
+
+    fn address(&self) -> usize {
+        self as *const File as usize
+    }
+
     fn describe(&self) -> String {
         self.path.display().to_string()
+    }
+}
+
+/// A file's writer this thread holds, from its transaction's start to its end.
+struct Held(usize);
+
+impl Held {
+    fn enter(file: usize) -> Held {
+        HELD.with(|held| held.borrow_mut().push(file));
+        Held(file)
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        HELD.with(|held| {
+            let mut held = held.borrow_mut();
+            if let Some(at) = held.iter().rposition(|&file| file == self.0) {
+                held.remove(at);
+            }
+        });
     }
 }
 

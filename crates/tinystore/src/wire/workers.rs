@@ -96,8 +96,9 @@ impl Engine for Workers {
         self.lock().stopped = true;
         self.ready.notify_all();
         let threads = std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
-        for thread in threads {
-            let _ = thread.join();
+        // a call that drops the store's last handle closes it from a worker, which is not joined
+        for worker in threads.into_iter().filter(|worker| worker.thread().id() != thread::current().id()) {
+            let _ = worker.join();
         }
         Ok(())
     }

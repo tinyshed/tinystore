@@ -78,6 +78,19 @@ pub fn unix_nanos(time: SystemTime) -> i64 {
     }
 }
 
+/// The time `millis` milliseconds after the Unix epoch; before it when negative.
+pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
+    match u64::try_from(millis) {
+        Ok(after) => UNIX_EPOCH + Duration::from_millis(after),
+        Err(_) => UNIX_EPOCH - Duration::from_millis(millis.unsigned_abs()),
+    }
+}
+
+/// A span in whole milliseconds, saturating.
+pub(crate) fn millis(span: Duration) -> i64 {
+    saturate(span.as_millis())
+}
+
 fn saturate(value: u128) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
