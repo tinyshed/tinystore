@@ -5,7 +5,6 @@
 //! reserves from, the background work it runs and the errors they all share.
 
 mod clock;
-mod durability;
 pub mod engine;
 mod error;
 #[cfg(feature = "kv")]
@@ -18,7 +17,6 @@ mod store;
 pub(crate) mod wire;
 
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
-pub use durability::Durability;
 pub use error::{Error, ErrorKind, Result};
 pub use memory::{Memory, Reservation};
 pub use store::{Options, Store};

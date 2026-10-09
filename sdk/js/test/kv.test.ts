@@ -228,7 +228,7 @@ describe.skipIf(!library)('counters', () => {
 	})
 
 	test('counters kept in memory count all the same', async () => {
-		const hits = store.counters('page-hits', { durability: '1s' })
+		const hits = store.counters('page-hits', { flushEvery: '1s' })
 		const counts = await Promise.all(Array.from({ length: 20 }, () => hits.add('/')))
 		expect(Math.max(...counts)).toBe(20)
 		expect(await hits.get('/')).toBe(20)

@@ -8,7 +8,7 @@ use crate::kv::{self, fixture::*};
 /// The ways counters count: each add written, or kept in memory a second.
 fn both(store: &Store, name: &str) -> [Counters; 2] {
     let written = store.counters(&format!("{name}-written")).open().unwrap();
-    let in_memory = store.counters(&format!("{name}-in-memory")).durability(SECOND).open().unwrap();
+    let in_memory = store.counters(&format!("{name}-in-memory")).flush_every(SECOND).open().unwrap();
     [written, in_memory]
 }
 
@@ -31,7 +31,7 @@ fn a_counter_adds_up_from_zero_and_is_zero_when_gone() {
 fn a_counters_window_starts_at_its_first_add_and_does_not_slide() {
     let f = fixture();
     let written = f.store.counters("attempts-written").ttl(15 * MINUTE).open().unwrap();
-    let in_memory = f.store.counters("attempts-in-memory").ttl(15 * MINUTE).durability(SECOND).open().unwrap();
+    let in_memory = f.store.counters("attempts-in-memory").ttl(15 * MINUTE).flush_every(SECOND).open().unwrap();
     for attempts in [written.under("ip"), in_memory.under("ip")] {
         for want in 1..=3 {
             assert_eq!(attempts.add("10.0.0.1", 1).unwrap(), want);
@@ -73,14 +73,14 @@ fn adds_from_many_threads_each_count_once() {
         assert_eq!(hits.get("page").unwrap(), 320);
     }
     kv::maintain(&f.store).unwrap();
-    let in_memory = f.store.counters("hits-in-memory").durability(SECOND).open().unwrap();
+    let in_memory = f.store.counters("hits-in-memory").flush_every(SECOND).open().unwrap();
     assert_eq!(in_memory.get("page").unwrap(), 320);
 }
 
 #[test]
 fn counters_in_memory_reach_the_file_at_a_flush_and_at_close() {
     let f = fixture();
-    let hits = f.store.counters("hits").durability(SECOND).open().unwrap();
+    let hits = f.store.counters("hits").flush_every(SECOND).open().unwrap();
     let commits = f.commits();
     for _ in 0..100 {
         hits.add("page", 1).unwrap();
@@ -93,33 +93,33 @@ fn counters_in_memory_reach_the_file_at_a_flush_and_at_close() {
     hits.add("page", 1).unwrap();
     hits.add("other", 7).unwrap();
     let f = f.reopen();
-    let hits = f.store.counters("hits").durability(SECOND).open().unwrap();
+    let hits = f.store.counters("hits").flush_every(SECOND).open().unwrap();
     assert_eq!((hits.get("page").unwrap(), hits.get("other").unwrap()), (101, 7), "close wrote what memory held");
 }
 
 #[test]
 fn counters_in_memory_reach_the_file_when_the_store_is_dropped_unclosed() {
     let f = fixture();
-    let hits = f.store.counters("hits").durability(SECOND).open().unwrap();
+    let hits = f.store.counters("hits").flush_every(SECOND).open().unwrap();
     hits.add("page", 5).unwrap();
     let Fixture { dir, store, clock } = f;
     drop(store);
     assert_eq!(hits.add("page", 1).unwrap_err().kind(), ErrorKind::Closed, "a handle outliving its store");
     let f = Fixture { store: crate::Store::open(dir.path(), crate::Options::default()).unwrap(), dir, clock };
-    assert_eq!(f.store.counters("hits").durability(SECOND).open().unwrap().get("page").unwrap(), 5);
+    assert_eq!(f.store.counters("hits").flush_every(SECOND).open().unwrap().get("page").unwrap(), 5);
 }
 
 #[test]
 fn counters_of_a_name_count_one_way_in_a_process() {
     let f = fixture();
     f.store.counters("hits").open().unwrap();
-    let error = f.store.counters("hits").durability(SECOND).open().unwrap_err();
+    let error = f.store.counters("hits").flush_every(SECOND).open().unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
-    f.store.counters("views").durability(SECOND).open().unwrap();
-    f.store.counters("views").durability(SECOND).open().unwrap();
-    assert!(f.store.counters("views").durability(2 * SECOND).open().is_err());
+    f.store.counters("views").flush_every(SECOND).open().unwrap();
+    f.store.counters("views").flush_every(SECOND).open().unwrap();
+    assert!(f.store.counters("views").flush_every(2 * SECOND).open().is_err());
     assert!(f.store.counters("views").open().is_err());
-    assert!(f.store.counters("other").durability(crate::Durability::Os).open().is_err());
+    assert!(f.store.counters("other").flush_every(Duration::ZERO).open().is_err());
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn a_name_holding_counters_opens_as_nothing_else() {
 #[test]
 fn a_clear_of_counters_in_memory_never_brings_them_back() {
     let f = fixture();
-    let hits = f.store.counters("hits").durability(SECOND).open().unwrap();
+    let hits = f.store.counters("hits").flush_every(SECOND).open().unwrap();
     hits.under("a").add("x", 1).unwrap();
     kv::maintain(&f.store).unwrap();
     hits.under("a").add("x", 1).unwrap();
@@ -153,7 +153,7 @@ fn a_clear_of_counters_in_memory_never_brings_them_back() {
 #[test]
 fn counters_in_memory_stay_within_their_bound() {
     let f = fixture();
-    let hits = f.store.counters("hits").durability(SECOND).open().unwrap();
+    let hits = f.store.counters("hits").flush_every(SECOND).open().unwrap();
     let buffer = hits.buffer.clone().unwrap();
     buffer.bound(8);
     for n in 0..20 {

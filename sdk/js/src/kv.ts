@@ -76,7 +76,7 @@ export interface CountersOptions {
 	 * keeps counts in memory and writes them this often, so that an add costs
 	 * no commit and a crash loses at most this span: attempts and hits, not money
 	 */
-	durability?: Duration | undefined
+	flushEvery?: Duration | undefined
 }
 
 /** Turns a bucket's values into what a row keeps, and back. */
@@ -341,7 +341,7 @@ export function countersOpen(name: string, options: CountersOptions = {}): Uint8
 	return KvCountersOpen.encode({
 		name,
 		ttl: options.ttl === undefined ? undefined : ms(options.ttl),
-		durability: options.durability === undefined ? undefined : ms(options.durability),
+		flushEvery: options.flushEvery === undefined ? undefined : ms(options.flushEvery),
 	})
 }
 

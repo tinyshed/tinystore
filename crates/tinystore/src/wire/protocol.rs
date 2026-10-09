@@ -467,8 +467,8 @@ pub(crate) struct KvCountersOpen {
     pub(crate) name: String,
     /// A counter lasts this long from its first add. Milliseconds.
     pub(crate) ttl: Option<u64>,
-    /// Kept in memory and written every interval; each add written when absent. Milliseconds.
-    pub(crate) durability: Option<u64>,
+    /// Kept in memory and written every span; each add written when absent. Milliseconds.
+    pub(crate) flush_every: Option<u64>,
 }
 
 #[cfg(feature = "kv")]
@@ -480,14 +480,14 @@ impl Message for KvCountersOpen {
         Ok(KvCountersOpen {
             name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
             ttl: fields.get(2, "ttl", codec::uint)?,
-            durability: fields.get(3, "durability", codec::uint)?,
+            flush_every: fields.get(3, "flushEvery", codec::uint)?,
         })
     }
 
     fn write(&self, out: &mut Out) {
         out.put(1, codec::str_value(&self.name));
         out.given(2, self.ttl.as_ref().map(codec::uint_value));
-        out.given(3, self.durability.as_ref().map(codec::uint_value));
+        out.given(3, self.flush_every.as_ref().map(codec::uint_value));
     }
 }
 

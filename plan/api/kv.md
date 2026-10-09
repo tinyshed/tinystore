@@ -170,19 +170,19 @@ const page = await sessions.under(user.id).list({ limit: 100, after: page.next }
 ```ts
 const attempts = store.counters('login-attempts', { ttl: '15m' })
 const n = await attempts.add(clientIp, 1)              // the new count: 1, 2, 3…
-const hits = store.counters('page-hits', { durability: '1s' })
+const hits = store.counters('page-hits', { flushEvery: '1s' })
 ```
 
 ```rust
 let attempts = store.counters("login-attempts").ttl(Duration::from_mins(15)).open()?;
 let n: i64 = attempts.add(&client_ip, 1)?;
-let hits = store.counters("page-hits").durability(Duration::from_secs(1)).open()?;
+let hits = store.counters("page-hits").flush_every(Duration::from_secs(1)).open()?;
 ```
 
 - An absent or expired counter is 0. A counter's window starts with its first
   add and does not slide: 15 minutes after the first attempt it starts from 0.
   A lockout that should not reset on a clock's edge is a `rateLimit`.
-- `durability: '1s'` keeps counters in memory and writes them every second: a
+- `flushEvery: '1s'` keeps counters in memory and writes them every second: a
   crash loses at most that second, and an add costs no commit. Without it every
   add is a durable write. A sum past what an int64 holds is `limit` and changes
   nothing.
@@ -378,15 +378,17 @@ are kept, needs another word.
 A Haiku agent read ten TypeScript call sites of the SDK as built, with four
 facts about it and nothing else.
 
-| It found                                                                      | Change                                                              |
-|-------------------------------------------------------------------------------|---------------------------------------------------------------------|
-| `{ ifVersion: entry?.version }` writes without a check when the key is absent | `ifVersion` takes a version, never `undefined`: it does not compile |
-| a read after a write in a transaction taken to see the old value              | the book says a read sees the transaction's own writes              |
+| It found                                                                      | Change                                                                |
+|-------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| `{ ifVersion: entry?.version }` writes without a check when the key is absent | `ifVersion` takes a version, never `undefined`: it does not compile   |
+| `durability: '1s'` read as how long counts are kept, by a second reader       | `flushEvery: '1s'`; `durability` is a file's mode, `'full'` or `'os'` |
+| a read after a write in a transaction taken to see the old value              | the book says a read sees the transaction's own writes                |
 
-Still open: `durability: '1s'`, read a second time as how long counts are kept,
-with `flushEvery` proposed; `if (await api.allow(id))`, always true since an
-answer is an object; `expire(key, date)` beside `expire(key, '2h')`, where
-Redis has `EXPIREAT`; `add`, which puts a key in a set and adds to a counter.
+Kept as they are, by the owner's leave: `{ ok }`, although
+`if (await api.allow(id))` is always true, an answer being an object, as
+Upstash's is; `expire(key, date)` beside `expire(key, '2h')`, a date being
+unambiguous where Redis has `EXPIREAT`; `add`, which puts a key in a set as
+`Set.add` does and adds to a counter as `AtomicLong` does.
 
 ## Was, in Go
 
@@ -400,7 +402,7 @@ Redis has `EXPIREAT`; `add`, which puts a key in a set and adds to a counter.
 | `Touch`                                                 | `expire`                                                  |
 | `GetEntry`, `SetEntry`                                  | `entry`; `set` returns nothing                            |
 | `Scan`                                                  | `list`                                                    |
-| `LoseAtMost(d)`                                         | `durability: '1s'`                                        |
+| `LoseAtMost(d)`                                         | `flushEvery: '1s'`                                        |
 | `OpenLimiter`, `Rate(n, per)`, `Burst`, `RetryAfter`    | `rateLimit`, `rate: '100/s'`, `burst`, `retryAt`          |
 | `OpenQuota`, `Window(name, n, span)`, `Get`, `Delete`   | `quota`, `{ name: 'n/span' }`, `peek`, `reset`            |
 | `OpenOnce`                                              | `once`                                                    |

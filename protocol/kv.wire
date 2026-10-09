@@ -69,7 +69,7 @@ message kv.Page {
 message kv.CountersOpen {
   1 name: str
   2 ttl: duration?            # a counter lasts this long from its first add
-  3 durability: duration?     # kept in memory and written every interval; each add written when absent
+  3 flushEvery: duration?     # kept in memory and written every span; each add written when absent
 }
 
 message kv.Count {

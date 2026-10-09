@@ -139,8 +139,8 @@ impl Kv {
         if let Some(found) = counting.get(&id) {
             let found_every = found.as_ref().map(|buffer| buffer.every());
             if found_every != every {
-                let (found, asked) = (durability(found_every), durability(every));
-                return Err(Error::invalid(format!("open in this process with durability {found}, not {asked}")));
+                let (found, asked) = (kept(found_every), kept(every));
+                return Err(Error::invalid(format!("open in this process {found}, not {asked}")));
             }
             return Ok(found.clone());
         }
@@ -241,8 +241,9 @@ fn described(role: &str) -> &str {
     }
 }
 
-fn durability(every: Option<Duration>) -> String {
-    every.map_or_else(|| "full".to_owned(), |every| format!("every {every:?}"))
+/// How counters are kept, as an error says it.
+fn kept(every: Option<Duration>) -> String {
+    every.map_or_else(|| "writing each add".to_owned(), |every| format!("flushing every {every:?}"))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

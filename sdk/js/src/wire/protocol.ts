@@ -217,8 +217,8 @@ export const KvCountersOpen = message('kv.CountersOpen', {
 	name: [1, str],
 	/** a counter lasts this long from its first add */
 	ttl: [2, uint],
-	/** kept in memory and written every interval; each add written when absent */
-	durability: [3, uint],
+	/** kept in memory and written every span; each add written when absent */
+	flushEvery: [3, uint],
 })
 
 export const KvCount = message('kv.Count', {

@@ -251,7 +251,7 @@ impl TxCounters<'_> {
         if self.counters.buffer.is_none() {
             return Ok(());
         }
-        Err(Error::invalid("counters kept in memory join no transaction; open them with durability Full to")
+        Err(Error::invalid("counters kept in memory join no transaction; open them without flush_every to")
             .within(self.counters.scope.shown()))
     }
 }

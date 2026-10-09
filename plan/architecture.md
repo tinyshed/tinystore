@@ -140,11 +140,14 @@ kind is one wire code and one error class in every SDK.
 
 **Durability.** A setting of each engine:
 
-| Value       | What a commit does                                                  | Survives                                        | Default for      |
-|-------------|---------------------------------------------------------------------|-------------------------------------------------|------------------|
-| `'full'`    | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
-| `'os'`      | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
-| an interval | kept in memory, written every interval                              | everything but the last interval                | kv rate limits   |
+| Value    | What a commit does                                                  | Survives                                        | Default for      |
+|----------|---------------------------------------------------------------------|-------------------------------------------------|------------------|
+| `'full'` | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
+| `'os'`   | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
+
+Counters opened with `flushEvery: '1s'` are kept in memory and written every
+second, losing at most that second to a crash, and a rate limit's times always
+are; neither is a file's mode, so each has its own word.
 
 ## Config
 

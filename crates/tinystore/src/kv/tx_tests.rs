@@ -125,7 +125,7 @@ fn counters_join_a_transaction_unless_they_live_in_memory() {
     assert!(refused.is_err());
     assert_eq!(hits.get("k").unwrap(), 0, "the add rolled back with it");
 
-    let in_memory = f.store.counters("views").durability(SECOND).open().unwrap();
+    let in_memory = f.store.counters("views").flush_every(SECOND).open().unwrap();
     let error = f.store.tx(|tx| tx.with(&in_memory).add("k", 1)).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
 }

@@ -377,7 +377,7 @@
     },
     {
       "fields": {
-        "durability": {
+        "flushEvery": {
           "uint": "1500"
         },
         "name": {

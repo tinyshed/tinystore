@@ -14,22 +14,22 @@ use super::scope::{Kind, Scope};
 use super::value::Raw;
 use crate::clock::millis;
 use crate::sqlite::Tx;
-use crate::{Durability, Error, Result, Store};
+use crate::{Error, Result, Store};
 
-/// Counters being opened: their name, how long a counter lasts, how far an
-/// add goes before it returns.
+/// Counters being opened: their name, how long a counter lasts, and whether
+/// they are kept in memory between flushes.
 #[must_use = "counters open with open()"]
 pub struct CountersBuilder {
     store: Store,
     name: String,
     ttl: Option<Duration>,
-    durability: Durability,
+    flush_every: Option<Duration>,
 }
 
 impl Store {
     /// Numbers by key that add up, in the store's kv.db: attempts, hits, uses.
     pub fn counters(&self, name: &str) -> CountersBuilder {
-        CountersBuilder { store: self.clone(), name: name.to_owned(), ttl: None, durability: Durability::Full }
+        CountersBuilder { store: self.clone(), name: name.to_owned(), ttl: None, flush_every: None }
     }
 }
 
@@ -41,22 +41,25 @@ impl CountersBuilder {
         self
     }
 
-    /// `Full`, the default, writes each add before it returns. An interval
-    /// keeps the counters in memory and writes what changed once an interval,
-    /// so an add costs no commit and a crash loses at most the last interval.
-    pub fn durability(mut self, durability: impl Into<Durability>) -> Self {
-        self.durability = durability.into();
+    /// Keeps the counters in memory and writes what changed once a span, so
+    /// that an add costs no commit and a crash loses at most the last span.
+    /// Without it each add is written before it returns.
+    pub fn flush_every(mut self, span: Duration) -> Self {
+        self.flush_every = Some(span);
         self
     }
 
     pub fn open(self) -> Result<Counters> {
         let shown = || format!("kv counters {}", self.name);
-        let every = interval(self.durability).map_err(|error| error.within(shown()))?;
         if self.ttl.is_some_and(|ttl| ttl.is_zero()) {
             return Err(Error::invalid("a ttl of zero").within(shown()));
         }
+        if self.flush_every.is_some_and(|span| span.is_zero()) {
+            return Err(Error::invalid("a flush every zero").within(shown()));
+        }
         let scope = Scope::open(&self.store, &self.name, Kind::Counters)?;
-        let buffer = scope.kv.buffer(scope.id, every, &scope.shown()).map_err(|error| error.within(scope.shown()))?;
+        let buffer =
+            scope.kv.buffer(scope.id, self.flush_every, &scope.shown()).map_err(|error| error.within(scope.shown()))?;
         Ok(Counters { scope, ttl: self.ttl, buffer })
     }
 }
@@ -177,19 +180,6 @@ impl fmt::Debug for Counters {
 impl fmt::Debug for CountersBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CountersBuilder({})", self.name)
-    }
-}
-
-/// How often counters kept in memory are written, or none when each add is.
-fn interval(durability: Durability) -> Result<Option<Duration>> {
-    match durability {
-        Durability::Full => Ok(None),
-        Durability::Every(every) if every.is_zero() => Err(Error::invalid("a durability interval of zero")),
-        Durability::Every(every) => Ok(Some(every)),
-        Durability::Os => Err(Error::invalid(
-            "durability Os is kv.db's to choose, not a counter's: an add is written in full, or kept in memory and \
-             written every interval",
-        )),
     }
 }
 

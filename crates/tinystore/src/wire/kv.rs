@@ -18,7 +18,7 @@ use crate::kv::{
     Allowance, Batch, Bucket, Cell, Counters, Hand, Handed, MAX_KEY, Outcome, PAGE_KEYS, Place, Put, Quota, RateLimit,
     Raw, Stamp, Version, WriteOptions, hand, once_rows,
 };
-use crate::{Durability, Error, Store, unix_millis};
+use crate::{Error, Store, unix_millis};
 
 /// What a connection opened, by handle.
 #[derive(Debug, Default)]
@@ -217,8 +217,8 @@ fn open_counters(store: &Store, open: KvCountersOpen) -> Result<Opened, Failure>
     if let Some(ttl) = open.ttl {
         builder = builder.ttl(Duration::from_millis(ttl));
     }
-    if let Some(every) = open.durability {
-        builder = builder.durability(Durability::Every(Duration::from_millis(every)));
+    if let Some(span) = open.flush_every {
+        builder = builder.flush_every(Duration::from_millis(span));
     }
     Ok(Opened::Counters(builder.open()?))
 }

@@ -1,5 +1,5 @@
-//! Counters kept in memory between flushes: counters opened with a durability
-//! interval, and the times of a rate limit.
+//! Counters kept in memory between flushes: counters opened with
+//! `flush_every`, and the times of a rate limit.
 //!
 //! For the keys it holds a buffer is the truth, and kv.db is behind it by what
 //! changed since the last flush; a key it does not hold is as the file has it.
