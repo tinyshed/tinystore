@@ -94,6 +94,9 @@ Each line cost a debugging session once. The fix named is the one in the code.
   which have no newline, stay there and a private child's parent waits for
   its `WELCOME` for ever. Flush after every write (`write_frames` in
   `crates/cli/src/connection.rs`).
+- **tracing's `LevelFilter` parses an empty string as `ERROR`**, so an empty
+  `LOG_LEVEL` silences every line but errors: read an empty or unknown level
+  as `info` (`level_named` in `crates/cli/src/lines.rs`).
 
 ## Tools
 

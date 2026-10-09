@@ -22,8 +22,12 @@ hmac = "0.12"
 sha2 = "0.10"
 getrandom = { version = "0.3", features = ["std"] }
 serde_json = "1.0.151"
+# the server's lines in a person's terminal: colours, and a Windows console's switch for them
+nu-ansi-term = "0.50.3"
+# a person's terminal reads the local time; a file, UTC
+jiff = "0.2.38"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
 
 [lints]
 workspace = true

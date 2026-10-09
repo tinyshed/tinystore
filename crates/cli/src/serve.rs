@@ -8,7 +8,9 @@ use std::io;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use nu_ansi_term::{Color, Style};
 
 use tinystore::pipe::{Connect, Stop};
 use tinystore::{Clock, ErrorKind, Options, Store, TestClock};
@@ -17,6 +19,7 @@ use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 
 use crate::args::{self, Transport};
+use crate::lines::{self, Lines, Terminal};
 use crate::{connection, local, remote};
 
 /// The exit of a server that found its directory held, by a server that
@@ -32,6 +35,7 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 const FIRST_CLIENT: Duration = Duration::from_secs(15);
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
+    let started = Instant::now();
     let serve = match args::serve(args) {
         Ok(serve) => serve,
         Err(refused) => {
@@ -48,39 +52,48 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = log_to(serve.log.as_deref()) {
-        eprintln!("tinystore serve: its log: {error}");
-        return ExitCode::FAILURE;
-    }
+    let console = match Console::open(serve.log.as_deref()) {
+        Ok(console) => console,
+        Err(error) => {
+            eprintln!("tinystore serve: its log: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let clock = serve.clock.map(|start| Arc::new(TestClock::new(start)));
     let store = match open(&serve.dir, clock.clone(), serve.memory) {
         Ok(store) => store,
-        Err(code) => return code,
+        Err((code, error)) => {
+            console.fail(&error);
+            return code;
+        }
     };
     let served = tokio::runtime::Builder::new_multi_thread().enable_all().build().and_then(|runtime| {
         runtime.block_on(async {
             match serve.transport {
                 Transport::Stdio => stdio(&store, clock).await,
-                Transport::Local { sidecar } => listen(&store, sidecar, serve.idle, remote).await,
+                Transport::Local { sidecar } => {
+                    let listening = Listening { sidecar, idle: serve.idle, console, started };
+                    listen(&store, listening, remote).await
+                }
             }
         })
     });
     let closed = store.close();
-    match (served, closed) {
-        (Ok(()), Ok(())) => ExitCode::SUCCESS,
-        (Err(error), _) => fail(&format!("{error}")),
-        (_, Err(error)) => fail(&format!("the store did not close cleanly: {error}")),
-    }
+    let failed = match (served, closed) {
+        (Ok(()), Ok(())) => return ExitCode::SUCCESS,
+        (Err(error), _) => error.to_string(),
+        (_, Err(error)) => format!("the store did not close cleanly: {error}"),
+    };
+    console.fail(&failed);
+    ExitCode::FAILURE
 }
 
 /// Opens the store, or says why not: a directory another holds exits with 3.
-fn open(dir: &Path, clock: Option<Arc<TestClock>>, memory: Option<u64>) -> Result<Store, ExitCode> {
+fn open(dir: &Path, clock: Option<Arc<TestClock>>, memory: Option<u64>) -> Result<Store, (ExitCode, String)> {
     let options = Options { clock: clock.map(|clock| clock as Arc<dyn Clock>), memory, ..Options::default() };
     Store::open(dir, options).map_err(|error| {
         let code = if error.kind() == ErrorKind::InUse { ExitCode::from(HELD) } else { ExitCode::FAILURE };
-        tracing::error!(target: "tinystore", %error, "the store did not open");
-        eprintln!("tinystore serve: {error}");
-        code
+        (code, error.to_string())
     })
 }
 
@@ -93,10 +106,20 @@ async fn stdio(store: &Store, clock: Option<Arc<TestClock>>) -> io::Result<()> {
     Ok(())
 }
 
+/// How a local server runs: whether its clients started it, how long it
+/// stays with none, and where it speaks.
+struct Listening {
+    sidecar: bool,
+    idle: Option<Duration>,
+    console: Console,
+    started: Instant,
+}
+
 /// A server for as many clients as come, until it is stopped, idles out or
 /// hears Ctrl+C: on a socket or a named pipe that `SERVE` names, and on TCP
 /// when `--listen` says.
-async fn listen(store: &Store, sidecar: bool, idle: Option<Duration>, remote: Option<remote::Ready>) -> io::Result<()> {
+async fn listen(store: &Store, listening: Listening, remote: Option<remote::Ready>) -> io::Result<()> {
+    let Listening { sidecar, idle, console, started } = listening;
     let server = local::server_dir(store.dir())?;
     local::unpublish(&server)?;
     let (listener, endpoint) = Listener::bind(store.dir(), &server)?;
@@ -114,7 +137,7 @@ async fn listen(store: &Store, sidecar: bool, idle: Option<Duration>, remote: Op
     let stop = stop_by(closing.clone());
     let connect = Connect { prove: Some(serve.prove()), stop: Some(Arc::clone(&stop)), ..Connect::default() };
     local::publish(&server, &serve)?;
-    tracing::info!(target: "tinystore", dir = %store.dir().display(), endpoints = ?serve.endpoints, "serving");
+    console.serving(store.dir(), &serve.endpoints, sidecar, started.elapsed());
     let (clients, counted) = watch::channel(0usize);
     let clients = Arc::new(clients);
     let accepted = listener.accept_all(store, &connect, &closed, &clients);
@@ -125,13 +148,14 @@ async fn listen(store: &Store, sidecar: bool, idle: Option<Duration>, remote: Op
         let connect = Connect { stop: Some(stop), admit: Some(ready.admit), ..Connect::default() };
         accept_remote(tcp, ready.tls, store, &connect, &closed, &clients).await
     };
-    tokio::select! {
-        accepted = accepted => accepted?,
-        accepted = accepted_remotely => accepted?,
-        () = stopped(closed.clone()) => {}
-        () = interrupted() => {}
-        () = idled(counted.clone(), idle) => tracing::info!(target: "tinystore", "idle, leaving"),
-    }
+    let why = tokio::select! {
+        accepted = accepted => return accepted,
+        accepted = accepted_remotely => return accepted,
+        () = stopped(closed.clone()) => "a client asked",
+        () = interrupted() => "interrupted",
+        () = idled(counted.clone(), idle) => "idle",
+    };
+    tracing::info!(target: "tinystore", why, "stopping");
     let _ = closing.send(true);
     left(counted).await;
     local::unpublish(&server)?;
@@ -337,26 +361,90 @@ impl Listener {
     fn remove(&self) {}
 }
 
-/// Logs to `file`, appended, or to stderr: never stdout, which a private
-/// child's frames travel on.
-fn log_to(file: Option<&Path>) -> io::Result<()> {
-    let builder = tracing_subscriber::fmt().with_ansi(false).with_target(false);
-    match file {
-        Some(path) => {
-            // a sidecar logs into <dir>/server/, which may not be there yet
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let file = OpenOptions::new().create(true).append(true).open(path)?;
-            builder.with_writer(Mutex::new(file)).init();
-        }
-        None => builder.with_writer(io::stderr).init(),
-    }
-    Ok(())
+/// Where the server speaks: its log, a file's or stderr's, and the terminal
+/// a person may read on stderr.
+#[derive(Clone, Copy)]
+struct Console {
+    terminal: Terminal,
+    to_file: bool,
 }
 
-fn fail(message: &str) -> ExitCode {
-    tracing::error!(target: "tinystore", "{message}");
-    eprintln!("tinystore serve: {message}");
-    ExitCode::FAILURE
+impl Console {
+    /// Logs to `file`, appended and plain, or to stderr, quietly coloured when
+    /// a person reads it: never stdout, which a private child's frames travel on.
+    fn open(file: Option<&Path>) -> io::Result<Console> {
+        let terminal = Terminal::of_stderr();
+        let level = lines::level();
+        match file {
+            Some(path) => {
+                // a sidecar logs into <dir>/server/, which may not be there yet
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let file = OpenOptions::new().create(true).append(true).open(path)?;
+                let lines = Lines { colours: false, person: false };
+                tracing_subscriber::fmt()
+                    .event_format(lines)
+                    .with_max_level(level)
+                    .with_writer(Mutex::new(file))
+                    .init();
+            }
+            None => {
+                let lines = Lines { colours: terminal.colours(), person: terminal.terminal };
+                tracing_subscriber::fmt().event_format(lines).with_max_level(level).with_writer(io::stderr).init();
+            }
+        }
+        Ok(Console { terminal, to_file: file.is_some() })
+    }
+
+    /// Says why the server failed: in its log, and on stderr too when the log
+    /// is a file, so that whoever started it sees it.
+    fn fail(self, message: &str) {
+        tracing::error!(target: "tinystore", "{message}");
+        if self.to_file {
+            eprintln!("tinystore serve: {message}");
+        }
+    }
+
+    /// Shows a person who started a server in a terminal where it listens,
+    /// as a framework's dev server does; a log gets the same as a line.
+    ///
+    /// ```text
+    ///   tinystore 0.1.0  ready in 14 ms
+    ///
+    ///   ➜  store   /srv/data
+    ///   ➜  local   unix:///srv/data/server/tinystore.sock
+    ///   ➜  remote  tls://0.0.0.0:7443
+    /// ```
+    fn serving(self, store: &Path, endpoints: &[String], sidecar: bool, ready: Duration) {
+        let banner = self.terminal.terminal && !sidecar;
+        if !banner || self.to_file {
+            tracing::info!(target: "tinystore", dir = %store.display(), endpoints = ?endpoints, "serving");
+        }
+        if banner {
+            eprint!("{}", banner_of(self.terminal.colours(), store, endpoints, ready));
+        }
+    }
+}
+
+fn banner_of(colours: bool, store: &Path, endpoints: &[String], ready: Duration) -> String {
+    let paint = |style: Style, text: &str| lines::paint(colours, style, text);
+    let (bold, dim, arrow, address) =
+        (Style::new().bold(), Style::new().dimmed(), Color::Green.normal(), Color::Cyan.normal());
+    let mut banner = format!(
+        "\n  {} {}  {} {}\n\n",
+        paint(bold, "tinystore"),
+        paint(dim, env!("CARGO_PKG_VERSION")),
+        paint(dim, "ready in"),
+        paint(bold, &format!("{} ms", ready.as_millis())),
+    );
+    let mut row = |label: &str, value: String| {
+        banner.push_str(&format!("  {}  {}  {value}\n", paint(arrow, "➜"), paint(dim, &format!("{label:<6}"))));
+    };
+    row("store", store.display().to_string());
+    for (at, endpoint) in endpoints.iter().enumerate() {
+        row(if at == 0 { "local" } else { "remote" }, paint(address, endpoint));
+    }
+    banner.push('\n');
+    banner
 }

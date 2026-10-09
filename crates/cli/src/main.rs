@@ -4,6 +4,7 @@
 
 mod args;
 mod connection;
+mod lines;
 mod local;
 mod remote;
 mod serve;
