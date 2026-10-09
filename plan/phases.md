@@ -52,7 +52,7 @@ taken against Go `e81a050` and written up as a research round.
 
 - [ ] Downloads and uploads under credit, which blobs and records need.
 - [ ] sqldb: tables from types, checked migrations, typed reads, `tx` in the protocol, FTS5 and R*Tree features.
-- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core and protocol 2 are built to the accepted book, but `watch` and transactions; the SDKs are next.
+- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, but `watch` and transactions; Python and Go come with their bindings.
 - [ ] blobs: objects inline or a file each, checked reads, scrub.
 - [ ] kv and jobs inside an sql database.
 

@@ -330,17 +330,17 @@ module defines.
 - a job runs at its time and not before, in the order of its time — `a_job_runs_at_its_time_and_not_before`, `jobs_run_in_the_order_of_their_time_equal_times_in_the_order_added` in `jobs::queue_tests`
 - a write during a Work loop's read is not lost, nor keeps it awake — `TestAWriteDuringAnAlarmReadCannotBeLost`, `TestALaterWriteDuringAnAlarmReadLetsTheLoopSleep`
 - a page finds exactly the ids under its prefix — `list_reads_the_ids_under_a_prefix_a_page_at_a_time` in `jobs::queue_tests`, `a_prefixs_end_is_the_first_text_past_every_text_it_starts` in `jobs::read`
-- an id names one job, and add adds only to a free one — `add_adds_only_to_an_id_that_is_free`, `add_of_an_id_whose_job_runs_adds_nothing` in `jobs::queue_tests`
+- an id names one job, and add adds only to a free one — `add_adds_only_to_an_id_that_is_free`, `add_of_an_id_whose_job_runs_adds_nothing` in `jobs::queue_tests`; `an id adds a job once, set makes it whatever it was, update changes one not started, cancel takes it` in `sdk/js/test/jobs.test.ts`
 - a set while its job runs asks one run more, with its value — `set_of_a_running_job_runs_it_once_more_with_its_value` in `jobs::queue_tests`
-- `dedupe` keeps a done id taken until its span passes — `dedupe_keeps_a_done_id_taken_until_its_span_passes` in `jobs::queue_tests`
+- `dedupe` keeps a done id taken until its span passes — `dedupe_keeps_a_done_id_taken_until_its_span_passes` in `jobs::queue_tests`; `dedupe keeps a done id taken, so that adding it again adds nothing, and the job its last run` in `sdk/js/test/jobs.test.ts`
 - `update` changes only a job that has not started, and says whether it did — `update_changes_only_a_job_that_has_not_started` in `jobs::queue_tests`
 - `cancel` says whether there was a job, and tells a running one's handler to stop — `cancel_says_whether_there_was_a_job_and_tells_a_running_handler_to_stop` in `jobs::queue_tests`
 - a job claimed ahead for a busy worker waits, and a cancel keeps it from starting — `TestAJobHeldForABusyWorkerWaitsAndCancelKeepsItFromStarting`
 - `get` says where a job is and how many jobs run before it — `get_says_where_a_job_is_and_how_many_run_before_it` in `jobs::queue_tests`
 - a watch follows its job to its end — `TestAWatchFollowsItsJobToItsEnd`
-- a progress past 4 KiB is refused — `a_progress_past_4_kib_is_refused` in `jobs::queue_tests`; `a progress JSON cannot write, or past 4 KiB, is refused` in `sdk/js/test/jobs.test.ts`
+- a progress past 4 KiB is refused — `a_progress_past_4_kib_is_refused` in `jobs::queue_tests`; `what a handler reports shows while its job runs, and a report past 4 KiB is refused` in `sdk/js/test/jobs.test.ts`
 - a queue's total holds it to its places across workers and claims — `a_total_holds_a_queue_to_its_places_across_claims` in `jobs::work_tests`
-- a group's bound holds each group to its places, and a settlement or a cancel gives the group's next job its place — `a_group_bounds_its_running_jobs_and_holds_back_no_other_group`, `a_job_cancelled_while_it_runs_gives_its_groups_place_to_the_next` in `jobs::work_tests`; over the wire `TestJobsBoundsAndMovesOverTheWire`, `a group bounds its running jobs, a rate its starts, move sets a time either way, and spread a phase` in `sdk/js/test/jobs.test.ts`
+- a group's bound holds each group to its places, and a settlement or a cancel gives the group's next job its place — `a_group_bounds_its_running_jobs_and_holds_back_no_other_group`, `a_job_cancelled_while_it_runs_gives_its_groups_place_to_the_next` in `jobs::work_tests`; over the wire `TestJobsBoundsAndMovesOverTheWire`
 - a full group's backlog is parked once and holds back no other group — `TestABusyGroupDoesNotHoldBackTheGroupsBehindIt`, through the index `TestAGroupsParkedJobsAreFoundByTheirIndex`
 - a queue opened with another group bound gives back what the old one parked, and a job started again keeps its group — `TestAChangedGroupBoundGivesBackTheParkedJobs`, `TestAJobStartedAgainKeepsItsGroup`
 - an update of a parked job gives it back its time — `an_update_of_a_parked_job_gives_it_back_its_time` in `jobs::work_tests`
@@ -349,7 +349,7 @@ module defines.
 - `every` gives each id's interval a phase of its own, kept in its text — `an_interval_gives_each_id_a_phase_of_its_own_kept_in_its_text` in `jobs::repeat`, `ids_repeating_together_run_each_at_a_phase_of_its_own` in `jobs::queue_tests`
 - a time past the years a job keeps is refused — `a_time_outside_the_years_a_job_keeps_is_refused` in `jobs::queue_tests`
 - a call that cannot be kept is `invalid` and names the queue and the id — `a_call_that_cannot_be_kept_is_invalid_and_says_why`, `a_name_keeps_its_kind_and_one_process_its_options` in `jobs::queue_tests`
-- a job keeps its last run — `get_says_where_a_job_is_and_how_many_run_before_it`, `dedupe_keeps_a_done_id_taken_until_its_span_passes` in `jobs::queue_tests`; over the wire `TestAJobsLastRunOverTheWire`, `a job keeps its last run: when it began and how long it took` in `sdk/js/test/jobs.test.ts`
+- a job keeps its last run — `get_says_where_a_job_is_and_how_many_run_before_it`, `dedupe_keeps_a_done_id_taken_until_its_span_passes` in `jobs::queue_tests`; over the wire `TestAJobsLastRunOverTheWire`, `dedupe keeps a done id taken, so that adding it again adds nothing, and the job its last run` in `sdk/js/test/jobs.test.ts`
 - a job whose lease ended runs again, and its stale lease settles nothing — `a_job_whose_lease_ended_runs_again_and_its_stale_lease_settles_nothing` in `jobs::work_tests`
 - a step runs once in a run, across its attempts, and a lost lease keeps none — `a_step_runs_once_across_the_attempts_of_a_run` in `jobs::work_tests`; `TestAStepOfALostLeaseKeepsNothing`
 - a run that ends takes its steps along, and a repeat's next run starts without them — `a_run_that_ends_takes_its_steps_along_and_a_repeats_next_run_starts_without_them` in `jobs::work_tests`; `TestAStepsNameAndAnswerAreBounded`
@@ -358,14 +358,16 @@ module defines.
 - a snooze counts no attempt — `a_handler_settles_its_job_by_what_it_returns` in `jobs::work_tests`
 - a repeating job neither overlaps nor piles up — `a_repeating_job_neither_overlaps_nor_piles_up` in `jobs::queue_tests`
 - a cron keeps its zone across daylight saving — `a_time_daylight_saving_skips_runs_when_the_skip_ends`, `a_time_daylight_saving_repeats_runs_once` in `jobs::cron`, `a_cron_runs_on_its_zones_wall_clock` in `jobs::queue_tests`
+- a cron needs a time zone, one given as undefined refused rather than read as UTC — `a_repeat_is_refused_for_what_it_lacks` in `jobs::repeat`; `a schedule keeps its one job, and a cron needs a time zone` in `sdk/js/test/jobs.test.ts`
 - a schedule keeps the code's repeat each time it opens — `a_schedule_keeps_the_codes_repeat_each_time_it_opens` in `jobs::queue_tests`
-- a handler settles its job by what it returns, a panic an error with its message — `a_handler_settles_its_job_by_what_it_returns`, `a_panic_is_an_error_with_its_message` in `jobs::work_tests`
+- a handler settles its job by what it returns, a panic an error with its message — `a_handler_settles_its_job_by_what_it_returns`, `a_panic_is_an_error_with_its_message` in `jobs::work_tests`; `what a handler returns settles its job: a throw retries, retry counts its run, snooze does not, fail ends it` in `sdk/js/test/jobs.test.ts`
+- an answer a handler made and did not return fails its run, saying so — `what a handler returns settles its job: a throw retries, retry counts its run, snooze does not, fail ends it` in `sdk/js/test/jobs.test.ts`
 - jobs due together are claimed and settled in batches — `jobs_due_together_are_claimed_and_settled_in_batches` in `jobs::work_tests`
 - a Work loop lets go of a lease another claim took — `TestWorkLetsGoOfALeaseAnotherClaimTook`, without writing again at once
 - a stopping worker waits for its handlers, writing what they answer as it comes, and gives back what it had not started, uncounted — `a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_started`, `a_worker_runs_jobs_on_the_stores_threads_until_it_stops` in `jobs::work_tests`
 - a worker its program let go of still stops when the store closes — `a_worker_its_program_let_go_of_still_stops_when_the_store_closes` in `jobs::work_tests`
 - a job value comes back as the JSON it went in — `a_value_comes_back_as_the_json_it_went_in` in `jobs::queue_tests`
-- a value that no longer reads fails its job, not its queue — `a_value_that_no_longer_reads_fails_its_job_not_its_queue` in `jobs::queue_tests`
+- a value that no longer reads fails its job, not its queue — `a_value_that_no_longer_reads_fails_its_job_not_its_queue` in `jobs::queue_tests`; `a schema checks each value before a handler gets it, and one that no longer meets it fails its job, not its queue` in `sdk/js/test/jobs.test.ts`
 - a queue past `maxWaiting` refuses the next job — `a_queue_past_max_waiting_refuses_the_next_job` in `jobs::queue_tests`
 - concurrent adds cannot pass `maxWaiting` — `TestConcurrentEnqueuesCannotPassMaxWaiting`
 - a failed job is kept, then removed — `a_failed_job_is_kept_then_removed` in `jobs::queue_tests`
@@ -410,14 +412,14 @@ module defines.
 
 ## The server and the wire
 
-- a job in an SQL batch over the wire commits with its rows, on the program's own store when it passed one — `TestAJobInAnSQLBatchCommitsWithItsRows`, `TestAQueueInTheProgramsDatabaseIsTheProgramsOwn`; `a job a batch enqueues commits with the rows or not at all` in `sdk/js/test/sql.test.ts`, `test_a_job_a_batch_enqueues_commits_with_the_rows_or_not_at_all` in Python's
+- a job in an SQL batch over the wire commits with its rows, on the program's own store when it passed one — `TestAJobInAnSQLBatchCommitsWithItsRows`, `TestAQueueInTheProgramsDatabaseIsTheProgramsOwn`; `test_a_job_a_batch_enqueues_commits_with_the_rows_or_not_at_all` in Python's
 - a backup over the wire holds every engine on disk, and makes none that is not — `TestABackupOverTheWireHoldsEveryEngineOnDisk`; `TestBackupWritesAZipThatRestoreTakesBack` in `cmd/tinystore`; `a backup is one zip of every engine, which restore takes back into an empty directory` in `sdk/js/test/backup.test.ts`, `test_a_backup_is_one_zip_of_every_engine_which_restore_takes_back` in Python's
 - a download holds the store's memory until its last DATA — `TestADownloadHoldsTheStoresMemoryUntilItsLastData`
 - a watch ends with its client's side — `TestAWatchEndsWithItsClientsSide`
-- a remote worker's job is watched through its progress — `TestAJobWatchFollowsARemoteWorkersJob`, `a watch follows a job up its queue, through its progress, to a cancel its handler sees` in `sdk/js/test/jobs.test.ts`, `test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees` in Python's
-- a remote worker's handler is told of a cancel, and what it answers after settles nothing — `a_cancel_of_a_job_the_client_holds_tells_its_handler_and_settles_nothing` in `wire::jobs`
-- a remote worker's steps are kept across a run's attempts — `a_step_one_attempt_kept_is_found_by_the_next` in `wire::jobs`, `a step runs once in a run: the attempt after a failure gets its kept answer` in `sdk/js/test/jobs.test.ts`, `test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer` in Python's
-- a remote worker holds no more jobs than its handlers, sent within its client's credit — `a_client_works_a_queue_one_job_at_a_time_for_each_handler`, `the_server_sends_a_worker_no_more_than_the_credit_its_client_granted` in `wire::jobs`
+- a remote worker's job is watched through its progress — `TestAJobWatchFollowsARemoteWorkersJob`, `test_a_watch_follows_a_job_through_its_progress_to_a_cancel_its_handler_sees` in Python's
+- a remote worker's handler is told of a cancel, and what it answers after settles nothing — `a_cancel_of_a_job_the_client_holds_tells_its_handler_and_settles_nothing` in `wire::jobs`; `a cancel tells a running handler to stop, and what it returns then settles nothing` in `sdk/js/test/jobs.test.ts`
+- a remote worker's steps are kept across a run's attempts — `a_step_one_attempt_kept_is_found_by_the_next` in `wire::jobs`, `a step one attempt kept is found by the next, which runs only the steps left` in `sdk/js/test/jobs.test.ts`, `test_a_step_runs_once_in_a_run_the_attempt_after_a_failure_gets_its_kept_answer` in Python's
+- a remote worker holds no more jobs than its handlers, sent within its client's credit — `a_client_works_a_queue_one_job_at_a_time_for_each_handler`, `the_server_sends_a_worker_no_more_than_the_credit_its_client_granted` in `wire::jobs`; `a worker runs as many handlers at once as its concurrency says` in `sdk/js/test/jobs.test.ts`
 - a remote worker stopped, or whose server closes, takes no job more and ends once the jobs in hand are answered, those never sent given back uncounted — `a_stopped_worker_takes_no_job_more_and_gives_back_those_it_never_sent`, `a_closing_server_hands_its_workers_no_job_more` in `wire::jobs`
 - a job a remote worker holds when it ends or its client leaves fails that attempt — `a_job_the_client_holds_when_its_worker_ends_fails_that_attempt`, `a_client_that_leaves_with_a_job_in_hand_fails_that_attempt` in `wire::jobs`
 - a job's value travels as the JSON it was, and one that is not JSON is refused before it is kept — `a_client_adds_finds_and_cancels_jobs_by_their_ids`, `a_value_that_is_not_json_is_refused_before_it_is_kept` in `wire::jobs`
@@ -433,7 +435,7 @@ module defines.
 - every message is a vector, every field by its name — `every_vector_of_the_schema_reads_and_writes_its_own_bytes` in `wire::codec` and `protocol 2` in `sdk/js/test/protocol.test.ts`, over `testdata/wire/protocol.json`
 - every codec and vector is what `protocol/*.wire` writes — `protocol --check`, `just protocol-check` and CI's quality job
 - the largest kv or jobs value travels in one body — `TestTheLargestValueTravelsInOneBody`
-- a work stream asked to end when idle ends — `a_worker_until_idle_runs_what_is_due_and_then_its_stream_ends` in `wire::jobs`
+- a work stream asked to end when idle ends — `a_worker_until_idle_runs_what_is_due_and_then_its_stream_ends` in `wire::jobs`; `runDue`, `a private store runs on the clock it is given, which moves only forward` in `sdk/js/test/clock.test.ts`
 - an extend on a work stream is refused, not an ack — `TestAnExtendOnAWorkStreamIsRefused`
 - a client past its credit is cut off, the reader never waits — `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection`
 - every stream ends with one final frame — `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up

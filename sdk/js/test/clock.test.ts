@@ -22,18 +22,18 @@ test('a private store runs on the clock it is given, which moves only forward', 
 
 	const codes = store.bucket<number>('codes')
 	await codes.set('K7Q2', 42, { ttl: '15m' })
-	const reminders = store.jobs.queue<{ userId: number }>('reminders')
-	await reminders.enqueue({ userId: 42 }, { after: '1h' })
+	const reminders = store.queue<{ userId: number }>('reminders')
+	await reminders.add({ userId: 42 }, { delay: '1h' })
 	const ran: number[] = []
-	const remind = async (job: { value: { userId: number } }) => {
-		ran.push(job.value.userId)
+	const remind = async ({ userId }: { userId: number }) => {
+		ran.push(userId)
 	}
-	await reminders.work(remind, { untilIdle: true })
-	expect(ran).toEqual([]) // nothing is due yet
+	expect(await reminders.runDue(remind)).toBe(0) // nothing is due yet
+	expect(ran).toEqual([])
 
 	expect((await store.clock.advance('1h')).toISOString()).toBe('2026-10-03T10:00:00.000Z')
 	expect(await codes.get('K7Q2')).toBeUndefined() // expired 45 minutes ago, on the store's clock
-	await reminders.work(remind, { untilIdle: true })
+	expect(await reminders.runDue(remind)).toBe(1)
 	expect(ran).toEqual([42])
 
 	expect(await caught(store.clock.set(new Date('2026-10-03T09:30:00Z')))).toBeInstanceOf(

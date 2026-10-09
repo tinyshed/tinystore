@@ -1,142 +1,293 @@
-// Work that runs at its time, in jobs.db, as Go's jobs package keeps it:
-// queues ordered by time, leases, retries and repeats. A handle opens with its
-// first call; a work loop is the server's own Work, its jobs handed over the
-// connection and settled by what the handler returns.
+// Work an application must do later, or now but outside the request that
+// asked for it, as plan/api/jobs.md has it: queues of JSON values run in the
+// order of their time, ids that find a job again, repeats, schedules and
+// limits. A worker's handlers run here while the server's loop claims the
+// queue's jobs and hands each over on one stream, the answers going back on
+// it. A handle opens with its first call on a connection.
 
-import { currentSignal } from './cancel.ts'
-import { type Connection, download, type Link } from './connection.ts'
-import { CancelledError, CorruptError, errorOf, InvalidError } from './errors.ts'
-import { checkName, handleOn, type Page } from './handles.ts'
+import { FailureLog, messageOf } from './background.ts'
+import type { Connection, Idempotence, Link } from './connection.ts'
+import { CancelledError, CorruptError, InvalidError } from './errors.ts'
+import { checkName, handleOn } from './handles.ts'
 import { type Rate, rateOf } from './limits.ts'
-import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
-import { LostError, watch } from './session.ts'
-import { batchBelongsTo, type Database, databaseBelongsTo, type SqlBatch } from './sql.ts'
-import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
+import { sayOwn } from './logger.ts'
+import { check, type StandardSchemaV1 } from './schema.ts'
+import type { Stream } from './session.ts'
+import { type Duration, ms, type Time, unixMs } from './time.ts'
+import type { Read, Written } from './wire/codec.ts'
 import {
 	JobsAnswer,
-	JobsBatch,
-	JobsChange,
-	JobsEntry,
+	JobsCall,
+	JobsChanged,
 	JobsHeld,
+	JobsId,
+	JobsJob,
 	JobsKept,
-	JobsKey,
-	JobsLease,
-	JobsOutcome,
-	JobsOutcomes,
+	JobsList,
 	JobsPage,
-	JobsQuery,
-	JobsQueue,
-	JobsSettled,
-	JobsWorkers,
+	JobsQueueOpen,
+	JobsScheduleOpen,
+	JobsStep,
+	JobsWork,
 	methods,
-} from './wire/messages.ts'
+} from './wire/protocol.ts'
+
+/** How many jobs of a queue run at once: in all, across every worker of the store, and in each group. */
+export interface Concurrency {
+	total?: number | undefined
+	/** at most this many jobs of one group at once: one customer's backlog holds back no other */
+	group?: number | undefined
+}
+
+/** The wait before a retry: initial, doubling each time up to max, a tenth longer or shorter at random. */
+export interface Backoff {
+	initial: Duration
+	max: Duration
+}
 
 export interface QueueOptions {
-	/** how long a claim holds a job before it is given back: 30 s */
-	lease?: Duration
-	/** the attempts after which a job fails for good: 10 */
-	maxAttempts?: number
-	/** a retry's wait, doubling from first to most: a second to an hour */
-	backoff?: { first?: Duration; most?: Duration }
-	/** the jobs a queue holds before it refuses the next with LimitError: ten million */
-	maxWaiting?: number
-	/** how long a failed job is kept for Get and Scan: seven days */
-	keepFailed?: Duration
-	/** remembers a done job's key this long, so that enqueuing it again adds nothing */
-	keepDone?: Duration
-	/** the jobs that may run at once, across every worker of the store: no bound */
-	maxRunning?: number
-	/** the jobs of one group, its enqueue's `group`, that may run at once: no bound */
-	maxRunningInGroup?: number
-	/** how many jobs may start in any span, across every worker of the store: `'30/s'` */
-	rate?: Rate
-	/**
-	 * keeps the queue in this database's file instead of jobs.db, so that a
-	 * batch of the database commits a job with its rows: `queue.withTx(tx)`
-	 */
-	in?: Database
+	/** runs a job gets before it fails for good, the first counted: 10 */
+	attempts?: number | undefined
+	/** 1s doubling up to 1h */
+	backoff?: Backoff | undefined
+	/** how long one run may take before its signal aborts: a minute */
+	timeout?: Duration | undefined
+	/** jobs running at once across every worker of the store: 8, or { total: 8, group: 2 }; one a worker unless given */
+	concurrency?: number | Concurrency | undefined
+	/** jobs started in any span: '30/s' */
+	rate?: Rate | undefined
+	/** how long a done job's id stays taken, so that an add of it adds nothing */
+	dedupe?: Duration | undefined
+	/** how long a failed job stays, to be found and started again: a week */
+	keep?: Duration | undefined
+	/** jobs that may wait; an add past it is LimitError: ten million */
+	maxWaiting?: number | undefined
 }
 
-/**
- * When a job runs again: cron text in a zone by its name, a daily time, or
- * every so often, which `spread` runs at a phase of each key's own.
- */
-export type Repeat =
-	| { cron: string; zone: string }
-	| { daily: string; zone: string }
-	| { every: Duration; spread?: boolean }
-
-export interface EnqueueOptions {
-	/** the job's time; one past runs now */
-	at?: Time
-	after?: Duration
-	/** names one job: enqueuing it again adds nothing and can bring it forward, never back */
-	key?: string
-	/** needs a key, since only a key stops it */
-	repeat?: Repeat
-	/** sets the time of the key's job either way, later too: a running one runs again then; needs a key */
-	move?: boolean
-	/** the group whose running jobs the queue's `maxRunningInGroup` bounds */
-	group?: string
+/** A job's time, group and repeat, as an add, a set and an update take them. */
+export interface JobOptions {
+	/** runs at this time, one past now; not beside delay */
+	at?: Time | undefined
+	/** runs this long from now */
+	delay?: Duration | undefined
+	/** the group whose running jobs the queue's concurrency.group bounds */
+	group?: string | undefined
+	/** repeats every span, each id at a phase of its own within it; needs an id */
+	every?: Duration | undefined
+	/** repeats by five cron fields, or @daily and its kind, on timeZone's wall clock; needs an id */
+	cron?: string | undefined
+	/** an IANA name, 'UTC' among them, which a cron needs: one given as undefined is InvalidError, never UTC */
+	timeZone?: string | undefined
 }
 
-/** done while keepDone keeps its key; cancelled only a watcher sees */
-export type JobState = 'waiting' | 'running' | 'failed' | 'done' | 'cancelled'
+export interface AddOptions extends JobOptions {
+	/** the job's id, 1 to 1024 bytes: what finds it again, and adds it once */
+	id?: string | undefined
+}
 
-export interface JobEntry<T> {
-	key: string
+/** done while dedupe keeps its id; cancelled only a watcher sees */
+export type JobState = 'scheduled' | 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'
+
+/** A job as its queue holds it. */
+export interface Job<T> {
+	id: string | undefined
 	value: T
-	/** the time it runs for */
+	state: JobState
+	/** when it runs next; for one done or failed, when its last run was for */
 	at: Date
 	/** its attempts, a running one included */
 	attempt: number
-	state: JobState
-	/** the jobs that run before a waiting one, up to 10,000; get and watch count it, scan leaves it 0 */
+	/** the jobs that run before a waiting one, up to 10,000 */
 	ahead: number
-	/** what a running job's handler last reported with job.progress */
+	/** what its handler last reported of a running job */
 	progress: unknown
-	/** when the last run a handler finished began: acknowledged, retried, failed or snoozed */
-	ran: Date | undefined
-	/** how many milliseconds that run took */
-	took: number | undefined
-	/** its last failure */
+	/** why its last run failed */
 	error: string | undefined
-	/** a repeating job's cron text and zone */
+	group: string | undefined
+	/** a repeating job's repeat as it keeps it: '@every 30s +6178ms', '10 3 * * * Europe/Berlin' */
 	repeat: string | undefined
+	/** when the last run a handler finished started and ended */
+	lastRun: { startedAt: Date; endedAt: Date } | undefined
+}
+
+export interface ListOptions {
+	/** ids that start with it, in their byte order: end it with a separator, 'chat:4:' */
+	prefix?: string | undefined
+	/** the jobs in this state alone; 'failed' with no prefix lists the last failed first */
+	state?: 'scheduled' | 'waiting' | 'running' | 'failed' | undefined
+	/** where the page before ended: its next */
+	after?: string | undefined
+	/** jobs a page holds at most: 100, 1000 at most */
+	limit?: number | undefined
+}
+
+/** A page of a queue's jobs, and where the next starts when there is one. */
+export interface JobPage<T> {
+	jobs: Job<T>[]
+	next: string | undefined
 }
 
 export interface WorkOptions {
-	/** the jobs in this process's hands at once: 1, the one order a queue promises */
-	workers?: number
-	/** how long a job may be in the handler's hands, after which its attempt fails: a minute */
-	timeout?: Duration
-	/** stops taking jobs: the ones in hand finish first, and work returns */
-	signal?: AbortSignal
-	/** returns once no job is due and none runs, as a test wants it */
-	untilIdle?: boolean
+	/** the handlers this worker runs at once, under the queue's bound: its total, or one */
+	concurrency?: number | undefined
 }
 
-type Settlement =
-	| { how: 'ack' }
-	| { how: 'retry'; error: string; at?: Time; after?: Duration }
-	| { how: 'fail'; error: string }
-	| { how: 'snooze'; at?: Time; after?: Duration }
+/**
+ * What runs a job: it gets the job's value and its run. Returning ends the
+ * job done, throwing runs it again after its backoff, and returning what
+ * run.retry, run.snooze or run.fail made ends it so.
+ */
+export type Handler<T> = (value: T, run: Run) => unknown
 
-const how = { ack: 1, retry: 2, fail: 3, snooze: 4, extend: 5, progress: 6 } as const
+/** When a schedule runs: every span, or by a cron on a time zone's wall clock. */
+export type ScheduleWhen = { every: Duration } | { cron: string; timeZone: string }
 
-/** the JSON a handler reports of its job, at most 4 KiB of it */
+export interface ScheduleOptions {
+	/** runs a time gets before it fails, the first counted: 10; the schedule goes on */
+	attempts?: number | undefined
+	backoff?: Backoff | undefined
+	/** how long one run may take before its signal aborts: a minute */
+	timeout?: Duration | undefined
+}
+
+/** A run's answer as the stream carries it. */
+type AnswerFields = Omit<Written<typeof JobsAnswer.fields>, 'run'>
+
+/** The handlers a client's worker runs at once at most, as the server bounds them. */
+const mostHandlers = 1024
+
+/** The pause before a worker dials again after a failure, doubling up to the last. */
+const firstPause = 100
+const lastPause = 30_000
+
+/** How a run ends otherwise than done, made by run.retry, run.snooze or run.fail: its handler returns it. */
+export class Answer {
+	readonly #how: string
+
+	/** Answers come from a run. */
+	constructor(how: string) {
+		this.#how = how
+	}
+
+	toString(): string {
+		return `run.${this.#how}(…)`
+	}
+}
+
+/** What a run is made of, which its worker gives it. */
+interface RunParts {
+	held: Read<typeof JobsHeld.fields>
+	signal: AbortSignal
+	steps: Steps
+	reporter: Reporter
+	/** the answers the run made, which the worker reads what the handler returned against */
+	made: Map<Answer, AnswerFields>
+}
+
+/** This call on a job: what it is, its signal, its steps and progress, and the answers its handler returns. */
+export class Run {
+	/** the job's id, undefined for one added without */
+	readonly id: string | undefined
+	/** when the run was due, which "thirty days ago" counts from even when it starts late */
+	readonly at: Date
+	/** this run's number among the job's attempts, the first being 1 */
+	readonly attempt: number
+	readonly group: string | undefined
+	/**
+	 * aborts when the run passes its timeout, or when a cancel takes the job,
+	 * whose reason is then a CancelledError: the handler should stop too
+	 */
+	readonly signal: AbortSignal
+	readonly #steps: Steps
+	readonly #reporter: Reporter
+	readonly #made: Map<Answer, AnswerFields>
+
+	/** Runs come to a handler from its worker. */
+	constructor(parts: RunParts) {
+		this.id = parts.held.id
+		this.at = new Date(parts.held.at ?? 0)
+		this.attempt = parts.held.attempt ?? 0
+		this.group = parts.held.group
+		this.signal = parts.signal
+		this.#steps = parts.steps
+		this.#reporter = parts.reporter
+		this.#made = parts.made
+	}
+
+	/**
+	 * Runs fn once in the job's run and keeps its answer, as JSON, across the
+	 * job's attempts: the attempt after a retry, a lost worker or a restart
+	 * gets the answer back without running fn again. A step whose attempt
+	 * ends before its answer is kept runs again, so what fn does outside the
+	 * store should bear doing twice. A name is the step's within its job,
+	 * numbered in a loop: 'model:1', 'tool:1'.
+	 *
+	 *     const found = await run.step('search', () => search(question.text))
+	 */
+	step<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
+		return this.#steps.run(name, fn)
+	}
+
+	/**
+	 * Shows how far the job got, any JSON within 4 KiB, to get: the latest
+	 * goes, ten a second at most, and nothing waits for the server.
+	 */
+	setProgress(progress: unknown): void {
+		this.#reporter.report(progressText(progress))
+	}
+
+	/** Runs the job again after its backoff, or at the time given, the run counted as an attempt: return it. */
+	retry(when?: Duration | Date): Answer {
+		return this.#make('retry', when === undefined ? {} : timing(when))
+	}
+
+	/** Runs the job again at the time given, the run not counted: return it. */
+	snooze(when: Duration | Date): Answer {
+		return this.#make('snooze', timing(when))
+	}
+
+	/** Fails the job for good now, its reason kept as its error: return it. */
+	fail(reason: string | Error): Answer {
+		return this.#make('fail', { error: messageOf(reason) })
+	}
+
+	#make(how: 'retry' | 'snooze' | 'fail', fields: AnswerFields): Answer {
+		const answer = new Answer(how)
+		this.#made.set(answer, { ...fields, how })
+		return answer
+	}
+}
+
+/** A retry's or a snooze's time: a Date at it, a span from now on the server's clock. */
+function timing(when: Duration | Date): AnswerFields {
+	return when instanceof Date ? { at: unixMs(when) } : { delay: ms(when) }
+}
+
+/** How a handler's return ends its run: an answer it made, done for anything else, and a failed run for an answer made and not returned. */
+function answerOf(returned: unknown, made: Map<Answer, AnswerFields>): AnswerFields {
+	if (returned instanceof Answer) {
+		return (
+			made.get(returned) ?? {
+				how: 'retry',
+				error: 'the handler returned an answer another run made',
+			}
+		)
+	}
+	const [unreturned] = made.keys()
+	if (unreturned !== undefined) {
+		return {
+			how: 'retry',
+			error: `the handler made ${unreturned} and returned something else: return the answer that ends the run`,
+		}
+	}
+	return { how: 'done' }
+}
+
+/** The JSON a handler reports of its job, 4 KiB of it at most. */
 function progressText(progress: unknown): string {
-	let text: string | undefined
-	try {
-		text = JSON.stringify(progress)
-	} catch (err) {
-		throw new InvalidError(`a job's progress JSON cannot write: ${(err as Error).message}`)
-	}
-	if (text === undefined) {
-		throw new InvalidError("a job's progress JSON cannot write: undefined, a function or a symbol")
-	}
+	const text = jsonText(progress, "a job's progress")
 	if (new TextEncoder().encode(text).length > 4096) {
-		throw new InvalidError("a job's progress is past 4 KiB of JSON")
+		throw new InvalidError("a job's progress past 4 KiB of JSON")
 	}
 	return text
 }
@@ -186,7 +337,7 @@ class Reporter {
 			})
 	}
 
-	/** Drops what waits and lets what is being sent finish, before the job's outcome follows it. */
+	/** Drops what waits and lets what is being sent finish, before the run's answer follows it. */
 	async stop(): Promise<void> {
 		this.#stopped = true
 		clearTimeout(this.#timer)
@@ -197,612 +348,255 @@ class Reporter {
 /** Calls a method on the connection a job is held on, answering its body. */
 type Call = (method: number, body: Uint8Array) => Promise<Uint8Array>
 
-/**
- * The steps of a held job's run, which the server keeps under the number the
- * job was held by: a step's kept answer, or the step run and its answer kept.
- */
+/** The steps of a held job's run, which the server keeps under the run's number on its connection. */
 class Steps {
 	readonly #call: Call
-	readonly #job: number
+	readonly #run: number
+	readonly #cancelled: AbortSignal
 
-	constructor(call: Call, job: number) {
+	constructor(call: Call, run: number, cancelled: AbortSignal) {
 		this.#call = call
-		this.#job = job
+		this.#run = run
+		this.#cancelled = cancelled
 	}
 
 	async run<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
-		const kept = JobsKept.decode(
-			await this.#call(methods['jobs.step'], JobsAnswer.encode({ job: this.#job, name })),
-		)
+		this.#cancelled.throwIfAborted()
+		const asked = JobsStep.encode({ run: this.#run, name })
+		const kept = JobsKept.decode(await this.#call(methods['jobs.step'], asked))
 		if (kept.found === true) {
 			return JSON.parse(kept.answer ?? 'null') as R
 		}
 		const answer = await fn()
-		let text: string
-		try {
-			text = JSON.stringify(answer) ?? 'null'
-		} catch (err) {
-			throw new InvalidError(
-				`step ${name} answered what JSON cannot write: ${(err as Error).message}`,
-			)
-		}
-		await this.#call(
-			methods['jobs.keep'],
-			JobsAnswer.encode({ job: this.#job, name, answer: text }),
-		)
+		const text = jsonText(answer, `step ${JSON.stringify(name)}'s answer`)
+		await this.#call(methods['jobs.keep'], JobsStep.encode({ run: this.#run, name, answer: text }))
 		return answer
 	}
 }
 
-/**
- * A job in a work loop's handler. Returning acknowledges it and throwing
- * retries it, unless the handler said otherwise with retry, fail or snooze;
- * the last of those it calls is how the job settles.
- */
-export class Job<T> {
-	readonly key: string
-	readonly value: T
-	/** the time it ran for */
-	readonly at: Date
-	/** its attempts, this one included */
-	readonly attempt: number
-	/**
-	 * aborts when the job's timeout passes, its loop stops, or cancel takes it,
-	 * whose reason is then a CancelledError: the handler should stop too
-	 */
-	readonly signal: AbortSignal
-	settlement: Settlement | undefined
-	readonly #reporter: Reporter | undefined
-	readonly #steps: Steps | undefined
-
-	constructor(
-		key: string,
-		value: T,
-		at: Date,
-		attempt: number,
-		signal: AbortSignal,
-		reporter?: Reporter,
-		steps?: Steps,
-	) {
-		this.key = key
-		this.value = value
-		this.at = at
-		this.attempt = attempt
-		this.signal = signal
-		this.#reporter = reporter
-		this.#steps = steps
+/** A value's JSON, the text every language reads; undefined writes as null, as a step's answer may be nothing. */
+function jsonText(value: unknown, what: string): string {
+	let text: string | undefined
+	try {
+		text = JSON.stringify(value)
+	} catch (err) {
+		throw new InvalidError(`${what} JSON cannot write: ${messageOf(err)}`)
 	}
-
-	/**
-	 * Runs fn once in the job's run and keeps what it answers, as JSON: an
-	 * attempt after a retry, a lost lease or a restart gets the kept answer
-	 * back without running fn again. A step whose attempt ends before its
-	 * answer is kept runs again, so what fn does outside the store should bear
-	 * doing twice. A name is the step's within the run, which a loop numbers:
-	 * 'model:1', 'tool:1', 'model:2'. An answer is at most 1 MiB of JSON.
-	 *
-	 *     const hits = await job.step('search', () => search(job.value.query))
-	 */
-	step<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
-		if (this.#steps === undefined) {
-			return Promise.reject(new InvalidError('a job no work loop handed over keeps no steps'))
+	if (text === undefined) {
+		if (value === undefined) {
+			return 'null'
 		}
-		return this.#steps.run(name, fn)
+		throw new InvalidError(`${what} JSON cannot write: a function or a symbol`)
 	}
-
-	/**
-	 * Reports how far the job got, any JSON within 4 KiB: get and watch show
-	 * the latest until the job is settled. It does not wait for the server.
-	 *
-	 *     await transcode({ signal: job.signal, onProgress: p => job.progress(p) })
-	 */
-	progress(progress: unknown): void {
-		this.#reporter?.report(progressText(progress))
-	}
-
-	/** Fails this attempt: the job runs again after its backoff, or at the time given. */
-	retry(error?: unknown, when?: { at?: Time; after?: Duration }): void {
-		this.settlement = { how: 'retry', error: reasonOf(error), ...when }
-	}
-
-	/** Fails the job for good, keeping it for keepFailed with its reason. */
-	fail(error?: unknown): void {
-		this.settlement = { how: 'fail', error: reasonOf(error) }
-	}
-
-	/** Moves the job to another time without counting the attempt. */
-	snooze(when: { at?: Time; after?: Duration }): void {
-		this.settlement = { how: 'snooze', ...when }
-	}
+	return text
 }
 
-/** A job a claim leased, which its caller settles itself before the lease ends. */
-export class ClaimedJob<T> {
-	readonly key: string
-	readonly value: T
-	readonly at: Date
-	readonly attempt: number
-	readonly #settle: (outcome: Parameters<typeof JobsOutcome.encode>[0]) => Promise<void>
-	readonly #job: number
-	readonly #steps: Steps
-
-	constructor(
-		held: ReturnType<typeof JobsHeld.decode>,
-		value: T,
-		settle: (outcome: Parameters<typeof JobsOutcome.encode>[0]) => Promise<void>,
-		call: Call,
-	) {
-		this.key = held.key ?? ''
-		this.value = value
-		this.at = new Date(held.at ?? 0)
-		this.attempt = held.attempt ?? 0
-		this.#job = held.job ?? 0
-		this.#settle = settle
-		this.#steps = new Steps(call, this.#job)
-	}
-
-	/** Runs fn once in the job's run and keeps its answer, as a work loop's job.step does. */
-	step<R>(name: string, fn: () => R | Promise<R>): Promise<R> {
-		return this.#steps.run(name, fn)
-	}
-
-	/** The job is done. */
-	ack(): Promise<void> {
-		return this.#settle({ job: this.#job, how: how.ack })
-	}
-
-	retry(error?: unknown, when?: { at?: Time; after?: Duration }): Promise<void> {
-		return this.#settle({ job: this.#job, how: how.retry, err: reasonOf(error), ...timing(when) })
-	}
-
-	fail(error?: unknown): Promise<void> {
-		return this.#settle({ job: this.#job, how: how.fail, err: reasonOf(error) })
-	}
-
-	snooze(when: { at?: Time; after?: Duration }): Promise<void> {
-		return this.#settle({ job: this.#job, how: how.snooze, ...timing(when) })
-	}
-
-	/** Holds the job this much longer from now. */
-	extend(d: Duration): Promise<void> {
-		return this.#settle({ job: this.#job, how: how.extend, after: ms(d) })
-	}
-
-	/** Reports how far the job got, any JSON within 4 KiB, which get and watch show until it is settled. */
-	progress(progress: unknown): Promise<void> {
-		return this.#settle({ job: this.#job, how: how.progress, progress: progressText(progress) })
-	}
-}
-
-function reasonOf(error: unknown): string {
-	if (error === undefined) {
-		return 'the handler gave no reason'
-	}
-	return error instanceof Error ? error.message : String(error)
-}
-
-function timing(when: { at?: Time; after?: Duration } | undefined): {
-	at?: number
-	after?: number
-} {
-	if (when?.at !== undefined) {
-		return { at: unixMs(when.at) }
-	}
-	if (when?.after !== undefined) {
-		return { after: ms(when.after) }
-	}
-	return {}
-}
-
-/** Encodes a queue's values as JSON, the text every language reads, and back. */
+/** A queue's values: JSON, checked by its schema when it has one. */
 interface Values<T> {
 	encode(value: T): string
-	decode(text: string): T | Promise<T>
+	decode(text: string): Promise<T>
 }
 
-const jsonValues: Values<unknown> = {
-	encode: value => {
-		let text: string | undefined
-		try {
-			text = JSON.stringify(value)
-		} catch (err) {
-			throw new InvalidError(`a job's value JSON cannot write: ${(err as Error).message}`)
-		}
-		if (text === undefined) {
-			throw new InvalidError("a job's value JSON cannot write: undefined, a function or a symbol")
-		}
-		return text
-	},
-	decode: text => {
-		try {
-			return JSON.parse(text)
-		} catch (err) {
-			throw new CorruptError(`a job's value is not JSON any more: ${(err as Error).message}`)
-		}
-	},
-}
-
-function schemaValues<S extends StandardSchemaV1>(schema: S): Values<unknown> {
+function valuesOf<T>(schema: StandardSchemaV1 | undefined): Values<T> {
 	return {
-		encode: jsonValues.encode,
-		decode: async text => {
-			const checked = await check(schema, await jsonValues.decode(text))
-			if ('issues' in checked) {
-				throw new CorruptError(`a job's value does not meet the queue's schema: ${checked.issues}`)
+		encode: value => {
+			if (value === undefined) {
+				throw new InvalidError('a value of undefined, which JSON cannot write: give null')
 			}
-			return checked.value
+			return jsonText(value, 'a value')
+		},
+		decode: async text => {
+			let value: unknown
+			try {
+				value = JSON.parse(text)
+			} catch (err) {
+				throw new CorruptError(`a value that is not JSON any more: ${messageOf(err)}`)
+			}
+			if (schema === undefined) {
+				return value as T
+			}
+			const checked = await check(schema, value)
+			if ('issues' in checked) {
+				throw new CorruptError(`a value that no longer meets the queue's schema: ${checked.issues}`)
+			}
+			return checked.value as T
 		},
 	}
 }
 
-function repeatOf(r: Repeat): Parameters<typeof JobsQueue.encode>[0]['schedule'] {
-	if ('every' in r) {
-		return { every: ms(r.every), spread: r.spread === true ? true : undefined }
-	}
-	if ('daily' in r) {
-		const time = /^(\d{1,2}):(\d{2})$/.exec(r.daily)
-		if (time === null || Number(time[1]) > 23 || Number(time[2]) > 59) {
-			throw new InvalidError(`the daily time ${JSON.stringify(r.daily)}; write it as 03:10`)
-		}
-		return { cron: `${Number(time[2])} ${Number(time[1])} * * *`, zone: r.zone }
-	}
-	return { cron: r.cron, zone: r.zone }
+/** What a queue's or a schedule's calls and workers need of it. */
+interface Source<T> {
+	link: Link
+	/** 'jobs queue emails', which an error names */
+	describe: string
+	openMethod: number
+	open: Uint8Array
+	values: Values<T>
+	/** a run's timeout, in milliseconds */
+	timeout: number
+	/** the store's running workers, which its close stops */
+	workers: Set<Worker>
 }
 
-export class Jobs {
-	readonly #link: Link
-
-	constructor(link: Link) {
-		this.#link = link
-	}
-
-	/** A queue of JSON values of type T. */
-	queue<T = unknown>(name: string, options?: QueueOptions): Queue<T>
-	/** A queue whose values each claim checks, with zod's, valibot's or another Standard Schema. */
-	queue<S extends StandardSchemaV1>(
-		name: string,
-		schema: S,
-		options?: QueueOptions,
-	): Queue<StandardSchemaV1.InferOutput<S>>
-	queue(
-		name: string,
-		of?: StandardSchemaV1 | QueueOptions,
-		options?: QueueOptions,
-	): Queue<unknown> {
-		checkName(name, 'queue')
-		let values = jsonValues
-		if (isSchema(of)) {
-			values = schemaValues(of)
-		} else if (of !== undefined) {
-			options = of
-		}
-		const open = JobsQueue.encode(queueFields(name, options))
-		return new Queue(this.#link, name, open, values, options?.in)
-	}
-
-	/**
-	 * A schedule: a queue of one job under the schedule's name, which repeats
-	 * as it says. work runs it; cancel stops it.
-	 */
-	schedule(name: string, repeat: Repeat, options?: QueueOptions): Queue<null> {
-		checkName(name, 'schedule')
-		const open = JobsQueue.encode({ ...queueFields(name, options), schedule: repeatOf(repeat) })
-		const nothing = { encode: () => '{}', decode: () => null }
-		return new Queue(this.#link, name, open, nothing, options?.in)
-	}
+function callOf<T>(
+	source: Source<T>,
+	method: number,
+	body: (handle: number) => Uint8Array,
+	idempotence: Idempotence,
+): Promise<Uint8Array> {
+	return source.link.run(idempotence, async connection => {
+		const handle = await handleOn(connection, source.openMethod, source.open)
+		return connection.session.call(method, body(handle))
+	})
 }
 
-function queueFields(
-	name: string,
-	options: QueueOptions | undefined,
-): Parameters<typeof JobsQueue.encode>[0] {
+async function getJob<T>(source: Source<T>, id: string): Promise<Job<T> | undefined> {
+	const body = await callOf(
+		source,
+		methods['jobs.get'],
+		handle => JobsId.encode({ handle, id }),
+		'read',
+	)
+	const found = JobsJob.decode(body)
+	return found.found === true ? jobOf(source, found) : undefined
+}
+
+async function cancelJob<T>(source: Source<T>, id: string): Promise<boolean> {
+	const body = await callOf(
+		source,
+		methods['jobs.cancel'],
+		handle => JobsId.encode({ handle, id }),
+		'write',
+	)
+	return JobsChanged.decode(body).changed === true
+}
+
+/** A job as the server sent it, its value read as the queue reads one. */
+async function jobOf<T>(source: Source<T>, found: Read<typeof JobsJob.fields>): Promise<Job<T>> {
+	let value: T
+	try {
+		value = await source.values.decode(found.value ?? 'null')
+	} catch (err) {
+		throw new CorruptError(
+			`${source.describe}: id ${JSON.stringify(found.id ?? '')}: ${messageOf(err)}`,
+		)
+	}
 	return {
-		name,
-		lease: options?.lease === undefined ? undefined : ms(options.lease),
-		maxAttempts: options?.maxAttempts,
-		backoffFirst: options?.backoff?.first === undefined ? undefined : ms(options.backoff.first),
-		backoffMost: options?.backoff?.most === undefined ? undefined : ms(options.backoff.most),
-		maxWaiting: options?.maxWaiting,
-		keepFailed: options?.keepFailed === undefined ? undefined : ms(options.keepFailed),
-		keepDone: options?.keepDone === undefined ? undefined : ms(options.keepDone),
-		maxRunning: options?.maxRunning,
-		in: options?.in?.name,
-		maxRunningInGroup: options?.maxRunningInGroup,
-		...rateFields(options?.rate),
+		id: found.id,
+		value,
+		state: (found.state ?? 'waiting') as JobState,
+		at: new Date(found.at ?? 0),
+		attempt: found.attempt ?? 0,
+		ahead: found.ahead ?? 0,
+		progress: found.progress === undefined ? undefined : JSON.parse(found.progress),
+		error: found.error,
+		group: found.group,
+		repeat: found.repeat,
+		lastRun:
+			found.startedAt === undefined
+				? undefined
+				: {
+						startedAt: new Date(found.startedAt),
+						endedAt: new Date(found.endedAt ?? found.startedAt),
+					},
 	}
 }
 
-/** A queue's rate as jobs.open carries it: how many, and in how many milliseconds. */
-function rateFields(rate: Rate | undefined): { rate?: number; per?: number } {
-	if (rate === undefined) {
-		return {}
-	}
-	const { count, per } = rateOf(rate)
-	if (count < 1 || per < 1) {
-		throw new InvalidError(`a queue's rate of ${rate}`)
-	}
-	return { rate: count, per }
-}
-
-/** A job's fields as jobs.enqueue and a batch carry them. */
-function jobFields<T>(values: Values<T>, value: T, options: EnqueueOptions | undefined) {
-	return {
-		value: values.encode(value),
-		key: options?.key,
-		at: options?.at === undefined ? undefined : unixMs(options.at),
-		after: options?.after === undefined ? undefined : ms(options.after),
-		repeat: options?.repeat === undefined ? undefined : repeatOf(options.repeat),
-		move: options?.move === true ? true : undefined,
-		group: options?.group,
-	}
-}
-
-/** A queue's enqueue inside a batch of the database it lives in. */
-export class QueueTx<T> {
-	readonly #tx: SqlBatch
-	readonly #open: Uint8Array
-	readonly #values: Values<T>
-
-	constructor(tx: SqlBatch, open: Uint8Array, values: Values<T>) {
-		this.#tx = tx
-		this.#open = open
-		this.#values = values
-	}
-
-	/** Adds a job to the batch; it settles once the batch has committed. */
-	enqueue(value: T, options?: EnqueueOptions): Promise<void> {
-		return this.#tx.enqueue(this.#open, jobFields(this.#values, value, options))
-	}
-}
-
-const states: Record<number, JobState> = {
-	1: 'waiting',
-	2: 'running',
-	3: 'failed',
-	4: 'done',
-	5: 'cancelled',
-}
-
+/** A queue of jobs of one type, run in the order of their time: open it with `store.queue(name)`. */
 export class Queue<T> {
 	readonly name: string
-	readonly #link: Link
-	readonly #open: Uint8Array
-	readonly #values: Values<T>
-	readonly #in: Database | undefined
+	readonly #source: Source<T>
 
-	constructor(
-		link: Link,
-		name: string,
-		open: Uint8Array,
-		values: Values<T>,
-		inDatabase: Database | undefined,
-	) {
-		this.#link = link
+	/** Queues come from `store.queue`. */
+	constructor(source: Source<T>, name: string) {
+		this.#source = source
 		this.name = name
-		this.#open = open
-		this.#values = values as Values<T>
-		this.#in = inDatabase
-		if (inDatabase !== undefined && !databaseBelongsTo(inDatabase, link)) {
-			throw new InvalidError(`queue ${name}: its SQL database belongs to another store`)
-		}
-	}
-
-	/** The queue's handle, its database opened first when it lives in one, as the server needs. */
-	async #handle(connection: Connection): Promise<number> {
-		await this.#in?.handle(connection)
-		return handleOn(connection, methods['jobs.open'], this.#open)
 	}
 
 	/**
-	 * The queue's enqueue inside a batch of the database it lives in, which
-	 * it was opened `in`: the job commits with the batch's rows or not at all.
+	 * Adds a job unless its id is taken: by a job scheduled, waiting, running
+	 * or failed, or done while the queue's dedupe keeps it. It returns once
+	 * the job is on disk, and says whether it added one; a job without an id
+	 * is always added.
 	 *
-	 *     await db.batch(tx => {
-	 *       tx.exec`update notes set body = ${body} where id = ${id}`
-	 *       index.withTx(tx).enqueue({ id })
-	 *     })
+	 *     await reminders.add({ userId: 42, text: 'Call mom' }, { delay: '1h' })
 	 */
-	withTx(tx: SqlBatch): QueueTx<T> {
-		if (
-			this.#in === undefined ||
-			this.#in.name !== tx.database ||
-			!batchBelongsTo(tx, this.#link)
-		) {
-			const lives = this.#in === undefined ? 'jobs.db' : `sql ${this.#in.name}`
-			throw new InvalidError(
-				`the queue ${this.name} lives in ${lives}, not in sql ${tx.database}: ` +
-					"open it with { in: db } to enqueue in that database's batches",
-			)
+	async add(value: T, options: AddOptions = {}): Promise<boolean> {
+		const fields = {
+			...jobFields(options),
+			id: options.id,
+			value: this.#source.values.encode(value),
 		}
-		return new QueueTx(tx, this.#open, this.#values)
-	}
-
-	/** Adds a job; it returns once the job is in the file. */
-	enqueue(value: T, options?: EnqueueOptions): Promise<void> {
-		return this.enqueueAll([{ value, ...options }])
-	}
-
-	/** Adds jobs in one transaction, all or none: a refused one names itself as `call`. */
-	async enqueueAll(jobs: readonly ({ value: T } & EnqueueOptions)[]): Promise<void> {
-		const encoded = jobs.map(job => jobFields(this.#values, job.value, job))
-		await this.#link.run('write', async connection => {
-			const handle = await this.#handle(connection)
-			await connection.session.call(
-				methods['jobs.enqueue'],
-				JobsBatch.encode({ handle, jobs: encoded }),
-			)
-		})
+		return (await this.#changed(methods['jobs.add'], fields)) === true
 	}
 
 	/**
-	 * Changes a job that waits or failed: its value and, when the options
-	 * say, its time, repeat or group. A job a worker holds, done or absent is
-	 * ConflictError.
-	 */
-	async update(
-		key: string,
-		value: T,
-		options?: Omit<EnqueueOptions, 'key' | 'move'>,
-	): Promise<void> {
-		const change = {
-			value: this.#values.encode(value),
-			key,
-			at: options?.at === undefined ? undefined : unixMs(options.at),
-			after: options?.after === undefined ? undefined : ms(options.after),
-			repeat: options?.repeat === undefined ? undefined : repeatOf(options.repeat),
-			group: options?.group,
-		}
-		await this.#link.run('write', async connection => {
-			const handle = await this.#handle(connection)
-			await connection.session.call(
-				methods['jobs.update'],
-				JobsChange.encode({ ...change, handle }),
-			)
-		})
-	}
-
-	/**
-	 * Removes the job under key, whether it waits, runs or failed, and says
-	 * whether there was one. A running job's handler sees job.signal abort,
-	 * and what it returns settles nothing.
-	 */
-	cancel(key: string): Promise<boolean> {
-		return this.#link.run('write', async connection => {
-			const handle = await this.#handle(connection)
-			const body = await connection.session.call(
-				methods['jobs.cancel'],
-				JobsKey.encode({ handle, key }),
-			)
-			return JobsEntry.decode(body).found === true
-		})
-	}
-
-	/**
-	 * The job a key names, waiting, running or failed, or done while keepDone
-	 * keeps its key; undefined when none is.
-	 */
-	async get(key: string): Promise<JobEntry<T> | undefined> {
-		const entry = await this.#link.run('read', async connection => {
-			const handle = await this.#handle(connection)
-			return JobsEntry.decode(
-				await connection.session.call(methods['jobs.get'], JobsKey.encode({ handle, key })),
-			)
-		})
-		return entry.found === true ? this.#entryOf(entry) : undefined
-	}
-
-	async #entryOf(entry: ReturnType<typeof JobsEntry.decode>): Promise<JobEntry<T>> {
-		const state = states[entry.state ?? 1] ?? 'waiting'
-		return {
-			key: entry.key ?? '',
-			value:
-				state === 'done' && entry.value === undefined
-					? (undefined as T)
-					: await this.#values.decode(entry.value ?? 'null'),
-			at: new Date(entry.at ?? 0),
-			attempt: entry.attempt ?? 0,
-			state,
-			ahead: entry.ahead ?? 0,
-			progress: entry.progress === undefined ? undefined : JSON.parse(entry.progress),
-			ran: dateOf(entry.ran),
-			took: entry.ran === undefined ? undefined : (entry.took ?? 0),
-			error: entry.err,
-			repeat: entry.repeat,
-		}
-	}
-
-	/**
-	 * Yields the job under key as it is, then again each time its state,
-	 * place, attempt, time, progress or error changes, until it ends: done,
-	 * failed or cancelled, the last entry it yields. A key that names no job
-	 * yields nothing. Leaving the loop ends the watch; a connection lost is
-	 * connected again, and the watch goes on from the job as it is then.
+	 * Makes the id's job this value at this time, whatever it was: one waiting
+	 * is made new, a failed one starts again, and a running one runs once more
+	 * after this run, with this value.
 	 *
-	 *     for await (const s of videos.watch(id)) send(s.state, s.ahead, s.progress)
+	 *     await checks.set(`check:${check.id}`, check, { delay: '25h' })
 	 */
-	async *watch(key: string): AsyncGenerator<JobEntry<T>> {
-		let last: string | undefined
-		for (;;) {
-			const stream = await this.#link.run('read', async connection => {
-				const handle = await this.#handle(connection)
-				const opened = await connection.session.open(
-					methods['jobs.watch'],
-					JobsKey.encode({ handle, key }),
-					true,
-				)
-				await opened.next()
-				return opened
-			})
-			const unwatch = watch(currentSignal(), stream)
-			try {
-				for (;;) {
-					const event = await stream.next()
-					stream.consumed(event.body.length)
-					if (event.end) {
-						return
-					}
-					const entry = await this.#entryOf(JobsEntry.decode(event.body))
-					const seen = JSON.stringify([
-						entry.state,
-						entry.ahead,
-						entry.attempt,
-						entry.at,
-						entry.progress,
-						entry.error,
-					])
-					if (seen !== last) {
-						last = seen
-						yield entry
-					}
-				}
-			} catch (err) {
-				if (!(err instanceof LostError)) {
-					throw err
-				}
-			} finally {
-				unwatch()
-				stream.cancel()
-			}
-		}
+	async set(id: string, value: T, options: JobOptions = {}): Promise<void> {
+		const fields = { ...jobFields(options), id, value: this.#source.values.encode(value) }
+		await callOf(
+			this.#source,
+			methods['jobs.set'],
+			handle => JobsCall.encode({ ...fields, handle }),
+			'write',
+		)
 	}
 
 	/**
-	 * A page of the jobs under a prefix, in the byte order of their keys; with
-	 * state 'failed' and no prefix, the failed jobs, the last failed first.
+	 * Changes the id's job when it has not started: its value, and its time,
+	 * group or repeat when the options give them. It says whether it did: a
+	 * job that runs, ran or never was answers false.
 	 */
-	async scan(query?: { prefix?: string; state?: 'failed'; after?: string; limit?: number }) {
-		const got = await this.#link.run('read', async connection => {
-			const handle = await this.#handle(connection)
-			const body = JobsQuery.encode({
-				handle,
-				prefix: query?.prefix,
-				state: query?.state === 'failed' ? 3 : undefined,
-				after: query?.after,
-				limit: query?.limit,
-			})
-			return download(connection, methods['jobs.scan'], body)
-		})
-		const items: JobEntry<T>[] = []
-		for (const item of got.items) {
-			items.push(await this.#entryOf(JobsEntry.decode(item)))
-		}
-		const page = JobsPage.decode(got.trailer)
-		return { items, next: page.more === true ? (page.after ?? '') : undefined } satisfies Page<
-			JobEntry<T>,
-			string
-		>
+	async update(id: string, value: T, options: JobOptions = {}): Promise<boolean> {
+		const fields = { ...jobFields(options), id, value: this.#source.values.encode(value) }
+		return (await this.#changed(methods['jobs.update'], fields)) === true
 	}
 
-	/** Walks scan's pages, holding no snapshot between them. */
-	async *all(query?: {
-		prefix?: string
-		state?: 'failed'
-		limit?: number
-	}): AsyncGenerator<JobEntry<T>> {
+	/**
+	 * Takes the job under id, whatever its state, and says whether there was
+	 * one. A running one's handler sees its signal abort, and what it returns
+	 * then settles nothing; a repeating one stops.
+	 */
+	cancel(id: string): Promise<boolean> {
+		return cancelJob(this.#source, id)
+	}
+
+	/**
+	 * Where the job under id is: scheduled, waiting and how many jobs are
+	 * ahead of it, running and its progress, failed and why, or done while
+	 * the queue's dedupe keeps its id; undefined for an id with no job.
+	 */
+	get(id: string): Promise<Job<T> | undefined> {
+		return getJob(this.#source, id)
+	}
+
+	/** A page of the queue's jobs whose ids start with a prefix, or of its failed ones. */
+	async list(options: ListOptions = {}): Promise<JobPage<T>> {
+		const body = await callOf(
+			this.#source,
+			methods['jobs.list'],
+			handle => JobsList.encode({ handle, ...options }),
+			'read',
+		)
+		const page = JobsPage.decode(body)
+		const jobs: Job<T>[] = []
+		for (const found of page.jobs ?? []) {
+			jobs.push(await jobOf(this.#source, found))
+		}
+		return { jobs, next: page.next }
+	}
+
+	/** Every job the options name, a page at a time, holding nothing between pages. */
+	async *all(options: Omit<ListOptions, 'after'> = {}): AsyncGenerator<Job<T>> {
 		let after: string | undefined
 		for (;;) {
-			const page = await this.scan({ ...query, ...(after === undefined ? {} : { after }) })
-			yield* page.items
+			const page = await this.list({ ...options, after })
+			yield* page.jobs
 			if (page.next === undefined) {
 				return
 			}
@@ -811,193 +605,418 @@ export class Queue<T> {
 	}
 
 	/**
-	 * Leases the next due job, or says there is none, without waiting. The
-	 * claim lives on this connection: settle it before its lease ends.
+	 * Runs handler on each job as it falls due, as many at once as the
+	 * queue's concurrency lets, one when it sets none, and returns the running
+	 * worker at once: stop it at shutdown, as store.close() does. A worker
+	 * whose connection is lost reaches the store again, the jobs it held
+	 * running again as a dead worker's would.
+	 *
+	 *     const worker = reminders.work(async ({ userId, text }) => push(userId, text))
 	 */
-	async claim(options?: { lease?: Duration }): Promise<ClaimedJob<T> | undefined> {
-		return this.#link.run('write', async connection => {
-			const handle = await this.#handle(connection)
-			const lease = options?.lease === undefined ? undefined : ms(options.lease)
-			const held = JobsHeld.decode(
-				await connection.session.call(methods['jobs.claim'], JobsLease.encode({ handle, lease })),
-			)
-			if (held.found !== true) {
-				return undefined
-			}
-			const value = await this.#values.decode(held.value ?? 'null')
-			return new ClaimedJob(
-				held,
-				value,
-				async outcome => {
-					const body = await connection.session.call(
-						methods['jobs.settle'],
-						JobsOutcomes.encode({ outcomes: [outcome] }),
-					)
-					const refused = JobsSettled.decode(body).settled?.[0]
-					if (refused !== undefined && refused !== null) {
-						throw errorOf(refused.code ?? 'internal', refused.message ?? '', refused.what ?? {})
-					}
-				},
-				(method, body) => connection.session.call(method, body),
-			)
-		})
+	work(handler: Handler<T>, options: WorkOptions = {}): Worker {
+		const concurrency = handlersOf(options, this.#source.describe)
+		return new Worker(
+			working => keepWorking({ source: this.#source, handler, concurrency, working }),
+			this.#source.workers,
+		)
 	}
 
 	/**
-	 * Runs the queue's jobs as they come due, workers at once, until the
-	 * signal aborts: the server's own Work loop claims ahead and extends
-	 * leases, and nothing polls. A handler's return acknowledges its job and a
-	 * throw retries it. A connection lost takes the jobs in hand with it, as a
-	 * process that died would, and the loop connects again.
+	 * Runs what is due when it starts and what falls due meanwhile, then says
+	 * how many jobs ran; it never waits for a later job. Tests, scripts and
+	 * commands use it.
 	 */
-	async work(
-		handler: (job: Job<T>) => void | Promise<void>,
-		options: WorkOptions = {},
-	): Promise<void> {
-		for (;;) {
-			options.signal?.throwIfAborted()
-			try {
-				await this.#link.run(
-					'read',
-					connection => this.#workOn(connection, handler, options),
-					options.signal,
-				)
-				if (options.untilIdle === true || options.signal?.aborted === true) {
-					return
-				}
-			} catch (err) {
-				if (!(err instanceof LostError) || options.signal?.aborted === true) {
-					throw err
-				}
-			}
-		}
+	runDue(handler: Handler<T>, options: WorkOptions = {}): Promise<number> {
+		return runDue(this.#source, handler, handlersOf(options, this.#source.describe))
 	}
 
-	async #workOn(
-		connection: Connection,
-		handler: (job: Job<T>) => void | Promise<void>,
-		options: WorkOptions,
-	) {
-		const handle = await this.#handle(connection)
-		const timeout = options.timeout === undefined ? 60_000 : ms(options.timeout)
-		const stream = await connection.session.open(
-			methods['jobs.work'],
-			JobsWorkers.encode({
-				handle,
-				workers: options.workers,
-				timeout,
-				untilIdle: options.untilIdle || undefined,
-				cancels: true,
-			}),
-			false,
+	async #changed(
+		method: number,
+		fields: Omit<Written<typeof JobsCall.fields>, 'handle'>,
+	): Promise<boolean | undefined> {
+		const body = await callOf(
+			this.#source,
+			method,
+			handle => JobsCall.encode({ ...fields, handle }),
+			'write',
 		)
-		const stopping = new AbortController()
-		const stop = () => stopping.abort()
-		options.signal?.addEventListener('abort', stop, { once: true })
-		const inHand = new Set<Promise<void>>()
-		const cancels = new Map<number, AbortController>()
-		let ended = false
-		const endOurSide = async () => {
-			if (!ended) {
-				ended = true
-				await Promise.allSettled(inHand)
-				await stream.send(new Uint8Array(0), true).catch(() => {})
-			}
-		}
-		stopping.signal.addEventListener('abort', () => void endOurSide(), { once: true })
-		try {
-			await stream.next()
-			for (;;) {
-				const event = await stream.next()
-				stream.consumed(event.body.length)
-				if (event.end) {
-					return
-				}
-				const held = JobsHeld.decode(event.body)
-				if (held.cancelled === true) {
-					cancels.get(held.job ?? 0)?.abort(new CancelledError('cancel took the job while it ran'))
-					continue
-				}
-				const cancel = new AbortController()
-				cancels.set(held.job ?? 0, cancel)
-				const steps = new Steps(
-					(method, body) => connection.session.call(method, body),
-					held.job ?? 0,
-				)
-				const running = this.#run(
-					stream,
-					held,
-					steps,
-					handler,
-					timeout,
-					stopping.signal,
-					cancel.signal,
-				).finally(() => cancels.delete(held.job ?? 0))
-				inHand.add(running)
-				running.finally(() => inHand.delete(running))
-			}
-		} finally {
-			options.signal?.removeEventListener('abort', stop)
-			stopping.abort()
-		}
-	}
-
-	// runs one job's handler and sends the outcome it settled by; a handler
-	// stopped by the loop's end gives its job back without counting the
-	// attempt, and one cancel took settles nothing, so it sends nothing
-	async #run(
-		stream: Awaited<ReturnType<Connection['session']['open']>>,
-		held: ReturnType<typeof JobsHeld.decode>,
-		steps: Steps,
-		handler: (job: Job<T>) => void | Promise<void>,
-		timeout: number,
-		stopping: AbortSignal,
-		cancelled: AbortSignal,
-	): Promise<void> {
-		const signal = AbortSignal.any([stopping, AbortSignal.timeout(timeout), cancelled])
-		const number = held.job ?? 0
-		const reporter = new Reporter(progress =>
-			stream.send(JobsOutcome.encode({ job: number, how: how.progress, progress }), false),
-		)
-		let outcome: Parameters<typeof JobsOutcome.encode>[0]
-		try {
-			const job = new Job(
-				held.key ?? '',
-				await this.#values.decode(held.value ?? 'null'),
-				new Date(held.at ?? 0),
-				held.attempt ?? 0,
-				signal,
-				reporter,
-				steps,
-			)
-			try {
-				await handler(job)
-				outcome = outcomeOf(number, job.settlement ?? { how: 'ack' })
-			} catch (err) {
-				outcome =
-					stopping.aborted && signal.aborted
-						? { job: number, how: how.snooze, at: held.at ?? Date.now() }
-						: outcomeOf(number, job.settlement ?? { how: 'retry', error: reasonOf(err) })
-			}
-		} catch (err) {
-			outcome = { job: number, how: how.fail, err: `the value no longer reads: ${reasonOf(err)}` }
-		}
-		await reporter.stop()
-		if (!cancelled.aborted) {
-			await stream.send(JobsOutcome.encode(outcome), false).catch(() => {})
-		}
+		return JobsChanged.decode(body).changed
 	}
 }
 
-function outcomeOf(job: number, s: Settlement): Parameters<typeof JobsOutcome.encode>[0] {
-	switch (s.how) {
-		case 'ack':
-			return { job, how: how.ack }
-		case 'retry':
-			return { job, how: how.retry, err: s.error, ...timing(s) }
-		case 'fail':
-			return { job, how: how.fail, err: s.error }
-		case 'snooze':
-			return { job, how: how.snooze, ...timing(s) }
+/** A repeat the code owns: one repeating job under its name, and the worker that runs it. */
+export class Schedule {
+	readonly name: string
+	readonly #source: Source<null>
+	readonly #handler: Handler<null>
+	readonly #worker: Worker
+
+	/** Schedules come from `store.schedule`, started. */
+	constructor(source: Source<null>, name: string, handler: (run: Run) => unknown) {
+		this.#source = source
+		this.name = name
+		this.#handler = (_, run) => handler(run)
+		const worked = { source, handler: this.#handler, concurrency: undefined }
+		this.#worker = new Worker(working => keepWorking({ ...worked, working }), source.workers)
+	}
+
+	/** When it runs next and how its last run went: what a page of cron jobs shows. */
+	get(): Promise<Job<null> | undefined> {
+		return getJob(this.#source, this.name)
+	}
+
+	/** Runs the schedule's job when it is due, as a queue's runDue does. */
+	runDue(): Promise<number> {
+		return runDue(this.#source, this.#handler, undefined)
+	}
+
+	/** Stops the schedule's worker, as a worker's stop does. */
+	stop(): Promise<void> {
+		return this.#worker.stop()
+	}
+
+	/** Removes the schedule's job, until the program opens it again. */
+	cancel(): Promise<boolean> {
+		return cancelJob(this.#source, this.name)
+	}
+}
+
+/** What a queue's open sends, checked before anything leaves. */
+export function openQueue<T>(
+	link: Link,
+	workers: Set<Worker>,
+	name: string,
+	options: QueueOptions & { schema?: StandardSchemaV1 | undefined },
+): Queue<T> {
+	checkName(name, 'queue')
+	const describe = `jobs queue ${name}`
+	const concurrency =
+		typeof options.concurrency === 'number' ? { total: options.concurrency } : options.concurrency
+	const open = JobsQueueOpen.encode({
+		name,
+		attempts: whole(options.attempts, describe, 'attempts'),
+		backoff: backoffOf(options.backoff),
+		timeout: msOf(options.timeout),
+		concurrency:
+			concurrency === undefined
+				? undefined
+				: {
+						total: whole(concurrency.total, describe, 'a concurrency'),
+						group: whole(concurrency.group, describe, "a group's concurrency"),
+					},
+		rate: options.rate === undefined ? undefined : rateOf(options.rate),
+		dedupe: msOf(options.dedupe),
+		keep: msOf(options.keep),
+		maxWaiting: whole(options.maxWaiting, describe, 'a maxWaiting'),
+	})
+	const source: Source<T> = {
+		link,
+		describe,
+		openMethod: methods['jobs.queue.open'],
+		open,
+		values: valuesOf<T>(options.schema),
+		timeout: options.timeout === undefined ? 60_000 : ms(options.timeout),
+		workers,
+	}
+	return new Queue<T>(source, name)
+}
+
+/** A schedule, its open checked before anything leaves, and its worker started. */
+export function openSchedule(
+	link: Link,
+	workers: Set<Worker>,
+	name: string,
+	when: ScheduleWhen,
+	handler: (run: Run) => unknown,
+	options: ScheduleOptions = {},
+): Schedule {
+	checkName(name, 'schedule')
+	const describe = `jobs schedule ${name}`
+	const repeat =
+		'cron' in when
+			? { cron: when.cron, timeZone: zoneOf(when.timeZone, describe) }
+			: { every: ms(when.every) }
+	const open = JobsScheduleOpen.encode({
+		name,
+		...repeat,
+		attempts: whole(options.attempts, describe, 'attempts'),
+		backoff: backoffOf(options.backoff),
+		timeout: msOf(options.timeout),
+	})
+	const source: Source<null> = {
+		link,
+		describe,
+		openMethod: methods['jobs.schedule.open'],
+		open,
+		values: valuesOf<null>(undefined),
+		timeout: options.timeout === undefined ? 60_000 : ms(options.timeout),
+		workers,
+	}
+	return new Schedule(source, name, handler)
+}
+
+/** A cron's zone, which an hour means nothing without: undefined, a user's never set, is refused. */
+function zoneOf(zone: string | undefined, describe: string): string {
+	if (typeof zone !== 'string' || zone === '') {
+		throw new InvalidError(`${describe}: a cron needs a timeZone, 'UTC' among them`)
+	}
+	return zone
+}
+
+function jobFields(
+	options: JobOptions,
+): Omit<Written<typeof JobsCall.fields>, 'handle' | 'id' | 'value'> {
+	return {
+		at: options.at === undefined ? undefined : unixMs(options.at),
+		delay: msOf(options.delay),
+		group: options.group,
+		every: msOf(options.every),
+		cron: options.cron,
+		timeZone: options.timeZone,
+	}
+}
+
+function msOf(d: Duration | undefined): number | undefined {
+	return d === undefined ? undefined : ms(d)
+}
+
+function backoffOf(backoff: Backoff | undefined): { initial: number; max: number } | undefined {
+	return backoff === undefined ? undefined : { initial: ms(backoff.initial), max: ms(backoff.max) }
+}
+
+/** A count the server takes as a whole number; one that is none is refused here, naming what it was. */
+function whole(n: number | undefined, describe: string, what: string): number | undefined {
+	if (n !== undefined && (!Number.isSafeInteger(n) || n < 0)) {
+		throw new InvalidError(`${describe}: ${what} of ${n}, which is no whole number`)
+	}
+	return n
+}
+
+function handlersOf(options: WorkOptions, describe: string): number | undefined {
+	const n = options.concurrency
+	if (n !== undefined && (!Number.isSafeInteger(n) || n < 1 || n > mostHandlers)) {
+		throw new InvalidError(`${describe}: a worker of ${n} handlers, not 1 to ${mostHandlers}`)
+	}
+	return n
+}
+
+/** A worker's state, which its loop and its stop share. */
+interface Working {
+	stopping: boolean
+	/** the stream the worker runs on now, which a stop is sent on */
+	stream: Stream | undefined
+	/** wakes a loop pausing before it dials again */
+	wake: (() => void) | undefined
+}
+
+/** A worker running a queue's handlers here while the server's loop claims their jobs. */
+export class Worker implements AsyncDisposable {
+	readonly #working: Working = { stopping: false, stream: undefined, wake: undefined }
+	readonly #done: Promise<void>
+
+	/** Workers come from a queue's work and from store.schedule, running. */
+	constructor(run: (working: Working) => Promise<void>, workers: Set<Worker>) {
+		workers.add(this)
+		this.#done = run(this.#working).finally(() => workers.delete(this))
+	}
+
+	/**
+	 * Takes no job more and waits for the handlers under way, each bounded by
+	 * its timeout: the server gives back the jobs it held for them, and ends
+	 * the worker once their answers are written.
+	 */
+	stop(): Promise<void> {
+		const working = this.#working
+		if (!working.stopping) {
+			working.stopping = true
+			working.stream?.send(JobsAnswer.encode({ how: 'stop' }), false).catch(() => {})
+			working.wake?.()
+		}
+		return this.#done
+	}
+
+	[Symbol.asyncDispose](): Promise<void> {
+		return this.stop()
+	}
+}
+
+/** One worker's parts: what it runs, how many at once, and the state its stop shares. */
+interface Worked<T> {
+	source: Source<T>
+	handler: Handler<T>
+	concurrency: number | undefined
+	working: Working
+}
+
+/**
+ * Runs a worker until it stops: a stream on the link's connection, and
+ * another once a connection is lost or a server going away has ended one.
+ * What fails between is said in TinyStore's own lines, as background work's
+ * failures are.
+ */
+async function keepWorking<T>(worked: Worked<T>): Promise<void> {
+	const { source, working } = worked
+	const failures = new FailureLog(`${source.describe} worker`, sayOwn)
+	let pause = firstPause
+	while (!working.stopping) {
+		try {
+			await source.link.run('read', connection => WorkStream.serve(connection, worked, false))
+			failures.succeeded()
+			pause = firstPause
+		} catch (err) {
+			if (working.stopping) {
+				return
+			}
+			failures.failed(err)
+			pause = Math.min(pause * 2, lastPause)
+		}
+		await pausing(pause, working)
+	}
+}
+
+/** Runs a stream that ends once nothing is due, and says how many jobs its handlers finished. */
+async function runDue<T>(
+	source: Source<T>,
+	handler: Handler<T>,
+	concurrency: number | undefined,
+): Promise<number> {
+	const working: Working = { stopping: false, stream: undefined, wake: undefined }
+	let finished = 0
+	await source.link.run('read', async connection => {
+		finished += await WorkStream.serve(connection, { source, handler, concurrency, working }, true)
+	})
+	return finished
+}
+
+/** Waits ms, or until the worker stops. */
+function pausing(ms: number, working: Working): Promise<void> {
+	if (working.stopping) {
+		return Promise.resolve()
+	}
+	return new Promise(resolve => {
+		const done = () => {
+			clearTimeout(timer)
+			working.wake = undefined
+			resolve()
+		}
+		const timer = setTimeout(done, ms)
+		working.wake = done
+	})
+}
+
+/** A worker's stream on one connection: the jobs the server hands over, and the handlers they run here. */
+class WorkStream<T> {
+	readonly #worked: Worked<T>
+	readonly #connection: Connection
+	readonly #stream: Stream
+	/** the runs under way, by number, and what cancels each */
+	readonly #runs = new Map<number, AbortController>()
+	#finished = 0
+
+	constructor(worked: Worked<T>, connection: Connection, stream: Stream) {
+		this.#worked = worked
+		this.#connection = connection
+		this.#stream = stream
+	}
+
+	/**
+	 * Opens a worker's stream on a connection and runs it to its end, which
+	 * the server sends: after a stop or a GOAWAY once the jobs in hand are
+	 * answered, or once nothing is due when it ends when idle. It says how
+	 * many jobs its handlers finished.
+	 */
+	static async serve<T>(
+		connection: Connection,
+		worked: Worked<T>,
+		untilIdle: boolean,
+	): Promise<number> {
+		const handle = await handleOn(connection, worked.source.openMethod, worked.source.open)
+		const asked = JobsWork.encode({
+			handle,
+			concurrency: worked.concurrency,
+			untilIdle: untilIdle || undefined,
+		})
+		const stream = await connection.session.open(methods['jobs.work'], asked, false)
+		const { working } = worked
+		working.stream = stream
+		if (working.stopping) {
+			stream.send(JobsAnswer.encode({ how: 'stop' }), false).catch(() => {})
+		}
+		try {
+			return await new WorkStream(worked, connection, stream).#serve()
+		} finally {
+			if (working.stream === stream) {
+				working.stream = undefined
+			}
+		}
+	}
+
+	async #serve(): Promise<number> {
+		try {
+			const started = await this.#stream.next()
+			while (!started.end) {
+				const event = await this.#stream.next()
+				this.#stream.consumed(event.body.length)
+				if (event.end) {
+					break
+				}
+				this.#take(JobsHeld.decode(event.body))
+			}
+			return this.#finished
+		} catch (err) {
+			for (const cancel of this.#runs.values()) {
+				cancel.abort(err)
+			}
+			throw err
+		}
+	}
+
+	/** A job the server handed over, run at once, since it sends no more than the handlers; or a cancel of one. */
+	#take(held: Read<typeof JobsHeld.fields>): void {
+		const run = held.run ?? 0
+		if (held.cancelled === true) {
+			this.#runs.get(run)?.abort(new CancelledError('a cancel took the job while it ran'))
+			this.#runs.delete(run)
+			return
+		}
+		const cancel = new AbortController()
+		this.#runs.set(run, cancel)
+		void this.#run(held, cancel).finally(() => this.#runs.delete(run))
+	}
+
+	/** Runs one job's handler and sends the answer it ended with; a job a cancel took is the server's, and gets none. */
+	async #run(held: Read<typeof JobsHeld.fields>, cancel: AbortController): Promise<void> {
+		const { source, handler } = this.#worked
+		const run = held.run ?? 0
+		const signal = AbortSignal.any([cancel.signal, AbortSignal.timeout(source.timeout)])
+		const reporter = new Reporter(progress =>
+			this.#stream.send(JobsAnswer.encode({ run, how: 'progress', progress }), false),
+		)
+		let answer: AnswerFields
+		try {
+			const value = await source.values.decode(held.value ?? 'null')
+			const made = new Map<Answer, AnswerFields>()
+			const steps = new Steps(
+				(method, body) => this.#connection.session.call(method, body),
+				run,
+				cancel.signal,
+			)
+			try {
+				answer = answerOf(
+					await handler(value, new Run({ held, signal, steps, reporter, made })),
+					made,
+				)
+			} catch (err) {
+				answer = { how: 'retry', error: messageOf(err) }
+			}
+		} catch (err) {
+			answer = { how: 'fail', error: `its value no longer reads: ${messageOf(err)}` }
+		}
+		await reporter.stop()
+		if (cancel.signal.aborted) {
+			return
+		}
+		this.#finished++
+		await this.#stream.send(JobsAnswer.encode({ run, ...answer }), false).catch(() => {})
 	}
 }

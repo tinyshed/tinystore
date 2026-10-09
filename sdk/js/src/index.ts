@@ -20,16 +20,23 @@ export { type ConsoleFormat, type ConsoleTime, secrets } from './console.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'
 export type {
-	ClaimedJob,
-	EnqueueOptions,
+	AddOptions,
+	Answer,
+	Backoff,
+	Concurrency,
+	Handler,
 	Job,
-	JobEntry,
+	JobOptions,
+	JobPage,
 	JobState,
-	Jobs,
+	ListOptions,
 	Queue,
 	QueueOptions,
-	QueueTx,
-	Repeat,
+	Run,
+	Schedule,
+	ScheduleOptions,
+	ScheduleWhen,
+	Worker,
 	WorkOptions,
 } from './jobs.ts'
 export type {

@@ -47,11 +47,11 @@ protocol-check:
 build:
     cargo build --release --locked -p tinystore-ffi -p tinystore-cli
 
-# run the Bun SDK's kv over the core in its own process, a private child and a sidecar, and its codecs against the vectors
+# run the Bun SDK's kv and jobs over the core in its own process, a private child, a sidecar and a remote server, its test clock, and its codecs against the vectors
 [working-directory: 'sdk/js']
 sdk: build
     bun install --frozen-lockfile
-    bun test test/pipe.test.ts test/kv.test.ts test/protocol.test.ts
+    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/clock.test.ts test/protocol.test.ts
 
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']

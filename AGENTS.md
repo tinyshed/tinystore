@@ -35,9 +35,9 @@ should be a fact a ten-second grep would answer.
 | wire           | frames, the MessagePack profile, a session apart from its transport; protocol 2, its messages written from `protocol/*.wire`, with kv's every method and jobs' but watch, a client's worker its jobs and answers on one stream           | [plan/protocol.md](plan/protocol.md)                |
 | pipe and FFI   | a connection in memory to the store in this process, and five C functions over it                                                                                                                                                        | [plan/ffi.md](plan/ffi.md)                          |
 | server         | `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, TCP and TLS with tokens, `server.stop`, a private server's clock                                                           | [docs/wire.md](docs/wire.md#finding-a-local-server) |
-| Bun SDK        | kv as its book has it, over protocol 2: embedded through bun:ffi, through a private child, a sidecar or a remote server; its other engines still speak protocol 1                                                                        | [plan/api/kv.md](plan/api/kv.md)                    |
+| Bun SDK        | kv and jobs as their books have them, but jobs' watch, over protocol 2: embedded through bun:ffi, through a private child, a sidecar or a remote server; its other engines still speak protocol 1                                        | [plan/api/kv.md](plan/api/kv.md)                    |
 
-Not built: jobs in the SDKs, jobs' watch and transactions,
+Not built: jobs' watch and transactions,
 sql, blobs, records, metrics, backup, config and the logger in the core, `tinystore`'s commands but `serve`, the Node, Python and Go
 bindings, protocol 2's codecs for Python and Go. [plan/phases.md](plan/phases.md) has
 their order and what closes each phase. The guides in [docs/](docs/README.md)

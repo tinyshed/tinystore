@@ -1,322 +1,291 @@
-// jobs through a real tinystore serve, the one test/binary.ts built.
+// jobs as plan/api/jobs.md has it over protocol 2, through each way a store
+// is reached: ids, answers, steps, progress, cancels, schedules, pages, a
+// schema, concurrency and dedupe, the handlers running here while the
+// server's loop claims their jobs.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import {
-	CancelledError,
-	ConflictError,
-	InvalidError,
-	type Job,
-	open,
-	type Store,
-} from '../src/index.ts'
-
-let dir: string
-let store: Store
-
-beforeAll(async () => {
-	dir = mkdtempSync(join(tmpdir(), 'tinystore-jobs-'))
-	store = await open(dir, { private: true })
-})
-
-afterAll(async () => {
-	await store.close()
-	rmSync(dir, { recursive: true, force: true })
-})
-
-async function caught(promise: Promise<unknown>): Promise<unknown> {
-	return promise.then(
-		() => undefined,
-		(err: unknown) => err,
-	)
-}
-
-async function until(holds: () => boolean, what: string): Promise<void> {
-	const deadline = Date.now() + 5000
-	while (!holds()) {
-		if (Date.now() > deadline) {
-			throw new Error(`waited five seconds for ${what}`)
-		}
-		await Bun.sleep(10)
-	}
-}
+import { CancelledError, InvalidError, type StandardSchemaV1, type Store } from '../src/index.ts'
+import { caught, removed, until, ways } from './ways.ts'
 
 interface Reminder {
-	user: number
+	userId: number
 	text: string
 }
 
-describe('a queue', () => {
-	test('a job keyed waits, changes, and is cancelled while it waits', async () => {
-		const later = store.jobs.queue<Reminder>('send-later')
-		await later.enqueue({ user: 42, text: 'call mom' }, { key: 'chat:42:a', after: '1h' })
-		const waiting = await later.get('chat:42:a')
-		expect(waiting?.value).toEqual({ user: 42, text: 'call mom' })
-		expect(waiting?.state).toBe('waiting')
-		expect(waiting?.at.getTime()).toBeGreaterThan(Date.now() + 59 * 60_000)
+/** A Standard Schema of reminders, as zod's or valibot's would check them. */
+const reminderSchema: StandardSchemaV1<unknown, Reminder> = {
+	'~standard': {
+		version: 1,
+		vendor: 'test',
+		validate: value => {
+			const reminder = value as Partial<Reminder> | null
+			return typeof reminder?.userId === 'number' && typeof reminder.text === 'string'
+				? { value: reminder as Reminder }
+				: { issues: [{ message: 'a reminder has a userId and a text', path: ['userId'] }] }
+		},
+	},
+}
 
-		await later.update('chat:42:a', { user: 42, text: 'call dad' })
-		expect((await later.get('chat:42:a'))?.value.text).toBe('call dad')
-		expect(await later.cancel('chat:42:a')).toBe(true)
-		expect(await later.cancel('chat:42:a')).toBe(false)
-		expect(await later.get('chat:42:a')).toBeUndefined()
-		expect(await caught(later.update('chat:42:a', { user: 1, text: 'x' }))).toBeInstanceOf(
-			ConflictError,
-		)
-	})
+for (const way of ways) {
+	describe.skipIf(!way.ready)(`jobs through ${way.name}`, () => {
+		let dir: string
+		let store: Store
 
-	test('an enqueue of many is all or none, the refused job named', async () => {
-		const q = store.jobs.queue<number>('atomic')
-		const err = await caught(
-			q.enqueueAll([
-				{ value: 1, key: 'a' },
-				{ value: 2, repeat: { every: '1m' } },
-			]),
-		)
-		expect(err).toBeInstanceOf(InvalidError)
-		expect((err as InvalidError).what).toMatchObject({ call: '1' })
-		expect(await q.get('a')).toBeUndefined()
-	})
-
-	test('a group bounds its running jobs, a rate its starts, move sets a time either way, and spread a phase', async () => {
-		const refreshes = store.jobs.queue<number>('refreshes', { maxRunningInGroup: 1, rate: '2/m' })
-		await refreshes.enqueueAll([
-			{ value: 1, key: 'refresh:1', group: 'db:42' },
-			{ value: 2, key: 'refresh:2', group: 'db:42' },
-			{ value: 3, key: 'refresh:3', group: 'db:7' },
-			{ value: 4, key: 'refresh:4' },
-		])
-		const first = await refreshes.claim()
-		const second = await refreshes.claim()
-		expect([first?.key, second?.key]).toEqual(['refresh:1', 'refresh:3'])
-		expect(await refreshes.claim()).toBeUndefined() // the rate's two starts a minute are taken
-
-		const checks = store.jobs.queue<string>('checks')
-		const later = Date.now() + 3_600_000
-		await checks.enqueue('backup', { key: 'check:7', at: new Date(later), move: true })
-		await checks.enqueue('backup', { key: 'check:7', at: new Date(later + 60_000), move: true })
-		expect((await checks.get('check:7'))?.at.getTime()).toBe(later + 60_000)
-		await checks.enqueue('probe', { key: 'probe:7', repeat: { every: '30s', spread: true } })
-		expect((await checks.get('probe:7'))?.repeat).toBe('@every 30s +6178ms')
-		expect(await caught(checks.enqueue('backup', { move: true }))).toBeInstanceOf(InvalidError)
-		expect(() => store.jobs.queue('rated', { rate: '0/s' })).toThrow(InvalidError)
-	})
-
-	test('scan pages the jobs under a prefix', async () => {
-		const q = store.jobs.queue<number>('scanned')
-		await q.enqueueAll(
-			Array.from({ length: 12 }, (_, i) => ({
-				value: i,
-				key: `chat:7:${String(i).padStart(2, '0')}`,
-				after: '1h',
-			})),
-		)
-		await q.enqueue(99, { key: 'chat:8:x', after: '1h' })
-		const first = await q.scan({ prefix: 'chat:7:', limit: 5 })
-		expect(first.items.map(j => j.value)).toEqual([0, 1, 2, 3, 4])
-		expect(first.next).toBe('chat:7:04')
-		const all = []
-		for await (const job of q.all({ prefix: 'chat:7:', limit: 5 })) {
-			all.push(job.value)
-		}
-		expect(all).toEqual(Array.from({ length: 12 }, (_, i) => i))
-	})
-})
-
-describe('a work loop', () => {
-	test('a return acknowledges, a throw retries, and fail and snooze say otherwise', async () => {
-		const q = store.jobs.queue<string>('outcomes', { backoff: { first: 1, most: 1 } })
-		await q.enqueueAll([
-			{ value: 'ok', key: 'ok' },
-			{ value: 'flaky', key: 'flaky' },
-			{ value: 'broken', key: 'broken' },
-			{ value: 'later', key: 'later' },
-		])
-		const attempts: Record<string, number[]> = {}
-		await q.work(
-			async job => {
-				attempts[job.key] = [...(attempts[job.key] ?? []), job.attempt]
-				if (job.value === 'flaky' && job.attempt === 1) {
-					throw new Error('try again')
-				}
-				if (job.value === 'broken') {
-					job.fail('bad input')
-				}
-				if (job.value === 'later') {
-					job.snooze({ after: '1h' })
-				}
-			},
-			{ workers: 2, untilIdle: true },
-		)
-		expect(attempts.flaky).toEqual([1, 2])
-		expect(await q.get('ok')).toBeUndefined()
-		expect(await q.get('flaky')).toBeUndefined()
-		const broken = await q.get('broken')
-		expect([broken?.state, broken?.error]).toEqual(['failed', 'bad input'])
-		const later = await q.get('later')
-		expect([later?.state, later?.attempt]).toEqual(['waiting', 0])
-	})
-
-	test('a loop stopped by its signal finishes the jobs in hand and returns', async () => {
-		const q = store.jobs.queue<number>('stopping')
-		const controller = new AbortController()
-		const done: number[] = []
-		const loop = q.work(
-			async job => {
-				done.push(job.value)
-				if (done.length === 2) {
-					controller.abort()
-				}
-			},
-			{ signal: controller.signal },
-		)
-		await q.enqueueAll([{ value: 1 }, { value: 2 }])
-		await loop
-		expect(done).toEqual([1, 2])
-		expect(await q.get('1')).toBeUndefined()
-	})
-
-	test('a claimed job is settled by its caller', async () => {
-		const q = store.jobs.queue<string>('claimed')
-		expect(await q.claim()).toBeUndefined()
-		await q.enqueue('x', { key: 'k' })
-		const job = await q.claim({ lease: '1m' })
-		expect([job?.key, job?.value, job?.attempt]).toEqual(['k', 'x', 1])
-		await job?.progress({ done: 1 })
-		const running = await q.get('k')
-		expect([running?.state, running?.progress]).toEqual(['running', { done: 1 }])
-		await job?.ack()
-		expect(await q.get('k')).toBeUndefined()
-	})
-
-	test('a watch follows a job up its queue, through its progress, to a cancel its handler sees', async () => {
-		const q = store.jobs.queue<string>('videos', { maxRunning: 1 })
-		await q.enqueueAll([
-			{ value: 'a', key: 'a' },
-			{ value: 'b', key: 'b' },
-		])
-		const seen: string[] = []
-		const watching = (async () => {
-			for await (const s of q.watch('b')) {
-				seen.push(
-					`${s.state} ${s.ahead}${s.progress === undefined ? '' : ` ${JSON.stringify(s.progress)}`}`,
-				)
-			}
-		})()
-		await until(() => seen.includes('waiting 1'), 'b waiting behind a')
-
-		const stop = new AbortController()
-		let release = () => {}
-		const released = new Promise<void>(resolve => {
-			release = resolve
+		beforeAll(async () => {
+			dir = mkdtempSync(join(tmpdir(), 'tinystore-jobs-'))
+			store = await way.open(dir)
 		})
-		const reasons: unknown[] = []
-		const loop = q.work(
-			async job => {
-				if (job.key === 'a') {
-					await released
-					return
-				}
-				job.progress({ done: 1 })
-				await new Promise(resolve => job.signal.addEventListener('abort', resolve, { once: true }))
-				reasons.push(job.signal.reason)
-				throw job.signal.reason
-			},
-			{ workers: 2, signal: stop.signal },
-		)
-		await until(() => seen.includes('waiting 0'), 'a running, b next')
-		expect((await q.get('b'))?.state).toBe('waiting') // maxRunning holds it though a worker is free
-		release()
-		await until(() => seen.includes('running 0 {"done":1}'), "b's progress")
-		expect(await q.cancel('b')).toBe(true)
-		await watching
-		expect(seen.at(-1)).toBe('cancelled 0')
-		await until(() => reasons.length === 1, 'the handler to see its signal')
-		expect(reasons[0]).toBeInstanceOf(CancelledError)
-		stop.abort()
-		await loop
-		expect(await q.get('b')).toBeUndefined()
-		const none: unknown[] = []
-		for await (const s of q.watch('b')) {
-			none.push(s)
-		}
-		expect(none).toEqual([])
-	})
 
-	test('a job keeps its last run: when it began and how long it took', async () => {
-		const q = store.jobs.queue<string>('last-run')
-		await q.enqueue('x', { key: 'k' })
-		const fresh = await q.get('k')
-		expect([fresh?.ran, fresh?.took]).toEqual([undefined, undefined])
-		const before = Date.now()
-		const job = await q.claim()
-		await Bun.sleep(20)
-		await job?.retry('busy', { after: '1h' })
-		const entry = await q.get('k')
-		expect(entry?.ran?.getTime()).toBeGreaterThanOrEqual(before - 5)
-		expect(entry?.took).toBeGreaterThanOrEqual(20)
-		expect(entry?.error).toBe('busy')
-	})
+		afterAll(async () => {
+			await store.close()
+			await way.leave(dir)
+			await removed(dir)
+		})
 
-	test('a progress JSON cannot write, or past 4 KiB, is refused', async () => {
-		const q = store.jobs.queue<string>('reports')
-		await q.enqueue('x', { key: 'k' })
-		const job = await q.claim()
-		expect(() => job?.progress(() => {})).toThrow(InvalidError)
-		expect(() => job?.progress('x'.repeat(4096))).toThrow(InvalidError)
-		await job?.ack()
-	})
+		test('an id adds a job once, set makes it whatever it was, update changes one not started, cancel takes it', async () => {
+			const later = store.queue<{ text: string }>('later')
+			const id = 'chat:42:draft-1'
+			expect(await later.add({ text: 'hi' }, { id, delay: '1h' })).toBe(true)
+			expect(await later.add({ text: 'hi again' }, { id, delay: '1h' })).toBe(false)
+			const added = await later.get(id)
+			expect([added?.state, added?.value, added?.attempt]).toEqual(['scheduled', { text: 'hi' }, 0])
 
-	test('a retry after nothing runs now, as After(0) does in Go, not after its backoff', async () => {
-		const q = store.jobs.queue<string>('again', { backoff: { first: '1h', most: '1h' } })
-		await q.enqueue('x', { key: 'k' })
-		await (await q.claim({ lease: '1m' }))?.retry('busy', { after: 0 })
-		const again = await q.claim()
-		expect([again?.key, again?.attempt]).toEqual(['k', 2])
-	})
+			await later.set(id, { text: 'edited' }, { delay: '2h' })
+			expect((await later.get(id))?.value).toEqual({ text: 'edited' })
+			expect(await later.update(id, { text: 'edited twice' })).toBe(true)
+			const updated = await later.get(id)
+			expect([updated?.value, updated?.state]).toEqual([{ text: 'edited twice' }, 'scheduled'])
 
-	test('a step runs once in a run: the attempt after a failure gets its kept answer', async () => {
-		const q = store.jobs.queue<{ question: string }>('agent', { backoff: { first: 1, most: 1 } })
-		await q.enqueue({ question: 'what is a store?' }, { key: 'run' })
-		let searches = 0
-		let asks = 0
-		const answers: string[] = []
-		const handler = async (job: Job<{ question: string }>) => {
-			const hits = await job.step('search', async () => {
-				searches++
-				return ['a file', 'a lock']
+			expect(await later.cancel(id)).toBe(true)
+			expect(await later.get(id)).toBeUndefined()
+			expect(await later.update(id, { text: 'too late' })).toBe(false)
+			expect(await later.cancel(id)).toBe(false)
+		})
+
+		test('a worker runs each job as it falls due, the value first and the run second', async () => {
+			const reminders = store.queue<Reminder>('reminders')
+			const ran: [number, string | undefined, number][] = []
+			const worker = reminders.work(async ({ userId }, run) => {
+				ran.push([userId, run.id, run.attempt])
 			})
-			const answer = await job.step('answer', () => {
-				asks++
-				if (asks === 1) {
-					throw new Error('the model is down')
+			await reminders.add({ userId: 1, text: 'Call mom' }, { id: 'r1' })
+			await reminders.add({ userId: 2, text: 'Drink water' })
+			await until(() => ran.length === 2)
+			await worker.stop()
+			expect(ran).toEqual([
+				[1, 'r1', 1],
+				[2, undefined, 1],
+			])
+			expect(await reminders.get('r1')).toBeUndefined()
+		})
+
+		test('what a handler returns settles its job: a throw retries, retry counts its run, snooze does not, fail ends it', async () => {
+			const pushes = store.queue<string>('pushes', { backoff: { initial: '1h', max: '2h' } })
+			for (const id of ['done', 'thrown', 'retry', 'snooze', 'fail', 'unreturned']) {
+				await pushes.add(id, { id })
+			}
+			const ran = await pushes.runDue(async (how, run) => {
+				switch (how) {
+					case 'thrown':
+						throw new Error('the provider is down')
+					case 'retry':
+						return run.retry('10m')
+					case 'snooze':
+						return run.snooze('10m')
+					case 'fail':
+						return run.fail('the provider no longer knows the token')
+					case 'unreturned':
+						run.snooze('10m')
 				}
-				return hits.join(' and ')
 			})
-			answers.push(answer)
-		}
-		// a loop until idle may end before the retry is due, a millisecond on
-		await q.work(handler, { untilIdle: true })
-		await Bun.sleep(20)
-		await q.work(handler, { untilIdle: true })
-		expect([searches, asks, answers]).toEqual([1, 2, ['a file and a lock']])
+			expect(ran).toBe(6)
 
-		await q.enqueue({ question: 'claimed' }, { key: 'claimed' })
-		const first = await q.claim({ lease: '1m' })
-		expect(await first?.step('count', () => 7)).toBe(7)
-		await first?.retry('later', { after: 0 })
-		const second = await q.claim()
-		expect(await second?.step('count', () => 8)).toBe(7)
-		await second?.ack()
-	})
+			expect(await pushes.get('done')).toBeUndefined()
+			const thrown = await pushes.get('thrown')
+			expect([thrown?.state, thrown?.attempt, thrown?.error]).toEqual([
+				'scheduled',
+				1,
+				'the provider is down',
+			])
+			const retry = await pushes.get('retry')
+			expect([retry?.state, retry?.attempt]).toEqual(['scheduled', 1])
+			const snooze = await pushes.get('snooze')
+			expect([snooze?.state, snooze?.attempt]).toEqual(['scheduled', 0])
+			const fail = await pushes.get('fail')
+			expect([fail?.state, fail?.error]).toEqual([
+				'failed',
+				'the provider no longer knows the token',
+			])
+			const unreturned = await pushes.get('unreturned')
+			expect([unreturned?.state, unreturned?.attempt]).toEqual(['scheduled', 1])
+			expect(unreturned?.error).toContain('run.snooze(…)')
+		})
 
-	test('a schedule is a queue of one repeating job under its name', async () => {
-		const purge = store.jobs.schedule('purge', { daily: '03:10', zone: 'Europe/Moscow' })
-		const job = await purge.get('purge')
-		expect(job?.repeat).toContain('10 3 * * *')
-		expect(await purge.cancel('purge')).toBe(true)
+		test('a step one attempt kept is found by the next, which runs only the steps left', async () => {
+			const orders = store.queue<{ order: number }>('orders')
+			await orders.add({ order: 7 }, { id: 'order:7' })
+			let charged = 0
+			const attempts: string[] = []
+			const ran = await orders.runDue(async (_, run) => {
+				const charge = await run.step('charge', () => {
+					charged++
+					return { charge: 'ch_1' }
+				})
+				attempts.push(`${run.attempt}:${charge.charge}`)
+				if (run.attempt === 1) {
+					return run.retry(new Date(0))
+				}
+			})
+			expect(ran).toBe(2)
+			expect(attempts).toEqual(['1:ch_1', '2:ch_1'])
+			expect(charged).toBe(1)
+		})
+
+		test('what a handler reports shows while its job runs, and a report past 4 KiB is refused', async () => {
+			const videos = store.queue<{ video: number }>('videos')
+			await videos.add({ video: 3 }, { id: 'video:3' })
+			let release!: () => void
+			const released = new Promise<void>(resolve => {
+				release = resolve
+			})
+			let refused: unknown
+			const worker = videos.work(async (_, run) => {
+				try {
+					run.setProgress('x'.repeat(5000))
+				} catch (err) {
+					refused = err
+				}
+				run.setProgress({ frames: 120 })
+				await released
+			})
+			await until(async () => (await videos.get('video:3'))?.progress !== undefined)
+			const running = await videos.get('video:3')
+			expect([running?.state, running?.progress]).toEqual(['running', { frames: 120 }])
+			expect(refused).toBeInstanceOf(InvalidError)
+			release()
+			await worker.stop()
+			expect(await videos.get('video:3')).toBeUndefined()
+		})
+
+		test('a cancel tells a running handler to stop, and what it returns then settles nothing', async () => {
+			const exports = store.queue<{ report: number }>('exports')
+			await exports.add({ report: 9 }, { id: 'export:9' })
+			let reason: unknown
+			const worker = exports.work(async (_, run) => {
+				await new Promise<void>(resolve => run.signal.addEventListener('abort', () => resolve()))
+				reason = run.signal.reason
+				return run.fail('it should settle nothing')
+			})
+			await until(async () => (await exports.get('export:9'))?.state === 'running')
+			expect(await exports.cancel('export:9')).toBe(true)
+			await until(() => reason !== undefined)
+			expect(reason).toBeInstanceOf(CancelledError)
+			await worker.stop()
+			expect(await exports.get('export:9')).toBeUndefined()
+		})
+
+		test('a schedule keeps its one job, and a cron needs a time zone', async () => {
+			const nightly = store.schedule(
+				'nightly',
+				{ cron: '10 3 * * *', timeZone: 'Europe/Berlin' },
+				async run => run.at,
+			)
+			await until(async () => (await nightly.get()) !== undefined)
+			const job = await nightly.get()
+			expect([job?.state, job?.repeat]).toEqual(['scheduled', '10 3 * * * Europe/Berlin'])
+			await nightly.stop()
+			expect(await nightly.cancel()).toBe(true)
+
+			const user: { timeZone?: string } = {}
+			const zoneless = () =>
+				store.schedule(
+					'digest',
+					{ cron: '0 20 * * *', timeZone: user.timeZone as string },
+					() => {},
+				)
+			expect(zoneless).toThrow(InvalidError)
+			const later = store.queue('digests')
+			const err = await caught(
+				later.set('user:42', {}, { cron: '0 20 * * *', timeZone: user.timeZone }),
+			)
+			expect(err).toBeInstanceOf(InvalidError)
+			expect((err as Error).message).toContain('time zone')
+		})
+
+		test('a page reads the ids under a prefix, and the failed jobs the last failed first', async () => {
+			const chats = store.queue<number>('chats')
+			for (const n of [1, 2, 3]) {
+				await chats.add(n, { id: `chat:4:${n}`, delay: '1h' })
+			}
+			await chats.add(42, { id: 'chat:42:1', delay: '1h' })
+			const first = await chats.list({ prefix: 'chat:4:', limit: 2 })
+			expect(first.jobs.map(job => job.id)).toEqual(['chat:4:1', 'chat:4:2'])
+			const second = await chats.list({ prefix: 'chat:4:', limit: 2, after: first.next })
+			expect(second.jobs.map(job => job.id)).toEqual(['chat:4:3'])
+			expect(second.next).toBeUndefined()
+			const all: (string | undefined)[] = []
+			for await (const job of chats.all({ prefix: 'chat:' })) {
+				all.push(job.id)
+			}
+			// byte order: '2' is 0x32, before ':' at 0x3a
+			expect(all).toEqual(['chat:42:1', 'chat:4:1', 'chat:4:2', 'chat:4:3'])
+		})
+
+		test('a schema checks each value before a handler gets it, and one that no longer meets it fails its job, not its queue', async () => {
+			const loose = store.queue('checked')
+			await loose.add({ userId: 'not a number' }, { id: 'bad' })
+			const checked = store.queue('checked', { schema: reminderSchema })
+			await checked.add({ userId: 5, text: 'Call mom' }, { id: 'good' })
+			const got: string[] = []
+			expect(await checked.runDue(async reminder => got.push(reminder.text))).toBe(2)
+			expect(got).toEqual(['Call mom'])
+			const bad = await loose.get('bad')
+			expect(bad?.state).toBe('failed')
+			expect(bad?.error).toContain("no longer meets the queue's schema")
+		})
+
+		test('a worker runs as many handlers at once as its concurrency says', async () => {
+			const refreshes = store.queue<number>('refreshes')
+			for (const n of [1, 2, 3, 4]) {
+				await refreshes.add(n)
+			}
+			let running = 0
+			let most = 0
+			let finished = 0
+			const worker = refreshes.work(
+				async () => {
+					running++
+					most = Math.max(most, running)
+					await Bun.sleep(50)
+					running--
+					finished++
+				},
+				{ concurrency: 2 },
+			)
+			await until(() => finished === 4)
+			await worker.stop()
+			expect([finished, most]).toEqual([4, 2])
+		})
+
+		test('dedupe keeps a done id taken, so that adding it again adds nothing, and the job its last run', async () => {
+			const once = store.queue<string>('welcome', { dedupe: '1h' })
+			expect(await once.add('ada', { id: 'welcome:ada' })).toBe(true)
+			expect(await once.runDue(() => {})).toBe(1)
+			expect(await once.add('ada', { id: 'welcome:ada' })).toBe(false)
+			const done = await once.get('welcome:ada')
+			expect([done?.state, done?.value]).toEqual(['done', 'ada'])
+			const { startedAt, endedAt } = done?.lastRun ?? {}
+			expect(endedAt!.getTime()).toBeGreaterThanOrEqual(startedAt!.getTime())
+		})
+
+		test('a value JSON cannot write is refused before it leaves', async () => {
+			const odd = store.queue<unknown>('odd')
+			expect(await caught(odd.add(undefined))).toBeInstanceOf(InvalidError)
+			expect(await caught(odd.add({ big: 1n }))).toBeInstanceOf(InvalidError)
+		})
 	})
-})
+}

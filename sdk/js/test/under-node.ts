@@ -75,8 +75,8 @@ test('a store opens through its sidecar under Node, and again through the one ru
 test('a private child serves its parent under Node, and frees its directory when closed', async () => {
 	const dir = join(scratch, 'private')
 	const store = await open(dir, { private: true })
-	const videos = store.jobs.queue<{ video: number }>('videos')
-	await videos.enqueue({ video: 7 }, { key: 'v7' })
+	const videos = store.queue<{ video: number }>('videos')
+	await videos.add({ video: 7 }, { id: 'v7' })
 	const job = await videos.get('v7')
 	assert.equal(job?.state, 'waiting')
 	await store.close()

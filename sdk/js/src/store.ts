@@ -6,7 +6,17 @@ import { Clock } from './clock.ts'
 import { Config, type ConfigLayer, type ConfigValue } from './config.ts'
 import { embedded, Link, privateChild, remote, sidecar } from './connection.ts'
 import { ClosedError, InvalidError } from './errors.ts'
-import { Jobs } from './jobs.ts'
+import {
+	openQueue,
+	openSchedule,
+	type Queue,
+	type QueueOptions,
+	type Run,
+	type Schedule,
+	type ScheduleOptions,
+	type ScheduleWhen,
+	type Worker,
+} from './jobs.ts'
 import {
 	Bucket,
 	type BucketOptions,
@@ -31,6 +41,7 @@ import { Records } from './records.ts'
 import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
+import type { StandardSchemaV1 } from './schema.ts'
 import { type Database, openDatabase, type SqlOptions } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { runTx, type Tx } from './tx.ts'
@@ -93,7 +104,6 @@ export interface ConnectOptions {
  * a Go program closes its tinystore.Store: `await using store = await open(dir)`.
  */
 export class Store implements AsyncDisposable {
-	readonly jobs: Jobs
 	readonly blobs: Blobs
 	readonly records: Records
 	readonly metrics: Metrics
@@ -101,11 +111,11 @@ export class Store implements AsyncDisposable {
 	readonly clock: Clock
 	readonly #link: Link
 	readonly #configs = new Set<Config<object>>()
+	readonly #workers = new Set<Worker>()
 
 	constructor(link: Link) {
 		this.#link = link
 		this.clock = new Clock(link)
-		this.jobs = new Jobs(link)
 		this.blobs = new Blobs(link)
 		this.records = new Records(link)
 		this.metrics = new Metrics(link)
@@ -144,6 +154,41 @@ export class Store implements AsyncDisposable {
 	/** A function run once a key, its JSON answer kept a day unless `keep` says: `store.once<Receipt>('charges')`. */
 	once<T = unknown>(name: string, options?: OnceOptions): Once<T> {
 		return new Once<T>(this.#link, name, onceOpen(name, options), [])
+	}
+
+	/**
+	 * A queue of jobs of one type, JSON, run in the order of their time; a
+	 * Standard Schema, zod's or valibot's, gives it its type and checks each
+	 * value before a handler gets it:
+	 *
+	 *     const emails = store.queue<Email>('emails', { attempts: 20, backoff: { initial: '5s', max: '30m' } })
+	 *     const refreshes = store.queue('refreshes', { schema: Refresh, concurrency: { total: 8, group: 2 } })
+	 */
+	queue<S extends StandardSchemaV1>(
+		name: string,
+		options: QueueOptions & { schema: S },
+	): Queue<StandardSchemaV1.InferOutput<S>>
+	queue<T = unknown>(name: string, options?: QueueOptions): Queue<T>
+	queue(name: string, options: QueueOptions & { schema?: StandardSchemaV1 } = {}): Queue<unknown> {
+		return openQueue(this.#link, this.#workers, name, options)
+	}
+
+	/**
+	 * A repeat the code owns: one repeating job under name, and handler run at
+	 * each of its times, started at once as a queue's work is. The code's
+	 * repeat replaces the one kept each time the program opens it.
+	 *
+	 *     store.schedule('cleanup', { cron: '10 3 * * *', timeZone: 'Europe/Berlin' }, async run => {
+	 *       await purgeDeletedBefore(daysBefore(run.at, 30))
+	 *     })
+	 */
+	schedule(
+		name: string,
+		when: ScheduleWhen,
+		handler: (run: Run) => unknown,
+		options?: ScheduleOptions,
+	): Schedule {
+		return openSchedule(this.#link, this.#workers, name, when, handler, options)
 	}
 
 	/**
@@ -257,12 +302,14 @@ export class Store implements AsyncDisposable {
 	}
 
 	/**
-	 * Ingests the instruments' last values and hands over the loggers' lines,
+	 * Stops every worker, each once its handlers under way have answered,
+	 * ingests the instruments' last values and hands over the loggers' lines,
 	 * then closes the connection. A private child is waited for until it has
 	 * exited, so that the directory is free once this returns; the directory's
 	 * sidecar goes once it has been idle.
 	 */
 	async close(): Promise<void> {
+		await Promise.all([...this.#workers].map(worker => worker.stop()))
 		await this.metrics.stop()
 		await this.records.stop()
 		for (const config of this.#configs) {
