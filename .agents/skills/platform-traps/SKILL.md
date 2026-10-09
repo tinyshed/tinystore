@@ -87,6 +87,14 @@ Each line cost a debugging session once. The fix named is the one in the code.
 - **A timing test compares with the clock of the thing it tests**: take the
   start before the object whose own clock began when it was made.
 
+## Rust and its libraries
+
+- **Rust's stdout holds what it is given until a newline**: `std::io::Stdout`
+  is a `LineWriter`, and tokio's `stdout()` writes through it, so frames,
+  which have no newline, stay there and a private child's parent waits for
+  its `WELCOME` for ever. Flush after every write (`write_frames` in
+  `crates/cli/src/connection.rs`).
+
 ## Tools
 
 - **The file-writing tool and quoted heredocs may turn `\uXXXX`, `\\` and
@@ -100,10 +108,13 @@ Each line cost a debugging session once. The fix named is the one in the code.
   file fails it at once with `EBUSY` (Bun 1.4.2). Try again in a loop of your
   own, as the sidecar test in `sdk/js/test/kv.test.ts` does.
 - **A long script inline in a shell command may be cut, or its quoting
-  broken**, a heredoc inside the tool's own quoting above all: write the
-  script to a file in the scratchpad with the file tool and run the file. A
-  script that edits files asserts each old text occurs exactly once before it
-  replaces it, so a miss fails instead of writing nothing.
+  broken**, a heredoc inside the tool's own quoting above all: bash says
+  `unexpected EOF while looking for matching`, or a script's `\n` arrives as
+  a real newline and its replacement finds nothing. Write the script to a
+  file in the scratchpad with the file tool and run the file. A script that
+  edits files asserts each old text occurs exactly once before it replaces
+  it, so a miss fails instead of writing nothing, and is run once: a second
+  run of a script that half applied applies its first half twice.
 - **Task runs its commands in a shell of its own, not Git Bash**: nothing
   rewrites `/paths` inside the Taskfile, and `{{.ROOT_DIR}}` is a Windows path
   with forward slashes, `D:/dev/...`, which `docker -v` takes as it is.
