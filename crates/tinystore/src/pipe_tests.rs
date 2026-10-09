@@ -1,9 +1,12 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::UNIX_EPOCH;
+
 use super::*;
 use crate::wire::codec::{Message, Row};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     Empty, Failure as Failed, GoAway, Handle, Hello, KvAnswer, KvBucketOpen, KvCall, KvCheck, KvEntry, KvOnceOpen,
-    KvOp, KvTx, KvTxResults, KvWritten, METHODS, Welcome, method,
+    KvOp, KvTx, KvTxResults, KvWritten, METHODS, ServerClock, Welcome, method,
 };
 
 /// A client's side of a pipe: frames out, frames back, as an SDK speaks.
@@ -17,7 +20,10 @@ struct Client {
 
 impl Client {
     fn connect(dir: &Path) -> Client {
-        let pipe = Pipe::open(dir, None).unwrap();
+        Client::over(Pipe::open(dir, None).unwrap())
+    }
+
+    fn over(pipe: Pipe) -> Client {
         Client { pipe, reader: frame::Reader::default(), early: Vec::new(), next_stream: 0 }
     }
 
@@ -30,7 +36,10 @@ impl Client {
 
     /// Says HELLO in `protocol`, and returns the WELCOME or the GOAWAY.
     fn hello(&mut self, protocol: u64) -> std::result::Result<Welcome, GoAway> {
-        let hello = Hello { protocol, client: "test/0".to_owned(), ..Hello::default() };
+        self.greet(Hello { protocol, client: "test/0".to_owned(), ..Hello::default() })
+    }
+
+    fn greet(&mut self, hello: Hello) -> std::result::Result<Welcome, GoAway> {
         self.write(Frame::new(Kind::Hello, 0, hello.encode()));
         let answer = self.read();
         match answer.kind {
@@ -276,6 +285,85 @@ fn a_transaction_applies_its_writes_or_names_the_read_that_changed() {
     assert_eq!(failed.what.unwrap().get("check").map(String::as_str), Some("1"), "the second read changed");
     let apples: KvEntry = client.call(method::KV_GET, &key("apples")).unwrap();
     assert_eq!(apples.value, Some(Row::Int(4)), "nothing of the failed transaction was written");
+}
+
+/// A server's connection to a store it holds: its stops counted, its clock
+/// a test clock at 1,790,000,000,000 ms, its proof the challenge reversed.
+fn served(store: &Store, stops: &Arc<AtomicUsize>) -> Pipe {
+    let stops = Arc::clone(stops);
+    let connect = Connect {
+        stop: Some(Arc::new(move || {
+            stops.fetch_add(1, Ordering::SeqCst);
+        })),
+        clock: Some(Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_millis(1_790_000_000_000)))),
+        prove: Some(Arc::new(|challenge: &[u8]| challenge.iter().rev().copied().collect())),
+        ..Connect::default()
+    };
+    Pipe::connect(store, connect).unwrap()
+}
+
+#[test]
+fn a_store_the_program_holds_answers_its_servers_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let stops = Arc::new(AtomicUsize::new(0));
+    let mut client = Client::over(served(&store, &stops));
+    let challenge: Vec<u8> = (0..16).collect();
+    let welcome = client.greet(Hello { protocol: 2, challenge: Some(challenge.clone()), ..Hello::default() }).unwrap();
+    assert_eq!(welcome.proof, Some(challenge.iter().rev().copied().collect()), "the proof answers the challenge");
+
+    let read: ServerClock = client.call(method::SERVER_CLOCK, &ServerClock::default()).unwrap();
+    assert_eq!(read.at, Some(1_790_000_000_000));
+    let moved: ServerClock = client.call(method::SERVER_CLOCK, &ServerClock { advance: Some(1500), at: None }).unwrap();
+    assert_eq!(moved.at, Some(1_790_000_001_500));
+    let back = ServerClock { at: Some(1_000), advance: None };
+    assert_eq!(client.call::<ServerClock>(method::SERVER_CLOCK, &back).unwrap_err().code, "invalid", "never back");
+
+    client.call::<Empty>(method::SERVER_STOP, &Empty {}).unwrap();
+    assert_eq!(stops.load(Ordering::SeqCst), 1, "the stop runs once its answer has left");
+    drop(client);
+    store.close().unwrap();
+}
+
+#[test]
+fn an_embedded_store_refuses_to_stop_and_has_no_clock_to_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    assert_eq!(client.call::<Empty>(method::SERVER_STOP, &Empty {}).unwrap_err().code, "permission");
+    assert_eq!(client.call::<ServerClock>(method::SERVER_CLOCK, &ServerClock::default()).unwrap_err().code, "invalid");
+}
+
+#[test]
+fn a_challenge_of_another_length_is_a_hello_the_server_cannot_take() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::connect(dir.path());
+    let refused = client.greet(Hello { protocol: 2, challenge: Some(vec![1; 8]), ..Hello::default() }).unwrap_err();
+    assert_eq!(refused.code, "protocol");
+}
+
+#[test]
+fn a_closing_server_says_goaway_and_answers_a_later_request_unavailable_unrun() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let mut client = Client::over(served(&store, &Arc::new(AtomicUsize::new(0))));
+    client.hello(2).unwrap();
+    let handle = client.bucket("sessions");
+    assert_eq!(client.pipe.streams(), 0);
+
+    client.pipe.go_away();
+    assert_eq!(client.read().kind, Kind::GoAway);
+    let set = KvCall { handle, key: "k".to_owned(), value: Some(Row::Int(1)), ..KvCall::default() };
+    assert_eq!(client.call::<KvWritten>(method::KV_SET, &set).unwrap_err().code, "unavailable");
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+    drop(client);
+
+    let mut again = Client::over(served(&store, &Arc::new(AtomicUsize::new(0))));
+    again.hello(2).unwrap();
+    let handle = again.bucket("sessions");
+    let get = KvCall { handle, key: "k".to_owned(), ..KvCall::default() };
+    assert!(!again.call::<KvEntry>(method::KV_GET, &get).unwrap().found, "the refused set never ran");
+    drop(again);
+    store.close().unwrap();
 }
 
 #[test]

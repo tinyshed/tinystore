@@ -30,7 +30,8 @@ them; the workspace builds and tests on three operating systems.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.
 - [x] kv's pages within the agreed body, transactions as a checked batch, `once` handed over to the client, and a `CANCEL` that lets a handed run go.
-- [ ] The server: sockets, named pipes, stdio, TCP and TLS, SERVE, as `tinystore serve`.
+- [x] The server, `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, `server.stop`, a private server's clock; the Bun SDK's kv suite passes through a private child and a sidecar.
+- [ ] The server's TCP with TLS and tokens; `tinystore stop`, `status` and `logs`; an owner-only DACL on the named pipe and on `server/` on Windows.
 - [x] The pipe: the C ABI and bun:ffi; the Bun SDK's kv is the book's over protocol 2, and its suite passes `embedded`.
 - [ ] napi-rs, PyO3 and cgo over the same five functions; the Python and Go SDKs.
 

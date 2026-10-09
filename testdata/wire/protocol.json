@@ -830,6 +830,25 @@
       "hex": "80",
       "message": "kv.TxResults",
       "name": "kv.TxResults with no field"
+    },
+    {
+      "fields": {
+        "advance": {
+          "uint": "1500"
+        },
+        "at": {
+          "int": "1790000000000"
+        }
+      },
+      "hex": "8201cf000001a0c4506c0002cd05dc",
+      "message": "server.Clock",
+      "name": "server.Clock with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "server.Clock",
+      "name": "server.Clock with no field"
     }
   ],
   "methods": {
@@ -858,7 +877,9 @@
     "kv.reset": 292,
     "kv.set": 260,
     "kv.take": 262,
-    "kv.tx": 320
+    "kv.tx": 320,
+    "server.clock": 2,
+    "server.stop": 1
   },
   "protocol": 2
 }

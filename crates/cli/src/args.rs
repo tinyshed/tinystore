@@ -1,0 +1,162 @@
+//! `tinystore serve`'s arguments, as the SDKs start it:
+//!
+//! ```text
+//! tinystore serve --dir <dir> --local --log <dir>/server/serve.log [--idle 30000ms]   a sidecar
+//! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]            a private child
+//! tinystore serve <dir>                                                            a person's server
+//! ```
+
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// How long a sidecar stays once its last client has gone, unless `--idle` says.
+const SIDECAR_IDLE: Duration = Duration::from_secs(30);
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Serve {
+    pub(crate) dir: PathBuf,
+    pub(crate) transport: Transport,
+    pub(crate) log: Option<PathBuf>,
+    /// How long the server stays with no client; for ever when `None`.
+    pub(crate) idle: Option<Duration>,
+    /// Where a private server's test clock starts; the system's clock when `None`.
+    pub(crate) clock: Option<SystemTime>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Transport {
+    /// One client, the parent, on stdin and stdout.
+    Stdio,
+    /// A local socket or named pipe that `SERVE` names; a sidecar is one its
+    /// clients started, which a client of a newer release may replace.
+    Local { sidecar: bool },
+}
+
+pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
+    let mut dir = None;
+    let (mut stdio, mut local) = (false, false);
+    let (mut log, mut idle, mut clock) = (None, None, None);
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
+        match arg.as_str() {
+            "--dir" => dir = Some(PathBuf::from(value("--dir")?)),
+            "--stdio" => stdio = true,
+            "--local" => local = true,
+            "--log" => log = Some(PathBuf::from(value("--log")?)),
+            "--idle" => idle = Some(span(&value("--idle")?)?),
+            "--clock" => clock = Some(time(&value("--clock")?)?),
+            flag if flag.starts_with("--") => return Err(format!("no flag {flag}")),
+            _ if dir.is_none() => dir = Some(PathBuf::from(arg)),
+            _ => return Err(format!("one directory, not {arg} too")),
+        }
+    }
+    let dir = dir.ok_or("a store's directory: tinystore serve <dir>")?;
+    let transport = match (stdio, local) {
+        (true, true) => return Err("--stdio or --local, not both".to_owned()),
+        (true, false) => Transport::Stdio,
+        (false, sidecar) => Transport::Local { sidecar },
+    };
+    if clock.is_some() && transport != Transport::Stdio {
+        return Err("--clock is a private server's: --stdio".to_owned());
+    }
+    let idle = match (idle, &transport) {
+        (Some(Duration::ZERO), _) => None,
+        (Some(idle), _) => Some(idle),
+        (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
+        (None, _) => None,
+    };
+    Ok(Serve { dir, transport, log, idle, clock })
+}
+
+/// A span as `--idle` takes it: a number and its unit, `0` for ever.
+///
+/// ```text
+/// 30000ms → 30 s     30s → 30 s     5m → 300 s     0 → for ever
+/// ```
+fn span(text: &str) -> Result<Duration, String> {
+    let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let (number, unit) = text.split_at(digits);
+    let number: u64 = number.parse().map_err(|_| format!("the span {text}: a number and a unit, as 30s"))?;
+    let millis = match unit {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "" if number == 0 => 0,
+        _ => return Err(format!("the span {text}: a unit of ms, s, m or h")),
+    };
+    Ok(Duration::from_millis(number.saturating_mul(millis)))
+}
+
+/// A time as JavaScript's `toISOString` writes it, in UTC.
+///
+/// ```text
+/// 2026-10-09T12:00:00.000Z → 1,791,547,200,000 ms     2026-10-09T12:00:00Z → the same
+/// ```
+fn time(text: &str) -> Result<SystemTime, String> {
+    let refused = || format!("the time {text}: as 2026-10-09T12:00:00.000Z");
+    let (date, rest) = text.split_once('T').ok_or_else(refused)?;
+    let clock = rest.strip_suffix('Z').ok_or_else(refused)?;
+    let (clock, fraction) = clock.split_once('.').unwrap_or((clock, "0"));
+    let number = |part: &str| part.parse::<i64>().map_err(|_| refused());
+    let day: Vec<i64> = date.split('-').map(number).collect::<Result<_, _>>()?;
+    let hms: Vec<i64> = clock.split(':').map(number).collect::<Result<_, _>>()?;
+    let (&[year, month, day], &[hour, minute, second]) = (&day[..], &hms[..]) else {
+        return Err(refused());
+    };
+    let millis = format!("{fraction:0<3}")[..3].parse::<i64>().map_err(|_| refused())?;
+    let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second;
+    let unix = u64::try_from(seconds * 1_000 + millis).map_err(|_| refused())?;
+    Ok(UNIX_EPOCH + Duration::from_millis(unix))
+}
+
+/// The days from 1970-01-01 to a date of the proleptic Gregorian calendar,
+/// Howard Hinnant's `days_from_civil`.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    era * 146_097 + of_cycle - 719_468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(text: &str) -> Vec<String> {
+        text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn a_sidecar_stays_thirty_seconds_unless_told() {
+        let sidecar = serve(&args("--dir d --local --log d/server/serve.log")).unwrap();
+        assert_eq!(sidecar.transport, Transport::Local { sidecar: true });
+        assert_eq!(sidecar.idle, Some(Duration::from_secs(30)));
+        assert_eq!(serve(&args("--dir d --local --idle 1500ms")).unwrap().idle, Some(Duration::from_millis(1500)));
+        assert_eq!(serve(&args("--dir d --local --idle 0ms")).unwrap().idle, None, "0 is for ever");
+        let person = serve(&args("d")).unwrap();
+        assert_eq!((person.transport, person.idle), (Transport::Local { sidecar: false }, None));
+    }
+
+    #[test]
+    fn a_clock_is_a_private_servers() {
+        let private = serve(&args("--dir d --stdio --clock 2026-10-09T12:00:00.000Z")).unwrap();
+        assert_eq!(private.clock, Some(UNIX_EPOCH + Duration::from_millis(1_791_547_200_000)));
+        assert!(serve(&args("--dir d --local --clock 2026-10-09T12:00:00.000Z")).is_err());
+        assert!(serve(&args("--dir d --stdio --local")).is_err());
+        assert!(serve(&args("--stdio")).is_err(), "no directory");
+    }
+
+    #[test]
+    fn spans_and_times_read_as_the_sdks_write_them() {
+        assert_eq!(span("30000ms").unwrap(), Duration::from_secs(30));
+        assert_eq!(span("5m").unwrap(), Duration::from_secs(300));
+        assert!(span("30").is_err(), "a unit");
+        assert_eq!(time("1970-01-01T00:00:00Z").unwrap(), UNIX_EPOCH);
+        assert_eq!(time("2000-03-01T00:00:00.5Z").unwrap(), UNIX_EPOCH + Duration::from_millis(951_868_800_500));
+        assert!(time("2026-10-09 12:00:00").is_err());
+    }
+}

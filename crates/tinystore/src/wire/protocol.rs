@@ -883,6 +883,33 @@ impl Message for KvTxResults {
     }
 }
 
+/// A private server's clock: a time to set it to, a span to move it forward by,
+/// or neither to read it. The answer is the time it reads once moved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ServerClock {
+    /// Unix milliseconds.
+    pub(crate) at: Option<i64>,
+    /// Milliseconds.
+    pub(crate) advance: Option<u64>,
+}
+
+impl Message for ServerClock {
+    const NAME: &'static str = "server.Clock";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(ServerClock {
+            at: fields.get(1, "at", codec::int)?,
+            advance: fields.get(2, "advance", codec::uint)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.given(1, self.at.as_ref().map(codec::int_value));
+        out.given(2, self.advance.as_ref().map(codec::uint_value));
+    }
+}
+
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
     #[cfg(feature = "kv")]
@@ -937,6 +964,8 @@ pub(crate) mod method {
     pub(crate) const KV_ONCE_DELETE: u16 = 0x0133;
     #[cfg(feature = "kv")]
     pub(crate) const KV_TX: u16 = 0x0140;
+    pub(crate) const SERVER_STOP: u16 = 0x0001;
+    pub(crate) const SERVER_CLOCK: u16 = 0x0002;
 }
 
 /// Every method, its name and number, for the test that the server answers each.
@@ -994,6 +1023,8 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
     ("kv.once.delete", 0x0133),
     #[cfg(feature = "kv")]
     ("kv.tx", 0x0140),
+    ("server.stop", 0x0001),
+    ("server.clock", 0x0002),
 ];
 
 /// A body of the message `name` read and written again, for the test that the
@@ -1051,6 +1082,7 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure
         "kv.Outcome" => KvOutcome::decode(body).map(|message| message.encode()),
         #[cfg(feature = "kv")]
         "kv.TxResults" => KvTxResults::decode(body).map(|message| message.encode()),
+        "server.Clock" => ServerClock::decode(body).map(|message| message.encode()),
         _ => return None,
     };
     Some(rewritten)

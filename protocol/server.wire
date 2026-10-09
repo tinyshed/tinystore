@@ -1,0 +1,15 @@
+# The server's own methods, below the engines' numbers. An embedded store
+# answers them too: it refuses to stop, since its program decides that, and
+# has no clock to move.
+
+# A private server's clock: a time to set it to, a span to move it forward by,
+# or neither to read it. The answer is the time it reads once moved.
+message server.Clock {
+  1 at: time?
+  2 advance: duration?
+}
+
+# Stops the server as its closing does: the streams running finish, every
+# connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
+method 0x0001 server.stop(Empty) -> Empty
+method 0x0002 server.clock(server.Clock) -> server.Clock

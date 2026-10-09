@@ -42,6 +42,8 @@ export const methods = {
 	'kv.once.get': 0x0132,
 	'kv.once.delete': 0x0133,
 	'kv.tx': 0x0140,
+	'server.stop': 0x0001,
+	'server.clock': 0x0002,
 } as const
 
 export type Method = keyof typeof methods
@@ -344,4 +346,13 @@ export const KvOutcome = message('kv.Outcome', {
 
 export const KvTxResults = message('kv.TxResults', {
 	outcomes: [1, list(KvOutcome)],
+})
+
+/**
+ * A private server's clock: a time to set it to, a span to move it forward by,
+ * or neither to read it. The answer is the time it reads once moved.
+ */
+export const ServerClock = message('server.Clock', {
+	at: [1, int],
+	advance: [2, uint],
 })

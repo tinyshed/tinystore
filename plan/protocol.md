@@ -136,6 +136,17 @@ imports be.
 | `kv.once.get`, `.delete`                       | handle, under, key                                                                                   | the answer; found                                                                            |
 | `kv.tx`                                        | checks: a read's version or absence; writes: set, create, take, delete, expire, clear, counters' add | each write's answer; a failed check or write names its place                                 |
 
+## The server
+
+| Method         | Request                                   | Answer                                                                   |
+|----------------|-------------------------------------------|--------------------------------------------------------------------------|
+| `server.stop`  | nothing                                   | nothing; then the server closes, refused by a store its program holds    |
+| `server.clock` | a time to set, a span to move by, neither | the time it reads once moved; a private server's, refused on system time |
+
+`protocol/server.wire` holds them; the connection's own messages, `HELLO`,
+`WELCOME`, `GOAWAY` and `Failure`, are `protocol/connection.wire`'s. Neither
+is an engine's, so neither is behind a feature.
+
 ## Open
 
 - Whether method numbers stay fixed or `WELCOME` gives each engine its byte by

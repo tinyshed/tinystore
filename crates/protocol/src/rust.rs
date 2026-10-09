@@ -256,6 +256,10 @@ fn writer(kind: &Kind) -> String {
     }
 }
 
+/// The engines, each a feature of the library; the connection's messages and
+/// the server's own are built always.
+const ENGINES: [&str; 6] = ["kv", "jobs", "sql", "blobs", "records", "metrics"];
+
 /// An engine's messages and methods are its feature's: `kv.` names kv's.
 fn feature_gate(name: &str) -> String {
     gated(name, "")
@@ -263,10 +267,7 @@ fn feature_gate(name: &str) -> String {
 
 fn gated(name: &str, indent: &str) -> String {
     match name.split_once('.') {
-        Some((engine, _)) => format!(
-            "{indent}#[cfg(feature = \"{engine}\")]
-"
-        ),
-        None => String::new(),
+        Some((engine, _)) if ENGINES.contains(&engine) => format!("{indent}#[cfg(feature = \"{engine}\")]\n"),
+        _ => String::new(),
     }
 }

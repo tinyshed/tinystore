@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::codec::Message;
 use super::frame::{self, Frame, Kind};
 use super::kv::{self, Route, Run};
-use super::protocol::{Failure, GoAway, Hello, Welcome};
+use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome, method};
 use super::workers::Workers;
+use crate::clock::from_unix_millis;
 use crate::kv::Handed;
-use crate::{Result, Store, unix_millis};
+use crate::pipe::Connect;
+use crate::{Clock, Result, Store, unix_millis};
 
 /// The protocol this server speaks, the second: a client of the first is
 /// refused, since nothing of it was released.
@@ -27,6 +29,8 @@ const STREAM_CREDIT: u64 = 2 << 20;
 const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
 /// The largest HELLO read before a body is agreed.
 const HELLO_MOST: usize = 1 << 16;
+/// The bytes of a HELLO's challenge, which a local server's proof answers.
+const CHALLENGE: usize = 16;
 
 /// What a session calls when frames become ready after the host took the last
 /// ones: once, until the host takes again. It must return quickly and not call
@@ -51,8 +55,11 @@ struct Shared {
     /// Numbers each run's asking, so that a wait that ends after its stream
     /// was cancelled, and its number named again, finds another run there.
     asked: AtomicU64,
+    /// Streams whose final frame has not left, which a closing server waits
+    /// for.
+    in_flight: AtomicUsize,
     ready: Condvar,
-    wake: Option<Wake>,
+    connect: Connect,
 }
 
 /// Where a client's run of once stands.
@@ -70,6 +77,8 @@ struct Input {
     max_body: Option<usize>,
     /// REQUEST and DATA bytes read since credit last went back.
     released: u64,
+    /// GOAWAY went out: a REQUEST after it is answered `unavailable`, unrun.
+    going_away: bool,
     ended: bool,
 }
 
@@ -81,7 +90,7 @@ struct Output {
 }
 
 impl Session {
-    pub(crate) fn new(store: Store, wake: Option<Wake>) -> Result<Session> {
+    pub(crate) fn new(store: Store, connect: Connect) -> Result<Session> {
         let workers = Workers::of(&store)?;
         let shared = Shared {
             store,
@@ -91,8 +100,9 @@ impl Session {
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
             asked: AtomicU64::new(0),
+            in_flight: AtomicUsize::new(0),
             ready: Condvar::new(),
-            wake,
+            connect,
         };
         Ok(Session { shared: Arc::new(shared) })
     }
@@ -139,6 +149,27 @@ impl Session {
         std::mem::take(&mut output.bytes)
     }
 
+    /// Tells the client the server is closing; the streams running finish.
+    pub(crate) fn go_away(&self) {
+        let mut input = self.shared.lock_input();
+        if input.ended || input.going_away {
+            return;
+        }
+        input.going_away = true;
+        let body = GoAway { code: "unavailable".to_owned(), message: "the server is closing".to_owned() }.encode();
+        self.shared.send(&[Frame::new(Kind::GoAway, 0, body)]);
+    }
+
+    pub(crate) fn streams(&self) -> usize {
+        self.shared.in_flight.load(Ordering::Acquire)
+    }
+
+    /// Whether the session reads nothing more and owes nothing more.
+    pub(crate) fn finished(&self) -> bool {
+        let output = self.shared.lock_output();
+        output.ended && output.bytes.is_empty()
+    }
+
     /// Ends the session: calls under way finish, what they answer is dropped,
     /// and the runs handed to the client are let go.
     pub(crate) fn end(&self) {
@@ -180,14 +211,19 @@ impl Shared {
             let refused = format!("protocol {}, older than {PROTOCOL}, the one this server speaks", hello.protocol);
             return self.go_away(input, "protocol", &refused);
         }
+        if let Some(length) = hello.challenge.as_ref().map(Vec::len).filter(|length| *length != CHALLENGE) {
+            let refused = format!("a challenge of {length} bytes, not {CHALLENGE}");
+            return self.go_away(input, "protocol", &refused);
+        }
         let client_most = hello.max_body.unwrap_or(MAX_BODY);
         let stream_credit = hello.stream_credit.unwrap_or(CLIENT_STREAM_CREDIT);
         let max_body = MAX_BODY.min(client_most).min(stream_credit);
         input.max_body = Some(max_body as usize);
-        self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body))]);
+        let proof = hello.challenge.zip(self.connect.prove.as_ref()).map(|(challenge, prove)| prove(&challenge));
+        self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, proof))]);
     }
 
-    fn welcome_body(&self, max_body: u64) -> Vec<u8> {
+    fn welcome_body(&self, max_body: u64, proof: Option<Vec<u8>>) -> Vec<u8> {
         let welcome = Welcome {
             protocol: PROTOCOL,
             server: env!("CARGO_PKG_VERSION").to_owned(),
@@ -199,7 +235,7 @@ impl Shared {
             stream_credit: STREAM_CREDIT,
             engines: vec!["kv".to_owned()],
             now: unix_millis(self.store.now()),
-            proof: None,
+            proof,
         };
         welcome.encode()
     }
@@ -209,8 +245,15 @@ impl Shared {
     /// anything else on a worker.
     fn request(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
         let (method, stream, body) = (frame.method, frame.stream, frame.body);
+        if input.going_away {
+            return self.answer(stream, Err(Failure::unavailable("the server is closing; ask another connection")));
+        }
+        if method >> 8 == 0x00 {
+            return self.server_call(stream, method, &body);
+        }
         match route(method) {
             Route::Inline => self.answer(stream, guarded(|| self.call(method, &body, max_body))),
             Route::Submit => {
@@ -325,12 +368,51 @@ impl Shared {
         }
     }
 
+    /// The server's own methods, answered before this returns: a stop once its
+    /// answer has left, so that the client hears it before the GOAWAY.
+    fn server_call(&self, stream: u32, called: u16, body: &[u8]) {
+        match called {
+            method::SERVER_STOP => match self.stopping(body) {
+                Ok(stop) => {
+                    self.answer(stream, Ok(Empty {}.encode()));
+                    stop();
+                }
+                Err(failure) => self.answer(stream, Err(failure)),
+            },
+            method::SERVER_CLOCK => self.answer(stream, guarded(|| self.clock(body))),
+            other => self.answer(stream, Err(Failure::unimplemented(format!("method {other:#06x}")))),
+        }
+    }
+
+    fn stopping(&self, body: &[u8]) -> std::result::Result<crate::pipe::Stop, Failure> {
+        Empty::decode(body)?;
+        let refused = || Failure::permission("this store's program decides when its server stops");
+        self.connect.stop.clone().ok_or_else(refused)
+    }
+
+    /// Reads a private server's clock, set to a time or moved forward first.
+    fn clock(&self, body: &[u8]) -> std::result::Result<Vec<u8>, Failure> {
+        let asked = ServerClock::decode(body)?;
+        let Some(clock) = &self.connect.clock else {
+            return Err(Failure::invalid("a clock call to a server that runs on the system's clock"));
+        };
+        match (asked.at, asked.advance) {
+            (Some(_), Some(_)) => return Err(Failure::invalid("a clock set and moved in one call")),
+            (Some(at), None) => clock.set(from_unix_millis(at))?,
+            (None, Some(advance)) => clock.advance(Duration::from_millis(advance)),
+            (None, None) => {}
+        }
+        Ok(ServerClock { at: Some(unix_millis(clock.now())), advance: None }.encode())
+    }
+
+    /// Ends a stream with its RESPONSE.
     fn answer(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
         let response = match answered {
             Ok(body) => Frame::new(Kind::Response, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Response, stream, failure.encode()).failing(),
         };
         self.send(&[response]);
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 
     /// Ends a stream whose RESPONSE went out already, with its last DATA.
@@ -340,6 +422,7 @@ impl Shared {
             Err(failure) => Frame::new(Kind::Data, stream, failure.encode()).failing(),
         };
         self.send(&[data]);
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 
     fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
@@ -382,7 +465,7 @@ impl Shared {
         let wake = !std::mem::replace(&mut output.woken, true);
         drop(output);
         self.ready.notify_all();
-        if let (true, Some(wake)) = (wake, &self.wake) {
+        if let (true, Some(wake)) = (wake, &self.connect.wake) {
             wake();
         }
     }

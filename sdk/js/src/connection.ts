@@ -11,7 +11,7 @@ import { currentSignal } from './cancel.ts'
 import { ClosedError, OutcomeUnknownError, TinystoreError, UnavailableError } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
 import { LostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
-import { Empty, methods } from './wire/messages.ts'
+import { Empty, methods } from './wire/protocol.ts'
 
 /** How long a server may take to answer HELLO. */
 const handshakeTime = 5000
@@ -320,7 +320,7 @@ async function reachServe(
 	}
 	const endpoint = published.endpoints?.[0]
 	const secret = Buffer.from(published.secret ?? '', 'base64url')
-	if (published.protocol !== 1 || endpoint === undefined || secret.length !== 32) {
+	if (published.protocol !== 2 || endpoint === undefined || secret.length !== 32) {
 		return undefined
 	}
 	try {

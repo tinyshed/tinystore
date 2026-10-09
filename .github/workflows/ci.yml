@@ -50,26 +50,27 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-      - name: Build the core's library
-        run: cargo build --release --locked -p tinystore-ffi
+      - name: Build the core's library and tinystore
+        run: cargo build --release --locked -p tinystore-ffi -p tinystore-cli
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
 
-      # TINYSTORE_BIN keeps the suite's preload from building the Go server
-      # these tests do not use
-      - name: Bun over the core, through bun:ffi
+      # kv through the core in Bun's process, a private child and a sidecar
+      - name: Bun over the core and tinystore serve
         shell: bash
         working-directory: sdk/js
         run: |
           case "$RUNNER_OS" in
-            Windows) library=tinystore_ffi.dll ;;
-            macOS) library=libtinystore_ffi.dylib ;;
-            *) library=libtinystore_ffi.so ;;
+            Windows) library=tinystore_ffi.dll binary=tinystore.exe ;;
+            macOS) library=libtinystore_ffi.dylib binary=tinystore ;;
+            *) library=libtinystore_ffi.so binary=tinystore ;;
           esac
           bun install --frozen-lockfile
-          TINYSTORE_BIN=unused TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library" bun test test/pipe.test.ts test/kv.test.ts test/protocol.test.ts
+          export TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library"
+          export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
+          bun test test/pipe.test.ts test/kv.test.ts test/protocol.test.ts
 
   quality:
     name: quality

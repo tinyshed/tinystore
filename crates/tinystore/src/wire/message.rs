@@ -71,6 +71,14 @@ impl Failure {
         Failure { code: "cancelled".to_owned(), message: message.into(), what: None }
     }
 
+    pub(crate) fn permission(message: impl Into<String>) -> Failure {
+        Failure { code: "permission".to_owned(), message: message.into(), what: None }
+    }
+
+    pub(crate) fn unavailable(message: impl Into<String>) -> Failure {
+        Failure { code: "unavailable".to_owned(), message: message.into(), what: None }
+    }
+
     /// The same failure with one more name of the item it is about.
     pub(crate) fn naming(mut self, name: &str, value: impl Into<String>) -> Failure {
         self.what.get_or_insert_default().insert(name.to_owned(), value.into());

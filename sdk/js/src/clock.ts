@@ -3,7 +3,7 @@
 
 import type { Link } from './connection.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
-import { Clock as ClockMessage, methods } from './wire/messages.ts'
+import { methods, ServerClock } from './wire/protocol.ts'
 
 /**
  * The clock of a store opened with `{ private: true, clock }`. Moving it
@@ -36,10 +36,10 @@ export class Clock {
 		return this.#move({ at: unixMs(to) })
 	}
 
-	async #move(fields: Parameters<typeof ClockMessage.encode>[0]): Promise<Date> {
+	async #move(fields: Parameters<typeof ServerClock.encode>[0]): Promise<Date> {
 		const body = await this.#link.run('write', connection =>
-			connection.session.call(methods['server.clock'], ClockMessage.encode(fields)),
+			connection.session.call(methods['server.clock'], ServerClock.encode(fields)),
 		)
-		return new Date(Number(ClockMessage.decode(body).at ?? 0))
+		return new Date(Number(ServerClock.decode(body).at ?? 0))
 	}
 }

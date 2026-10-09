@@ -435,7 +435,12 @@ module defines.
 - a Go test client's upload stops with its stream or connection — `TestAFinalResponseStopsAnUploadWaitingForCredit`, `TestALostConnectionStopsAnUploadWaitingForCredit` in `server/internal/client`
 - a point read cancelled while it waits lets its connection go on — `TestACancelledPointReadLetsTheConnectionGoOn`
 - a stream's number is free when its final frame arrives — `TestAStreamNumberIsFreeWhenItsFinalFrameArrives`
-- a closing server lets the streams running finish — `TestClosingTheServerLetsTheStreamsRunningFinish`, `TestARequestThatCrossesTheGoAwayIsAnsweredUnavailable`
+- a closing server says `GOAWAY`, lets the streams running finish, and answers a later request `unavailable` unrun — `a_closing_server_says_goaway_and_answers_a_later_request_unavailable_unrun` in `pipe::tests`
+- a private child answers its parent and leaves when its stdin ends — `a_private_child_answers_hello_and_leaves_when_its_stdin_ends` in `crates/cli/tests/serve.rs`
+- a local server publishes `SERVE`, proves itself, holds its directory against a second, and stops on `server.stop`, `SERVE` gone before the directory is let go — `a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_meanwhile` in `crates/cli/tests/serve.rs`
+- a stop runs once its answer has left, a private clock moves only forward, and an embedded store refuses both — `a_store_the_program_holds_answers_its_servers_calls`, `an_embedded_store_refuses_to_stop_and_has_no_clock_to_move` in `pipe::tests`
+- a challenge of another length than 16 bytes is a `HELLO` the server cannot take — `a_challenge_of_another_length_is_a_hello_the_server_cannot_take` in `pipe::tests`
+- the Bun SDK's kv answers alike through the core in its process, a private child and a sidecar — `sdk/js/test/kv.test.ts`, every test through each
 - a remote connection needs its token — `TestARemoteConnectionNeedsItsToken`
 - a pipe's name has one owner — `TestAPipesNameHasOneOwner`, on Windows
 - a kv batch is one transaction — `TestAKVBatchRollsBackWhenOneOfItsCallsFails`

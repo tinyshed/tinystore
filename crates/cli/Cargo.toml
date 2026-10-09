@@ -1,0 +1,30 @@
+[package]
+name = "tinystore-cli"
+description = "The tinystore command: a store's directory served to other processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tinystore"
+path = "src/main.rs"
+
+[dependencies]
+tinystore = { path = "../tinystore" }
+# the server's sockets and pipes; the library itself runs no async runtime
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "io-std", "macros", "signal", "sync", "time"] }
+hmac = "0.12"
+sha2 = "0.10"
+getrandom = { version = "0.3", features = ["std"] }
+serde_json = "1.0.151"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27"

@@ -4,10 +4,11 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 library := if os() == "windows" { "tinystore_ffi.dll" } else if os() == "macos" { "libtinystore_ffi.dylib" } else { "libtinystore_ffi.so" }
+binary := if os() == "windows" { "tinystore.exe" } else { "tinystore" }
 
-# the SDK's suite builds a Go server in its preload unless this names one
-export TINYSTORE_BIN := "unused"
+# the core the Bun SDK loads in its own process, and the tinystore it starts as a private child or a sidecar
 export TINYSTORE_LIBRARY := justfile_directory() / "target" / "release" / library
+export TINYSTORE_BIN := justfile_directory() / "target" / "release" / binary
 
 # the Linux the container recipes run in; named volumes keep cargo's registry
 # and the build between runs, so a second run compiles only what changed
@@ -42,13 +43,13 @@ protocol:
 protocol-check:
     cargo run --locked -p tinystore-protocol -- --check
 
-# build the core's library that bun:ffi loads
-library:
-    cargo build --release --locked -p tinystore-ffi
+# build the core's library that bun:ffi loads, and tinystore
+build:
+    cargo build --release --locked -p tinystore-ffi -p tinystore-cli
 
-# run the Bun SDK over the core in its own process, through bun:ffi, and its codecs against the vectors
+# run the Bun SDK's kv over the core in its own process, a private child and a sidecar, and its codecs against the vectors
 [working-directory: 'sdk/js']
-pipe: library
+sdk: build
     bun install --frozen-lockfile
     bun test test/pipe.test.ts test/kv.test.ts test/protocol.test.ts
 
@@ -79,7 +80,7 @@ tables:
     bun run tables
 
 # everything CI gates on
-check: fmt-check lint test protocol-check pipe sdk-check lint-actions
+check: fmt-check lint test protocol-check sdk sdk-check lint-actions
 
 # remove build output
 clean:
