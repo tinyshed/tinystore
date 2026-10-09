@@ -1354,6 +1354,351 @@
       "hex": "80",
       "message": "server.Clock",
       "name": "server.Clock with no field"
+    },
+    {
+      "fields": {
+        "name": {
+          "str": "name"
+        },
+        "sql": {
+          "str": "sql"
+        }
+      },
+      "hex": "8201a46e616d6502a373716c",
+      "message": "sql.Migration",
+      "name": "sql.Migration with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Migration",
+      "name": "sql.Migration with no field"
+    },
+    {
+      "fields": {
+        "migrations": {
+          "list": [
+            {
+              "fields": {
+                "name": {
+                  "str": "name"
+                },
+                "sql": {
+                  "str": "sql"
+                }
+              }
+            }
+          ]
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8201a46e616d6502918201a46e616d6502a373716c",
+      "message": "sql.Open",
+      "name": "sql.Open with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Open",
+      "name": "sql.Open with no field"
+    },
+    {
+      "fields": {
+        "text": {
+          "str": "text"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        }
+      },
+      "hex": "8201a4746578740291a676616c756573",
+      "message": "sql.Text",
+      "name": "sql.Text with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Text",
+      "name": "sql.Text with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "text": {
+          "str": "text"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        }
+      },
+      "hex": "83016b02a4746578740391a676616c756573",
+      "message": "sql.Statement",
+      "name": "sql.Statement with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Statement",
+      "name": "sql.Statement with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "text": {
+          "str": "text"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        },
+        "want": {
+          "str": "want"
+        }
+      },
+      "hex": "84016b02a4746578740391a676616c75657304a477616e74",
+      "message": "sql.Query",
+      "name": "sql.Query with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Query",
+      "name": "sql.Query with no field"
+    },
+    {
+      "fields": {
+        "columns": {
+          "list": [
+            {
+              "str": "columns"
+            }
+          ]
+        },
+        "rows": {
+          "list": [
+            {
+              "list": [
+                {
+                  "str": "rows"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "hex": "820191a7636f6c756d6e73029191a4726f7773",
+      "message": "sql.Rows",
+      "name": "sql.Rows with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Rows",
+      "name": "sql.Rows with no field"
+    },
+    {
+      "fields": {
+        "changes": {
+          "uint": "107"
+        },
+        "lastInsertRowid": {
+          "int": "9007199254740993"
+        }
+      },
+      "hex": "82016b02cf0020000000000001",
+      "message": "sql.Done",
+      "name": "sql.Done with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Done",
+      "name": "sql.Done with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "statements": {
+          "list": [
+            {
+              "fields": {
+                "text": {
+                  "str": "text"
+                },
+                "values": {
+                  "list": [
+                    {
+                      "str": "values"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "82016b02918201a4746578740291a676616c756573",
+      "message": "sql.Batch",
+      "name": "sql.Batch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Batch",
+      "name": "sql.Batch with no field"
+    },
+    {
+      "fields": {
+        "done": {
+          "list": [
+            {
+              "fields": {
+                "changes": {
+                  "uint": "107"
+                },
+                "lastInsertRowid": {
+                  "int": "9007199254740993"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "81019182016b02cf0020000000000001",
+      "message": "sql.Batched",
+      "name": "sql.Batched with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Batched",
+      "name": "sql.Batched with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "sql.TxOpen",
+      "name": "sql.TxOpen with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.TxOpen",
+      "name": "sql.TxOpen with no field"
+    },
+    {
+      "fields": {
+        "commit": {
+          "bool": true
+        },
+        "text": {
+          "str": "text"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        },
+        "want": {
+          "str": "want"
+        }
+      },
+      "hex": "8401a4746578740291a676616c75657303a477616e7404c3",
+      "message": "sql.TxCall",
+      "name": "sql.TxCall with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.TxCall",
+      "name": "sql.TxCall with no field"
+    },
+    {
+      "fields": {
+        "done": {
+          "fields": {
+            "changes": {
+              "uint": "107"
+            },
+            "lastInsertRowid": {
+              "int": "9007199254740993"
+            }
+          }
+        },
+        "failure": {
+          "fields": {
+            "code": {
+              "str": "code"
+            },
+            "message": {
+              "str": "message"
+            },
+            "what": {
+              "names": {
+                "a": {
+                  "str": "what"
+                }
+              }
+            }
+          }
+        },
+        "rows": {
+          "fields": {
+            "columns": {
+              "list": [
+                {
+                  "str": "columns"
+                }
+              ]
+            },
+            "rows": {
+              "list": [
+                {
+                  "list": [
+                    {
+                      "str": "rows"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "hex": "8301820191a7636f6c756d6e73029191a4726f77730282016b02cf0020000000000001038301a4636f646502a76d6573736167650381a161a477686174",
+      "message": "sql.TxAnswer",
+      "name": "sql.TxAnswer with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.TxAnswer",
+      "name": "sql.TxAnswer with no field"
     }
   ],
   "methods": {
@@ -1396,7 +1741,12 @@
     "kv.take": 262,
     "kv.tx": 320,
     "server.clock": 2,
-    "server.stop": 1
+    "server.stop": 1,
+    "sql.batch": 772,
+    "sql.exec": 771,
+    "sql.open": 769,
+    "sql.query": 770,
+    "sql.tx": 773
   },
   "protocol": 2
 }

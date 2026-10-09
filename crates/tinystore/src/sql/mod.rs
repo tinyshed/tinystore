@@ -35,6 +35,10 @@ pub use migrations::Migrations;
 pub use statement::Sql;
 pub use tx::Tx;
 
+pub(crate) use rows::Rows;
+pub(crate) use run::Wanted;
+pub(crate) use values::Value;
+
 #[cfg(test)]
 #[path = "database_tests.rs"]
 mod database_tests;

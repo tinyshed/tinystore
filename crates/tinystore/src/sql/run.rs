@@ -19,6 +19,16 @@ pub(crate) enum Wanted {
 }
 
 impl Wanted {
+    /// The shape a client asks for by name.
+    pub(crate) fn named(name: &str) -> Option<Wanted> {
+        match name {
+            "all" => Some(Wanted::All),
+            "one" => Some(Wanted::One),
+            "scalar" => Some(Wanted::Scalar),
+            _ => None,
+        }
+    }
+
     /// Rows to read before the call can tell it got too many. A write is
     /// stepped to its end whatever it returns, since its end is its effect.
     fn most(self, writes: bool) -> usize {

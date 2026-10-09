@@ -431,6 +431,10 @@ module defines.
 - a remote worker holds no more jobs than its handlers, sent within its client's credit — `a_client_works_a_queue_one_job_at_a_time_for_each_handler`, `the_server_sends_a_worker_no_more_than_the_credit_its_client_granted` in `wire::jobs`; `a worker runs as many handlers at once as its concurrency says` in `sdk/js/test/jobs.test.ts`
 - a remote worker stopped, or whose server closes, takes no job more and ends once the jobs in hand are answered, those never sent given back uncounted — `a_stopped_worker_takes_no_job_more_and_gives_back_those_it_never_sent`, `a_closing_server_hands_its_workers_no_job_more` in `wire::jobs`
 - a job a remote worker holds when it ends or its client leaves fails that attempt — `a_job_the_client_holds_when_its_worker_ends_fails_that_attempt`, `a_client_that_leaves_with_a_job_in_hand_fails_that_attempt` in `wire::jobs`
+- a client's database is opened, written and read over the wire, a write with `returning` through a read — `a_client_opens_a_database_writes_it_and_reads_its_rows` in `wire::sql`
+- rows past one message come in parts within the client's credit — `rows_past_one_message_come_in_parts_within_the_clients_credit` in `wire::sql`
+- a transaction over the wire holds its calls until its last DATA commits or rolls back, a call that fails leaving it open — `a_transaction_holds_its_calls_until_its_last_data_commits_or_rolls_back` in `wire::sql`
+- a transaction whose client stalls or cancels is rolled back by the server, which frees the writer — `a_transaction_whose_client_stalls_or_cancels_is_rolled_back_by_the_server` in `wire::sql`
 - a job's value travels as the JSON it was, and one that is not JSON is refused before it is kept — `a_client_adds_finds_and_cancels_jobs_by_their_ids`, `a_value_that_is_not_json_is_refused_before_it_is_kept` in `wire::jobs`
 - a remote worker's progress shows while its job runs, and one past 4 KiB fails its stream — `what_a_handler_reports_shows_while_its_job_runs` in `wire::jobs`
 - a schedule opened over the wire keeps its one job, which no add takes — `a_schedule_opened_over_the_wire_keeps_its_one_job` in `wire::jobs`

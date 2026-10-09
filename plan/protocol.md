@@ -175,6 +175,32 @@ done, failed or `cancelled`, and the stream's `DATA`·END follows; an id with
 no job ends the stream at once, and the server's `GOAWAY` ends it
 `unavailable`, to watch again on another connection.
 
+## sql
+
+| Method      | Request                                                                  | Answer                                                                                                               |
+|-------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `sql.open`  | name, migrations: each file's name and SQL; none opens the file as it is | a handle                                                                                                             |
+| `sql.query` | handle, text, the values of its `?`s, want: all, one or scalar           | a download: the rows in the RESPONSE when they fit one message, else their parts as DATA, the last ending the stream |
+| `sql.exec`  | handle, text, values                                                     | changes, and the rowid of the row it inserted                                                                        |
+| `sql.batch` | handle, statements                                                       | what each one changed                                                                                                |
+| `sql.tx`    | handle                                                                   | both ways: calls in, answers out                                                                                     |
+
+A statement travels as text and the values of its `?`s, each as SQLite keeps
+it: nil, an integer, a float, a str or bin. An SDK builds its queries into
+text and values before they leave, so the server sees SQL alone.
+`sql.query` sends a write with `returning` to the writer and answers its rows
+once its commit is durable; a part of the rows is at most half the client's
+stream credit, the first naming the columns. `sql.exec` and `sql.batch` are
+answered from the shared commit's completion, as kv's writes are.
+
+`sql.tx` holds the database's writer. The client's calls come as DATA, each
+answered as a DATA: its rows, what it changed, or why it failed, which leaves
+the transaction as it was before the call. The client's last DATA·END says
+whether to commit, and the server's DATA·END `{}` follows once it is done.
+The server's own timer rolls a transaction back past five seconds, its
+client's pauses included, and ends the stream `limit`; a CANCEL or the
+connection's end rolls it back too.
+
 ## The server
 
 | Method         | Request                                   | Answer                                                                   |

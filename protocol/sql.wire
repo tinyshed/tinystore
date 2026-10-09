@@ -1,0 +1,92 @@
+# sql, as plan/api/sqldb.md has it: the application's databases, their
+# migrations, statements as text and the values of their ?s, rows, batches
+# and transactions. A value travels as SQLite keeps it, nil, an integer, a
+# float, a str or bin; an SDK turns its types into those and back, and builds
+# its queries into text and values before they leave.
+
+# A migration as its file has it: the name that numbers it, and its SQL.
+message sql.Migration {
+  1 name: str                     # 0001_notes.sql
+  2 sql: str
+}
+
+# Opens a database. Migrations, when given, are applied and checked; without
+# them the file opens as it is.
+message sql.Open {
+  1 name: str                     # [a-z0-9][a-z0-9_-]{0,63}
+  2 migrations: [sql.Migration]?
+}
+
+# A statement's text and the values of its ?s, in order.
+message sql.Text {
+  1 text: str
+  2 values: [cell]
+}
+
+# A write on a database.
+message sql.Statement {
+  1 handle: uint
+  2 text: str
+  3 values: [cell]
+}
+
+# What a statement gives back: its rows, one row or none, or one value. A
+# write with returning runs on the writer, its rows given once it is durable.
+message sql.Query {
+  1 handle: uint
+  2 text: str
+  3 values: [cell]
+  4 want: str                     # all, one or scalar
+}
+
+# Rows a statement gave, a part of them a message: the first part names the
+# columns, and every row holds a value a column, in their order.
+message sql.Rows {
+  1 columns: [str]
+  2 rows: [[cell]]
+}
+
+# What a write changed: the rows, and SQLite's rowid of the row it inserted,
+# 0 when it inserted none.
+message sql.Done {
+  1 changes: uint
+  2 lastInsertRowid: int64
+}
+
+# Statements known before they run, written as one in a shared commit.
+message sql.Batch {
+  1 handle: uint
+  2 statements: [sql.Text]
+}
+
+message sql.Batched {
+  1 done: [sql.Done]
+}
+
+# Opens a transaction: it holds the database's writer until the client's last
+# DATA, five seconds at most.
+message sql.TxOpen {
+  1 handle: uint
+}
+
+# A transaction's call, or its end: the last DATA commits, or not.
+message sql.TxCall {
+  1 text: str
+  2 values: [cell]
+  3 want: str                     # all, one, scalar or exec; nothing in the last
+  4 commit: bool                  # in the last: true commits, false rolls back
+}
+
+# A call's answer: its rows, what it changed, or why it failed, which leaves
+# the transaction as it was before the call.
+message sql.TxAnswer {
+  1 rows: sql.Rows?
+  2 done: sql.Done?
+  3 failure: Failure?
+}
+
+method 0x0301 sql.open(sql.Open) -> Handle
+method 0x0302 sql.query(sql.Query) -> download sql.Rows until sql.Rows
+method 0x0303 sql.exec(sql.Statement) -> sql.Done
+method 0x0304 sql.batch(sql.Batch) -> sql.Batched
+method 0x0305 sql.tx(sql.TxOpen) -> exchange sql.TxAnswer for sql.TxCall

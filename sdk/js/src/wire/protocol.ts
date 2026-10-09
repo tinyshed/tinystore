@@ -11,6 +11,7 @@ import {
 	list,
 	message,
 	names,
+	sqlValue,
 	str,
 	uint,
 } from './codec.ts'
@@ -56,6 +57,11 @@ export const methods = {
 	'kv.tx': 0x0140,
 	'server.stop': 0x0001,
 	'server.clock': 0x0002,
+	'sql.open': 0x0301,
+	'sql.query': 0x0302,
+	'sql.exec': 0x0303,
+	'sql.batch': 0x0304,
+	'sql.tx': 0x0305,
 } as const
 
 export type Method = keyof typeof methods
@@ -579,4 +585,112 @@ export const KvTxResults = message('kv.TxResults', {
 export const ServerClock = message('server.Clock', {
 	at: [1, int],
 	advance: [2, uint],
+})
+
+/**
+ * A migration as its file has it: the name that numbers it, and its SQL.
+ */
+export const SqlMigration = message('sql.Migration', {
+	/** 0001_notes.sql */
+	name: [1, str],
+	sql: [2, str],
+})
+
+/**
+ * Opens a database. Migrations, when given, are applied and checked; without
+ * them the file opens as it is.
+ */
+export const SqlOpen = message('sql.Open', {
+	/** [a-z0-9][a-z0-9_-]{0,63} */
+	name: [1, str],
+	migrations: [2, list(SqlMigration)],
+})
+
+/**
+ * A statement's text and the values of its ?s, in order.
+ */
+export const SqlText = message('sql.Text', {
+	text: [1, str],
+	values: [2, list(sqlValue)],
+})
+
+/**
+ * A write on a database.
+ */
+export const SqlStatement = message('sql.Statement', {
+	handle: [1, uint],
+	text: [2, str],
+	values: [3, list(sqlValue)],
+})
+
+/**
+ * What a statement gives back: its rows, one row or none, or one value. A
+ * write with returning runs on the writer, its rows given once it is durable.
+ */
+export const SqlQuery = message('sql.Query', {
+	handle: [1, uint],
+	text: [2, str],
+	values: [3, list(sqlValue)],
+	/** all, one or scalar */
+	want: [4, str],
+})
+
+/**
+ * Rows a statement gave, a part of them a message: the first part names the
+ * columns, and every row holds a value a column, in their order.
+ */
+export const SqlRows = message('sql.Rows', {
+	columns: [1, list(str)],
+	rows: [2, list(list(sqlValue))],
+})
+
+/**
+ * What a write changed: the rows, and SQLite's rowid of the row it inserted,
+ * 0 when it inserted none.
+ */
+export const SqlDone = message('sql.Done', {
+	changes: [1, uint],
+	lastInsertRowid: [2, int64],
+})
+
+/**
+ * Statements known before they run, written as one in a shared commit.
+ */
+export const SqlBatch = message('sql.Batch', {
+	handle: [1, uint],
+	statements: [2, list(SqlText)],
+})
+
+export const SqlBatched = message('sql.Batched', {
+	done: [1, list(SqlDone)],
+})
+
+/**
+ * Opens a transaction: it holds the database's writer until the client's last
+ * DATA, five seconds at most.
+ */
+export const SqlTxOpen = message('sql.TxOpen', {
+	handle: [1, uint],
+})
+
+/**
+ * A transaction's call, or its end: the last DATA commits, or not.
+ */
+export const SqlTxCall = message('sql.TxCall', {
+	text: [1, str],
+	values: [2, list(sqlValue)],
+	/** all, one, scalar or exec; nothing in the last */
+	want: [3, str],
+	/** in the last: true commits, false rolls back */
+	commit: [4, bool],
+})
+
+/**
+ * A call's answer: its rows, what it changed, or why it failed, which leaves
+ * the transaction as it was before the call.
+ */
+export const SqlTxAnswer = message('sql.TxAnswer', {
+	rows: [1, SqlRows],
+	done: [2, SqlDone],
+	failure: [3, Failure],
 })

@@ -8,8 +8,8 @@ use super::schema::{Kind, Message, Schema};
 
 /// What sdk/js/src/wire/codec.ts reads and writes a field with, in the order
 /// biome sorts them.
-const CODECS: [&str; 12] =
-    ["bin", "bool", "float", "int", "int64", "key", "kvValue", "list", "message", "names", "str", "uint"];
+const CODECS: [&str; 13] =
+    ["bin", "bool", "float", "int", "int64", "key", "kvValue", "list", "message", "names", "sqlValue", "str", "uint"];
 
 pub(crate) fn write(schema: &Schema) -> String {
     let mut out = String::new();
@@ -66,6 +66,7 @@ fn codec(kind: &Kind) -> String {
         Kind::Bin => "bin".to_owned(),
         Kind::Key => "key".to_owned(),
         Kind::Value => "kvValue".to_owned(),
+        Kind::Cell => "sqlValue".to_owned(),
         Kind::List(item) => format!("list({})", codec(item)),
         Kind::Names(item) => format!("names({})", codec(item)),
         Kind::Message(name) => type_name(name),

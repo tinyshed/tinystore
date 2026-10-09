@@ -12,6 +12,8 @@ use super::frame::{self, Frame, Kind};
 use super::jobs;
 use super::kv::{self, Run};
 use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome, method};
+#[cfg(feature = "sql")]
+use super::sql;
 use super::workers::Workers;
 use crate::clock::from_unix_millis;
 use crate::kv::Handed;
@@ -53,6 +55,8 @@ struct Shared {
     kv: kv::Handles,
     #[cfg(feature = "jobs")]
     jobs: jobs::Handles,
+    #[cfg(feature = "sql")]
+    sql: sql::Handles,
     input: Mutex<Input>,
     output: Mutex<Output>,
     /// Clients' runs of once, by stream, from the REQUEST to the last frame.
@@ -107,6 +111,8 @@ impl Session {
             kv: kv::Handles::default(),
             #[cfg(feature = "jobs")]
             jobs: jobs::Handles::default(),
+            #[cfg(feature = "sql")]
+            sql: sql::Handles::default(),
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
@@ -216,6 +222,8 @@ impl Session {
                 work.end();
             }
         }
+        #[cfg(feature = "sql")]
+        self.shared.sql.end();
     }
 }
 
@@ -312,7 +320,11 @@ impl Shared {
                     let answering = Arc::clone(&shared);
                     let done = move |answered| answering.answer(stream, answered);
                     let queued = guarded(|| {
-                        kv::submit(&shared.kv, method, &body, done);
+                        match method >> 8 {
+                            #[cfg(feature = "sql")]
+                            0x03 => sql::submit(&shared.sql, method, &body, done),
+                            _ => kv::submit(&shared.kv, method, &body, done),
+                        }
                         Ok(())
                     });
                     if let Err(failure) = queued {
@@ -330,6 +342,10 @@ impl Shared {
             Route::Exchange => self.exchange(input, stream, &body),
             #[cfg(feature = "jobs")]
             Route::Watch => self.watch(input, stream, &body),
+            #[cfg(feature = "sql")]
+            Route::Download => self.download(input, stream, body),
+            #[cfg(feature = "sql")]
+            Route::Transaction => self.transaction(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -388,6 +404,58 @@ impl Shared {
         jobs::Link { send, finish, spawn, credit: input.stream_credit, max_body }
     }
 
+    /// Answers a query on a worker: its rows in the RESPONSE when they fit
+    /// one message, else a RESPONSE and their parts as DATA within the
+    /// client's credit.
+    #[cfg(feature = "sql")]
+    fn download(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
+        let link = self.sql_link(input, stream);
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || match guarded(|| sql::query(&shared.sql, &body, &link)) {
+            Ok(sql::Queried::Whole(rows)) => shared.answer(stream, Ok(rows)),
+            Ok(sql::Queried::Parts(parts)) => {
+                shared.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                sql::download(&shared.sql, stream, parts, &link);
+            }
+            Err(failure) => shared.answer(stream, Err(failure)),
+        }));
+    }
+
+    /// Opens a client's transaction: the stream's RESPONSE, then a worker
+    /// that holds the writer while the client's calls come as DATA.
+    #[cfg(feature = "sql")]
+    fn transaction(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.sql_link(input, stream);
+        match guarded(|| sql::transaction(&self.sql, stream, body, &link)) {
+            Ok((txing, running)) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                let shared = Arc::clone(self);
+                self.workers.run(Box::new(move || txing.run(running, &shared.sql, stream)));
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
+    /// What an sql stream that sends DATA needs of the session.
+    #[cfg(feature = "sql")]
+    fn sql_link(self: &Arc<Self>, input: &Input, stream: u32) -> sql::Link {
+        let (sending, finishing) = (Arc::downgrade(self), Arc::downgrade(self));
+        sql::Link {
+            send: Arc::new(move |body| {
+                if let Some(shared) = sending.upgrade() {
+                    shared.send(&[Frame::new(Kind::Data, stream, body)]);
+                }
+            }),
+            finish: Arc::new(move |last| {
+                if let Some(shared) = finishing.upgrade() {
+                    shared.end_stream(stream, last);
+                }
+            }),
+            credit: input.stream_credit,
+            max_body: input.max_body.unwrap_or(HELLO_MOST),
+        }
+    }
+
     /// Starts a client's run of a once key: its kept answer ends the stream, a
     /// run handed over waits for the client's last DATA, and a run held
     /// elsewhere asks again once it ends. A run cancelled meanwhile goes back.
@@ -434,6 +502,14 @@ impl Shared {
     /// dropped, its credit still given back.
     fn data(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
+        #[cfg(feature = "sql")]
+        if let Some(tx) = self.sql.tx(frame.stream) {
+            // a call is read once it is queued: its credit goes back at once
+            if let Ok(read) = u32::try_from(frame.body.len()) {
+                self.send(&[Frame::new(Kind::Credit, frame.stream, read.to_le_bytes().to_vec())]);
+            }
+            return tx.item(&frame.body, frame.flags & frame::END != 0);
+        }
         #[cfg(feature = "jobs")]
         if let Some(work) = self.jobs.work(frame.stream) {
             return self.work_data(&work, &frame);
@@ -493,12 +569,19 @@ impl Shared {
     /// A client's grant of DATA on a stream: a worker's or a watch's sends
     /// what waited for it. No other stream sends DATA a client grants credit
     /// for: a call answers in one message, within the body agreed.
-    #[cfg_attr(not(feature = "jobs"), expect(unused_variables, reason = "only jobs' streams take credit"))]
+    #[cfg_attr(
+        not(any(feature = "jobs", feature = "sql")),
+        expect(unused_variables, reason = "only jobs' and sql's streams take credit")
+    )]
     fn credit(&self, frame: &Frame) {
+        let Ok(granted) = <[u8; 4]>::try_from(frame.body.as_slice()) else {
+            return;
+        };
+        let granted = u32::from_le_bytes(granted);
         #[cfg(feature = "jobs")]
-        if let Ok(granted) = <[u8; 4]>::try_from(frame.body.as_slice()) {
-            self.jobs.grant(frame.stream, u32::from_le_bytes(granted));
-        }
+        self.jobs.grant(frame.stream, granted);
+        #[cfg(feature = "sql")]
+        self.sql.grant(frame.stream, granted);
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
@@ -506,6 +589,10 @@ impl Shared {
     /// as its END would end it, the jobs it held failing their attempt, and a
     /// watch cancelled ends.
     fn cancel(self: &Arc<Self>, stream: u32) {
+        #[cfg(feature = "sql")]
+        if self.sql.cancel(stream) {
+            return;
+        }
         #[cfg(feature = "jobs")]
         if self.jobs.work(stream).is_some() {
             return self.end_work(stream, Err(Failure::cancelled("the client cancelled its worker")));
@@ -590,6 +677,8 @@ impl Shared {
             0x01 => kv::call(&self.store, &self.kv, method, body, max_body),
             #[cfg(feature = "jobs")]
             0x02 => jobs::call(&self.store, &self.jobs, method, body, max_body),
+            #[cfg(feature = "sql")]
+            0x03 => sql::call(&self.store, &self.sql, method, body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -657,6 +746,8 @@ fn route(method: u16) -> Route {
         0x01 => kv::route(method),
         #[cfg(feature = "jobs")]
         0x02 => jobs::route(method),
+        #[cfg(feature = "sql")]
+        0x03 => sql::route(method),
         _ => Route::Worker,
     }
 }
@@ -664,7 +755,8 @@ fn route(method: u16) -> Route {
 /// The engines this server serves.
 fn engines() -> Vec<String> {
     let jobs = cfg!(feature = "jobs").then_some("jobs");
-    [Some("kv"), jobs].into_iter().flatten().map(str::to_owned).collect()
+    let sql = cfg!(feature = "sql").then_some("sql");
+    [Some("kv"), jobs, sql].into_iter().flatten().map(str::to_owned).collect()
 }
 
 /// A call that panics answers `internal` rather than leaving its stream open.

@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::codec::{self, Message, Out, Row};
+#[cfg(feature = "sql")]
+use super::codec::Cell;
 use super::message::Fields;
 
 /// What a client says first.
@@ -1507,6 +1509,340 @@ impl Message for ServerClock {
     }
 }
 
+/// A migration as its file has it: the name that numbers it, and its SQL.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlMigration {
+    /// 0001_notes.sql.
+    pub(crate) name: String,
+    pub(crate) sql: String,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlMigration {
+    const NAME: &'static str = "sql.Migration";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlMigration {
+            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
+            sql: fields.get(2, "sql", codec::str)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::str_value(&self.name));
+        out.put(2, codec::str_value(&self.sql));
+    }
+}
+
+/// Opens a database. Migrations, when given, are applied and checked; without
+/// them the file opens as it is.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlOpen {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    pub(crate) migrations: Option<Vec<SqlMigration>>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlOpen {
+    const NAME: &'static str = "sql.Open";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlOpen {
+            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
+            migrations: fields.get(2, "migrations", codec::list(codec::message::<SqlMigration>))?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::str_value(&self.name));
+        out.given(2, self.migrations.as_ref().map(|items| codec::list_value(items, codec::message_value)));
+    }
+}
+
+/// A statement's text and the values of its ?s, in order.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlText {
+    pub(crate) text: String,
+    pub(crate) values: Vec<Cell>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlText {
+    const NAME: &'static str = "sql.Text";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlText {
+            text: fields.get(1, "text", codec::str)?.unwrap_or_default(),
+            values: fields.get(2, "values", codec::list(codec::cell))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::str_value(&self.text));
+        out.put(2, codec::list_value(&self.values, codec::cell_value));
+    }
+}
+
+/// A write on a database.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlStatement {
+    pub(crate) handle: u64,
+    pub(crate) text: String,
+    pub(crate) values: Vec<Cell>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlStatement {
+    const NAME: &'static str = "sql.Statement";
+    const KEYS: &'static [u64] = &[1, 2, 3];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlStatement {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            text: fields.get(2, "text", codec::str)?.unwrap_or_default(),
+            values: fields.get(3, "values", codec::list(codec::cell))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.put(2, codec::str_value(&self.text));
+        out.put(3, codec::list_value(&self.values, codec::cell_value));
+    }
+}
+
+/// What a statement gives back: its rows, one row or none, or one value. A
+/// write with returning runs on the writer, its rows given once it is durable.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlQuery {
+    pub(crate) handle: u64,
+    pub(crate) text: String,
+    pub(crate) values: Vec<Cell>,
+    /// All, one or scalar.
+    pub(crate) want: String,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlQuery {
+    const NAME: &'static str = "sql.Query";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlQuery {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            text: fields.get(2, "text", codec::str)?.unwrap_or_default(),
+            values: fields.get(3, "values", codec::list(codec::cell))?.unwrap_or_default(),
+            want: fields.get(4, "want", codec::str)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.put(2, codec::str_value(&self.text));
+        out.put(3, codec::list_value(&self.values, codec::cell_value));
+        out.put(4, codec::str_value(&self.want));
+    }
+}
+
+/// Rows a statement gave, a part of them a message: the first part names the
+/// columns, and every row holds a value a column, in their order.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlRows {
+    pub(crate) columns: Vec<String>,
+    pub(crate) rows: Vec<Vec<Cell>>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlRows {
+    const NAME: &'static str = "sql.Rows";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlRows {
+            columns: fields.get(1, "columns", codec::list(codec::str))?.unwrap_or_default(),
+            rows: fields.get(2, "rows", codec::list(codec::list(codec::cell)))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::list_value(&self.columns, codec::str_value));
+        out.put(2, codec::list_value(&self.rows, |items| codec::list_value(items, codec::cell_value)));
+    }
+}
+
+/// What a write changed: the rows, and SQLite's rowid of the row it inserted,
+/// 0 when it inserted none.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlDone {
+    pub(crate) changes: u64,
+    pub(crate) last_insert_rowid: i64,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlDone {
+    const NAME: &'static str = "sql.Done";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlDone {
+            changes: fields.get(1, "changes", codec::uint)?.unwrap_or_default(),
+            last_insert_rowid: fields.get(2, "lastInsertRowid", codec::int)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.changes));
+        out.put(2, codec::int_value(&self.last_insert_rowid));
+    }
+}
+
+/// Statements known before they run, written as one in a shared commit.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlBatch {
+    pub(crate) handle: u64,
+    pub(crate) statements: Vec<SqlText>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlBatch {
+    const NAME: &'static str = "sql.Batch";
+    const KEYS: &'static [u64] = &[1, 2];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlBatch {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+            statements: fields.get(2, "statements", codec::list(codec::message::<SqlText>))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+        out.put(2, codec::list_value(&self.statements, codec::message_value));
+    }
+}
+
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlBatched {
+    pub(crate) done: Vec<SqlDone>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlBatched {
+    const NAME: &'static str = "sql.Batched";
+    const KEYS: &'static [u64] = &[1];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlBatched {
+            done: fields.get(1, "done", codec::list(codec::message::<SqlDone>))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::list_value(&self.done, codec::message_value));
+    }
+}
+
+/// Opens a transaction: it holds the database's writer until the client's last
+/// DATA, five seconds at most.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlTxOpen {
+    pub(crate) handle: u64,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlTxOpen {
+    const NAME: &'static str = "sql.TxOpen";
+    const KEYS: &'static [u64] = &[1];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlTxOpen {
+            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.handle));
+    }
+}
+
+/// A transaction's call, or its end: the last DATA commits, or not.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlTxCall {
+    pub(crate) text: String,
+    pub(crate) values: Vec<Cell>,
+    /// All, one, scalar or exec; nothing in the last.
+    pub(crate) want: String,
+    /// In the last: true commits, false rolls back.
+    pub(crate) commit: bool,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlTxCall {
+    const NAME: &'static str = "sql.TxCall";
+    const KEYS: &'static [u64] = &[1, 2, 3, 4];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlTxCall {
+            text: fields.get(1, "text", codec::str)?.unwrap_or_default(),
+            values: fields.get(2, "values", codec::list(codec::cell))?.unwrap_or_default(),
+            want: fields.get(3, "want", codec::str)?.unwrap_or_default(),
+            commit: fields.get(4, "commit", codec::bool)?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::str_value(&self.text));
+        out.put(2, codec::list_value(&self.values, codec::cell_value));
+        out.put(3, codec::str_value(&self.want));
+        out.put(4, codec::bool_value(&self.commit));
+    }
+}
+
+/// A call's answer: its rows, what it changed, or why it failed, which leaves
+/// the transaction as it was before the call.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlTxAnswer {
+    pub(crate) rows: Option<SqlRows>,
+    pub(crate) done: Option<SqlDone>,
+    pub(crate) failure: Option<Failure>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlTxAnswer {
+    const NAME: &'static str = "sql.TxAnswer";
+    const KEYS: &'static [u64] = &[1, 2, 3];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(SqlTxAnswer {
+            rows: fields.get(1, "rows", codec::message::<SqlRows>)?,
+            done: fields.get(2, "done", codec::message::<SqlDone>)?,
+            failure: fields.get(3, "failure", codec::message::<Failure>)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.given(1, self.rows.as_ref().map(codec::message_value));
+        out.given(2, self.done.as_ref().map(codec::message_value));
+        out.given(3, self.failure.as_ref().map(codec::message_value));
+    }
+}
+
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
     #[cfg(feature = "jobs")]
@@ -1587,6 +1923,16 @@ pub(crate) mod method {
     pub(crate) const KV_TX: u16 = 0x0140;
     pub(crate) const SERVER_STOP: u16 = 0x0001;
     pub(crate) const SERVER_CLOCK: u16 = 0x0002;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_OPEN: u16 = 0x0301;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_QUERY: u16 = 0x0302;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_EXEC: u16 = 0x0303;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_BATCH: u16 = 0x0304;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_TX: u16 = 0x0305;
 }
 
 /// Every method, its name and number, for the test that the server answers each.
@@ -1670,6 +2016,16 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
     ("kv.tx", 0x0140),
     ("server.stop", 0x0001),
     ("server.clock", 0x0002),
+    #[cfg(feature = "sql")]
+    ("sql.open", 0x0301),
+    #[cfg(feature = "sql")]
+    ("sql.query", 0x0302),
+    #[cfg(feature = "sql")]
+    ("sql.exec", 0x0303),
+    #[cfg(feature = "sql")]
+    ("sql.batch", 0x0304),
+    #[cfg(feature = "sql")]
+    ("sql.tx", 0x0305),
 ];
 
 /// A body of the message `name` read and written again, for the test that the
@@ -1760,6 +2116,30 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure
         #[cfg(feature = "kv")]
         "kv.TxResults" => KvTxResults::decode(body).map(|message| message.encode()),
         "server.Clock" => ServerClock::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Migration" => SqlMigration::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Open" => SqlOpen::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Text" => SqlText::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Statement" => SqlStatement::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Query" => SqlQuery::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Rows" => SqlRows::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Done" => SqlDone::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Batch" => SqlBatch::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.Batched" => SqlBatched::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.TxOpen" => SqlTxOpen::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.TxCall" => SqlTxCall::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "sql")]
+        "sql.TxAnswer" => SqlTxAnswer::decode(body).map(|message| message.encode()),
         _ => return None,
     };
     Some(rewritten)

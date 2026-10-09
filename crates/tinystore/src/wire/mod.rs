@@ -12,6 +12,8 @@ pub(crate) mod msgpack;
 #[rustfmt::skip]
 pub(crate) mod protocol;
 mod session;
+#[cfg(feature = "sql")]
+mod sql;
 mod workers;
 
 pub(crate) use session::Session;
@@ -30,5 +32,9 @@ pub(crate) enum Route {
     Exchange,
     #[cfg(feature = "jobs")]
     Watch,
+    #[cfg(feature = "sql")]
+    Download,
+    #[cfg(feature = "sql")]
+    Transaction,
     Worker,
 }

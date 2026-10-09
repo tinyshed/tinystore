@@ -79,6 +79,7 @@ fn sample(schema: &Schema, field: &Field, kind: &Kind) -> Sample {
         Kind::Json => Sample::Str("{\"a\":1}".to_owned()),
         Kind::Key => Sample::Str("k".to_owned()),
         Kind::Bin | Kind::Value => Sample::Bin(vec![0x01, 0xff]),
+        Kind::Cell => Sample::Str(field.name.clone()),
         Kind::List(item) => Sample::List(vec![sample(schema, field, item)]),
         Kind::Names(item) => Sample::Names(vec![("a".to_owned(), sample(schema, field, item))]),
         Kind::Message(name) => every_field(schema, schema.message(name)),

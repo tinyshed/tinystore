@@ -45,6 +45,11 @@ impl Sql {
         self
     }
 
+    /// A statement whose values arrived as SQLite keeps them, from the wire.
+    pub(crate) fn with_values(text: String, values: Vec<Value>) -> Sql {
+        Sql { text, values, refused: None }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }

@@ -36,6 +36,19 @@ pub(crate) enum Row {
     Bin(Vec<u8>),
 }
 
+/// A value as SQLite keeps it, as it travels: nothing, an integer, a float,
+/// text or bytes. A bool from a client is the integer SQLite keeps for it.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum Cell {
+    #[default]
+    Nil,
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bin(Vec<u8>),
+}
+
 /// A message's fields as they are written.
 #[derive(Debug, Default)]
 pub(crate) struct Out {
@@ -119,6 +132,22 @@ pub(crate) fn row(value: &Value, name: &str) -> Result<Row, Failure> {
     }
 }
 
+#[cfg(feature = "sql")]
+pub(crate) fn cell(value: &Value, name: &str) -> Result<Cell, Failure> {
+    match value {
+        Value::Nil => Ok(Cell::Nil),
+        Value::Bool(flag) => Ok(Cell::Int(i64::from(*flag))),
+        Value::Uint(number) => {
+            i64::try_from(*number).map(Cell::Int).map_err(|_| Failure::invalid(format!("{name} past an int 64")))
+        }
+        Value::Int(number) => Ok(Cell::Int(*number)),
+        Value::Float(number) => Ok(Cell::Float(*number)),
+        Value::Str(text) => Ok(Cell::Str(text.clone())),
+        Value::Bin(bytes) => Ok(Cell::Bin(bytes.clone())),
+        _ => Err(not(name, "nil, a bool, a number, a str or a bin")),
+    }
+}
+
 pub(crate) fn list<T>(
     item: impl Fn(&Value, &str) -> Result<T, Failure>,
 ) -> impl Fn(&Value, &str) -> Result<Vec<T>, Failure> {
@@ -179,6 +208,17 @@ pub(crate) fn row_value(row: &Row) -> Value {
         Row::Nil => Value::Nil,
         Row::Int(number) => int_value(number),
         Row::Bin(bytes) => Value::Bin(bytes.clone()),
+    }
+}
+
+#[cfg(feature = "sql")]
+pub(crate) fn cell_value(cell: &Cell) -> Value {
+    match cell {
+        Cell::Nil => Value::Nil,
+        Cell::Int(number) => int_value(number),
+        Cell::Float(number) => Value::Float(*number),
+        Cell::Str(text) => Value::Str(text.clone()),
+        Cell::Bin(bytes) => Value::Bin(bytes.clone()),
     }
 }
 

@@ -11,6 +11,7 @@ pub(crate) fn write(schema: &Schema) -> String {
     out.push_str("// Written by crates/protocol from protocol/*.wire; `just protocol` writes it again.\n\n");
     out.push_str("use std::collections::BTreeMap;\n\n");
     out.push_str("use super::codec::{self, Message, Out, Row};\n");
+    out.push_str(&cell_import(schema));
     out.push_str("use super::message::Fields;\n");
     for message in &schema.messages {
         out.push('\n');
@@ -208,6 +209,7 @@ fn kind_type(kind: &Kind) -> String {
         Kind::Str | Kind::Key | Kind::Json => "String".to_owned(),
         Kind::Bin => "Vec<u8>".to_owned(),
         Kind::Value => "Row".to_owned(),
+        Kind::Cell => "Cell".to_owned(),
         Kind::List(item) => format!("Vec<{}>", kind_type(item)),
         Kind::Names(item) => format!("BTreeMap<String, {}>", kind_type(item)),
         Kind::Message(name) => type_name(name),
@@ -225,6 +227,7 @@ fn reader(kind: &Kind) -> String {
         Kind::Key => "codec::key".to_owned(),
         Kind::Bin => "codec::bin".to_owned(),
         Kind::Value => "codec::row".to_owned(),
+        Kind::Cell => "codec::cell".to_owned(),
         Kind::List(item) => format!("codec::list({})", reader(item)),
         Kind::Names(item) => format!("codec::names({})", reader(item)),
         Kind::Message(name) => format!("codec::message::<{}>", type_name(name)),
@@ -250,6 +253,7 @@ fn writer(kind: &Kind) -> String {
         Kind::Str | Kind::Json | Kind::Key => "codec::str_value".to_owned(),
         Kind::Bin => "codec::bin_value".to_owned(),
         Kind::Value => "codec::row_value".to_owned(),
+        Kind::Cell => "codec::cell_value".to_owned(),
         Kind::List(item) => format!("|items| codec::list_value(items, {})", writer(item)),
         Kind::Names(item) => format!("|names| codec::names_value(names, {})", writer(item)),
         Kind::Message(_) => "codec::message_value".to_owned(),
@@ -259,6 +263,39 @@ fn writer(kind: &Kind) -> String {
 /// The engines, each a feature of the library; the connection's messages and
 /// the server's own are built always.
 const ENGINES: [&str; 6] = ["kv", "jobs", "sql", "blobs", "records", "metrics"];
+
+/// The import of `Cell`, gated by the engines whose messages hold one, so
+/// that a build without them imports nothing it does not use.
+fn cell_import(schema: &Schema) -> String {
+    let mut engines: Vec<&str> = Vec::new();
+    for message in &schema.messages {
+        if !message.fields.iter().any(|field| holds_cell(&field.kind)) {
+            continue;
+        }
+        match message.name.split_once('.') {
+            Some((engine, _)) if ENGINES.contains(&engine) => {
+                if !engines.contains(&engine) {
+                    engines.push(engine);
+                }
+            }
+            _ => return "use super::codec::Cell;\n".to_owned(),
+        }
+    }
+    let features: Vec<String> = engines.iter().map(|engine| format!("feature = \"{engine}\"")).collect();
+    match features.as_slice() {
+        [] => String::new(),
+        [feature] => format!("#[cfg({feature})]\nuse super::codec::Cell;\n"),
+        several => format!("#[cfg(any({}))]\nuse super::codec::Cell;\n", several.join(", ")),
+    }
+}
+
+fn holds_cell(kind: &Kind) -> bool {
+    match kind {
+        Kind::Cell => true,
+        Kind::List(item) | Kind::Names(item) => holds_cell(item),
+        _ => false,
+    }
+}
 
 /// An engine's messages and methods are its feature's: `kv.` names kv's.
 fn feature_gate(name: &str) -> String {

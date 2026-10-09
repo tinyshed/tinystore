@@ -54,6 +54,15 @@ impl Rows {
         Ok(Rows { columns, values: kept })
     }
 
+    pub(crate) fn columns(&self) -> &[String] {
+        &self.columns
+    }
+
+    /// The values, a row after another, each `width()` long.
+    pub(crate) fn into_values(self) -> Vec<Value> {
+        self.values
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.values.len().checked_div(self.columns.len()).unwrap_or(0)
     }

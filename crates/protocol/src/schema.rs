@@ -57,6 +57,8 @@ pub(crate) enum Kind {
     Key,
     /// A kv row: nil, an integer or bin.
     Value,
+    /// A value as SQLite keeps it: nil, an integer, a float, a str or bin.
+    Cell,
     /// JSON's text, as a str.
     Json,
     List(Box<Kind>),
@@ -254,6 +256,7 @@ fn parse_kind(text: &str) -> Result<Kind, String> {
         "nanos" => Kind::Nanos,
         "key" => Kind::Key,
         "value" => Kind::Value,
+        "cell" => Kind::Cell,
         "json" => Kind::Json,
         name if name.chars().next().is_some_and(char::is_alphabetic) => Kind::Message(name.to_owned()),
         other => return Err(format!("no type {other}")),

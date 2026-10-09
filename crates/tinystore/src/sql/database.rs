@@ -140,6 +140,31 @@ impl Database {
         })
     }
 
+    /// A statement's rows as SQLite keeps them, for a caller that is not
+    /// Rust: the wire's.
+    pub(crate) fn rows_of(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
+        self.rows(statement, wanted).map_err(|error| self.failed(statement, error))
+    }
+
+    /// `exec` without waiting: `done` is called on the thread that commits it.
+    pub(crate) fn exec_then(&self, statement: Sql, done: impl FnOnce(Result<Done>) + Send + 'static) {
+        let (weight, describe) = (statement.weight(), self.failed_by(&statement));
+        self.base.file.submit(weight, move |tx| run::exec(tx, &statement), move |done_| done(done_.map_err(describe)));
+    }
+
+    /// `batch` without waiting: `done` is called on the thread that commits it.
+    pub(crate) fn batch_then(&self, statements: Vec<Sql>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
+        let weight = statements.iter().map(Sql::weight).sum();
+        let describe = self.base.describe();
+        let write = move |tx: &crate::sqlite::Tx<'_>| -> Result<Vec<Done>> {
+            statements
+                .iter()
+                .map(|statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe())))
+                .collect()
+        };
+        self.base.file.submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));
+    }
+
     /// A statement's rows from a reader, or from the writer when SQLite says
     /// it writes; a statement known to write goes to the writer at once.
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
@@ -155,6 +180,12 @@ impl Database {
 
     fn failed(&self, statement: &Sql, error: Error) -> Error {
         error.within(statement.describe()).within(self.base.describe())
+    }
+
+    /// What names a failure of `statement`, to say it on another thread.
+    fn failed_by(&self, statement: &Sql) -> impl FnOnce(Error) -> Error + Send + 'static {
+        let (statement, database) = (statement.describe(), self.base.describe());
+        move |error| error.within(statement).within(database)
     }
 }
 

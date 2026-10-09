@@ -52,6 +52,11 @@ impl<'t> Tx<'t> {
         self.call(|| run::exec(self.raw, &statement)).map_err(|error| self.failed(&statement, error))
     }
 
+    /// A statement's rows as SQLite keeps them, for the wire.
+    pub(crate) fn rows_of(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
+        self.rows(statement, wanted).map_err(|error| self.failed(statement, error))
+    }
+
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
         self.call(|| run::write(self.raw, statement, wanted))
     }
