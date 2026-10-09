@@ -12,10 +12,12 @@ use std::time::Duration;
 
 use tinystore::pipe::{Connect, Stop};
 use tinystore::{Clock, ErrorKind, Options, Store, TestClock};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 
 use crate::args::{self, Transport};
-use crate::{connection, local};
+use crate::{connection, local, remote};
 
 /// The exit of a server that found its directory held, by a server that
 /// started first or one still letting go: its client reads `SERVE` again.
@@ -23,6 +25,8 @@ const HELD: u8 = 3;
 
 /// How long a closing server waits for its clients to leave.
 const LEAVING: Duration = Duration::from_secs(10);
+/// How long a remote client may take over its TLS handshake.
+const HANDSHAKE: Duration = Duration::from_secs(10);
 /// How long a server waits for its first client before idling counts: as long
 /// as a client waits for the sidecar it started.
 const FIRST_CLIENT: Duration = Duration::from_secs(15);
@@ -35,12 +39,21 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // a remote server's tokens and certificate are read first, so that a
+    // mistake in them leaves no files behind
+    let remote = match serve.remote.map(remote::Ready::of).transpose() {
+        Ok(remote) => remote,
+        Err(refused) => {
+            eprintln!("tinystore serve: {refused}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Err(error) = log_to(serve.log.as_deref()) {
         eprintln!("tinystore serve: its log: {error}");
         return ExitCode::FAILURE;
     }
     let clock = serve.clock.map(|start| Arc::new(TestClock::new(start)));
-    let store = match open(&serve.dir, clock.clone()) {
+    let store = match open(&serve.dir, clock.clone(), serve.memory) {
         Ok(store) => store,
         Err(code) => return code,
     };
@@ -48,7 +61,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         runtime.block_on(async {
             match serve.transport {
                 Transport::Stdio => stdio(&store, clock).await,
-                Transport::Local { sidecar } => listen(&store, sidecar, serve.idle).await,
+                Transport::Local { sidecar } => listen(&store, sidecar, serve.idle, remote).await,
             }
         })
     });
@@ -61,8 +74,8 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
 }
 
 /// Opens the store, or says why not: a directory another holds exits with 3.
-fn open(dir: &Path, clock: Option<Arc<TestClock>>) -> Result<Store, ExitCode> {
-    let options = Options { clock: clock.map(|clock| clock as Arc<dyn Clock>), ..Options::default() };
+fn open(dir: &Path, clock: Option<Arc<TestClock>>, memory: Option<u64>) -> Result<Store, ExitCode> {
+    let options = Options { clock: clock.map(|clock| clock as Arc<dyn Clock>), memory, ..Options::default() };
     Store::open(dir, options).map_err(|error| {
         let code = if error.kind() == ErrorKind::InUse { ExitCode::from(HELD) } else { ExitCode::FAILURE };
         tracing::error!(target: "tinystore", %error, "the store did not open");
@@ -80,22 +93,41 @@ async fn stdio(store: &Store, clock: Option<Arc<TestClock>>) -> io::Result<()> {
     Ok(())
 }
 
-/// A local server: a socket or a named pipe that `SERVE` names, for as many
-/// clients as come, until it is stopped, idles out or hears Ctrl+C.
-async fn listen(store: &Store, sidecar: bool, idle: Option<Duration>) -> io::Result<()> {
+/// A server for as many clients as come, until it is stopped, idles out or
+/// hears Ctrl+C: on a socket or a named pipe that `SERVE` names, and on TCP
+/// when `--listen` says.
+async fn listen(store: &Store, sidecar: bool, idle: Option<Duration>, remote: Option<remote::Ready>) -> io::Result<()> {
     let server = local::server_dir(store.dir())?;
     local::unpublish(&server)?;
     let (listener, endpoint) = Listener::bind(store.dir(), &server)?;
-    let serve = local::Serve::new(endpoint, sidecar)?;
+    let mut endpoints = vec![endpoint];
+    let remote = match remote {
+        Some(ready) => {
+            let tcp = remote::bind(&ready.address).await?;
+            endpoints.push(ready.address.endpoint(tcp.local_addr()?.port()));
+            Some((tcp, ready))
+        }
+        None => None,
+    };
+    let serve = local::Serve::new(endpoints, sidecar)?;
     let (closing, closed) = watch::channel(false);
-    let connect = Connect { prove: Some(serve.prove()), stop: Some(stop_by(closing.clone())), ..Connect::default() };
+    let stop = stop_by(closing.clone());
+    let connect = Connect { prove: Some(serve.prove()), stop: Some(Arc::clone(&stop)), ..Connect::default() };
     local::publish(&server, &serve)?;
-    tracing::info!(target: "tinystore", dir = %store.dir().display(), endpoint = %serve.endpoint, "serving");
+    tracing::info!(target: "tinystore", dir = %store.dir().display(), endpoints = ?serve.endpoints, "serving");
     let (clients, counted) = watch::channel(0usize);
     let clients = Arc::new(clients);
     let accepted = listener.accept_all(store, &connect, &closed, &clients);
+    let accepted_remotely = async {
+        let Some((tcp, ready)) = remote else {
+            return std::future::pending::<io::Result<()>>().await;
+        };
+        let connect = Connect { stop: Some(stop), admit: Some(ready.admit), ..Connect::default() };
+        accept_remote(tcp, ready.tls, store, &connect, &closed, &clients).await
+    };
     tokio::select! {
         accepted = accepted => accepted?,
+        accepted = accepted_remotely => accepted?,
         () = stopped(closed.clone()) => {}
         () = interrupted() => {}
         () = idled(counted.clone(), idle) => tracing::info!(target: "tinystore", "idle, leaving"),
@@ -105,6 +137,41 @@ async fn listen(store: &Store, sidecar: bool, idle: Option<Duration>) -> io::Res
     local::unpublish(&server)?;
     listener.remove();
     Ok(())
+}
+
+/// Takes remote clients, each over TLS when the address said so, admitted
+/// by its token once its HELLO comes.
+async fn accept_remote(
+    listener: TcpListener,
+    tls: Option<TlsAcceptor>,
+    store: &Store,
+    connect: &Connect,
+    closed: &watch::Receiver<bool>,
+    clients: &Arc<watch::Sender<usize>>,
+) -> io::Result<()> {
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let _ = stream.set_nodelay(true);
+        let (store, connect, closed, counted) = (store.clone(), connect.clone(), closed.clone(), served(clients));
+        let tls = tls.clone();
+        tokio::spawn(async move {
+            match tls {
+                None => {
+                    let (reader, writer) = stream.into_split();
+                    connection::serve(reader, writer, &store, connect, closed).await;
+                }
+                Some(tls) => match tokio::time::timeout(HANDSHAKE, tls.accept(stream)).await {
+                    Ok(Ok(stream)) => {
+                        let (reader, writer) = tokio::io::split(stream);
+                        connection::serve(reader, writer, &store, connect, closed).await;
+                    }
+                    Ok(Err(error)) => tracing::debug!(target: "tinystore", %error, "a TLS handshake failed"),
+                    Err(_) => tracing::debug!(target: "tinystore", "a TLS handshake took too long"),
+                },
+            }
+            drop(counted);
+        });
+    }
 }
 
 fn stop_by(closing: watch::Sender<bool>) -> Stop {

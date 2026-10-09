@@ -12,7 +12,7 @@ use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome, metho
 use super::workers::Workers;
 use crate::clock::from_unix_millis;
 use crate::kv::Handed;
-use crate::pipe::Connect;
+use crate::pipe::{Capability, Connect};
 use crate::{Clock, Result, Store, unix_millis};
 
 /// The protocol this server speaks, the second: a client of the first is
@@ -79,6 +79,8 @@ struct Input {
     released: u64,
     /// GOAWAY went out: a REQUEST after it is answered `unavailable`, unrun.
     going_away: bool,
+    /// What the client may do, once its HELLO was admitted.
+    capability: Option<Capability>,
     ended: bool,
 }
 
@@ -164,6 +166,10 @@ impl Session {
         self.shared.in_flight.load(Ordering::Acquire)
     }
 
+    pub(crate) fn welcomed(&self) -> bool {
+        self.shared.lock_input().max_body.is_some()
+    }
+
     /// Whether the session reads nothing more and owes nothing more.
     pub(crate) fn finished(&self) -> bool {
         let output = self.shared.lock_output();
@@ -215,20 +221,32 @@ impl Shared {
             let refused = format!("a challenge of {length} bytes, not {CHALLENGE}");
             return self.go_away(input, "protocol", &refused);
         }
+        let capability = match &self.connect.admit {
+            None => Capability::Admin,
+            Some(admit) => match admit(hello.token.as_deref()) {
+                Some(capability) => capability,
+                None => return self.go_away(input, "unauthenticated", "no token this server knows"),
+            },
+        };
+        input.capability = Some(capability);
         let client_most = hello.max_body.unwrap_or(MAX_BODY);
         let stream_credit = hello.stream_credit.unwrap_or(CLIENT_STREAM_CREDIT);
         let max_body = MAX_BODY.min(client_most).min(stream_credit);
         input.max_body = Some(max_body as usize);
         let proof = hello.challenge.zip(self.connect.prove.as_ref()).map(|(challenge, prove)| prove(&challenge));
-        self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, proof))]);
+        self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, capability, proof))]);
     }
 
-    fn welcome_body(&self, max_body: u64, proof: Option<Vec<u8>>) -> Vec<u8> {
+    fn welcome_body(&self, max_body: u64, capability: Capability, proof: Option<Vec<u8>>) -> Vec<u8> {
+        let capability = match capability {
+            Capability::Admin => "admin",
+            Capability::Data => "data",
+        };
         let welcome = Welcome {
             protocol: PROTOCOL,
             server: env!("CARGO_PKG_VERSION").to_owned(),
             instance: instance(),
-            capability: "admin".to_owned(),
+            capability: capability.to_owned(),
             max_body,
             in_flight: IN_FLIGHT,
             connection_credit: CONNECTION_CREDIT,
@@ -252,6 +270,9 @@ impl Shared {
             return self.answer(stream, Err(Failure::unavailable("the server is closing; ask another connection")));
         }
         if method >> 8 == 0x00 {
+            if input.capability != Some(Capability::Admin) {
+                return self.answer(stream, Err(Failure::permission("the server's own calls are an admin's")));
+            }
             return self.server_call(stream, method, &body);
         }
         match route(method) {

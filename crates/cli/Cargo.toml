@@ -16,6 +16,8 @@ path = "src/main.rs"
 tinystore = { path = "../tinystore" }
 # the server's sockets and pipes; the library itself runs no async runtime
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "io-std", "macros", "signal", "sync", "time"] }
+# a remote server's TLS, with ring's cryptography: it builds with a C compiler alone
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 hmac = "0.12"
 sha2 = "0.10"
 getrandom = { version = "0.3", features = ["std"] }
@@ -28,3 +30,4 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3.27"
+rcgen = "0.14.10"

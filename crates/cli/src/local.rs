@@ -23,15 +23,17 @@ const PROTOCOL: u64 = 2;
 pub(crate) struct Serve {
     pub(crate) instance: [u8; 16],
     pub(crate) secret: [u8; 32],
-    pub(crate) endpoint: String,
+    /// The local endpoint first, which a client of this machine dials; a
+    /// remote one after it.
+    pub(crate) endpoints: Vec<String>,
     pub(crate) sidecar: bool,
 }
 
 impl Serve {
-    pub(crate) fn new(endpoint: String, sidecar: bool) -> io::Result<Serve> {
+    pub(crate) fn new(endpoints: Vec<String>, sidecar: bool) -> io::Result<Serve> {
         let (mut instance, mut secret) = ([0; 16], [0; 32]);
         getrandom::fill(&mut instance).and_then(|()| getrandom::fill(&mut secret)).map_err(io::Error::other)?;
-        Ok(Serve { instance, secret, endpoint, sidecar })
+        Ok(Serve { instance, secret, endpoints, sidecar })
     }
 
     fn json(&self) -> String {
@@ -41,7 +43,7 @@ impl Serve {
             "pid": std::process::id(),
             "instance": base64url(&self.instance),
             "secret": base64url(&self.secret),
-            "endpoints": [self.endpoint],
+            "endpoints": self.endpoints,
         });
         if self.sidecar {
             published["sidecar"] = serde_json::Value::Bool(true);
@@ -170,7 +172,7 @@ mod tests {
 
     #[test]
     fn the_proof_is_the_hmac_of_the_challenge() {
-        let serve = Serve { instance: [0; 16], secret: [7; 32], endpoint: "pipe:x".to_owned(), sidecar: true };
+        let serve = Serve { instance: [0; 16], secret: [7; 32], endpoints: vec!["pipe:x".to_owned()], sidecar: true };
         let mut mac = Hmac::<Sha256>::new_from_slice(&[7; 32]).unwrap();
         mac.update(b"0123456789abcdef");
         assert_eq!(serve.prove()(b"0123456789abcdef"), mac.finalize().into_bytes().to_vec());

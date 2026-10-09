@@ -1,39 +1,97 @@
 // kv as plan/api/kv.md has it, buckets, counters, limits, once and
 // transactions over protocol 2, through each way a store is reached: the core
 // in this process, when TINYSTORE_LIBRARY names the library `cargo build -p
-// tinystore-ffi` made, and a private child and a sidecar, when TINYSTORE_BIN
-// names the tinystore that test/binary.ts or `just pipe` built.
+// tinystore-ffi` made, and a private child, a sidecar and a remote server,
+// when TINYSTORE_BIN names the tinystore that test/binary.ts or `just sdk`
+// built.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
 	ConflictError,
 	CorruptError,
+	connect,
 	type Duration,
 	InvalidError,
-	type OpenOptions,
 	open,
 	type Rate,
 	type Store,
 } from '../src/index.ts'
 
 const library = process.env.TINYSTORE_LIBRARY
-const served = process.env.TINYSTORE_BIN !== undefined && process.env.TINYSTORE_BIN !== 'unused'
+const binary = process.env.TINYSTORE_BIN
+const served = binary !== undefined && binary !== 'unused'
 
-/** Each way a store is reached, and whether this run can reach it so. */
-const ways: { name: string; ready: boolean; options: OpenOptions }[] = [
+/** A remote server's admin token, in a tokens file of the test's own. */
+const token = '4dGQ6tR2kq0SxVZpLWn8E1yHf7cJmB3aUoN9Tz5Ki0E'
+
+/** Each way a store is reached: how a test opens one in a directory, and lets go of it after. */
+interface Way {
+	name: string
+	ready: boolean
+	open(dir: string): Promise<Store>
+	/** Waits until whatever served the directory has let go of it. */
+	leave(dir: string): Promise<void>
+}
+
+const remotes = new Map<string, ReturnType<typeof Bun.spawn>>()
+
+const ways: Way[] = [
 	{
 		name: 'the core in this process',
 		ready: library !== undefined,
-		options: { embedded: true, library },
+		open: dir => open(dir, { embedded: true, library }),
+		leave: async () => {},
 	},
-	{ name: 'a private child', ready: served, options: { private: true } },
-	// a sidecar gone at once once the store closes, so that its directory can go
-	{ name: 'a sidecar', ready: served, options: { idle: 1 } },
+	{
+		name: 'a private child',
+		ready: served,
+		open: dir => open(dir, { private: true }),
+		leave: async () => {},
+	},
+	{
+		name: 'a sidecar',
+		ready: served,
+		// gone at once once the store closes, so that its directory can go
+		open: dir => open(dir, { idle: 1 }),
+		leave: dir => until(() => !existsSync(join(dir, 'server', 'SERVE'))),
+	},
+	{
+		name: 'a remote server over TCP',
+		ready: served,
+		open: async dir => {
+			writeFileSync(join(dir, 'tokens'), `admin ${token}\n`)
+			const args = [
+				'serve',
+				join(dir, 'store'),
+				'--listen',
+				'tcp://127.0.0.1:0',
+				'--tokens',
+				join(dir, 'tokens'),
+			]
+			remotes.set(dir, Bun.spawn([binary!, ...args], { stdout: 'ignore', stderr: 'ignore' }))
+			const serve = join(dir, 'store', 'server', 'SERVE')
+			await until(() => existsSync(serve))
+			const endpoints: string[] = JSON.parse(readFileSync(serve, 'utf8')).endpoints
+			return connect(endpoints[1]!, { token })
+		},
+		leave: async dir => {
+			const server = remotes.get(dir)
+			server?.kill()
+			await server?.exited
+		},
+	},
 ]
+
+async function until(done: () => boolean): Promise<void> {
+	const deadline = Date.now() + 10_000
+	while (!done() && Date.now() < deadline) {
+		await Bun.sleep(20)
+	}
+}
 
 /**
  * What a promise rejected with. Bun's expect(...).rejects waits for a
@@ -47,12 +105,9 @@ async function caught(promise: Promise<unknown>): Promise<unknown> {
 	)
 }
 
-/** Removes a store's directory once its server has let go of it: SERVE gone, then its files. */
+/** Removes a directory, again while Windows still holds a file in it a moment after its server. */
 async function removed(dir: string): Promise<void> {
 	const deadline = Date.now() + 10_000
-	while (existsSync(join(dir, 'server', 'SERVE')) && Date.now() < deadline) {
-		await Bun.sleep(20)
-	}
 	for (;;) {
 		try {
 			rmSync(dir, { recursive: true, force: true })
@@ -78,11 +133,12 @@ for (const way of ways) {
 
 		beforeAll(async () => {
 			dir = mkdtempSync(join(tmpdir(), 'tinystore-kv-'))
-			store = await open(dir, way.options)
+			store = await way.open(dir)
 		})
 
 		afterAll(async () => {
 			await store.close()
+			await way.leave(dir)
 			await removed(dir)
 		})
 
@@ -431,13 +487,14 @@ for (const way of ways) {
 
 			test('a handle of another store is refused', async () => {
 				const otherDir = mkdtempSync(join(tmpdir(), 'tinystore-kv-other-'))
-				const other = await open(otherDir, way.options)
+				const other = await way.open(otherDir)
 				try {
 					const theirs = other.bucket<number>('stock', { type: 'int' })
 					const err = await caught(store.tx(async tx => tx.with(theirs).get('sku-1')))
 					expect(err).toBeInstanceOf(InvalidError)
 				} finally {
 					await other.close()
+					await way.leave(otherDir)
 					await removed(otherDir)
 				}
 			})

@@ -14,6 +14,8 @@ use tokio::time::Instant;
 
 /// How long a closing server, or a client gone, waits for the streams running.
 const DRAIN: Duration = Duration::from_secs(10);
+/// How long a client may take to say HELLO before its connection ends.
+const HELLO_TIME: Duration = Duration::from_secs(5);
 /// How often draining looks whether the streams are done.
 const DRAIN_TICK: Duration = Duration::from_millis(10);
 
@@ -44,6 +46,7 @@ where
 /// server closing tells it `GOAWAY` and reads on while its streams finish.
 async fn read_frames<R: AsyncRead + Unpin>(mut reader: R, pipe: &Pipe, mut closing: watch::Receiver<bool>) {
     let mut buffer = vec![0; 64 << 10];
+    let hello_by = Instant::now() + HELLO_TIME;
     let mut going_away = *closing.borrow();
     if going_away {
         pipe.go_away();
@@ -64,6 +67,7 @@ async fn read_frames<R: AsyncRead + Unpin>(mut reader: R, pipe: &Pipe, mut closi
                 }
             }
             () = tokio::time::sleep(DRAIN_TICK), if going_away => {}
+            () = tokio::time::sleep_until(hello_by), if !pipe.welcomed() => return,
         }
     }
 }

@@ -26,19 +26,19 @@ should be a fact a ten-second grep would answer.
 
 ## Status
 
-| Part           | What is built                                                                                                                                                                 | Contract                                            |
-|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
-| runtime        | the store and its `LOCK`, the clock, the memory budget, background work, errors, the engine registry; a store closes at `close` or at its last handle's drop                  | [plan/architecture.md](plan/architecture.md)        |
-| SQLite adapter | the pinned build, one writer a file with grouped commits that callers lead or that answer through a completion, `query_only` readers that close when idle, checked migrations | [plan/architecture.md](plan/architecture.md)        |
-| kv             | buckets of any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears; counters, rate limits, quotas, `once`, transactions                            | [plan/api/kv.md](plan/api/kv.md)                    |
-| wire           | frames, the MessagePack profile, a session apart from its transport; protocol 2, its messages written from `protocol/*.wire`, with kv's every method                          | [plan/protocol.md](plan/protocol.md)                |
-| pipe and FFI   | a connection in memory to the store in this process, and five C functions over it                                                                                             | [plan/ffi.md](plan/ffi.md)                          |
-| server         | `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, `server.stop`, a private server's clock                         | [docs/wire.md](docs/wire.md#finding-a-local-server) |
-| Bun SDK        | kv as its book has it, over protocol 2: embedded through bun:ffi, through a private child or a sidecar; its other engines still speak protocol 1                              | [plan/api/kv.md](plan/api/kv.md)                    |
+| Part           | What is built                                                                                                                                                                  | Contract                                            |
+|----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
+| runtime        | the store and its `LOCK`, the clock, the memory budget, background work, errors, the engine registry; a store closes at `close` or at its last handle's drop                   | [plan/architecture.md](plan/architecture.md)        |
+| SQLite adapter | the pinned build, one writer a file with grouped commits that callers lead or that answer through a completion, `query_only` readers that close when idle, checked migrations  | [plan/architecture.md](plan/architecture.md)        |
+| kv             | buckets of any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears; counters, rate limits, quotas, `once`, transactions                             | [plan/api/kv.md](plan/api/kv.md)                    |
+| wire           | frames, the MessagePack profile, a session apart from its transport; protocol 2, its messages written from `protocol/*.wire`, with kv's every method                           | [plan/protocol.md](plan/protocol.md)                |
+| pipe and FFI   | a connection in memory to the store in this process, and five C functions over it                                                                                              | [plan/ffi.md](plan/ffi.md)                          |
+| server         | `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, TCP and TLS with tokens, `server.stop`, a private server's clock | [docs/wire.md](docs/wire.md#finding-a-local-server) |
+| Bun SDK        | kv as its book has it, over protocol 2: embedded through bun:ffi, through a private child, a sidecar or a remote server; its other engines still speak protocol 1              | [plan/api/kv.md](plan/api/kv.md)                    |
 
 Not built: jobs, sql, blobs, records, metrics, backup, config and the logger
-in the core, the server's TCP and TLS, `tinystore`'s other commands, the Node,
-Python and Go bindings, protocol 2's codecs for Python and Go. [plan/phases.md](plan/phases.md) has
+in the core, `tinystore`'s commands but `serve`, the Node, Python and Go
+bindings, protocol 2's codecs for Python and Go. [plan/phases.md](plan/phases.md) has
 their order and what closes each phase. The guides in [docs/](docs/README.md)
 and the SDKs still describe the Go release candidates, and promise nothing for
 this branch.
@@ -60,7 +60,7 @@ Do not describe unbuilt behaviour as though it works.
 | `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                               |
 | `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                             |
 | `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                     |
-| `crates/cli/`                  | `tinystore`: `serve` over stdio, a local socket or a named pipe, on tokio                            |
+| `crates/cli/`                  | `tinystore`: `serve` over stdio, a local socket or a named pipe, TCP and TLS, on tokio               |
 | `crates/protocol/`             | the generator: `protocol/*.wire` to the Rust and TypeScript codecs and the vectors; nothing ships it |
 | `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                             |
 | `protocol/`                    | the wire protocol's schema, a file an engine, which every codec and vector is written from           |

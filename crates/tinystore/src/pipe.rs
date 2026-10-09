@@ -27,6 +27,21 @@ pub type Prove = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// What `server.stop` does, called once its answer has left.
 pub type Stop = Arc<dyn Fn() + Send + Sync>;
 
+/// What a remote server lets a connection do by the token its HELLO carries:
+/// none for a token it does not know. It compares every token it knows in
+/// constant time, so that the time taken says nothing of which matched.
+pub type Admit = Arc<dyn Fn(Option<&str>) -> Option<Capability> + Send + Sync>;
+
+/// What a connection may do. A local endpoint's are `Admin`, its permission
+/// being the file system's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Capability {
+    /// Everything, stopping the server and changing a schema among it.
+    Admin,
+    /// Reads and writes.
+    Data,
+}
+
 /// What a connection to a store needs of its host beyond the frames.
 #[derive(Clone, Default)]
 pub struct Connect {
@@ -42,6 +57,9 @@ pub struct Connect {
     /// A private server's clock, which `server.clock` reads and moves; a
     /// connection without it refuses the call.
     pub clock: Option<Arc<TestClock>>,
+    /// A remote server's tokens; a connection without it admits every client
+    /// as `Admin`, as a local endpoint and an embedded store do.
+    pub admit: Option<Admit>,
 }
 
 impl fmt::Debug for Connect {
@@ -51,6 +69,7 @@ impl fmt::Debug for Connect {
             .field("prove", &self.prove.is_some())
             .field("stop", &self.stop.is_some())
             .field("clock", &self.clock)
+            .field("admit", &self.admit.is_some())
             .finish()
     }
 }
@@ -113,6 +132,12 @@ impl Pipe {
     /// The streams whose final frame has not left.
     pub fn streams(&self) -> usize {
         self.session.streams()
+    }
+
+    /// Whether the client's HELLO was taken: a server closes a connection
+    /// that says nothing for long.
+    pub fn welcomed(&self) -> bool {
+        self.session.welcomed()
     }
 
     /// Whether the session reads nothing more and owes nothing more: the

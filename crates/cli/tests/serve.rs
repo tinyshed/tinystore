@@ -4,17 +4,24 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned, crypto};
 
 const BINARY: &str = env!("CARGO_BIN_EXE_tinystore");
 const HELLO: u8 = 1;
 const WELCOME: u8 = 2;
 const REQUEST: u8 = 3;
 const RESPONSE: u8 = 4;
+const GOAWAY: u8 = 10;
 const END: u8 = 1;
+const ERROR: u8 = 2;
+const ADMIN: &str = "4dGQ6tR2kq0SxVZpLWn8E1yHf7cJmB3aUoN9Tz5Ki0E";
+const DATA: &str = "Yq8wHn2xLz5Rb7Tc0Vm3Kj6Fd9Gs1Ap4Ue8Wo2Ni5Qt";
 const SERVER_STOP: u16 = 0x0001;
 
 fn frame(kind: u8, flags: u8, method: u16, stream: u32, body: &[u8]) -> Vec<u8> {
@@ -34,6 +41,16 @@ fn hello(challenge: Option<&[u8; 16]>) -> Vec<u8> {
         Some(challenge) => [&[0x82, 0x01, 0x02, 0x06, 0xc4, 0x10][..], challenge].concat(),
     };
     frame(HELLO, 0, 0, 0, &body)
+}
+
+/// A HELLO of protocol 2 with a token, `{1: 2, 3: str}`.
+fn hello_with(token: &str) -> Vec<u8> {
+    let body = [&[0x82, 0x01, 0x02, 0x03, 0xd9, u8::try_from(token.len()).unwrap()][..], token.as_bytes()].concat();
+    frame(HELLO, 0, 0, 0, &body)
+}
+
+fn holds(body: &[u8], text: &str) -> bool {
+    body.windows(text.len()).any(|window| window == text.as_bytes())
 }
 
 /// The next frame: its kind, flags, stream and body.
@@ -112,6 +129,116 @@ fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_me
     assert_eq!((kind, flags & END, stream), (RESPONSE, END, 1));
     assert_eq!(wait(&mut server), 0);
     assert!(!dir.path().join("server").join("SERVE").exists(), "SERVE goes before the directory is let go");
+}
+
+/// A server on a directory's local endpoint and on `listen`, with an admin
+/// token and a data token, and what `SERVE` says of it.
+fn remote(dir: &Path, listen: &str, tls: &[&Path]) -> (Child, serde_json::Value) {
+    let tokens = dir.join("tokens");
+    std::fs::write(&tokens, format!("# who may connect\nadmin {ADMIN}\ndata  {DATA}\n")).unwrap();
+    let mut command = Command::new(BINARY);
+    command.arg("serve").arg(dir.join("store")).args(["--listen", listen, "--tokens"]).arg(&tokens);
+    if let [cert, key] = tls {
+        command.arg("--tls-cert").arg(cert).arg("--tls-key").arg(key);
+    }
+    let server = command.stderr(Stdio::null()).spawn().unwrap();
+    let serve = published(&dir.join("store").join("server").join("SERVE"));
+    (server, serve)
+}
+
+#[test]
+fn a_remote_client_is_admitted_by_its_token_and_may_do_what_its_line_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[]);
+    let endpoint = serve["endpoints"][1].as_str().unwrap();
+    let address = endpoint.strip_prefix("tcp://").unwrap();
+
+    let mut stranger = std::net::TcpStream::connect(address).unwrap();
+    stranger.write_all(&hello(None)).unwrap();
+    let (kind, _, _, body) = read_frame(&mut stranger);
+    assert!(kind == GOAWAY && holds(&body, "unauthenticated"), "no token");
+
+    let mut data = std::net::TcpStream::connect(address).unwrap();
+    data.write_all(&hello_with(DATA)).unwrap();
+    let (kind, _, _, welcome) = read_frame(&mut data);
+    assert!(kind == WELCOME && holds(&welcome, "data"));
+    data.write_all(&frame(REQUEST, END, SERVER_STOP, 1, &[0x80])).unwrap();
+    let (_, flags, _, refused) = read_frame(&mut data);
+    assert!(flags & ERROR != 0 && holds(&refused, "permission"), "a data client cannot stop the server");
+
+    let mut admin = std::net::TcpStream::connect(address).unwrap();
+    admin.write_all(&hello_with(ADMIN)).unwrap();
+    let (kind, _, _, welcome) = read_frame(&mut admin);
+    assert!(kind == WELCOME && holds(&welcome, "admin"));
+    admin.write_all(&frame(REQUEST, END, SERVER_STOP, 1, &[0x80])).unwrap();
+    assert_eq!(read_frame(&mut admin).0, RESPONSE);
+    assert_eq!(wait(&mut server), 0);
+}
+
+#[test]
+fn a_tls_server_answers_over_its_certificate() {
+    let dir = tempfile::tempdir().unwrap();
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+    let (cert, key) = (dir.path().join("cert.pem"), dir.path().join("key.pem"));
+    std::fs::write(&cert, certified.cert.pem()).unwrap();
+    std::fs::write(&key, certified.signing_key.serialize_pem()).unwrap();
+    let (mut server, serve) = remote(dir.path(), "tls://127.0.0.1:0", &[&cert, &key]);
+    let endpoint = serve["endpoints"][1].as_str().unwrap();
+    assert!(endpoint.starts_with("tls://127.0.0.1:"), "{endpoint}");
+
+    let mut roots = RootCertStore::empty();
+    roots.add(certified.cert.der().clone()).unwrap();
+    let config = ClientConfig::builder_with_provider(Arc::new(crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let tcp = std::net::TcpStream::connect(endpoint.strip_prefix("tls://").unwrap()).unwrap();
+    let connection = ClientConnection::new(Arc::new(config), ServerName::try_from("localhost").unwrap()).unwrap();
+    let mut tls = StreamOwned::new(connection, tcp);
+    tls.write_all(&hello_with(ADMIN)).unwrap();
+    assert_eq!(read_frame(&mut tls).0, WELCOME);
+    tls.write_all(&frame(REQUEST, END, SERVER_STOP, 1, &[0x80])).unwrap();
+    assert_eq!(read_frame(&mut tls).0, RESPONSE);
+    assert_eq!(wait(&mut server), 0);
+}
+
+#[test]
+fn a_connection_that_says_no_hello_ends_with_the_handshakes_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut server, serve) = remote(dir.path(), "tcp://127.0.0.1:0", &[]);
+    let address = serve["endpoints"][1].as_str().unwrap().strip_prefix("tcp://").unwrap().to_owned();
+    let mut silent = std::net::TcpStream::connect(&address).unwrap();
+    let began = Instant::now();
+    let mut byte = [0];
+    let read = silent.read(&mut byte);
+    assert!(matches!(read, Ok(0) | Err(_)), "the server ended the connection: {read:?}");
+    assert!(began.elapsed() < Duration::from_secs(10), "after {:?}", began.elapsed());
+
+    let mut admin = std::net::TcpStream::connect(&address).unwrap();
+    admin.write_all(&hello_with(ADMIN)).unwrap();
+    assert_eq!(read_frame(&mut admin).0, WELCOME);
+    admin.write_all(&frame(REQUEST, END, SERVER_STOP, 1, &[0x80])).unwrap();
+    assert_eq!(read_frame(&mut admin).0, RESPONSE);
+    assert_eq!(wait(&mut server), 0);
+}
+
+#[test]
+fn a_mistake_in_the_tokens_leaves_no_files_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let tokens = dir.path().join("tokens");
+    std::fs::write(&tokens, "admin short\n").unwrap();
+    let store = dir.path().join("store");
+    let status = Command::new(BINARY)
+        .arg("serve")
+        .arg(&store)
+        .args(["--listen", "tcp://127.0.0.1:0", "--tokens"])
+        .arg(&tokens)
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(1));
+    assert!(!store.exists(), "the store never opened");
 }
 
 /// `SERVE` once the server has written it.

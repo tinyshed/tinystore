@@ -441,7 +441,10 @@ module defines.
 - a stop runs once its answer has left, a private clock moves only forward, and an embedded store refuses both — `a_store_the_program_holds_answers_its_servers_calls`, `an_embedded_store_refuses_to_stop_and_has_no_clock_to_move` in `pipe::tests`
 - a challenge of another length than 16 bytes is a `HELLO` the server cannot take — `a_challenge_of_another_length_is_a_hello_the_server_cannot_take` in `pipe::tests`
 - the Bun SDK's kv answers alike through the core in its process, a private child and a sidecar — `sdk/js/test/kv.test.ts`, every test through each
-- a remote connection needs its token — `TestARemoteConnectionNeedsItsToken`
+- a remote connection needs its token, and may do what its line says — `a_remote_client_is_admitted_by_its_token_and_may_do_what_its_line_says` in `crates/cli/tests/serve.rs`
+- a tokens file takes only a capability and a token a line, and a mistake in it leaves no files — `a_tokens_file_refuses_what_is_not_a_token` in `crates/cli/src/remote.rs`, `a_mistake_in_the_tokens_leaves_no_files_behind`
+- a TLS server answers over its certificate — `a_tls_server_answers_over_its_certificate`
+- a connection that says no HELLO ends within the handshake's time — `a_connection_that_says_no_hello_ends_with_the_handshakes_time`
 - a pipe's name has one owner — `TestAPipesNameHasOneOwner`, on Windows
 - a kv batch is one transaction — `TestAKVBatchRollsBackWhenOneOfItsCallsFails`
 - a kv transaction across the wire applies its writes or names the read that changed, and the SDK runs it again — `a_transaction_applies_its_writes_or_names_the_read_that_changed` in `pipe::tests`, `a key read that changed before the commit runs the function again` in `sdk/js/test/kv.test.ts`

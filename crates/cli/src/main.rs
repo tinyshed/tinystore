@@ -5,12 +5,14 @@
 mod args;
 mod connection;
 mod local;
+mod remote;
 mod serve;
 
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --stdio] [--log <file>] [--idle <span>] \
-                     [--clock <time>]";
+                     [--clock <time>] [--listen tls://<host>:<port> --tls-cert <pem> --tls-key <pem> --tokens <file>] \
+                     [--memory <size>]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

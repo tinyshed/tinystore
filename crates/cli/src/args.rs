@@ -4,13 +4,18 @@
 //! tinystore serve --dir <dir> --local --log <dir>/server/serve.log [--idle 30000ms]   a sidecar
 //! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]            a private child
 //! tinystore serve <dir>                                                            a person's server
+//! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
 //! ```
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::remote::Address;
+
 /// How long a sidecar stays once its last client has gone, unless `--idle` says.
 const SIDECAR_IDLE: Duration = Duration::from_secs(30);
+/// The memory a remote server's engines hold at most, unless `--memory` says.
+const REMOTE_MEMORY: u64 = 1 << 30;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Serve {
@@ -21,6 +26,18 @@ pub(crate) struct Serve {
     pub(crate) idle: Option<Duration>,
     /// Where a private server's test clock starts; the system's clock when `None`.
     pub(crate) clock: Option<SystemTime>,
+    /// Clients on other machines, beside the local ones.
+    pub(crate) remote: Option<Remote>,
+    /// The bytes the engines' work may hold at once.
+    pub(crate) memory: Option<u64>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Remote {
+    pub(crate) address: Address,
+    pub(crate) tokens: PathBuf,
+    /// The certificate chain and key a `tls://` address answers with, PEM.
+    pub(crate) tls: Option<(PathBuf, PathBuf)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -36,6 +53,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let mut dir = None;
     let (mut stdio, mut local) = (false, false);
     let (mut log, mut idle, mut clock) = (None, None, None);
+    let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
@@ -46,6 +64,11 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--log" => log = Some(PathBuf::from(value("--log")?)),
             "--idle" => idle = Some(span(&value("--idle")?)?),
             "--clock" => clock = Some(time(&value("--clock")?)?),
+            "--listen" => listen = Some(Address::parse(&value("--listen")?)?),
+            "--tls-cert" => cert = Some(PathBuf::from(value("--tls-cert")?)),
+            "--tls-key" => key = Some(PathBuf::from(value("--tls-key")?)),
+            "--tokens" => tokens = Some(PathBuf::from(value("--tokens")?)),
+            "--memory" => memory = Some(size(&value("--memory")?)?),
             flag if flag.starts_with("--") => return Err(format!("no flag {flag}")),
             _ if dir.is_none() => dir = Some(PathBuf::from(arg)),
             _ => return Err(format!("one directory, not {arg} too")),
@@ -60,13 +83,57 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     if clock.is_some() && transport != Transport::Stdio {
         return Err("--clock is a private server's: --stdio".to_owned());
     }
+    let remote = match listen {
+        None if cert.is_some() || key.is_some() || tokens.is_some() => {
+            return Err("--tls-cert, --tls-key and --tokens are --listen's".to_owned());
+        }
+        None => None,
+        Some(_) if transport == Transport::Stdio => return Err("--listen or --stdio, not both".to_owned()),
+        Some(address) => Some(remote(address, tokens, cert, key)?),
+    };
+    let memory = memory.or(remote.as_ref().map(|_| REMOTE_MEMORY));
     let idle = match (idle, &transport) {
         (Some(Duration::ZERO), _) => None,
         (Some(idle), _) => Some(idle),
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    Ok(Serve { dir, transport, log, idle, clock })
+    Ok(Serve { dir, transport, log, idle, clock, remote, memory })
+}
+
+fn remote(
+    address: Address,
+    tokens: Option<PathBuf>,
+    cert: Option<PathBuf>,
+    key: Option<PathBuf>,
+) -> Result<Remote, String> {
+    let tokens = tokens.ok_or("--listen needs --tokens: a remote client is admitted by its token")?;
+    let tls = match (address.tls, cert, key) {
+        (true, Some(cert), Some(key)) => Some((cert, key)),
+        (true, ..) => return Err("a tls:// address needs --tls-cert and --tls-key".to_owned()),
+        (false, None, None) => None,
+        (false, ..) => return Err("--tls-cert and --tls-key are a tls:// address's".to_owned()),
+    };
+    Ok(Remote { address, tokens, tls })
+}
+
+/// A size as `--memory` takes it: bytes, or a number and KiB, MiB or GiB.
+///
+/// ```text
+/// 1GiB → 1,073,741,824     512MiB → 536,870,912     4096 → 4,096
+/// ```
+fn size(text: &str) -> Result<u64, String> {
+    let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let (number, unit) = text.split_at(digits);
+    let number: u64 = number.parse().map_err(|_| format!("the size {text}: as 1GiB or 512MiB"))?;
+    let unit = match unit {
+        "" | "B" => 1,
+        "KiB" => 1 << 10,
+        "MiB" => 1 << 20,
+        "GiB" => 1 << 30,
+        _ => return Err(format!("the size {text}: a unit of KiB, MiB or GiB")),
+    };
+    number.checked_mul(unit).ok_or_else(|| format!("the size {text}: past what a u64 holds"))
 }
 
 /// A span as `--idle` takes it: a number and its unit, `0` for ever.
@@ -148,6 +215,20 @@ mod tests {
         assert!(serve(&args("--dir d --local --clock 2026-10-09T12:00:00.000Z")).is_err());
         assert!(serve(&args("--dir d --stdio --local")).is_err());
         assert!(serve(&args("--stdio")).is_err(), "no directory");
+    }
+
+    #[test]
+    fn a_remote_server_needs_its_tokens_and_a_tls_address_its_certificate() {
+        let tls = serve(&args("d --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens t")).unwrap();
+        assert_eq!(tls.remote.unwrap().tls, Some((PathBuf::from("c.pem"), PathBuf::from("k.pem"))));
+        assert_eq!(tls.memory, Some(1 << 30), "a remote server's engines hold a GiB at most");
+        assert!(serve(&args("d --listen tls://0.0.0.0:7443 --tokens t")).is_err(), "no certificate");
+        assert!(serve(&args("d --listen tcp://127.0.0.1:0")).is_err(), "no tokens");
+        assert!(serve(&args("d --listen tcp://127.0.0.1:0 --tokens t --tls-key k.pem")).is_err());
+        assert!(serve(&args("d --tokens t")).is_err(), "tokens without --listen");
+        assert!(serve(&args("--dir d --stdio --listen tcp://127.0.0.1:0 --tokens t")).is_err());
+        let sized = serve(&args("d --listen tcp://127.0.0.1:0 --tokens t --memory 512MiB")).unwrap();
+        assert_eq!(sized.memory, Some(512 << 20));
     }
 
     #[test]
