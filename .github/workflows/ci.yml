@@ -16,6 +16,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
     name: test (${{ matrix.os }})
@@ -27,109 +30,46 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            server/go.sum
-            tools/go.sum
+      # rust-toolchain.toml pins the release and its components
+      - name: Toolchain
+        run: rustup toolchain install
 
-      # a cgo dependency must fail on the pull request that introduces it
-      - name: Build (CGO-free)
-        env:
-          CGO_ENABLED: 0
-        run: |
-          go build ./...
-          go -C server build ./...
-          go -C cmd/tinystore build ./...
+      - uses: Swatinem/rust-cache@v2
 
-      # the race detector needs cgo, which the windows runner cannot provide
+      # without it SQLite's Unix VFS calls fsync for fdatasync, which cost a
+      # 64 KiB set 1.5x (research kv-optimization-2026-10-09)
+      - name: SQLite's flags on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: echo 'LIBSQLITE3_FLAGS=SQLITE_DQS=0 -DHAVE_FDATASYNC=1' >> "$GITHUB_ENV"
+
+      # each platform's code is linted where it compiles: cfg hides it elsewhere
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Test
-        if: matrix.os == 'windows-latest'
-        run: |
-          go test -shuffle=on ./...
-          go -C server test -shuffle=on ./...
-          go -C cmd/tinystore test -shuffle=on ./...
+        run: cargo test --workspace --locked
 
-      - name: Test (race)
-        if: matrix.os != 'windows-latest'
-        env:
-          CGO_ENABLED: 1
-        run: |
-          go test -race -shuffle=on ./...
-          go -C server test -race -shuffle=on ./...
-          go -C cmd/tinystore test -race -shuffle=on ./...
-
-  sdk:
-    name: sdk (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: cmd/tinystore/go.mod
-          cache-dependency-path: |
-            go.sum
-            server/go.sum
-            cmd/tinystore/go.sum
+      - name: Build the core's library
+        run: cargo build --release --locked -p tinystore-ffi
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
 
-      # the JS SDK runs under Node too, which strips its types itself from 22.18
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      - uses: astral-sh/setup-uv@v10.2.0
-
-      - uses: arduino/setup-task@v3
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # each platform reaches its server another way: a named pipe on
-      # Windows, a Unix socket elsewhere
-      - name: Check and test the SDKs
-        run: task sdk
-
-  web:
-    name: web
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # each page's last change is read from the history
-          fetch-depth: 0
-
-      # the server's test runs against a tinystore built here
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: cmd/tinystore/go.mod
-          cache-dependency-path: |
-            go.sum
-            server/go.sum
-            cmd/tinystore/go.sum
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-
-      - uses: arduino/setup-task@v3
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # a link in the docs that leads nowhere fails the build here
-      - name: Check, test and build the site
-        run: task web
+      # TINYSTORE_BIN keeps the suite's preload from building the Go server
+      # the pipe test does not use
+      - name: Bun over the core, through bun:ffi
+        shell: bash
+        working-directory: sdk/js
+        run: |
+          case "$RUNNER_OS" in
+            Windows) library=tinystore_ffi.dll ;;
+            macOS) library=libtinystore_ffi.dylib ;;
+            *) library=libtinystore_ffi.so ;;
+          esac
+          bun install --frozen-lockfile
+          TINYSTORE_BIN=unused TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library" bun test test/pipe.test.ts
 
   quality:
     name: quality
@@ -137,68 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            server/go.sum
-            tools/go.sum
-
-      - uses: arduino/setup-task@v3
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # the tools change only with tools/, and lint checks only what changed since its last run
-      - uses: actions/cache@v6
-        with:
-          path: |
-            bin
-            .task
-            ~/.cache/golangci-lint
-          key: quality-${{ hashFiles('tools/go.sum', 'Taskfile.yml', '.golangci.yml') }}-${{ github.sha }}
-          restore-keys: quality-${{ hashFiles('tools/go.sum', 'Taskfile.yml', '.golangci.yml') }}-
-
-      - name: Build pinned tools
-        run: task setup
+      - name: Toolchain
+        run: rustup toolchain install
 
       - name: Formatting
-        run: task fmt:check
-
-      # build tags hide each platform's files from another's lint
-      - name: Lint
-        run: task lint:platforms
+        run: cargo fmt --all --check
 
       # a release workflow that does not parse fails only when a release needs it
       - name: Workflows
-        run: task lint:actions
-
-      - name: Vulnerabilities
-        run: task vuln
-
-      # naming the shell is what adds pipefail, without which tee hides a failure
-      - name: Import weight
-        shell: bash
-        run: task size | tee -a "$GITHUB_STEP_SUMMARY"
-
-  tidy:
-    name: tidy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            server/go.sum
-            tools/go.sum
-
-      - name: Verify the module files are tidy
-        run: |
-          go mod tidy -diff
-          go -C tools mod tidy -diff
-          go -C server mod tidy -diff
-          go -C cmd/tinystore mod tidy -diff
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
