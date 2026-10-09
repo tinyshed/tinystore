@@ -27,7 +27,7 @@ and is not the source of truth; these files are.
 | Phase                                              | Status      |
 |----------------------------------------------------|-------------|
 | 0. Decisions, vocabulary, workspace                | in progress |
-| 1. Vertical slice: core and KV through every layer | not started |
+| 1. Vertical slice: core and KV through every layer | in progress |
 | 2. sqldb, jobs, blobs                              | not started |
 | 3. records and metrics                             | not started |
 | 4. Backup, CLI, guest, SDKs, v0.1.0                | not started |
@@ -56,7 +56,6 @@ and is not the source of truth; these files are.
   gather facts, take inventories, run builds, tests and measurements, and do
   mechanical chores such as commits in research; they never write or edit
   Rust code.
-- **The rest of the repository's rules still hold**: AGENTS.md's runtime and
-  storage invariants, its editing and commit rules. Its rules about Go modules,
-  cgo and `task` describe the reference and give way here to what
-  [architecture.md](architecture.md) and [ffi.md](ffi.md) say.
+- **The rest of the repository's rules hold**: AGENTS.md, rewritten for this
+  branch, has the runtime and storage invariants, the editing and commit
+  rules, and the checks, which run through `just`.
