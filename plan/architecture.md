@@ -202,6 +202,25 @@ alpha.
 for a real caller: anomalies are an operator of metrics queries, a diff
 compares kv versions, similarity is an SQL function.
 
+## Engines of others
+
+An application's own engine is a later feature, but the core is built so it
+needs no back door: the built-in engines use only what an outside one would.
+
+- **Built now.** The store keeps one engine of each type, opened by the first
+  handle and closed with the store (`engine::Host::engine`), with `attach`,
+  `every` and `claim` beside it. kv is built on these and the SQLite adapter
+  alone.
+- **With the second engine.** Two seams wait until sqldb or jobs shows their
+  shape: the SQLite adapter's `File` made public as an engine's file, and a
+  registry of wire methods, where an engine registers its calls and is given
+  its byte by name in WELCOME, the built-in ones the same way. Today the
+  session matches kv's byte by hand.
+- **The three ways in.** Most applications compose what exists: buckets, SQL
+  and queues. Some register SQL functions and virtual tables, the cheapest
+  extension. A few write an engine of their own beside ours, on the same file,
+  registry and wire.
+
 ## What carries over from AGENTS.md
 
 These rules hold unchanged; AGENTS.md has their reasons.

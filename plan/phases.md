@@ -10,8 +10,10 @@ says so. Mark a task done in the commit that does it.
 - [x] This plan.
 - [x] The Go engines leave the tree; `e81a050` stays the reference.
 - [ ] AGENTS.md rewritten for the Rust repository: shape, crates, `unsafe`, features, checks.
-- [ ] A Cargo workspace with the crates of [architecture.md](architecture.md), building on Linux, macOS and Windows in CI.
-- [ ] The API book for jobs, then kv ([dx.md](dx.md#the-api-books)).
+- [x] A Cargo workspace with the crates of [architecture.md](architecture.md): builds and tests on Windows and in a Linux container (`rust:1.99`).
+- [ ] CI building and testing it on Linux, macOS and Windows.
+- [x] The kv book's first draft and one newcomer check ([api/kv.md](api/kv.md)).
+- [ ] The jobs book; the kv book's second check; the owner accepts both.
 - [ ] The protocol's schema in the new vocabulary, and the generator of message types for Rust, TypeScript, Python and Go.
 
 **Gate:** the jobs and kv books pass the newcomer check and the owner accepts
@@ -19,13 +21,24 @@ them; the workspace builds and tests on three operating systems.
 
 ## 1. Vertical slice: core and KV through every layer
 
-- [ ] The SQLite adapter: the pinned build, the writer and group commit (both shapes measured), readers with idle close, the statement cache, checked migrations, SQLite's memory counted.
-- [ ] The runtime: Store, LOCK, clock, memory budget, scheduler, errors.
+- [x] The SQLite adapter: the pinned build, one writer with grouped commits that callers lead or that answer submitted writes through a callback, readers with idle close, the statement cache, checked migrations.
+- [ ] SQLite's memory in the store's budget through `SQLITE_CONFIG_MALLOC`; today only `sqlite3_memory_used` is read.
+- [x] The runtime: Store, LOCK, clock, memory budget, background work, errors, the engine registry.
 - [ ] Config and the logger in the core, with the `tracing` layer.
-- [ ] kv, complete: buckets, ttl and idle expiry, versions, counters, limiter, quota, once, config storage.
-- [ ] The wire: the sans-IO session, dispatch, the server as a sidecar.
-- [ ] The pipe: the C ABI, bun:ffi, napi-rs, PyO3, cgo.
-- [ ] The Bun, Python and Go SDKs on kv, over the pipe and over a socket.
+- [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
+- [ ] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
+- [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's open, get, has, set, delete, take, touch and clear.
+- [ ] kv's scan, batch, view and the rest of its methods; downloads under credit; CANCEL.
+- [ ] The server: sockets, named pipes, stdio, TCP and TLS, SERVE, as `tinystore serve`.
+- [x] The pipe: the C ABI and bun:ffi; the Bun SDK opens a store `embedded` and its kv calls pass.
+- [ ] napi-rs, PyO3 and cgo over the same five functions; the Python and Go SDKs.
+
+A smoke comparison, not a research round, 9 October on Windows 11 with Bun
+1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,
+a get took 11.5 µs embedded against 37 µs through the Go sidecar of
+`e81a050`, a lone set 1.48 against 1.53 ms, and 2000 sets at once ran at about
+63,000 against 42,000 a second. The same 2000 sets as raw frames through
+bun:ffi ran at 72,000 to 97,000, and through the pipe from Rust at 138,000.
 
 **Gate:** every kv line of GATES.md has a Rust test and it passes; the SDK
 suites for kv pass over the pipe and over a socket on three operating
