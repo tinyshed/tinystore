@@ -33,13 +33,14 @@ should be a fact a ten-second grep would answer.
 | kv             | buckets of any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears; counters, rate limits, quotas, `once`, transactions                                                                                                                                                                                                                      | [plan/api/kv.md](plan/api/kv.md)                    |
 | jobs           | queues of any serde type by their time, ids that add, set, update and cancel, repeats by interval and by cron on a zone, schedules, concurrency in all and by group, rate, retries, steps, workers on the store's threads, claims, pages, watches, transactions                                                                                                         | [plan/api/jobs.md](plan/api/jobs.md)                |
 | sql            | databases by name, `sql/<name>.db`, with migrations from files checked at every open and run with foreign keys off; reads that send a write with `returning` to the writer, writes, batches, transactions bounded at five seconds; values through serde; tables and a query builder, a row holding the rows of a query it includes; buckets and queues kept in its file | [plan/api/sqldb.md](plan/api/sqldb.md)              |
+| blobs          | files by path in named sets, folders, uploads published whole at their commit, `ifMatch` and `create`, copies that share their bytes, expiry, whole reads checked against their SHA-256, the scrub, and what a process that died left removed at open; not yet on the wire                                                                                              | [plan/api/blobs.md](plan/api/blobs.md)              |
 | wire           | frames, the MessagePack profile, a session apart from its transport; protocol 2, its messages written from `protocol/*.wire`, with kv's every method and jobs', a client's worker its jobs and answers on one stream, a watch its job's changes; sql's queries in parts, writes, batches, and transactions whose calls, kv's and jobs' among them, come on one stream   | [plan/protocol.md](plan/protocol.md)                |
 | pipe and FFI   | a connection in memory to the store in this process, and four C functions over it                                                                                                                                                                                                                                                                                       | [plan/ffi.md](plan/ffi.md)                          |
 | server         | `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, TCP and TLS with tokens, `server.stop`, a private server's clock                                                                                                                                                                                          | [docs/wire.md](docs/wire.md#finding-a-local-server) |
 | Bun SDK        | kv and jobs as their books have them, and sql's with its tables, query builder, `include` and buckets and queues, over protocol 2: embedded through bun:ffi, through a private child, a sidecar or a remote server; its other engines still speak protocol 1                                                                                                            | [plan/api/kv.md](plan/api/kv.md)                    |
 
 Not built: the Python and Go SDKs,
-blobs, records, metrics, backup, config and the logger in the core, `tinystore`'s commands but `serve`, the Node, Python and Go
+blobs on the wire and in the SDKs, records, metrics, backup, config and the logger in the core, `tinystore`'s commands but `serve`, the Node, Python and Go
 bindings, protocol 2's codecs for Python and Go. [plan/phases.md](plan/phases.md) has
 their order and what closes each phase. The guides in [docs/](docs/README.md)
 and the SDKs still describe the Go release candidates, and promise nothing for
@@ -61,6 +62,7 @@ Do not describe unbuilt behaviour as though it works.
 | `crates/tinystore/src/kv/`     | kv: buckets, counters, rate limits, quotas, `once`, transactions                                     |
 | `crates/tinystore/src/jobs/`   | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                       |
 | `crates/tinystore/src/sql/`    | sql: the application's databases, their migrations, reads, writes, batches and transactions          |
+| `crates/tinystore/src/blobs/`  | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory        |
 | `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                               |
 | `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                             |
 | `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                     |
@@ -83,7 +85,7 @@ separate artifact: `crates/ffi` and `crates/cli` today, `crates/node` and
 ships in nothing. Only `crates/cli` runs tokio; the library runs no async
 runtime.
 
-- **Each engine is a cargo feature**, `kv`, `jobs` and `sql` the defaults today. A program links
+- **Each engine is a cargo feature**, `kv`, `jobs`, `sql` and `blobs` the defaults today. A program links
   the engines it opens and nothing else. An engine adds its calls to `Store`
   from its own module (`impl Store { pub fn bucket… }`): the store's own code
   names no engine.
@@ -98,7 +100,7 @@ runtime.
   saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for
   it: rusqlite pinned to one release with SQLite bundled, serde, serde_json,
-  tracing. Anything a measurement needs belongs in research, not here.
+  tracing, and sha2 for blobs' hashes. Anything a measurement needs belongs in research, not here.
 - **The toolchain is pinned** in `rust-toolchain.toml`; `rust-version` is the
   floor a user needs, raised only for a feature in use.
 

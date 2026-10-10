@@ -157,7 +157,7 @@ impl Store {
         lock(&self.inner.files).push(Arc::clone(file));
     }
 
-    pub(crate) fn files(&self) -> Vec<Arc<EngineFile>> {
+    pub(crate) fn engine_files(&self) -> Vec<Arc<EngineFile>> {
         lock(&self.inner.files).clone()
     }
 

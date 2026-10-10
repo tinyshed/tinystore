@@ -50,7 +50,7 @@ impl Store {
     /// separate calls already share commits.
     pub fn tx<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         self.refuse_when_closed("a transaction")?;
-        let files = self.files();
+        let files = self.engine_files();
         Transaction::of_store(&files, |transaction| work(&Tx { transaction }))
     }
 }

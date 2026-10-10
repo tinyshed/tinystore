@@ -4,6 +4,8 @@
 //! The store gives every engine the clock it reads, the memory budget its work
 //! reserves from, the background work it runs and the errors they all share.
 
+#[cfg(feature = "blobs")]
+pub mod blobs;
 mod clock;
 pub mod engine;
 mod error;
@@ -11,6 +13,7 @@ mod error;
 mod inside;
 #[cfg(feature = "jobs")]
 pub mod jobs;
+mod key;
 #[cfg(feature = "kv")]
 pub mod kv;
 mod memory;
@@ -25,6 +28,7 @@ pub(crate) mod wire;
 
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
 pub use error::{Constraint, ConstraintKind, Error, ErrorKind, Result};
+pub use key::Key;
 pub use memory::{Memory, Reservation};
 pub use sqlite::Durability;
 pub use store::{Options, Store};

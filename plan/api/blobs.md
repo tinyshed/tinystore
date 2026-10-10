@@ -92,7 +92,7 @@ err = avatars.Delete(ctx, id+".png")
 ```rust
 avatars.key(&format!("{id}.png")).content_type("image/png").put(&png)?;  // FileInfo
 let avatar: Option<StoredFile> = avatars.get(&format!("{id}.png"))?;    // Read + Seek
-let bytes = avatar.map(|mut file| file.bytes()).transpose()?;
+let bytes = avatar.map(|mut file| file.read_all()).transpose()?;
 let info: Option<FileInfo> = avatars.head(&format!("{id}.png"))?;
 avatars.delete(&format!("{id}.png"))?;
 ```

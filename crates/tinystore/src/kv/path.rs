@@ -10,8 +10,6 @@
 //! An owner ends with 00, so the byte after a branch's prefix is 01 or 02, and
 //! every path under a prefix lies in `[prefix, prefix 03)`.
 
-use std::borrow::Cow;
-
 use crate::{Error, Result};
 
 /// The longest path a key may have, its owners included, as the file keeps it.
@@ -23,41 +21,7 @@ const PAST: u8 = 0x03;
 const END: u8 = 0x00;
 const ESCAPE: u8 = 0xff;
 
-/// What names a key or an owner: text, or an integer spelled in decimal, so
-/// that `42` and `"42"` are one key.
-pub trait Key {
-    fn text(&self) -> Cow<'_, str>;
-}
-
-impl Key for str {
-    fn text(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self)
-    }
-}
-
-impl Key for String {
-    fn text(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self)
-    }
-}
-
-impl<K: Key + ?Sized> Key for &K {
-    fn text(&self) -> Cow<'_, str> {
-        (**self).text()
-    }
-}
-
-macro_rules! integer_keys {
-    ($($integer:ty),*) => {
-        $(impl Key for $integer {
-            fn text(&self) -> Cow<'_, str> {
-                Cow::Owned(self.to_string())
-            }
-        })*
-    };
-}
-
-integer_keys!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+pub use crate::Key;
 
 /// A branch: the owners above its keys, as a prefix of their paths.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

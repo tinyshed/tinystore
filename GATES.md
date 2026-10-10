@@ -409,28 +409,30 @@ module defines.
 
 ## Blobs
 
-- a Put that returned survives an abrupt exit — `TestAPutThatReturnedSurvivesAnAbruptExit`, inline and in files
-- an object appears whole at its commit or not at all — `TestAnObjectAppearsWholeAtItsCommitOrNotAtAll`, readers racing its replacements
-- an exit at any step of an upload leaves nothing behind — `TestAnExitAtEveryStepOfAnUploadLeavesNothingBehind`, the next Open cleaning up
-- Open walks only what a crash can have left — `TestOpenRemovesWhatAbandonedUploadsLeft`, past the settled mark alone
+- a put that returned survives a reopen, inline and in a file — `a_put_that_returned_is_there_after_a_reopen` in `blobs::files`; an abrupt exit still `TestAPutThatReturnedSurvivesAnAbruptExit`
+- a file appears whole at its commit or not at all — `an_upload_appears_whole_at_its_commit_and_never_before` in `blobs::upload`; readers racing its replacements still `TestAnObjectAppearsWholeAtItsCommitOrNotAtAll`
+- an open removes what a process that died left, in `uploads/` and past the settled mark alone — `an_open_removes_what_a_process_that_died_left` in `blobs::maintain`; every step of an upload still `TestAnExitAtEveryStepOfAnUploadLeavesNothingBehind`
 - a commit whose outcome is unknown leaves no file — `TestAnUnknownCommitLeavesNoFileBehind`
-- an upload that does not commit leaves nothing — `TestAnAbortedOrAbandonedUploadLeavesNothing`, `TestMaintenanceAbortsAnUploadItsContextLeft`
-- a reader keeps what it opened, on Windows too — `TestAReaderKeepsWhatItOpened`, through a delete, a replace, an expiry, a Clear
+- an upload that does not commit leaves nothing — `an_upload_aborted_or_dropped_leaves_nothing` in `blobs::upload`, `create_writes_only_where_nothing_is_and_says_so` in `blobs::files`
+- a reader keeps what it opened, on Windows too — `a_reader_keeps_what_it_opened_through_a_replace_and_a_delete` in `blobs::read`; an expiry and a clear still `TestAReaderKeepsWhatItOpened`
 - an Open racing a replace opens the new object — `TestAnOpenRacingAReplaceOpensTheNewObject`
-- a whole read of a changed byte fails before its end — `TestAWholeReadOfAChangedByteFailsBeforeItsEnd`; a range is not checked
-- the scrub finds what changed and names its keys — `TestTheScrubNamesTheKeysOfWhatChanged`, `TestTheScrubKeepsItsPlaceAcrossReopens`
+- a whole read of a changed byte fails before its end, an inline one at its read — `a_whole_read_of_a_changed_byte_fails_before_its_end`, `an_inline_file_whose_bytes_changed_is_corrupt_when_read`, `a_range_is_not_checked` in `blobs::read`
+- the scrub finds what changed, once, and a read of it is corrupt — `the_scrub_finds_a_changed_byte_and_a_read_of_it_is_corrupt`, `a_changed_inline_body_is_found_by_the_scrub` in `blobs::maintain`; its place across reopens still `TestTheScrubKeepsItsPlaceAcrossReopens`
 - memory does not follow an object's size — `TestMemoryDoesNotGrowWithAnObjectsSize`, `TestStoreMemoryBoundsUploadsReadsAndScans`
 - a Put grows its buffer only when memory is free now — `TestStreamingUsesOnlyTheBufferItsBudgetCanHold`, `TestAFailedStreamReleasesItsLargerBuffer`
 - a Windows scanner's hold is retried and cleaned up — `TestARenameRetriesAfterAWindowsScannerLetsGo`, `TestAHeldRenameExhaustsRetriesAndRecovers`
-- a stream that disagrees with its Size is refused — `TestAStreamThatDisagreesWithItsSizeIsRefused`
-- an upload past MaxSize or KeepFree leaves nothing — `TestAnUploadPastItsBoundsStopsAndLeavesNothing`
-- of two conditional replaces, one conflicts — `TestOneOfTwoConditionalReplacesConflicts`, `TestIfNoneMatchCreatesOnce`
-- a copy shares the bytes and outlives its source — `TestACopySharesTheBytesAndOutlivesItsSource`
-- a blobs Clear empties a folder and those under it — `TestClearEmptiesAFolderAndThoseUnderIt`, over the bound and under it
-- a key is its own bytes on every file system — `TestAKeyIsItsOwnBytesOnEveryFileSystem`, `TestAPathThatIsNotOneIsRefused`
+- a body that disagrees with its size is refused and leaves nothing — `a_body_that_disagrees_with_its_size_is_refused_and_leaves_nothing` in `blobs::upload`
+- a file past `max_file_size` is refused, leaves nothing and removes nothing stored — `a_file_past_its_bound_is_refused_and_leaves_nothing` in `blobs::upload`; `keepFree` still `TestAnUploadPastItsBoundsStopsAndLeavesNothing`
+- of two writes that read one ETag, one conflicts; `create` writes once — `of_two_writes_that_read_one_etag_one_conflicts`, `create_writes_only_where_nothing_is_and_says_so` in `blobs::files`
+- a copy shares the bytes and outlives its source; a copy or a rename never replaces a file but by its ETag — `a_copy_shares_the_bytes_and_outlives_its_source`, `copy_and_rename_never_replace_a_file_by_surprise` in `blobs::files`
+- a file expires by its own term or its files', a write again lives its term again — `a_file_expires_by_its_own_term_or_its_files_term`, `a_write_again_lives_its_term_again` in `blobs::files`, `maintenance_removes_expired_files_and_their_bytes` in `blobs::maintain`
+- a folder is whole segments, and a clear empties it and the folders in it, past its bound at once — `a_folder_is_whole_segments_never_a_prefix_of_text`, `a_clear_past_its_bound_hides_every_file_at_once_and_maintenance_removes_them` in `blobs::list`
+- a page walks every file once in the byte order of its path; a prefix is text — `pages_walk_every_file_once_in_the_byte_order_of_their_paths`, `a_prefix_is_text_within_the_folder` in `blobs::list`
+- a path is its own bytes on every file system, and one that is not a path is refused — `a_path_is_its_own_bytes_whatever_the_file_system`, `a_path_or_a_name_that_is_not_one_is_refused` in `blobs::files`, `a_folder_is_whole_segments_and_a_path_is_its_folders_and_its_own` in `blobs::paths`
+- bytes no file names are removed, though their first removal failed — `bytes_no_file_names_are_removed_when_their_removal_failed_before` in `blobs::maintain`
 - a file another program holds is removed later — `TestAFileHeldElsewhereIsRemovedLater`, on Windows
 - a snapshot links the files, and removal waits for it — `TestASnapshotLinksFilesAndCopiesTheDatabase`, `TestCollectionWaitsForASnapshot`
-- the blobs engine links no net/http — `TestBlobsImportsNoHTTP`
+- the blobs engine links no HTTP: `sha2` is its one dependency more, in `crates/tinystore/Cargo.toml`
 
 ## Backups
 
