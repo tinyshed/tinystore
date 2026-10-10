@@ -1,4 +1,5 @@
-//! The Rust side: a struct a message, read whole or refused through
+//! The Rust side: a struct a message, read whole or refused a field at a time
+//! from its body and written a field at a time into its bytes, through
 //! `wire::codec`, and a constant a method.
 
 use std::fmt::Write as _;
@@ -10,9 +11,9 @@ pub(crate) fn write(schema: &Schema) -> String {
     let mut out = String::new();
     out.push_str("// Written by crates/protocol from protocol/*.wire; `just protocol` writes it again.\n\n");
     out.push_str("use std::collections::BTreeMap;\n\n");
-    out.push_str("use super::codec::{self, Message, Out, Row};\n");
+    out.push_str("use super::codec::{self, Map, Message, Row};\n");
     out.push_str(&cell_import(schema));
-    out.push_str("use super::message::Fields;\n");
+    out.push_str("use super::msgpack::Reader;\n");
     for message in &schema.messages {
         out.push('\n');
         write_message(&mut out, message);
@@ -42,44 +43,77 @@ fn write_message(out: &mut String, message: &Message) {
     out.push_str("}\n\n");
     out.push_str(&gate);
     let _ = writeln!(out, "impl Message for {name} {{");
-    let _ = writeln!(out, "    const NAME: &'static str = \"{}\";", message.name);
-    let keys: Vec<String> = message.fields.iter().map(|field| field.number.to_string()).collect();
-    let _ = writeln!(out, "    const KEYS: &'static [u64] = &[{}];\n", keys.join(", "));
-    write_read(out, &name, message);
-    write_write(out, message);
+    let _ = writeln!(out, "    const NAME: &'static str = \"{}\";\n", message.name);
+    let fields = by_number(message);
+    write_read(out, &fields);
+    write_write(out, &fields);
+    write_is_zero(out, &fields);
     out.push_str("}\n");
 }
 
-fn write_read(out: &mut String, name: &str, message: &Message) {
-    let fields = if message.fields.is_empty() { "_fields" } else { "fields" };
-    let _ = writeln!(out, "    fn read({fields}: &Fields) -> Result<Self, Failure> {{");
-    if message.fields.is_empty() {
-        let _ = writeln!(out, "        Ok({name} {{}})");
-    } else {
-        let _ = writeln!(out, "        Ok({name} {{");
-        for field in &message.fields {
-            let read = format!("fields.get({}, \"{}\", {})?", field.number, field.name, reader(&field.kind));
-            let read = if field.optional { read } else { format!("{read}.unwrap_or_default()") };
-            let _ = writeln!(out, "            {}: {read},", rust_field(&field.name));
-        }
-        out.push_str("        })\n");
-    }
-    out.push_str("    }\n\n");
+/// A message's fields in the order of their numbers, which a map's
+/// canonical order is.
+fn by_number(message: &Message) -> Vec<&Field> {
+    let mut fields: Vec<&Field> = message.fields.iter().collect();
+    fields.sort_by_key(|field| field.number);
+    fields
 }
 
-fn write_write(out: &mut String, message: &Message) {
-    let to = if message.fields.is_empty() { "_out" } else { "out" };
-    let _ = writeln!(out, "    fn write(&self, {to}: &mut Out) {{");
-    for field in &message.fields {
-        let member = format!("self.{}", rust_field(&field.name));
-        let line = if field.optional {
-            format!("out.given({}, {member}.as_ref().map({}));", field.number, writer(&field.kind))
-        } else {
-            format!("out.put({}, {});", field.number, written(&field.kind, &format!("&{member}")))
-        };
-        let _ = writeln!(out, "        {line}");
+fn write_read(out: &mut String, fields: &[&Field]) {
+    out.push_str("    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {\n");
+    if fields.is_empty() {
+        out.push_str("        match codec::fields(r, Self::NAME)? {\n");
+        out.push_str("            0 => Ok(Self {}),\n");
+        out.push_str("            _ => Err(codec::unknown(codec::field(r, Self::NAME, &mut 0)?, Self::NAME)),\n");
+        out.push_str("        }\n    }\n\n");
+        return;
     }
-    out.push_str("    }\n");
+    out.push_str("        let mut message = Self::default();\n");
+    out.push_str("        let mut seen = 0;\n");
+    out.push_str("        for _ in 0..codec::fields(r, Self::NAME)? {\n");
+    out.push_str("            match codec::field(r, Self::NAME, &mut seen)? {\n");
+    for field in fields {
+        let read = read_with(&field.kind, &format!("\"{}\"", field.name));
+        let read = if field.optional { format!("Some({read})") } else { read };
+        let _ = writeln!(out, "                {} => message.{} = {read},", field.number, rust_field(&field.name));
+    }
+    out.push_str("                number => return Err(codec::unknown(number, Self::NAME)),\n");
+    out.push_str("            }\n        }\n        Ok(message)\n    }\n\n");
+}
+
+fn write_write(out: &mut String, fields: &[&Field]) {
+    if fields.is_empty() {
+        out.push_str("    fn write(&self, out: &mut Vec<u8>) {\n        Map::open(out).close(out);\n    }\n\n");
+        return;
+    }
+    out.push_str("    fn write(&self, out: &mut Vec<u8>) {\n");
+    out.push_str("        let mut map = Map::open(out);\n");
+    for field in fields {
+        let member = rust_field(&field.name);
+        if field.optional {
+            let _ = writeln!(out, "        if let Some({member}) = &self.{member} {{");
+            let _ = writeln!(out, "            map.field(out, {});", field.number);
+            let _ = writeln!(out, "            {};", write_with(&field.kind, &member));
+        } else {
+            let _ = writeln!(out, "        if {} {{", nonzero(&field.kind, &format!("self.{member}")));
+            let _ = writeln!(out, "            map.field(out, {});", field.number);
+            let _ = writeln!(out, "            {};", write_with(&field.kind, &format!("&self.{member}")));
+        }
+        out.push_str("        }\n");
+    }
+    out.push_str("        map.close(out);\n    }\n\n");
+}
+
+fn write_is_zero(out: &mut String, fields: &[&Field]) {
+    let zero: Vec<String> = fields
+        .iter()
+        .map(|field| {
+            let member = format!("self.{}", rust_field(&field.name));
+            if field.optional { format!("{member}.is_none()") } else { zero(&field.kind, &member) }
+        })
+        .collect();
+    let zero = if zero.is_empty() { "true".to_owned() } else { zero.join("\n            && ") };
+    let _ = writeln!(out, "    fn is_zero(&self) -> bool {{\n        {zero}\n    }}");
 }
 
 fn write_methods(out: &mut String, schema: &Schema) {
@@ -216,8 +250,20 @@ fn kind_type(kind: &Kind) -> String {
     }
 }
 
-/// The function that reads a kind from its value.
-fn reader(kind: &Kind) -> String {
+/// A field's value read from the reader `r`, the field named `name` in a
+/// refusal.
+fn read_with(kind: &Kind, name: &str) -> String {
+    match kind {
+        Kind::List(item) => format!("codec::list(r, {name}, {})?", item_reader(item)),
+        Kind::Names(item) => format!("codec::names(r, {name}, {})?", item_reader(item)),
+        Kind::Message(message) => format!("{}::read(r)?", type_name(message)),
+        _ => format!("{}(r, {name})?", item_reader(kind)),
+    }
+}
+
+/// What reads an item of a list or a map: a function, or a closure for a
+/// list in a list.
+fn item_reader(kind: &Kind) -> String {
     match kind {
         Kind::Bool => "codec::bool".to_owned(),
         Kind::Uint | Kind::Duration => "codec::uint".to_owned(),
@@ -228,35 +274,70 @@ fn reader(kind: &Kind) -> String {
         Kind::Bin => "codec::bin".to_owned(),
         Kind::Value => "codec::row".to_owned(),
         Kind::Cell => "codec::cell".to_owned(),
-        Kind::List(item) => format!("codec::list({})", reader(item)),
-        Kind::Names(item) => format!("codec::names({})", reader(item)),
+        Kind::List(item) => format!("|r, name| codec::list(r, name, {})", item_reader(item)),
+        Kind::Names(item) => format!("|r, name| codec::names(r, name, {})", item_reader(item)),
         Kind::Message(name) => format!("codec::message::<{}>", type_name(name)),
     }
 }
 
-/// A kind's value written, from an expression that borrows it.
-fn written(kind: &Kind, value: &str) -> String {
+/// A field's value written, from an expression that borrows it.
+fn write_with(kind: &Kind, value: &str) -> String {
     match kind {
-        Kind::List(item) => format!("codec::list_value({value}, {})", writer(item)),
-        Kind::Names(item) => format!("codec::names_value({value}, {})", writer(item)),
-        _ => format!("{}({value})", writer(kind)),
+        Kind::List(item) => format!("codec::write_list(out, {value}, {})", item_writer(item)),
+        Kind::Names(item) => format!("codec::write_names(out, {value}, {})", item_writer(item)),
+        _ => format!("{}(out, {value})", item_writer(kind)),
     }
 }
 
-/// What writes a kind as its value: a function, or a closure for a list.
-fn writer(kind: &Kind) -> String {
+/// What writes an item of a list or a map: a function, or a closure for a
+/// list in a list.
+fn item_writer(kind: &Kind) -> String {
     match kind {
-        Kind::Bool => "codec::bool_value".to_owned(),
-        Kind::Uint | Kind::Duration => "codec::uint_value".to_owned(),
-        Kind::Int | Kind::Int64 | Kind::Time | Kind::Nanos => "codec::int_value".to_owned(),
-        Kind::Float => "codec::float_value".to_owned(),
-        Kind::Str | Kind::Json | Kind::Key => "codec::str_value".to_owned(),
-        Kind::Bin => "codec::bin_value".to_owned(),
-        Kind::Value => "codec::row_value".to_owned(),
-        Kind::Cell => "codec::cell_value".to_owned(),
-        Kind::List(item) => format!("|items| codec::list_value(items, {})", writer(item)),
-        Kind::Names(item) => format!("|names| codec::names_value(names, {})", writer(item)),
-        Kind::Message(_) => "codec::message_value".to_owned(),
+        Kind::Bool => "codec::write_bool".to_owned(),
+        Kind::Uint | Kind::Duration => "codec::write_uint".to_owned(),
+        Kind::Int | Kind::Int64 | Kind::Time | Kind::Nanos => "codec::write_int".to_owned(),
+        Kind::Float => "codec::write_float".to_owned(),
+        Kind::Str | Kind::Json | Kind::Key => "codec::write_str".to_owned(),
+        Kind::Bin => "codec::write_bin".to_owned(),
+        Kind::Value => "codec::write_row".to_owned(),
+        Kind::Cell => "codec::write_cell".to_owned(),
+        Kind::List(item) => format!("|out, items| codec::write_list(out, items, {})", item_writer(item)),
+        Kind::Names(item) => format!("|out, names| codec::write_names(out, names, {})", item_writer(item)),
+        Kind::Message(_) => "codec::write_message".to_owned(),
+    }
+}
+
+/// Whether a field that is not optional holds more than its zero value,
+/// which the profile writes and a field at zero leaves out: false, 0, a float
+/// whose bits are all 0, nothing in a text, bytes or a list, a message all
+/// of whose fields are at zero.
+fn nonzero(kind: &Kind, member: &str) -> String {
+    match kind {
+        Kind::Bool => member.to_owned(),
+        Kind::Uint | Kind::Duration | Kind::Int | Kind::Int64 | Kind::Time | Kind::Nanos => format!("{member} != 0"),
+        Kind::Float => format!("{member}.to_bits() != 0"),
+        Kind::Str | Kind::Json | Kind::Key | Kind::Bin | Kind::List(_) | Kind::Names(_) => {
+            format!("!{member}.is_empty()")
+        }
+        Kind::Value => format!("!codec::row_is_zero(&{member})"),
+        Kind::Cell => format!("!codec::cell_is_zero(&{member})"),
+        Kind::Message(_) => format!("!{member}.is_zero()"),
+    }
+}
+
+/// Whether a field that is not optional holds its zero value: what
+/// `nonzero` says the other way round.
+fn zero(kind: &Kind, member: &str) -> String {
+    match kind {
+        Kind::Bool => format!("!{member}"),
+        Kind::Uint | Kind::Duration | Kind::Int | Kind::Int64 | Kind::Time | Kind::Nanos => format!("{member} == 0"),
+        Kind::Float => format!("{member}.to_bits() == 0"),
+        Kind::Str | Kind::Json | Kind::Key | Kind::Bin | Kind::List(_) | Kind::Names(_) => {
+            format!("{member}.is_empty()")
+        }
+        Kind::Value => format!("codec::row_is_zero(&{member})"),
+        Kind::Cell => format!("codec::cell_is_zero(&{member})"),
+        Kind::Message(_) => format!("{member}.is_zero()"),
     }
 }
 

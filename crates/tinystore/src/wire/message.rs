@@ -3,52 +3,8 @@
 //! answer to a request read in part answers another question. A refusal is a
 //! `Failure`, the message a stream that failed ends with.
 
-use super::msgpack::{self, Value};
 use super::protocol::Failure;
 use crate::{Error, ErrorKind};
-
-/// A request's fields by their numbers.
-#[derive(Debug)]
-pub(crate) struct Fields {
-    pairs: Vec<(u64, Value)>,
-}
-
-impl Fields {
-    /// Decodes a body of the message `name`, refusing a field outside `known`.
-    pub(crate) fn decode(body: &[u8], name: &str, known: &[u64]) -> Result<Fields, Failure> {
-        let value = msgpack::decode(body).map_err(|refused| Failure::invalid(refused.0))?;
-        Fields::from_value(&value, name, known)
-    }
-
-    /// A message's fields from its map, a nested message's too.
-    pub(crate) fn from_value(value: &Value, name: &str, known: &[u64]) -> Result<Fields, Failure> {
-        let Value::Map(pairs) = value else {
-            return Err(Failure::invalid(format!("a {name} that is not a map")));
-        };
-        let mut fields = Vec::with_capacity(pairs.len());
-        for (key, value) in pairs {
-            let Value::Uint(number) = key else {
-                return Err(Failure::invalid(format!("a {name} with a field named rather than numbered")));
-            };
-            if !known.contains(number) {
-                return Err(Failure::unimplemented(format!("field {number} of {name}")));
-            }
-            fields.push((*number, value.clone()));
-        }
-        Ok(Fields { pairs: fields })
-    }
-
-    /// A field read by `read`, or `None` when the message leaves it out.
-    pub(crate) fn get<T>(
-        &self,
-        number: u64,
-        name: &str,
-        read: impl Fn(&Value, &str) -> Result<T, Failure>,
-    ) -> Result<Option<T>, Failure> {
-        let value = self.pairs.iter().find(|(key, _)| *key == number).map(|(_, value)| value);
-        value.map(|value| read(value, name)).transpose()
-    }
-}
 
 impl Failure {
     pub(crate) fn invalid(message: impl Into<String>) -> Failure {

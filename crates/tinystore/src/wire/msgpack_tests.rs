@@ -3,7 +3,7 @@
 
 use serde_json::Value as Json;
 
-use super::*;
+use super::tree::{Value, decode, encode, signed};
 
 fn vectors() -> Json {
     let text = include_str!("../../../../testdata/wire/vectors.json");

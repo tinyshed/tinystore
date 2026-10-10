@@ -534,7 +534,10 @@ function joined(parts: Uint8Array[]): Answered {
 	return answered
 }
 
-function doneOf(done: { changes?: number; lastInsertRowid?: bigint }): Done {
+function doneOf(done: {
+	changes?: number | undefined
+	lastInsertRowid?: bigint | undefined
+}): Done {
 	const rowid = done.lastInsertRowid ?? 0n
 	const exact = rowid >= BigInt(Number.MIN_SAFE_INTEGER) && rowid <= BigInt(Number.MAX_SAFE_INTEGER)
 	return { changes: done.changes ?? 0, lastInsertRowid: exact ? Number(rowid) : rowid }

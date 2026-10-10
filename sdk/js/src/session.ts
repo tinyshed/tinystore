@@ -43,10 +43,13 @@ const welcomeMost = 1 << 20
 /** A frame past this leaves by itself, so that what a turn's calls are written into stays small. */
 const largeFrame = 1 << 15
 
-export type Agreed = Required<Omit<Read<typeof Welcome.fields>, 'proof' | 'durability'>> & {
+export type Agreed = Given<Omit<Read<typeof Welcome.fields>, 'proof' | 'durability'>> & {
 	/** how far the store's files' commits go, when it was opened with one: full or os */
 	durability: string | undefined
 }
+
+/** Every field of a message read, each with a value: one the message left out is at its zero. */
+type Given<T> = { [K in keyof T]-?: Exclude<T[K], undefined> }
 
 export interface SessionOptions {
 	/** a name and version, for the server's logs */

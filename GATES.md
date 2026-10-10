@@ -468,6 +468,9 @@ module defines.
 - a client newer than its server speaks the server's protocol — `TestAClientOfANewerProtocolIsWelcomedInTheServers`
 - the vectors are the bytes — `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`
 - every message is a vector, every field by its name — `every_vector_of_the_schema_reads_and_writes_its_own_bytes` in `wire::codec` and `protocol 2` in `sdk/js/test/protocol.test.ts`, over `testdata/wire/protocol.json`
+- a message read a field at a time refuses what the profile refuses, for the same rule: a body that is not a map, a field named or twice, bytes after it, a count past the bytes left, a str that is not UTF-8, a name twice in a map of names — `a_message_is_refused_for_the_rule_its_body_breaks`, `a_value_the_profile_refuses_is_refused_in_a_message_too`, `a_map_of_names_is_refused_for_a_name_twice_or_a_number` in `wire::codec`
+- a map of more than fifteen fields writes a map 16's head, what came before it kept — `a_map_of_more_than_fifteen_fields_writes_the_head_a_map_16_has` in `wire::codec`
+- each message's written-out reader and writer do what its table of fields does: the same bytes for random values from the edges of each type, and the same message or the same refusal for those bytes cut short or changed — `a message's own reader and writer` in `sdk/js/test/protocol.test.ts`
 - every codec and vector is what `protocol/*.wire` writes — `protocol --check`, `just protocol-check` and CI's quality job
 - the largest kv or jobs value travels in one body — `TestTheLargestValueTravelsInOneBody`
 - a work stream asked to end when idle ends — `a_worker_until_idle_runs_what_is_due_and_then_its_stream_ends` in `wire::jobs`; `runDue`, `a private store runs on the clock it is given, which moves only forward` in `sdk/js/test/clock.test.ts`

@@ -116,6 +116,17 @@ left out of rustfmt, and the TypeScript one imports every codec, used or not,
 so that a change of the schema never moves its header; biome lets its unused
 imports be.
 
+A message's reader and writer are written out a field at a time, in every
+language: the reader takes a field's value straight from the body as the
+profile's one parser meets it, and the writer puts each field after its
+number into the bytes that leave, the map's count kept in a byte until the
+fields are known. Neither builds a tree of values or walks a table of fields,
+which the core paid in allocations and the Bun SDK in closures, every call.
+The TypeScript messages keep their table of fields, for their types and as
+the reference a test holds the written code to; the schema keeps a field's
+number to one byte and a value within the profile's eight levels, which is
+what lets a reader that follows the schema skip counting them.
+
 ## kv
 
 | Method                                         | Request                                                                                              | Answer                                                                                       |

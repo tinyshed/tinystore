@@ -2,10 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use super::codec::{self, Message, Out, Row};
+use super::codec::{self, Map, Message, Row};
 #[cfg(feature = "sql")]
 use super::codec::Cell;
-use super::message::Fields;
+use super::msgpack::Reader;
 
 /// What a client says first.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -26,26 +26,60 @@ pub(crate) struct Hello {
 
 impl Message for Hello {
     const NAME: &'static str = "Hello";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(Hello {
-            protocol: fields.get(1, "protocol", codec::uint)?.unwrap_or_default(),
-            client: fields.get(2, "client", codec::str)?.unwrap_or_default(),
-            token: fields.get(3, "token", codec::str)?,
-            max_body: fields.get(4, "maxBody", codec::uint)?,
-            stream_credit: fields.get(5, "streamCredit", codec::uint)?,
-            challenge: fields.get(6, "challenge", codec::bin)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.protocol = codec::uint(r, "protocol")?,
+                2 => message.client = codec::str(r, "client")?,
+                3 => message.token = Some(codec::str(r, "token")?),
+                4 => message.max_body = Some(codec::uint(r, "maxBody")?),
+                5 => message.stream_credit = Some(codec::uint(r, "streamCredit")?),
+                6 => message.challenge = Some(codec::bin(r, "challenge")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.protocol));
-        out.put(2, codec::str_value(&self.client));
-        out.given(3, self.token.as_ref().map(codec::str_value));
-        out.given(4, self.max_body.as_ref().map(codec::uint_value));
-        out.given(5, self.stream_credit.as_ref().map(codec::uint_value));
-        out.given(6, self.challenge.as_ref().map(codec::bin_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.protocol != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.protocol);
+        }
+        if !self.client.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.client);
+        }
+        if let Some(token) = &self.token {
+            map.field(out, 3);
+            codec::write_str(out, token);
+        }
+        if let Some(max_body) = &self.max_body {
+            map.field(out, 4);
+            codec::write_uint(out, max_body);
+        }
+        if let Some(stream_credit) = &self.stream_credit {
+            map.field(out, 5);
+            codec::write_uint(out, stream_credit);
+        }
+        if let Some(challenge) = &self.challenge {
+            map.field(out, 6);
+            codec::write_bin(out, challenge);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.protocol == 0
+            && self.client.is_empty()
+            && self.token.is_none()
+            && self.max_body.is_none()
+            && self.stream_credit.is_none()
+            && self.challenge.is_none()
     }
 }
 
@@ -80,38 +114,96 @@ pub(crate) struct Welcome {
 
 impl Message for Welcome {
     const NAME: &'static str = "Welcome";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(Welcome {
-            protocol: fields.get(1, "protocol", codec::uint)?.unwrap_or_default(),
-            server: fields.get(2, "server", codec::str)?.unwrap_or_default(),
-            instance: fields.get(3, "instance", codec::bin)?.unwrap_or_default(),
-            capability: fields.get(4, "capability", codec::str)?.unwrap_or_default(),
-            max_body: fields.get(5, "maxBody", codec::uint)?.unwrap_or_default(),
-            in_flight: fields.get(6, "inFlight", codec::uint)?.unwrap_or_default(),
-            connection_credit: fields.get(7, "connectionCredit", codec::uint)?.unwrap_or_default(),
-            stream_credit: fields.get(8, "streamCredit", codec::uint)?.unwrap_or_default(),
-            engines: fields.get(9, "engines", codec::list(codec::str))?.unwrap_or_default(),
-            now: fields.get(10, "now", codec::int)?.unwrap_or_default(),
-            proof: fields.get(11, "proof", codec::bin)?,
-            durability: fields.get(12, "durability", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.protocol = codec::uint(r, "protocol")?,
+                2 => message.server = codec::str(r, "server")?,
+                3 => message.instance = codec::bin(r, "instance")?,
+                4 => message.capability = codec::str(r, "capability")?,
+                5 => message.max_body = codec::uint(r, "maxBody")?,
+                6 => message.in_flight = codec::uint(r, "inFlight")?,
+                7 => message.connection_credit = codec::uint(r, "connectionCredit")?,
+                8 => message.stream_credit = codec::uint(r, "streamCredit")?,
+                9 => message.engines = codec::list(r, "engines", codec::str)?,
+                10 => message.now = codec::int(r, "now")?,
+                11 => message.proof = Some(codec::bin(r, "proof")?),
+                12 => message.durability = Some(codec::str(r, "durability")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.protocol));
-        out.put(2, codec::str_value(&self.server));
-        out.put(3, codec::bin_value(&self.instance));
-        out.put(4, codec::str_value(&self.capability));
-        out.put(5, codec::uint_value(&self.max_body));
-        out.put(6, codec::uint_value(&self.in_flight));
-        out.put(7, codec::uint_value(&self.connection_credit));
-        out.put(8, codec::uint_value(&self.stream_credit));
-        out.put(9, codec::list_value(&self.engines, codec::str_value));
-        out.put(10, codec::int_value(&self.now));
-        out.given(11, self.proof.as_ref().map(codec::bin_value));
-        out.given(12, self.durability.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.protocol != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.protocol);
+        }
+        if !self.server.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.server);
+        }
+        if !self.instance.is_empty() {
+            map.field(out, 3);
+            codec::write_bin(out, &self.instance);
+        }
+        if !self.capability.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.capability);
+        }
+        if self.max_body != 0 {
+            map.field(out, 5);
+            codec::write_uint(out, &self.max_body);
+        }
+        if self.in_flight != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.in_flight);
+        }
+        if self.connection_credit != 0 {
+            map.field(out, 7);
+            codec::write_uint(out, &self.connection_credit);
+        }
+        if self.stream_credit != 0 {
+            map.field(out, 8);
+            codec::write_uint(out, &self.stream_credit);
+        }
+        if !self.engines.is_empty() {
+            map.field(out, 9);
+            codec::write_list(out, &self.engines, codec::write_str);
+        }
+        if self.now != 0 {
+            map.field(out, 10);
+            codec::write_int(out, &self.now);
+        }
+        if let Some(proof) = &self.proof {
+            map.field(out, 11);
+            codec::write_bin(out, proof);
+        }
+        if let Some(durability) = &self.durability {
+            map.field(out, 12);
+            codec::write_str(out, durability);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.protocol == 0
+            && self.server.is_empty()
+            && self.instance.is_empty()
+            && self.capability.is_empty()
+            && self.max_body == 0
+            && self.in_flight == 0
+            && self.connection_credit == 0
+            && self.stream_credit == 0
+            && self.engines.is_empty()
+            && self.now == 0
+            && self.proof.is_none()
+            && self.durability.is_none()
     }
 }
 
@@ -125,16 +217,30 @@ pub(crate) struct StoreOptions {
 
 impl Message for StoreOptions {
     const NAME: &'static str = "store.Options";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(StoreOptions {
-            durability: fields.get(1, "durability", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.durability = Some(codec::str(r, "durability")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.given(1, self.durability.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(durability) = &self.durability {
+            map.field(out, 1);
+            codec::write_str(out, durability);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.durability.is_none()
     }
 }
 
@@ -147,18 +253,36 @@ pub(crate) struct GoAway {
 
 impl Message for GoAway {
     const NAME: &'static str = "GoAway";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(GoAway {
-            code: fields.get(1, "code", codec::str)?.unwrap_or_default(),
-            message: fields.get(2, "message", codec::str)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.code = codec::str(r, "code")?,
+                2 => message.message = codec::str(r, "message")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.code));
-        out.put(2, codec::str_value(&self.message));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.code.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.code);
+        }
+        if !self.message.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.code.is_empty()
+            && self.message.is_empty()
     }
 }
 
@@ -173,20 +297,42 @@ pub(crate) struct Failure {
 
 impl Message for Failure {
     const NAME: &'static str = "Failure";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(Failure {
-            code: fields.get(1, "code", codec::str)?.unwrap_or_default(),
-            message: fields.get(2, "message", codec::str)?.unwrap_or_default(),
-            what: fields.get(3, "what", codec::names(codec::str))?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.code = codec::str(r, "code")?,
+                2 => message.message = codec::str(r, "message")?,
+                3 => message.what = Some(codec::names(r, "what", codec::str)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.code));
-        out.put(2, codec::str_value(&self.message));
-        out.given(3, self.what.as_ref().map(|names| codec::names_value(names, codec::str_value)));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.code.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.code);
+        }
+        if !self.message.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.message);
+        }
+        if let Some(what) = &self.what {
+            map.field(out, 3);
+            codec::write_names(out, what, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.code.is_empty()
+            && self.message.is_empty()
+            && self.what.is_none()
     }
 }
 
@@ -198,16 +344,30 @@ pub(crate) struct Handle {
 
 impl Message for Handle {
     const NAME: &'static str = "Handle";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(Handle {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
     }
 }
 
@@ -218,13 +378,20 @@ pub(crate) struct Empty {
 
 impl Message for Empty {
     const NAME: &'static str = "Empty";
-    const KEYS: &'static [u64] = &[];
 
-    fn read(_fields: &Fields) -> Result<Self, Failure> {
-        Ok(Empty {})
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        match codec::fields(r, Self::NAME)? {
+            0 => Ok(Self {}),
+            _ => Err(codec::unknown(codec::field(r, Self::NAME, &mut 0)?, Self::NAME)),
+        }
     }
 
-    fn write(&self, _out: &mut Out) {
+    fn write(&self, out: &mut Vec<u8>) {
+        Map::open(out).close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        true
     }
 }
 
@@ -240,18 +407,36 @@ pub(crate) struct JobsConcurrency {
 #[cfg(feature = "jobs")]
 impl Message for JobsConcurrency {
     const NAME: &'static str = "jobs.Concurrency";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsConcurrency {
-            total: fields.get(1, "total", codec::uint)?,
-            group: fields.get(2, "group", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.total = Some(codec::uint(r, "total")?),
+                2 => message.group = Some(codec::uint(r, "group")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.given(1, self.total.as_ref().map(codec::uint_value));
-        out.given(2, self.group.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(total) = &self.total {
+            map.field(out, 1);
+            codec::write_uint(out, total);
+        }
+        if let Some(group) = &self.group {
+            map.field(out, 2);
+            codec::write_uint(out, group);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.total.is_none()
+            && self.group.is_none()
     }
 }
 
@@ -268,18 +453,36 @@ pub(crate) struct JobsBackoff {
 #[cfg(feature = "jobs")]
 impl Message for JobsBackoff {
     const NAME: &'static str = "jobs.Backoff";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsBackoff {
-            initial: fields.get(1, "initial", codec::uint)?.unwrap_or_default(),
-            max: fields.get(2, "max", codec::uint)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.initial = codec::uint(r, "initial")?,
+                2 => message.max = codec::uint(r, "max")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.initial));
-        out.put(2, codec::uint_value(&self.max));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.initial != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.initial);
+        }
+        if self.max != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.max);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.initial == 0
+            && self.max == 0
     }
 }
 
@@ -295,18 +498,36 @@ pub(crate) struct JobsRate {
 #[cfg(feature = "jobs")]
 impl Message for JobsRate {
     const NAME: &'static str = "jobs.Rate";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsRate {
-            count: fields.get(1, "count", codec::uint)?.unwrap_or_default(),
-            per: fields.get(2, "per", codec::uint)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.count = codec::uint(r, "count")?,
+                2 => message.per = codec::uint(r, "per")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.count));
-        out.put(2, codec::uint_value(&self.per));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.count != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.count);
+        }
+        if self.per != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.per);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.count == 0
+            && self.per == 0
     }
 }
 
@@ -338,34 +559,84 @@ pub(crate) struct JobsQueueOpen {
 #[cfg(feature = "jobs")]
 impl Message for JobsQueueOpen {
     const NAME: &'static str = "jobs.QueueOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsQueueOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            attempts: fields.get(2, "attempts", codec::uint)?,
-            backoff: fields.get(3, "backoff", codec::message::<JobsBackoff>)?,
-            timeout: fields.get(4, "timeout", codec::uint)?,
-            concurrency: fields.get(5, "concurrency", codec::message::<JobsConcurrency>)?,
-            rate: fields.get(6, "rate", codec::message::<JobsRate>)?,
-            dedupe: fields.get(7, "dedupe", codec::uint)?,
-            keep: fields.get(8, "keep", codec::uint)?,
-            max_waiting: fields.get(9, "maxWaiting", codec::uint)?,
-            database: fields.get(10, "database", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.attempts = Some(codec::uint(r, "attempts")?),
+                3 => message.backoff = Some(JobsBackoff::read(r)?),
+                4 => message.timeout = Some(codec::uint(r, "timeout")?),
+                5 => message.concurrency = Some(JobsConcurrency::read(r)?),
+                6 => message.rate = Some(JobsRate::read(r)?),
+                7 => message.dedupe = Some(codec::uint(r, "dedupe")?),
+                8 => message.keep = Some(codec::uint(r, "keep")?),
+                9 => message.max_waiting = Some(codec::uint(r, "maxWaiting")?),
+                10 => message.database = Some(codec::uint(r, "database")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.given(2, self.attempts.as_ref().map(codec::uint_value));
-        out.given(3, self.backoff.as_ref().map(codec::message_value));
-        out.given(4, self.timeout.as_ref().map(codec::uint_value));
-        out.given(5, self.concurrency.as_ref().map(codec::message_value));
-        out.given(6, self.rate.as_ref().map(codec::message_value));
-        out.given(7, self.dedupe.as_ref().map(codec::uint_value));
-        out.given(8, self.keep.as_ref().map(codec::uint_value));
-        out.given(9, self.max_waiting.as_ref().map(codec::uint_value));
-        out.given(10, self.database.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(attempts) = &self.attempts {
+            map.field(out, 2);
+            codec::write_uint(out, attempts);
+        }
+        if let Some(backoff) = &self.backoff {
+            map.field(out, 3);
+            codec::write_message(out, backoff);
+        }
+        if let Some(timeout) = &self.timeout {
+            map.field(out, 4);
+            codec::write_uint(out, timeout);
+        }
+        if let Some(concurrency) = &self.concurrency {
+            map.field(out, 5);
+            codec::write_message(out, concurrency);
+        }
+        if let Some(rate) = &self.rate {
+            map.field(out, 6);
+            codec::write_message(out, rate);
+        }
+        if let Some(dedupe) = &self.dedupe {
+            map.field(out, 7);
+            codec::write_uint(out, dedupe);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 8);
+            codec::write_uint(out, keep);
+        }
+        if let Some(max_waiting) = &self.max_waiting {
+            map.field(out, 9);
+            codec::write_uint(out, max_waiting);
+        }
+        if let Some(database) = &self.database {
+            map.field(out, 10);
+            codec::write_uint(out, database);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.attempts.is_none()
+            && self.backoff.is_none()
+            && self.timeout.is_none()
+            && self.concurrency.is_none()
+            && self.rate.is_none()
+            && self.dedupe.is_none()
+            && self.keep.is_none()
+            && self.max_waiting.is_none()
+            && self.database.is_none()
     }
 }
 
@@ -390,28 +661,66 @@ pub(crate) struct JobsScheduleOpen {
 #[cfg(feature = "jobs")]
 impl Message for JobsScheduleOpen {
     const NAME: &'static str = "jobs.ScheduleOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsScheduleOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            every: fields.get(2, "every", codec::uint)?,
-            cron: fields.get(3, "cron", codec::str)?,
-            time_zone: fields.get(4, "timeZone", codec::str)?,
-            attempts: fields.get(5, "attempts", codec::uint)?,
-            backoff: fields.get(6, "backoff", codec::message::<JobsBackoff>)?,
-            timeout: fields.get(7, "timeout", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.every = Some(codec::uint(r, "every")?),
+                3 => message.cron = Some(codec::str(r, "cron")?),
+                4 => message.time_zone = Some(codec::str(r, "timeZone")?),
+                5 => message.attempts = Some(codec::uint(r, "attempts")?),
+                6 => message.backoff = Some(JobsBackoff::read(r)?),
+                7 => message.timeout = Some(codec::uint(r, "timeout")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.given(2, self.every.as_ref().map(codec::uint_value));
-        out.given(3, self.cron.as_ref().map(codec::str_value));
-        out.given(4, self.time_zone.as_ref().map(codec::str_value));
-        out.given(5, self.attempts.as_ref().map(codec::uint_value));
-        out.given(6, self.backoff.as_ref().map(codec::message_value));
-        out.given(7, self.timeout.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(every) = &self.every {
+            map.field(out, 2);
+            codec::write_uint(out, every);
+        }
+        if let Some(cron) = &self.cron {
+            map.field(out, 3);
+            codec::write_str(out, cron);
+        }
+        if let Some(time_zone) = &self.time_zone {
+            map.field(out, 4);
+            codec::write_str(out, time_zone);
+        }
+        if let Some(attempts) = &self.attempts {
+            map.field(out, 5);
+            codec::write_uint(out, attempts);
+        }
+        if let Some(backoff) = &self.backoff {
+            map.field(out, 6);
+            codec::write_message(out, backoff);
+        }
+        if let Some(timeout) = &self.timeout {
+            map.field(out, 7);
+            codec::write_uint(out, timeout);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.every.is_none()
+            && self.cron.is_none()
+            && self.time_zone.is_none()
+            && self.attempts.is_none()
+            && self.backoff.is_none()
+            && self.timeout.is_none()
     }
 }
 
@@ -437,32 +746,78 @@ pub(crate) struct JobsCall {
 #[cfg(feature = "jobs")]
 impl Message for JobsCall {
     const NAME: &'static str = "jobs.Call";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsCall {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            id: fields.get(2, "id", codec::str)?,
-            value: fields.get(3, "value", codec::str)?.unwrap_or_default(),
-            at: fields.get(4, "at", codec::int)?,
-            delay: fields.get(5, "delay", codec::uint)?,
-            group: fields.get(6, "group", codec::str)?,
-            every: fields.get(7, "every", codec::uint)?,
-            cron: fields.get(8, "cron", codec::str)?,
-            time_zone: fields.get(9, "timeZone", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.id = Some(codec::str(r, "id")?),
+                3 => message.value = codec::str(r, "value")?,
+                4 => message.at = Some(codec::int(r, "at")?),
+                5 => message.delay = Some(codec::uint(r, "delay")?),
+                6 => message.group = Some(codec::str(r, "group")?),
+                7 => message.every = Some(codec::uint(r, "every")?),
+                8 => message.cron = Some(codec::str(r, "cron")?),
+                9 => message.time_zone = Some(codec::str(r, "timeZone")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.given(2, self.id.as_ref().map(codec::str_value));
-        out.put(3, codec::str_value(&self.value));
-        out.given(4, self.at.as_ref().map(codec::int_value));
-        out.given(5, self.delay.as_ref().map(codec::uint_value));
-        out.given(6, self.group.as_ref().map(codec::str_value));
-        out.given(7, self.every.as_ref().map(codec::uint_value));
-        out.given(8, self.cron.as_ref().map(codec::str_value));
-        out.given(9, self.time_zone.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if let Some(id) = &self.id {
+            map.field(out, 2);
+            codec::write_str(out, id);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.value);
+        }
+        if let Some(at) = &self.at {
+            map.field(out, 4);
+            codec::write_int(out, at);
+        }
+        if let Some(delay) = &self.delay {
+            map.field(out, 5);
+            codec::write_uint(out, delay);
+        }
+        if let Some(group) = &self.group {
+            map.field(out, 6);
+            codec::write_str(out, group);
+        }
+        if let Some(every) = &self.every {
+            map.field(out, 7);
+            codec::write_uint(out, every);
+        }
+        if let Some(cron) = &self.cron {
+            map.field(out, 8);
+            codec::write_str(out, cron);
+        }
+        if let Some(time_zone) = &self.time_zone {
+            map.field(out, 9);
+            codec::write_str(out, time_zone);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.id.is_none()
+            && self.value.is_empty()
+            && self.at.is_none()
+            && self.delay.is_none()
+            && self.group.is_none()
+            && self.every.is_none()
+            && self.cron.is_none()
+            && self.time_zone.is_none()
     }
 }
 
@@ -477,18 +832,36 @@ pub(crate) struct JobsId {
 #[cfg(feature = "jobs")]
 impl Message for JobsId {
     const NAME: &'static str = "jobs.Id";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsId {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            id: fields.get(2, "id", codec::str)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.id = codec::str(r, "id")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::str_value(&self.id));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.id.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.id);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.id.is_empty()
     }
 }
 
@@ -503,16 +876,30 @@ pub(crate) struct JobsChanged {
 #[cfg(feature = "jobs")]
 impl Message for JobsChanged {
     const NAME: &'static str = "jobs.Changed";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsChanged {
-            changed: fields.get(1, "changed", codec::bool)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.changed = codec::bool(r, "changed")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.changed));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.changed {
+            map.field(out, 1);
+            codec::write_bool(out, &self.changed);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.changed
     }
 }
 
@@ -544,40 +931,102 @@ pub(crate) struct JobsJob {
 #[cfg(feature = "jobs")]
 impl Message for JobsJob {
     const NAME: &'static str = "jobs.Job";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsJob {
-            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
-            id: fields.get(2, "id", codec::str)?,
-            value: fields.get(3, "value", codec::str)?,
-            state: fields.get(4, "state", codec::str)?.unwrap_or_default(),
-            at: fields.get(5, "at", codec::int)?,
-            attempt: fields.get(6, "attempt", codec::uint)?.unwrap_or_default(),
-            ahead: fields.get(7, "ahead", codec::uint)?.unwrap_or_default(),
-            progress: fields.get(8, "progress", codec::str)?,
-            error: fields.get(9, "error", codec::str)?,
-            group: fields.get(10, "group", codec::str)?,
-            repeat: fields.get(11, "repeat", codec::str)?,
-            started_at: fields.get(12, "startedAt", codec::int)?,
-            ended_at: fields.get(13, "endedAt", codec::int)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                2 => message.id = Some(codec::str(r, "id")?),
+                3 => message.value = Some(codec::str(r, "value")?),
+                4 => message.state = codec::str(r, "state")?,
+                5 => message.at = Some(codec::int(r, "at")?),
+                6 => message.attempt = codec::uint(r, "attempt")?,
+                7 => message.ahead = codec::uint(r, "ahead")?,
+                8 => message.progress = Some(codec::str(r, "progress")?),
+                9 => message.error = Some(codec::str(r, "error")?),
+                10 => message.group = Some(codec::str(r, "group")?),
+                11 => message.repeat = Some(codec::str(r, "repeat")?),
+                12 => message.started_at = Some(codec::int(r, "startedAt")?),
+                13 => message.ended_at = Some(codec::int(r, "endedAt")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.found));
-        out.given(2, self.id.as_ref().map(codec::str_value));
-        out.given(3, self.value.as_ref().map(codec::str_value));
-        out.put(4, codec::str_value(&self.state));
-        out.given(5, self.at.as_ref().map(codec::int_value));
-        out.put(6, codec::uint_value(&self.attempt));
-        out.put(7, codec::uint_value(&self.ahead));
-        out.given(8, self.progress.as_ref().map(codec::str_value));
-        out.given(9, self.error.as_ref().map(codec::str_value));
-        out.given(10, self.group.as_ref().map(codec::str_value));
-        out.given(11, self.repeat.as_ref().map(codec::str_value));
-        out.given(12, self.started_at.as_ref().map(codec::int_value));
-        out.given(13, self.ended_at.as_ref().map(codec::int_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        if let Some(id) = &self.id {
+            map.field(out, 2);
+            codec::write_str(out, id);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 3);
+            codec::write_str(out, value);
+        }
+        if !self.state.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.state);
+        }
+        if let Some(at) = &self.at {
+            map.field(out, 5);
+            codec::write_int(out, at);
+        }
+        if self.attempt != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.attempt);
+        }
+        if self.ahead != 0 {
+            map.field(out, 7);
+            codec::write_uint(out, &self.ahead);
+        }
+        if let Some(progress) = &self.progress {
+            map.field(out, 8);
+            codec::write_str(out, progress);
+        }
+        if let Some(error) = &self.error {
+            map.field(out, 9);
+            codec::write_str(out, error);
+        }
+        if let Some(group) = &self.group {
+            map.field(out, 10);
+            codec::write_str(out, group);
+        }
+        if let Some(repeat) = &self.repeat {
+            map.field(out, 11);
+            codec::write_str(out, repeat);
+        }
+        if let Some(started_at) = &self.started_at {
+            map.field(out, 12);
+            codec::write_int(out, started_at);
+        }
+        if let Some(ended_at) = &self.ended_at {
+            map.field(out, 13);
+            codec::write_int(out, ended_at);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+            && self.id.is_none()
+            && self.value.is_none()
+            && self.state.is_empty()
+            && self.at.is_none()
+            && self.attempt == 0
+            && self.ahead == 0
+            && self.progress.is_none()
+            && self.error.is_none()
+            && self.group.is_none()
+            && self.repeat.is_none()
+            && self.started_at.is_none()
+            && self.ended_at.is_none()
     }
 }
 
@@ -600,24 +1049,54 @@ pub(crate) struct JobsList {
 #[cfg(feature = "jobs")]
 impl Message for JobsList {
     const NAME: &'static str = "jobs.List";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsList {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            prefix: fields.get(2, "prefix", codec::str)?,
-            state: fields.get(3, "state", codec::str)?,
-            after: fields.get(4, "after", codec::str)?,
-            limit: fields.get(5, "limit", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.prefix = Some(codec::str(r, "prefix")?),
+                3 => message.state = Some(codec::str(r, "state")?),
+                4 => message.after = Some(codec::str(r, "after")?),
+                5 => message.limit = Some(codec::uint(r, "limit")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.given(2, self.prefix.as_ref().map(codec::str_value));
-        out.given(3, self.state.as_ref().map(codec::str_value));
-        out.given(4, self.after.as_ref().map(codec::str_value));
-        out.given(5, self.limit.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if let Some(prefix) = &self.prefix {
+            map.field(out, 2);
+            codec::write_str(out, prefix);
+        }
+        if let Some(state) = &self.state {
+            map.field(out, 3);
+            codec::write_str(out, state);
+        }
+        if let Some(after) = &self.after {
+            map.field(out, 4);
+            codec::write_str(out, after);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 5);
+            codec::write_uint(out, limit);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.prefix.is_none()
+            && self.state.is_none()
+            && self.after.is_none()
+            && self.limit.is_none()
     }
 }
 
@@ -631,18 +1110,36 @@ pub(crate) struct JobsPage {
 #[cfg(feature = "jobs")]
 impl Message for JobsPage {
     const NAME: &'static str = "jobs.Page";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsPage {
-            jobs: fields.get(1, "jobs", codec::list(codec::message::<JobsJob>))?.unwrap_or_default(),
-            next: fields.get(2, "next", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.jobs = codec::list(r, "jobs", codec::message::<JobsJob>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.jobs, codec::message_value));
-        out.given(2, self.next.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.jobs.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.jobs, codec::write_message);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.jobs.is_empty()
+            && self.next.is_none()
     }
 }
 
@@ -665,20 +1162,42 @@ pub(crate) struct JobsWork {
 #[cfg(feature = "jobs")]
 impl Message for JobsWork {
     const NAME: &'static str = "jobs.Work";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsWork {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            concurrency: fields.get(2, "concurrency", codec::uint)?,
-            until_idle: fields.get(3, "untilIdle", codec::bool)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.concurrency = Some(codec::uint(r, "concurrency")?),
+                3 => message.until_idle = codec::bool(r, "untilIdle")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.given(2, self.concurrency.as_ref().map(codec::uint_value));
-        out.put(3, codec::bool_value(&self.until_idle));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if let Some(concurrency) = &self.concurrency {
+            map.field(out, 2);
+            codec::write_uint(out, concurrency);
+        }
+        if self.until_idle {
+            map.field(out, 3);
+            codec::write_bool(out, &self.until_idle);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.concurrency.is_none()
+            && !self.until_idle
     }
 }
 
@@ -702,28 +1221,66 @@ pub(crate) struct JobsHeld {
 #[cfg(feature = "jobs")]
 impl Message for JobsHeld {
     const NAME: &'static str = "jobs.Held";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsHeld {
-            run: fields.get(1, "run", codec::uint)?.unwrap_or_default(),
-            id: fields.get(2, "id", codec::str)?,
-            value: fields.get(3, "value", codec::str)?,
-            at: fields.get(4, "at", codec::int)?.unwrap_or_default(),
-            attempt: fields.get(5, "attempt", codec::uint)?.unwrap_or_default(),
-            group: fields.get(6, "group", codec::str)?,
-            cancelled: fields.get(7, "cancelled", codec::bool)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.run = codec::uint(r, "run")?,
+                2 => message.id = Some(codec::str(r, "id")?),
+                3 => message.value = Some(codec::str(r, "value")?),
+                4 => message.at = codec::int(r, "at")?,
+                5 => message.attempt = codec::uint(r, "attempt")?,
+                6 => message.group = Some(codec::str(r, "group")?),
+                7 => message.cancelled = codec::bool(r, "cancelled")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.run));
-        out.given(2, self.id.as_ref().map(codec::str_value));
-        out.given(3, self.value.as_ref().map(codec::str_value));
-        out.put(4, codec::int_value(&self.at));
-        out.put(5, codec::uint_value(&self.attempt));
-        out.given(6, self.group.as_ref().map(codec::str_value));
-        out.put(7, codec::bool_value(&self.cancelled));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.run != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.run);
+        }
+        if let Some(id) = &self.id {
+            map.field(out, 2);
+            codec::write_str(out, id);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 3);
+            codec::write_str(out, value);
+        }
+        if self.at != 0 {
+            map.field(out, 4);
+            codec::write_int(out, &self.at);
+        }
+        if self.attempt != 0 {
+            map.field(out, 5);
+            codec::write_uint(out, &self.attempt);
+        }
+        if let Some(group) = &self.group {
+            map.field(out, 6);
+            codec::write_str(out, group);
+        }
+        if self.cancelled {
+            map.field(out, 7);
+            codec::write_bool(out, &self.cancelled);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.run == 0
+            && self.id.is_none()
+            && self.value.is_none()
+            && self.at == 0
+            && self.attempt == 0
+            && self.group.is_none()
+            && !self.cancelled
     }
 }
 
@@ -749,26 +1306,60 @@ pub(crate) struct JobsAnswer {
 #[cfg(feature = "jobs")]
 impl Message for JobsAnswer {
     const NAME: &'static str = "jobs.Answer";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsAnswer {
-            run: fields.get(1, "run", codec::uint)?.unwrap_or_default(),
-            how: fields.get(2, "how", codec::str)?.unwrap_or_default(),
-            at: fields.get(3, "at", codec::int)?,
-            error: fields.get(4, "error", codec::str)?,
-            progress: fields.get(5, "progress", codec::str)?,
-            delay: fields.get(6, "delay", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.run = codec::uint(r, "run")?,
+                2 => message.how = codec::str(r, "how")?,
+                3 => message.at = Some(codec::int(r, "at")?),
+                4 => message.error = Some(codec::str(r, "error")?),
+                5 => message.progress = Some(codec::str(r, "progress")?),
+                6 => message.delay = Some(codec::uint(r, "delay")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.run));
-        out.put(2, codec::str_value(&self.how));
-        out.given(3, self.at.as_ref().map(codec::int_value));
-        out.given(4, self.error.as_ref().map(codec::str_value));
-        out.given(5, self.progress.as_ref().map(codec::str_value));
-        out.given(6, self.delay.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.run != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.run);
+        }
+        if !self.how.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.how);
+        }
+        if let Some(at) = &self.at {
+            map.field(out, 3);
+            codec::write_int(out, at);
+        }
+        if let Some(error) = &self.error {
+            map.field(out, 4);
+            codec::write_str(out, error);
+        }
+        if let Some(progress) = &self.progress {
+            map.field(out, 5);
+            codec::write_str(out, progress);
+        }
+        if let Some(delay) = &self.delay {
+            map.field(out, 6);
+            codec::write_uint(out, delay);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.run == 0
+            && self.how.is_empty()
+            && self.at.is_none()
+            && self.error.is_none()
+            && self.progress.is_none()
+            && self.delay.is_none()
     }
 }
 
@@ -787,20 +1378,42 @@ pub(crate) struct JobsStep {
 #[cfg(feature = "jobs")]
 impl Message for JobsStep {
     const NAME: &'static str = "jobs.Step";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsStep {
-            run: fields.get(1, "run", codec::uint)?.unwrap_or_default(),
-            name: fields.get(2, "name", codec::str)?.unwrap_or_default(),
-            answer: fields.get(3, "answer", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.run = codec::uint(r, "run")?,
+                2 => message.name = codec::str(r, "name")?,
+                3 => message.answer = Some(codec::str(r, "answer")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.run));
-        out.put(2, codec::str_value(&self.name));
-        out.given(3, self.answer.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.run != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.run);
+        }
+        if !self.name.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(answer) = &self.answer {
+            map.field(out, 3);
+            codec::write_str(out, answer);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.run == 0
+            && self.name.is_empty()
+            && self.answer.is_none()
     }
 }
 
@@ -814,18 +1427,36 @@ pub(crate) struct JobsKept {
 #[cfg(feature = "jobs")]
 impl Message for JobsKept {
     const NAME: &'static str = "jobs.Kept";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsKept {
-            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
-            answer: fields.get(2, "answer", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                2 => message.answer = Some(codec::str(r, "answer")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.found));
-        out.given(2, self.answer.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        if let Some(answer) = &self.answer {
+            map.field(out, 2);
+            codec::write_str(out, answer);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+            && self.answer.is_none()
     }
 }
 
@@ -843,20 +1474,42 @@ pub(crate) struct JobsOp {
 #[cfg(feature = "jobs")]
 impl Message for JobsOp {
     const NAME: &'static str = "jobs.Op";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsOp {
-            method: fields.get(1, "method", codec::uint)?.unwrap_or_default(),
-            call: fields.get(2, "call", codec::message::<JobsCall>)?,
-            id: fields.get(3, "id", codec::message::<JobsId>)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.method = codec::uint(r, "method")?,
+                2 => message.call = Some(JobsCall::read(r)?),
+                3 => message.id = Some(JobsId::read(r)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.method));
-        out.given(2, self.call.as_ref().map(codec::message_value));
-        out.given(3, self.id.as_ref().map(codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.method != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.method);
+        }
+        if let Some(call) = &self.call {
+            map.field(out, 2);
+            codec::write_message(out, call);
+        }
+        if let Some(id) = &self.id {
+            map.field(out, 3);
+            codec::write_message(out, id);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.method == 0
+            && self.call.is_none()
+            && self.id.is_none()
     }
 }
 
@@ -871,16 +1524,30 @@ pub(crate) struct JobsTx {
 #[cfg(feature = "jobs")]
 impl Message for JobsTx {
     const NAME: &'static str = "jobs.Tx";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsTx {
-            writes: fields.get(1, "writes", codec::list(codec::message::<JobsOp>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.writes = codec::list(r, "writes", codec::message::<JobsOp>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.writes, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.writes.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.writes, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.writes.is_empty()
     }
 }
 
@@ -895,16 +1562,30 @@ pub(crate) struct JobsTxResults {
 #[cfg(feature = "jobs")]
 impl Message for JobsTxResults {
     const NAME: &'static str = "jobs.TxResults";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(JobsTxResults {
-            outcomes: fields.get(1, "outcomes", codec::list(codec::message::<JobsChanged>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.outcomes = codec::list(r, "outcomes", codec::message::<JobsChanged>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.outcomes, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.outcomes.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.outcomes, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.outcomes.is_empty()
     }
 }
 
@@ -926,22 +1607,48 @@ pub(crate) struct KvBucketOpen {
 #[cfg(feature = "kv")]
 impl Message for KvBucketOpen {
     const NAME: &'static str = "kv.BucketOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvBucketOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            ttl: fields.get(2, "ttl", codec::uint)?,
-            idle: fields.get(3, "idle", codec::uint)?,
-            database: fields.get(4, "database", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.ttl = Some(codec::uint(r, "ttl")?),
+                3 => message.idle = Some(codec::uint(r, "idle")?),
+                4 => message.database = Some(codec::uint(r, "database")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.given(2, self.ttl.as_ref().map(codec::uint_value));
-        out.given(3, self.idle.as_ref().map(codec::uint_value));
-        out.given(4, self.database.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(ttl) = &self.ttl {
+            map.field(out, 2);
+            codec::write_uint(out, ttl);
+        }
+        if let Some(idle) = &self.idle {
+            map.field(out, 3);
+            codec::write_uint(out, idle);
+        }
+        if let Some(database) = &self.database {
+            map.field(out, 4);
+            codec::write_uint(out, database);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.ttl.is_none()
+            && self.idle.is_none()
+            && self.database.is_none()
     }
 }
 
@@ -968,30 +1675,72 @@ pub(crate) struct KvCall {
 #[cfg(feature = "kv")]
 impl Message for KvCall {
     const NAME: &'static str = "kv.Call";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvCall {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            under: fields.get(2, "under", codec::list(codec::key))?.unwrap_or_default(),
-            key: fields.get(3, "key", codec::key)?.unwrap_or_default(),
-            value: fields.get(4, "value", codec::row)?,
-            ttl: fields.get(5, "ttl", codec::uint)?,
-            expires_at: fields.get(6, "expiresAt", codec::int)?,
-            if_version: fields.get(7, "ifVersion", codec::bin)?,
-            n: fields.get(8, "n", codec::int)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.under = codec::list(r, "under", codec::key)?,
+                3 => message.key = codec::key(r, "key")?,
+                4 => message.value = Some(codec::row(r, "value")?),
+                5 => message.ttl = Some(codec::uint(r, "ttl")?),
+                6 => message.expires_at = Some(codec::int(r, "expiresAt")?),
+                7 => message.if_version = Some(codec::bin(r, "ifVersion")?),
+                8 => message.n = Some(codec::int(r, "n")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::list_value(&self.under, codec::str_value));
-        out.put(3, codec::str_value(&self.key));
-        out.given(4, self.value.as_ref().map(codec::row_value));
-        out.given(5, self.ttl.as_ref().map(codec::uint_value));
-        out.given(6, self.expires_at.as_ref().map(codec::int_value));
-        out.given(7, self.if_version.as_ref().map(codec::bin_value));
-        out.given(8, self.n.as_ref().map(codec::int_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.key);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 4);
+            codec::write_row(out, value);
+        }
+        if let Some(ttl) = &self.ttl {
+            map.field(out, 5);
+            codec::write_uint(out, ttl);
+        }
+        if let Some(expires_at) = &self.expires_at {
+            map.field(out, 6);
+            codec::write_int(out, expires_at);
+        }
+        if let Some(if_version) = &self.if_version {
+            map.field(out, 7);
+            codec::write_bin(out, if_version);
+        }
+        if let Some(n) = &self.n {
+            map.field(out, 8);
+            codec::write_int(out, n);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.under.is_empty()
+            && self.key.is_empty()
+            && self.value.is_none()
+            && self.ttl.is_none()
+            && self.expires_at.is_none()
+            && self.if_version.is_none()
+            && self.n.is_none()
     }
 }
 
@@ -1012,24 +1761,54 @@ pub(crate) struct KvEntry {
 #[cfg(feature = "kv")]
 impl Message for KvEntry {
     const NAME: &'static str = "kv.Entry";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvEntry {
-            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
-            value: fields.get(2, "value", codec::row)?,
-            version: fields.get(3, "version", codec::bin)?,
-            expires_at: fields.get(4, "expiresAt", codec::int)?,
-            key: fields.get(5, "key", codec::key)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                2 => message.value = Some(codec::row(r, "value")?),
+                3 => message.version = Some(codec::bin(r, "version")?),
+                4 => message.expires_at = Some(codec::int(r, "expiresAt")?),
+                5 => message.key = Some(codec::key(r, "key")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.found));
-        out.given(2, self.value.as_ref().map(codec::row_value));
-        out.given(3, self.version.as_ref().map(codec::bin_value));
-        out.given(4, self.expires_at.as_ref().map(codec::int_value));
-        out.given(5, self.key.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 2);
+            codec::write_row(out, value);
+        }
+        if let Some(version) = &self.version {
+            map.field(out, 3);
+            codec::write_bin(out, version);
+        }
+        if let Some(expires_at) = &self.expires_at {
+            map.field(out, 4);
+            codec::write_int(out, expires_at);
+        }
+        if let Some(key) = &self.key {
+            map.field(out, 5);
+            codec::write_str(out, key);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+            && self.value.is_none()
+            && self.version.is_none()
+            && self.expires_at.is_none()
+            && self.key.is_none()
     }
 }
 
@@ -1047,20 +1826,42 @@ pub(crate) struct KvWritten {
 #[cfg(feature = "kv")]
 impl Message for KvWritten {
     const NAME: &'static str = "kv.Written";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvWritten {
-            written: fields.get(1, "written", codec::bool)?.unwrap_or_default(),
-            version: fields.get(2, "version", codec::bin)?.unwrap_or_default(),
-            expires_at: fields.get(3, "expiresAt", codec::int)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.written = codec::bool(r, "written")?,
+                2 => message.version = codec::bin(r, "version")?,
+                3 => message.expires_at = Some(codec::int(r, "expiresAt")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.written));
-        out.put(2, codec::bin_value(&self.version));
-        out.given(3, self.expires_at.as_ref().map(codec::int_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.written {
+            map.field(out, 1);
+            codec::write_bool(out, &self.written);
+        }
+        if !self.version.is_empty() {
+            map.field(out, 2);
+            codec::write_bin(out, &self.version);
+        }
+        if let Some(expires_at) = &self.expires_at {
+            map.field(out, 3);
+            codec::write_int(out, expires_at);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.written
+            && self.version.is_empty()
+            && self.expires_at.is_none()
     }
 }
 
@@ -1073,16 +1874,30 @@ pub(crate) struct KvFound {
 #[cfg(feature = "kv")]
 impl Message for KvFound {
     const NAME: &'static str = "kv.Found";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvFound {
-            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.found));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
     }
 }
 
@@ -1097,18 +1912,36 @@ pub(crate) struct KvBranch {
 #[cfg(feature = "kv")]
 impl Message for KvBranch {
     const NAME: &'static str = "kv.Branch";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvBranch {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            under: fields.get(2, "under", codec::list(codec::key))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.under = codec::list(r, "under", codec::key)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::list_value(&self.under, codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.under.is_empty()
     }
 }
 
@@ -1127,22 +1960,48 @@ pub(crate) struct KvList {
 #[cfg(feature = "kv")]
 impl Message for KvList {
     const NAME: &'static str = "kv.List";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvList {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            under: fields.get(2, "under", codec::list(codec::key))?.unwrap_or_default(),
-            after: fields.get(3, "after", codec::key)?,
-            limit: fields.get(4, "limit", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.under = codec::list(r, "under", codec::key)?,
+                3 => message.after = Some(codec::key(r, "after")?),
+                4 => message.limit = Some(codec::uint(r, "limit")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::list_value(&self.under, codec::str_value));
-        out.given(3, self.after.as_ref().map(codec::str_value));
-        out.given(4, self.limit.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        if let Some(after) = &self.after {
+            map.field(out, 3);
+            codec::write_str(out, after);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 4);
+            codec::write_uint(out, limit);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.under.is_empty()
+            && self.after.is_none()
+            && self.limit.is_none()
     }
 }
 
@@ -1158,18 +2017,36 @@ pub(crate) struct KvPage {
 #[cfg(feature = "kv")]
 impl Message for KvPage {
     const NAME: &'static str = "kv.Page";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvPage {
-            entries: fields.get(1, "entries", codec::list(codec::message::<KvEntry>))?.unwrap_or_default(),
-            next: fields.get(2, "next", codec::key)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.entries = codec::list(r, "entries", codec::message::<KvEntry>)?,
+                2 => message.next = Some(codec::key(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.entries, codec::message_value));
-        out.given(2, self.next.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.entries.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.entries, codec::write_message);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.entries.is_empty()
+            && self.next.is_none()
     }
 }
 
@@ -1187,20 +2064,42 @@ pub(crate) struct KvCountersOpen {
 #[cfg(feature = "kv")]
 impl Message for KvCountersOpen {
     const NAME: &'static str = "kv.CountersOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvCountersOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            ttl: fields.get(2, "ttl", codec::uint)?,
-            flush_every: fields.get(3, "flushEvery", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.ttl = Some(codec::uint(r, "ttl")?),
+                3 => message.flush_every = Some(codec::uint(r, "flushEvery")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.given(2, self.ttl.as_ref().map(codec::uint_value));
-        out.given(3, self.flush_every.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(ttl) = &self.ttl {
+            map.field(out, 2);
+            codec::write_uint(out, ttl);
+        }
+        if let Some(flush_every) = &self.flush_every {
+            map.field(out, 3);
+            codec::write_uint(out, flush_every);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.ttl.is_none()
+            && self.flush_every.is_none()
     }
 }
 
@@ -1213,16 +2112,30 @@ pub(crate) struct KvCount {
 #[cfg(feature = "kv")]
 impl Message for KvCount {
     const NAME: &'static str = "kv.Count";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvCount {
-            value: fields.get(1, "value", codec::int)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.value = codec::int(r, "value")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::int_value(&self.value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.value != 0 {
+            map.field(out, 1);
+            codec::write_int(out, &self.value);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.value == 0
     }
 }
 
@@ -1241,22 +2154,48 @@ pub(crate) struct KvRateLimitOpen {
 #[cfg(feature = "kv")]
 impl Message for KvRateLimitOpen {
     const NAME: &'static str = "kv.RateLimitOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvRateLimitOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            rate: fields.get(2, "rate", codec::uint)?.unwrap_or_default(),
-            per: fields.get(3, "per", codec::uint)?.unwrap_or_default(),
-            burst: fields.get(4, "burst", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.rate = codec::uint(r, "rate")?,
+                3 => message.per = codec::uint(r, "per")?,
+                4 => message.burst = Some(codec::uint(r, "burst")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.put(2, codec::uint_value(&self.rate));
-        out.put(3, codec::uint_value(&self.per));
-        out.given(4, self.burst.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if self.rate != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.rate);
+        }
+        if self.per != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.per);
+        }
+        if let Some(burst) = &self.burst {
+            map.field(out, 4);
+            codec::write_uint(out, burst);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.rate == 0
+            && self.per == 0
+            && self.burst.is_none()
     }
 }
 
@@ -1274,20 +2213,42 @@ pub(crate) struct KvWindow {
 #[cfg(feature = "kv")]
 impl Message for KvWindow {
     const NAME: &'static str = "kv.Window";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvWindow {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            limit: fields.get(2, "limit", codec::uint)?.unwrap_or_default(),
-            per: fields.get(3, "per", codec::uint)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.limit = codec::uint(r, "limit")?,
+                3 => message.per = codec::uint(r, "per")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.put(2, codec::uint_value(&self.limit));
-        out.put(3, codec::uint_value(&self.per));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if self.limit != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.limit);
+        }
+        if self.per != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.per);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.limit == 0
+            && self.per == 0
     }
 }
 
@@ -1302,18 +2263,36 @@ pub(crate) struct KvQuotaOpen {
 #[cfg(feature = "kv")]
 impl Message for KvQuotaOpen {
     const NAME: &'static str = "kv.QuotaOpen";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvQuotaOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            windows: fields.get(2, "windows", codec::list(codec::message::<KvWindow>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.windows = codec::list(r, "windows", codec::message::<KvWindow>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.put(2, codec::list_value(&self.windows, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.windows.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.windows, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.windows.is_empty()
     }
 }
 
@@ -1332,24 +2311,54 @@ pub(crate) struct KvWindowUse {
 #[cfg(feature = "kv")]
 impl Message for KvWindowUse {
     const NAME: &'static str = "kv.WindowUse";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvWindowUse {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            used: fields.get(2, "used", codec::uint)?.unwrap_or_default(),
-            limit: fields.get(3, "limit", codec::uint)?.unwrap_or_default(),
-            left: fields.get(4, "left", codec::uint)?.unwrap_or_default(),
-            resets_at: fields.get(5, "resetsAt", codec::int)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.used = codec::uint(r, "used")?,
+                3 => message.limit = codec::uint(r, "limit")?,
+                4 => message.left = codec::uint(r, "left")?,
+                5 => message.resets_at = Some(codec::int(r, "resetsAt")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.put(2, codec::uint_value(&self.used));
-        out.put(3, codec::uint_value(&self.limit));
-        out.put(4, codec::uint_value(&self.left));
-        out.given(5, self.resets_at.as_ref().map(codec::int_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if self.used != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.used);
+        }
+        if self.limit != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.limit);
+        }
+        if self.left != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.left);
+        }
+        if let Some(resets_at) = &self.resets_at {
+            map.field(out, 5);
+            codec::write_int(out, resets_at);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.used == 0
+            && self.limit == 0
+            && self.left == 0
+            && self.resets_at.is_none()
     }
 }
 
@@ -1369,22 +2378,48 @@ pub(crate) struct KvAllowance {
 #[cfg(feature = "kv")]
 impl Message for KvAllowance {
     const NAME: &'static str = "kv.Allowance";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvAllowance {
-            ok: fields.get(1, "ok", codec::bool)?.unwrap_or_default(),
-            left: fields.get(2, "left", codec::uint)?.unwrap_or_default(),
-            retry_at: fields.get(3, "retryAt", codec::int)?,
-            windows: fields.get(4, "windows", codec::list(codec::message::<KvWindowUse>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.ok = codec::bool(r, "ok")?,
+                2 => message.left = codec::uint(r, "left")?,
+                3 => message.retry_at = Some(codec::int(r, "retryAt")?),
+                4 => message.windows = codec::list(r, "windows", codec::message::<KvWindowUse>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.ok));
-        out.put(2, codec::uint_value(&self.left));
-        out.given(3, self.retry_at.as_ref().map(codec::int_value));
-        out.put(4, codec::list_value(&self.windows, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.ok {
+            map.field(out, 1);
+            codec::write_bool(out, &self.ok);
+        }
+        if self.left != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.left);
+        }
+        if let Some(retry_at) = &self.retry_at {
+            map.field(out, 3);
+            codec::write_int(out, retry_at);
+        }
+        if !self.windows.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.windows, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.ok
+            && self.left == 0
+            && self.retry_at.is_none()
+            && self.windows.is_empty()
     }
 }
 
@@ -1400,18 +2435,36 @@ pub(crate) struct KvOnceOpen {
 #[cfg(feature = "kv")]
 impl Message for KvOnceOpen {
     const NAME: &'static str = "kv.OnceOpen";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvOnceOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            keep: fields.get(2, "keep", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.keep = Some(codec::uint(r, "keep")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.given(2, self.keep.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 2);
+            codec::write_uint(out, keep);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.keep.is_none()
     }
 }
 
@@ -1428,18 +2481,36 @@ pub(crate) struct KvAnswer {
 #[cfg(feature = "kv")]
 impl Message for KvAnswer {
     const NAME: &'static str = "kv.Answer";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvAnswer {
-            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
-            value: fields.get(2, "value", codec::row)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                2 => message.value = Some(codec::row(r, "value")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.found));
-        out.given(2, self.value.as_ref().map(codec::row_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 2);
+            codec::write_row(out, value);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+            && self.value.is_none()
     }
 }
 
@@ -1458,22 +2529,48 @@ pub(crate) struct KvCheck {
 #[cfg(feature = "kv")]
 impl Message for KvCheck {
     const NAME: &'static str = "kv.Check";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvCheck {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            under: fields.get(2, "under", codec::list(codec::key))?.unwrap_or_default(),
-            key: fields.get(3, "key", codec::key)?.unwrap_or_default(),
-            version: fields.get(4, "version", codec::bin)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.under = codec::list(r, "under", codec::key)?,
+                3 => message.key = codec::key(r, "key")?,
+                4 => message.version = Some(codec::bin(r, "version")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::list_value(&self.under, codec::str_value));
-        out.put(3, codec::str_value(&self.key));
-        out.given(4, self.version.as_ref().map(codec::bin_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.key);
+        }
+        if let Some(version) = &self.version {
+            map.field(out, 4);
+            codec::write_bin(out, version);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.under.is_empty()
+            && self.key.is_empty()
+            && self.version.is_none()
     }
 }
 
@@ -1489,18 +2586,36 @@ pub(crate) struct KvOp {
 #[cfg(feature = "kv")]
 impl Message for KvOp {
     const NAME: &'static str = "kv.Op";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvOp {
-            method: fields.get(1, "method", codec::uint)?.unwrap_or_default(),
-            call: fields.get(2, "call", codec::message::<KvCall>)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.method = codec::uint(r, "method")?,
+                2 => message.call = KvCall::read(r)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.method));
-        out.put(2, codec::message_value(&self.call));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.method != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.method);
+        }
+        if !self.call.is_zero() {
+            map.field(out, 2);
+            codec::write_message(out, &self.call);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.method == 0
+            && self.call.is_zero()
     }
 }
 
@@ -1516,18 +2631,36 @@ pub(crate) struct KvTx {
 #[cfg(feature = "kv")]
 impl Message for KvTx {
     const NAME: &'static str = "kv.Tx";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvTx {
-            checks: fields.get(1, "checks", codec::list(codec::message::<KvCheck>))?.unwrap_or_default(),
-            writes: fields.get(2, "writes", codec::list(codec::message::<KvOp>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.checks = codec::list(r, "checks", codec::message::<KvCheck>)?,
+                2 => message.writes = codec::list(r, "writes", codec::message::<KvOp>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.checks, codec::message_value));
-        out.put(2, codec::list_value(&self.writes, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.checks.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.checks, codec::write_message);
+        }
+        if !self.writes.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.writes, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.checks.is_empty()
+            && self.writes.is_empty()
     }
 }
 
@@ -1551,26 +2684,60 @@ pub(crate) struct KvOutcome {
 #[cfg(feature = "kv")]
 impl Message for KvOutcome {
     const NAME: &'static str = "kv.Outcome";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvOutcome {
-            found: fields.get(1, "found", codec::bool)?.unwrap_or_default(),
-            written: fields.get(2, "written", codec::bool)?.unwrap_or_default(),
-            value: fields.get(3, "value", codec::row)?,
-            version: fields.get(4, "version", codec::bin)?,
-            expires_at: fields.get(5, "expiresAt", codec::int)?,
-            count: fields.get(6, "count", codec::int)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                2 => message.written = codec::bool(r, "written")?,
+                3 => message.value = Some(codec::row(r, "value")?),
+                4 => message.version = Some(codec::bin(r, "version")?),
+                5 => message.expires_at = Some(codec::int(r, "expiresAt")?),
+                6 => message.count = Some(codec::int(r, "count")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::bool_value(&self.found));
-        out.put(2, codec::bool_value(&self.written));
-        out.given(3, self.value.as_ref().map(codec::row_value));
-        out.given(4, self.version.as_ref().map(codec::bin_value));
-        out.given(5, self.expires_at.as_ref().map(codec::int_value));
-        out.given(6, self.count.as_ref().map(codec::int_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        if self.written {
+            map.field(out, 2);
+            codec::write_bool(out, &self.written);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 3);
+            codec::write_row(out, value);
+        }
+        if let Some(version) = &self.version {
+            map.field(out, 4);
+            codec::write_bin(out, version);
+        }
+        if let Some(expires_at) = &self.expires_at {
+            map.field(out, 5);
+            codec::write_int(out, expires_at);
+        }
+        if let Some(count) = &self.count {
+            map.field(out, 6);
+            codec::write_int(out, count);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+            && !self.written
+            && self.value.is_none()
+            && self.version.is_none()
+            && self.expires_at.is_none()
+            && self.count.is_none()
     }
 }
 
@@ -1583,16 +2750,30 @@ pub(crate) struct KvTxResults {
 #[cfg(feature = "kv")]
 impl Message for KvTxResults {
     const NAME: &'static str = "kv.TxResults";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(KvTxResults {
-            outcomes: fields.get(1, "outcomes", codec::list(codec::message::<KvOutcome>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.outcomes = codec::list(r, "outcomes", codec::message::<KvOutcome>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.outcomes, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.outcomes.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.outcomes, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.outcomes.is_empty()
     }
 }
 
@@ -1608,18 +2789,36 @@ pub(crate) struct ServerClock {
 
 impl Message for ServerClock {
     const NAME: &'static str = "server.Clock";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(ServerClock {
-            at: fields.get(1, "at", codec::int)?,
-            advance: fields.get(2, "advance", codec::uint)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.at = Some(codec::int(r, "at")?),
+                2 => message.advance = Some(codec::uint(r, "advance")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.given(1, self.at.as_ref().map(codec::int_value));
-        out.given(2, self.advance.as_ref().map(codec::uint_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(at) = &self.at {
+            map.field(out, 1);
+            codec::write_int(out, at);
+        }
+        if let Some(advance) = &self.advance {
+            map.field(out, 2);
+            codec::write_uint(out, advance);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.at.is_none()
+            && self.advance.is_none()
     }
 }
 
@@ -1635,18 +2834,36 @@ pub(crate) struct SqlMigration {
 #[cfg(feature = "sql")]
 impl Message for SqlMigration {
     const NAME: &'static str = "sql.Migration";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlMigration {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            sql: fields.get(2, "sql", codec::str)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.sql = codec::str(r, "sql")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.put(2, codec::str_value(&self.sql));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.sql.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.sql);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.sql.is_empty()
     }
 }
 
@@ -1665,20 +2882,42 @@ pub(crate) struct SqlOpen {
 #[cfg(feature = "sql")]
 impl Message for SqlOpen {
     const NAME: &'static str = "sql.Open";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlOpen {
-            name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
-            migrations: fields.get(2, "migrations", codec::list(codec::message::<SqlMigration>))?,
-            durability: fields.get(3, "durability", codec::str)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.migrations = Some(codec::list(r, "migrations", codec::message::<SqlMigration>)?),
+                3 => message.durability = Some(codec::str(r, "durability")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.name));
-        out.given(2, self.migrations.as_ref().map(|items| codec::list_value(items, codec::message_value)));
-        out.given(3, self.durability.as_ref().map(codec::str_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(migrations) = &self.migrations {
+            map.field(out, 2);
+            codec::write_list(out, migrations, codec::write_message);
+        }
+        if let Some(durability) = &self.durability {
+            map.field(out, 3);
+            codec::write_str(out, durability);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.migrations.is_none()
+            && self.durability.is_none()
     }
 }
 
@@ -1693,18 +2932,36 @@ pub(crate) struct SqlText {
 #[cfg(feature = "sql")]
 impl Message for SqlText {
     const NAME: &'static str = "sql.Text";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlText {
-            text: fields.get(1, "text", codec::str)?.unwrap_or_default(),
-            values: fields.get(2, "values", codec::list(codec::cell))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.text = codec::str(r, "text")?,
+                2 => message.values = codec::list(r, "values", codec::cell)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.text));
-        out.put(2, codec::list_value(&self.values, codec::cell_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.text.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.text);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.values, codec::write_cell);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.text.is_empty()
+            && self.values.is_empty()
     }
 }
 
@@ -1720,20 +2977,42 @@ pub(crate) struct SqlStatement {
 #[cfg(feature = "sql")]
 impl Message for SqlStatement {
     const NAME: &'static str = "sql.Statement";
-    const KEYS: &'static [u64] = &[1, 2, 3];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlStatement {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            text: fields.get(2, "text", codec::str)?.unwrap_or_default(),
-            values: fields.get(3, "values", codec::list(codec::cell))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.text = codec::str(r, "text")?,
+                3 => message.values = codec::list(r, "values", codec::cell)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::str_value(&self.text));
-        out.put(3, codec::list_value(&self.values, codec::cell_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.text.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.text);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.values, codec::write_cell);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.text.is_empty()
+            && self.values.is_empty()
     }
 }
 
@@ -1752,22 +3031,48 @@ pub(crate) struct SqlQuery {
 #[cfg(feature = "sql")]
 impl Message for SqlQuery {
     const NAME: &'static str = "sql.Query";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlQuery {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            text: fields.get(2, "text", codec::str)?.unwrap_or_default(),
-            values: fields.get(3, "values", codec::list(codec::cell))?.unwrap_or_default(),
-            want: fields.get(4, "want", codec::str)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.text = codec::str(r, "text")?,
+                3 => message.values = codec::list(r, "values", codec::cell)?,
+                4 => message.want = codec::str(r, "want")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::str_value(&self.text));
-        out.put(3, codec::list_value(&self.values, codec::cell_value));
-        out.put(4, codec::str_value(&self.want));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.text.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.text);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.values, codec::write_cell);
+        }
+        if !self.want.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.want);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.text.is_empty()
+            && self.values.is_empty()
+            && self.want.is_empty()
     }
 }
 
@@ -1783,18 +3088,36 @@ pub(crate) struct SqlRows {
 #[cfg(feature = "sql")]
 impl Message for SqlRows {
     const NAME: &'static str = "sql.Rows";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlRows {
-            columns: fields.get(1, "columns", codec::list(codec::str))?.unwrap_or_default(),
-            rows: fields.get(2, "rows", codec::list(codec::list(codec::cell)))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.columns = codec::list(r, "columns", codec::str)?,
+                2 => message.rows = codec::list(r, "rows", |r, name| codec::list(r, name, codec::cell))?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.columns, codec::str_value));
-        out.put(2, codec::list_value(&self.rows, |items| codec::list_value(items, codec::cell_value)));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.columns.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.columns, codec::write_str);
+        }
+        if !self.rows.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.rows, |out, items| codec::write_list(out, items, codec::write_cell));
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.columns.is_empty()
+            && self.rows.is_empty()
     }
 }
 
@@ -1810,18 +3133,36 @@ pub(crate) struct SqlDone {
 #[cfg(feature = "sql")]
 impl Message for SqlDone {
     const NAME: &'static str = "sql.Done";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlDone {
-            changes: fields.get(1, "changes", codec::uint)?.unwrap_or_default(),
-            last_insert_rowid: fields.get(2, "lastInsertRowid", codec::int)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.changes = codec::uint(r, "changes")?,
+                2 => message.last_insert_rowid = codec::int(r, "lastInsertRowid")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.changes));
-        out.put(2, codec::int_value(&self.last_insert_rowid));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.changes != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.changes);
+        }
+        if self.last_insert_rowid != 0 {
+            map.field(out, 2);
+            codec::write_int(out, &self.last_insert_rowid);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.changes == 0
+            && self.last_insert_rowid == 0
     }
 }
 
@@ -1836,18 +3177,36 @@ pub(crate) struct SqlBatch {
 #[cfg(feature = "sql")]
 impl Message for SqlBatch {
     const NAME: &'static str = "sql.Batch";
-    const KEYS: &'static [u64] = &[1, 2];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlBatch {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-            statements: fields.get(2, "statements", codec::list(codec::message::<SqlText>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.statements = codec::list(r, "statements", codec::message::<SqlText>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
-        out.put(2, codec::list_value(&self.statements, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.statements.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.statements, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.statements.is_empty()
     }
 }
 
@@ -1860,16 +3219,30 @@ pub(crate) struct SqlBatched {
 #[cfg(feature = "sql")]
 impl Message for SqlBatched {
     const NAME: &'static str = "sql.Batched";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlBatched {
-            done: fields.get(1, "done", codec::list(codec::message::<SqlDone>))?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.done = codec::list(r, "done", codec::message::<SqlDone>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::list_value(&self.done, codec::message_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.done.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.done, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.done.is_empty()
     }
 }
 
@@ -1884,16 +3257,30 @@ pub(crate) struct SqlTxOpen {
 #[cfg(feature = "sql")]
 impl Message for SqlTxOpen {
     const NAME: &'static str = "sql.TxOpen";
-    const KEYS: &'static [u64] = &[1];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlTxOpen {
-            handle: fields.get(1, "handle", codec::uint)?.unwrap_or_default(),
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::uint_value(&self.handle));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
     }
 }
 
@@ -1918,26 +3305,60 @@ pub(crate) struct SqlTxCall {
 #[cfg(feature = "sql")]
 impl Message for SqlTxCall {
     const NAME: &'static str = "sql.TxCall";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlTxCall {
-            text: fields.get(1, "text", codec::str)?.unwrap_or_default(),
-            values: fields.get(2, "values", codec::list(codec::cell))?.unwrap_or_default(),
-            want: fields.get(3, "want", codec::str)?.unwrap_or_default(),
-            commit: fields.get(4, "commit", codec::bool)?.unwrap_or_default(),
-            method: fields.get(5, "method", codec::uint)?,
-            body: fields.get(6, "body", codec::bin)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.text = codec::str(r, "text")?,
+                2 => message.values = codec::list(r, "values", codec::cell)?,
+                3 => message.want = codec::str(r, "want")?,
+                4 => message.commit = codec::bool(r, "commit")?,
+                5 => message.method = Some(codec::uint(r, "method")?),
+                6 => message.body = Some(codec::bin(r, "body")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.put(1, codec::str_value(&self.text));
-        out.put(2, codec::list_value(&self.values, codec::cell_value));
-        out.put(3, codec::str_value(&self.want));
-        out.put(4, codec::bool_value(&self.commit));
-        out.given(5, self.method.as_ref().map(codec::uint_value));
-        out.given(6, self.body.as_ref().map(codec::bin_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.text.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.text);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.values, codec::write_cell);
+        }
+        if !self.want.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.want);
+        }
+        if self.commit {
+            map.field(out, 4);
+            codec::write_bool(out, &self.commit);
+        }
+        if let Some(method) = &self.method {
+            map.field(out, 5);
+            codec::write_uint(out, method);
+        }
+        if let Some(body) = &self.body {
+            map.field(out, 6);
+            codec::write_bin(out, body);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.text.is_empty()
+            && self.values.is_empty()
+            && self.want.is_empty()
+            && !self.commit
+            && self.method.is_none()
+            && self.body.is_none()
     }
 }
 
@@ -1956,22 +3377,48 @@ pub(crate) struct SqlTxAnswer {
 #[cfg(feature = "sql")]
 impl Message for SqlTxAnswer {
     const NAME: &'static str = "sql.TxAnswer";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
-    fn read(fields: &Fields) -> Result<Self, Failure> {
-        Ok(SqlTxAnswer {
-            rows: fields.get(1, "rows", codec::message::<SqlRows>)?,
-            done: fields.get(2, "done", codec::message::<SqlDone>)?,
-            failure: fields.get(3, "failure", codec::message::<Failure>)?,
-            body: fields.get(4, "body", codec::bin)?,
-        })
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.rows = Some(SqlRows::read(r)?),
+                2 => message.done = Some(SqlDone::read(r)?),
+                3 => message.failure = Some(Failure::read(r)?),
+                4 => message.body = Some(codec::bin(r, "body")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
     }
 
-    fn write(&self, out: &mut Out) {
-        out.given(1, self.rows.as_ref().map(codec::message_value));
-        out.given(2, self.done.as_ref().map(codec::message_value));
-        out.given(3, self.failure.as_ref().map(codec::message_value));
-        out.given(4, self.body.as_ref().map(codec::bin_value));
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(rows) = &self.rows {
+            map.field(out, 1);
+            codec::write_message(out, rows);
+        }
+        if let Some(done) = &self.done {
+            map.field(out, 2);
+            codec::write_message(out, done);
+        }
+        if let Some(failure) = &self.failure {
+            map.field(out, 3);
+            codec::write_message(out, failure);
+        }
+        if let Some(body) = &self.body {
+            map.field(out, 4);
+            codec::write_bin(out, body);
+        }
+        map.close(out);
+    }
+
+    fn is_zero(&self) -> bool {
+        self.rows.is_none()
+            && self.done.is_none()
+            && self.failure.is_none()
+            && self.body.is_none()
     }
 }
 

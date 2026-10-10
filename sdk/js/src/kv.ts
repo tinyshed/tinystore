@@ -298,20 +298,17 @@ const [valueField] = KvEntry.fields.value
 function valueIn<T>(r: Reader, values: Values<T>): T | undefined {
 	let found = false
 	let raw: Raw = null
-	r.fields(field => {
+	for (let n = r.message(); n > 0; n--) {
+		const field = r.field()
 		if (field === foundField) {
 			found = r.bool()
-			return true
+		} else if (field !== valueField) {
+			r.skip()
+		} else if (!r.nil()) {
+			raw = r.type() !== 'bin' ? r.int64() : values.keeps === true ? r.bytes() : r.bin()
 		}
-		if (field !== valueField) {
-			return false
-		}
-		if (r.nil()) {
-			return true
-		}
-		raw = r.type() !== 'bin' ? r.int64() : values.keeps === true ? r.bytes() : r.bin()
-		return true
-	})
+	}
+	r.leave()
 	return found ? values.decode(raw) : undefined
 }
 

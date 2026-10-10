@@ -149,8 +149,9 @@ impl Schema {
         }
     }
 
-    /// Refuses a schema that names what it does not declare, or declares a
-    /// name, a field number or a method twice.
+    /// Refuses a schema that names what it does not declare, declares a
+    /// name, a field number or a method twice, numbers a field past what one
+    /// byte holds, or nests a value past the profile's eight levels.
     pub(crate) fn check(&self) -> Result<(), String> {
         let mut names = HashSet::new();
         for message in &self.messages {
@@ -164,6 +165,10 @@ impl Schema {
                 if !numbers.insert(field.number) {
                     return Err(format!("{}: field {} twice", message.name, field.number));
                 }
+                // a positive fixint: a field's number is one byte, which its writer pushes as it is
+                if !(1..=127).contains(&field.number) {
+                    return Err(format!("{}: field {} is not 1 to 127", message.name, field.number));
+                }
                 if let Some(missing) = field.kind.message().filter(|name| !names.contains(name)) {
                     return Err(format!("{}.{}: no message {missing}", message.name, field.name));
                 }
@@ -171,6 +176,14 @@ impl Schema {
         }
         if !names.contains("Failure") {
             return Err("no message Failure, which a refused message is".to_owned());
+        }
+        for message in &self.messages {
+            // a message is a value at level 0 and its fields at level 1; a reader
+            // that follows the schema meets nothing deeper than it says
+            let deepest = 1 + self.below(message, &mut Vec::new())?;
+            if deepest > 8 {
+                return Err(format!("{} nests a value {deepest} levels down, past the profile's 8", message.name));
+            }
         }
         let mut ids = HashSet::new();
         for method in &self.methods {
@@ -184,6 +197,35 @@ impl Schema {
             }
         }
         Ok(())
+    }
+
+    /// How many levels below its fields a message's deepest value lies.
+    /// `within` holds the messages being measured, one naming itself again
+    /// being a cycle.
+    fn below<'a>(&'a self, message: &'a Message, within: &mut Vec<&'a str>) -> Result<usize, String> {
+        if within.contains(&message.name.as_str()) {
+            return Err(format!("{} holds itself, which no depth bounds", message.name));
+        }
+        within.push(&message.name);
+        let mut deepest = 0;
+        for field in &message.fields {
+            deepest = deepest.max(self.levels(&field.kind, within)?);
+        }
+        within.pop();
+        Ok(deepest)
+    }
+
+    /// How many levels below a value of the kind its deepest part lies.
+    fn levels<'a>(&'a self, kind: &'a Kind, within: &mut Vec<&'a str>) -> Result<usize, String> {
+        match kind {
+            Kind::List(item) | Kind::Names(item) => Ok(1 + self.levels(item, within)?),
+            Kind::Message(name) => {
+                let named = self.message(name);
+                let fields = if named.fields.is_empty() { 0 } else { 1 };
+                Ok(fields + self.below(named, within)?)
+            }
+            _ => Ok(0),
+        }
     }
 
     pub(crate) fn message(&self, name: &str) -> &Message {

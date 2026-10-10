@@ -13,7 +13,7 @@ import { Reader, Writer } from './msgpack.ts'
 export interface Codec<Out, In = Out> {
 	/** what the value is, which the tests that read vectors go by */
 	readonly kind: string
-	/** a list's items, or what a nullable holds when it holds something */
+	/** a list's items, a map's values, or what a nullable holds when it holds something */
 	readonly item?: Codec<unknown, never>
 	write(w: Writer, value: In): void
 	read(r: Reader): Out
@@ -213,22 +213,33 @@ export function names<V, In = V>(
 ): Codec<Record<string, V>, Record<string, In>> {
 	return {
 		kind: value.kind === 'sql value' ? 'sql names' : 'names',
-		write: (w, v) => {
-			const sorted = Object.keys(v).sort(byCodePoint)
-			w.map(sorted.length)
-			for (const name of sorted) {
-				w.str(name)
-				value.write(w, v[name] as In)
-			}
-		},
-		read: r => {
-			const named: Record<string, V> = {}
-			r.names(name => {
-				named[name] = value.read(r)
-			})
-			return named
-		},
+		item: value,
+		write: (w, v) => writeNames(w, v, value.write),
+		read: r => readNames(r, value.read),
 	}
+}
+
+/** Writes a map of names in the byte order of their UTF-8, each value as `item` writes it. */
+export function writeNames<In>(
+	w: Writer,
+	named: Record<string, In>,
+	item: (w: Writer, value: In) => void,
+): void {
+	const sorted = Object.keys(named).sort(byCodePoint)
+	w.map(sorted.length)
+	for (const name of sorted) {
+		w.str(name)
+		item(w, named[name] as In)
+	}
+}
+
+/** Reads a map of names, a name twice refused, each value as `item` reads it. */
+export function readNames<V>(r: Reader, item: (r: Reader) => V): Record<string, V> {
+	const named: Record<string, V> = {}
+	r.names(name => {
+		named[name] = item(r)
+	})
+	return named
 }
 
 /** Orders strings as their UTF-8 bytes are ordered, which UTF-16's code units do not. */
@@ -360,25 +371,40 @@ type OutOf<C> = C extends Codec<infer O, never> ? O : never
 type InOf<C> = C extends Codec<unknown, infer I> ? I : never
 
 /** What a message reads: every field it holds, a field it lacks undefined. */
-export type Read<F extends Fields> = { [K in keyof F]?: OutOf<F[K][1]> }
+export type Read<F extends Fields> = { [K in keyof F]?: OutOf<F[K][1]> | undefined }
 
 /** What a message is written from: a field undefined is left out. */
 export type Written<F extends Fields> = { [K in keyof F]?: InOf<F[K][1]> | undefined }
 
 /**
+ * A message's reader and writer written out a field at a time, as
+ * crates/protocol writes every message of the schema: what its table of
+ * fields says, without walking the table.
+ */
+export interface Made<F extends Fields> {
+	write(w: Writer, value: Written<F>): void
+	read(r: Reader): Read<F>
+}
+
+/**
  * A message: a map of the fields its declaration names, keys ascending. A
  * field is written when its value is not undefined, so an absent field and a
  * zero one stay what the caller said; a key the declaration lacks is skipped
- * as it reads, well formed and within bounds.
+ * as it reads, well formed and within bounds. A message the schema declares
+ * is read and written by its own code; one declared by hand, by its table.
  */
 export class Message<F extends Fields> implements Codec<Read<F>, Written<F>> {
 	readonly kind = 'message'
 	readonly name: string
 	readonly fields: F
+	/** Writes the message at the writer's end; a function of its own, to be passed as one. */
+	readonly write: (w: Writer, value: Written<F>) => void
+	/** Reads the message the reader is at; a function of its own, to be passed as one. */
+	readonly read: (r: Reader) => Read<F>
 	readonly #order: { name: string; key: number; codec: Codec<unknown, unknown> }[]
 	readonly #byKey: ({ name: string; codec: Codec<unknown, unknown> } | undefined)[] = []
 
-	constructor(name: string, fields: F) {
+	constructor(name: string, fields: F, made?: Made<F>) {
 		this.name = name
 		this.fields = fields
 		this.#order = Object.entries(fields)
@@ -391,9 +417,11 @@ export class Message<F extends Fields> implements Codec<Read<F>, Written<F>> {
 		for (const f of this.#order) {
 			this.#byKey[f.key] = f
 		}
+		this.write = made?.write ?? ((w, value) => this.#write(w, value))
+		this.read = made?.read ?? (r => this.#read(r))
 	}
 
-	write(w: Writer, value: Written<F>): void {
+	#write(w: Writer, value: Written<F>): void {
 		const held = value as Record<string, unknown>
 		const order = this.#order
 		if (order.length > 15) {
@@ -437,7 +465,7 @@ export class Message<F extends Fields> implements Codec<Read<F>, Written<F>> {
 		return value
 	}
 
-	read(r: Reader): Read<F> {
+	#read(r: Reader): Read<F> {
 		const read: Record<string, unknown> = {}
 		r.fields(key => {
 			const f = this.#byKey[key]
@@ -451,6 +479,10 @@ export class Message<F extends Fields> implements Codec<Read<F>, Written<F>> {
 	}
 }
 
-export function message<const F extends Fields>(name: string, fields: F): Message<F> {
-	return new Message(name, fields)
+export function message<const F extends Fields>(
+	name: string,
+	fields: F,
+	made?: Made<NoInfer<F>>,
+): Message<F> {
+	return new Message(name, fields, made)
 }

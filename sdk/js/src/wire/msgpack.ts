@@ -98,6 +98,37 @@ export class Writer {
 		this.#bytes[at] = FIXMAP | n
 	}
 
+	/**
+	 * Keeps the byte a message's count of fields goes in, and says where: a
+	 * field left undefined is not written, so the count is known only once
+	 * the fields are.
+	 */
+	openMap(): number {
+		return this.#room(1)
+	}
+
+	/** Writes a field's number, one byte, as the schema keeps every number. */
+	field(key: number): void {
+		this.#byte(key)
+	}
+
+	/**
+	 * Writes a message's count of fields in the byte openMap kept. Past
+	 * fifteen the count is a map 16's three bytes, and the fields move up to
+	 * make room: the profile writes the shortest head, so none is kept wider.
+	 */
+	closeMap(at: number, n: number): void {
+		if (n <= 15) {
+			this.#bytes[at] = FIXMAP | n
+			return
+		}
+		const end = this.#length
+		this.#room(2)
+		this.#bytes.copyWithin(at + 3, at + 1, end)
+		this.#bytes[at] = MAP16
+		this.#two(at + 1, n)
+	}
+
 	/** Makes room for n bytes at the end and says where they begin. */
 	#room(n: number): number {
 		const at = this.#length
@@ -421,6 +452,10 @@ export class Reader {
 	#at: number
 	#end: number
 	#depth = 0
+	/** The field numbers under 31 each message being read has shown, in bits, by its depth. */
+	readonly #seen = new Array<number>(maxDepth + 1).fill(0)
+	/** The numbers past those, rare enough to be kept in a set, made when one comes. */
+	readonly #others: (Set<number> | undefined)[] = []
 
 	/** Reads a message that is the bytes from `at` to `end`: all of them unless said. */
 	constructor(bytes: Uint8Array, at = 0, end = bytes.length) {
@@ -712,6 +747,43 @@ export class Reader {
 		}
 		this.#depth++
 		return n
+	}
+
+	/**
+	 * Reads a message's count of fields and enters its map, for a reader
+	 * written out a field at a time: field() reads each number, and leave()
+	 * ends the map.
+	 */
+	message(): number {
+		const n = this.map()
+		this.#seen[this.#depth] = 0
+		this.#others[this.#depth]?.clear()
+		return n
+	}
+
+	/** Reads the next field's number in the message entered last, refusing one it showed before. */
+	field(): number {
+		const key = this.uint()
+		const depth = this.#depth
+		if (key < 31) {
+			const bit = 1 << key
+			const seen = this.#seen[depth]!
+			if ((seen & bit) !== 0) {
+				throw fail(`key ${key} twice`)
+			}
+			this.#seen[depth] = seen | bit
+			return key
+		}
+		let others = this.#others[depth]
+		if (others === undefined) {
+			others = new Set()
+			this.#others[depth] = others
+		}
+		if (others.has(key)) {
+			throw fail(`key ${key} twice`)
+		}
+		others.add(key)
+		return key
 	}
 
 	/**
