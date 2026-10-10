@@ -59,6 +59,10 @@ struct Queue {
     waiting: VecDeque<Arc<Write>>,
     leading: bool,
     closed: bool,
+    /// How many writes a gathering leader waits for: the write that makes
+    /// them wakes it, and no other, since a wake a write would cost each
+    /// caller more than its write.
+    gathering: Option<usize>,
     /// The writes the next commit may expect: those that waited when the last
     /// commit ended, and the ones it answered, whose callers may be about to
     /// write again.
@@ -81,7 +85,13 @@ enum Turn {
     Waiting,
     Leading,
     /// Taken once, by the caller.
-    Answered(Option<Result<()>>),
+    Answered(Option<Answer>),
+}
+
+/// A write's answer, and the answers its caller passes on as it returns.
+struct Answer {
+    own: Result<()>,
+    passed_on: Vec<(Arc<Write>, Result<()>)>,
 }
 
 impl Group {
@@ -108,7 +118,7 @@ impl Group {
         let write = Arc::new(Write::new(bytes, work));
         let leads = self.enqueue(&write)?;
         if leads || write.wait_for_turn() {
-            self.lead(writer);
+            self.lead(writer, Some(&write));
         }
         write.take_answer()
     }
@@ -119,9 +129,9 @@ impl Group {
     pub(crate) fn submit(&self, writer: &Mutex<Connection>, bytes: usize, work: Work, done: Done) {
         let write = Arc::new(Write::submitted(bytes, work, done));
         match self.enqueue(&write) {
-            Ok(true) => self.lead(writer),
+            Ok(true) => self.lead(writer, None),
             Ok(false) => {}
-            Err(error) => write.answer(Err(error)),
+            Err(error) => write.answer(Err(error), Vec::new()),
         }
     }
 
@@ -134,7 +144,7 @@ impl Group {
             std::mem::take(&mut queue.waiting)
         };
         for write in waiting {
-            write.answer(Err(Error::closed("a grouped write")));
+            write.answer(Err(Error::closed("a grouped write")), Vec::new());
         }
         self.grew.notify_all();
     }
@@ -147,7 +157,9 @@ impl Group {
         }
         queue.waiting.push_back(Arc::clone(write));
         if queue.leading {
-            self.grew.notify_all();
+            if queue.gathering.is_some_and(|wanted| queue.waiting.len() >= wanted) {
+                self.grew.notify_all();
+            }
             return Ok(false);
         }
         queue.leading = true;
@@ -155,8 +167,9 @@ impl Group {
     }
 
     /// Commits batches until the write at the front has a caller of its own to
-    /// lead, or the queue is empty.
-    fn lead(&self, writer: &Mutex<Connection>) {
+    /// lead, or the queue is empty. `own` is the write of the caller that
+    /// leads, when it has one.
+    fn lead(&self, writer: &Mutex<Connection>, own: Option<&Arc<Write>>) {
         loop {
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
@@ -168,9 +181,7 @@ impl Group {
                 self.commits.fetch_add(1, Ordering::Relaxed);
             }
             let leads_on = self.hand_off(batch.len(), held);
-            for (write, answer) in batch.iter().zip(answers) {
-                write.answer(answer);
-            }
+            answer_all(batch, answers, own);
             if !leads_on {
                 return;
             }
@@ -186,6 +197,7 @@ impl Group {
         let wanted = queue.expected.min(self.limits.writes);
         let window = (queue.last_held / GATHER_SHARE).min(self.limits.gather);
         let deadline = queue.last_ended.map_or_else(Instant::now, |ended| ended + window);
+        queue.gathering = Some(wanted);
         while queue.waiting.len() < wanted && !queue.closed {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -193,6 +205,7 @@ impl Group {
             }
             queue = self.grew.wait_timeout(queue, left).unwrap_or_else(PoisonError::into_inner).0;
         }
+        queue.gathering = None;
         self.take(&mut queue)
     }
 
@@ -269,12 +282,14 @@ impl Write {
         }
     }
 
-    fn answer(&self, answer: Result<()>) {
+    /// Answers the write, and gives its caller the answers it passes on. A
+    /// submitted write has no caller to pass any on, and is given none.
+    fn answer(&self, own: Result<()>, passed_on: Vec<(Arc<Write>, Result<()>)>) {
         let done = self.done.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(done) = done {
-            return done(answer);
+            return done(own);
         }
-        *self.lock_turn() = Turn::Answered(Some(answer));
+        *self.lock_turn() = Turn::Answered(Some(Answer { own, passed_on }));
         self.changed.notify_one();
     }
 
@@ -282,17 +297,50 @@ impl Write {
         self.work.lock().unwrap_or_else(PoisonError::into_inner).take()
     }
 
+    /// The write's answer, once the answers given with it are passed on.
     fn take_answer(&self) -> Result<()> {
-        match &mut *self.lock_turn() {
-            Turn::Answered(answer) => {
-                answer.take().unwrap_or_else(|| Err(Error::internal("a grouped write was answered twice")))
-            }
-            _ => Err(Error::internal("a grouped write ended without an answer")),
+        let answer = match &mut *self.lock_turn() {
+            Turn::Answered(answer) => answer.take(),
+            _ => return Err(Error::internal("a grouped write ended without an answer")),
+        };
+        let Some(Answer { own, passed_on }) = answer else {
+            return Err(Error::internal("a grouped write was answered twice"));
+        };
+        for (write, answer) in passed_on {
+            write.answer(answer, Vec::new());
         }
+        own
     }
 
     fn lock_turn(&self) -> MutexGuard<'_, Turn> {
         self.turn.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Answers a commit's writes: a submitted one through its `done`, here, and
+/// a caller that waits by waking it.
+///
+/// A wake costs tens of microseconds where the processor it lands on sleeps,
+/// and a leader that woke 64 callers one after another spent on it what
+/// their commit had taken, so that half of them missed the next commit
+/// (research rust-slice-2026-10-10). The leader wakes one caller in every
+/// share, the square root of them, and that caller wakes the rest of its
+/// share as it returns: a caller slow to wake delays that many answers and
+/// no more. The leader's own write passes none on, since its thread may lead
+/// the next commit first.
+fn answer_all(batch: Vec<Arc<Write>>, answers: Vec<Result<()>>, own: Option<&Arc<Write>>) {
+    let mut waiting = Vec::with_capacity(batch.len());
+    for (write, answer) in batch.into_iter().zip(answers) {
+        if write.is_submitted() || own.is_some_and(|own| Arc::ptr_eq(own, &write)) {
+            write.answer(answer, Vec::new());
+        } else {
+            waiting.push((write, answer));
+        }
+    }
+    let share = waiting.len().isqrt().max(1);
+    let mut waiting = waiting.into_iter();
+    while let Some((first, answer)) = waiting.next() {
+        first.answer(answer, waiting.by_ref().take(share).collect());
     }
 }
 
