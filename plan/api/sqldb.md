@@ -11,8 +11,8 @@ transactions (`crates/tinystore/src/sql`), protocol 2 serves them
 (`protocol/sql.wire`), and the Bun SDK has all of it with its tables and
 query builder (`sdk/js/src/sql.ts`, `query.ts`), as the Rust core has
 them (`query.rs`), both held to `testdata/sql/queries.json`, and the buckets
-and queues kept in a database's file (`inside.rs`); `include` and the Python
-and Go SDKs come next. The Go engine at `e81a050` and research's
+and queues kept in a database's file (`inside.rs`), and `include`
+(`included.rs`); the Python and Go SDKs come next. The Go engine at `e81a050` and research's
 design of it are the reference for what it promises.
 
 What changed from the Go engine: queries can be built without writing their
@@ -437,12 +437,21 @@ await notes.where(sql`created_at < ${cutoff}`).delete()
   without `select` reads the first table's columns, `o.*`, so that a name both
   tables have cannot take the other's value.
 - `include(name, query)` gives each row the rows of a query as a list under
-  `name`, its `limit` counted for each row, which it must have. It is planned
-  and not in the first build: a list through `json_group_array` loses bytes,
-  which JSON cannot hold, and integers past 2^53 in a JSON parser, and a value
-  comes back as it went in or not at all. A prototype weighs it against a
-  second statement in the same snapshot, `row_number() over (partition by …)`,
-  joined in the SDK, by exact values and by SQLite's plan.
+  `name`, from the same statement and so the same snapshot. The query names
+  the row it belongs to in its `where`, by the outer table's alias; names its
+  columns with `select`, each a plain column or `… as name`; has a `limit`,
+  counted for each row; and includes nothing itself. Anything else is
+  `invalid` and says which. It runs as a subquery a row, so the column its
+  `where` names wants an index.
+  - A value comes back as it is kept: bytes, an integer past 2^53, every digit
+    of a float, a text with a zero byte. A list through `json_group_array`
+    loses the first two, so the rows come as the SQL literals SQLite's
+    `quote()` writes, `(1,'it''s',NULL),(2,X'00ff',1.5)`, which the SDK reads.
+  - The included rows read by their own table's `types` and schema. In Rust
+    the list is a field of the row's type, `posts: Vec<Post>`.
+  - It is not measured against the alternative the first draft named, a
+    second statement in the same snapshot with `row_number() over (partition
+    by …)`, joined in the SDK: that comparison is open.
 - `all`, `one`, `scalar`, `count` and `each` read; `count` counts every match,
   without the order and the limit. `update` and `delete` write and say how many
   rows changed; a value `update` sets may be a piece of SQL. `update` or
@@ -682,7 +691,7 @@ Prisma.
 | `sql.contains('tags', …)` read as a substring                                                | `sql.has`, a list holding a value                                                                        |
 | `sql.id(column)` read as the column `id`                                                     | `sql.ident`                                                                                              |
 | `'orders o'` read as a table named "orders o"                                                | `'orders as o'`                                                                                          |
-| `include` without a limit can build a JSON of a whole table inside SQLite                    | `include` needs its query's `limit`, which is per row; its execution waits for a prototype               |
+| `include` without a limit can build a JSON of a whole table inside SQLite                    | `include` needs its query's `limit`, which is per row, and its `select`                                  |
 | a transaction bounded only across the network                                                | five seconds wherever it runs                                                                            |
 | `where_` in Rust read as a typo                                                              | Rust spells it `filter`, as Diesel does; the others keep `where`, SQL's word                             |
 | a number past 2^53 rounded before the call                                                   | `invalid`, saying to pass a `bigint`                                                                     |
@@ -708,7 +717,7 @@ An agent the owner works with read the book after the check.
 |---------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
 | `tx([…])` and `tx(fn)` cost two different things under one word                 | `batch([…])` for the list; `tx` takes a function alone                                   |
 | `one` on a write with `returning` changes how statements reach their connection | the routing by `sqlite3_stmt_readonly`, the savepoint, durability and errors are written |
-| `include` through JSON loses bytes and integers past 2^53                       | planned, its execution chosen by a prototype                                             |
+| `include` through JSON loses bytes and integers past 2^53                       | its rows come as the SQL literals `quote()` writes, each value as it is kept             |
 | `update` in an upsert limits the columns, not whose row they are                | `upsert(…, { where })`, the owner's condition                                            |
 | a quoted sort is still a column the request chose                               | the book's request picks from the program's sorts; `"u"."created_at"` quoted by parts    |
 | a cursor could be given to another query                                        | a cursor holds a digest of its query, and another's is `invalid`                         |

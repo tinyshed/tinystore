@@ -23,6 +23,7 @@
 
 mod database;
 mod engine;
+mod included;
 mod migrations;
 mod pieces;
 mod query;

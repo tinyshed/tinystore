@@ -3,7 +3,7 @@
 // around names, and nothing else. It runs in this process; the server sees
 // the text and the values, as it would a statement written by hand.
 
-import { InvalidError } from './errors.ts'
+import { CorruptError, InvalidError } from './errors.ts'
 import { check, type StandardSchemaV1 } from './schema.ts'
 import {
 	type Condition,
@@ -67,6 +67,17 @@ interface Parts {
 	order: { piece: Sql; column?: string | undefined; direction: Direction }[]
 	limit?: number | undefined
 	offset?: number | undefined
+	includes: Included[]
+}
+
+/** A query whose rows each row of another holds as a list under a name. */
+interface Included {
+	name: string
+	parts: Parts
+	/** how the included rows read: their table's types and schema */
+	source: Source
+	/** the names of the columns its select gives, in their order */
+	columns: string[]
 }
 
 /** How a table reads and writes: its runner, its name, and how its rows read. */
@@ -111,6 +122,45 @@ export class Query<T = Row> implements Embeddable {
 	select<R = Row>(columns: string | Sql): Query<R> {
 		const select = typeof columns === 'string' ? new Sql(columns, []) : columns
 		return new Query<R>(this.#source, { ...this.#parts, select })
+	}
+
+	/**
+	 * Gives each row the rows of another query as a list under `name`, from
+	 * the same statement: the query names the row it belongs to in its
+	 * `where`, by this table's alias, names its columns with `select`, and has
+	 * a `limit`, which counts for each row. Every value comes back as it is
+	 * kept, bytes and integers past 2^53 among them.
+	 *
+	 *     const latest = db.table<Post>('posts as p').select<{ id: string; title: string }>('p.id, p.title')
+	 *       .where('p.author_id = u.id').orderBy('p.id', 'desc').limit(3)
+	 *     const authors = await db.table<User>('users as u').include('posts', latest).all()
+	 */
+	include<N extends string, C>(name: N, query: Query<C>): Query<T & Record<N, C[]>> {
+		const describe = `the included ${JSON.stringify(name)}`
+		const parts = query.parts
+		if (parts.select === undefined) {
+			throw new InvalidError(`${describe}: it names its columns with select('p.id, p.title')`)
+		}
+		if (parts.limit === undefined) {
+			throw new InvalidError(`${describe}: it needs a limit, which counts for each row`)
+		}
+		if (parts.includes.length > 0) {
+			throw new InvalidError(`${describe}: an included query includes nothing itself`)
+		}
+		const included = {
+			name,
+			parts,
+			source: query.source,
+			columns: namesOf(parts.select.text, describe),
+		}
+		const taken = this.#parts.includes.some(each => each.name === name)
+		if (taken || name.length === 0) {
+			throw new InvalidError(`${describe}: an included list has a name of its own`)
+		}
+		return new Query<T & Record<N, C[]>>(this.#source, {
+			...this.#parts,
+			includes: [...this.#parts.includes, included],
+		})
 	}
 
 	/** Joins a table, `'users as u'`, on a condition as SQL text or a piece of SQL. */
@@ -191,6 +241,7 @@ export class Query<T = Row> implements Embeddable {
 			order: [],
 			limit: undefined,
 			offset: undefined,
+			includes: [],
 		}
 		const statement =
 			counted.groups.length === 0
@@ -313,21 +364,7 @@ export class Query<T = Row> implements Embeddable {
 
 	/** A row as the table's types and schema read it. */
 	protected async read(row: Row): Promise<T> {
-		const typed: Record<string, unknown> = { ...row }
-		for (const [column, type] of Object.entries(this.#source.types)) {
-			if (column in typed) {
-				typed[column] = typedOf(typed[column] as SqlValue, type, column)
-			}
-		}
-		const schema = this.#source.schema
-		if (schema === undefined) {
-			return typed as T
-		}
-		const checked = await check(schema, typed)
-		if ('issues' in checked) {
-			throw new InvalidError(`a row does not meet the table's schema: ${checked.issues}`)
-		}
-		return checked.value as T
+		return (await readAs(this.#source, row)) as T
 	}
 
 	protected get source(): Source {
@@ -339,13 +376,20 @@ export class Query<T = Row> implements Embeddable {
 	}
 
 	async #rows(columns: readonly string[], rows: readonly SqlValue[][]): Promise<T[]> {
+		const includes = this.#parts.includes
 		const out: T[] = []
 		for (const values of rows) {
 			const row: Row = {}
-			columns.forEach((column, at) => {
-				row[column] = values[at] ?? null
-			})
-			out.push(await this.read(row))
+			const lists: Record<string, unknown[]> = {}
+			for (const [at, column] of columns.entries()) {
+				const included = includes.find(each => each.name === column)
+				if (included === undefined) {
+					row[column] = values[at] ?? null
+				} else {
+					lists[column] = await includedRows(included, values[at] ?? null)
+				}
+			}
+			out.push({ ...((await this.read(row)) as object), ...lists } as T)
 		}
 		return out
 	}
@@ -457,7 +501,259 @@ export class Table<T = Row> extends Query<T> {
 }
 
 function emptyParts(table: string, alias?: string): Parts {
-	return { table, alias, joins: [], conditions: [], groups: [], having: [], order: [] }
+	return {
+		table,
+		alias,
+		joins: [],
+		conditions: [],
+		groups: [],
+		having: [],
+		order: [],
+		includes: [],
+	}
+}
+
+/** A row as a table's types and schema read it. */
+async function readAs(source: Source, row: Row): Promise<unknown> {
+	const typed: Record<string, unknown> = { ...row }
+	for (const [column, type] of Object.entries(source.types)) {
+		if (column in typed) {
+			typed[column] = typedOf(typed[column] as SqlValue, type, column)
+		}
+	}
+	if (source.schema === undefined) {
+		return typed
+	}
+	const checked = await check(source.schema, typed)
+	if ('issues' in checked) {
+		throw new InvalidError(`a row does not meet the table's schema: ${checked.issues}`)
+	}
+	return checked.value
+}
+
+/** The rows a row's included query gave, read as that query's table reads them. */
+async function includedRows(included: Included, kept: SqlValue): Promise<unknown[]> {
+	if (kept === null) {
+		return []
+	}
+	if (typeof kept !== 'string') {
+		throw new CorruptError(`the included ${JSON.stringify(included.name)} came back as no text`)
+	}
+	const rows: unknown[] = []
+	for (const values of literalRows(kept)) {
+		const row: Row = {}
+		included.columns.forEach((column, at) => {
+			row[column] = values[at] ?? null
+		})
+		rows.push(await readAs(included.source, row))
+	}
+	return rows
+}
+
+/**
+ * The names of the columns a select's text gives, in their order: a column's
+ * own name, or what follows its `as`. An expression without a name is
+ * refused, since its rows could not be given their fields.
+ */
+export function namesOf(select: string, describe: string): string[] {
+	const name = `("(?:[^"]|"")+"|[A-Za-z_][\\w$]*)`
+	const aliased = new RegExp(`\\s+as\\s+${name}\\s*$`, 'i')
+	const column = new RegExp(`^(?:${name}\\.)?${name}$`)
+	const bare = (quoted: string) =>
+		quoted.startsWith('"') ? quoted.slice(1, -1).replaceAll('""', '"') : quoted
+	const names: string[] = []
+	for (const item of itemsOf(select)) {
+		const found = aliased.exec(item)?.[1] ?? column.exec(item)?.[2]
+		if (found === undefined) {
+			throw new InvalidError(
+				`${describe}: the column ${JSON.stringify(item)} needs a name: write it as … as name`,
+			)
+		}
+		if (names.includes(bare(found))) {
+			throw new InvalidError(`${describe}: two columns named ${bare(found)}`)
+		}
+		names.push(bare(found))
+	}
+	return names
+}
+
+/** A select's items: its text cut at the commas outside quotes and parentheses. */
+function itemsOf(select: string): string[] {
+	const items: string[] = []
+	let [depth, from, at] = [0, 0, 0]
+	while (at < select.length) {
+		const c = select[at] as string
+		if (c === "'" || c === '"' || c === '`') {
+			at = select.indexOf(c, at + 1)
+			if (at < 0) {
+				break
+			}
+		} else if (c === '(') {
+			depth++
+		} else if (c === ')') {
+			depth--
+		} else if (c === ',' && depth === 0) {
+			items.push(select.slice(from, at).trim())
+			from = at + 1
+		}
+		at++
+	}
+	items.push(select.slice(from).trim())
+	return items
+}
+
+/**
+ * An included query as one value of its row: its rows as SQL literals,
+ * `(1,'a'),(2,NULL)`, in the query's order. SQLite's quote() writes an
+ * integer, a float, a text and bytes so that each reads back as it is kept,
+ * where JSON would lose bytes and the last digits of a float.
+ */
+function includedText(included: Included): Sql {
+	const child = included.parts
+	const order = child.order.map((each, at) => ({ ...each, alias: `"$o${at + 1}"` }))
+	const select = child.select as Sql
+	const inner = render({
+		...child,
+		select: new Sql(
+			[select.text, ...order.map(each => `${each.piece.text} as ${each.alias}`)].join(', '),
+			[...select.values, ...order.flatMap(each => each.piece.values)],
+		),
+	})
+	const row = included.columns.map(literalOf).join(" || ',' || ")
+	const ordered =
+		order.length === 0
+			? ''
+			: ` order by ${order.map(each => `${each.alias} ${each.direction}`).join(', ')}`
+	return new Sql(
+		`(select group_concat('(' || ${row} || ')', ','${ordered}) from (${inner.text}))`,
+		inner.values,
+	)
+}
+
+/** A column as an SQL literal that keeps it whole: quote() cuts a text at a zero byte, so such a text goes as its bytes. */
+function literalOf(column: string): string {
+	const c = `"${column.replaceAll('"', '""')}"`
+	return `case when typeof(${c}) = 'text' and instr(cast(${c} as blob), x'00') > 0 then 'T' || quote(cast(${c} as blob)) else quote(${c}) end`
+}
+
+/** The rows an included query gave, read from their literals: `(1,'it''s',NULL),(2,X'00ff',1.5)`. */
+export function literalRows(text: string): SqlValue[][] {
+	const reader = new Literals(text)
+	const rows: SqlValue[][] = []
+	while (!reader.done) {
+		reader.expect('(')
+		const row = [reader.literal()]
+		while (reader.next === ',') {
+			reader.expect(',')
+			row.push(reader.literal())
+		}
+		reader.expect(')')
+		rows.push(row)
+		if (!reader.done) {
+			reader.expect(',')
+		}
+	}
+	return rows
+}
+
+/** A reader of SQL literals as SQLite's quote() writes them. */
+class Literals {
+	readonly #text: string
+	#at = 0
+
+	constructor(text: string) {
+		this.#text = text
+	}
+
+	get done(): boolean {
+		return this.#at >= this.#text.length
+	}
+
+	get next(): string | undefined {
+		return this.#text[this.#at]
+	}
+
+	expect(wanted: string): void {
+		if (this.next !== wanted) {
+			throw this.#broken()
+		}
+		this.#at++
+	}
+
+	literal(): SqlValue {
+		switch (this.next) {
+			case "'":
+				return this.#quoted()
+			case 'X':
+				return this.#hex()
+			case 'T':
+				this.#at++
+				return new TextDecoder().decode(this.#hex())
+		}
+		if (this.#text.startsWith('NULL', this.#at)) {
+			this.#at += 4
+			return null
+		}
+		return this.#number()
+	}
+
+	/** A text in single quotes, a quote inside it doubled. */
+	#quoted(): string {
+		let value = ''
+		for (this.#at++; ; this.#at++) {
+			const end = this.#text.indexOf("'", this.#at)
+			if (end < 0) {
+				throw this.#broken()
+			}
+			value += this.#text.slice(this.#at, end)
+			this.#at = end + 1
+			if (this.next !== "'") {
+				return value
+			}
+			value += "'"
+		}
+	}
+
+	/** Bytes as `X'00ff'`. */
+	#hex(): Uint8Array {
+		const end = this.#text.indexOf("'", this.#at + 2)
+		const digits = this.#text.slice(this.#at + 2, Math.max(end, 0))
+		if (
+			!this.#text.startsWith("X'", this.#at) ||
+			end < 0 ||
+			!/^(?:[0-9A-Fa-f]{2})*$/.test(digits)
+		) {
+			throw this.#broken()
+		}
+		this.#at = end + 1
+		return new Uint8Array(Buffer.from(digits, 'hex'))
+	}
+
+	/** An integer, a bigint past 2^53, or a float, which quote() writes with a point or an exponent. */
+	#number(): number | bigint {
+		let end = this.#at
+		while (end < this.#text.length && this.#text[end] !== ',' && this.#text[end] !== ')') {
+			end++
+		}
+		const word = this.#text.slice(this.#at, end)
+		if (/^-?\d+$/.test(word)) {
+			this.#at = end
+			const whole = BigInt(word)
+			return whole >= Number.MIN_SAFE_INTEGER && whole <= Number.MAX_SAFE_INTEGER
+				? Number(whole)
+				: whole
+		}
+		if (word.length === 0 || Number.isNaN(Number(word))) {
+			throw this.#broken()
+		}
+		this.#at = end
+		return Number(word)
+	}
+
+	#broken(): CorruptError {
+		const shown = this.#text.slice(this.#at, this.#at + 20)
+		return new CorruptError(`included rows that do not read at ${this.#at}: ${shown}`)
+	}
 }
 
 /** `'orders'` or `'orders as o'`, quoted as names. */
@@ -531,8 +827,13 @@ function render(parts: Parts): Sql {
 	if (parts.select !== undefined) {
 		columns = parts.select.text
 		values.push(...parts.select.values)
-	} else if (parts.joins.length > 0) {
+	} else if (parts.joins.length > 0 || parts.includes.length > 0) {
 		columns = `${identOf(parts.alias ?? parts.table)}.*`
+	}
+	for (const included of parts.includes) {
+		const list = includedText(included)
+		columns += `, ${list.text} as ${identOf(included.name)}`
+		values.push(...list.values)
 	}
 	let text = `select ${columns} from ${from}`
 	for (const join of parts.joins) {

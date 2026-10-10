@@ -5,7 +5,8 @@
 import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 
-import { type Query, Table } from '../src/query.ts'
+import { CorruptError, InvalidError } from '../src/errors.ts'
+import { literalRows, namesOf, type Query, Table } from '../src/query.ts'
 import { type Condition, type Done, type Runner, type Sql, type SqlArg, sql } from '../src/sql.ts'
 
 type Step = Record<string, unknown>
@@ -86,6 +87,11 @@ function apply(query: Query<Record<string, unknown>>, step: Step): Query<Record<
 			return query.limit(argument as number)
 		case 'offset':
 			return query.offset(argument as number)
+		case 'include': {
+			const [name, included] = argument as [string, { table: string; steps: Step[] }]
+			const table: Query<Record<string, unknown>> = new Table(new Recorder(), included.table)
+			return query.include(name, included.steps.reduce(apply, table))
+		}
 	}
 	throw new Error(`no step ${verb}`)
 }
@@ -141,4 +147,37 @@ describe('the query vectors', () => {
 			expect(statement.values.map(kept)).toEqual(vector.values)
 		})
 	}
+})
+
+// The same cases as the core's own tests of sql/included.rs: both read a
+// select's names and an included query's literals alike.
+describe('an included query', () => {
+	test("a select's columns are named by themselves or by their as", () => {
+		const select = `p.id, "p"."the title", upper(p.status) as status, count(*) AS "n", 'a, b' as c`
+		expect(namesOf(select, 'posts')).toEqual(['id', 'the title', 'status', 'n', 'c'])
+		expect(namesOf('p.id  AS\n"a ""b""", x\tas y', 'posts')).toEqual(['a "b"', 'y'])
+		for (const unnamed of [
+			'p.id, count(*)',
+			'p.id, o.id',
+			'cast(p.id as text)',
+			'p.title t',
+			'p.*',
+		]) {
+			expect(() => namesOf(unnamed, 'posts')).toThrow(InvalidError)
+		}
+	})
+
+	test('rows read back from their literals', () => {
+		const text =
+			"(1,'it''s, (odd)',NULL),(-9223372036854775808,X'00FF27',1.5),(2,TX'610062',-9.0e+999)"
+		expect(literalRows(text)).toEqual([
+			[1, "it's, (odd)", null],
+			[-9223372036854775808n, new Uint8Array([0, 255, 39]), 1.5],
+			[2, 'a\u0000b', Number.NEGATIVE_INFINITY],
+		])
+		expect(literalRows('')).toEqual([])
+		for (const broken of ["(1,'open", '(1)(2)', "(X'0g')", '(1,)']) {
+			expect(() => literalRows(broken)).toThrow(CorruptError)
+		}
+	})
 })

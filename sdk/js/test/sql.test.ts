@@ -393,6 +393,85 @@ for (const way of ways) {
 			expect(await app.table('notes').where({ id: 'tx1' }).count()).toBe(0)
 		})
 
+		test('an included query gives each row its rows, every value as it is kept', async () => {
+			const db = await store.database('included', {
+				migrations: {
+					'0001_included.sql': `create table authors (id integer primary key, name text not null) strict;
+						create table posts (id integer primary key, author_id integer not null, title text not null,
+							score real, big integer, raw blob, done integer not null default 0) strict;`,
+				},
+			})
+			const odd = `it's, (odd)\u0000 "text"`
+			await db.exec`insert into authors (id, name) values (1, 'ann'), (2, 'bob'), (3, 'eve')`
+			await db.exec`insert into posts (id, author_id, title, score, big, raw, done) values
+				(1, 1, 'first', ${0.1 + 0.2}, ${2n ** 60n + 1n}, ${new Uint8Array([0, 255, 39])}, 1),
+				(2, 1, ${odd}, 1e308, null, null, 0),
+				(3, 1, 'third', null, -5, x'', 0),
+				(4, 2, 'only', 2.5, 7, null, 1)`
+
+			interface Post {
+				id: number
+				title: string
+				score: number | null
+				big: number | bigint | null
+				raw: Uint8Array | null
+				done: boolean
+			}
+			const latest = db
+				.table('posts as p', { types: { done: 'bool' } })
+				.select<Post>('p.id, p.title, p.score, p.big, p.raw, p.done')
+				.where('p.author_id = a.id')
+				.orderBy('p.id', 'desc')
+				.limit(2)
+			const authors = await db
+				.table<{ id: number; name: string }>('authors as a')
+				.include('posts', latest)
+				.orderBy('a.id')
+				.all()
+			expect(authors.map(author => [author.name, author.posts.map(post => post.id)])).toEqual([
+				['ann', [3, 2]],
+				['bob', [4]],
+				['eve', []],
+			])
+			const [third, second] = authors[0]?.posts ?? []
+			expect(second).toEqual({ id: 2, title: odd, score: 1e308, big: null, raw: null, done: false })
+			expect(third).toEqual({
+				id: 3,
+				title: 'third',
+				score: null,
+				big: -5,
+				raw: new Uint8Array(0),
+				done: false,
+			})
+
+			const ann = await db
+				.table('authors as a')
+				.select<{ name: string }>('a.name')
+				.include('posts', latest.limit(3))
+				.where({ 'a.id': 1 })
+				.one()
+			expect(ann?.posts[2]).toEqual({
+				id: 1,
+				title: 'first',
+				score: 0.1 + 0.2,
+				big: 2n ** 60n + 1n,
+				raw: new Uint8Array([0, 255, 39]),
+				done: true,
+			})
+			const inTx = await db.tx(tx =>
+				tx.table('authors as a').include('posts', latest).where({ 'a.id': 2 }).one(),
+			)
+			expect(inTx?.posts.map(post => post.title)).toEqual(['only'])
+
+			const posts = db.table('posts as p')
+			const authorsTable = db.table('authors as a')
+			expect(() => authorsTable.include('posts', posts.limit(1))).toThrow(InvalidError)
+			expect(() => authorsTable.include('posts', posts.select('p.id'))).toThrow(InvalidError)
+			expect(() => authorsTable.include('posts', posts.select('count(*)').limit(1))).toThrow(
+				InvalidError,
+			)
+		})
+
 		test('a bucket and a queue opened from the database commit with its rows, or roll back with them', async () => {
 			const sessions = app.bucket<{ user: string }>('sessions')
 			const emails = app.queue<{ note: string }>('emails')

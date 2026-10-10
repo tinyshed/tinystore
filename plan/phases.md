@@ -11,7 +11,7 @@ says so. Mark a task done in the commit that does it.
 - [x] The Go engines leave the tree; `e81a050` stays the reference.
 - [x] AGENTS.md rewritten for the Rust repository: shape, crates, `unsafe`, features, checks; `just` in place of `task`. The skills in `.agents/skills/` still speak of Go.
 - [x] A Cargo workspace with the crates of [architecture.md](architecture.md): builds and tests on Windows and in a Linux container (`rust:1.99`).
-- [ ] CI building and testing it on Linux, macOS and Windows: written, with the Bun pipe on all three, and green once the branch is pushed.
+- [x] CI building and testing it on Linux, macOS and Windows, with the Bun pipe on all three: green since the branch was first pushed, on 10 October.
 - [x] The kv book's first draft and one newcomer check ([api/kv.md](api/kv.md)).
 - [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the owner accepted the jobs book on 9 October, after a survey of job libraries and a second newcomer round.
 - [x] Protocol 2: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
@@ -51,10 +51,10 @@ taken against Go `e81a050` and written up as a research round.
 ## 2. sqldb, jobs, blobs
 
 - [ ] Downloads and uploads under credit, which blobs and records need.
-- [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree.
-- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, but transactions; Python and Go come with their bindings.
+- [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree. The Rust core, protocol 2 and the Bun SDK are built to the book, `include` among them; FTS5 and R*Tree have no test yet, and Python and Go come with their bindings.
+- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, a queue in the store's transaction among them; Python and Go come with their bindings.
 - [ ] blobs: objects inline or a file each, checked reads, scrub.
-- [ ] kv and jobs inside an sql database.
+- [x] kv and jobs inside an sql database: `db.bucket` and `db.queue`, which commit with its rows, in the Rust core, protocol 2 and the Bun SDK.
 
 **Gate:** their GATES.md lines pass in Rust and through every SDK; Dashbin can
 start on sqldb, kv and jobs.

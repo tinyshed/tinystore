@@ -9,8 +9,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::database::{Database, Done};
+use super::included::{literal_of, names_of};
 use super::pieces::{checked, joined_with, quote};
-use super::rows::Rows;
+use super::rows::{Nested, Rows};
 use super::run::Wanted;
 use super::statement::Sql;
 use super::tx::Tx;
@@ -115,6 +116,15 @@ struct Order {
     direction: Direction,
 }
 
+/// A query whose rows each row of another holds as a list under a name.
+#[derive(Clone, Debug)]
+struct Included {
+    name: String,
+    parts: Parts,
+    /// The names of the columns its select gives, in their order.
+    columns: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 struct Parts {
     table: String,
@@ -127,6 +137,7 @@ struct Parts {
     order: Vec<Order>,
     limit: Option<u64>,
     offset: Option<u64>,
+    includes: Vec<Included>,
     /// The first piece the query could not take, told when it runs.
     refused: Option<String>,
 }
@@ -206,6 +217,7 @@ impl<'r, T> Table<'r, T> {
             order: Vec::new(),
             limit: None,
             offset: None,
+            includes: Vec::new(),
             refused,
         };
         Table { name: table, query: Query { runner, parts, row: PhantomData } }
@@ -289,6 +301,37 @@ impl<'r, T> Query<'r, T> {
         Query { runner: self.runner.clone(), parts, row: PhantomData }
     }
 
+    /// Gives each row the rows of another query as a list under `name`, a
+    /// field of the row's type, from the same statement: the query names the
+    /// row it belongs to in its `filter`, by this table's alias, names its
+    /// columns with `select`, and has a `limit`, which counts for each row.
+    /// Every value comes back as it is kept.
+    ///
+    /// ```no_run
+    /// # use tinystore::sql::Direction;
+    /// # #[derive(serde::Deserialize)] struct Post { id: i64, title: String }
+    /// # #[derive(serde::Deserialize)] struct Author { id: i64, posts: Vec<Post> }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let db = tinystore::Store::open("data", Default::default())?.database("app").open()?;
+    /// let latest = db
+    ///     .table::<Post>("posts as p")
+    ///     .select::<Post>("p.id, p.title")
+    ///     .filter("p.author_id = u.id")
+    ///     .order_by("p.id", Direction::Desc)
+    ///     .limit(3);
+    /// let authors: Vec<Author> = db.table::<Author>("users as u").include("posts", &latest).all()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn include<C>(&self, name: &str, query: &Query<'_, C>) -> Self {
+        let included = included(name, &query.parts, &self.parts);
+        self.with(|parts| match included {
+            Ok(included) => parts.includes.push(included),
+            Err(why) => refuse(parts, format!("the included {name:?}: {why}")),
+        })
+    }
+
     /// Joins a table, `"users as u"`, on a condition.
     #[must_use]
     pub fn join(&self, table: &str, on: impl Into<Sql>) -> Self {
@@ -364,6 +407,7 @@ impl<'r, T> Query<'r, T> {
         counted.order.clear();
         counted.limit = None;
         counted.offset = None;
+        counted.includes.clear();
         let statement = if counted.groups.is_empty() {
             render(&counted)?
         } else {
@@ -457,12 +501,12 @@ impl<'r, T> Query<'r, T> {
 
 impl<T: DeserializeOwned> Query<'_, T> {
     pub fn all(&self) -> Result<Vec<T>> {
-        self.runner.rows_of(&render(&self.parts)?, Wanted::All)?.decode()
+        self.runner.rows_of(&render(&self.parts)?, Wanted::All)?.nesting(nested(&self.parts)).decode()
     }
 
     pub fn one(&self) -> Result<Option<T>> {
-        let rows: Vec<T> = self.runner.rows_of(&render(&self.parts)?, Wanted::One)?.decode()?;
-        Ok(rows.into_iter().next())
+        let rows = self.runner.rows_of(&render(&self.parts)?, Wanted::One)?.nesting(nested(&self.parts));
+        Ok(rows.decode::<T>()?.into_iter().next())
     }
 
     pub fn scalar<V: DeserializeOwned>(&self) -> Result<V> {
@@ -492,7 +536,7 @@ impl<T: DeserializeOwned> Query<'_, T> {
         let rows = self.runner.rows_of(&render(&parts)?, Wanted::All)?;
         let last = last_order_values(&rows, order)?;
         let full = rows.len() as u64 == limit;
-        let decoded: Vec<T> = rows.decode()?;
+        let decoded: Vec<T> = rows.nesting(nested(&self.parts)).decode()?;
         let next = if full && limit > 0 { last.map(|values| cursor_text(&values, &digest)) } else { None };
         Ok(Page { rows: decoded, next })
     }
@@ -562,22 +606,8 @@ fn render(parts: &Parts) -> Result<Sql> {
     if let Some(why) = &parts.refused {
         return Err(Error::invalid(why.clone()));
     }
-    let mut values: Vec<Value> = Vec::new();
-    let from = table_text(&parts.table, parts.alias.as_deref());
-    let columns = match &parts.select {
-        Some(select) => {
-            if let Some(why) = select.why_refused() {
-                return Err(Error::invalid(why.to_owned()));
-            }
-            values.extend(select.values().iter().cloned());
-            select.text().to_owned()
-        }
-        None if !parts.joins.is_empty() => {
-            format!("{}.*", quote(parts.alias.as_deref().unwrap_or(&parts.table)).unwrap_or_default())
-        }
-        None => "*".to_owned(),
-    };
-    let mut text = format!("select {columns} from {from}");
+    let (columns, mut values) = selected(parts)?;
+    let mut text = format!("select {columns} from {}", table_text(&parts.table, parts.alias.as_deref()));
     for join in &parts.joins {
         text.push(' ');
         text.push_str(join.text());
@@ -596,6 +626,37 @@ fn render(parts: &Parts) -> Result<Sql> {
         text.push_str(&format!(" having {condition}"));
         values.extend(condition_values);
     }
+    push_order_and_bounds(parts, &mut text, &mut values)?;
+    Ok(Sql::piece(text, values, false))
+}
+
+/// What the query selects: its own columns, then the rows of each query it
+/// includes. A query that joins or includes reads its own table's columns
+/// where it names none, since `*` would read every table's.
+fn selected(parts: &Parts) -> Result<(String, Vec<Value>)> {
+    let mut values: Vec<Value> = Vec::new();
+    let mut columns = match &parts.select {
+        Some(select) => {
+            if let Some(why) = select.why_refused() {
+                return Err(Error::invalid(why.to_owned()));
+            }
+            values.extend(select.values().iter().cloned());
+            select.text().to_owned()
+        }
+        None if !parts.joins.is_empty() || !parts.includes.is_empty() => {
+            format!("{}.*", quote(parts.alias.as_deref().unwrap_or(&parts.table)).unwrap_or_default())
+        }
+        None => "*".to_owned(),
+    };
+    for included in &parts.includes {
+        let list = included_text(included)?;
+        columns.push_str(&format!(", {} as {}", list.text(), quote(&included.name).map_err(Error::invalid)?));
+        values.extend(list.values().iter().cloned());
+    }
+    Ok((columns, values))
+}
+
+fn push_order_and_bounds(parts: &Parts, text: &mut String, values: &mut Vec<Value>) -> Result<()> {
     if !parts.order.is_empty() {
         let orders: Vec<String> =
             parts.order.iter().map(|each| format!("{} {}", each.piece.text(), each.direction.text())).collect();
@@ -618,7 +679,54 @@ fn render(parts: &Parts) -> Result<Sql> {
         text.push_str(" offset cast(? as integer)");
         values.push(Value::Integer(i64::try_from(offset).unwrap_or(i64::MAX)));
     }
-    Ok(Sql::piece(text, values, false))
+    Ok(())
+}
+
+/// What an included query must be, and the names of its columns.
+fn included(name: &str, query: &Parts, into: &Parts) -> std::result::Result<Included, String> {
+    if let Some(why) = &query.refused {
+        return Err(why.clone());
+    }
+    let Some(select) = &query.select else {
+        return Err("it names its columns with select(\"p.id, p.title\")".to_owned());
+    };
+    if query.limit.is_none() {
+        return Err("it needs a limit, which counts for each row".to_owned());
+    }
+    if !query.includes.is_empty() {
+        return Err("an included query includes nothing itself".to_owned());
+    }
+    if name.is_empty() || into.includes.iter().any(|each| each.name == name) {
+        return Err("an included list has a name of its own".to_owned());
+    }
+    Ok(Included { name: name.to_owned(), parts: query.clone(), columns: names_of(select.text())? })
+}
+
+/// An included query as one value of its row: its rows as SQL literals, in the
+/// query's order, which the aggregate takes from columns the query gives it.
+fn included_text(included: &Included) -> Result<Sql> {
+    let mut child = included.parts.clone();
+    let select = child.select.take().ok_or_else(|| Error::internal("an included query without its select"))?;
+    let (mut text, mut values) = (select.text().to_owned(), select.values().to_vec());
+    let mut ordered = Vec::new();
+    for (at, each) in child.order.iter().enumerate() {
+        text.push_str(&format!(", {} as \"$o{}\"", each.piece.text(), at + 1));
+        values.extend(each.piece.values().iter().cloned());
+        ordered.push(format!("\"$o{}\" {}", at + 1, each.direction.text()));
+    }
+    child.select = Some(Sql::piece(text, values, false));
+    let inner = render(&child)?;
+    let row: Vec<String> = included.columns.iter().map(|column| literal_of(column)).collect();
+    let order = if ordered.is_empty() { String::new() } else { format!(" order by {}", ordered.join(", ")) };
+    let text =
+        format!("(select group_concat('(' || {} || ')', ','{order}) from ({}))", row.join(" || ',' || "), inner.text());
+    Ok(Sql::piece(text, inner.values().to_vec(), false))
+}
+
+/// The columns of a query's rows that hold the rows of the queries it includes.
+fn nested(parts: &Parts) -> Vec<Nested> {
+    let list = |included: &Included| Nested { column: included.name.clone(), columns: included.columns.clone().into() };
+    parts.includes.iter().map(list).collect()
 }
 
 /// An insert of rows of one shape, the first row's columns.

@@ -62,11 +62,37 @@ fn items_of(select: &str) -> Vec<&str> {
     items
 }
 
-/// The name after an item's last `as`, when the item ends with one.
+/// The name after an item's `as`, when the item ends with one: `… as name`,
+/// whatever the space around the word.
 fn aliased(item: &str) -> Option<String> {
-    let lowered = item.to_ascii_lowercase();
-    let at = lowered.rfind(" as ").or_else(|| lowered.rfind("\tas ")).or_else(|| lowered.rfind("\nas "))?;
-    name(item[at + 4..].trim())
+    let start = last_name_start(item)?;
+    let before = item[..start].trim_end();
+    let word = before.len().checked_sub(2).and_then(|at| before.get(at..))?;
+    let apart = before.len() < start && before[..before.len() - 2].ends_with(char::is_whitespace);
+    if apart && word.eq_ignore_ascii_case("as") { name(&item[start..]) } else { None }
+}
+
+/// Where the name an item ends with starts: a quoted one at its opening
+/// quote, past the doubled quotes inside it, a bare one at its first
+/// character.
+fn last_name_start(item: &str) -> Option<usize> {
+    let bytes = item.as_bytes();
+    if bytes.last() != Some(&b'"') {
+        let before = item.trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        return (before.len() < item.len()).then_some(before.len());
+    }
+    let mut at = bytes.len() - 1;
+    while at > 0 {
+        at -= 1;
+        if bytes[at] != b'"' {
+            continue;
+        }
+        if at == 0 || bytes[at - 1] != b'"' {
+            return Some(at);
+        }
+        at -= 1;
+    }
+    None
 }
 
 /// A plain column's own name: `title`, `p.title`, `"p"."title"`.
@@ -222,11 +248,15 @@ mod tests {
         assert!(names_of("p.id, count(*)").unwrap_err().contains("needs a name"));
         assert!(names_of("p.id, o.id").unwrap_err().contains("two columns named id"));
         assert!(names_of("cast(p.id as text)").is_err(), "an as inside an expression names nothing");
+        assert_eq!(names_of("p.id  AS\n\"a \"\"b\"\"\", x\tas y").unwrap(), ["a \"b\"", "y"]);
+        assert!(names_of("p.title t").is_err(), "a name without its as is no name");
+        assert!(names_of("p.*").is_err());
     }
 
     #[test]
     fn rows_read_back_from_their_literals() {
-        let rows = literal_rows("(1,'it''s, (odd)',NULL),(-9223372036854775808,X'00FF27',1.5),(2,TX'610062',-9.0e+999)");
+        let rows =
+            literal_rows("(1,'it''s, (odd)',NULL),(-9223372036854775808,X'00FF27',1.5),(2,TX'610062',-9.0e+999)");
         assert_eq!(
             rows.unwrap(),
             [

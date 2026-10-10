@@ -12,6 +12,7 @@ use rusqlite::{Statement, params_from_iter};
 use serde::de::value::{SeqDeserializer, StrDeserializer};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, IntoDeserializer, Visitor};
 
+use super::included::literal_rows;
 use super::values::Value;
 use crate::{Error, Memory, Reservation, Result};
 
@@ -32,6 +33,16 @@ pub(crate) struct Rows {
     columns: Arc<[String]>,
     values: Vec<Value>,
     held: Held,
+    /// The columns that hold an included query's rows.
+    nested: Vec<Nested>,
+}
+
+/// A column whose value is the rows of an included query, as their literals,
+/// and the names of those rows' columns.
+#[derive(Clone, Debug)]
+pub(crate) struct Nested {
+    pub(crate) column: String,
+    pub(crate) columns: Arc<[String]>,
 }
 
 /// The store's memory a call's rows hold, reserved as they are read: twice
@@ -108,7 +119,14 @@ impl Rows {
             count += 1;
         }
         held.settle();
-        Ok(Rows { columns, values: kept, held })
+        Ok(Rows { columns, values: kept, held, nested: Vec::new() })
+    }
+
+    /// The same rows, `nested` of their columns read as the rows of the
+    /// queries they include.
+    pub(crate) fn nesting(mut self, nested: Vec<Nested>) -> Rows {
+        self.nested = nested;
+        self
     }
 
     pub(crate) fn columns(&self) -> &[String] {
@@ -130,10 +148,13 @@ impl Rows {
     #[cfg(test)]
     pub(crate) fn answered(wanted: super::run::Wanted) -> Rows {
         match wanted {
-            super::run::Wanted::Scalar => {
-                Rows { columns: Arc::from([String::new()]), values: vec![Value::Integer(0)], held: Held::default() }
-            }
-            _ => Rows { columns: Arc::from([]), values: Vec::new(), held: Held::default() },
+            super::run::Wanted::Scalar => Rows {
+                columns: Arc::from([String::new()]),
+                values: vec![Value::Integer(0)],
+                held: Held::default(),
+                nested: Vec::new(),
+            },
+            _ => Rows { columns: Arc::from([]), values: Vec::new(), held: Held::default(), nested: Vec::new() },
         }
     }
 
@@ -163,7 +184,7 @@ impl Rows {
             if row.is_empty() {
                 return Ok(decoded);
             }
-            let row = RowDecoder { columns: &self.columns, values: row };
+            let row = RowDecoder { columns: &self.columns, values: row, nested: &self.nested };
             decoded.push(T::deserialize(row).map_err(|failure| Error::invalid(failure.0))?);
         }
     }
@@ -222,13 +243,14 @@ impl de::Error for Mismatch {
 struct RowDecoder<'a> {
     columns: &'a [String],
     values: Vec<Value>,
+    nested: &'a [Nested],
 }
 
 impl<'de> de::Deserializer<'de> for RowDecoder<'_> {
     type Error = Mismatch;
 
     fn deserialize_any<V: Visitor<'de>>(mut self, visitor: V) -> Result<V::Value, Mismatch> {
-        if self.values.len() == 1 {
+        if self.values.len() == 1 && self.nested.is_empty() {
             let column = &self.columns[0];
             let value = self.values.pop().unwrap_or(Value::Null);
             return ValueDecoder(value)
@@ -239,7 +261,7 @@ impl<'de> de::Deserializer<'de> for RowDecoder<'_> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_map(Columns { columns: self.columns, values: self.values.into_iter(), at: 0 })
+        visitor.visit_map(self.columns())
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -252,7 +274,7 @@ impl<'de> de::Deserializer<'de> for RowDecoder<'_> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_seq(Columns { columns: self.columns, values: self.values.into_iter(), at: 0 })
+        visitor.visit_seq(self.columns())
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(self, _: usize, visitor: V) -> Result<V::Value, Mismatch> {
@@ -291,7 +313,11 @@ impl<'de> de::Deserializer<'de> for RowDecoder<'_> {
     }
 }
 
-impl RowDecoder<'_> {
+impl<'a> RowDecoder<'a> {
+    fn columns(self) -> Columns<'a> {
+        Columns { columns: self.columns, values: self.values.into_iter(), at: 0, nested: self.nested }
+    }
+
     fn one_column(mut self) -> Result<ValueDecoder, Mismatch> {
         if self.values.len() != 1 {
             return Err(Mismatch(format!("a row of {} columns does not read as one value", self.values.len())));
@@ -306,6 +332,7 @@ struct Columns<'a> {
     columns: &'a [String],
     values: std::vec::IntoIter<Value>,
     at: usize,
+    nested: &'a [Nested],
 }
 
 impl<'de> de::SeqAccess<'de> for Columns<'_> {
@@ -338,7 +365,58 @@ impl<'de> de::MapAccess<'de> for Columns<'_> {
         let column = &self.columns[self.at];
         self.at += 1;
         let value = self.values.next().unwrap_or(Value::Null);
-        seed.deserialize(ValueDecoder(value)).map_err(|failure| Mismatch(format!("column {column}: {failure}")))
+        let named = |failure: Mismatch| Mismatch(format!("column {column}: {failure}"));
+        match self.nested.iter().find(|nested| nested.column == *column) {
+            Some(nested) => seed.deserialize(NestedRows::of(nested, value).map_err(named)?).map_err(named),
+            None => seed.deserialize(ValueDecoder(value)).map_err(named),
+        }
+    }
+}
+
+/// The rows of an included query, each read as a row is: a list of them.
+struct NestedRows<'a> {
+    columns: &'a [String],
+    rows: std::vec::IntoIter<Vec<Value>>,
+}
+
+impl<'a> NestedRows<'a> {
+    /// The rows a column's literals hold; a row that included none holds
+    /// `NULL`, and has none.
+    fn of(nested: &'a Nested, value: Value) -> Result<NestedRows<'a>, Mismatch> {
+        let rows = match value {
+            Value::Null => Vec::new(),
+            Value::Text(text) => literal_rows(&text).map_err(Mismatch)?,
+            other => return ValueDecoder(other).refuse("the rows of an included query"),
+        };
+        Ok(NestedRows { columns: &nested.columns, rows: rows.into_iter() })
+    }
+}
+
+impl<'de> de::Deserializer<'de> for NestedRows<'_> {
+    type Error = Mismatch;
+
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
+        visitor.visit_seq(self)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf option unit unit_struct
+        newtype_struct seq tuple tuple_struct map struct enum identifier ignored_any
+    }
+}
+
+impl<'de> de::SeqAccess<'de> for NestedRows<'_> {
+    type Error = Mismatch;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>, Mismatch> {
+        let Some(values) = self.rows.next() else {
+            return Ok(None);
+        };
+        seed.deserialize(RowDecoder { columns: self.columns, values, nested: &[] }).map(Some)
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.rows.len())
     }
 }
 

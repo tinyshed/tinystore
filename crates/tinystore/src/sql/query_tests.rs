@@ -113,6 +113,11 @@ fn apply<'r>(query: Rows<'r>, step: &Json) -> Rows<'r> {
         }
         "limit" => query.limit(argument.as_u64().unwrap()),
         "offset" => query.offset(argument.as_u64().unwrap()),
+        "include" => {
+            let table = Table::<Ordered>::recorded(argument[1]["table"].as_str().unwrap(), Arc::default());
+            let included = argument[1]["steps"].as_array().unwrap().iter().fold((*table).clone(), apply);
+            query.include(argument[0].as_str().unwrap(), &included)
+        }
         other => panic!("no step {other}"),
     }
 }
@@ -319,4 +324,101 @@ fn a_join_reads_its_first_table_and_a_table_inside_a_transaction_rolls_back_with
     });
     assert!(refused.is_err());
     assert_eq!(db.table::<Book>("books").count().unwrap(), 2, "rolled back");
+}
+
+const AUTHORS: &str = "create table authors (id integer primary key, name text not null) strict;
+create table posts (
+    id        integer primary key,
+    author_id integer not null references authors (id),
+    title     text not null,
+    score     real not null,
+    raw       blob,
+    done      integer not null default 0 check (done in (0, 1))
+) strict";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Post {
+    id: i64,
+    title: String,
+    score: f64,
+    raw: Option<Vec<u8>>,
+    done: bool,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct Author {
+    id: i64,
+    name: String,
+    posts: Vec<Post>,
+}
+
+/// An integer a float cannot hold.
+const WIDE: i64 = (1 << 60) + 1;
+
+fn authors_and_posts(db: &super::Database) -> Vec<Post> {
+    db.exec(sql!("insert into authors (id, name) values (1, 'Ann'), (2, 'Bob'), (3, 'Cy')")).unwrap();
+    let posts = vec![
+        Post { id: 1, title: "first".to_owned(), score: 1.0, raw: None, done: false },
+        Post {
+            id: 2,
+            title: "it's, (odd)\0 text".to_owned(),
+            score: 0.1 + 0.2,
+            raw: Some(vec![0, 255, 39]),
+            done: true,
+        },
+        Post { id: WIDE, title: String::new(), score: 1e308, raw: None, done: false },
+        Post { id: 4, title: "Bob's".to_owned(), score: -2.5, raw: None, done: false },
+    ];
+    for (post, author) in posts.iter().zip([1, 1, 1, 2]) {
+        let insert = "insert into posts (id, author_id, title, score, raw, done) values (?, ?, ?, ?, ?, ?)";
+        db.exec(sql!(insert, post.id, author, &post.title, post.score, &post.raw, post.done)).unwrap();
+    }
+    posts
+}
+
+#[test]
+fn an_included_query_gives_each_row_its_rows_every_value_as_it_is_kept() {
+    let f = fixture();
+    let db = f.store.database("app").migrations([("0001_authors.sql", AUTHORS)]).open().unwrap();
+    let posts = authors_and_posts(&db);
+    let latest = db
+        .table::<Post>("posts as p")
+        .select::<Post>("p.id, p.title, p.score, p.raw, p.done")
+        .filter("p.author_id = a.id")
+        .order_by("p.id", Direction::Desc)
+        .limit(2);
+    let authors = db.table::<Author>("authors as a").include("posts", &latest).order_by("a.id", Direction::Asc);
+
+    let read = authors.all().unwrap();
+    assert_eq!(read.iter().map(|author| author.name.as_str()).collect::<Vec<_>>(), ["Ann", "Bob", "Cy"]);
+    assert_eq!(read[0].posts, [posts[2].clone(), posts[1].clone()], "the two latest, each value as it is kept");
+    assert_eq!(read[1].posts, [posts[3].clone()]);
+    assert!(read[2].posts.is_empty(), "a row with none has an empty list");
+
+    let bob = authors.filter(sql::eq("a.id", &2)).one().unwrap().unwrap();
+    assert_eq!((bob.id, bob.posts.len()), (2, 1));
+    assert_eq!(authors.count().unwrap(), 3, "a count reads no included rows");
+    let inside = db.tx(|tx| tx.table::<Author>("authors as a").include("posts", &latest).all()).unwrap();
+    assert_eq!(inside.len(), 3);
+}
+
+#[test]
+fn an_included_query_names_its_columns_and_its_limit_and_includes_nothing() {
+    let f = fixture();
+    let db = f.store.database("app").migrations([("0001_authors.sql", AUTHORS)]).open().unwrap();
+    let posts = db.table::<Post>("posts as p").filter("p.author_id = a.id");
+    let named = posts.select::<Post>("p.id, p.title");
+    let authors = db.table::<Author>("authors as a");
+    let refused = [
+        (authors.include("posts", &posts.limit(2)), "names its columns"),
+        (authors.include("posts", &named), "needs a limit"),
+        (authors.include("posts", &named.limit(2).include("more", &named.limit(1))), "includes nothing itself"),
+        (authors.include("posts", &named.limit(2)).include("posts", &named.limit(2)), "a name of its own"),
+        (authors.include("posts", &posts.select::<Post>("p.id, upper(p.title)").limit(2)), "upper(p.title)"),
+    ];
+    for (query, why) in refused {
+        let error = query.all().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        assert!(error.to_string().contains(why), "{error}");
+    }
 }

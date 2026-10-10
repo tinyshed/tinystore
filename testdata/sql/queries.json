@@ -1,5 +1,5 @@
 {
-  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order.",
+  "about": "Every SDK's query builder writes these statements from these steps: the text and the values, a bool as SQLite keeps it, 0 or 1. A condition is {equal: {column: value}}, {sql: [text, ...values]}, {or: [conditions]}, {and: [conditions]} or {has: [column, value]}. A row, and an update's columns, are [name, value] pairs, in their order. An include step is [name, {table, steps}], the query whose rows the row holds under the name.",
   "queries": [
     {
       "name": "equal values in the order of their names, a group of alternatives, an order and a limit",
@@ -535,6 +535,99 @@
       "text": "select count(*) from \"orders\" where \"status\" = ?",
       "values": [
         "paid"
+      ]
+    },
+    {
+      "name": "an included query's rows as literals in its row, in its order, its limit a row's",
+      "table": "users as u",
+      "steps": [
+        {
+          "include": [
+            "posts",
+            {
+              "table": "posts as p",
+              "steps": [
+                {
+                  "select": "p.id, p.title"
+                },
+                {
+                  "where": {
+                    "sql": [
+                      "p.author_id = u.id"
+                    ]
+                  }
+                },
+                {
+                  "orderBy": [
+                    "p.id",
+                    "desc"
+                  ]
+                },
+                {
+                  "limit": 3
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "where": {
+            "equal": {
+              "u.active": true
+            }
+          }
+        }
+      ],
+      "text": "select \"u\".*, (select group_concat('(' || case when typeof(\"id\") = 'text' and instr(cast(\"id\" as blob), x'00') > 0 then 'T' || quote(cast(\"id\" as blob)) else quote(\"id\") end || ',' || case when typeof(\"title\") = 'text' and instr(cast(\"title\" as blob), x'00') > 0 then 'T' || quote(cast(\"title\" as blob)) else quote(\"title\") end || ')', ',' order by \"$o1\" desc) from (select p.id, p.title, \"p\".\"id\" as \"$o1\" from \"posts\" as \"p\" where p.author_id = u.id order by \"p\".\"id\" desc limit cast(? as integer))) as \"posts\" from \"users\" as \"u\" where \"u\".\"active\" = ?",
+      "values": [
+        3,
+        1
+      ]
+    },
+    {
+      "name": "an included query beside a select, its column named by as, its values before the row's own",
+      "table": "users as u",
+      "steps": [
+        {
+          "select": "u.id, u.name"
+        },
+        {
+          "include": [
+            "orders",
+            {
+              "table": "orders as o",
+              "steps": [
+                {
+                  "select": "o.id, upper(o.status) as status"
+                },
+                {
+                  "where": {
+                    "sql": [
+                      "o.user_id = u.id and o.total > ?",
+                      100
+                    ]
+                  }
+                },
+                {
+                  "limit": 5
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "where": {
+            "equal": {
+              "u.id": 7
+            }
+          }
+        }
+      ],
+      "text": "select u.id, u.name, (select group_concat('(' || case when typeof(\"id\") = 'text' and instr(cast(\"id\" as blob), x'00') > 0 then 'T' || quote(cast(\"id\" as blob)) else quote(\"id\") end || ',' || case when typeof(\"status\") = 'text' and instr(cast(\"status\" as blob), x'00') > 0 then 'T' || quote(cast(\"status\" as blob)) else quote(\"status\") end || ')', ',') from (select o.id, upper(o.status) as status from \"orders\" as \"o\" where o.user_id = u.id and o.total > ? limit cast(? as integer))) as \"orders\" from \"users\" as \"u\" where \"u\".\"id\" = ?",
+      "values": [
+        100,
+        5,
+        7
       ]
     }
   ]
