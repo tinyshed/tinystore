@@ -43,18 +43,24 @@ const encoder = new TextEncoder()
 // begins a str as the character it is, where the default drops it
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
+// Where a 64-bit integer or a float is laid out. A DataView over each
+// message's own bytes cost more than the message: asking a small array for
+// its buffer, or for a view of a part of it, makes the engine move it to one,
+// for every call and answer. So a small part is read as a copy, and short
+// text is written a byte at a time.
+const eight = new DataView(new ArrayBuffer(8))
+const eightBytes = new Uint8Array(eight.buffer)
+
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER)
 const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER)
 
 /** Writes one message, its buffer growing as it must. */
 export class Writer {
 	#bytes: Uint8Array
-	#view: DataView
 	#length = 0
 
 	constructor(capacity = 128) {
 		this.#bytes = new Uint8Array(capacity)
-		this.#view = new DataView(this.#bytes.buffer)
 	}
 
 	get length(): number {
@@ -64,6 +70,32 @@ export class Writer {
 	/** A copy of what was written. */
 	bytes(): Uint8Array {
 		return this.#bytes.slice(0, this.#length)
+	}
+
+	/** Where the bytes are written, with room past them: the same array until a write outgrows it. */
+	get buffer(): Uint8Array {
+		return this.#bytes
+	}
+
+	/** Makes room for n bytes the caller writes into the buffer, and says where they begin. */
+	reserve(n: number): number {
+		return this.#room(n)
+	}
+
+	/** Writes bytes as they are, a message another writer made. */
+	raw(bytes: Uint8Array): void {
+		const at = this.#room(bytes.length)
+		this.#bytes.set(bytes, at)
+	}
+
+	/** Forgets what was written past a length. */
+	truncate(length: number): void {
+		this.#length = length
+	}
+
+	/** Writes a map's count of 15 pairs or fewer in the byte reserved for it. */
+	mapAt(at: number, n: number): void {
+		this.#bytes[at] = FIXMAP | n
 	}
 
 	/** Makes room for n bytes at the end and says where they begin. */
@@ -76,9 +108,8 @@ export class Writer {
 				size *= 2
 			}
 			const grown = new Uint8Array(size)
-			grown.set(this.#bytes.subarray(0, at))
+			grown.set(this.#bytes)
 			this.#bytes = grown
-			this.#view = new DataView(grown.buffer)
 		}
 		this.#length = need
 		return at
@@ -89,6 +120,25 @@ export class Writer {
 	#byte(b: number): void {
 		const at = this.#room(1)
 		this.#bytes[at] = b
+	}
+
+	/** Writes two bytes at a place, the high one first; a byte keeps the low eight bits. */
+	#two(at: number, v: number): void {
+		this.#bytes[at] = v >>> 8
+		this.#bytes[at + 1] = v
+	}
+
+	#four(at: number, v: number): void {
+		this.#bytes[at] = v >>> 24
+		this.#bytes[at + 1] = v >>> 16
+		this.#bytes[at + 2] = v >>> 8
+		this.#bytes[at + 3] = v
+	}
+
+	/** Writes the low 64 bits of an integer: a negative one in two's complement. */
+	#eight(at: number, v: bigint): void {
+		eight.setBigUint64(0, v)
+		this.#bytes.set(eightBytes, at)
 	}
 
 	nil(): void {
@@ -112,7 +162,7 @@ export class Writer {
 			if (v > MAX_SAFE) {
 				const at = this.#room(9)
 				this.#bytes[at] = UINT64
-				this.#view.setBigUint64(at + 1, v)
+				this.#eight(at + 1, v)
 				return
 			}
 			v = Number(v)
@@ -131,15 +181,15 @@ export class Writer {
 		} else if (v <= 0xffff) {
 			const at = this.#room(3)
 			this.#bytes[at] = UINT16
-			this.#view.setUint16(at + 1, v)
+			this.#two(at + 1, v)
 		} else if (v <= 0xffff_ffff) {
 			const at = this.#room(5)
 			this.#bytes[at] = UINT32
-			this.#view.setUint32(at + 1, v)
+			this.#four(at + 1, v)
 		} else {
 			const at = this.#room(9)
 			this.#bytes[at] = UINT64
-			this.#view.setBigUint64(at + 1, BigInt(v))
+			this.#eight(at + 1, BigInt(v))
 		}
 	}
 
@@ -161,7 +211,7 @@ export class Writer {
 			if (v < MIN_SAFE) {
 				const at = this.#room(9)
 				this.#bytes[at] = INT64
-				this.#view.setBigInt64(at + 1, v)
+				this.#eight(at + 1, v)
 				return
 			}
 			v = Number(v)
@@ -176,19 +226,19 @@ export class Writer {
 		} else if (v >= -0x80) {
 			const at = this.#room(2)
 			this.#bytes[at] = INT8
-			this.#view.setInt8(at + 1, v)
+			this.#bytes[at + 1] = v
 		} else if (v >= -0x8000) {
 			const at = this.#room(3)
 			this.#bytes[at] = INT16
-			this.#view.setInt16(at + 1, v)
+			this.#two(at + 1, v)
 		} else if (v >= -0x8000_0000) {
 			const at = this.#room(5)
 			this.#bytes[at] = INT32
-			this.#view.setInt32(at + 1, v)
+			this.#four(at + 1, v)
 		} else {
 			const at = this.#room(9)
 			this.#bytes[at] = INT64
-			this.#view.setBigInt64(at + 1, BigInt(v))
+			this.#eight(at + 1, BigInt(v))
 		}
 	}
 
@@ -196,7 +246,8 @@ export class Writer {
 	float(v: number): void {
 		const at = this.#room(9)
 		this.#bytes[at] = FLOAT64
-		this.#view.setFloat64(at + 1, v)
+		eight.setFloat64(0, v)
+		this.#bytes.set(eightBytes, at + 1)
 	}
 
 	/**
@@ -204,6 +255,9 @@ export class Writer {
 	 * write and is refused, rather than changed into U+FFFD.
 	 */
 	str(s: string): void {
+		if (s.length <= shortText && this.#ascii(s)) {
+			return
+		}
 		if (!s.isWellFormed()) {
 			throw new InvalidError('a string with a lone surrogate, which UTF-8 cannot spell')
 		}
@@ -221,6 +275,24 @@ export class Writer {
 		this.#strHeader(at, written)
 	}
 
+	/** Writes text of ASCII alone, a byte a character, or nothing: it says which. */
+	#ascii(s: string): boolean {
+		const n = s.length
+		const header = headerOf(n)
+		const start = this.#length
+		const at = this.#room(header + n) + header
+		for (let i = 0; i < n; i++) {
+			const c = s.charCodeAt(i)
+			if (c > 0x7f) {
+				this.#length = start
+				return false
+			}
+			this.#bytes[at + i] = c
+		}
+		this.#strHeader(start, n)
+		return true
+	}
+
 	#strHeader(at: number, n: number): void {
 		if (n <= 31) {
 			this.#bytes[at] = FIXSTR | n
@@ -229,10 +301,10 @@ export class Writer {
 			this.#bytes[at + 1] = n
 		} else if (n <= 0xffff) {
 			this.#bytes[at] = STR16
-			this.#view.setUint16(at + 1, n)
+			this.#two(at + 1, n)
 		} else {
 			this.#bytes[at] = STR32
-			this.#view.setUint32(at + 1, n)
+			this.#four(at + 1, n)
 		}
 	}
 
@@ -247,12 +319,12 @@ export class Writer {
 		} else if (n <= 0xffff) {
 			at = this.#room(3 + n)
 			this.#bytes[at] = BIN16
-			this.#view.setUint16(at + 1, n)
+			this.#two(at + 1, n)
 			at += 3
 		} else {
 			at = this.#room(5 + n)
 			this.#bytes[at] = BIN32
-			this.#view.setUint32(at + 1, n)
+			this.#four(at + 1, n)
 			at += 5
 		}
 		this.#bytes.set(b, at)
@@ -272,14 +344,19 @@ export class Writer {
 		} else if (n <= 0xffff) {
 			const at = this.#room(3)
 			this.#bytes[at] = two
-			this.#view.setUint16(at + 1, n)
+			this.#two(at + 1, n)
 		} else {
 			const at = this.#room(5)
 			this.#bytes[at] = four
-			this.#view.setUint32(at + 1, n)
+			this.#four(at + 1, n)
 		}
 	}
 }
+
+/** Text up to this long is written a byte at a time while it is ASCII. */
+const shortText = 64
+/** A part of a message up to this long is read as a copy, a longer one as a view. */
+const smallPart = 256
 
 /** The bytes a str's header takes for a length. */
 function headerOf(n: number): number {
@@ -340,31 +417,46 @@ const typeNames: Record<Type, string> = {
  * ProtocolError. What it returns of the body, a bin, is a view of the body.
  */
 export class Reader {
-	readonly #bytes: Uint8Array
-	readonly #view: DataView
-	#at = 0
+	#bytes: Uint8Array
+	#at: number
+	#end: number
 	#depth = 0
 
-	constructor(bytes: Uint8Array) {
+	/** Reads a message that is the bytes from `at` to `end`: all of them unless said. */
+	constructor(bytes: Uint8Array, at = 0, end = bytes.length) {
 		this.#bytes = bytes
-		this.#view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+		this.#at = at
+		this.#end = end
+	}
+
+	/** Turns to another message, for a reader kept from one answer to the next. */
+	reset(bytes: Uint8Array, at: number, end: number): void {
+		this.#bytes = bytes
+		this.#at = at
+		this.#end = end
+		this.#depth = 0
 	}
 
 	/** Refuses bytes left after the one value a message is. */
 	end(): void {
-		if (this.#at !== this.#bytes.length) {
-			throw fail(`${this.#bytes.length - this.#at} bytes after the message`)
+		if (this.#at !== this.#end) {
+			throw fail(`${this.#end - this.#at} bytes after the message`)
 		}
 	}
 
 	/** The next value's type, without reading it. */
 	type(): Type {
-		const b = this.#bytes[this.#at]
+		const b = this.#peek()
 		return b === undefined ? 'invalid' : typeOf(b)
 	}
 
+	/** The next byte, or undefined at the message's end: past it lie another message's bytes. */
+	#peek(): number | undefined {
+		return this.#at < this.#end ? this.#bytes[this.#at] : undefined
+	}
+
 	#next(): number {
-		const b = this.#bytes[this.#at]
+		const b = this.#peek()
 		if (b === undefined) {
 			throw fail('the body ends inside a value')
 		}
@@ -373,13 +465,36 @@ export class Reader {
 	}
 
 	#take(n: number): number {
-		const left = this.#bytes.length - this.#at
+		const left = this.#end - this.#at
 		if (n > left) {
 			throw fail(`${n} bytes asked for where ${left} are left`)
 		}
 		const at = this.#at
 		this.#at += n
 		return at
+	}
+
+	/** Reads two bytes as an unsigned integer, the high one first. */
+	#two(): number {
+		const at = this.#take(2)
+		return (this.#bytes[at]! << 8) | this.#bytes[at + 1]!
+	}
+
+	#four(): number {
+		const at = this.#take(4)
+		const bytes = this.#bytes
+		return (
+			((bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!) >>> 0
+		)
+	}
+
+	/** Lays the next eight bytes out to be read as 64 bits. */
+	#eight(): DataView {
+		const at = this.#take(8)
+		for (let i = 0; i < 8; i++) {
+			eightBytes[i] = this.#bytes[at + i]!
+		}
+		return eight
 	}
 
 	/**
@@ -398,19 +513,19 @@ export class Reader {
 			case UINT8:
 				return BigInt(this.#bytes[this.#take(1)]!)
 			case UINT16:
-				return BigInt(this.#view.getUint16(this.#take(2)))
+				return BigInt(this.#two())
 			case UINT32:
-				return BigInt(this.#view.getUint32(this.#take(4)))
+				return BigInt(this.#four())
 			case UINT64:
-				return this.#view.getBigUint64(this.#take(8))
+				return this.#eight().getBigUint64(0)
 			case INT8:
-				return BigInt(this.#view.getInt8(this.#take(1)))
+				return BigInt((this.#bytes[this.#take(1)]! << 24) >> 24)
 			case INT16:
-				return BigInt(this.#view.getInt16(this.#take(2)))
+				return BigInt((this.#two() << 16) >> 16)
 			case INT32:
-				return BigInt(this.#view.getInt32(this.#take(4)))
+				return BigInt(this.#four() | 0)
 			case INT64:
-				return this.#view.getBigInt64(this.#take(8))
+				return this.#eight().getBigInt64(0)
 		}
 		throw fail(`${typeNames[typeOf(b)]} where ${want} belongs`)
 	}
@@ -435,6 +550,12 @@ export class Reader {
 
 	/** Reads an unsigned integer a number holds exactly. */
 	uint(): number {
+		// the one byte nearly every integer takes, read without a bigint
+		const b = this.#peek()
+		if (b !== undefined && b <= 0x7f) {
+			this.#at++
+			return b
+		}
 		const v = this.uint64()
 		if (v > MAX_SAFE) {
 			throw fail(`${v}, past what a number holds exactly, where a number belongs`)
@@ -444,6 +565,11 @@ export class Reader {
 
 	/** Reads an integer a number holds exactly. */
 	int(): number {
+		const b = this.#peek()
+		if (b !== undefined && (b <= 0x7f || b >= NEGFIX)) {
+			this.#at++
+			return b <= 0x7f ? b : b - 0x100
+		}
 		const v = this.int64()
 		if (v > MAX_SAFE || v < MIN_SAFE) {
 			throw fail(`${v}, past what a number holds exactly, where a number belongs`)
@@ -459,7 +585,7 @@ export class Reader {
 		const t = this.type()
 		if (t === 'float') {
 			this.#at++
-			return this.#view.getFloat64(this.#take(8))
+			return this.#eight().getFloat64(0)
 		}
 		if (t !== 'int') {
 			throw fail(`${typeNames[t]} where a float belongs`)
@@ -502,15 +628,18 @@ export class Reader {
 		} else if (b === STR8) {
 			n = this.#bytes[this.#take(1)]!
 		} else if (b === STR16) {
-			n = this.#view.getUint16(this.#take(2))
+			n = this.#two()
 		} else if (b === STR32) {
-			n = this.#view.getUint32(this.#take(4))
+			n = this.#four()
 		} else {
 			throw fail(`${typeNames[typeOf(b)]} where a str belongs`)
 		}
 		const at = this.#take(n)
+		const stop = at + n
 		try {
-			return decoder.decode(this.#bytes.subarray(at, at + n))
+			return decoder.decode(
+				n <= smallPart ? this.#bytes.slice(at, stop) : this.#bytes.subarray(at, stop),
+			)
 		} catch {
 			throw fail('a str that is not UTF-8')
 		}
@@ -518,19 +647,30 @@ export class Reader {
 
 	/** Reads a bin as a view of the body; an empty one is an empty array. */
 	bin(): Uint8Array {
-		const b = this.#next()
-		let n: number
-		if (b === BIN8) {
-			n = this.#bytes[this.#take(1)]!
-		} else if (b === BIN16) {
-			n = this.#view.getUint16(this.#take(2))
-		} else if (b === BIN32) {
-			n = this.#view.getUint32(this.#take(4))
-		} else {
-			throw fail(`${typeNames[typeOf(b)]} where a bin belongs`)
-		}
+		const n = this.#binLength()
 		const at = this.#take(n)
 		return this.#bytes.subarray(at, at + n)
+	}
+
+	/** Reads a bin as bytes of its own, which outlive the body. */
+	bytes(): Uint8Array {
+		const n = this.#binLength()
+		const at = this.#take(n)
+		return this.#bytes.slice(at, at + n)
+	}
+
+	#binLength(): number {
+		const b = this.#next()
+		if (b === BIN8) {
+			return this.#bytes[this.#take(1)]!
+		}
+		if (b === BIN16) {
+			return this.#two()
+		}
+		if (b === BIN32) {
+			return this.#four()
+		}
+		throw fail(`${typeNames[typeOf(b)]} where a bin belongs`)
 	}
 
 	/**
@@ -557,13 +697,13 @@ export class Reader {
 		if ((b & 0xf0) === fix) {
 			n = b & 0x0f
 		} else if (b === two) {
-			n = this.#view.getUint16(this.#take(2))
+			n = this.#two()
 		} else if (b === four) {
-			n = this.#view.getUint32(this.#take(4))
+			n = this.#four()
 		} else {
 			throw fail(`${typeNames[typeOf(b)]} where ${typeNames[kind]} belongs`)
 		}
-		const left = this.#bytes.length - this.#at
+		const left = this.#end - this.#at
 		if (n * each > left) {
 			throw fail(`${typeNames[kind]} of ${n} elements in ${left} bytes`)
 		}
@@ -645,7 +785,7 @@ export class Reader {
 				this.str()
 				return
 			case 'bin':
-				this.bin()
+				this.#take(this.#binLength())
 				return
 			case 'array':
 				this.items(() => this.skip())
@@ -672,7 +812,7 @@ export class Reader {
 	}
 
 	#describe(): string {
-		const b = this.#bytes[this.#at]
+		const b = this.#peek()
 		if (b === undefined) {
 			return 'the body ends where a value belongs'
 		}

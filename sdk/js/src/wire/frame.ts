@@ -63,14 +63,49 @@ export function kindName(kind: number): string {
 
 /** Reads a header from its twelve bytes without checking it. */
 export function parseHeader(bytes: Uint8Array, at = 0): Header {
-	const view = new DataView(bytes.buffer, bytes.byteOffset + at, headerSize)
-	return {
-		length: view.getUint32(0, true),
-		kind: view.getUint8(4),
-		flags: view.getUint8(5),
-		method: view.getUint16(6, true),
-		stream: view.getUint32(8, true),
+	if (bytes.length - at < headerSize) {
+		throw new ProtocolError(`a header of ${bytes.length - at} bytes`)
 	}
+	return {
+		length: uint32At(bytes, at),
+		kind: bytes[at + 4]!,
+		flags: bytes[at + 5]!,
+		method: bytes[at + 6]! | (bytes[at + 7]! << 8),
+		stream: uint32At(bytes, at + 8),
+	}
+}
+
+/** Writes a header where its twelve bytes were kept, once its body's length is known. */
+export function putHeader(
+	bytes: Uint8Array,
+	at: number,
+	kind: number,
+	flags: number,
+	method: number,
+	stream: number,
+	length: number,
+): void {
+	putUint32(bytes, at, length)
+	bytes[at + 4] = kind
+	bytes[at + 5] = flags
+	bytes[at + 6] = method
+	bytes[at + 7] = method >>> 8
+	putUint32(bytes, at + 8, stream)
+}
+
+// Four bytes, the low one first. Not through a DataView: asking a small array
+// for its buffer makes the engine move it to one, for every frame.
+function uint32At(bytes: Uint8Array, at: number): number {
+	return (
+		(bytes[at]! | (bytes[at + 1]! << 8) | (bytes[at + 2]! << 16) | (bytes[at + 3]! << 24)) >>> 0
+	)
+}
+
+function putUint32(bytes: Uint8Array, at: number, n: number): void {
+	bytes[at] = n
+	bytes[at + 1] = n >>> 8
+	bytes[at + 2] = n >>> 16
+	bytes[at + 3] = n >>> 24
 }
 
 /**
@@ -117,12 +152,7 @@ export function frame(
 	body: Uint8Array,
 ): Uint8Array {
 	const bytes = new Uint8Array(headerSize + body.length)
-	const view = new DataView(bytes.buffer)
-	view.setUint32(0, body.length, true)
-	view.setUint8(4, kind)
-	view.setUint8(5, flags)
-	view.setUint16(6, method, true)
-	view.setUint32(8, stream, true)
+	putHeader(bytes, 0, kind, flags, method, stream, body.length)
 	bytes.set(body, headerSize)
 	return bytes
 }
@@ -130,10 +160,10 @@ export function frame(
 /** A CREDIT granting n bytes on a stream. */
 export function credit(stream: number, n: number): Uint8Array {
 	const body = new Uint8Array(4)
-	new DataView(body.buffer).setUint32(0, n, true)
+	putUint32(body, 0, n)
 	return frame(Kind.credit, 0, 0, stream, body)
 }
 
 export function granted(body: Uint8Array): number {
-	return new DataView(body.buffer, body.byteOffset, 4).getUint32(0, true)
+	return uint32At(body, 0)
 }

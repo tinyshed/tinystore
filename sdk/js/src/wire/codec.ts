@@ -61,7 +61,7 @@ export const str: Codec<string> = {
 export const bin: Codec<Uint8Array> = {
 	kind: 'bin',
 	write: (w, v) => w.bin(v),
-	read: r => r.bin().slice(),
+	read: r => r.bytes(),
 }
 
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
@@ -82,7 +82,7 @@ export function textOf(bytes: Uint8Array): string | undefined {
 export const text: Codec<string | Uint8Array> = {
 	kind: 'text',
 	write: (w, v) => writeText(w, v),
-	read: r => (r.type() === 'bin' ? r.bin().slice() : r.str()),
+	read: r => (r.type() === 'bin' ? r.bytes() : r.str()),
 }
 
 function writeText(w: Writer, v: string | Uint8Array): void {
@@ -116,7 +116,7 @@ export const key: Codec<string | Uint8Array, Key> = {
 	read: r => {
 		switch (r.type()) {
 			case 'bin':
-				return r.bin().slice()
+				return r.bytes()
 			case 'int':
 				return String(r.int64())
 		}
@@ -142,7 +142,7 @@ export const kvValue: Codec<Raw, Raw | number> = {
 		if (r.nil()) {
 			return null
 		}
-		return r.type() === 'bin' ? r.bin().slice() : r.int64()
+		return r.type() === 'bin' ? r.bytes() : r.int64()
 	},
 }
 
@@ -395,19 +395,30 @@ export class Message<F extends Fields> implements Codec<Read<F>, Written<F>> {
 
 	write(w: Writer, value: Written<F>): void {
 		const held = value as Record<string, unknown>
-		let n = 0
-		for (const f of this.#order) {
-			if (held[f.name] !== undefined) {
-				n++
+		const order = this.#order
+		if (order.length > 15) {
+			let n = 0
+			for (const f of order) {
+				if (held[f.name] !== undefined) {
+					n++
+				}
 			}
+			w.map(n)
 		}
-		w.map(n)
-		for (const f of this.#order) {
+		// up to 15 fields are counted as they are written, into the byte kept for the count
+		const count = order.length > 15 ? -1 : w.reserve(1)
+		let n = 0
+		for (let i = 0; i < order.length; i++) {
+			const f = order[i]!
 			const v = held[f.name]
 			if (v !== undefined) {
+				n++
 				w.uint(f.key)
 				f.codec.write(w, v)
 			}
+		}
+		if (count >= 0) {
+			w.mapAt(count, n)
 		}
 	}
 
