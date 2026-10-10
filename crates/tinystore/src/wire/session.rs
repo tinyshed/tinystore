@@ -668,8 +668,7 @@ impl Shared {
             Ok(body) => Frame::new(Kind::Response, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Response, stream, failure.encode()).failing(),
         };
-        self.send(&[response]);
-        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        self.send_last(response);
     }
 
     /// Ends a stream whose RESPONSE went out already, with its last DATA.
@@ -678,8 +677,7 @@ impl Shared {
             Ok(body) => Frame::new(Kind::Data, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Data, stream, failure.encode()).failing(),
         };
-        self.send(&[data]);
-        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        self.send_last(data);
     }
 
     fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
@@ -743,12 +741,31 @@ impl Shared {
     }
 
     fn send(&self, frames: &[Frame]) {
+        self.queue(frames, 0);
+    }
+
+    /// Sends a stream's last frame.
+    fn send_last(&self, frame: Frame) {
+        self.queue(&[frame], 1);
+    }
+
+    /// Queues frames for the host to take, `ended` of them their streams'
+    /// last. Those streams leave the count under the output's lock, after
+    /// their frames are queued: whoever read a stream's last frame finds
+    /// `streams` without it, and whoever finds no stream finds every last
+    /// frame queued. Counted after the lock instead, a client that had read
+    /// its answer could still see its stream in flight.
+    fn queue(&self, frames: &[Frame], ended: usize) {
         let mut output = self.lock_output();
-        if output.ended && frames.iter().all(|frame| frame.kind != Kind::GoAway) {
-            return;
+        let dropped = output.ended && frames.iter().all(|frame| frame.kind != Kind::GoAway);
+        if !dropped {
+            for frame in frames {
+                frame.encode_into(&mut output.bytes);
+            }
         }
-        for frame in frames {
-            frame.encode_into(&mut output.bytes);
+        self.in_flight.fetch_sub(ended, Ordering::AcqRel);
+        if dropped {
+            return;
         }
         let wake = !std::mem::replace(&mut output.woken, true);
         drop(output);

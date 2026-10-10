@@ -470,6 +470,7 @@ module defines.
 - an extend on a work stream is refused, not an ack — `TestAnExtendOnAWorkStreamIsRefused`
 - a client past its credit is cut off, the reader never waits — `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection`
 - every stream ends with one final frame — `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up
+- a client that read a stream's last frame finds the stream ended, counted out as its frame is queued — `a_client_that_read_its_answer_finds_its_stream_ended` in `wire::jobs`
 - answers queued during a write leave in the next — `TestQueuedAnswersShareAWrite` in `server/internal/flow`
 - a connection grant wakes every sender whose body fits — `TestAGrantWakesEverySenderWhoseBodyFits` in `server/internal/flow`
 - a Go test client's upload stops with its stream or connection — `TestAFinalResponseStopsAnUploadWaitingForCredit`, `TestALostConnectionStopsAnUploadWaitingForCredit` in `server/internal/client`

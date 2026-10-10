@@ -504,3 +504,15 @@ fn writes_of_jobs_in_flight_hold_no_thread_of_the_session() {
     drop(client);
     store.close().unwrap();
 }
+
+#[test]
+fn a_client_that_read_its_answer_finds_its_stream_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "emails");
+    // a call of jobs is answered off the thread that reads the client's frames
+    for _ in 0..20_000 {
+        assert!(!get(&mut client, handle, "none").found);
+        assert_eq!(client.pipe.streams(), 0, "the answer was read, and its stream is counted still");
+    }
+}
