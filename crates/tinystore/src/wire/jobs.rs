@@ -15,18 +15,20 @@ use std::time::Duration;
 
 use serde_json::value::RawValue;
 
-use super::Route;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsPage,
     JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsWork, method,
 };
+use super::{Lent, Route};
+#[cfg(feature = "sql")]
+use crate::TxHandle;
 use crate::clock::from_unix_millis;
 use crate::jobs::{
-    Answers, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, Remote, RemoteWork, Report,
-    Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
+    Answers, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder, Remote,
+    RemoteWork, Report, Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
 };
-use crate::{Error, ErrorKind, Store, unix_millis};
+use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
 
 /// A job's value as the wire carries it.
 type Raw = Box<RawValue>;
@@ -82,22 +84,18 @@ struct Opened {
 }
 
 /// Answers a call that runs to its end on this thread.
-pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], max_body: usize) -> Answered {
+pub(crate) fn call(
+    store: &Store,
+    handles: &Handles,
+    lent: Lent<'_>,
+    called: u16,
+    body: &[u8],
+    max_body: usize,
+) -> Answered {
     match called {
-        method::JOBS_QUEUE_OPEN => handles.open(open_queue(store, JobsQueueOpen::decode(body)?)?, false),
+        method::JOBS_QUEUE_OPEN => handles.open(open_queue(store, lent, JobsQueueOpen::decode(body)?)?, false),
         method::JOBS_SCHEDULE_OPEN => handles.open(open_schedule(store, JobsScheduleOpen::decode(body)?)?, true),
-        method::JOBS_ADD => {
-            let added = on_job(handles, JobsCall::decode(body)?, |job, value| job.add(&value))?;
-            Ok(JobsChanged { changed: added }.encode())
-        }
-        method::JOBS_SET => {
-            on_job(handles, JobsCall::decode(body)?, |job, value| job.set(&value))?;
-            Ok(Empty {}.encode())
-        }
-        method::JOBS_UPDATE => {
-            let changed = on_job(handles, JobsCall::decode(body)?, |job, value| job.update(&value))?;
-            Ok(JobsChanged { changed }.encode())
-        }
+        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE => write(handles, None, called, body),
         method::JOBS_CANCEL => {
             let id = JobsId::decode(body)?;
             let changed = handles.opened(id.handle)?.queue.cancel(&id.id)?;
@@ -115,8 +113,51 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], m
     }
 }
 
-fn open_queue(store: &Store, open: JobsQueueOpen) -> Result<Queue<Raw>, Failure> {
-    let mut builder = store.queue::<Raw>(&open.name);
+/// Answers a call made inside a database's transaction, on its stream: a
+/// queue kept in the database's file adds, changes and reads its jobs in the
+/// transaction.
+#[cfg(feature = "sql")]
+pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body: &[u8], max_body: usize) -> Answered {
+    match called {
+        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE => write(handles, Some(tx), called, body),
+        method::JOBS_CANCEL => {
+            let id = JobsId::decode(body)?;
+            let changed = handles.opened(id.handle)?.queue.cancel_in(&id.id, Some(tx))?;
+            Ok(JobsChanged { changed }.encode())
+        }
+        method::JOBS_GET => {
+            let id = JobsId::decode(body)?;
+            let job = handles.opened(id.handle)?.queue.in_tx(tx).get(&id.id)?;
+            within(job.map_or_else(JobsJob::default, job_of).encode(), max_body)
+        }
+        other => Err(Failure::invalid(format!("method {other:#06x} is not a queue's call inside a transaction"))),
+    }
+}
+
+/// An add, a set or an update, in `tx` when there is one.
+fn write(handles: &Handles, tx: Option<&Transaction<'_>>, called: u16, body: &[u8]) -> Answered {
+    let call = JobsCall::decode(body)?;
+    match called {
+        method::JOBS_ADD => {
+            let added = on_job(handles, call, tx, |job, value| job.add(&value))?;
+            Ok(JobsChanged { changed: added }.encode())
+        }
+        method::JOBS_SET => {
+            on_job(handles, call, tx, |job, value| job.set(&value))?;
+            Ok(Empty {}.encode())
+        }
+        _ => {
+            let changed = on_job(handles, call, tx, |job, value| job.update(&value))?;
+            Ok(JobsChanged { changed }.encode())
+        }
+    }
+}
+
+fn open_queue(store: &Store, lent: Lent<'_>, open: JobsQueueOpen) -> Result<Queue<Raw>, Failure> {
+    let mut builder = match open.database {
+        Some(database) => QueueBuilder::<Raw>::in_file(lent(database)?, &open.name),
+        None => store.queue::<Raw>(&open.name),
+    };
     if let Some(attempts) = open.attempts {
         builder = builder.attempts(small(attempts, "attempts")?);
     }
@@ -171,10 +212,12 @@ fn open_schedule(store: &Store, open: JobsScheduleOpen) -> Result<Queue<Raw>, Fa
     Ok(builder.open()?.queue().retyped())
 }
 
-/// Runs an add, a set or an update on the job a call names.
+/// Runs an add, a set or an update on the job a call names, in `tx` when
+/// there is one.
 fn on_job<T>(
     handles: &Handles,
     call: JobsCall,
+    tx: Option<&Transaction<'_>>,
     write: impl FnOnce(JobCall<'_, Raw>, Raw) -> crate::Result<T>,
 ) -> Result<T, Failure> {
     let opened = handles.opened(call.handle)?;
@@ -183,7 +226,7 @@ fn on_job<T>(
     }
     let value = RawValue::from_string(call.value)
         .map_err(|error| Failure::invalid(format!("a value that is not JSON: {error}")))?;
-    let mut job = JobCall::new(&opened.queue);
+    let mut job = JobCall::new(&opened.queue, tx);
     if let Some(id) = &call.id {
         job = job.id(id);
     }

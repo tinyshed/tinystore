@@ -117,7 +117,7 @@ imports be.
 
 | Method                                         | Request                                                                                              | Answer                                                                                       |
 |------------------------------------------------|------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `kv.bucket.open`                               | name, ttl or idle                                                                                    | a handle                                                                                     |
+| `kv.bucket.open`                               | name, ttl or idle, the database whose file keeps it                                                  | a handle                                                                                     |
 | `kv.get`                                       | handle, under, key                                                                                   | entry: found, value, version, expires at                                                     |
 | `kv.has`                                       | handle, under, key                                                                                   | found                                                                                        |
 | `kv.set`                                       | call: value, ttl or expires at, if version                                                           | version, expires at                                                                          |
@@ -139,17 +139,17 @@ imports be.
 
 ## jobs
 
-| Method                        | Request                                                                          | Answer                                                                                         |
-|-------------------------------|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| `jobs.queue.open`             | name, attempts, backoff, timeout, concurrency, rate, dedupe, keep, max waiting   | a handle                                                                                       |
-| `jobs.schedule.open`          | name, every or a cron and its time zone, attempts, backoff, timeout              | a handle on the schedule's one job, which no add, set or update takes                          |
-| `jobs.add`, `.set`, `.update` | handle, id, value as JSON, at or delay, group, every or a cron and its time zone | changed: whether an add added and an update changed; a set says nothing                        |
-| `jobs.cancel`                 | handle, id                                                                       | changed: whether there was a job                                                               |
-| `jobs.get`                    | handle, id                                                                       | the job: found, value, state, at, attempt, ahead, progress, error, group, repeat, its last run |
-| `jobs.list`                   | handle, prefix, state, after, limit                                              | a page: its jobs, as many as the limit asks and the body holds, and where the next starts      |
-| `jobs.work`                   | handle, concurrency, until idle                                                  | both ways: held jobs out, answers back                                                         |
-| `jobs.step`, `.keep`          | a run, a step's name; keep's answer as JSON                                      | the answer kept, found false for none; nothing                                                 |
-| `jobs.watch`                  | handle, id                                                                       | a download: the job as it is, then again each time it changes, until it ends                   |
+| Method                        | Request                                                                                                          | Answer                                                                                         |
+|-------------------------------|------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| `jobs.queue.open`             | name, attempts, backoff, timeout, concurrency, rate, dedupe, keep, max waiting, the database whose file keeps it | a handle                                                                                       |
+| `jobs.schedule.open`          | name, every or a cron and its time zone, attempts, backoff, timeout                                              | a handle on the schedule's one job, which no add, set or update takes                          |
+| `jobs.add`, `.set`, `.update` | handle, id, value as JSON, at or delay, group, every or a cron and its time zone                                 | changed: whether an add added and an update changed; a set says nothing                        |
+| `jobs.cancel`                 | handle, id                                                                                                       | changed: whether there was a job                                                               |
+| `jobs.get`                    | handle, id                                                                                                       | the job: found, value, state, at, attempt, ahead, progress, error, group, repeat, its last run |
+| `jobs.list`                   | handle, prefix, state, after, limit                                                                              | a page: its jobs, as many as the limit asks and the body holds, and where the next starts      |
+| `jobs.work`                   | handle, concurrency, until idle                                                                                  | both ways: held jobs out, answers back                                                         |
+| `jobs.step`, `.keep`          | a run, a step's name; keep's answer as JSON                                                                      | the answer kept, found false for none; nothing                                                 |
+| `jobs.watch`                  | handle, id                                                                                                       | a download: the job as it is, then again each time it changes, until it ends                   |
 
 `jobs.work` is a worker whose handlers are the client's. The server runs the
 queue's loop on a thread of the store's, claiming as every worker does, and
@@ -200,6 +200,14 @@ whether to commit, and the server's DATA·END `{}` follows once it is done.
 The server's own timer rolls a transaction back past five seconds, its
 client's pauses included, and ends the stream `limit`; a CANCEL or the
 connection's end rolls it back too.
+
+A bucket or a queue opened with a database's handle, `database` in
+`kv.bucket.open` or `jobs.queue.open`, lives in the database's file. Inside
+`sql.tx` a call of theirs is a DATA whose `want` is `call`, the method and its
+request in `method` and `body`; it runs in the transaction, in a savepoint of
+its own, and its answer is the method's own, in `body`. A handle's first open
+writes the file, so a client opens the database's handles before `sql.tx`,
+whose transaction holds the writer an open would wait for.
 
 ## The server
 

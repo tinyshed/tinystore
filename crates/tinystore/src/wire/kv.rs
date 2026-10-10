@@ -7,18 +7,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use super::Route;
 use super::codec::{Message, Row};
 use super::protocol::{
     Empty, Failure, Handle, KvAllowance, KvAnswer, KvBranch, KvBucketOpen, KvCall, KvCheck, KvCount, KvCountersOpen,
     KvEntry, KvFound, KvList, KvOnceOpen, KvOutcome, KvPage, KvQuotaOpen, KvRateLimitOpen, KvTx, KvTxResults,
     KvWindowUse, KvWritten, method,
 };
+use super::{Lent, Route};
+#[cfg(feature = "sql")]
+use crate::Transaction;
 use crate::clock::from_unix_millis;
 use crate::kv::{
-    Allowance, Batch, Bucket, Cell, Counters, Hand, Handed, MAX_KEY, Outcome, PAGE_KEYS, Place, Put, Quota, RateLimit,
-    Raw, Stamp, Version, WriteOptions, hand, once_rows,
+    Allowance, Batch, Bucket, BucketBuilder, Cell, Counters, Hand, Handed, MAX_KEY, Outcome, PAGE_KEYS, Place, Put,
+    Quota, RateLimit, Raw, Stamp, Version, WriteOptions, hand, once_rows,
 };
+#[cfg(feature = "sql")]
+use crate::kv::{call_on_branch, call_on_key, clear_work};
 use crate::{Error, Store, unix_millis};
 
 /// What a connection opened, by handle.
@@ -49,9 +53,16 @@ pub(crate) fn route(called: u16) -> Route {
 }
 
 /// Answers a call that runs to its end on this thread.
-pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], max_body: usize) -> Answered {
+pub(crate) fn call(
+    store: &Store,
+    handles: &Handles,
+    lent: Lent<'_>,
+    called: u16,
+    body: &[u8],
+    max_body: usize,
+) -> Answered {
     match called {
-        method::KV_BUCKET_OPEN => handles.open(open_bucket(store, KvBucketOpen::decode(body)?)?),
+        method::KV_BUCKET_OPEN => handles.open(open_bucket(store, lent, KvBucketOpen::decode(body)?)?),
         method::KV_COUNTERS_OPEN => handles.open(open_counters(store, KvCountersOpen::decode(body)?)?),
         method::KV_RATE_LIMIT_OPEN => handles.open(open_rate_limit(store, KvRateLimitOpen::decode(body)?)?),
         method::KV_QUOTA_OPEN => handles.open(open_quota(store, KvQuotaOpen::decode(body)?)?),
@@ -86,6 +97,61 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], m
         }
         method::KV_TX => tx(handles, KvTx::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
+    }
+}
+
+/// Answers a call made inside a database's transaction, on its stream: a
+/// bucket kept in the database's file reads and writes in the transaction.
+#[cfg(feature = "sql")]
+pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body: &[u8], max_body: usize) -> Answered {
+    match called {
+        method::KV_CLEAR => {
+            let branch = KvBranch::decode(body)?;
+            let bucket = handles.bucket(branch.handle, &branch.under)?;
+            call_on_branch(tx, &bucket.scope, clear_work(&bucket.scope)?)?;
+            Ok(Empty {}.encode())
+        }
+        method::KV_LIST => {
+            let list = KvList::decode(body)?;
+            let bucket = handles.bucket(list.handle, &list.under)?;
+            let (limit, after) = (page_limit(&list), list.after.as_deref());
+            let read = |sql: &crate::sqlite::Tx<'_>, _: &_| bucket.page_rows(sql, limit.clamp(1, PAGE_KEYS), after);
+            let rows = call_on_branch(tx, &bucket.scope, read)?;
+            page(bucket.keyed(rows)?, &list, limit, max_body)
+        }
+        _ => key_call_in(handles, tx, called, &KvCall::decode(body)?),
+    }
+}
+
+/// A call on one key of a bucket inside a database's transaction.
+#[cfg(feature = "sql")]
+fn key_call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, call: &KvCall) -> Answered {
+    let bucket = handles.bucket(call.handle, &call.under)?;
+    let (key, scope) = (call.key.as_str(), &bucket.scope);
+    match called {
+        method::KV_GET | method::KV_HAS => {
+            let cell = call_on_key(tx, scope, key, |sql, _| bucket.read_cell_in(sql, key))?;
+            match called {
+                method::KV_GET => Ok(entry(cell, None).encode()),
+                _ => Ok(KvFound { found: cell.is_some() }.encode()),
+            }
+        }
+        method::KV_SET | method::KV_CREATE => {
+            let put = if called == method::KV_SET { Put::Always } else { Put::OnlyNew };
+            let raw = raw_of(call.value.clone().unwrap_or_default());
+            let (_, work) = bucket.put_work(key, raw, options(call)?, put)?;
+            Ok(written(call_on_key(tx, scope, key, work)?))
+        }
+        method::KV_TAKE => Ok(taken(call_on_key(tx, scope, key, bucket.remove_work(key, options(call)?)?)?)),
+        method::KV_DELETE => {
+            let cell = call_on_key(tx, scope, key, bucket.remove_work(key, options(call)?)?)?;
+            Ok(KvFound { found: cell.is_some() }.encode())
+        }
+        method::KV_EXPIRE => {
+            let found = call_on_key(tx, scope, key, bucket.expire_work(key, options(call)?)?)?;
+            Ok(KvFound { found }.encode())
+        }
+        other => Err(Failure::invalid(format!("method {other:#06x} is not a bucket's call inside a transaction"))),
     }
 }
 
@@ -191,8 +257,11 @@ impl Handles {
     }
 }
 
-fn open_bucket(store: &Store, open: KvBucketOpen) -> Result<Opened, Failure> {
-    let mut builder = store.bucket::<()>(&open.name);
+fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen) -> Result<Opened, Failure> {
+    let mut builder = match open.database {
+        Some(database) => BucketBuilder::in_file(lent(database)?, &open.name),
+        None => store.bucket::<()>(&open.name),
+    };
     if let Some(ttl) = open.ttl {
         builder = builder.ttl(Duration::from_millis(ttl));
     }
@@ -247,8 +316,17 @@ fn clear(handles: &Handles, branch: KvBranch) -> Answered {
 /// body holds: a page cut by the body starts the next after its last key.
 fn list(handles: &Handles, list: KvList, max_body: usize) -> Answered {
     let bucket = handles.bucket(list.handle, &list.under)?;
-    let limit = list.limit.map_or(100, |limit| usize::try_from(limit).unwrap_or(usize::MAX));
+    let limit = page_limit(&list);
     let rows = bucket.list_rows(limit, list.after.as_deref())?;
+    page(rows, &list, limit, max_body)
+}
+
+fn page_limit(list: &KvList) -> usize {
+    list.limit.map_or(100, |limit| usize::try_from(limit).unwrap_or(usize::MAX))
+}
+
+/// The page a list's rows make, as many as the agreed body holds.
+fn page(rows: Vec<(String, Cell)>, list: &KvList, limit: usize, max_body: usize) -> Answered {
     let full = rows.len() == limit.clamp(1, PAGE_KEYS);
     let mut page = KvPage::default();
     // a page's own fields and the next key's room, kept apart from what entries may take

@@ -9,7 +9,7 @@ use super::repeat::Asked as Repeat;
 use super::values::{self, Kept};
 use super::write::Prepared;
 use crate::clock::millis;
-use crate::{Error, Result, unix_millis};
+use crate::{Error, Result, Transaction, unix_millis};
 
 /// An id or a group is at most this long.
 const MAX_ID: usize = 1024;
@@ -24,6 +24,8 @@ const LATEST: i64 = 253_402_300_799_999;
 #[must_use = "a job's call runs at its last step: add, set or update"]
 pub struct JobCall<'a, V> {
     queue: &'a Queue<V>,
+    /// The transaction the call runs in, when it was made through one.
+    tx: Option<&'a Transaction<'a>>,
     asked: Asked,
 }
 
@@ -48,8 +50,8 @@ impl<'a, V> JobCall<'a, V>
 where
     V: Serialize + DeserializeOwned + Send + 'static,
 {
-    pub(crate) fn new(queue: &'a Queue<V>) -> Self {
-        JobCall { queue, asked: Asked::default() }
+    pub(crate) fn new(queue: &'a Queue<V>, tx: Option<&'a Transaction<'a>>) -> Self {
+        JobCall { queue, tx, asked: Asked::default() }
     }
 
     /// The job's id, 1 to 1024 bytes of text: what finds it again, and what
@@ -95,21 +97,21 @@ where
     /// whether it added one; a job without an id is always added.
     #[expect(clippy::should_implement_trait, reason = "a queue's add puts a job in it, as BullMQ's does: no sum")]
     pub fn add(self, value: &V) -> Result<bool> {
-        self.queue.add_asked(self.asked, value)
+        self.queue.add_asked(self.asked, value, self.tx)
     }
 
     /// Makes the id's job this value at this time, whatever it was: a job
     /// waiting is made new, a failed one starts again, and a running one runs
     /// once more after this run, with this value.
     pub fn set(self, value: &V) -> Result<()> {
-        self.queue.set_asked(self.asked, value)
+        self.queue.set_asked(self.asked, value, self.tx)
     }
 
     /// Changes the id's job when it has not started: its value, and its time,
     /// group or repeat when the call names them. Says whether it did: a job
     /// that runs, ran or never was answers `false`.
     pub fn update(self, value: &V) -> Result<bool> {
-        self.queue.update_asked(self.asked, value)
+        self.queue.update_asked(self.asked, value, self.tx)
     }
 
     fn when(mut self, when: When) -> Self {

@@ -1,5 +1,6 @@
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime};
 
@@ -13,6 +14,7 @@ use super::renewals::Renewal;
 use super::scope::{Kind, Scope};
 use super::value::{self, Raw, Value};
 use crate::clock::{from_unix_millis, millis};
+use crate::engine::{Home, SharedFile};
 use crate::sqlite::Tx;
 use crate::{Error, ErrorKind, Result, Store, unix_millis};
 
@@ -31,7 +33,7 @@ const RENEW_AT_ONCE: i64 = 60_000;
 /// A bucket being opened: its name, its type, how its keys expire.
 #[must_use = "a bucket opens with open()"]
 pub struct BucketBuilder<V> {
-    store: Store,
+    home: Home,
     name: String,
     expiry: Expiry,
     _value: PhantomData<fn() -> V>,
@@ -51,7 +53,18 @@ impl Store {
     /// A bucket of values of type `V` by key, in the store's kv.db; the engine
     /// opens with the first handle.
     pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V> {
-        BucketBuilder { store: self.clone(), name: name.to_owned(), expiry: Expiry::Never, _value: PhantomData }
+        BucketBuilder::new(Home::Store(self.clone()), name)
+    }
+}
+
+impl<V: Value> BucketBuilder<V> {
+    fn new(home: Home, name: &str) -> Self {
+        BucketBuilder { home, name: name.to_owned(), expiry: Expiry::Never, _value: PhantomData }
+    }
+
+    /// A bucket kept in a file another engine lends, a database's.
+    pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str) -> Self {
+        BucketBuilder::new(Home::Shared(shared), name)
     }
 }
 
@@ -71,7 +84,7 @@ impl<V: Value> BucketBuilder<V> {
 
     pub fn open(self) -> Result<Bucket<V>> {
         check_expiry(self.expiry).map_err(|error| error.within(format!("kv bucket {}", self.name)))?;
-        let scope = Scope::open(&self.store, &self.name, Kind::Values)?;
+        let scope = Scope::open(&self.home, &self.name, Kind::Values)?;
         Ok(Bucket::new(scope, self.expiry))
     }
 }
@@ -473,6 +486,11 @@ impl<V> Bucket<V> {
             .file()
             .read(|connection| self.page_rows(connection, limit, after))
             .map_err(|error| error.within(self.scope.shown_branch()))?;
+        self.keyed(rows)
+    }
+
+    /// Rows of this branch by path, each with its key instead.
+    pub(crate) fn keyed(&self, rows: Vec<(Vec<u8>, Cell)>) -> Result<Vec<(String, Cell)>> {
         let branch = self.scope.branch()?;
         rows.into_iter().map(|(path, cell)| Ok((branch.key_of(&path)?, cell))).collect()
     }

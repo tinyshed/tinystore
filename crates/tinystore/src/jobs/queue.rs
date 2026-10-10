@@ -12,17 +12,20 @@ use super::claim::{self, Claiming};
 use super::engine::Jobs;
 use super::policy::{Concurrency, Policy};
 use super::read::{self, Filter, Job, Page};
+use super::rows;
 use super::run::{Outcome, Run};
 use super::state::{Kind, QueueState};
 use super::work::{self, Worker};
 use super::write::{self, Cancelled};
 use crate::clock::millis;
-use crate::{Error, ErrorKind, Result, Store};
+use crate::engine::{Home, SharedFile};
+use crate::sqlite::Tx as SqlTx;
+use crate::{Error, ErrorKind, Result, Store, Transaction};
 
 /// A queue being opened: its name, its type, and how it treats its jobs.
 #[must_use = "a queue opens with open()"]
 pub struct QueueBuilder<V> {
-    store: Store,
+    home: Home,
     name: String,
     policy: Policy,
     _value: PhantomData<fn() -> V>,
@@ -35,7 +38,7 @@ impl Store {
     where
         V: Serialize + DeserializeOwned + Send + 'static,
     {
-        QueueBuilder { store: self.clone(), name: name.to_owned(), policy: Policy::default(), _value: PhantomData }
+        QueueBuilder::new(Home::Store(self.clone()), name)
     }
 }
 
@@ -49,6 +52,15 @@ impl<V> QueueBuilder<V>
 where
     V: Serialize + DeserializeOwned + Send + 'static,
 {
+    fn new(home: Home, name: &str) -> Self {
+        QueueBuilder { home, name: name.to_owned(), policy: Policy::default(), _value: PhantomData }
+    }
+
+    /// A queue kept in a file another engine lends, a database's.
+    pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str) -> Self {
+        QueueBuilder::new(Home::Shared(shared), name)
+    }
+
     /// Runs a job gets before it fails for good, the first counted: 10.
     pub fn attempts(mut self, attempts: u32) -> Self {
         self.policy.attempts = attempts;
@@ -104,7 +116,7 @@ where
     }
 
     pub fn open(self) -> Result<Queue<V>> {
-        Queue::open(&self.store, &self.name, Kind::Queue, self.policy)
+        Queue::open(&self.home, &self.name, Kind::Queue, self.policy)
     }
 }
 
@@ -137,8 +149,8 @@ where
         Queue { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData }
     }
 
-    pub(crate) fn open(store: &Store, name: &str, kind: Kind, policy: Policy) -> Result<Queue<V>> {
-        let jobs = Jobs::of(store)?;
+    pub(crate) fn open(home: &Home, name: &str, kind: Kind, policy: Policy) -> Result<Queue<V>> {
+        let jobs = Jobs::at(home)?;
         let state = jobs.queue(name, kind, policy)?;
         Ok(Queue { jobs, state, _value: PhantomData })
     }
@@ -146,54 +158,68 @@ where
     /// Adds a job that runs as soon as a worker is free, and returns once it
     /// is on disk. Adds from many callers share a commit.
     pub fn add(&self, value: &V) -> Result<bool> {
-        self.add_asked(Asked::default(), value)
+        self.add_asked(Asked::default(), value, None)
     }
 
     /// Makes the job under `id` this value, due now, whatever it was; see
     /// [`JobCall::set`].
     pub fn set(&self, id: impl AsRef<str>, value: &V) -> Result<()> {
-        self.set_asked(Asked::with_id(id.as_ref()), value)
+        self.set_asked(Asked::with_id(id.as_ref()), value, None)
     }
 
     /// Gives the job under `id` this value when it has not started, and says
     /// whether it did; see [`JobCall::update`].
     pub fn update(&self, id: impl AsRef<str>, value: &V) -> Result<bool> {
-        self.update_asked(Asked::with_id(id.as_ref()), value)
+        self.update_asked(Asked::with_id(id.as_ref()), value, None)
     }
 
     /// Takes the job under `id`, whatever its state, and says whether there
     /// was one. A running one's handler is told to stop: `run.stopped()` turns
     /// true, and what it returns settles nothing. A repeating job stops.
     pub fn cancel(&self, id: impl AsRef<str>) -> Result<bool> {
-        let id = id.as_ref().to_owned();
-        let queue = Arc::clone(&self.state);
-        let key = id.clone();
-        let cancelled = self
-            .jobs
-            .file()
-            .write(0, move |tx| {
-                let cancelled = write::cancel(tx, &queue, &key)?;
-                queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
-                Ok(cancelled)
-            })
-            .map_err(|error| {
-                self.state.watchers.cancelled(&id, false);
-                self.fail(Some(&id), error)
-            })?;
-        let found = match cancelled {
-            Cancelled::Job(job) => {
-                if let Some(lease) = self.state.held(job) {
-                    lease.cancel();
-                    self.state.release(&lease);
-                }
-                self.state.room_made(self.jobs.now());
-                true
-            }
-            Cancelled::Failed => true,
-            Cancelled::Nothing => false,
+        self.cancel_in(id.as_ref(), None)
+    }
+
+    /// A cancel, in `tx` when there is one. Its watchers learn it was a cancel
+    /// inside its write, before the commit, so that a watch that reads the job
+    /// gone never takes it for done; a cancel that does not commit takes that
+    /// back.
+    pub(crate) fn cancel_in(&self, id: &str, tx: Option<&Transaction<'_>>) -> Result<bool> {
+        let (queue, key) = (Arc::clone(&self.state), id.to_owned());
+        let work = move |c: &SqlTx<'_>| {
+            let cancelled = write::cancel(c, &queue, &key)?;
+            queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
+            Ok(cancelled)
         };
-        if found {
-            self.state.watchers.changed();
+        let written = match tx {
+            None => self.jobs.file().write(0, work),
+            Some(tx) => self.run_in(tx, work),
+        };
+        let cancelled = written.map_err(|error| {
+            self.state.watchers.cancelled(id, false);
+            self.fail(Some(id), error)
+        })?;
+        let found = !matches!(cancelled, Cancelled::Nothing);
+        let (jobs, state, key) = (Arc::clone(&self.jobs), Arc::clone(&self.state), id.to_owned());
+        let settle = move |committed: bool| {
+            if !committed {
+                state.watchers.cancelled(&key, false);
+                return;
+            }
+            if let Cancelled::Job(job) = cancelled {
+                if let Some(lease) = state.held(job) {
+                    lease.cancel();
+                    state.release(&lease);
+                }
+                state.room_made(jobs.now());
+            }
+            if found {
+                state.watchers.changed();
+            }
+        };
+        match tx {
+            None => settle(true),
+            Some(tx) => tx.after(settle),
         }
         Ok(found)
     }
@@ -220,19 +246,19 @@ where
 
     /// A call on the job with this id; see [`JobCall`].
     pub fn id(&self, id: impl AsRef<str>) -> JobCall<'_, V> {
-        JobCall::new(self).id(id)
+        JobCall::new(self, None).id(id)
     }
 
     pub fn at(&self, time: SystemTime) -> JobCall<'_, V> {
-        JobCall::new(self).at(time)
+        JobCall::new(self, None).at(time)
     }
 
     pub fn delay(&self, span: Duration) -> JobCall<'_, V> {
-        JobCall::new(self).delay(span)
+        JobCall::new(self, None).delay(span)
     }
 
     pub fn group(&self, group: impl AsRef<str>) -> JobCall<'_, V> {
-        JobCall::new(self).group(group)
+        JobCall::new(self, None).group(group)
     }
 
     /// Runs `handler` on each job as it falls due, on threads the store starts
@@ -313,59 +339,92 @@ where
         }
     }
 
-    pub(crate) fn add_asked(&self, asked: Asked, value: &V) -> Result<bool> {
+    pub(crate) fn add_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<bool> {
         let id = asked.id().map(str::to_owned);
-        let call = asked
-            .prepare(value, self.jobs.next_id()?, self.jobs.now())
-            .map_err(|error| self.fail(id.as_deref(), error))?;
+        let fail = |error| self.fail(id.as_deref(), error);
+        let mut call = asked.prepare(value, 0, self.jobs.now()).map_err(fail)?;
         let (queue, at) = (Arc::clone(&self.state), call.at);
-        let added = self
-            .jobs
-            .file()
-            .write(call.value.len(), move |tx| write::add(tx, &queue, &call))
-            .map_err(|error| self.fail(id.as_deref(), error))?;
+        let added = match tx {
+            None => {
+                call.id = self.jobs.next_id().map_err(fail)?;
+                self.jobs.file().write(call.value.len(), move |c| write::add(c, &queue, &call))
+            }
+            Some(tx) => self.run_in(tx, |c| {
+                call.id = rows::reserve_ids(c, 1)?;
+                write::add(c, &queue, &call)
+            }),
+        }
+        .map_err(fail)?;
         if added {
-            self.state.alarm.lower(at);
-            self.state.watchers.changed();
+            self.wake(at, tx);
         }
         Ok(added)
     }
 
-    pub(crate) fn set_asked(&self, asked: Asked, value: &V) -> Result<()> {
+    pub(crate) fn set_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<()> {
         let id = asked.id().map(str::to_owned);
         let Some(key) = id.as_deref() else {
             return Err(self.fail(None, Error::invalid("a set needs an id, which names the job it sets")));
         };
-        let call =
-            asked.prepare(value, self.jobs.next_id()?, self.jobs.now()).map_err(|error| self.fail(Some(key), error))?;
+        let fail = |error| self.fail(Some(key), error);
+        let mut call = asked.prepare(value, 0, self.jobs.now()).map_err(fail)?;
         let queue = Arc::clone(&self.state);
-        let set = self
-            .jobs
-            .file()
-            .write(call.value.len(), move |tx| write::set(tx, &queue, &call))
-            .map_err(|error| self.fail(Some(key), error))?;
-        self.state.alarm.lower(set.due);
-        self.state.watchers.changed();
+        let set = match tx {
+            None => {
+                call.id = self.jobs.next_id().map_err(fail)?;
+                self.jobs.file().write(call.value.len(), move |c| write::set(c, &queue, &call))
+            }
+            Some(tx) => self.run_in(tx, |c| {
+                call.id = rows::reserve_ids(c, 1)?;
+                write::set(c, &queue, &call)
+            }),
+        }
+        .map_err(fail)?;
+        self.wake(set.due, tx);
         Ok(())
     }
 
-    pub(crate) fn update_asked(&self, asked: Asked, value: &V) -> Result<bool> {
+    pub(crate) fn update_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<bool> {
         let id = asked.id().map(str::to_owned);
         let Some(key) = id.as_deref() else {
             return Err(self.fail(None, Error::invalid("an update needs an id, which names the job it changes")));
         };
-        let call = asked.prepare(value, 0, self.jobs.now()).map_err(|error| self.fail(Some(key), error))?;
+        let fail = |error| self.fail(Some(key), error);
+        let call = asked.prepare(value, 0, self.jobs.now()).map_err(fail)?;
         let queue = Arc::clone(&self.state);
-        let due = self
-            .jobs
-            .file()
-            .write(call.value.len(), move |tx| write::update(tx, &queue, &call))
-            .map_err(|error| self.fail(Some(key), error))?;
+        let due = match tx {
+            None => self.jobs.file().write(call.value.len(), move |c| write::update(c, &queue, &call)),
+            Some(tx) => self.run_in(tx, |c| write::update(c, &queue, &call)),
+        }
+        .map_err(fail)?;
         if let Some(due) = due {
-            self.state.alarm.lower(due);
-            self.state.watchers.changed();
+            self.wake(due, tx);
         }
         Ok(due.is_some())
+    }
+
+    /// Runs a write of the queue in a savepoint of `tx`, once the queue is
+    /// kept in the transaction's file. Its ids come from the transaction too,
+    /// as one more reserved: the block the process holds is reserved by a
+    /// write of its own, which would wait for the writer `tx` holds.
+    pub(crate) fn run_in<T>(&self, tx: &Transaction<'_>, work: impl FnOnce(&SqlTx<'_>) -> Result<T>) -> Result<T> {
+        tx.takes(self.jobs.file(), self.jobs.place())?;
+        tx.call(work)
+    }
+
+    /// Wakes the queue's workers and watchers for a job due at `at`, at once,
+    /// or once the transaction it was written in ends: a worker woken before
+    /// the commit would not find the job, and sleep past it.
+    fn wake(&self, at: i64, tx: Option<&Transaction<'_>>) {
+        let state = Arc::clone(&self.state);
+        let wake = move |_committed: bool| {
+            state.alarm.lower(at);
+            state.watchers.changed();
+        };
+        match tx {
+            None => wake(true),
+            Some(tx) => tx.after(wake),
+        }
     }
 
     /// Names the queue and the id a call failed on.

@@ -10,7 +10,17 @@ import { join } from 'node:path'
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { download } from './connection.ts'
 import { errorOf, InvalidError } from './errors.ts'
-import { checkName, handleOn } from './handles.ts'
+import { checkName, type Home, handleOn, type Open, type Via } from './handles.ts'
+import {
+	openQueue,
+	type Queue,
+	type QueueOptions,
+	queueParts,
+	queueVia,
+	type TxQueue,
+	type Worker,
+} from './jobs.ts'
+import { Bucket, type BucketOptions, bucketOpen, partsOf, type Values, valuesOf } from './kv.ts'
 import { Table, type TableOptions } from './query.ts'
 import type { StandardSchemaV1 } from './schema.ts'
 import type { Stream } from './session.ts'
@@ -459,13 +469,14 @@ async function migrationFiles(given: Migrations): Promise<{ name: string; sql: s
 /** Opens a database by its name, its migrations applied and checked before it resolves. */
 export async function openDatabase(
 	link: Link,
+	workers: Set<Worker>,
 	name: string,
 	options: DatabaseOptions = {},
 ): Promise<Database> {
 	checkName(name, 'database')
 	const migrations =
 		options.migrations === undefined ? undefined : await migrationFiles(options.migrations)
-	const db = new Database(link, name, SqlOpen.encode({ name, migrations }))
+	const db = new Database(link, workers, name, SqlOpen.encode({ name, migrations }))
 	await link.run('read', connection => db.handle(connection))
 	return db
 }
@@ -542,15 +553,19 @@ async function scalar<T>(runner: Runner, statement: Sql): Promise<T> {
  * what a write changed. A write with `returning` goes through a read's verb
  * and runs on the writer, its rows given once it is durable.
  */
-export class Database implements Runner {
+export class Database implements Runner, Home {
 	readonly name: string
 	readonly describe: string
 	readonly #link: Link
 	readonly #open: Uint8Array
+	readonly #workers: Set<Worker>
+	/** the buckets and queues kept in the file, by their open: a transaction opens them first */
+	readonly #guests = new Map<string, { method: number; open: Open }>()
 
 	/** Databases come from `store.database`. */
-	constructor(link: Link, name: string, open: Uint8Array) {
+	constructor(link: Link, workers: Set<Worker>, name: string, open: Uint8Array) {
 		this.#link = link
+		this.#workers = workers
 		this.name = name
 		this.describe = `sql ${name}`
 		this.#open = open
@@ -558,6 +573,52 @@ export class Database implements Runner {
 
 	handle(connection: Connection): Promise<number> {
 		return handleOn(connection, methods['sql.open'], this.#open)
+	}
+
+	keep(
+		method: number,
+		bytes: Uint8Array,
+		make: (connection: Connection) => Promise<Uint8Array>,
+	): Open {
+		const key = `${method}:${Buffer.from(bytes).toString('base64')}`
+		const kept = this.#guests.get(key)
+		if (kept !== undefined) {
+			return kept.open
+		}
+		this.#guests.set(key, { method, open: make })
+		return make
+	}
+
+	/**
+	 * A bucket of values by key kept in this database's file, beside its
+	 * tables, as `store.bucket` keeps one in kv.db: the same calls, and its
+	 * writes commit with the rows in `db.tx`, through `tx.with(bucket)`.
+	 *
+	 *     const sessions = db.bucket<Session>('sessions', { idle: '30d' })
+	 */
+	bucket<T = unknown>(name: string, options?: BucketOptions): Bucket<T> {
+		const bytes = bucketOpen(name, options)
+		const open = this.keep(methods['kv.bucket.open'], bytes, async connection =>
+			bucketOpen(name, options, await this.handle(connection)),
+		)
+		return new Bucket<T>(this.#link, name, open, valuesOf(options?.type) as Values<T>, [], this)
+	}
+
+	/**
+	 * A queue of jobs kept in this database's file, as `store.queue` keeps one
+	 * in jobs.db: the same calls and workers, and its jobs commit with the
+	 * rows in `db.tx`, through `tx.with(queue)`. It shares the database's
+	 * writer, which is the point and its cost.
+	 *
+	 *     const emails = db.queue<Email>('emails', { attempts: 5 })
+	 */
+	queue<S extends StandardSchemaV1>(
+		name: string,
+		options: QueueOptions & { schema: S },
+	): Queue<StandardSchemaV1.InferOutput<S>>
+	queue<T = unknown>(name: string, options?: QueueOptions): Queue<T>
+	queue(name: string, options: QueueOptions & { schema?: StandardSchemaV1 } = {}): Queue<unknown> {
+		return openQueue(this.#link, this.#workers, name, options, this)
 	}
 
 	/** Every row a statement gives: `db.all<Note>\`select * from notes where author_id = ${id}\`` */
@@ -665,13 +726,14 @@ export class Database implements Runner {
 	async tx<T>(fn: (tx: SqlTx) => T | Promise<T>): Promise<T> {
 		const connection = await this.#link.connection()
 		const handle = await this.handle(connection)
+		const guests = await this.#openGuests(connection)
 		const stream = await connection.session.open(
 			methods['sql.tx'],
 			SqlTxOpen.encode({ handle }),
 			false,
 		)
 		await stream.next()
-		const tx = new SqlTx(stream, this.describe)
+		const tx = new SqlTx(stream, this, connection, guests)
 		let value: T
 		try {
 			value = await fn(tx)
@@ -681,6 +743,27 @@ export class Database implements Runner {
 		}
 		await tx.end(true)
 		return value
+	}
+
+	/**
+	 * Opens on `connection` the buckets and queues kept in the file, before a
+	 * transaction holds its writer: a first open writes the file, and would
+	 * wait for the writer the transaction holds. One that fails is told when
+	 * the transaction takes it in.
+	 */
+	async #openGuests(connection: Connection): Promise<Guests> {
+		const guests: Guests = new Map()
+		const kept = [...this.#guests.values()]
+		const settled = await Promise.allSettled(
+			kept.map(guest => handleOn(connection, guest.method, guest.open)),
+		)
+		settled.forEach((outcome, at) => {
+			const open = kept[at]?.open
+			if (open !== undefined) {
+				guests.set(open, outcome.status === 'fulfilled' ? undefined : outcome.reason)
+			}
+		})
+		return guests
 	}
 
 	async rows(statement: Sql, want: Want): Promise<Answered> {
@@ -710,6 +793,9 @@ export class Database implements Runner {
 	}
 }
 
+/** The buckets and queues a transaction opened before it began, each with why its open failed, if it did. */
+type Guests = Map<Open, unknown>
+
 /**
  * A database's transaction, from `db.tx`: its reads see its writes, and a
  * call that fails leaves it as it was before the call. Its calls go one at a
@@ -718,12 +804,54 @@ export class Database implements Runner {
 export class SqlTx implements Runner {
 	readonly describe: string
 	readonly #stream: Stream
+	readonly #database: Database
+	readonly #connection: Connection
+	readonly #guests: Guests
+	readonly #via: Via
 	#last: Promise<unknown> = Promise.resolve()
 
 	/** Transactions come from `db.tx`. */
-	constructor(stream: Stream, describe: string) {
+	constructor(stream: Stream, database: Database, connection: Connection, guests: Guests) {
 		this.#stream = stream
-		this.describe = describe
+		this.#database = database
+		this.#connection = connection
+		this.#guests = guests
+		this.describe = database.describe
+		this.#via = {
+			call: async (openMethod, open, method, body) => {
+				const handle = await handleOn(this.#connection, openMethod, open)
+				return this.#nested(method, body(handle))
+			},
+		}
+	}
+
+	/**
+	 * A bucket or a queue opened from this database, inside the transaction:
+	 * what it writes commits with the rows or not at all, and what it reads
+	 * sees what the transaction wrote.
+	 *
+	 *     await db.tx(async tx => {
+	 *       const order = await tx.table<Order>('orders').insert({ user_id, total })
+	 *       await tx.with(emails).add({ order: order.id, to })
+	 *     })
+	 */
+	with<T>(bucket: Bucket<T>): Bucket<T>
+	with<T>(queue: Queue<T>): TxQueue<T>
+	with(handle: Bucket<unknown> | Queue<unknown>): Bucket<unknown> | TxQueue<unknown> {
+		const bucket = partsOf(handle)
+		if (bucket?.values !== undefined && bucket.openMethod === 'kv.bucket.open') {
+			this.#takes(bucket.home, bucket.open, `kv bucket ${bucket.name}`)
+			const { link, name, open, values, under, home } = bucket
+			return new Bucket(link, name, open, values, under, home, this.#via)
+		}
+		const queue = queueParts(handle)
+		if (queue !== undefined) {
+			this.#takes(queue.source.home, queue.source.open, `jobs queue ${queue.name}`)
+			return queueVia(queue, this.#via)
+		}
+		throw new InvalidError(
+			`${this.describe}: a transaction takes in a bucket or a queue opened from its database`,
+		)
 	}
 
 	async all<T = Row>(...statement: Statement): Promise<T[]> {
@@ -762,9 +890,43 @@ export class SqlTx implements Runner {
 		await this.#stream.next()
 	}
 
+	/**
+	 * Refuses a handle kept elsewhere, whose writes would not commit with the
+	 * rows, and one made after the transaction began, whose first open would
+	 * wait for the writer the transaction holds.
+	 */
+	#takes(home: Home | undefined, open: Open, what: string): void {
+		if (home !== this.#database) {
+			const kept = home === undefined ? 'the store' : home.describe
+			throw new InvalidError(
+				`${what}: kept in ${kept}, outside this transaction of ${this.describe}`,
+			)
+		}
+		if (!this.#guests.has(open)) {
+			throw new InvalidError(
+				`${this.describe}: ${what}: made after the transaction began; make it before db.tx, which opens it first`,
+			)
+		}
+		const failed = this.#guests.get(open)
+		if (failed !== undefined) {
+			throw failed
+		}
+	}
+
+	/** A call of kv or jobs in the transaction: its method and its request, and the method's answer. */
+	async #nested(method: number, body: Uint8Array): Promise<Uint8Array> {
+		const answer = await this.#send(SqlTxCall.encode({ want: 'call', method, body }))
+		return answer.body ?? new Uint8Array(0)
+	}
+
 	#call(statement: Sql, want: Want | 'exec') {
+		return this.#send(
+			SqlTxCall.encode({ text: statement.text, values: [...statement.values], want }),
+		)
+	}
+
+	#send(body: Uint8Array) {
 		const call = async () => {
-			const body = SqlTxCall.encode({ text: statement.text, values: [...statement.values], want })
 			await this.#stream.send(body, false)
 			const event = await this.#stream.next()
 			this.#stream.consumed(event.body.length)

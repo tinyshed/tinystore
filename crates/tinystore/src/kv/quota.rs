@@ -11,6 +11,7 @@ use super::path::Key;
 use super::scope::{Kind, Scope};
 use super::value::Raw;
 use crate::clock::{from_unix_millis, millis};
+use crate::engine::Home;
 use crate::sqlite::Tx;
 use crate::{Error, Result, Store};
 
@@ -48,7 +49,7 @@ impl QuotaBuilder {
     pub fn open(self) -> Result<Quota> {
         check_windows(&self.windows).map_err(|error| error.within(format!("kv quota {}", self.name)))?;
         let least = self.windows.iter().map(|window| window.limit).min().unwrap_or(0);
-        let scope = Scope::open(&self.store, &self.name, Kind::Quota)?;
+        let scope = Scope::open(&Home::Store(self.store.clone()), &self.name, Kind::Quota)?;
         Ok(Quota { scope, windows: self.windows.into(), least })
     }
 }

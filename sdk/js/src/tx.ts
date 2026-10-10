@@ -93,6 +93,11 @@ export class Tx {
 				`kv ${parts.name}: a handle of another store, in a transaction of this one`,
 			)
 		}
+		if (parts.home !== undefined) {
+			throw new InvalidError(
+				`${parts.home.describe}: kv bucket ${parts.name}: kept in the database's file, outside this transaction of kv.db: take it in with db.tx`,
+			)
+		}
 		if (parts.values === undefined) {
 			return new TxCounters(this, parts)
 		}
@@ -343,7 +348,11 @@ function placeOf(parts: Parts, key: string): string {
 	return JSON.stringify([handleOf(parts), parts.under, key])
 }
 
+/** A handle's place as text: its open's bytes, which a store's own handle has. */
 function handleOf(parts: Parts): string {
+	if (typeof parts.open === 'function') {
+		throw new InvalidError(`kv ${parts.name}: a handle of a database, in a transaction of kv.db`)
+	}
 	return `${parts.openMethod} ${Buffer.from(parts.open).toString('base64')}`
 }
 

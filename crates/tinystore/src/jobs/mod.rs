@@ -39,6 +39,7 @@ mod run;
 mod schedule;
 mod state;
 mod steps;
+mod tx;
 mod values;
 mod watch;
 mod work;
@@ -51,6 +52,7 @@ pub use queue::{All, Claimed, Queue, QueueBuilder, Workers};
 pub use read::{Filter, Job, LastRun, PAGE_JOBS, Page, State};
 pub use run::{Outcome, Run, When};
 pub use schedule::{Schedule, ScheduleBuilder};
+pub use tx::TxQueue;
 pub use watch::Watch;
 pub use work::Worker;
 

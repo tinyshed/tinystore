@@ -42,7 +42,7 @@ pub use once::{Once, OnceBuilder};
 pub use path::Key;
 pub use quota::{Quota, QuotaBuilder};
 pub use rate_limit::{RateLimit, RateLimitBuilder};
-pub use tx::{Tx, TxBucket, TxCounters, TxHandle};
+pub use tx::{Tx, TxBucket, TxCounters};
 pub use value::{Bytes, Value};
 
 pub(crate) use batch::{Batch, Outcome, Place};
@@ -50,7 +50,10 @@ pub(crate) use bucket::{Put, Stamp, WriteOptions};
 pub(crate) use cells::Cell;
 pub(crate) use once::{Hand, Handed, hand, rows as once_rows};
 pub(crate) use path::MAX_PATH as MAX_KEY;
+// The wire's calls of a bucket inside a database's transaction.
 pub(crate) use value::Raw;
+#[cfg(feature = "sql")]
+pub(crate) use {bucket::clear_work, tx::call_on_branch, tx::call_on_key};
 
 use crate::{Result, Store};
 

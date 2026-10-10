@@ -33,6 +33,7 @@ message jobs.QueueOpen {
   7 dedupe: duration?             # how long a done job's id stays taken
   8 keep: duration?               # how long a failed job stays: a week when absent
   9 maxWaiting: uint?             # ten million when absent
+  10 database: uint?              # a database's handle: the queue lives in its file; jobs.db when absent
 }
 
 # Opens a schedule: one repeating job the code owns, under its name, whose

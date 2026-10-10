@@ -237,6 +237,9 @@
             }
           }
         },
+        "database": {
+          "uint": "1007"
+        },
         "dedupe": {
           "uint": "1500"
         },
@@ -263,7 +266,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8901a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b",
+      "hex": "8a01a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b0acd03ef",
       "message": "jobs.QueueOpen",
       "name": "jobs.QueueOpen with every field"
     },
@@ -662,6 +665,9 @@
     },
     {
       "fields": {
+        "database": {
+          "uint": "407"
+        },
         "idle": {
           "uint": "1500"
         },
@@ -672,7 +678,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8301a46e616d6502cd05dc03cd05dc",
+      "hex": "8401a46e616d6502cd05dc03cd05dc04cd0197",
       "message": "kv.BucketOpen",
       "name": "kv.BucketOpen with every field"
     },
@@ -1611,8 +1617,14 @@
     },
     {
       "fields": {
+        "body": {
+          "bin": "01ff"
+        },
         "commit": {
           "bool": true
+        },
+        "method": {
+          "uint": "507"
         },
         "text": {
           "str": "text"
@@ -1628,7 +1640,7 @@
           "str": "want"
         }
       },
-      "hex": "8401a4746578740291a676616c75657303a477616e7404c3",
+      "hex": "8601a4746578740291a676616c75657303a477616e7404c305cd01fb06c40201ff",
       "message": "sql.TxCall",
       "name": "sql.TxCall with every field"
     },
@@ -1640,6 +1652,9 @@
     },
     {
       "fields": {
+        "body": {
+          "bin": "01ff"
+        },
         "done": {
           "fields": {
             "changes": {
@@ -1690,7 +1705,7 @@
           }
         }
       },
-      "hex": "8301820191a7636f6c756d6e73029191a4726f77730282016b02cf0020000000000001038301a4636f646502a76d6573736167650381a161a477686174",
+      "hex": "8401820191a7636f6c756d6e73029191a4726f77730282016b02cf0020000000000001038301a4636f646502a76d6573736167650381a161a47768617404c40201ff",
       "message": "sql.TxAnswer",
       "name": "sql.TxAnswer with every field"
     },

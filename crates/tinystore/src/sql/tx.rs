@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 
@@ -7,28 +7,22 @@ use super::engine::Base;
 use super::rows::Rows;
 use super::run::{self, Wanted};
 use super::statement::Sql;
-use crate::sqlite::{execute, sql_error};
-use crate::{Error, Result};
+use crate::{Result, Transaction, TxHandle};
 
 /// How long a transaction holds the writer at most: past it, it rolls back.
 pub(crate) const BOUND: Duration = Duration::from_secs(5);
-
-const SAVEPOINT: &str = "savepoint call";
-const RELEASE: &str = "release call";
-const ROLLBACK_TO: &str = "rollback to call";
 
 /// A database's transaction, from [`Database::tx`](super::Database::tx): its
 /// reads see its writes, and a call that fails leaves it as it was before the
 /// call.
 pub struct Tx<'t> {
-    raw: &'t crate::sqlite::Tx<'t>,
+    transaction: &'t Transaction<'t>,
     base: &'t Base,
-    started: SystemTime,
 }
 
 impl<'t> Tx<'t> {
-    pub(crate) fn new(raw: &'t crate::sqlite::Tx<'t>, base: &'t Base, started: SystemTime) -> Self {
-        Tx { raw, base, started }
+    pub(crate) fn new(transaction: &'t Transaction<'t>, base: &'t Base) -> Self {
+        Tx { transaction, base }
     }
 
     pub fn all<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Vec<T>> {
@@ -49,7 +43,29 @@ impl<'t> Tx<'t> {
 
     pub fn exec(&self, statement: impl Into<Sql>) -> Result<Done> {
         let statement = statement.into();
-        self.call(|| run::exec(self.raw, &statement)).map_err(|error| self.failed(&statement, error))
+        self.transaction.call(|raw| run::exec(raw, &statement)).map_err(|error| self.failed(&statement, error))
+    }
+
+    /// The calls of a bucket or a queue opened from this database, inside the
+    /// transaction: what they write commits with the rows or not at all.
+    ///
+    /// ```no_run
+    /// # #[derive(serde::Serialize, serde::Deserialize)]
+    /// # struct Email { order: i64 }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let db = store.database("app").open()?;
+    /// let emails = db.queue::<Email>("emails").open()?;
+    /// db.tx(|tx| -> tinystore::Result<()> {
+    ///     let order: i64 = tx.scalar(tinystore::sql!("insert into orders (total) values (?) returning id", 70))?;
+    ///     tx.with(&emails).add(&Email { order })?; // sent only if the order is there
+    ///     Ok(())
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with<'h, H: TxHandle>(&'h self, handle: &'h H) -> H::InTx<'h> {
+        handle.in_tx(self.transaction)
     }
 
     /// A statement's rows as SQLite keeps them, for the wire.
@@ -57,39 +73,16 @@ impl<'t> Tx<'t> {
         self.rows(statement, wanted).map_err(|error| self.failed(statement, error))
     }
 
+    /// The transaction itself, for the wire's calls of other engines in it.
+    pub(crate) fn transaction(&self) -> &'t Transaction<'t> {
+        self.transaction
+    }
+
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
-        self.call(|| run::write(self.raw, statement, wanted))
+        self.transaction.call(|raw| run::write(raw, statement, wanted))
     }
 
-    /// Runs one call in a savepoint of the transaction, rolled back when the
-    /// call fails, once the transaction is still within its bound.
-    fn call<T>(&self, work: impl FnOnce() -> Result<T>) -> Result<T> {
-        self.within_bound()?;
-        let what = "a call: its savepoint";
-        execute(self.raw, SAVEPOINT).map_err(|error| sql_error(what, error))?;
-        let outcome = work();
-        let ended = match outcome {
-            Ok(_) => execute(self.raw, RELEASE),
-            Err(_) => execute(self.raw, ROLLBACK_TO).and_then(|()| execute(self.raw, RELEASE)),
-        };
-        ended.map_err(|error| sql_error(what, error))?;
-        outcome
-    }
-
-    /// Fails once the transaction has held the writer past its bound, which
-    /// then rolls back.
-    pub(crate) fn within_bound(&self) -> Result<()> {
-        let held = self.base.now().duration_since(self.started).unwrap_or_default();
-        if held <= BOUND {
-            return Ok(());
-        }
-        Err(Error::limit(format!(
-            "{}: a transaction held the writer {held:?}, past its {BOUND:?}, and rolls back",
-            self.base.describe()
-        )))
-    }
-
-    fn failed(&self, statement: &Sql, error: Error) -> Error {
+    fn failed(&self, statement: &Sql, error: crate::Error) -> crate::Error {
         error.within(statement.describe()).within(self.base.describe())
     }
 }

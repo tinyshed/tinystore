@@ -9,6 +9,7 @@ message kv.BucketOpen {
   1 name: str                 # [a-z0-9][a-z0-9_-]{0,63}
   2 ttl: duration?
   3 idle: duration?
+  4 database: uint?           # a database's handle: the bucket lives in its file; kv.db when absent
 }
 
 # A call on one key of a handle's branch.

@@ -19,6 +19,10 @@ mod workers;
 pub(crate) use session::Session;
 pub use session::Wake;
 
+/// The file of a database a connection opened, by its handle: where a bucket
+/// or a queue opened with that handle is kept.
+pub(crate) type Lent<'a> = &'a dyn Fn(u64) -> Result<std::sync::Arc<crate::engine::SharedFile>, protocol::Failure>;
+
 /// How a session runs a method: a point read at once on the caller's thread,
 /// a write queued for its group commit with no thread waiting on it, a run of
 /// once handed over, a worker whose jobs and answers are the stream's items, a

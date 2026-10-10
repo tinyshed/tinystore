@@ -5,7 +5,15 @@
 
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { CorruptError, InvalidError } from './errors.ts'
-import { checkName, handleOn, ownerText } from './handles.ts'
+import {
+	checkName,
+	type Home,
+	handleOn,
+	type Open,
+	ownerText,
+	type Via,
+	viaLink,
+} from './handles.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf, type Written } from './wire/codec.ts'
 import {
@@ -89,9 +97,11 @@ export interface Values<T> {
 export interface Parts {
 	readonly link: Link
 	readonly name: string
-	readonly open: Uint8Array
+	readonly open: Open
 	readonly openMethod: Method
 	readonly under: readonly string[]
+	/** the database whose file keeps the handle; the store's own when undefined */
+	readonly home?: Home | undefined
 }
 
 // a handle's parts, kept out of its public shape, for store.tx
@@ -105,31 +115,41 @@ export function partsOf(handle: object): (Parts & { values?: Values<unknown> }) 
 export class Bucket<T> {
 	readonly name: string
 	readonly #link: Link
-	readonly #open: Uint8Array
+	readonly #open: Open
 	readonly #values: Values<T>
 	readonly #under: readonly string[]
+	readonly #home: Home | undefined
+	readonly #via: Via
 
-	/** Buckets come from `store.bucket` and their `under`. */
+	/**
+	 * Buckets come from `store.bucket`, `db.bucket` and their `under`; inside
+	 * a database's transaction, from `tx.with(bucket)`, whose calls go through
+	 * the transaction.
+	 */
 	constructor(
 		link: Link,
 		name: string,
-		open: Uint8Array,
+		open: Open,
 		values: Values<T>,
 		under: readonly string[],
+		home?: Home,
+		via?: Via,
 	) {
 		this.#link = link
 		this.name = name
 		this.#open = open
 		this.#values = values
 		this.#under = under
-		const own = { link, name, open, openMethod: 'kv.bucket.open', under } as const
+		this.#home = home
+		this.#via = via ?? viaLink(link)
+		const own = { link, name, open, openMethod: 'kv.bucket.open', under, home } as const
 		parts.set(this, { ...own, values: values as Values<unknown> })
 	}
 
 	/** The branch the owners name below this one: whose keys these are. */
 	under(...owners: Key[]): Bucket<T> {
 		const under = [...this.#under, ...owners.map(keyText)]
-		return new Bucket(this.#link, this.name, this.#open, this.#values, under)
+		return new Bucket(this.#link, this.name, this.#open, this.#values, under, this.#home, this.#via)
 	}
 
 	/** The key's value, undefined when it holds none. */
@@ -207,25 +227,27 @@ export class Bucket<T> {
 
 	/** Removes this branch's keys and every branch under it, at once however many. */
 	async clear(): Promise<void> {
-		await this.#link.run('write', async connection => {
-			const handle = await handleOn(connection, methods['kv.bucket.open'], this.#open)
-			const branch = KvBranch.encode({ handle, under: underField(this.#under) })
-			await connection.session.call(methods['kv.clear'], branch)
-		})
+		const under = underField(this.#under)
+		await this.#via.call(
+			methods['kv.bucket.open'],
+			this.#open,
+			methods['kv.clear'],
+			handle => KvBranch.encode({ handle, under }),
+			'write',
+		)
 	}
 
 	/** One page of this branch's own keys, in the byte order of their text: `"10"` before `"9"`. */
 	async list(options?: { limit?: number | undefined; after?: Key | undefined }): Promise<Page<T>> {
-		const page = await this.#link.run('read', async connection => {
-			const handle = await handleOn(connection, methods['kv.bucket.open'], this.#open)
-			const list = KvList.encode({
-				handle,
-				under: underField(this.#under),
-				after: options?.after,
-				limit: options?.limit,
-			})
-			return KvPage.decode(await connection.session.call(methods['kv.list'], list))
-		})
+		const under = underField(this.#under)
+		const body = await this.#via.call(
+			methods['kv.bucket.open'],
+			this.#open,
+			methods['kv.list'],
+			handle => KvList.encode({ handle, under, after: options?.after, limit: options?.limit }),
+			'read',
+		)
+		const page = KvPage.decode(body)
 		const entries = (page.entries ?? []).map(found => entryOf(found.key ?? '', found, this.#values))
 		return { entries, next: page.next === undefined ? undefined : keyText(page.next) }
 	}
@@ -248,13 +270,12 @@ export class Bucket<T> {
 	}
 
 	async #call(method: Method, fields: CallFields, idempotence: Idempotence): Promise<Uint8Array> {
-		return callOn(
-			this.#link,
-			'kv.bucket.open',
+		const under = underField(this.#under)
+		return this.#via.call(
+			methods['kv.bucket.open'],
 			this.#open,
-			this.#under,
-			method,
-			fields,
+			methods[method],
+			handle => KvCall.encode({ ...fields, handle, under }),
 			idempotence,
 		)
 	}
@@ -323,8 +344,15 @@ export class Counters {
 	}
 }
 
-/** What a bucket's open sends, checked before anything leaves. */
-export function bucketOpen(name: string, options: BucketOptions = {}): Uint8Array {
+/**
+ * What a bucket's open sends, checked before anything leaves; `database` is
+ * the handle of the database whose file keeps it.
+ */
+export function bucketOpen(
+	name: string,
+	options: BucketOptions = {},
+	database?: number,
+): Uint8Array {
 	checkName(name, 'bucket')
 	if (options.ttl !== undefined && options.idle !== undefined) {
 		throw new InvalidError(`kv bucket ${name}: ttl and idle are one or the other`)
@@ -333,6 +361,7 @@ export function bucketOpen(name: string, options: BucketOptions = {}): Uint8Arra
 		name,
 		ttl: options.ttl === undefined ? undefined : ms(options.ttl),
 		idle: options.idle === undefined ? undefined : ms(options.idle),
+		database,
 	})
 }
 
@@ -351,7 +380,7 @@ type CallFields = Omit<Written<typeof KvCall.fields>, 'handle' | 'under'>
 export function callOn(
 	link: Link,
 	openMethod: Method,
-	open: Uint8Array,
+	open: Open,
 	under: readonly string[],
 	method: Method,
 	fields: CallFields,

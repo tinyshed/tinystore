@@ -256,7 +256,7 @@ export class Store implements AsyncDisposable {
 	 *     const db = await store.database('app', { migrations: `${import.meta.dir}/migrations` })
 	 */
 	database(name: string, options?: DatabaseOptions): Promise<Database> {
-		return openDatabase(this.#link, name, options)
+		return openDatabase(this.#link, this.#workers, name, options)
 	}
 
 	/**

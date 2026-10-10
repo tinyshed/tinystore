@@ -243,6 +243,11 @@ module defines.
 - a page reads after the last row of the one before, and a cursor only its own query — `a_page_reads_after_the_last_row_of_the_one_before_and_only_its_own_query` in `sql::query_tests`; `a page reads after the last row of the one before, and only its own query` in `sdk/js/test/sql.test.ts`
 - a join reads its first table's columns, a query in a piece is a subquery — `a_join_reads_its_first_table_and_a_table_inside_a_transaction_rolls_back_with_it` in `sql::query_tests`; `a join reads its first table, a query in a piece is a subquery, and a plan explains it` in `sdk/js/test/sql.test.ts`
 - a table inside a transaction writes with it and rolls back with it — `a table inside a transaction writes with it, and rolls back with it` in `sdk/js/test/sql.test.ts`
+- a bucket and a queue opened from a database live in its file, each engine's migrations under a history of its own — `a_bucket_and_a_queue_opened_from_a_database_live_in_its_file` in `inside`
+- rows, keys and jobs commit together in a database's transaction, or roll back together, a cancel among them — `rows_keys_and_jobs_commit_together_or_not_at_all`, `a_cancel_that_rolls_back_leaves_the_job` in `inside`; `a bucket and a queue opened from the database commit with its rows, or roll back with them` in `sdk/js/test/sql.test.ts`
+- a worker finds a job a transaction added once the transaction commits, and not before — `a_worker_runs_a_job_added_in_a_transaction_once_it_commits` in `inside`; `a worker runs a job its transaction added, once the transaction commits` in `sdk/js/test/sql.test.ts`
+- a transaction refuses a handle kept in another file, and an SDK one made after it began — `a_transaction_refuses_a_handle_kept_in_another_file` in `inside`; `a transaction refuses a handle kept elsewhere, or one made after it began` in `sdk/js/test/sql.test.ts`
+- the store closes what a database keeps before the database's file — `the_store_closes_what_a_database_keeps_before_its_file` in `inside`
 
 ## SQLite under every engine
 
@@ -442,6 +447,7 @@ module defines.
 - rows past one message come in parts within the client's credit — `rows_past_one_message_come_in_parts_within_the_clients_credit` in `wire::sql`; `each reads a query past one message a part at a time` in `sdk/js/test/sql.test.ts`
 - a transaction over the wire holds its calls until its last DATA commits or rolls back, a call that fails leaving it open — `a_transaction_holds_its_calls_until_its_last_data_commits_or_rolls_back` in `wire::sql`
 - a transaction whose client stalls or cancels is rolled back by the server, which frees the writer — `a_transaction_whose_client_stalls_or_cancels_is_rolled_back_by_the_server` in `wire::sql`
+- a bucket and a queue opened with a database's handle write inside its transactions, a call of theirs on the transaction's stream — `a_bucket_and_a_queue_opened_from_a_database_write_inside_its_transactions` in `wire::sql`
 - a job's value travels as the JSON it was, and one that is not JSON is refused before it is kept — `a_client_adds_finds_and_cancels_jobs_by_their_ids`, `a_value_that_is_not_json_is_refused_before_it_is_kept` in `wire::jobs`
 - a remote worker's progress shows while its job runs, and one past 4 KiB fails its stream — `what_a_handler_reports_shows_while_its_job_runs` in `wire::jobs`
 - a schedule opened over the wire keeps its one job, which no add takes — `a_schedule_opened_over_the_wire_keeps_its_one_job` in `wire::jobs`

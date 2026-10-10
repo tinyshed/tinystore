@@ -8,7 +8,7 @@ use super::policy::Policy;
 use super::rows;
 use super::state::{Kind, QueueState};
 use super::work::Running;
-use crate::engine::{Claim, Engine, Host};
+use crate::engine::{Claim, Engine, Home, Host};
 use crate::sqlite::{Config, File, Migration};
 use crate::{Clock, Error, Result, Store, unix_millis};
 
@@ -22,10 +22,13 @@ const MAINTENANCE: Duration = Duration::from_secs(60);
 /// Job ids reserved in one write of the meta row.
 const ID_BLOCK: i64 = 1000;
 
-/// The jobs engine of a store: jobs.db, the queues this process opened, and
-/// the workers running their handlers. Every handle of the store shares it.
+/// jobs in one file: jobs.db, or a database's file; the queues this process
+/// opened there, and the workers running their handlers. Every handle opened
+/// from the store, or from the database, shares it.
 pub(crate) struct Jobs {
-    file: File,
+    file: Arc<File>,
+    /// The engine whose file jobs are kept in, when it is not jobs.db: `sql app`.
+    lent_by: Option<String>,
     clock: Arc<dyn Clock>,
     /// The next id to give and the end of the block reserved.
     ids: Mutex<(i64, i64)>,
@@ -35,31 +38,41 @@ pub(crate) struct Jobs {
     closed: AtomicBool,
     /// One maintenance at a time.
     maintaining: Mutex<()>,
-    _claim: Claim,
+    _claim: Option<Claim>,
 }
 
 impl Jobs {
-    /// The store's jobs engine, opened by the first queue.
+    /// The store's jobs engine, in jobs.db, opened by the first queue.
     pub(crate) fn of(store: &Store) -> Result<Arc<Jobs>> {
         store.engine(|store| {
-            let jobs = Arc::new(Jobs::open(store)?);
-            let weak = Arc::downgrade(&jobs);
-            store.every("jobs: maintenance", MAINTENANCE, move || {
-                weak.upgrade().map_or(Ok(()), |jobs| maintain::run(&jobs).map(drop))
-            })?;
-            Ok(jobs)
+            let claim = store.claim("jobs.db")?;
+            let file = File::open(claim.path(), Config::default())?;
+            Jobs::start(store, Arc::new(file), None, Some(claim))
         })
     }
 
-    /// Opens jobs.db and gives back the leases a process that died held,
-    /// counting their attempts.
-    fn open(store: &Store) -> Result<Jobs> {
-        let claim = store.claim("jobs.db")?;
-        let file = File::open(claim.path(), Config::default())?;
+    /// The jobs engine a queue opens in: the store's, or the one kept in the
+    /// file of the database it was opened from.
+    pub(crate) fn at(home: &Home) -> Result<Arc<Jobs>> {
+        match home {
+            Home::Store(store) => Jobs::of(store),
+            Home::Shared(shared) => shared.engine(|store| {
+                let lent_by = Some(shared.owner().to_owned());
+                Jobs::start(store, Arc::clone(shared.file()), lent_by, None)
+            }),
+        }
+    }
+
+    /// Makes the tables of jobs in `file` when it has none, gives back the
+    /// leases a process that died held, counting their attempts, and starts
+    /// maintenance on the store's background thread.
+    fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Jobs>> {
         file.migrate("jobs", MIGRATIONS)?;
         file.transaction(|tx| rows::end_dead_leases(tx))?;
-        Ok(Jobs {
+        let task = lent_by.as_ref().map_or_else(|| "jobs".to_owned(), |owner| format!("jobs in {owner}"));
+        let jobs = Arc::new(Jobs {
             file,
+            lent_by,
             clock: store.clock(),
             ids: Mutex::new((0, 0)),
             queues: Mutex::new(HashMap::new()),
@@ -67,11 +80,21 @@ impl Jobs {
             closed: AtomicBool::new(false),
             maintaining: Mutex::new(()),
             _claim: claim,
-        })
+        });
+        let weak = Arc::downgrade(&jobs);
+        store.every(&format!("{task}: maintenance"), MAINTENANCE, move || {
+            weak.upgrade().map_or(Ok(()), |jobs| maintain::run(&jobs).map(drop))
+        })?;
+        Ok(jobs)
     }
 
     pub(crate) fn file(&self) -> &File {
         &self.file
+    }
+
+    /// The file as an error names it: `jobs.db`, or `sql app`.
+    pub(crate) fn place(&self) -> &str {
+        self.lent_by.as_deref().unwrap_or("jobs.db")
     }
 
     pub(crate) fn now(&self) -> i64 {
@@ -99,7 +122,7 @@ impl Jobs {
     /// A second open in this process takes the same kind and options, or is
     /// `invalid`; the first gives back the jobs another group bound parked.
     pub(crate) fn queue(&self, name: &str, kind: Kind, policy: Policy) -> Result<Arc<QueueState>> {
-        let describe = || format!("jobs {} {name}", kind.as_str());
+        let describe = || QueueState::described(self.lent_by.as_deref(), kind, name);
         check_name(name).map_err(|error| error.within(describe()))?;
         policy.check().map_err(|error| error.within(describe()))?;
         let mut queues = lock(&self.queues);
@@ -124,7 +147,7 @@ impl Jobs {
         if stored != kind.as_str() {
             return Err(Error::invalid(format!("the name is a {stored}")).within(describe()));
         }
-        let state = Arc::new(QueueState::new(id, name, kind, policy));
+        let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
         queues.insert(name.to_owned(), Arc::clone(&state));
         Ok(state)
     }
@@ -162,7 +185,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Engine for Jobs {
     /// Stops every worker, which takes no job more and waits for its handlers
-    /// under way, then closes jobs.db.
+    /// under way, then closes jobs.db. A file another engine lends is that
+    /// engine's to close.
     fn close(&self) -> Result<()> {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
@@ -171,7 +195,7 @@ impl Engine for Jobs {
         for worker in workers {
             worker.stop();
         }
-        let closed = self.file.close();
+        let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
         // a watcher waiting for a change reads again, and hears the store closed
         for queue in self.open_queues() {
             queue.watchers.changed();

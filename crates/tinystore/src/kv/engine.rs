@@ -8,7 +8,7 @@ use super::cells;
 use super::once::Runs;
 use super::renewals::Renewals;
 use super::scope::Kind;
-use crate::engine::{Claim, Engine, Host};
+use crate::engine::{Claim, Engine, Home, Host};
 use crate::sqlite::{Config, File, Migration, Tx};
 use crate::store::WeakStore;
 use crate::{Clock, Error, Result, Store, unix_millis};
@@ -26,10 +26,13 @@ const BATCHES: usize = 10;
 const MAINTENANCE: Duration = Duration::from_secs(60);
 const RENEWALS: Duration = Duration::from_secs(1);
 
-/// The kv engine of a store: kv.db, its one writer, and the revision every
-/// version comes from. Every handle of the store shares it.
+/// kv in one file: kv.db, its one writer, and the revision every version
+/// comes from, which every handle of the store shares; or a database's file,
+/// which every handle opened from the database shares.
 pub(crate) struct Kv {
-    file: File,
+    file: Arc<File>,
+    /// The engine whose file kv is kept in, when it is not kv.db: `sql app`.
+    lent_by: Option<String>,
     clock: Arc<dyn Clock>,
     /// Weak, so that the application's last handle on the store closes it.
     store: WeakStore,
@@ -40,7 +43,7 @@ pub(crate) struct Kv {
     counting: Mutex<HashMap<i64, Option<Arc<Buffer>>>>,
     renewals: Renewals,
     runs: Runs,
-    _claim: Claim,
+    _claim: Option<Claim>,
 }
 
 /// What one maintenance pass did.
@@ -57,25 +60,36 @@ pub struct Maintenance {
 }
 
 impl Kv {
-    /// The store's kv engine, opened by the first handle.
+    /// The store's kv engine, in kv.db, opened by the first handle.
     pub(crate) fn of(store: &Store) -> Result<Arc<Kv>> {
         store.engine(|store| {
-            let kv = Arc::new(Kv::open(store)?);
-            let weak = Arc::downgrade(&kv);
-            store.every("kv: maintenance", MAINTENANCE, move || with(&weak, |kv| kv.maintain().map(drop)))?;
-            let weak = Arc::downgrade(&kv);
-            store.every("kv: renewals", RENEWALS, move || with(&weak, |kv| kv.renewals.flush(&kv.file).map(drop)))?;
-            Ok(kv)
+            let claim = store.claim("kv.db")?;
+            let file = File::open(claim.path(), Config::default())?;
+            Kv::start(store, Arc::new(file), None, Some(claim))
         })
     }
 
-    fn open(store: &Store) -> Result<Kv> {
-        let claim = store.claim("kv.db")?;
-        let file = File::open(claim.path(), Config::default())?;
+    /// The kv engine a handle opens in: the store's, or the one kept in the
+    /// file of the database it was opened from.
+    pub(crate) fn at(home: &Home) -> Result<Arc<Kv>> {
+        match home {
+            Home::Store(store) => Kv::of(store),
+            Home::Shared(shared) => shared.engine(|store| {
+                let lent_by = Some(shared.owner().to_owned());
+                Kv::start(store, Arc::clone(shared.file()), lent_by, None)
+            }),
+        }
+    }
+
+    /// Makes kv's tables in `file` when it has none, and starts its
+    /// maintenance and its renewals on the store's background thread.
+    fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Kv>> {
         file.migrate("kv", MIGRATIONS)?;
         let revision = file.read(cells::revision)?;
-        Ok(Kv {
+        let tasks = lent_by.as_ref().map_or_else(|| "kv".to_owned(), |owner| format!("kv in {owner}"));
+        let kv = Arc::new(Kv {
             file,
+            lent_by,
             clock: store.clock(),
             store: store.downgrade(),
             revision: Arc::new(AtomicI64::new(revision)),
@@ -84,11 +98,28 @@ impl Kv {
             renewals: Renewals::default(),
             runs: Runs::default(),
             _claim: claim,
-        })
+        });
+        let weak = Arc::downgrade(&kv);
+        store
+            .every(&format!("{tasks}: maintenance"), MAINTENANCE, move || with(&weak, |kv| kv.maintain().map(drop)))?;
+        let weak = Arc::downgrade(&kv);
+        let renew = move || with(&weak, |kv| kv.renewals.flush(&kv.file).map(drop));
+        store.every(&format!("{tasks}: renewals"), RENEWALS, renew)?;
+        Ok(kv)
     }
 
     pub(crate) fn file(&self) -> &File {
         &self.file
+    }
+
+    /// The engine whose file kv is kept in, when it is not kv.db.
+    pub(crate) fn lent_by(&self) -> Option<&str> {
+        self.lent_by.as_deref()
+    }
+
+    /// The file as an error names it: `kv.db`, or `sql app`.
+    pub(crate) fn place(&self) -> &str {
+        self.lent_by.as_deref().unwrap_or("kv.db")
     }
 
     pub(crate) fn now(&self) -> i64 {
@@ -149,7 +180,7 @@ impl Kv {
         drop(counting);
         if let (Some(buffer), Some(store)) = (&buffer, self.store.upgrade()) {
             let (kv, flushed) = (Arc::downgrade(self), Arc::downgrade(buffer));
-            store.every(&format!("kv: {shown}"), buffer.every(), move || flush(&kv, &flushed))?;
+            store.every(&format!("{}: {shown}", self.place()), buffer.every(), move || flush(&kv, &flushed))?;
         }
         Ok(buffer)
     }
@@ -252,11 +283,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Engine for Kv {
     /// Writes what memory holds, then closes kv.db; the first failure is the
-    /// error, and the file closes either way.
+    /// error, and the file closes either way. A file another engine lends is
+    /// that engine's to close.
     fn close(&self) -> Result<()> {
         let renewed = self.renewals.flush(&self.file);
         let flushed = self.flush_buffers();
-        let closed = self.file.close();
+        let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
         renewed.and(flushed).and(closed)
     }
 }

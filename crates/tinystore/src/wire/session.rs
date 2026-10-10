@@ -15,7 +15,10 @@ use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome, metho
 #[cfg(feature = "sql")]
 use super::sql;
 use super::workers::Workers;
+#[cfg(feature = "sql")]
+use crate::Transaction;
 use crate::clock::from_unix_millis;
+use crate::engine::SharedFile;
 use crate::kv::Handed;
 use crate::pipe::{Capability, Connect};
 use crate::{Clock, Result, Store, unix_millis};
@@ -430,7 +433,12 @@ impl Shared {
             Ok((txing, running)) => {
                 self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
                 let shared = Arc::clone(self);
-                self.workers.run(Box::new(move || txing.run(running, &shared.sql, stream)));
+                self.workers.run(Box::new(move || {
+                    let nested = |tx: &Transaction<'_>, method, body: &[u8], max_body| {
+                        shared.call_in(tx, method, body, max_body)
+                    };
+                    txing.run(running, &shared.sql, stream, &nested);
+                }));
             }
             Err(failure) => self.answer(stream, Err(failure)),
         }
@@ -673,13 +681,40 @@ impl Shared {
     }
 
     fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
+        let lent = |handle| self.lent(handle);
         match method >> 8 {
-            0x01 => kv::call(&self.store, &self.kv, method, body, max_body),
+            0x01 => kv::call(&self.store, &self.kv, &lent, method, body, max_body),
             #[cfg(feature = "jobs")]
-            0x02 => jobs::call(&self.store, &self.jobs, method, body, max_body),
+            0x02 => jobs::call(&self.store, &self.jobs, &lent, method, body, max_body),
             #[cfg(feature = "sql")]
             0x03 => sql::call(&self.store, &self.sql, method, body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
+        }
+    }
+
+    /// The file of a database this connection opened, for a bucket or a
+    /// queue opened in it.
+    fn lent(&self, handle: u64) -> std::result::Result<Arc<SharedFile>, Failure> {
+        #[cfg(feature = "sql")]
+        return self.sql.shared(handle);
+        #[cfg(not(feature = "sql"))]
+        Err(Failure::invalid(format!("database {handle}: this server keeps no databases")))
+    }
+
+    /// Answers a call of kv or jobs made inside a database's transaction.
+    #[cfg(feature = "sql")]
+    fn call_in(
+        &self,
+        tx: &Transaction<'_>,
+        method: u16,
+        body: &[u8],
+        max_body: usize,
+    ) -> std::result::Result<Vec<u8>, Failure> {
+        match method >> 8 {
+            0x01 => kv::call_in(&self.kv, tx, method, body, max_body),
+            #[cfg(feature = "jobs")]
+            0x02 => jobs::call_in(&self.jobs, tx, method, body, max_body),
+            _ => Err(Failure::invalid(format!("method {method:#06x} does not run inside a transaction"))),
         }
     }
 

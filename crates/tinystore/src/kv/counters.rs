@@ -13,6 +13,7 @@ use super::path::Key;
 use super::scope::{Kind, Scope};
 use super::value::Raw;
 use crate::clock::millis;
+use crate::engine::Home;
 use crate::sqlite::Tx;
 use crate::{Error, Result, Store};
 
@@ -57,7 +58,7 @@ impl CountersBuilder {
         if self.flush_every.is_some_and(|span| span.is_zero()) {
             return Err(Error::invalid("a flush every zero").within(shown()));
         }
-        let scope = Scope::open(&self.store, &self.name, Kind::Counters)?;
+        let scope = Scope::open(&Home::Store(self.store.clone()), &self.name, Kind::Counters)?;
         let buffer =
             scope.kv.buffer(scope.id, self.flush_every, &scope.shown()).map_err(|error| error.within(scope.shown()))?;
         Ok(Counters { scope, ttl: self.ttl, buffer })

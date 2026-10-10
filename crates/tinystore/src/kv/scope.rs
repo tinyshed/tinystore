@@ -1,5 +1,5 @@
 //! What every kind of kv handle shares: the engine, the row of its name in
-//! kv.db, what the name holds, and the branch the handle sees.
+//! the engine's file, what the name holds, and the branch the handle sees.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
@@ -8,10 +8,11 @@ use rusqlite::Connection;
 
 use super::engine::Kv;
 use super::path::{Branch, Key};
+use crate::engine::Home;
 use crate::sqlite::Tx;
-use crate::{Error, Result, Store};
+use crate::{Error, Result};
 
-/// What a name in kv.db holds. A name keeps its kind: a name that holds
+/// What a name in kv's file holds. A name keeps its kind: a name that holds
 /// counters never opens as a bucket of values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -46,7 +47,7 @@ impl Kind {
     }
 }
 
-/// A handle's place in kv.db, cheap to clone.
+/// A handle's place in its engine's file, cheap to clone.
 #[derive(Clone)]
 pub(crate) struct Scope {
     pub(crate) kv: Arc<Kv>,
@@ -58,11 +59,15 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
-    /// Opens `name` as `kind`, making its row the first time.
-    pub(crate) fn open(store: &Store, name: &str, kind: Kind) -> Result<Scope> {
-        let shown = || format!("kv {} {name}", kind.shown());
+    /// Opens `name` as `kind` where `home` says, making its row the first time.
+    pub(crate) fn open(home: &Home, name: &str, kind: Kind) -> Result<Scope> {
+        let lent_by = match home {
+            Home::Store(_) => None,
+            Home::Shared(shared) => Some(shared.owner()),
+        };
+        let shown = || described(lent_by, kind, name);
         check_name(name).map_err(|error| error.within(shown()))?;
-        let kv = Kv::of(store).map_err(|error| error.within(shown()))?;
+        let kv = Kv::at(home).map_err(|error| error.within(shown()))?;
         let id = kv.name(name, kind).map_err(|error| error.within(shown()))?;
         Ok(Scope { kv, id, name: name.into(), kind, branch: Ok(Branch::default()) })
     }
@@ -91,7 +96,7 @@ impl Scope {
 
     /// The handle as an error names it: `kv counters hits`.
     pub(crate) fn shown(&self) -> String {
-        format!("kv {} {}", self.kind.shown(), self.name)
+        described(self.kv.lent_by(), self.kind, &self.name)
     }
 
     pub(crate) fn shown_key(&self, key: &str) -> String {
@@ -108,8 +113,8 @@ impl Scope {
         }
     }
 
-    /// Runs a write on kv.db's writer in a commit it may share, naming the key
-    /// in its errors.
+    /// Runs a write on the file's writer in a commit it may share, naming the
+    /// key in its errors.
     pub(crate) fn write<T: Send + 'static>(
         &self,
         key: &str,
@@ -120,8 +125,8 @@ impl Scope {
         self.kv.file().write(bytes, move |tx| work(tx, &revision)).map_err(|error| error.within(self.shown_key(key)))
     }
 
-    /// Queues a write on kv.db's writer and returns; `done` gets its answer on
-    /// the thread that commits it.
+    /// Queues a write on the file's writer and returns; `done` gets its answer
+    /// on the thread that commits it.
     pub(crate) fn submit<T: Send + 'static>(
         &self,
         key: &str,
@@ -144,6 +149,15 @@ impl Scope {
 impl std::fmt::Debug for Scope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.shown())
+    }
+}
+
+/// A handle as an error names it: `kv counters hits`, or `sql app: kv bucket
+/// sessions` for one kept in a database's file.
+fn described(lent_by: Option<&str>, kind: Kind, name: &str) -> String {
+    match lent_by {
+        Some(owner) => format!("{owner}: kv {} {name}", kind.shown()),
+        None => format!("kv {} {name}", kind.shown()),
     }
 }
 

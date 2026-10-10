@@ -13,10 +13,11 @@ import {
 	type Database,
 	InvalidError,
 	LimitError,
+	type SqlTx,
 	type Store,
 	sql,
 } from '../src/index.ts'
-import { caught, removed, ways } from './ways.ts'
+import { caught, removed, until, ways } from './ways.ts'
 
 const NOTES = `create table notes (
 	id         text primary key,
@@ -365,6 +366,68 @@ for (const way of ways) {
 			)
 			expect((refused as Error).message).toBe('changed my mind')
 			expect(await app.table('notes').where({ id: 'tx1' }).count()).toBe(0)
+		})
+
+		test('a bucket and a queue opened from the database commit with its rows, or roll back with them', async () => {
+			const sessions = app.bucket<{ user: string }>('sessions')
+			const emails = app.queue<{ note: string }>('emails')
+			await sessions.set('t-0', { user: 'ann' })
+			expect(await sessions.get('t-0')).toEqual({ user: 'ann' })
+
+			const insert = (tx: SqlTx) =>
+				tx.exec`insert into notes (id, author_id, title) values ('q1', 5, 'a')`
+			const refused = await caught(
+				app.tx(async tx => {
+					await insert(tx)
+					await tx.with(sessions).set('t-1', { user: 'bob' })
+					expect(await tx.with(emails).add({ note: 'q1' }, { id: 'q1' })).toBe(true)
+					expect(await tx.with(sessions).get('t-1')).toEqual({ user: 'bob' })
+					expect((await tx.with(emails).get('q1'))?.state).toBe('waiting')
+					throw new Error('declined')
+				}),
+			)
+			expect((refused as Error).message).toBe('declined')
+			expect(await sessions.has('t-1')).toBe(false)
+			expect(await emails.get('q1')).toBeUndefined()
+			expect(await app.scalar<number>`select count(*) from notes where id = 'q1'`).toBe(0)
+
+			await app.tx(async tx => {
+				await insert(tx)
+				await tx.with(sessions).set('t-1', { user: 'bob' })
+				await tx.with(emails).add({ note: 'q1' }, { id: 'q1' })
+			})
+			expect(await sessions.get('t-1')).toEqual({ user: 'bob' })
+			expect((await emails.get('q1'))?.value).toEqual({ note: 'q1' })
+			expect(await store.bucket('sessions').has('t-1')).toBe(false)
+		})
+
+		test('a transaction refuses a handle kept elsewhere, or one made after it began', async () => {
+			const kept = await caught(app.tx(tx => tx.with(store.bucket<number>('sessions')).set('k', 1)))
+			expect(kept).toBeInstanceOf(InvalidError)
+			expect((kept as Error).message).toContain(
+				'kept in the store, outside this transaction of sql app',
+			)
+			const late = await caught(app.tx(tx => tx.with(app.bucket<number>('late')).set('k', 1)))
+			expect(late).toBeInstanceOf(InvalidError)
+			expect((late as Error).message).toContain('make it before db.tx')
+			const inDatabase = app.bucket<number>('sessions')
+			expect(await caught(store.tx(tx => tx.with(inDatabase).set('k', 1)))).toBeInstanceOf(
+				InvalidError,
+			)
+		})
+
+		test('a worker runs a job its transaction added, once the transaction commits', async () => {
+			const sent = app.queue<{ note: string }>('sent')
+			const seen: string[] = []
+			const worker = sent.work(async email => {
+				seen.push(email.note)
+			})
+			await app.tx(async tx => {
+				await tx.with(sent).add({ note: 'w1' })
+			})
+			await until(() => seen.length === 1)
+			await worker.stop()
+			expect(seen).toEqual(['w1'])
 		})
 	})
 }

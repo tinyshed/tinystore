@@ -188,6 +188,8 @@ export const JobsQueueOpen = message('jobs.QueueOpen', {
 	keep: [8, uint],
 	/** ten million when absent */
 	maxWaiting: [9, uint],
+	/** a database's handle: the queue lives in its file; jobs.db when absent */
+	database: [10, uint],
 })
 
 /**
@@ -363,6 +365,8 @@ export const KvBucketOpen = message('kv.BucketOpen', {
 	name: [1, str],
 	ttl: [2, uint],
 	idle: [3, uint],
+	/** a database's handle: the bucket lives in its file; kv.db when absent */
+	database: [4, uint],
 })
 
 /**
@@ -674,23 +678,31 @@ export const SqlTxOpen = message('sql.TxOpen', {
 })
 
 /**
- * A transaction's call, or its end: the last DATA commits, or not.
+ * A transaction's call, or its end: the last DATA commits, or not. A call is
+ * a statement, or a call of kv or jobs on a bucket or a queue kept in the
+ * database's file: a method of theirs with its request, kv.set or jobs.add,
+ * which runs in the transaction.
  */
 export const SqlTxCall = message('sql.TxCall', {
 	text: [1, str],
 	values: [2, list(sqlValue)],
-	/** all, one, scalar or exec; nothing in the last */
+	/** all, one, scalar or exec; call for a method; nothing in the last */
 	want: [3, str],
 	/** in the last: true commits, false rolls back */
 	commit: [4, bool],
+	/** with want call: the method, its request in body */
+	method: [5, uint],
+	body: [6, bin],
 })
 
 /**
- * A call's answer: its rows, what it changed, or why it failed, which leaves
- * the transaction as it was before the call.
+ * A call's answer: its rows, what it changed, a method's answer, or why it
+ * failed, which leaves the transaction as it was before the call.
  */
 export const SqlTxAnswer = message('sql.TxAnswer', {
 	rows: [1, SqlRows],
 	done: [2, SqlDone],
 	failure: [3, Failure],
+	/** what a method answered, as its own answer */
+	body: [4, bin],
 })

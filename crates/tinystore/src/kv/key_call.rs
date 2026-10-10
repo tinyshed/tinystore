@@ -2,22 +2,22 @@ use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use super::bucket::{Bucket, Put, Version, Work, WriteOptions};
-use super::tx::Tx;
+use super::tx;
 use super::value::Value;
-use crate::{Error, Result};
+use crate::{Error, Result, Transaction};
 
 /// A call on one key with what it asks beside its value, run by its last step:
 /// `sessions.key(&token).if_version(seen).set(&next)`.
 #[must_use = "a key's call runs at its last step: set, create, take, delete or expire"]
 pub struct KeyCall<'a, V> {
     bucket: &'a Bucket<V>,
-    tx: Option<&'a Tx<'a>>,
+    tx: Option<&'a Transaction<'a>>,
     key: String,
     options: WriteOptions,
 }
 
 impl<'a, V: Value> KeyCall<'a, V> {
-    pub(crate) fn new(bucket: &'a Bucket<V>, tx: Option<&'a Tx<'a>>, key: String) -> Self {
+    pub(crate) fn new(bucket: &'a Bucket<V>, tx: Option<&'a Transaction<'a>>, key: String) -> Self {
         KeyCall { bucket, tx, key, options: WriteOptions::default() }
     }
 
@@ -79,7 +79,7 @@ impl<'a, V: Value> KeyCall<'a, V> {
     /// may share.
     fn run<T: Send + 'static>(&self, bytes: usize, work: impl Work<T>) -> Result<T> {
         match self.tx {
-            Some(tx) => tx.run(&self.bucket.scope, &self.key, work),
+            Some(within) => tx::call_on_key(within, &self.bucket.scope, &self.key, work),
             None => self.bucket.scope.write(&self.key, bytes, work),
         }
     }

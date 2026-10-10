@@ -9,7 +9,8 @@ use super::rows::Rows;
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
-use crate::{Error, Result, Store};
+use crate::engine::SharedFile;
+use crate::{Error, Result, Store, Transaction};
 
 impl Store {
     /// The application's database `name`, `sql/<name>.db` in the store's
@@ -106,7 +107,10 @@ impl Database {
         let statement = statement.into();
         let weight = statement.weight();
         let running = statement.clone();
-        self.base.file.write(weight, move |tx| run::exec(tx, &running)).map_err(|error| self.failed(&statement, error))
+        self.base
+            .file()
+            .write(weight, move |tx| run::exec(tx, &running))
+            .map_err(|error| self.failed(&statement, error))
     }
 
     /// Runs statements known before they run as one, all of them or none, in
@@ -118,7 +122,7 @@ impl Database {
     {
         let statements: Vec<Sql> = statements.into_iter().map(Into::into).collect();
         let weight = statements.iter().map(Sql::weight).sum();
-        let ran = self.base.file.write(weight, move |tx| {
+        let ran = self.base.file().write(weight, move |tx| {
             statements
                 .iter()
                 .map(|statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe())))
@@ -130,14 +134,19 @@ impl Database {
     /// Runs `work` in a transaction that holds the writer, for writes that
     /// depend on what its reads found: `Ok` commits, an error or a panic rolls
     /// back. It runs once. Past five seconds it rolls back and is `limit`.
+    ///
+    /// A bucket or a queue opened from the database joins it through
+    /// `tx.with(&handle)`, so that its keys and jobs commit with the rows.
     pub fn tx<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         let started = self.base.now();
-        self.base.file.transaction(|raw| {
-            let tx = Tx::new(raw, &self.base, started);
-            let value = work(&tx)?;
-            tx.within_bound()?;
-            Ok(value)
-        })
+        let bound = || self.base.within_bound(started);
+        let owner = self.base.describe();
+        Transaction::run(self.base.file(), &owner, Some(&bound), |transaction| work(&Tx::new(transaction, &self.base)))
+    }
+
+    /// The file the database lends to the buckets and queues opened from it.
+    pub(crate) fn shared(&self) -> &Arc<SharedFile> {
+        &self.base.shared
     }
 
     /// A statement's rows as SQLite keeps them, for a caller that is not
@@ -149,7 +158,11 @@ impl Database {
     /// `exec` without waiting: `done` is called on the thread that commits it.
     pub(crate) fn exec_then(&self, statement: Sql, done: impl FnOnce(Result<Done>) + Send + 'static) {
         let (weight, describe) = (statement.weight(), self.failed_by(&statement));
-        self.base.file.submit(weight, move |tx| run::exec(tx, &statement), move |done_| done(done_.map_err(describe)));
+        self.base.file().submit(
+            weight,
+            move |tx| run::exec(tx, &statement),
+            move |done_| done(done_.map_err(describe)),
+        );
     }
 
     /// `batch` without waiting: `done` is called on the thread that commits it.
@@ -162,20 +175,20 @@ impl Database {
                 .map(|statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe())))
                 .collect()
         };
-        self.base.file.submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));
+        self.base.file().submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));
     }
 
     /// A statement's rows from a reader, or from the writer when SQLite says
     /// it writes; a statement known to write goes to the writer at once.
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
         if !self.base.writes(statement.text()) {
-            match self.base.file.read(|connection| run::read(connection, statement, wanted))? {
+            match self.base.file().read(|connection| run::read(connection, statement, wanted))? {
                 Read::Rows(rows) => return Ok(rows),
                 Read::Writes => self.base.remember_write(statement.text()),
             }
         }
         let running = statement.clone();
-        self.base.file.write(statement.weight(), move |tx| run::write(tx, &running, wanted))
+        self.base.file().write(statement.weight(), move |tx| run::write(tx, &running, wanted))
     }
 
     fn failed(&self, statement: &Sql, error: Error) -> Error {

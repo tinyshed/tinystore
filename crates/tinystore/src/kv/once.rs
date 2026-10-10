@@ -9,6 +9,7 @@ use super::bucket::{Bucket, Expiry, Put, WriteOptions};
 use super::path::Key;
 use super::scope::{Kind, Scope};
 use super::value::{Raw, Value};
+use crate::engine::Home;
 use crate::{Error, Result, Store};
 
 /// How long an answer is kept unless `keep` says.
@@ -44,7 +45,7 @@ impl<V: Value> OnceBuilder<V> {
         if self.keep.is_zero() {
             return Err(Error::invalid("a keep of zero").within(format!("kv once {}", self.name)));
         }
-        let scope = Scope::open(&self.store, &self.name, Kind::Once)?;
+        let scope = Scope::open(&Home::Store(self.store.clone()), &self.name, Kind::Once)?;
         Ok(Once { answers: Bucket::new(scope, Expiry::Ttl(self.keep)) })
     }
 }
@@ -56,7 +57,7 @@ pub(crate) fn rows(store: &Store, name: &str, keep: Option<Duration>) -> Result<
     if keep.is_zero() {
         return Err(Error::invalid("a keep of zero").within(format!("kv once {name}")));
     }
-    let scope = Scope::open(store, name, Kind::Once)?;
+    let scope = Scope::open(&Home::Store(store.clone()), name, Kind::Once)?;
     Ok(Bucket::new(scope, Expiry::Ttl(keep)))
 }
 

@@ -217,6 +217,43 @@ alpha.
 for a real caller: anomalies are an operator of metrics queries, a diff
 compares kv versions, similarity is an SQL function.
 
+## One file, several engines
+
+A database lends its file to the buckets and queues opened from it, so that a
+transaction commits a key or a job with the rows it is about, and no engine
+imports another for it. Three things at the crate's root carry it:
+
+| What                      | It is                                                                                                       |
+|---------------------------|-------------------------------------------------------------------------------------------------------------|
+| `engine::SharedFile`      | a file one engine opened that others keep their tables in, and the engines kept there, one of each type     |
+| `engine::Home`            | where a handle opens: its engine's own file of the store, or a file another engine lends                    |
+| `Transaction`, `TxHandle` | a transaction of one file as the handles it takes in see it: a savepoint a call, its bound, what runs after |
+
+kv's `store.tx` and a database's `db.tx` each hand their `Transaction` to the
+handles `tx.with` takes in, which run their calls in it and refuse it when
+they are kept in another file. `inside.rs` is the one place two engines meet,
+a line a handle: `db.bucket`, `db.queue`.
+
+An engine that lives in another's file:
+
+1. names its tables `_tinystore_<engine>_…` and keeps its migrations under a
+   history of its own, which the file's `_tinystore_migrations` checks apart
+   from the others' and the application's;
+2. keeps its state a file: opened by `Engine::at(&Home)`, the store's own or
+   the one in a lent file, and closed without closing a file it did not open;
+3. wakes what waits on a commit from `Transaction::after`, never before the
+   commit, since a waiter woken early reads nothing and sleeps past it;
+4. gives its handles `TxHandle`, so that any transaction of their file takes
+   them in;
+5. adds its handle to `inside.rs`, `database` to its open message, and its
+   calls to the session's `call_in`, which `sql.tx` runs in the transaction.
+
+The engines kept in a lent file open after its owner, so the store closes them
+first, while the file is open. records, metrics and blobs keep files of their
+own: no engine waits on another's writer unless the application asks it to.
+An engine of another crate gets the same seams once they are public, with an
+extension trait in place of a line in `inside.rs`.
+
 ## Engines of others
 
 An application's own engine is a later feature, but the core is built so it
@@ -226,11 +263,11 @@ needs no back door: the built-in engines use only what an outside one would.
   handle and closed with the store (`engine::Host::engine`), with `attach`,
   `every` and `claim` beside it. kv is built on these and the SQLite adapter
   alone.
-- **With the second engine.** Two seams wait until sqldb or jobs shows their
-  shape: the SQLite adapter's `File` made public as an engine's file, and a
-  registry of wire methods, where an engine registers its calls and is given
-  its byte by name in WELCOME, the built-in ones the same way. Today the
-  session matches kv's byte by hand.
+- **With the second engine.** A file one engine lends another is
+  `engine::SharedFile`, which sqldb showed the shape of. A registry of wire
+  methods still waits, where an engine registers its calls and is given its
+  byte by name in WELCOME, the built-in ones the same way. Today the session
+  matches each engine's byte by hand.
 - **The three ways in.** Most applications compose what exists: buckets, SQL
   and queues. Some register SQL functions and virtual tables, the cheapest
   extension. A few write an engine of their own beside ours, on the same file,

@@ -37,6 +37,8 @@ pub(crate) struct QueueState {
     pub(crate) name: String,
     pub(crate) kind: Kind,
     pub(crate) policy: Policy,
+    /// The engine whose file the queue is kept in, when it is not jobs.db.
+    lent_by: Option<String>,
     pub(crate) alarm: Alarm,
     pub(crate) rate: Option<RateLog>,
     pub(crate) watchers: Watchers,
@@ -52,12 +54,13 @@ pub(crate) struct QueueState {
 }
 
 impl QueueState {
-    pub(crate) fn new(id: i64, name: &str, kind: Kind, policy: Policy) -> QueueState {
+    pub(crate) fn new(id: i64, name: &str, kind: Kind, policy: Policy, lent_by: Option<String>) -> QueueState {
         QueueState {
             id,
             name: name.to_owned(),
             kind,
             policy,
+            lent_by,
             alarm: Alarm::new(),
             rate: policy.rate.map(|(count, per)| RateLog::new(count, per)),
             watchers: Watchers::default(),
@@ -72,7 +75,16 @@ impl QueueState {
 
     /// What an error about this queue says first: `jobs queue emails`.
     pub(crate) fn describe(&self) -> String {
-        format!("jobs {} {}", self.kind.as_str(), self.name)
+        QueueState::described(self.lent_by.as_deref(), self.kind, &self.name)
+    }
+
+    /// A queue as an error names it: `jobs queue emails`, or `sql app: jobs
+    /// queue emails` for one kept in a database's file.
+    pub(crate) fn described(lent_by: Option<&str>, kind: Kind, name: &str) -> String {
+        match lent_by {
+            Some(owner) => format!("{owner}: jobs {} {name}", kind.as_str()),
+            None => format!("jobs {} {name}", kind.as_str()),
+        }
     }
 
     pub(crate) fn hold(&self, lease: &Arc<Lease>) {

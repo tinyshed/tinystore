@@ -16,6 +16,7 @@ use super::run::{Outcome, Run};
 use super::state::{Kind, QueueState};
 use super::values::{self, Kept};
 use super::work::Worker;
+use crate::engine::Home;
 use crate::{Error, Result, Store};
 
 /// A schedule being opened: its name and its repeat.
@@ -91,7 +92,7 @@ impl ScheduleBuilder {
         let describe = || format!("jobs schedule {}", self.name);
         let asked = self.repeat.ok_or_else(|| Error::invalid("a schedule needs every or cron").within(describe()))?;
         let repeat = asked.of(&self.name).map_err(|error| error.within(describe()))?;
-        let queue = Queue::<()>::open(&self.store, &self.name, Kind::Schedule, self.policy)?;
+        let queue = Queue::<()>::open(&Home::Store(self.store.clone()), &self.name, Kind::Schedule, self.policy)?;
         keep_repeat(&queue, &repeat)?;
         Ok(Schedule { queue, worker: None })
     }

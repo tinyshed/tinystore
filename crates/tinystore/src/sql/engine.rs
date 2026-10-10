@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
-use crate::engine::{Claim, Engine, Host};
+use super::tx::BOUND;
+use crate::engine::{Claim, Engine, Host, SharedFile};
 use crate::sqlite::{Config, File, Migration};
-use crate::{Clock, Result, Store};
+use crate::{Clock, Error, Result, Store};
 
 /// The history a database's own migrations are kept under.
 const HISTORY: &str = "migrations";
@@ -19,10 +20,11 @@ pub(crate) struct Databases {
     open: Mutex<HashMap<String, Arc<Base>>>,
 }
 
-/// One application database: `sql/<name>.db`, its writer and its readers.
+/// One application database: `sql/<name>.db`, its writer and its readers,
+/// and the buckets and queues kept in its file.
 pub(crate) struct Base {
     pub(crate) name: String,
-    pub(crate) file: File,
+    pub(crate) shared: Arc<SharedFile>,
     clock: Arc<dyn Clock>,
     /// Statements known to write, by their text. SQLite says whether one
     /// writes when it compiles it, and a read call sends those to the writer.
@@ -44,7 +46,7 @@ impl Databases {
             let base = Arc::clone(base);
             drop(open);
             if let Some(migrations) = migrations {
-                base.file.migrate_checked(HISTORY, &migrations)?;
+                base.file().migrate_checked(HISTORY, &migrations)?;
             }
             return Ok(base);
         }
@@ -55,7 +57,7 @@ impl Databases {
         }
         let base = Base {
             name: name.to_owned(),
-            file,
+            shared: Arc::new(SharedFile::new(file, format!("sql {name}"), store)),
             clock: store.clock(),
             writes: Mutex::new(HashSet::new()),
             _claim: claim,
@@ -73,7 +75,7 @@ impl Engine for Databases {
         let open: Vec<Arc<Base>> = lock(&self.open).drain().map(|(_, base)| base).collect();
         let mut first_failure = None;
         for base in open {
-            if let Err(error) = base.file.close() {
+            if let Err(error) = base.file().close() {
                 first_failure.get_or_insert(error.within(base.describe()));
             }
         }
@@ -82,8 +84,25 @@ impl Engine for Databases {
 }
 
 impl Base {
+    pub(crate) fn file(&self) -> &File {
+        self.shared.file()
+    }
+
     pub(crate) fn now(&self) -> SystemTime {
         self.clock.now()
+    }
+
+    /// Fails once a transaction that started at `started` has held the writer
+    /// past its bound, which then rolls back.
+    pub(crate) fn within_bound(&self, started: SystemTime) -> Result<()> {
+        let held = self.now().duration_since(started).unwrap_or_default();
+        if held <= BOUND {
+            return Ok(());
+        }
+        Err(Error::limit(format!(
+            "{}: a transaction held the writer {held:?}, past its {BOUND:?}, and rolls back",
+            self.describe()
+        )))
     }
 
     pub(crate) fn writes(&self, text: &str) -> bool {

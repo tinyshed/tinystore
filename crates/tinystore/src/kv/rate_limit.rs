@@ -6,6 +6,7 @@ use super::allowance::Allowance;
 use super::buffer::{Buffer, Change, Live};
 use super::path::Key;
 use super::scope::{Kind, Scope};
+use crate::engine::Home;
 use crate::{Error, Result, Store, unix_millis, unix_nanos};
 
 /// How often a rate limit's times reach kv.db, and so what a crash forgets.
@@ -45,7 +46,7 @@ impl RateLimitBuilder {
     pub fn open(self) -> Result<RateLimit> {
         let (interval, burst) =
             check_rate(self.rate, self.burst).map_err(|error| error.within(format!("kv rate limit {}", self.name)))?;
-        let scope = Scope::open(&self.store, &self.name, Kind::RateLimit)?;
+        let scope = Scope::open(&Home::Store(self.store.clone()), &self.name, Kind::RateLimit)?;
         let buffer =
             scope.kv.buffer(scope.id, Some(FLUSH), &scope.shown()).map_err(|error| error.within(scope.shown()))?;
         let buffer = buffer.ok_or_else(|| Error::internal("a rate limit without its memory").within(scope.shown()))?;

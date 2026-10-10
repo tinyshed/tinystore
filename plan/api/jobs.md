@@ -10,8 +10,9 @@ code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) the words
 both books share. TypeScript comes first; Python, Go and Rust follow where
 they spell something differently. The Rust and TypeScript columns are
 built, the core in `crates/tinystore/src/jobs`, protocol 2 in
-`protocol/jobs.wire` and the Bun SDK in `sdk/js/src/jobs.ts`, all but
-transactions and queues opened from an SQL database, which come with sqldb.
+`protocol/jobs.wire` and the Bun SDK in `sdk/js/src/jobs.ts`, queues opened
+from an SQL database and its transactions among them; a transaction of
+jobs.db, `store.tx` for a queue, is not.
 
 ## What a newcomer learns
 

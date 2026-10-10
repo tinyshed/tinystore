@@ -36,6 +36,7 @@ export type {
 	Schedule,
 	ScheduleOptions,
 	ScheduleWhen,
+	TxQueue,
 	Worker,
 	WorkOptions,
 } from './jobs.ts'

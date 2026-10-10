@@ -8,7 +8,7 @@
 import { FailureLog, messageOf } from './background.ts'
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { CancelledError, CorruptError, InvalidError, UnavailableError } from './errors.ts'
-import { checkName, handleOn } from './handles.ts'
+import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { type Rate, rateOf } from './limits.ts'
 import { sayOwn } from './logger.ts'
 import { check, type StandardSchemaV1 } from './schema.ts'
@@ -430,7 +430,11 @@ interface Source<T> {
 	/** 'jobs queue emails', which an error names */
 	describe: string
 	openMethod: number
-	open: Uint8Array
+	open: Open
+	/** the database whose file keeps the queue; the store's jobs.db when undefined */
+	home?: Home | undefined
+	/** how its calls reach the server: the link's connection, or a database's transaction */
+	via: Via
 	values: Values<T>
 	/** a run's timeout, in milliseconds */
 	timeout: number
@@ -444,10 +448,7 @@ function callOf<T>(
 	body: (handle: number) => Uint8Array,
 	idempotence: Idempotence,
 ): Promise<Uint8Array> {
-	return source.link.run(idempotence, async connection => {
-		const handle = await handleOn(connection, source.openMethod, source.open)
-		return connection.session.call(method, body(handle))
-	})
+	return source.via.call(source.openMethod, source.open, method, body, idempotence)
 }
 
 async function getJob<T>(source: Source<T>, id: string): Promise<Job<T> | undefined> {
@@ -562,15 +563,25 @@ function showsTheSame(a: Read<typeof JobsJob.fields>, b: Read<typeof JobsJob.fie
 	)
 }
 
+// a queue's source and name, kept out of its public shape, for a database's transaction
+const queues = new WeakMap<object, QueueParts>()
+
+/** What a database's transaction needs of a queue it takes in. */
+export interface QueueParts {
+	readonly name: string
+	readonly source: Source<unknown>
+}
+
 /** A queue of jobs of one type, run in the order of their time: open it with `store.queue(name)`. */
 export class Queue<T> {
 	readonly name: string
 	readonly #source: Source<T>
 
-	/** Queues come from `store.queue`. */
+	/** Queues come from `store.queue` and `db.queue`. */
 	constructor(source: Source<T>, name: string) {
 		this.#source = source
 		this.name = name
+		queues.set(this, { name, source: source as Source<unknown> })
 	}
 
 	/**
@@ -717,6 +728,54 @@ export class Queue<T> {
 	}
 }
 
+/**
+ * A queue's calls inside a database's transaction, from `tx.with(queue)`: a
+ * job it adds is there only if the transaction commits, and the queue's
+ * workers find it once it has. A worker, a watch and a page work outside.
+ */
+export class TxQueue<T> {
+	readonly name: string
+	readonly #queue: Queue<T>
+
+	/** Comes from `tx.with(queue)`. */
+	constructor(queue: Queue<T>) {
+		this.#queue = queue
+		this.name = queue.name
+	}
+
+	/** Adds a job unless its id is taken, as `queue.add` does, with the transaction. */
+	add(value: T, options: AddOptions = {}): Promise<boolean> {
+		return this.#queue.add(value, options)
+	}
+
+	set(id: string, value: T, options: JobOptions = {}): Promise<void> {
+		return this.#queue.set(id, value, options)
+	}
+
+	update(id: string, value: T, options: JobOptions = {}): Promise<boolean> {
+		return this.#queue.update(id, value, options)
+	}
+
+	cancel(id: string): Promise<boolean> {
+		return this.#queue.cancel(id)
+	}
+
+	/** The job under id as the transaction sees it, its own writes among it. */
+	get(id: string): Promise<Job<T> | undefined> {
+		return this.#queue.get(id)
+	}
+}
+
+/** A queue's parts, for a database's transaction that takes it in; undefined for anything else. */
+export function queueParts(handle: object): QueueParts | undefined {
+	return queues.get(handle)
+}
+
+/** The queue's calls inside a transaction, going through its stream. */
+export function queueVia(parts: QueueParts, via: Via): TxQueue<unknown> {
+	return new TxQueue(new Queue({ ...parts.source, via }, parts.name))
+}
+
 /** A repeat the code owns: one repeating job under its name, and the worker that runs it. */
 export class Schedule {
 	readonly name: string
@@ -755,17 +814,24 @@ export class Schedule {
 }
 
 /** What a queue's open sends, checked before anything leaves. */
+/**
+ * A queue, its open checked before anything leaves; `home` is the database
+ * whose file keeps it, its open naming the database's handle on each
+ * connection.
+ */
 export function openQueue<T>(
 	link: Link,
 	workers: Set<Worker>,
 	name: string,
 	options: QueueOptions & { schema?: StandardSchemaV1 | undefined },
+	home?: Home,
 ): Queue<T> {
 	checkName(name, 'queue')
-	const describe = `jobs queue ${name}`
+	const describe =
+		home === undefined ? `jobs queue ${name}` : `${home.describe}: jobs queue ${name}`
 	const concurrency =
 		typeof options.concurrency === 'number' ? { total: options.concurrency } : options.concurrency
-	const open = JobsQueueOpen.encode({
+	const fields = {
 		name,
 		attempts: whole(options.attempts, describe, 'attempts'),
 		backoff: backoffOf(options.backoff),
@@ -781,12 +847,21 @@ export function openQueue<T>(
 		dedupe: msOf(options.dedupe),
 		keep: msOf(options.keep),
 		maxWaiting: whole(options.maxWaiting, describe, 'a maxWaiting'),
-	})
+	}
+	const bytes = JobsQueueOpen.encode(fields)
+	const open: Open =
+		home === undefined
+			? bytes
+			: home.keep(methods['jobs.queue.open'], bytes, async connection =>
+					JobsQueueOpen.encode({ ...fields, database: await home.handle(connection) }),
+				)
 	const source: Source<T> = {
 		link,
 		describe,
 		openMethod: methods['jobs.queue.open'],
 		open,
+		home,
+		via: viaLink(link),
 		values: valuesOf<T>(options.schema),
 		timeout: options.timeout === undefined ? 60_000 : ms(options.timeout),
 		workers,
@@ -821,6 +896,7 @@ export function openSchedule(
 		describe,
 		openMethod: methods['jobs.schedule.open'],
 		open,
+		via: viaLink(link),
 		values: valuesOf<null>(undefined),
 		timeout: options.timeout === undefined ? 60_000 : ms(options.timeout),
 		workers,

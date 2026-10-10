@@ -69,20 +69,26 @@ message sql.TxOpen {
   1 handle: uint
 }
 
-# A transaction's call, or its end: the last DATA commits, or not.
+# A transaction's call, or its end: the last DATA commits, or not. A call is
+# a statement, or a call of kv or jobs on a bucket or a queue kept in the
+# database's file: a method of theirs with its request, kv.set or jobs.add,
+# which runs in the transaction.
 message sql.TxCall {
   1 text: str
   2 values: [cell]
-  3 want: str                     # all, one, scalar or exec; nothing in the last
+  3 want: str                     # all, one, scalar or exec; call for a method; nothing in the last
   4 commit: bool                  # in the last: true commits, false rolls back
+  5 method: uint?                 # with want call: the method, its request in body
+  6 body: bin?
 }
 
-# A call's answer: its rows, what it changed, or why it failed, which leaves
-# the transaction as it was before the call.
+# A call's answer: its rows, what it changed, a method's answer, or why it
+# failed, which leaves the transaction as it was before the call.
 message sql.TxAnswer {
   1 rows: sql.Rows?
   2 done: sql.Done?
   3 failure: Failure?
+  4 body: bin?                    # what a method answered, as its own answer
 }
 
 method 0x0301 sql.open(sql.Open) -> Handle

@@ -10,8 +10,9 @@ The Rust core builds databases, their migrations, reads, writes, batches and
 transactions (`crates/tinystore/src/sql`), protocol 2 serves them
 (`protocol/sql.wire`), and the Bun SDK has all of it with its tables and
 query builder (`sdk/js/src/sql.ts`, `query.ts`), as the Rust core has
-them (`query.rs`), both held to `testdata/sql/queries.json`; `include` and
-the Python and Go SDKs come next. The Go engine at `e81a050` and research's
+them (`query.rs`), both held to `testdata/sql/queries.json`, and the buckets
+and queues kept in a database's file (`inside.rs`); `include` and the Python
+and Go SDKs come next. The Go engine at `e81a050` and research's
 design of it are the reference for what it promises.
 
 What changed from the Go engine: queries can be built without writing their
@@ -534,15 +535,38 @@ let placed = db.tx(|tx| -> Result<bool, ShopError> {
 ## kv and jobs in the database
 
 ```ts
-const sessions = db.bucket<Session>('sessions')     // in sql/app.db, beside the tables
-const emails = db.queue<Email>('emails')
+const sessions = db.bucket<Session>('sessions', { idle: '30d' })   // in sql/app.db, beside the tables
+const emails = db.queue<Email>('emails', { attempts: 5 })
+emails.work(async email => send(email))
+```
+
+```rust
+let sessions = db.bucket::<Session>("sessions").idle(Duration::from_days(30)).open()?;
+let emails = db.queue::<Email>("emails").attempts(5).open()?;
 ```
 
 A bucket or a queue opened from a database lives in its file and commits with
 its rows in `db.tx`; opened from the store it lives in kv.db or jobs.db, with
 a writer of its own (decision 15). The handle and its calls are the same
-either way. A queue in the application's file shares the application's
-writer, which is the point and its cost.
+either way, a queue's workers among them. A queue in the application's file
+shares the application's writer, which is the point and its cost.
+
+- `tx.with(bucket)` takes a bucket in with every call it has; `tx.with(queue)`
+  takes a queue's `add`, `set`, `update`, `cancel` and `get`, while its
+  workers, watches and pages work outside. A worker finds a job a transaction
+  added once the transaction commits, and nothing of one that rolled back.
+- `db.tx` takes in the database's buckets and queues, and `store.tx` the
+  store's buckets: a handle kept in another file is `invalid`, since its
+  writes would not commit with the rest.
+- Each engine keeps its tables under names of its own, `_tinystore_kv_…` and
+  `_tinystore_jobs_…`, and its migrations under a history of its own in the
+  file's `_tinystore_migrations`, beside the application's and checked apart
+  from them. A name starting `_tinystore_` is TinyStore's, which the
+  application's migrations leave alone.
+- A bucket's or a queue's first open writes the file: its engine's tables and
+  its name. An SDK opens the database's buckets and queues before `db.tx`
+  holds the writer, and refuses one made inside the transaction's function;
+  Rust opens them before the transaction, which refuses an open inside it.
 
 ## Search and geometry
 

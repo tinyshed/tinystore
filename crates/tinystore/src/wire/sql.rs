@@ -16,8 +16,9 @@ use super::protocol::{
     Empty, Failure, Handle, SqlBatch, SqlBatched, SqlDone, SqlOpen, SqlQuery, SqlRows, SqlStatement, SqlTxAnswer,
     SqlTxCall, SqlTxOpen, method,
 };
+use crate::engine::SharedFile;
 use crate::sql::{Database, Done, Migrations, Rows, Sql, Tx, Value, Wanted};
-use crate::{Error, ErrorKind, Store};
+use crate::{Error, ErrorKind, Store, Transaction};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
 
@@ -60,6 +61,12 @@ impl Handles {
             .get(&handle)
             .cloned()
             .ok_or_else(|| Failure::invalid(format!("handle {handle} names no database this connection opened")))
+    }
+
+    /// The file of the database `handle` names, for a bucket or a queue
+    /// opened in it.
+    pub(crate) fn shared(&self, handle: u64) -> Result<Arc<SharedFile>, Failure> {
+        self.database(handle).map(|database| Arc::clone(database.shared()))
     }
 
     /// Credit the client granted a stream: a download's or a transaction's.
@@ -354,8 +361,9 @@ impl Txing {
 
     /// Runs the transaction: each call as it comes, its answer as a DATA,
     /// until the last commits or rolls back, the client leaves, or its bound
-    /// passes; then the stream's last DATA says how it ended.
-    pub(crate) fn run(self: &Arc<Self>, running: Running, handles: &Handles, stream: u32) {
+    /// passes; then the stream's last DATA says how it ended. A call of kv or
+    /// jobs goes to `nested`, which runs it in the transaction.
+    pub(crate) fn run(self: &Arc<Self>, running: Running, handles: &Handles, stream: u32, nested: Nested<'_>) {
         let Running { database, received, link } = running;
         let deadline = Instant::now() + TX_BOUND;
         let ended = database.tx(|tx| -> Result<(), Ended> {
@@ -374,7 +382,7 @@ impl Txing {
                 if call.want.is_empty() {
                     return if call.commit { Ok(()) } else { Err(Ended::RolledBack) };
                 }
-                let answer = answer(tx, call, link.max_body);
+                let answer = answer(tx, call, link.max_body, nested);
                 self.send(&link, answer.encode(), deadline)?;
             }
         });
@@ -408,16 +416,27 @@ fn past_bound() -> Error {
     Error::limit(format!("a transaction held the writer past its {TX_BOUND:?}, and rolled back"))
 }
 
-/// A call's answer: its rows, what it changed, or why it failed, which left
-/// the transaction as it was before the call.
-fn answer(tx: &Tx<'_>, call: SqlTxCall, max_body: usize) -> SqlTxAnswer {
+/// A call of kv or jobs inside a transaction: its method, its request, and
+/// the largest answer the connection agreed.
+pub(crate) type Nested<'a> = &'a dyn Fn(&Transaction<'_>, u16, &[u8], usize) -> Answered;
+
+/// A call's answer: its rows, what it changed, a method's answer, or why it
+/// failed, which left the transaction as it was before the call.
+fn answer(tx: &Tx<'_>, call: SqlTxCall, max_body: usize, nested: Nested<'_>) -> SqlTxAnswer {
     let ran = || -> Result<SqlTxAnswer, Failure> {
+        if call.want == "call" {
+            let method = call.method.and_then(|method| u16::try_from(method).ok());
+            let method = method.ok_or_else(|| Failure::invalid("a call inside a transaction names its method"))?;
+            let body = nested(tx.transaction(), method, call.body.as_deref().unwrap_or_default(), max_body)?;
+            return Ok(SqlTxAnswer { body: Some(body), ..SqlTxAnswer::default() });
+        }
         let statement = statement(call.text, call.values)?;
         if call.want == "exec" {
             return Ok(SqlTxAnswer { done: Some(done_of(&tx.exec(statement)?)), ..SqlTxAnswer::default() });
         }
-        let wanted = Wanted::named(&call.want)
-            .ok_or_else(|| Failure::invalid(format!("want {:?}: a call wants all, one, scalar or exec", call.want)))?;
+        let wanted = Wanted::named(&call.want).ok_or_else(|| {
+            Failure::invalid(format!("want {:?}: a call wants all, one, scalar, exec or call", call.want))
+        })?;
         let rows = tx.rows_of(&statement, wanted)?;
         let mut parts = parts(rows, max_body / 2)?;
         if parts.len() > 1 {

@@ -7,6 +7,8 @@
 mod clock;
 pub mod engine;
 mod error;
+#[cfg(all(feature = "sql", any(feature = "kv", feature = "jobs")))]
+mod inside;
 #[cfg(feature = "jobs")]
 pub mod jobs;
 #[cfg(feature = "kv")]
@@ -18,9 +20,11 @@ mod schedule;
 pub mod sql;
 pub(crate) mod sqlite;
 mod store;
+mod transaction;
 pub(crate) mod wire;
 
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
 pub use error::{Error, ErrorKind, Result};
 pub use memory::{Memory, Reservation};
 pub use store::{Options, Store};
+pub use transaction::{Transaction, TxHandle};

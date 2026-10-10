@@ -139,7 +139,8 @@ fn begin(client: &mut Client, handle: u64) -> u32 {
 }
 
 fn call(client: &mut Client, stream: u32, sql: &str, values: Vec<Cell>, want: &str) -> SqlTxAnswer {
-    let call = SqlTxCall { text: sql.to_owned(), values, want: want.to_owned(), commit: false };
+    let call =
+        SqlTxCall { text: sql.to_owned(), values, want: want.to_owned(), commit: false, method: None, body: None };
     client.write(Frame::new(Kind::Data, stream, call.encode()));
     let answer = client.next_on(stream);
     assert_eq!((answer.kind, answer.flags), (Kind::Data, 0), "an answer, the transaction open");
@@ -204,5 +205,74 @@ fn a_transaction_whose_client_stalls_or_cancels_is_rolled_back_by_the_server() {
         "both rolled back"
     );
     assert_eq!(insert(&mut client, handle, "n3", "c").changes, 1, "the writer is free again");
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+/// A call of kv or jobs inside a transaction: its method and its request.
+#[cfg(feature = "jobs")]
+fn nested(client: &mut Client, stream: u32, called: u16, request: &impl Message) -> SqlTxAnswer {
+    let call = SqlTxCall {
+        want: "call".to_owned(),
+        method: Some(u64::from(called)),
+        body: Some(request.encode()),
+        ..SqlTxCall::default()
+    };
+    client.write(Frame::new(Kind::Data, stream, call.encode()));
+    let answer = client.next_on(stream);
+    assert_eq!((answer.kind, answer.flags), (Kind::Data, 0), "an answer, the transaction open");
+    SqlTxAnswer::decode(&answer.body).unwrap()
+}
+
+#[cfg(feature = "jobs")]
+#[test]
+fn a_bucket_and_a_queue_opened_from_a_database_write_inside_its_transactions() {
+    use crate::wire::codec::Row;
+    use crate::wire::protocol::{
+        JobsCall, JobsChanged, JobsId, JobsJob, JobsQueueOpen, KvBucketOpen, KvCall, KvEntry, KvWritten,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let database = open(&mut client);
+    let bucket_open = KvBucketOpen { name: "sessions".to_owned(), database: Some(database), ..KvBucketOpen::default() };
+    let sessions = client.call::<Handle>(method::KV_BUCKET_OPEN, &bucket_open).unwrap().handle;
+    let queue_open = JobsQueueOpen { name: "emails".to_owned(), database: Some(database), ..JobsQueueOpen::default() };
+    let emails = client.call::<Handle>(method::JOBS_QUEUE_OPEN, &queue_open).unwrap().handle;
+    let in_kv = client.call::<Handle>(
+        method::KV_BUCKET_OPEN,
+        &KvBucketOpen { name: "sessions".to_owned(), ..KvBucketOpen::default() },
+    );
+    let in_kv = in_kv.unwrap().handle;
+    let set =
+        KvCall { handle: sessions, key: "t-1".to_owned(), value: Some(Row::Bin(b"ann".to_vec())), ..KvCall::default() };
+    let add = JobsCall { handle: emails, id: Some("n1".to_owned()), value: "{}".to_owned(), ..JobsCall::default() };
+    let session = KvCall { handle: sessions, key: "t-1".to_owned(), ..KvCall::default() };
+    let job = JobsId { handle: emails, id: "n1".to_owned() };
+
+    for commit in [false, true] {
+        let stream = begin(&mut client, database);
+        call(&mut client, stream, "insert into notes (id, title) values ('n1', 'a')", Vec::new(), "exec");
+        assert!(KvWritten::decode(&nested(&mut client, stream, method::KV_SET, &set).body.unwrap()).unwrap().written);
+        assert!(
+            JobsChanged::decode(&nested(&mut client, stream, method::JOBS_ADD, &add).body.unwrap()).unwrap().changed
+        );
+        let seen = nested(&mut client, stream, method::KV_GET, &session);
+        assert!(KvEntry::decode(&seen.body.unwrap()).unwrap().found, "a read sees the transaction's own write");
+        let elsewhere = KvCall { handle: in_kv, ..set.clone() };
+        let refused = nested(&mut client, stream, method::KV_SET, &elsewhere).failure.unwrap();
+        assert!(refused.message.contains("kept in kv.db, outside this transaction of sql app"), "{}", refused.message);
+        assert_eq!(end(&mut client, stream, commit).flags, frame::END);
+
+        let found = client.call::<KvEntry>(method::KV_GET, &session).unwrap().found;
+        let queued = client.call::<JobsJob>(method::JOBS_GET, &job).unwrap().found;
+        let rows = query(&mut client, database, "select count(*) from notes", "scalar").rows;
+        assert_eq!(
+            (found, queued, rows),
+            (commit, commit, vec![vec![Cell::Int(i64::from(commit))]]),
+            "commit {commit}"
+        );
+    }
+    let in_kv_db = client.call::<KvEntry>(method::KV_GET, &KvCall { handle: in_kv, ..session.clone() }).unwrap();
+    assert!(!in_kv_db.found, "kv.db is another file");
     assert_eq!(client.pipe.streams(), 0);
 }

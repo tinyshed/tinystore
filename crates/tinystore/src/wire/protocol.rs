@@ -304,12 +304,14 @@ pub(crate) struct JobsQueueOpen {
     pub(crate) keep: Option<u64>,
     /// Ten million when absent.
     pub(crate) max_waiting: Option<u64>,
+    /// A database's handle: the queue lives in its file; jobs.db when absent.
+    pub(crate) database: Option<u64>,
 }
 
 #[cfg(feature = "jobs")]
 impl Message for JobsQueueOpen {
     const NAME: &'static str = "jobs.QueueOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
     fn read(fields: &Fields) -> Result<Self, Failure> {
         Ok(JobsQueueOpen {
@@ -322,6 +324,7 @@ impl Message for JobsQueueOpen {
             dedupe: fields.get(7, "dedupe", codec::uint)?,
             keep: fields.get(8, "keep", codec::uint)?,
             max_waiting: fields.get(9, "maxWaiting", codec::uint)?,
+            database: fields.get(10, "database", codec::uint)?,
         })
     }
 
@@ -335,6 +338,7 @@ impl Message for JobsQueueOpen {
         out.given(7, self.dedupe.as_ref().map(codec::uint_value));
         out.given(8, self.keep.as_ref().map(codec::uint_value));
         out.given(9, self.max_waiting.as_ref().map(codec::uint_value));
+        out.given(10, self.database.as_ref().map(codec::uint_value));
     }
 }
 
@@ -809,18 +813,21 @@ pub(crate) struct KvBucketOpen {
     pub(crate) ttl: Option<u64>,
     /// Milliseconds.
     pub(crate) idle: Option<u64>,
+    /// A database's handle: the bucket lives in its file; kv.db when absent.
+    pub(crate) database: Option<u64>,
 }
 
 #[cfg(feature = "kv")]
 impl Message for KvBucketOpen {
     const NAME: &'static str = "kv.BucketOpen";
-    const KEYS: &'static [u64] = &[1, 2, 3];
+    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
     fn read(fields: &Fields) -> Result<Self, Failure> {
         Ok(KvBucketOpen {
             name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
             ttl: fields.get(2, "ttl", codec::uint)?,
             idle: fields.get(3, "idle", codec::uint)?,
+            database: fields.get(4, "database", codec::uint)?,
         })
     }
 
@@ -828,6 +835,7 @@ impl Message for KvBucketOpen {
         out.put(1, codec::str_value(&self.name));
         out.given(2, self.ttl.as_ref().map(codec::uint_value));
         out.given(3, self.idle.as_ref().map(codec::uint_value));
+        out.given(4, self.database.as_ref().map(codec::uint_value));
     }
 }
 
@@ -1779,22 +1787,28 @@ impl Message for SqlTxOpen {
     }
 }
 
-/// A transaction's call, or its end: the last DATA commits, or not.
+/// A transaction's call, or its end: the last DATA commits, or not. A call is
+/// a statement, or a call of kv or jobs on a bucket or a queue kept in the
+/// database's file: a method of theirs with its request, kv.set or jobs.add,
+/// which runs in the transaction.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlTxCall {
     pub(crate) text: String,
     pub(crate) values: Vec<Cell>,
-    /// All, one, scalar or exec; nothing in the last.
+    /// All, one, scalar or exec; call for a method; nothing in the last.
     pub(crate) want: String,
     /// In the last: true commits, false rolls back.
     pub(crate) commit: bool,
+    /// With want call: the method, its request in body.
+    pub(crate) method: Option<u64>,
+    pub(crate) body: Option<Vec<u8>>,
 }
 
 #[cfg(feature = "sql")]
 impl Message for SqlTxCall {
     const NAME: &'static str = "sql.TxCall";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4];
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6];
 
     fn read(fields: &Fields) -> Result<Self, Failure> {
         Ok(SqlTxCall {
@@ -1802,6 +1816,8 @@ impl Message for SqlTxCall {
             values: fields.get(2, "values", codec::list(codec::cell))?.unwrap_or_default(),
             want: fields.get(3, "want", codec::str)?.unwrap_or_default(),
             commit: fields.get(4, "commit", codec::bool)?.unwrap_or_default(),
+            method: fields.get(5, "method", codec::uint)?,
+            body: fields.get(6, "body", codec::bin)?,
         })
     }
 
@@ -1810,29 +1826,34 @@ impl Message for SqlTxCall {
         out.put(2, codec::list_value(&self.values, codec::cell_value));
         out.put(3, codec::str_value(&self.want));
         out.put(4, codec::bool_value(&self.commit));
+        out.given(5, self.method.as_ref().map(codec::uint_value));
+        out.given(6, self.body.as_ref().map(codec::bin_value));
     }
 }
 
-/// A call's answer: its rows, what it changed, or why it failed, which leaves
-/// the transaction as it was before the call.
+/// A call's answer: its rows, what it changed, a method's answer, or why it
+/// failed, which leaves the transaction as it was before the call.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlTxAnswer {
     pub(crate) rows: Option<SqlRows>,
     pub(crate) done: Option<SqlDone>,
     pub(crate) failure: Option<Failure>,
+    /// What a method answered, as its own answer.
+    pub(crate) body: Option<Vec<u8>>,
 }
 
 #[cfg(feature = "sql")]
 impl Message for SqlTxAnswer {
     const NAME: &'static str = "sql.TxAnswer";
-    const KEYS: &'static [u64] = &[1, 2, 3];
+    const KEYS: &'static [u64] = &[1, 2, 3, 4];
 
     fn read(fields: &Fields) -> Result<Self, Failure> {
         Ok(SqlTxAnswer {
             rows: fields.get(1, "rows", codec::message::<SqlRows>)?,
             done: fields.get(2, "done", codec::message::<SqlDone>)?,
             failure: fields.get(3, "failure", codec::message::<Failure>)?,
+            body: fields.get(4, "body", codec::bin)?,
         })
     }
 
@@ -1840,6 +1861,7 @@ impl Message for SqlTxAnswer {
         out.given(1, self.rows.as_ref().map(codec::message_value));
         out.given(2, self.done.as_ref().map(codec::message_value));
         out.given(3, self.failure.as_ref().map(codec::message_value));
+        out.given(4, self.body.as_ref().map(codec::bin_value));
     }
 }
 

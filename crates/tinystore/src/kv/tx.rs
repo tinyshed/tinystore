@@ -1,4 +1,6 @@
-//! A transaction of kv.db, for reads that decide what to write.
+//! A transaction of kv.db, for reads that decide what to write, and the calls
+//! of a bucket or counters inside any transaction of their file: kv.db's, or
+//! the database's they were opened from.
 //!
 //! ```no_run
 //! # fn main() -> tinystore::Result<()> {
@@ -29,8 +31,9 @@ use super::key_call::KeyCall;
 use super::path::Key;
 use super::scope::Scope;
 use super::value::Value;
-use crate::sqlite::{Tx as SqlTx, sql_error};
-use crate::{Error, Result, Store};
+use crate::sqlite::Tx as SqlTx;
+use crate::transaction::sealed::Sealed;
+use crate::{Error, Result, Store, Transaction, TxHandle};
 
 impl Store {
     /// Runs `work` in one transaction of kv.db that holds its writer alone, so
@@ -45,83 +48,59 @@ impl Store {
     /// already share commits.
     pub fn tx<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         let kv = Kv::of(self).map_err(|error| E::from(error.within("kv tx")))?;
-        kv.file().transaction(|sql| work(&Tx { kv: &kv, sql }))
+        Transaction::run(kv.file(), kv.place(), None, |transaction| work(&Tx { transaction }))
     }
 }
 
 /// A transaction of kv.db, given to the function `Store::tx` runs.
 pub struct Tx<'a> {
-    kv: &'a Kv,
-    sql: &'a SqlTx<'a>,
+    transaction: &'a Transaction<'a>,
 }
 
-impl<'a> Tx<'a> {
+impl Tx<'_> {
     /// The calls of `handle` inside this transaction: what they read sees what
     /// the transaction wrote, and what they write commits with it or not at
-    /// all. A handle of another store is refused at its first call.
+    /// all. A handle kept in another file is refused at its first call.
     pub fn with<'h, H: TxHandle>(&'h self, handle: &'h H) -> H::InTx<'h> {
-        handle.in_tx(self)
-    }
-
-    /// Runs one call of a handle in a savepoint of the transaction, so that a
-    /// call that fails leaves the transaction as it was before the call.
-    pub(crate) fn run<T>(
-        &self,
-        scope: &Scope,
-        key: &str,
-        work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>,
-    ) -> Result<T> {
-        self.check(scope)?;
-        let revision = self.kv.revision();
-        savepoint(self.sql, || work(self.sql, &revision)).map_err(|error| error.within(scope.shown_key(key)))
-    }
-
-    fn check(&self, scope: &Scope) -> Result<()> {
-        if std::ptr::eq(&*scope.kv, self.kv) {
-            return Ok(());
-        }
-        Err(Error::invalid("a handle of another store, in a transaction of this one").within(scope.shown()))
+        handle.in_tx(self.transaction)
     }
 }
 
 impl fmt::Debug for Tx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Tx({:?})", self.kv)
+        write!(f, "Tx({:?})", self.transaction)
     }
 }
 
-/// A handle a transaction takes in with `tx.with(&handle)`: a bucket or
-/// counters kept in the file.
-pub trait TxHandle: sealed::Sealed {
-    /// The handle's calls inside a transaction.
-    type InTx<'h>
-    where
-        Self: 'h;
-
-    #[doc(hidden)]
-    fn in_tx<'h>(&'h self, tx: &'h Tx<'h>) -> Self::InTx<'h>;
+/// Runs one call of a handle of `scope` on `key` in a savepoint of the
+/// transaction, once the handle is kept in the transaction's file.
+pub(crate) fn call_on_key<T>(
+    tx: &Transaction<'_>,
+    scope: &Scope,
+    key: &str,
+    work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>,
+) -> Result<T> {
+    call(tx, scope, work).map_err(|error| error.within(scope.shown_key(key)))
 }
 
-/// Sealed: a public bound that no other crate can implement.
-mod sealed {
-    pub trait Sealed {}
-
-    impl<V> Sealed for super::Bucket<V> {}
-    impl Sealed for super::Counters {}
-    impl<H: Sealed + ?Sized> Sealed for &H {}
+/// Runs one call of a handle of `scope` on its whole branch, as
+/// [`call_on_key`] runs one on a key.
+pub(crate) fn call_on_branch<T>(
+    tx: &Transaction<'_>,
+    scope: &Scope,
+    work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>,
+) -> Result<T> {
+    call(tx, scope, work).map_err(|error| error.within(scope.shown_branch()))
 }
 
-/// A handle held by reference joins as the handle does.
-impl<H: TxHandle + ?Sized> TxHandle for &H {
-    type InTx<'h>
-        = H::InTx<'h>
-    where
-        Self: 'h;
-
-    fn in_tx<'h>(&'h self, tx: &'h Tx<'h>) -> H::InTx<'h> {
-        (**self).in_tx(tx)
-    }
+fn call<T>(tx: &Transaction<'_>, scope: &Scope, work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>) -> Result<T> {
+    let revision = scope.kv.revision();
+    tx.takes(scope.kv.file(), scope.kv.place())?;
+    tx.call(|sql| work(sql, &revision))
 }
+
+impl<V> Sealed for Bucket<V> {}
+impl Sealed for Counters {}
 
 impl<V: Value> TxHandle for Bucket<V> {
     type InTx<'h>
@@ -129,7 +108,7 @@ impl<V: Value> TxHandle for Bucket<V> {
     where
         Self: 'h;
 
-    fn in_tx<'h>(&'h self, tx: &'h Tx<'h>) -> TxBucket<'h, V> {
+    fn in_tx<'h>(&'h self, tx: &'h Transaction<'h>) -> TxBucket<'h, V> {
         TxBucket { bucket: self, tx }
     }
 }
@@ -137,7 +116,7 @@ impl<V: Value> TxHandle for Bucket<V> {
 impl TxHandle for Counters {
     type InTx<'h> = TxCounters<'h>;
 
-    fn in_tx<'h>(&'h self, tx: &'h Tx<'h>) -> TxCounters<'h> {
+    fn in_tx<'h>(&'h self, tx: &'h Transaction<'h>) -> TxCounters<'h> {
         TxCounters { counters: self, tx }
     }
 }
@@ -145,7 +124,7 @@ impl TxHandle for Counters {
 /// A bucket's calls inside a transaction.
 pub struct TxBucket<'a, V> {
     bucket: &'a Bucket<V>,
-    tx: &'a Tx<'a>,
+    tx: &'a Transaction<'a>,
 }
 
 impl<'a, V: Value> TxBucket<'a, V> {
@@ -155,13 +134,13 @@ impl<'a, V: Value> TxBucket<'a, V> {
 
     pub fn entry(&self, key: impl Key) -> Result<Option<Entry<V>>> {
         let key = key.text();
-        let cell = self.tx.run(&self.bucket.scope, &key, |sql, _| self.bucket.read_cell_in(sql, &key))?;
+        let cell = call_on_key(self.tx, &self.bucket.scope, &key, |sql, _| self.bucket.read_cell_in(sql, &key))?;
         cell.map(|cell| self.bucket.entry_of(&key, cell)).transpose()
     }
 
     pub fn has(&self, key: impl Key) -> Result<bool> {
         let key = key.text();
-        Ok(self.tx.run(&self.bucket.scope, &key, |sql, _| self.bucket.read_cell_in(sql, &key))?.is_some())
+        Ok(call_on_key(self.tx, &self.bucket.scope, &key, |sql, _| self.bucket.read_cell_in(sql, &key))?.is_some())
     }
 
     pub fn set(&self, key: impl Key, value: &V) -> Result<()> {
@@ -194,21 +173,15 @@ impl<'a, V: Value> TxBucket<'a, V> {
 
     /// Removes every key of the bucket's branch and of the branches under it.
     pub fn clear(&self) -> Result<()> {
-        let work = clear_work(&self.bucket.scope)?;
-        let shown = self.bucket.scope.shown_branch();
-        self.tx.check(&self.bucket.scope)?;
-        let revision = self.tx.kv.revision();
-        savepoint(self.tx.sql, || work(self.tx.sql, &revision)).map_err(|error| error.within(shown))
+        let scope = &self.bucket.scope;
+        let work = clear_work(scope).map_err(|error| error.within(scope.shown_branch()))?;
+        call_on_branch(self.tx, scope, work)
     }
 
     /// One page of the branch's own keys, as `Bucket::list` reads it.
     pub fn list(&self, limit: usize, after: Option<&str>) -> Result<Page<V>> {
         let limit = limit.clamp(1, PAGE_KEYS);
-        self.tx.check(&self.bucket.scope)?;
-        let rows = self
-            .bucket
-            .page_rows(self.tx.sql, limit, after)
-            .map_err(|error| error.within(self.bucket.scope.shown_branch()))?;
+        let rows = call_on_branch(self.tx, &self.bucket.scope, |sql, _| self.bucket.page_rows(sql, limit, after))?;
         self.bucket.page_of(rows, limit)
     }
 }
@@ -223,7 +196,7 @@ impl<V> fmt::Debug for TxBucket<'_, V> {
 /// transaction: their calls through it are `Invalid`.
 pub struct TxCounters<'a> {
     counters: &'a Counters,
-    tx: &'a Tx<'a>,
+    tx: &'a Transaction<'a>,
 }
 
 impl TxCounters<'_> {
@@ -231,20 +204,20 @@ impl TxCounters<'_> {
         let key = key.text();
         self.refuse_in_memory()?;
         let work = self.counters.add_work(&key, n)?;
-        self.tx.run(&self.counters.scope, &key, work)
+        call_on_key(self.tx, &self.counters.scope, &key, work)
     }
 
     pub fn get(&self, key: impl Key) -> Result<i64> {
         let key = key.text();
         self.refuse_in_memory()?;
-        self.tx.run(&self.counters.scope, &key, |sql, _| self.counters.get_on(sql, &key))
+        call_on_key(self.tx, &self.counters.scope, &key, |sql, _| self.counters.get_on(sql, &key))
     }
 
     pub fn delete(&self, key: impl Key) -> Result<bool> {
         let key = key.text();
         self.refuse_in_memory()?;
         let work = self.counters.delete_work(&key)?;
-        self.tx.run(&self.counters.scope, &key, work)
+        call_on_key(self.tx, &self.counters.scope, &key, work)
     }
 
     fn refuse_in_memory(&self) -> Result<()> {
@@ -259,24 +232,6 @@ impl TxCounters<'_> {
 impl fmt::Debug for TxCounters<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TxCounters({:?})", self.counters.scope)
-    }
-}
-
-const SAVEPOINT: &str = "savepoint call";
-const RELEASE: &str = "release call";
-const ROLLBACK_TO: &str = "rollback to call";
-
-/// Runs `work` in a savepoint of the transaction, kept when it succeeds and
-/// rolled back when it fails.
-fn savepoint<T>(sql: &SqlTx<'_>, work: impl FnOnce() -> Result<T>) -> Result<T> {
-    let fail = |error| sql_error("a call's savepoint", error);
-    sql.execute_batch(SAVEPOINT).map_err(fail)?;
-    match work() {
-        Ok(value) => sql.execute_batch(RELEASE).map_err(fail).map(|()| value),
-        Err(error) => {
-            sql.execute_batch(ROLLBACK_TO).and_then(|()| sql.execute_batch(RELEASE)).map_err(fail)?;
-            Err(error)
-        }
     }
 }
 
