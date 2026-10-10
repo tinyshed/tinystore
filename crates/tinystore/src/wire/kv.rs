@@ -47,6 +47,9 @@ pub(crate) fn route(called: u16) -> Route {
     match called {
         method::KV_GET | method::KV_HAS | method::KV_ONCE_GET => Route::Inline,
         method::KV_SET | method::KV_CREATE | method::KV_TAKE | method::KV_DELETE | method::KV_EXPIRE => Route::Submit,
+        method::KV_CLEAR | method::KV_TX | method::KV_ONCE_DELETE => Route::Submit,
+        method::KV_COUNTERS_ADD | method::KV_COUNTERS_DELETE => Route::Submit,
+        method::KV_ALLOW | method::KV_REFUND | method::KV_RESET => Route::Submit,
         method::KV_ONCE_RUN => Route::Handover,
         _ => Route::Worker,
     }
@@ -72,30 +75,22 @@ pub(crate) fn call(
         }
         method::KV_GET => get(handles, KvCall::decode(body)?),
         method::KV_HAS => has(handles, KvCall::decode(body)?),
-        method::KV_CLEAR => clear(handles, KvBranch::decode(body)?),
         method::KV_LIST => list(handles, KvList::decode(body)?, max_body),
-        method::KV_COUNTERS_ADD | method::KV_COUNTERS_GET | method::KV_COUNTERS_DELETE => {
-            counting(handles, called, KvCall::decode(body)?)
+        method::KV_COUNTERS_GET => {
+            let call = KvCall::decode(body)?;
+            Ok(KvCount { value: handles.counters(call.handle, &call.under)?.get(&*call.key)? }.encode())
         }
         method::KV_COUNTERS_CLEAR => {
             let branch = KvBranch::decode(body)?;
             handles.counters(branch.handle, &branch.under)?.clear()?;
             Ok(Empty {}.encode())
         }
-        method::KV_ALLOW | method::KV_PEEK | method::KV_RESET | method::KV_REFUND => {
-            limit(handles, called, KvCall::decode(body)?)
-        }
+        method::KV_PEEK => limit(handles, called, KvCall::decode(body)?),
         method::KV_ONCE_GET => {
             let call = KvCall::decode(body)?;
             let cell = handles.once(call.handle, &call.under)?.read_cell(&call.key)?;
             Ok(answer(cell.map(|cell| cell.raw)).encode())
         }
-        method::KV_ONCE_DELETE => {
-            let call = KvCall::decode(body)?;
-            let removed = handles.once(call.handle, &call.under)?.remove(&call.key, WriteOptions::default())?;
-            Ok(KvFound { found: removed.is_some() }.encode())
-        }
-        method::KV_TX => tx(handles, KvTx::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -158,6 +153,18 @@ fn key_call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, call: &KvCa
 /// Queues a write and returns; `done` gets its answer on the thread that
 /// commits it.
 pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    match called {
+        method::KV_CLEAR => clear(handles, body, done),
+        method::KV_TX => tx(handles, body, done),
+        method::KV_ONCE_DELETE => forget(handles, body, done),
+        method::KV_COUNTERS_ADD | method::KV_COUNTERS_DELETE => counting(handles, called, body, done),
+        method::KV_ALLOW | method::KV_REFUND | method::KV_RESET => using(handles, called, body, done),
+        _ => write(handles, called, body, done),
+    }
+}
+
+/// A write of one key of a bucket, queued for its commit.
+fn write(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
     let prepared = || -> Result<_, Failure> {
         let call = KvCall::decode(body)?;
         let bucket = handles.bucket(call.handle, &call.under)?;
@@ -307,9 +314,25 @@ fn has(handles: &Handles, call: KvCall) -> Answered {
     Ok(KvFound { found }.encode())
 }
 
-fn clear(handles: &Handles, branch: KvBranch) -> Answered {
-    handles.bucket(branch.handle, &branch.under)?.clear()?;
-    Ok(Empty {}.encode())
+fn clear(handles: &Handles, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let bucket = KvBranch::decode(body).and_then(|branch| handles.bucket(branch.handle, &branch.under));
+    match bucket {
+        Ok(bucket) => {
+            bucket.clear_then(move |cleared| done(cleared.map(|()| Empty {}.encode()).map_err(Failure::from)))
+        }
+        Err(failure) => done(Err(failure)),
+    }
+}
+
+/// Removes a once key's kept answer.
+fn forget(handles: &Handles, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let answers = KvCall::decode(body).and_then(|call| Ok((handles.once(call.handle, &call.under)?, call.key)));
+    match answers {
+        Ok((answers, key)) => answers.remove_then(&key, WriteOptions::default(), move |removed| {
+            done(removed.map(|removed| KvFound { found: removed.is_some() }.encode()).map_err(Failure::from));
+        }),
+        Err(failure) => done(Err(failure)),
+    }
 }
 
 /// A page of the branch's own keys, as many as `limit` asks and the agreed
@@ -350,13 +373,46 @@ fn page(rows: Vec<(String, Cell)>, list: &KvList, limit: usize, max_body: usize)
     Ok(page.encode())
 }
 
-fn counting(handles: &Handles, called: u16, call: KvCall) -> Answered {
-    let counters = handles.counters(call.handle, &call.under)?;
-    Ok(match called {
-        method::KV_COUNTERS_ADD => KvCount { value: counters.add(&*call.key, call.n.unwrap_or(1))? }.encode(),
-        method::KV_COUNTERS_GET => KvCount { value: counters.get(&*call.key)? }.encode(),
-        _ => KvFound { found: counters.delete(&*call.key)? }.encode(),
-    })
+/// A counter's add or its delete, answered once its commit ends, or at once
+/// by counters kept in memory.
+fn counting(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let counters = KvCall::decode(body).and_then(|call| Ok((handles.counters(call.handle, &call.under)?, call)));
+    let (counters, call) = match counters {
+        Ok(counters) => counters,
+        Err(failure) => return done(Err(failure)),
+    };
+    if called == method::KV_COUNTERS_ADD {
+        counters.add_then(&call.key, call.n.unwrap_or(1), move |sum| {
+            done(sum.map(|value| KvCount { value }.encode()).map_err(Failure::from));
+        });
+    } else {
+        counters.delete_then(&call.key, move |found| {
+            done(found.map(|found| KvFound { found }.encode()).map_err(Failure::from));
+        });
+    }
+}
+
+/// A use of a limit that writes: a quota's, answered once its commit ends.
+/// A rate limit counts in memory, and answers at once.
+fn using(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let opened = KvCall::decode(body).and_then(|call| Ok((handles.opened(call.handle)?, call)));
+    let (quota, call) = match opened {
+        Ok((Opened::Quota(quota), call)) => (quota, call),
+        Ok((_, call)) => return done(limit(handles, called, call)),
+        Err(failure) => return done(Err(failure)),
+    };
+    let Ok(n) = u64::try_from(call.n.unwrap_or(1)) else {
+        return done(Err(Failure::invalid("a negative count of requests")));
+    };
+    let quota = call.under.iter().fold(quota, |quota, owner| quota.under(owner));
+    let nothing = |written: Result<(), Error>| written.map(|()| Empty {}.encode()).map_err(Failure::from);
+    match called {
+        method::KV_ALLOW => quota.allow_n_then(&call.key, n, move |allowance| {
+            done(allowance.map(|allowance| allowance_of(&allowance).encode()).map_err(Failure::from));
+        }),
+        method::KV_RESET => quota.reset_then(&call.key, move |reset| done(nothing(reset))),
+        _ => quota.refund_n_then(&call.key, n, move |refunded| done(nothing(refunded))),
+    }
 }
 
 /// A rate limit's or a quota's call: n is the requests or uses asked, 1 when
@@ -390,18 +446,27 @@ fn limit(handles: &Handles, called: u16, call: KvCall) -> Answered {
 
 /// A transaction's checks and writes in one batch, all or none; a failed one
 /// names its place in `what`.
-fn tx(handles: &Handles, tx: KvTx) -> Answered {
-    let mut batch = Batch::default();
-    for (index, check) in tx.checks.iter().enumerate() {
-        add_check(handles, &mut batch, check).map_err(|failure| failure.at(Place::Check(index)))?;
-    }
-    for (index, op) in tx.writes.iter().enumerate() {
-        add_write(handles, &mut batch, op.method, &op.call).map_err(|failure| failure.at(Place::Write(index)))?;
-    }
-    match batch.commit() {
-        Ok(outcomes) => Ok(KvTxResults { outcomes: outcomes.into_iter().map(outcome_of).collect() }.encode()),
-        Err((Some(place), error)) => Err(Failure::from(error).at(place)),
-        Err((None, error)) => Err(Failure::from(error)),
+fn tx(handles: &Handles, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    let batched = || -> Result<Batch, Failure> {
+        let tx = KvTx::decode(body)?;
+        let mut batch = Batch::default();
+        for (index, check) in tx.checks.iter().enumerate() {
+            add_check(handles, &mut batch, check).map_err(|failure| failure.at(Place::Check(index)))?;
+        }
+        for (index, op) in tx.writes.iter().enumerate() {
+            add_write(handles, &mut batch, op.method, &op.call).map_err(|failure| failure.at(Place::Write(index)))?;
+        }
+        Ok(batch)
+    };
+    match batched() {
+        Ok(batch) => batch.commit_then(move |committed| {
+            done(match committed {
+                Ok(outcomes) => Ok(KvTxResults { outcomes: outcomes.into_iter().map(outcome_of).collect() }.encode()),
+                Err((Some(place), error)) => Err(Failure::from(error).at(place)),
+                Err((None, error)) => Err(Failure::from(error)),
+            });
+        }),
+        Err(failure) => done(Err(failure)),
     }
 }
 

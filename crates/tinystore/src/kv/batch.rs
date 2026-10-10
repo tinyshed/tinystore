@@ -37,6 +37,9 @@ pub(crate) struct Outcome {
     pub(crate) count: Option<i64>,
 }
 
+/// A batch's outcomes, or its failure and the place of what failed.
+pub(crate) type Committed = std::result::Result<Vec<Outcome>, (Option<Place>, Error)>;
+
 /// Where a batch failed: the check or the write, by its place.
 #[derive(Debug)]
 pub(crate) enum Place {
@@ -109,15 +112,16 @@ impl Batch {
     }
 
     /// Checks every read, then applies every write, in one grouped write; the
-    /// first that fails rolls all of them back and says its place.
-    pub(crate) fn commit(self) -> std::result::Result<Vec<Outcome>, (Option<Place>, Error)> {
+    /// first that fails rolls all of them back and says its place. It does
+    /// not wait: `done` gets the outcomes on the thread that commits them.
+    pub(crate) fn commit_then(self, done: impl FnOnce(Committed) + Send + 'static) {
         let Some(kv) = self.kv else {
-            return Ok(Vec::new());
+            return done(Ok(Vec::new()));
         };
         let (checks, writes, revision) = (self.checks, self.writes, kv.revision());
         let failed = Arc::new(std::sync::Mutex::new(None));
         let at = Arc::clone(&failed);
-        let committed = kv.file().write(self.bytes, move |tx| {
+        let work = move |tx: &Tx<'_>| {
             for (index, check) in checks.into_iter().enumerate() {
                 check(tx, &revision).inspect_err(|_| *lock(&at) = Some(Place::Check(index)))?;
             }
@@ -126,8 +130,11 @@ impl Batch {
                 outcomes.push(write(tx, &revision).inspect_err(|_| *lock(&at) = Some(Place::Write(index)))?);
             }
             Ok(outcomes)
-        });
-        committed.map_err(|error| (lock(&failed).take(), error))
+        };
+        let answered = move |committed: Result<Vec<Outcome>>| {
+            done(committed.map_err(|error| (lock(&failed).take(), error)));
+        };
+        kv.file().submit(self.bytes, work, answered);
     }
 
     fn write(

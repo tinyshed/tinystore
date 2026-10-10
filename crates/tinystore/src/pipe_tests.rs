@@ -6,8 +6,9 @@ use super::*;
 use crate::wire::codec::{Message, Row};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Failure as Failed, Handle, Hello, KvAnswer, KvCall, KvCheck, KvEntry, KvOnceOpen, KvOp, KvTx, KvTxResults,
-    KvWritten, METHODS, ServerClock, method,
+    Empty, Failure as Failed, Handle, Hello, KvAllowance, KvAnswer, KvBranch, KvCall, KvCheck, KvCount, KvCountersOpen,
+    KvEntry, KvList, KvOnceOpen, KvOp, KvPage, KvQuotaOpen, KvTx, KvTxResults, KvWindow, KvWritten, METHODS,
+    ServerClock, method,
 };
 
 #[test]
@@ -331,4 +332,64 @@ fn sets_in_flight() {
         let seconds = started.elapsed().as_secs_f64();
         println!("pass {pass}: {:.0} sets/s", 2000.0 / seconds);
     }
+}
+
+#[test]
+fn writes_of_kv_in_flight_hold_no_thread_of_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    client.hello(2).unwrap();
+    let sessions = client.bucket("sessions");
+    let hits = KvCountersOpen { name: "hits".to_owned(), ..KvCountersOpen::default() };
+    let hits = client.call::<Handle>(method::KV_COUNTERS_OPEN, &hits).unwrap().handle;
+    let window = KvWindow { name: "minute".to_owned(), limit: 100, per: 60_000 };
+    let uses = KvQuotaOpen { name: "uses".to_owned(), windows: vec![window] };
+    let uses = client.call::<Handle>(method::KV_QUOTA_OPEN, &uses).unwrap().handle;
+    let held = store.bucket::<i64>("held").open().unwrap();
+    let (began, begun) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+
+    std::thread::scope(|scope| {
+        // a transaction of kv.db holds its writer, so that no write can commit
+        let (store, held) = (&store, &held);
+        let holding = scope.spawn(move || {
+            store.tx(|tx| -> crate::Result<()> {
+                tx.with(held).set("k", &1)?;
+                began.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(())
+            })
+        });
+        begun.recv().unwrap();
+        let key = |handle, n: usize| KvCall { handle, key: format!("k{n}"), ..KvCall::default() };
+        let adds: Vec<u32> = (0..20).map(|n| client.start(method::KV_COUNTERS_ADD, &key(hits, n))).collect();
+        let allows: Vec<u32> = (0..10).map(|n| client.start(method::KV_ALLOW, &key(uses, n))).collect();
+        let txs: Vec<u32> = (0..10)
+            .map(|n| {
+                let set = KvCall { value: Some(Row::Int(1)), ..key(sessions, n) };
+                let writes = vec![KvOp { method: u64::from(method::KV_SET), call: set }];
+                client.start(method::KV_TX, &KvTx { checks: Vec::new(), writes })
+            })
+            .collect();
+        let clear = client.start(method::KV_CLEAR, &KvBranch { handle: sessions, under: vec!["gone".to_owned()] });
+        // more writes wait than the session has threads, and a call that needs one is still answered
+        let page: KvPage = client.call(method::KV_LIST, &KvList { handle: sessions, ..KvList::default() }).unwrap();
+        assert!(page.entries.is_empty(), "nothing is committed yet");
+        release.send(()).unwrap();
+        holding.join().unwrap().unwrap();
+        for stream in adds {
+            assert_eq!(answered::<KvCount>(&client.next_on(stream)).unwrap().value, 1);
+        }
+        for stream in allows {
+            assert!(answered::<KvAllowance>(&client.next_on(stream)).unwrap().ok);
+        }
+        for stream in txs {
+            assert_eq!(answered::<KvTxResults>(&client.next_on(stream)).unwrap().outcomes.len(), 1);
+        }
+        answered::<Empty>(&client.next_on(clear)).unwrap();
+    });
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+    drop(client);
+    store.close().unwrap();
 }

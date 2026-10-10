@@ -97,6 +97,30 @@ impl Counters {
         buffer.step(&self.scope.kv, &path, now, step).map_err(|error| error.within(self.scope.shown_key(&key)))
     }
 
+    /// `add` without waiting for its commit: `done` gets the sum on the
+    /// thread that commits it. Counters kept in memory answer before this
+    /// returns.
+    pub(crate) fn add_then(&self, key: &str, n: i64, done: impl FnOnce(Result<i64>) + Send + 'static) {
+        if self.buffer.is_some() {
+            return done(self.add(key, n));
+        }
+        match self.add_work(key, n) {
+            Ok(work) => self.scope.submit(key, 0, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    /// `delete` without waiting for its commit.
+    pub(crate) fn delete_then(&self, key: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
+        if self.buffer.is_some() {
+            return done(self.delete(key));
+        }
+        match self.delete_work(key) {
+            Ok(work) => self.scope.submit(key, 0, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
     /// What the counter under `key` holds; 0 when it is not there.
     pub fn get(&self, key: impl Key) -> Result<i64> {
         let key = key.text();

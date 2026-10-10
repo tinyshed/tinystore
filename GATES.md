@@ -475,6 +475,8 @@ module defines.
 - a client past its credit is cut off, the reader never waits — `TestAClientPastItsCreditIsCutOff`, `TestFramesThatBreakTheProtocolEndTheConnection`
 - every stream ends with one final frame — `TestEveryStreamEndsOnce`, answered, failed, panicked, cancelled, silent, down and up
 - a client that read a stream's last frame finds the stream ended, counted out as its frame is queued — `a_client_that_read_its_answer_finds_its_stream_ended` in `wire::jobs`
+- kv's writes in flight over the wire hold no thread of the session, a counter's add, a quota's use, a transaction and a clear among them — `writes_of_kv_in_flight_hold_no_thread_of_the_session` in `pipe`
+- a write sent through a query holds no thread of the session until its commit — `writes_through_a_query_in_flight_hold_no_thread_of_the_session` in `wire::sql`
 - reads sent together are each answered, the crowd of them on the store's workers and the last where they are read — `reads_sent_together_are_each_answered_though_workers_take_the_crowd` in `pipe`, `a_reader_says_how_many_frames_wait_whole` in `wire::frame`
 - jobs queued for sleeping workers wake them one through another, and start no thread more — `jobs_queued_for_sleeping_threads_wake_them_one_through_another` in `wire::workers`
 - answers queued during a write leave in the next — `TestQueuedAnswersShareAWrite` in `server/internal/flow`

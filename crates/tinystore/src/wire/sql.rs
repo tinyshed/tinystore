@@ -165,14 +165,37 @@ pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnO
 /// Runs a query and says how its rows go: in the RESPONSE when they fit one
 /// part, or a part a DATA within the client's credit, the last ending the
 /// stream, through [`download`] once the RESPONSE went out.
-pub(crate) fn query(handles: &Handles, body: &[u8], link: &Link) -> Result<Queried, Failure> {
-    let asked = SqlQuery::decode(body)?;
-    let database = handles.database(asked.handle)?;
-    let wanted = Wanted::named(&asked.want)
-        .ok_or_else(|| Failure::invalid(format!("want {:?}: a query wants all, one or scalar", asked.want)))?;
-    let mut rows = database.rows_of(&statement(asked.text, asked.values)?, wanted)?;
+///
+/// It does not wait for a commit: a read is given to `done` before this
+/// returns, and a statement that writes once its commit ends, on the thread
+/// that commits it, so that writes in flight hold no thread of the session.
+pub(crate) fn query(
+    handles: &Handles,
+    body: &[u8],
+    link: &Link,
+    done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
+) {
+    let prepared = || -> Result<_, Failure> {
+        let asked = SqlQuery::decode(body)?;
+        let database = handles.database(asked.handle)?;
+        let wanted = Wanted::named(&asked.want)
+            .ok_or_else(|| Failure::invalid(format!("want {:?}: a query wants all, one or scalar", asked.want)))?;
+        Ok((database, statement(asked.text, asked.values)?, wanted))
+    };
+    let (database, statement, wanted) = match prepared() {
+        Ok(prepared) => prepared,
+        Err(failure) => return done(Err(failure)),
+    };
+    let bound = part_bound(link);
+    database.rows_then(statement, wanted, move |rows| {
+        done(rows.map_err(Failure::from).and_then(|rows| queried(rows, bound)));
+    });
+}
+
+/// How a query's rows go: whole, or in parts with the memory they hold.
+fn queried(mut rows: Rows, bound: usize) -> Result<Queried, Failure> {
     let held = rows.held();
-    let mut parts = parts(rows, part_bound(link))?;
+    let mut parts = parts(rows, bound)?;
     if parts.len() == 1 {
         return Ok(Queried::Whole(parts.pop_front().unwrap_or_default()));
     }

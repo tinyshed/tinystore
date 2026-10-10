@@ -352,6 +352,17 @@ impl<V> Bucket<V> {
         self.scope.kv.file().write(0, move |tx| work(tx, &revision)).map_err(|error| error.within(shown))
     }
 
+    /// `clear` without waiting for its commit.
+    pub(crate) fn clear_then(&self, done: impl FnOnce(Result<()>) + Send + 'static) {
+        let work = match clear_work(&self.scope) {
+            Ok(work) => work,
+            Err(error) => return done(Err(error)),
+        };
+        let (revision, shown) = (self.scope.kv.revision(), self.scope.shown_branch());
+        let answered = move |cleared: Result<()>| done(cleared.map_err(|error| error.within(shown)));
+        self.scope.kv.file().submit(0, move |tx| work(tx, &revision), answered);
+    }
+
     /// Writes a row's value under `key`, as `put` says, and stamps it.
     pub(crate) fn put_raw(&self, key: &str, raw: Raw, options: WriteOptions, put: Put) -> Result<Stamp> {
         let (bytes, work) = self.put_work(key, raw, options, put)?;

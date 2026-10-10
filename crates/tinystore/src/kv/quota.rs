@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 
 use super::allowance::{Allowance, Window as WindowUse};
+use super::bucket::Work;
 use super::cells;
 use super::engine::next_version;
 use super::path::Key;
@@ -104,13 +105,25 @@ impl Quota {
     /// room for `n`. More than a window's limit never passes, and is `Invalid`.
     pub fn allow_n(&self, key: impl Key, n: u64) -> Result<Allowance> {
         let key = key.text();
+        self.scope.write(&key, ROW, self.allow_work(&key, n)?)
+    }
+
+    /// `allow_n` without waiting: `done` gets the allowance once its commit ends.
+    pub(crate) fn allow_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<Allowance>) + Send + 'static) {
+        match self.allow_work(key, n) {
+            Ok(work) => self.scope.submit(key, ROW, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    fn allow_work(&self, key: &str, n: u64) -> Result<impl Work<Allowance> + use<>> {
         if n == 0 || n > self.least {
             let message = format!("{n} at once, past the smallest window's limit of {}", self.least);
-            return Err(Error::invalid(message).within(self.scope.shown_key(&key)));
+            return Err(Error::invalid(message).within(self.scope.shown_key(key)));
         }
         let now = self.scope.now();
-        let (id, path, windows) = (self.scope.id, self.scope.path(&key)?, Arc::clone(&self.windows));
-        self.scope.write(&key, ROW, move |tx: &Tx<'_>, revision: &AtomicI64| {
+        let (id, path, windows) = (self.scope.id, self.scope.path(key)?, Arc::clone(&self.windows));
+        Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
             let (held, spill) = held(tx, id, &path, now)?;
             let (next, usage) = decide(&windows, &held, now, n);
             if usage.ok {
@@ -137,9 +150,21 @@ impl Quota {
     /// Gives `n` uses back, never below nothing.
     pub fn refund_n(&self, key: impl Key, n: u64) -> Result<()> {
         let key = key.text();
+        self.scope.write(&key, ROW, self.refund_work(&key, n)?)
+    }
+
+    /// `refund_n` without waiting for its commit.
+    pub(crate) fn refund_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<()>) + Send + 'static) {
+        match self.refund_work(key, n) {
+            Ok(work) => self.scope.submit(key, ROW, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    fn refund_work(&self, key: &str, n: u64) -> Result<impl Work<()> + use<>> {
         let now = self.scope.now();
-        let (id, path) = (self.scope.id, self.scope.path(&key)?);
-        self.scope.write(&key, ROW, move |tx: &Tx<'_>, revision: &AtomicI64| {
+        let (id, path) = (self.scope.id, self.scope.path(key)?);
+        Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
             let (held, spill) = held(tx, id, &path, now)?;
             let next: Held = held
                 .into_iter()
@@ -156,9 +181,21 @@ impl Quota {
     /// Forgets `key`'s windows, so that its next use starts each anew.
     pub fn reset(&self, key: impl Key) -> Result<()> {
         let key = key.text();
+        self.scope.write(&key, 0, self.reset_work(&key)?)
+    }
+
+    /// `reset` without waiting for its commit.
+    pub(crate) fn reset_then(&self, key: &str, done: impl FnOnce(Result<()>) + Send + 'static) {
+        match self.reset_work(key) {
+            Ok(work) => self.scope.submit(key, 0, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    fn reset_work(&self, key: &str) -> Result<impl Work<()> + use<>> {
         let now = self.scope.now();
-        let (id, path) = (self.scope.id, self.scope.path(&key)?);
-        self.scope.write(&key, 0, move |tx: &Tx<'_>, _: &AtomicI64| match cells::current(tx, id, &path, now)? {
+        let (id, path) = (self.scope.id, self.scope.path(key)?);
+        Ok(move |tx: &Tx<'_>, _: &AtomicI64| match cells::current(tx, id, &path, now)? {
             Some(current) => cells::remove(tx, id, &path, current.spill),
             None => Ok(()),
         })

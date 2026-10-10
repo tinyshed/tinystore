@@ -178,6 +178,24 @@ impl Database {
         self.base.file().submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));
     }
 
+    /// `rows_of` without waiting for a commit: a read's rows come before this
+    /// returns, and a write's once its commit ends, on the thread that
+    /// commits it.
+    pub(crate) fn rows_then(&self, statement: Sql, wanted: Wanted, done: impl FnOnce(Result<Rows>) + Send + 'static) {
+        let describe = self.failed_by(&statement);
+        if !self.base.writes(statement.text()) {
+            let held = Held::of(&self.base.memory);
+            match self.base.file().read(|connection| run::read(connection, &statement, wanted, held)) {
+                Ok(Read::Rows(rows)) => return done(Ok(rows)),
+                Ok(Read::Writes) => self.base.remember_write(statement.text()),
+                Err(error) => return done(Err(describe(error))),
+            }
+        }
+        let (weight, held) = (statement.weight(), Held::of(&self.base.memory));
+        let write = move |tx: &crate::sqlite::Tx<'_>| run::write(tx, &statement, wanted, held);
+        self.base.file().submit(weight, write, move |rows| done(rows.map_err(describe)));
+    }
+
     /// A statement's rows from a reader, or from the writer when SQLite says
     /// it writes; a statement known to write goes to the writer at once.
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {

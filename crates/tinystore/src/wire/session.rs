@@ -431,13 +431,23 @@ impl Shared {
     fn download(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
         let link = self.sql_link(input, stream);
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || match guarded(|| sql::query(&shared.sql, &body, &link)) {
-            Ok(sql::Queried::Whole(rows)) => shared.answer(stream, Ok(rows)),
-            Ok(sql::Queried::Parts(parts, held)) => {
-                shared.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
-                sql::download(&shared.sql, stream, (parts, held), &link);
+        self.workers.run(Box::new(move || {
+            let (answering, sending) = (Arc::clone(&shared), link.clone());
+            let done = move |queried| match queried {
+                Ok(sql::Queried::Whole(rows)) => answering.answer(stream, Ok(rows)),
+                Ok(sql::Queried::Parts(parts, held)) => {
+                    answering.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                    sql::download(&answering.sql, stream, (parts, held), &sending);
+                }
+                Err(failure) => answering.answer(stream, Err(failure)),
+            };
+            let queued = guarded(|| {
+                sql::query(&shared.sql, &body, &link, done);
+                Ok(())
+            });
+            if let Err(failure) = queued {
+                shared.answer(stream, Err(failure));
             }
-            Err(failure) => shared.answer(stream, Err(failure)),
         }));
     }
 

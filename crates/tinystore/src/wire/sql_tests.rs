@@ -315,3 +315,50 @@ fn a_bucket_and_a_queue_opened_from_a_database_write_inside_its_transactions() {
     assert!(!in_kv_db.found, "kv.db is another file");
     assert_eq!(client.pipe.streams(), 0);
 }
+
+#[test]
+fn writes_through_a_query_in_flight_hold_no_thread_of_the_session() {
+    use crate::pipe::{Connect, Pipe};
+    use crate::{Options, Store, sql};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    client.hello(2).unwrap();
+    let handle = open(&mut client);
+    let held = store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+    let (began, begun) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+
+    std::thread::scope(|scope| {
+        // a transaction of the database holds its writer, so that no write can commit
+        let held = &held;
+        let holding = scope.spawn(move || {
+            held.tx(|tx| -> crate::Result<()> {
+                tx.exec(sql!("insert into notes (id, title) values ('held', 'a')"))?;
+                began.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(())
+            })
+        });
+        begun.recv().unwrap();
+        let inserts: Vec<u32> = (0..40)
+            .map(|n| {
+                let text = "insert into notes (id, title) values (?, 'b') returning id".to_owned();
+                let values = vec![Cell::Str(format!("n{n}"))];
+                client.start(method::SQL_QUERY, &SqlQuery { handle, text, values, want: "one".to_owned() })
+            })
+            .collect();
+        // more writes wait than the session has threads, and a read is still answered
+        assert_eq!(query(&mut client, handle, "select count(*) from notes", "scalar").rows.len(), 1);
+        release.send(()).unwrap();
+        holding.join().unwrap().unwrap();
+        for stream in inserts {
+            assert_eq!(answered::<SqlRows>(&client.next_on(stream)).unwrap().rows.len(), 1);
+        }
+    });
+    assert_eq!(query(&mut client, handle, "select id from notes", "all").rows.len(), 41);
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+    drop(client);
+    store.close().unwrap();
+}
