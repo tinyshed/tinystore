@@ -19,9 +19,6 @@ const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_s
 /// How often the store removes what the queues keep no longer.
 const MAINTENANCE: Duration = Duration::from_secs(60);
 
-/// Job ids reserved in one write of the meta row.
-const ID_BLOCK: i64 = 1000;
-
 /// jobs in one file: jobs.db, or a database's file; the queues this process
 /// opened there, and the workers running their handlers. Every handle opened
 /// from the store, or from the database, shares it.
@@ -30,8 +27,6 @@ pub(crate) struct Jobs {
     /// The engine whose file jobs are kept in, when it is not jobs.db: `sql app`.
     lent_by: Option<String>,
     clock: Arc<dyn Clock>,
-    /// The next id to give and the end of the block reserved.
-    ids: Mutex<(i64, i64)>,
     queues: Mutex<HashMap<String, Arc<QueueState>>>,
     /// Kept here, so that a worker its program let go of still stops at close.
     workers: Mutex<Vec<Arc<Running>>>,
@@ -75,7 +70,6 @@ impl Jobs {
             file,
             lent_by,
             clock: store.clock(),
-            ids: Mutex::new((0, 0)),
             queues: Mutex::new(HashMap::new()),
             workers: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
@@ -104,19 +98,6 @@ impl Jobs {
 
     pub(crate) fn closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
-    }
-
-    /// The next job id, from a block reserved in a transaction of its own when
-    /// the last is spent, so that an id is never given twice, not after a crash
-    /// either.
-    pub(crate) fn next_id(&self) -> Result<i64> {
-        let mut ids = lock(&self.ids);
-        if ids.0 == ids.1 {
-            let end = self.file.write(0, |tx| rows::reserve_ids(tx, ID_BLOCK))?;
-            *ids = (end - ID_BLOCK, end);
-        }
-        ids.0 += 1;
-        Ok(ids.0)
     }
 
     /// The queue `name` as this process knows it, registered on its first open.

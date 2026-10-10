@@ -155,6 +155,10 @@ imports be.
 | `jobs.watch`                  | handle, id                                                                                                       | a download: the job as it is, then again each time it changes, until it ends                   |
 | `jobs.tx`                     | writes: each an add, a set or an update with its call, or a cancel with its id                                   | what each did, in their order; all of them are made in one transaction of jobs.db, or none     |
 
+`jobs.add`, `.set`, `.update` and `.cancel` are answered from the shared commit's
+completion, as kv's writes are: no thread of the session waits for a commit,
+and the writes in flight are the writes one commit carries.
+
 `jobs.work` is a worker whose handlers are the client's. The server runs the
 queue's loop on a thread of the store's, claiming as every worker does, and
 sends each job it hands over as a held job, its run numbered on the

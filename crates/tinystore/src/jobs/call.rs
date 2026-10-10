@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use super::queue::Queue;
+use super::queue::{Change, Queue};
 use super::repeat::Asked as Repeat;
 use super::values::{self, Kept};
 use super::write::Prepared;
@@ -114,6 +114,11 @@ where
         self.queue.update_asked(self.asked, value, self.tx)
     }
 
+    /// The call's write without waiting; see [`Queue::write_then`].
+    pub(crate) fn write_then(self, change: Change, value: &V, done: impl FnOnce(Result<bool>) + Send + 'static) {
+        self.queue.write_then(change, self.asked, value, done);
+    }
+
     fn when(mut self, when: When) -> Self {
         if self.asked.when.is_some() {
             self.asked.refused = Some("a time given twice: at or delay, not both".to_owned());
@@ -140,7 +145,7 @@ impl Asked {
 
     /// Checks what was asked and gathers what the write needs, the value
     /// encoded, before the write waits for the writer.
-    pub(crate) fn prepare<V: Serialize>(self, value: &V, id: i64, now: i64) -> Result<Prepared> {
+    pub(crate) fn prepare<V: Serialize>(self, value: &V, now: i64) -> Result<Prepared> {
         if let Some(refused) = self.refused {
             return Err(Error::invalid(refused));
         }
@@ -165,7 +170,6 @@ impl Asked {
             return Err(Error::invalid("a time outside the years 1 to 9999"));
         }
         Ok(Prepared {
-            id,
             key: self.id,
             at,
             timed: self.when.is_some(),

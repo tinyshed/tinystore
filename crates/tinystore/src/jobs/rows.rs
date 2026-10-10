@@ -38,7 +38,7 @@ const UNPARK_JOBS: &str =
     concat!("update _tinystore_jobs set next = next - ?2 where queue = ?1 and next >= ", parked_from!());
 const UNPARK_KEYS: &str =
     concat!("update _tinystore_jobs_keys set next = next - ?2 where queue = ?1 and next >= ", parked_from!());
-const RESERVE_IDS: &str = "update _tinystore_jobs_meta set value = value + ?1 where name = 'ids' returning value";
+const NEXT_ID: &str = "update _tinystore_jobs_meta set value = value + 1 where name = 'ids' returning value";
 /// A lease the file still holds at open belongs to a process that died: its
 /// attempt counts, and its job is due again at once.
 const COUNT_DEAD_ATTEMPTS: &str = "update _tinystore_jobs set attempt = l.attempt from _tinystore_jobs_leases l
@@ -145,11 +145,13 @@ pub(crate) fn keep_group_bound(c: &Connection, queue: i64, was: i64, is: i64) ->
     execute(c, KEEP_IN_GROUP, params![queue, is], "a queue's group bound")
 }
 
-/// Reserves `block` job ids and answers the end of the block.
-pub(crate) fn reserve_ids(c: &Connection, block: i64) -> Result<i64> {
-    c.prepare_cached(RESERVE_IDS)
-        .and_then(|mut update| update.query_row([block], |row| row.get(0)))
-        .map_err(|error| sql_error("a block of job ids", error))
+/// The next job id, taken by the write that inserts its row: it commits or
+/// rolls back with the row, so that an id is never given twice, not after a
+/// crash either, and no write waits for another to reserve it one.
+pub(crate) fn next_id(c: &Connection) -> Result<i64> {
+    c.prepare_cached(NEXT_ID)
+        .and_then(|mut update| update.query_row([], |row| row.get(0)))
+        .map_err(|error| sql_error("the next job id", error))
 }
 
 pub(crate) fn end_dead_leases(c: &Connection) -> Result<()> {

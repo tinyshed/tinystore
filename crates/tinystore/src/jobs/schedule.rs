@@ -151,28 +151,23 @@ impl fmt::Debug for Schedule {
 fn keep_repeat(queue: &Queue<()>, repeat: &Repeat) -> Result<()> {
     let now = queue.jobs.now();
     let next = repeat.next(now).ok_or_else(|| Error::invalid("the repeat never runs again"))?;
-    let (id, text, value) = (queue.jobs.next_id()?, repeat.text(), Kept::of(values::encode(&())?));
+    let (text, value) = (repeat.text(), Kept::of(values::encode(&())?));
     let state = Arc::clone(&queue.state);
     queue
         .jobs
         .file()
-        .write(0, move |tx| register(tx, &state, (id, now, next), &text, &value))
+        .write(0, move |tx| register(tx, &state, (now, next), &text, &value))
         .map_err(|error| queue.fail(None, error))?;
     queue.state.alarm.lower(next);
     queue.state.watchers.changed();
     Ok(())
 }
 
-fn register(
-    c: &Connection,
-    queue: &QueueState,
-    (id, now, next): (i64, i64, i64),
-    text: &str,
-    value: &Kept,
-) -> Result<()> {
+fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &str, value: &Kept) -> Result<()> {
     let key = queue.name.as_str();
     let Some(there) = rows::job_by_key(c, queue.id, key)? else {
         rows::check_room(c, queue.id, queue.policy.max_waiting)?;
+        let id = rows::next_id(c)?;
         let job = NewJob { queue: queue.id, id, key: Some(key), at: next, repeat: Some(text), group: None, value };
         return rows::insert(c, &job);
     };

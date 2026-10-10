@@ -324,6 +324,8 @@ impl Shared {
                     let done = move |answered| answering.answer(stream, answered);
                     let queued = guarded(|| {
                         match method >> 8 {
+                            #[cfg(feature = "jobs")]
+                            0x02 => jobs::submit(&shared.jobs, method, &body, done),
                             #[cfg(feature = "sql")]
                             0x03 => sql::submit(&shared.sql, method, &body, done),
                             _ => kv::submit(&shared.kv, method, &body, done),

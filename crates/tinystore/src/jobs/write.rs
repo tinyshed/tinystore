@@ -19,8 +19,6 @@ use crate::Result;
 /// A call's facts, gathered and checked before it waits for the writer.
 #[derive(Debug)]
 pub(crate) struct Prepared {
-    /// The id a new row takes.
-    pub(crate) id: i64,
     pub(crate) key: Option<String>,
     /// When the job is due: the call's time, its repeat's next, or now.
     pub(crate) at: i64,
@@ -33,10 +31,10 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
-    fn new_job<'a>(&'a self, queue: &QueueState, group: Option<&'a str>) -> NewJob<'a> {
+    fn new_job<'a>(&'a self, id: i64, queue: &QueueState, group: Option<&'a str>) -> NewJob<'a> {
         NewJob {
             queue: queue.id,
-            id: self.id,
+            id,
             key: self.key.as_deref(),
             at: self.at,
             repeat: self.repeat.as_deref(),
@@ -61,7 +59,7 @@ pub(crate) fn add(c: &Connection, queue: &QueueState, call: &Prepared) -> Result
         }
     }
     rows::check_room(c, queue.id, queue.policy.max_waiting)?;
-    rows::insert(c, &call.new_job(queue, call.group.as_deref()))?;
+    rows::insert(c, &call.new_job(rows::next_id(c)?, queue, call.group.as_deref()))?;
     Ok(true)
 }
 
@@ -86,7 +84,8 @@ pub(crate) fn set(c: &Connection, queue: &QueueState, call: &Prepared) -> Result
     }
     let failed_group = rows::drop_failed(c, queue.id, key)?.flatten();
     rows::check_room(c, queue.id, queue.policy.max_waiting)?;
-    rows::insert(c, &call.new_job(queue, call.group.as_deref().or(failed_group.as_deref())))?;
+    let group = call.group.as_deref().or(failed_group.as_deref());
+    rows::insert(c, &call.new_job(rows::next_id(c)?, queue, group))?;
     Ok(Set { due: call.at })
 }
 

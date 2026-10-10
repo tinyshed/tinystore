@@ -25,7 +25,7 @@ use super::{Lent, Route};
 use crate::TxHandle;
 use crate::clock::from_unix_millis;
 use crate::jobs::{
-    Answers, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder, Remote,
+    Answers, Change, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder, Remote,
     RemoteWork, Report, Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
 };
 use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
@@ -60,6 +60,7 @@ pub(crate) fn route(called: u16) -> Route {
     match called {
         method::JOBS_WORK => Route::Exchange,
         method::JOBS_WATCH => Route::Watch,
+        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE | method::JOBS_CANCEL => Route::Submit,
         _ => Route::Worker,
     }
 }
@@ -95,12 +96,6 @@ pub(crate) fn call(
     match called {
         method::JOBS_QUEUE_OPEN => handles.open(open_queue(store, lent, JobsQueueOpen::decode(body)?)?, false),
         method::JOBS_SCHEDULE_OPEN => handles.open(open_schedule(store, JobsScheduleOpen::decode(body)?)?, true),
-        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE => write(handles, None, called, body),
-        method::JOBS_CANCEL => {
-            let id = JobsId::decode(body)?;
-            let changed = handles.opened(id.handle)?.queue.cancel(&id.id)?;
-            Ok(JobsChanged { changed }.encode())
-        }
         method::JOBS_GET => {
             let id = JobsId::decode(body)?;
             let job = handles.opened(id.handle)?.queue.get(&id.id)?;
@@ -114,13 +109,57 @@ pub(crate) fn call(
     }
 }
 
+/// Queues a job's write and returns; `done` gets its answer on the thread
+/// that commits it, so that no thread of the session waits for a commit and
+/// the writes in flight share one.
+pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+    if called == method::JOBS_CANCEL {
+        let asked = JobsId::decode(body).and_then(|id| Ok((handles.opened(id.handle)?.queue, id.id)));
+        return match asked {
+            Ok((queue, id)) => queue.cancel_then(&id, move |found| {
+                done(found.map(|changed| JobsChanged { changed }.encode()).map_err(Failure::from));
+            }),
+            Err(failure) => done(Err(failure)),
+        };
+    }
+    let change = match called {
+        method::JOBS_ADD => Change::Add,
+        method::JOBS_SET => Change::Set,
+        _ => Change::Update,
+    };
+    let mut done = Some(done);
+    let queued = JobsCall::decode(body).and_then(|call| {
+        on_job(handles, call, None, |job, value| {
+            let done = done.take().expect("a job's write is queued once");
+            job.write_then(change, &value, move |changed| {
+                let answer = |changed| match change {
+                    Change::Set => Empty {}.encode(),
+                    _ => JobsChanged { changed }.encode(),
+                };
+                done(changed.map(answer).map_err(Failure::from));
+            });
+            Ok(())
+        })
+    });
+    if let (Err(failure), Some(done)) = (queued, done) {
+        done(Err(failure));
+    }
+}
+
 /// Answers a call made inside a database's transaction, on its stream: a
 /// queue kept in the database's file adds, changes and reads its jobs in the
 /// transaction.
 #[cfg(feature = "sql")]
 pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body: &[u8], max_body: usize) -> Answered {
     match called {
-        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE => write(handles, Some(tx), called, body),
+        method::JOBS_ADD | method::JOBS_SET | method::JOBS_UPDATE => {
+            let changed = write_op(
+                handles,
+                tx,
+                &JobsOp { method: u64::from(called), call: Some(JobsCall::decode(body)?), id: None },
+            )?;
+            Ok(if called == method::JOBS_SET { Empty {}.encode() } else { JobsChanged { changed }.encode() })
+        }
         method::JOBS_CANCEL => {
             let id = JobsId::decode(body)?;
             let changed = handles.opened(id.handle)?.queue.cancel_in(&id.id, Some(tx))?;
@@ -165,25 +204,6 @@ fn write_op(handles: &Handles, tx: &Transaction<'_>, op: &JobsOp) -> Result<bool
         _ => Err(Failure::invalid(format!(
             "method {called:#06x} is not a write of a transaction, or lacks what it takes"
         ))),
-    }
-}
-
-/// An add, a set or an update, in `tx` when there is one.
-fn write(handles: &Handles, tx: Option<&Transaction<'_>>, called: u16, body: &[u8]) -> Answered {
-    let call = JobsCall::decode(body)?;
-    match called {
-        method::JOBS_ADD => {
-            let added = on_job(handles, call, tx, |job, value| job.add(&value))?;
-            Ok(JobsChanged { changed: added }.encode())
-        }
-        method::JOBS_SET => {
-            on_job(handles, call, tx, |job, value| job.set(&value))?;
-            Ok(Empty {}.encode())
-        }
-        _ => {
-            let changed = on_job(handles, call, tx, |job, value| job.update(&value))?;
-            Ok(JobsChanged { changed }.encode())
-        }
     }
 }
 

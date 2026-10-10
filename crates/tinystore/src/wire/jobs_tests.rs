@@ -465,3 +465,42 @@ fn a_transaction_of_jobs_writes_all_of_its_jobs_or_none() {
     assert!(get(&mut client, pushes, "ann").found && !get(&mut client, pushes, "bob").found);
     assert_eq!(client.pipe.streams(), 0);
 }
+
+#[test]
+fn writes_of_jobs_in_flight_hold_no_thread_of_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    client.hello(2).unwrap();
+    let mail = queue(&mut client, "mail");
+    let held = store.queue::<serde_json::Value>("mail").open().unwrap();
+    let (began, begun) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+
+    std::thread::scope(|scope| {
+        // a transaction of jobs.db holds its writer, so that no add can commit
+        let (store, held) = (&store, &held);
+        let holding = scope.spawn(move || {
+            store.tx(|tx| -> crate::Result<()> {
+                tx.with(held).id("held").add(&serde_json::json!({}))?;
+                began.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(())
+            })
+        });
+        begun.recv().unwrap();
+        let adds: Vec<u32> =
+            (0..40).map(|n| client.start(method::JOBS_ADD, &job(mail, &format!("job-{n}"), "{}"))).collect();
+        // more adds wait than the session has threads, and a read is still answered
+        let page: JobsPage = client.call(method::JOBS_LIST, &JobsList { handle: mail, ..JobsList::default() }).unwrap();
+        assert!(page.jobs.is_empty(), "nothing is committed yet");
+        release.send(()).unwrap();
+        holding.join().unwrap().unwrap();
+        for stream in adds {
+            assert!(answered::<JobsChanged>(&client.next_on(stream)).unwrap().changed);
+        }
+    });
+    assert_eq!(client.pipe.streams(), 0);
+    drop(client);
+    store.close().unwrap();
+}
