@@ -74,6 +74,19 @@ and a shared AMD EPYC 9V74 VM with two CPUs (metrics, SQL); Go 1.27.1, Rust
   wakes a gathering leader but the one it waits for: a commit carries 46, and
   64 callers write 1.30–1.53× as fast, 1.02–1.12× Go where they had been
   0.67–0.84×, one to four as before (rust-slice-2026-10-10).
+- **SQLite's own mutexes park a thread the moment one is held.** Every read
+  takes the mutex of its file's WAL index twice, and two threads reading one
+  file read 0.7× of what one did. With the core's mutexes, which spin first,
+  and a readers' pool that wakes nobody for nothing, two readers read 3.7×
+  through kv and 4.5× through sql, and four 2.3× and 3.0×. On a KVM server,
+  where a wake costs less, the same change gives 1.31× and 1.08×
+  (rust-slice-2026-10-10).
+- **A connection wakes one thread for a crowd of calls, not one a call.**
+  Every call handed to the store's threads woke one, and a point read took
+  its turn on the thread that read it. With one wake that the woken thread
+  passes on, and a crowd's reads on those threads, 64 calls in flight through
+  Bun are 1.04–1.28× Go's sidecar where they were 0.5–0.95×: kv get 1.4–1.5×
+  of before, sql point read 1.6–2.5×, jobs add 1.3× (rust-slice-2026-10-10).
 
 ## Not measured
 
@@ -112,6 +125,8 @@ method of measuring; their code is not carried over.
 | `HAVE_FDATASYNC` in the SQLite build     | 64 KiB set 1.6×                                             | `kv-opt-bench`, report kv-optimization-2026-10-09        |
 | No shared page cache in the SQLite build | a read by 16 callers 9.3×, 5.2× Go                          | `slice-bench`, report rust-slice-2026-10-10              |
 | A commit's callers wake one another      | 64 writers 1.30–1.53×, 1.02–1.12× Go                        | `slice-bench`, report rust-slice-2026-10-10              |
+| Mutexes for SQLite that spin first       | two readers 3.7–4.5×, four 2.3–3.0×                         | `slice-bench`, report rust-slice-2026-10-10              |
+| One wake for a crowd on a connection     | Bun, 64 in flight: 1.3–2.5×, past Go's sidecar              | `slice-bench`, report rust-slice-2026-10-10              |
 
 Measured and not worth it: an owned batch arena and lookaside (read16 0.96×),
 a no-result kv set (0.99–1.00×), immutable payload packs (sparse reads 8–33 %
