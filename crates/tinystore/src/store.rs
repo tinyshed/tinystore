@@ -27,11 +27,17 @@ pub struct Options {
     /// `jobs.db`, and every database that does not say its own. `None` leaves
     /// each engine its own, which for these is [`Durability::Full`].
     pub durability: Option<Durability>,
+    /// Bytes of the disk the store keeps free: a file that would leave less is
+    /// a `Limit` error and leaves nothing. 1 GiB unless said; 0 keeps none.
+    pub keep_free: u64,
 }
+
+/// The disk a store keeps free unless its options say otherwise.
+pub(crate) const KEEP_FREE: u64 = 1 << 30;
 
 impl Default for Options {
     fn default() -> Self {
-        Self { memory: None, clock: None, background: true, durability: None }
+        Self { memory: None, clock: None, background: true, durability: None, keep_free: KEEP_FREE }
     }
 }
 
@@ -42,6 +48,7 @@ impl fmt::Debug for Options {
             .field("clock", &self.clock.as_ref().map(|_| "custom"))
             .field("background", &self.background)
             .field("durability", &self.durability)
+            .field("keep_free", &self.keep_free)
             .finish()
     }
 }
@@ -81,6 +88,7 @@ struct Inner {
     /// transaction is a transaction of one of.
     files: Mutex<Vec<Arc<EngineFile>>>,
     durability: Option<Durability>,
+    keep_free: u64,
     closed: AtomicBool,
 }
 
@@ -101,6 +109,7 @@ impl Store {
             claims: Arc::default(),
             files: Mutex::new(Vec::new()),
             durability: options.durability,
+            keep_free: options.keep_free,
             closed: AtomicBool::new(false),
             dir,
         };
@@ -115,6 +124,11 @@ impl Store {
     /// that opens one.
     pub(crate) fn durability(&self) -> Option<Durability> {
         self.inner.durability
+    }
+
+    /// The bytes of the disk the store keeps free, as its options said.
+    pub fn keep_free(&self) -> u64 {
+        self.inner.keep_free
     }
 
     pub fn now(&self) -> SystemTime {

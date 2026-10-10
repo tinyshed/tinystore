@@ -22,6 +22,9 @@ pub(crate) const INLINE: usize = 16 << 10;
 /// gigabytes.
 const SYNC_EVERY: u64 = 256 << 20;
 
+/// How often an upload asks the disk how much is free as its bytes go to it.
+const ROOM_EVERY: u64 = 64 << 20;
+
 /// How long an upload waits for the store's memory for its buffer.
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -42,6 +45,9 @@ pub struct Upload {
     hash: Sha256,
     written: u64,
     synced: u64,
+    /// The bytes its file holds, and `written` when the disk was last asked.
+    on_disk: u64,
+    roomed: u64,
     ended: bool,
     _reserved: Reservation,
 }
@@ -67,6 +73,8 @@ impl Upload {
             hash: Sha256::new(),
             written: 0,
             synced: 0,
+            on_disk: 0,
+            roomed: 0,
             ended: false,
             _reserved: reserved,
         };
@@ -91,6 +99,7 @@ impl Upload {
                 self.buffer.extend_from_slice(bytes);
                 return Ok(());
             }
+            self.keep_room()?;
             if self.file.is_none() {
                 self.spill()?;
             }
@@ -187,6 +196,19 @@ impl Upload {
         }
     }
 
+    /// Refuses bytes that would leave the disk less free than the store keeps:
+    /// asked as the upload first goes to a file, for what its declared size
+    /// still brings, and again every ROOM_EVERY bytes. What is stored already
+    /// is never removed to make room.
+    fn keep_room(&mut self) -> Result<()> {
+        if self.file.is_some() && self.written - self.roomed < ROOM_EVERY {
+            return Ok(());
+        }
+        self.roomed = self.written;
+        let coming = self.options.size.unwrap_or(0).max(self.written) - self.on_disk;
+        self.files.blobs.room(coming)
+    }
+
     fn fits_inline(&self) -> bool {
         self.options.size.is_none_or(|declared| declared <= INLINE as u64) && self.written <= INLINE as u64
     }
@@ -205,6 +227,7 @@ impl Upload {
         let durable = self.files.blobs.disk.durable();
         let file = self.file.as_mut().ok_or_else(|| Error::internal("an upload without its file"))?;
         file.write_all(bytes).map_err(|error| Error::io("blobs: write an upload", error))?;
+        self.on_disk += bytes.len() as u64;
         if durable && self.written - self.synced >= SYNC_EVERY {
             file.sync_data().map_err(|error| Error::io("blobs: sync an upload", error))?;
             self.synced = self.written;

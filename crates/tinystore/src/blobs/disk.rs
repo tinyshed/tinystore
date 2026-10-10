@@ -34,6 +34,10 @@ pub(crate) struct Disk {
 }
 
 impl Disk {
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub(crate) fn new(dir: PathBuf, durable: bool) -> Disk {
         Disk { dir, durable, made: Mutex::new(HashSet::new()), syncs: Mutex::new(HashMap::new()) }
     }

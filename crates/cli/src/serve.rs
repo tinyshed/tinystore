@@ -64,6 +64,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         memory: serve.memory,
         clock: clock.clone().map(|clock| clock as Arc<dyn Clock>),
         durability: serve.durability,
+        keep_free: serve.keep_free.unwrap_or(Options::default().keep_free),
         ..Options::default()
     };
     let store = match open(&serve.dir, options) {

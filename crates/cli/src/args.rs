@@ -3,7 +3,7 @@
 //! ```text
 //! tinystore serve --dir <dir> --local --log <dir>/server/serve.log [--idle 30000ms]   a sidecar
 //! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]            a private child
-//! tinystore serve <dir> [--durability os]                                          a person's server
+//! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                      a person's server
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
 //! ```
 
@@ -34,6 +34,8 @@ pub(crate) struct Serve {
     pub(crate) memory: Option<u64>,
     /// How far a commit of the store's files goes; each engine's own when `None`.
     pub(crate) durability: Option<Durability>,
+    /// The disk the store keeps free; the store's own 1 GiB when `None`.
+    pub(crate) keep_free: Option<u64>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -58,7 +60,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let (mut stdio, mut local) = (false, false);
     let (mut log, mut idle, mut clock) = (None, None, None);
     let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
-    let mut durability = None;
+    let (mut durability, mut keep_free) = (None, None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
@@ -74,6 +76,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--tls-key" => key = Some(PathBuf::from(value("--tls-key")?)),
             "--tokens" => tokens = Some(PathBuf::from(value("--tokens")?)),
             "--memory" => memory = Some(size(&value("--memory")?)?),
+            "--keep-free" => keep_free = Some(size(&value("--keep-free")?)?),
             "--durability" => {
                 let word = value("--durability")?;
                 durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
@@ -107,7 +110,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability })
+    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability, keep_free })
 }
 
 fn remote(
@@ -212,6 +215,13 @@ mod tests {
         assert_eq!(serve(&args("d --durability os")).unwrap().durability, Some(Durability::Os));
         assert_eq!(serve(&args("--dir d --stdio --durability full")).unwrap().durability, Some(Durability::Full));
         assert_eq!(serve(&args("d --durability fast")).unwrap_err(), "--durability fast: full or os");
+    }
+
+    #[test]
+    fn the_disk_a_store_keeps_free_is_the_stores_own_unless_said() {
+        assert_eq!(serve(&args("d")).unwrap().keep_free, None);
+        assert_eq!(serve(&args("d --keep-free 10GiB")).unwrap().keep_free, Some(10 << 30));
+        assert_eq!(serve(&args("d --keep-free 0")).unwrap().keep_free, Some(0), "0 keeps none");
     }
 
     #[test]

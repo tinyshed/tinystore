@@ -373,6 +373,13 @@ Every error names the files and the path: `files avatars: "users/42/1.png": conf
 | a page                    | 1000 files                          |
 | a name                    | `[a-z0-9][a-z0-9_-]{0,63}`          |
 
+The disk the store keeps free is the store's, not the files': `keep_free` in
+Rust's `Options`, `tinystore serve --keep-free 10GiB`, 0 keeping none. A
+file that would leave less is `limit` and leaves nothing: an upload asks the
+disk as its bytes first go to it, for what its `size` still brings, and
+every 64 MiB after; a file small enough to be a row of `blobs.db` is not
+asked.
+
 ## What the engine chooses
 
 None of this appears in a call, and each is measured in the Go engine's rounds:

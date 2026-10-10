@@ -422,7 +422,7 @@ module defines.
 - a Put grows its buffer only when memory is free now — `TestStreamingUsesOnlyTheBufferItsBudgetCanHold`, `TestAFailedStreamReleasesItsLargerBuffer`
 - a Windows scanner's hold is retried and cleaned up — `TestARenameRetriesAfterAWindowsScannerLetsGo`, `TestAHeldRenameExhaustsRetriesAndRecovers`
 - a body that disagrees with its size is refused and leaves nothing — `a_body_that_disagrees_with_its_size_is_refused_and_leaves_nothing` in `blobs::upload`
-- a file past `max_file_size` is refused, leaves nothing and removes nothing stored — `a_file_past_its_bound_is_refused_and_leaves_nothing` in `blobs::upload`; `keepFree` still `TestAnUploadPastItsBoundsStopsAndLeavesNothing`
+- a file past `max_file_size` is refused, leaves nothing and removes nothing stored — `a_file_past_its_bound_is_refused_and_leaves_nothing` in `blobs::upload`; one that would leave the disk less free than the store keeps likewise — `a_file_that_would_leave_less_free_disk_than_the_store_keeps_is_refused_and_leaves_nothing` in `blobs::upload`
 - of two writes that read one ETag, one conflicts; `create` writes once — `of_two_writes_that_read_one_etag_one_conflicts`, `create_writes_only_where_nothing_is_and_says_so` in `blobs::files`
 - a copy shares the bytes and outlives its source; a copy or a rename never replaces a file but by its ETag — `a_copy_shares_the_bytes_and_outlives_its_source`, `copy_and_rename_never_replace_a_file_by_surprise` in `blobs::files`
 - a file expires by its own term or its files', a write again lives its term again — `a_file_expires_by_its_own_term_or_its_files_term`, `a_write_again_lives_its_term_again` in `blobs::files`, `maintenance_removes_expired_files_and_their_bytes` in `blobs::maintain`

@@ -35,6 +35,8 @@ pub(crate) struct Blobs {
     pub(crate) memory: Arc<Memory>,
     pub(crate) scrubbing: Mutex<Option<Scrubbing>>,
     clock: Arc<dyn Clock>,
+    /// The disk the store keeps free, which no file may take.
+    keep_free: u64,
     revision: AtomicI64,
     sets: Mutex<HashMap<String, i64>>,
     _claim: Claim,
@@ -75,6 +77,7 @@ impl Blobs {
                 memory: Arc::clone(store.memory()),
                 scrubbing: Mutex::new(None),
                 clock: store.clock(),
+                keep_free: store.keep_free(),
                 revision: AtomicI64::new(0),
                 sets: Mutex::new(HashMap::new()),
                 _claim: claim,
@@ -86,6 +89,24 @@ impl Blobs {
             })?;
             Ok(blobs)
         })
+    }
+
+    /// Refuses `coming` bytes that would leave the disk less free than the
+    /// store keeps, asking the system how much is free now.
+    pub(crate) fn room(&self, coming: u64) -> Result<()> {
+        if self.keep_free == 0 {
+            return Ok(());
+        }
+        let free = crate::space::available(self.disk.dir())
+            .map_err(|error| Error::io("blobs: the disk's free space", error))?;
+        if free >= self.keep_free.saturating_add(coming) {
+            return Ok(());
+        }
+        Err(Error::limit(format!(
+            "{coming} bytes more would leave the disk {} bytes free, under the {} the store keeps",
+            free.saturating_sub(coming),
+            self.keep_free
+        )))
     }
 
     /// Takes up the file's marks and removes what a process that died left:

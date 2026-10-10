@@ -77,3 +77,22 @@ fn a_file_past_its_bound_is_refused_and_leaves_nothing() {
     assert!(f.uploads().is_empty());
     assert_eq!(f.objects().len(), 1);
 }
+
+#[test]
+fn a_file_that_would_leave_less_free_disk_than_the_store_keeps_is_refused_and_leaves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = crate::Options { keep_free: u64::MAX / 2, background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let docs = store.files("docs").open().unwrap();
+    docs.put("small", bytes(INLINE)).unwrap();
+    let error = docs.put("large", bytes(INLINE + 1)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
+    let mut upload = docs.upload("streamed").unwrap();
+    upload.write_all(&bytes(INLINE)).unwrap();
+    assert!(upload.write_all(b"one more").is_err(), "the first byte past inline asks the disk");
+    assert_eq!((docs.head("large").unwrap(), docs.head("streamed").unwrap()), (None, None));
+    assert_eq!(std::fs::read_dir(dir.path().join("blobs/uploads")).unwrap().count(), 0);
+    let objects = dir.path().join("blobs/objects");
+    let stored = std::fs::read_dir(objects).unwrap().flat_map(|fan| std::fs::read_dir(fan.unwrap().path()).unwrap());
+    assert_eq!(stored.count(), 0, "no byte reached objects/");
+}
