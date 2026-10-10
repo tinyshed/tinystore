@@ -60,8 +60,10 @@ where C takes a pointer and a length.
 - **`send` never waits for the disk.** It parses the frames and dispatches
   them; what is ready at once comes back from the call, everything else
   through `recv`. A write joins the group commit and its answer arrives after
-  the commit. A point read may answer inline once phase 1 has measured that it
-  pays; the functions do not change either way.
+  the commit. A point read alone answers inline, before `send` returns; a
+  crowd of them, and a read that comes while the store's threads have reads
+  of its connection, go to those threads, since a host with one thread has
+  better to do than read keys with it.
 - **`wake` is edge-triggered.** A core thread calls it once when frames become
   ready after the host's last `recv`, and not again until the host has called
   `recv`.
@@ -130,7 +132,9 @@ Against Go `e81a050` on the same machine, in the same session:
 - 25,000 rows through the pipe into Bun against native Rust, Prisma's case;
 - an idle store with kv, sql and jobs open, in each host;
 - the time from a write's commit to its promise resolving in Bun and Node;
-- whether a point read answered inline in `send` beats the store's threads.
+- whether a point read answered inline in `send` beats the store's threads:
+  it is as fast up to five in flight, and they win from six, on the round's
+  host ([evidence.md](evidence.md)).
 
 The estimate before measuring is 1–2 µs a call for MessagePack and the
 session, against 40–200 µs through a sidecar.

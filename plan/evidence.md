@@ -87,6 +87,38 @@ and a shared AMD EPYC 9V74 VM with two CPUs (metrics, SQL); Go 1.27.1, Rust
   passes on, and a crowd's reads on those threads, 64 calls in flight through
   Bun are 1.04–1.28× Go's sidecar where they were 0.5–0.95×: kv get 1.4–1.5×
   of before, sql point read 1.6–2.5×, jobs add 1.3× (rust-slice-2026-10-10).
+- **A worker that sleeps the moment it finds no job makes every job pay a
+  wake, and a host with one thread should not read keys with it.** A query
+  for one row, which runs on a worker, took 56 microseconds through Bun with
+  one in flight, most of it the wake; and with 64 reads in flight a Bun
+  program's thread spent 39% of its time reading keys the session answered
+  where it read them, while sixteen workers slept. A worker now looks for
+  the next job for 200 microseconds while jobs come closer together than
+  that, and a crowd of six requests goes to the workers whole, each read
+  after it too while they have reads of its connection. The query alone is
+  3.7×, 13 microseconds; reads with 8 to 64 in flight 1.2–1.4×; in process
+  nothing moves (rust-slice-2026-10-10).
+- **Most of a Bun call was the SDK's own.** Asking a small array for its
+  buffer makes JavaScriptCore move it to one, and the SDK asked for every
+  message; a call through a stream made five promises and copied its body
+  three times. Writing a message without a view of it, and making a
+  bucket's call in place for one promise, 64 reads in flight are 2.5× of
+  before with the core's change, 289,000 a second and 2.7× Go's sidecar, and
+  one at a time 1.6×. A loop over the C functions with no SDK makes 949,000:
+  the SDK is at 37% of it (rust-slice-2026-10-10).
+- **The core's frames belong in the host's bytes.** Handed a buffer of the
+  core's each call, bun:ffi wrapped it, copied it and gave it back. With the
+  host's own bytes written into, the C functions are four and none frees:
+  1.18× one read at a time, 1.24× with 8 in flight, 1.19× with 64
+  (rust-slice-2026-10-10).
+- **A commit that does not wait for the disk is worth tens of times to one
+  writer and nothing to a thousand.** `'os'` as every file's default: one
+  writer sets 53–96× as many keys on the round's host, whose sync took 1.7
+  to 5.9 milliseconds, and 22× on a KVM server, whose sync takes 0.7 to 0.9;
+  64 writers 1.6–2.0× and 1.2×, a queue's adds by 64 4.5–4.7× and 1.9×. Past
+  some 30,000 sets a second on the round's host the modes are one: the file's
+  writer is the bound. It is built as a store's `durability`, and a
+  database's own (rust-slice-2026-10-10).
 
 ## Not measured
 
@@ -115,22 +147,29 @@ Twelve directories in research, about 45,000 lines of Rust with much of it
 copied between them, 154 tests. They are the evidence for algorithms and the
 method of measuring; their code is not carried over.
 
-| Take                                     | What it gave                                                | Where in research                                        |
-|------------------------------------------|-------------------------------------------------------------|----------------------------------------------------------|
-| Word-based residual reader and writer    | 17-bit decode 4.06 → 0.46 µs in Go; up to 17.6× at width 64 | `metrics-max-bench/rust/src/codec/residuals.rs`          |
-| 35-word exact accumulator for sum, avg   | cut-block sum 2.02 → 0.82 ms, exact merges kept             | `metrics-opt-bench/rust/src/exact.rs`                    |
-| Regular clocks filled, payloads borrowed | read16 2.57 → 2.19 ms                                       | `metrics-max-bench/rust/src/codec/sealed.rs`             |
-| One owned buffer per records result      | full read 2.9×, held memory 335 → 141.5 MiB                 | `records-opt-bench/rust/src/optimized.rs`                |
-| Rowid groups for metrics                 | file −21.4 % on Alibaba, +0.45 % on TSBS                    | `metrics-layout-bench`, report metrics-layout-2026-10-09 |
-| `HAVE_FDATASYNC` in the SQLite build     | 64 KiB set 1.6×                                             | `kv-opt-bench`, report kv-optimization-2026-10-09        |
-| No shared page cache in the SQLite build | a read by 16 callers 9.3×, 5.2× Go                          | `slice-bench`, report rust-slice-2026-10-10              |
-| A commit's callers wake one another      | 64 writers 1.30–1.53×, 1.02–1.12× Go                        | `slice-bench`, report rust-slice-2026-10-10              |
-| Mutexes for SQLite that spin first       | two readers 3.7–4.5×, four 2.3–3.0×                         | `slice-bench`, report rust-slice-2026-10-10              |
-| One wake for a crowd on a connection     | Bun, 64 in flight: 1.3–2.5×, past Go's sidecar              | `slice-bench`, report rust-slice-2026-10-10              |
+| Take                                      | What it gave                                                    | Where in research                                        |
+|-------------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
+| Word-based residual reader and writer     | 17-bit decode 4.06 → 0.46 µs in Go; up to 17.6× at width 64     | `metrics-max-bench/rust/src/codec/residuals.rs`          |
+| 35-word exact accumulator for sum, avg    | cut-block sum 2.02 → 0.82 ms, exact merges kept                 | `metrics-opt-bench/rust/src/exact.rs`                    |
+| Regular clocks filled, payloads borrowed  | read16 2.57 → 2.19 ms                                           | `metrics-max-bench/rust/src/codec/sealed.rs`             |
+| One owned buffer per records result       | full read 2.9×, held memory 335 → 141.5 MiB                     | `records-opt-bench/rust/src/optimized.rs`                |
+| Rowid groups for metrics                  | file −21.4 % on Alibaba, +0.45 % on TSBS                        | `metrics-layout-bench`, report metrics-layout-2026-10-09 |
+| `HAVE_FDATASYNC` in the SQLite build      | 64 KiB set 1.6×                                                 | `kv-opt-bench`, report kv-optimization-2026-10-09        |
+| No shared page cache in the SQLite build  | a read by 16 callers 9.3×, 5.2× Go                              | `slice-bench`, report rust-slice-2026-10-10              |
+| A commit's callers wake one another       | 64 writers 1.30–1.53×, 1.02–1.12× Go                            | `slice-bench`, report rust-slice-2026-10-10              |
+| Mutexes for SQLite that spin first        | two readers 3.7–4.5×, four 2.3–3.0×                             | `slice-bench`, report rust-slice-2026-10-10              |
+| One wake for a crowd on a connection      | Bun, 64 in flight: 1.3–2.5×, past Go's sidecar                  | `slice-bench`, report rust-slice-2026-10-10              |
+| A worker that lingers, a crowd sent whole | a query at one call 3.7×; Bun reads, 8–64 in flight, 1.2–1.4×   | `slice-bench`, report rust-slice-2026-10-10              |
+| A call in place in the Bun SDK            | Bun, 64 reads in flight 2.5× with the core's, 2.7× Go's sidecar | `slice-bench`, report rust-slice-2026-10-10              |
+| The host's bytes for the core's frames    | Bun, one read at a time 1.18×, 64 in flight 1.19×               | `slice-bench`, report rust-slice-2026-10-10              |
+| `durability: 'os'`                        | one writer 22–96×, 64 writers 1.2–2.0×, 1,024 1.0×              | `slice-bench`, report rust-slice-2026-10-10              |
 
 Measured and not worth it: an owned batch arena and lookaside (read16 0.96×),
 a no-result kv set (0.99–1.00×), immutable payload packs (sparse reads 8–33 %
-slower, dead bodies kept until the last reference dies).
+slower, dead bodies kept until the last reference dies), a cache of 4 or 16
+MiB a connection (sixteen readers 0.88–0.95×, in two to six times the
+memory), no wake for what a write returns and one wake for half a crowd's
+answers (no rate moved).
 
 What is wrong with the code, and why none of it is copied:
 

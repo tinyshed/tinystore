@@ -150,8 +150,9 @@ It is the store's: `open` gives it for every file, and a database may say
 its own, with which the buckets and queues kept in it commit. A store has
 one, its first opener's: a pipe that joins it, or a client that finds its
 sidecar running, asks for the same or for nothing, and is refused another.
-On the round's host one writer writes fifty times as many keys with `'os'`,
-64 writers half as many again ([evidence.md](evidence.md)).
+With `'os'` one writer sets 22 to 96 times as many keys as with `'full'` on
+the round's two hosts, 64 writers 1.2 to 2.0 times, a thousand as many
+([evidence.md](evidence.md)).
 
 Counters opened with `flushEvery: '1s'` are kept in memory and written every
 second, losing at most that second to a crash, and a rate limit's times always
