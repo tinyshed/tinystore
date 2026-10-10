@@ -235,7 +235,8 @@ whose transaction holds the writer an open would wait for.
 | `blobs.open`                 | name, a term for its files, the largest file     | a handle                                                                                |
 | `blobs.put`                  | where, the file's fields and its bytes; `create` | what it wrote, none when a create found a file                                          |
 | `blobs.upload`               | where and the file's fields, its bytes to follow | both ways: the client's pieces in, the server's credit out; the last publishes the file |
-| `blobs.get`                  | where                                            | a download: what the file carries and its first bytes, the rest as pieces               |
+| `blobs.get`                  | where                                            | what the file carries, and its bytes when they fit one message                          |
+| `blobs.read`                 | where, the ETag a get gave, a range              | a download: the bytes in pieces, the whole file checked                                 |
 | `blobs.head`                 | where                                            | what the file carries, or none                                                          |
 | `blobs.delete`               | where, an ETag                                   | nothing                                                                                 |
 | `blobs.copy`, `blobs.rename` | a folder, from, to, an ETag                      | what the file at `to` carries                                                           |
@@ -250,10 +251,15 @@ the server joins no string a client wrote. A file's bytes travel as
 them, and credit counts the bytes of the messages sent, which the taker gives
 back.
 
-`blobs.get` answers what the file carries and its first piece in the
-RESPONSE, and the rest as DATA within the client's credit, read from the file
-as credit comes. A whole read holds its last piece back until the file
-matched its SHA-256: a changed byte ends the stream `corrupt` instead.
+Reads are S3's, and the server holds nothing between calls. `blobs.get`
+answers what the file carries, and all its bytes when they fit half a body;
+a larger file's are left to `blobs.read`, so that a range sends no byte
+before it. `blobs.read` reads on the ETag a get gave, as `If-Match`: a file
+replaced or deleted since is `conflict`. Its first piece is the RESPONSE's
+and the rest go as DATA within the client's credit, read from the file as
+credit comes. A whole read holds its last piece back until the file matched
+its SHA-256, a changed byte ending the stream `corrupt` instead; a range is
+not checked.
 
 `blobs.upload`'s RESPONSE says the server is ready. The client's pieces come
 as DATA within the server's stream credit, each given back once it is

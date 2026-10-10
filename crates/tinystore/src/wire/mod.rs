@@ -43,7 +43,7 @@ pub(crate) enum Route {
     #[cfg(feature = "sql")]
     Transaction,
     #[cfg(feature = "blobs")]
-    Get,
+    Read,
     #[cfg(feature = "blobs")]
     Upload,
     Worker,

@@ -22,6 +22,7 @@ import {
 	BlobsOpen,
 	BlobsPage,
 	BlobsPiece,
+	BlobsRead,
 	BlobsUsage,
 	BlobsWrite,
 	BlobsWritten,
@@ -148,39 +149,25 @@ export class Files {
 	}
 
 	/**
-	 * The file and the bytes it reads, which stay what they were when get
-	 * returned, through a replace, a delete or an expiry; undefined when the
-	 * path holds none. Its bytes are read once, as a Response's body is.
+	 * What the file carries, and its bytes: a file up to about a megabyte comes
+	 * with them, and a larger one's are read when they are read, on its ETag,
+	 * as S3's GET with If-Match reads them. Undefined when the path holds none.
 	 */
-	async get(
-		path: string,
-		options?: { signal?: AbortSignal | undefined },
-	): Promise<StoredFile | undefined> {
-		return this.#link.run(
+	async get(path: string): Promise<StoredFile | undefined> {
+		const answer = await this.#call(
+			'blobs.get',
+			handle => BlobsAt.encode({ handle, folder: this.#folder, path }),
 			'read',
-			async connection => {
-				const at = BlobsAt.encode({
-					handle: await this.#handle(connection),
-					folder: this.#folder,
-					path,
-				})
-				const stream = await connection.session.open(methods['blobs.get'], at, true)
-				const unwatch = watch(options?.signal, stream)
-				const first = await stream.next().catch((err: unknown) => {
-					unwatch()
-					throw err
-				})
-				const got = BlobsGot.decode(first.body)
-				if (first.end) {
-					unwatch()
-				}
-				if (got.info === undefined) {
-					return undefined
-				}
-				const rest = first.end ? undefined : stream
-				return new StoredFile(infoOf(got.info), got.bytes ?? nothing, rest, unwatch)
-			},
-			options?.signal,
+		)
+		const got = BlobsGot.decode(answer)
+		if (got.info === undefined) {
+			return undefined
+		}
+		const info = infoOf(got.info)
+		const bytes = got.bytes ?? nothing
+		const whole = bytes.length === info.size ? bytes : undefined
+		return new StoredFile(info, whole, (offset, length) =>
+			this.#read(path, info.etag, offset, length),
 		)
 	}
 
@@ -308,6 +295,61 @@ export class Files {
 		idempotence: Idempotence,
 	): Promise<Uint8Array> {
 		return this.#via.call(methods['blobs.open'], this.#open, methods[method], body, idempotence)
+	}
+
+	/**
+	 * A file's bytes as S3's GET reads them with a range and If-Match: on the
+	 * ETag a get gave, ConflictError once the path holds another file or none;
+	 * the whole file checked, a range not. Nothing is asked before the first read.
+	 */
+	#read(
+		path: string,
+		ifMatch: string,
+		offset?: number,
+		length?: number,
+	): ReadableStream<Uint8Array> {
+		let stream: Stream | undefined
+		const open = () =>
+			this.#link.run('read', async connection => {
+				const read = BlobsRead.encode({
+					handle: await this.#handle(connection),
+					folder: this.#folder,
+					path,
+					ifMatch,
+					offset,
+					length,
+				})
+				const opened = await connection.session.open(methods['blobs.read'], read, true)
+				return { opened, first: await opened.next() }
+			})
+		return new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				try {
+					if (stream === undefined) {
+						// the RESPONSE's piece is no DATA, so it takes none of the credit
+						const { opened, first } = await open()
+						stream = opened
+						enqueue(controller, first.body)
+						if (first.end) {
+							controller.close()
+						}
+						return
+					}
+					const event = await stream.next()
+					if (event.end) {
+						controller.close()
+						return
+					}
+					stream.consumed(event.body.length)
+					enqueue(controller, event.body)
+				} catch (err) {
+					controller.error(err)
+				}
+			},
+			cancel() {
+				stream?.cancel()
+			},
+		})
 	}
 
 	async #move(
@@ -466,102 +508,34 @@ export class Upload implements AsyncDisposable {
 	}
 }
 
-/** Cancels the stream of a file whose bytes nobody can read any more. */
-const unread = new FinalizationRegistry<Stream>(stream => stream.cancel())
-
 /**
- * A file as `get` found it: what it carries, and its bytes, read once as a
- * Response's body is, with `stream()`, or whole with `bytes()`, `text()`,
- * `json()` or `arrayBuffer()`, which hold the whole file in memory. A file
- * whose bytes changed fails CorruptError before its last bytes.
+ * Bytes of a file, read when they are read, as a Blob's are: `stream()`, or
+ * all of them with `bytes()`, `text()`, `json()` or `arrayBuffer()`, which
+ * hold them in memory. Each read is a read of its own.
  */
-export class StoredFile implements FileInfo {
-	readonly path: string
+export class FileBytes {
 	readonly size: number
-	readonly etag: string
-	readonly contentType: string
-	readonly lastModified: Date
-	readonly expires: Date | undefined
-	readonly meta: Record<string, string>
-	readonly #first: Uint8Array
-	/** the rest of its bytes, none when the first were all of them */
-	readonly #rest: Stream | undefined
-	readonly #unwatch: () => void
-	#read = false
+	readonly #stream: () => ReadableStream<Uint8Array>
 
-	/** Stored files come from `files.get`. */
-	constructor(info: FileInfo, first: Uint8Array, rest: Stream | undefined, unwatch: () => void) {
-		this.path = info.path
-		this.size = info.size
-		this.etag = info.etag
-		this.contentType = info.contentType
-		this.lastModified = info.lastModified
-		this.expires = info.expires
-		this.meta = info.meta
-		this.#first = first
-		this.#rest = rest
-		this.#unwatch = unwatch
-		if (rest !== undefined) {
-			unread.register(this, rest, this)
-		}
+	/** File bytes come from `files.get` and `slice`. */
+	constructor(size: number, stream: () => ReadableStream<Uint8Array>) {
+		this.size = size
+		this.#stream = stream
 	}
 
 	/** Its bytes as they come, the credit of each given back once it is taken. */
 	stream(): ReadableStream<Uint8Array> {
-		this.#take()
-		const rest = this.#rest
-		const unwatch = this.#unwatch
-		let first: Uint8Array | undefined = this.#first.length > 0 ? this.#first : undefined
-		const body = new ReadableStream<Uint8Array>({
-			async pull(controller) {
-				if (first !== undefined) {
-					controller.enqueue(first)
-					first = undefined
-					return
-				}
-				if (rest === undefined) {
-					controller.close()
-					return
-				}
-				try {
-					const event = await rest.next()
-					if (event.end) {
-						unwatch()
-						controller.close()
-						return
-					}
-					rest.consumed(event.body.length)
-					controller.enqueue(BlobsPiece.decode(event.body).bytes ?? nothing)
-				} catch (err) {
-					unwatch()
-					controller.error(err)
-				}
-			},
-			cancel() {
-				unwatch()
-				rest?.cancel()
-			},
-		})
-		if (rest !== undefined) {
-			// the stream's reader holds the bytes from now on, and lets them go with it
-			unread.unregister(this)
-			unread.register(body, rest, body)
-		}
-		return body
+		return this.#stream()
 	}
 
 	async bytes(): Promise<Uint8Array<ArrayBuffer>> {
 		const whole = new Uint8Array(this.size)
 		let at = 0
-		const reader = this.stream().getReader()
-		for (;;) {
-			const { done, value } = await reader.read()
-			if (done) {
-				return at === whole.length ? whole : whole.slice(0, at)
-			}
-			whole.set(value, at)
-			at += value.length
+		for await (const piece of this.stream() as AsyncIterable<Uint8Array>) {
+			whole.set(piece, at)
+			at += piece.length
 		}
+		return at === whole.length ? whole : whole.slice(0, at)
 	}
 
 	async arrayBuffer(): Promise<ArrayBuffer> {
@@ -575,14 +549,84 @@ export class StoredFile implements FileInfo {
 	async json(): Promise<unknown> {
 		return JSON.parse(await this.text())
 	}
+}
 
-	#take(): void {
-		if (this.#read) {
-			throw new InvalidError(
-				`the bytes of ${JSON.stringify(this.path)} were read already: a file reads once`,
-			)
+/**
+ * A file as `get` found it: what it carries, and its bytes. A whole read is
+ * checked against its SHA-256 and fails CorruptError before its last bytes
+ * when they changed; `slice` reads a range, which is not checked.
+ */
+export class StoredFile extends FileBytes implements FileInfo {
+	readonly path: string
+	readonly etag: string
+	readonly contentType: string
+	readonly lastModified: Date
+	readonly expires: Date | undefined
+	readonly meta: Record<string, string>
+	/** its bytes when they came with the get */
+	readonly #whole: Uint8Array | undefined
+	readonly #read: (offset?: number, length?: number) => ReadableStream<Uint8Array>
+
+	/** Stored files come from `files.get`. */
+	constructor(
+		info: FileInfo,
+		whole: Uint8Array | undefined,
+		read: (offset?: number, length?: number) => ReadableStream<Uint8Array>,
+	) {
+		super(info.size, () => (whole === undefined ? read() : streamOf(whole)))
+		this.path = info.path
+		this.etag = info.etag
+		this.contentType = info.contentType
+		this.lastModified = info.lastModified
+		this.expires = info.expires
+		this.meta = info.meta
+		this.#whole = whole
+		this.#read = read
+	}
+
+	/**
+	 * A range of its bytes, as Blob.slice takes one: an end left out is the
+	 * file's, and a negative place counts back from it, so `slice(-500)` is the
+	 * last 500 bytes.
+	 */
+	slice(start?: number, end?: number): FileBytes {
+		const from = placeOf(start, this.size, 0)
+		const to = Math.max(from, placeOf(end, this.size, this.size))
+		const whole = this.#whole
+		if (whole !== undefined) {
+			const bytes = whole.subarray(from, to)
+			return new FileBytes(bytes.length, () => streamOf(bytes))
 		}
-		this.#read = true
+		return new FileBytes(to - from, () => this.#read(from, to - from))
+	}
+}
+
+/** A place in bytes as Blob.slice reads one: negative from the end, and within the size. */
+function placeOf(place: number | undefined, size: number, absent: number): number {
+	if (place === undefined) {
+		return absent
+	}
+	const at = Math.trunc(place)
+	return at < 0 ? Math.max(size + at, 0) : Math.min(at, size)
+}
+
+/** Bytes in hand as a stream, a copy, so that a reader's changes stay its own. */
+function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			if (bytes.length > 0) {
+				controller.enqueue(bytes.slice())
+			}
+			controller.close()
+		},
+	})
+}
+
+/** Enqueues a piece's bytes, none when it carries none. */
+function enqueue(controller: ReadableStreamDefaultController<Uint8Array>, body: Uint8Array): void {
+	const bytes = BlobsPiece.decode(body).bytes ?? nothing
+	if (bytes.length > 0) {
+		controller.enqueue(bytes)
 	}
 }
 

@@ -443,7 +443,7 @@ impl Shared {
             #[cfg(feature = "sql")]
             Route::Transaction => self.transaction(input, stream, &body),
             #[cfg(feature = "blobs")]
-            Route::Get => self.get(input, stream, body),
+            Route::Read => self.read(input, stream, body),
             #[cfg(feature = "blobs")]
             Route::Upload => self.upload(input, stream, &body),
             Route::Worker => {
@@ -562,15 +562,15 @@ impl Shared {
         }
     }
 
-    /// Answers a get on a worker: what the file carries and its first bytes
-    /// in the RESPONSE, and the rest as pieces within the client's credit.
+    /// Answers a read of a file's bytes on a worker: its first piece in the
+    /// RESPONSE, and the rest as pieces within the client's credit.
     #[cfg(feature = "blobs")]
-    fn get(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
+    fn read(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
         let link = self.blobs_link(input, stream);
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || match guarded(|| blobs::get(&shared.blobs, stream, &body, &link)) {
-            Ok(blobs::Got::Whole(response)) => shared.answer(stream, Ok(response)),
-            Ok(blobs::Got::Begun(response, getting)) => {
+        self.workers.run(Box::new(move || match guarded(|| blobs::read(&shared.blobs, stream, &body, &link)) {
+            Ok(blobs::Reading::Whole(response)) => shared.answer(stream, Ok(response)),
+            Ok(blobs::Reading::Begun(response, getting)) => {
                 shared.send(&[Frame::new(Kind::Response, stream, response)]);
                 getting.pump();
             }
@@ -874,7 +874,7 @@ impl Shared {
             #[cfg(feature = "sql")]
             0x03 => sql::call(&self.store, &self.sql, method, body),
             #[cfg(feature = "blobs")]
-            0x04 => blobs::call(&self.store, &self.blobs, method, body),
+            0x04 => blobs::call(&self.store, &self.blobs, method, body, max_body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }

@@ -4,7 +4,8 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    BlobsAt, BlobsGot, BlobsHead, BlobsOpen, BlobsPiece, BlobsWrite, BlobsWritten, Empty, Handle, Hello, method,
+    BlobsAt, BlobsDelete, BlobsGot, BlobsHead, BlobsOpen, BlobsPiece, BlobsRead, BlobsWrite, BlobsWritten, Empty,
+    Failure, Handle, Hello, method,
 };
 
 fn open(client: &mut Client, name: &str) -> u64 {
@@ -45,29 +46,41 @@ fn upload(client: &mut Client, write: &BlobsWrite, body: &[u8], piece: usize, mu
     client.next_on(stream)
 }
 
-/// A get's whole file: its RESPONSE, then pieces never past the `credit` the
-/// client gave, which it grants back once half of it was taken, as the SDK does.
-fn download(client: &mut Client, at: &BlobsAt, credit: u64) -> (BlobsGot, Vec<u8>, Frame) {
-    let stream = client.start(method::BLOBS_GET, at);
-    let first = client.next_on(stream);
-    let got = answered::<BlobsGot>(&first).unwrap();
-    let mut body = got.bytes.clone();
-    let mut last = first;
+/// A read of a file's bytes and how its stream ended: the RESPONSE's piece,
+/// then pieces never past the `credit` the client gave, which it grants back
+/// once half of it was taken, as the SDK does.
+fn read(client: &mut Client, read: &BlobsRead, credit: u64) -> (Vec<u8>, Result<(), Failure>) {
+    let stream = client.start(method::BLOBS_READ, read);
+    let mut frame = client.next_on(stream);
+    let mut bytes = match answered::<BlobsPiece>(&frame) {
+        Ok(first) => first.bytes,
+        Err(failure) => return (Vec::new(), Err(failure)),
+    };
+    assert!(bytes.len() as u64 <= credit / 2, "a piece is at most half the credit");
     let mut taken = 0_u64;
-    while last.flags & frame::END == 0 {
-        last = client.next_on(stream);
-        if last.flags & frame::END != 0 {
-            break;
+    while frame.flags & frame::END == 0 {
+        frame = client.next_on(stream);
+        if frame.flags & frame::END != 0 {
+            return (bytes, answered::<Empty>(&frame).map(drop));
         }
-        taken += last.body.len() as u64;
+        taken += frame.body.len() as u64;
         assert!(taken <= credit, "the server sends within the client's credit");
-        body.extend_from_slice(&BlobsPiece::decode(&last.body).unwrap().bytes);
+        bytes.extend_from_slice(&BlobsPiece::decode(&frame.body).unwrap().bytes);
         if taken >= credit / 2 {
             client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
             taken = 0;
         }
     }
-    (got, body, last)
+    (bytes, Ok(()))
+}
+
+/// A read of the whole file at `path`, on the ETag its get gave.
+fn whole(client: &mut Client, handle: u64, path: &str, credit: u64) -> (Vec<u8>, Result<(), Failure>) {
+    let at = BlobsAt { handle, folder: Vec::new(), path: path.to_owned() };
+    let got: BlobsGot = client.call(method::BLOBS_GET, &at).unwrap();
+    assert!(got.bytes.is_empty(), "a file past half a body waits for its read");
+    let if_match = got.info.map(|info| info.etag);
+    read(client, &BlobsRead { handle, path: path.to_owned(), if_match, ..BlobsRead::default() }, credit)
 }
 
 #[test]
@@ -122,16 +135,73 @@ fn a_large_file_goes_up_and_comes_down_in_pieces_within_the_credit() {
     let written = answered::<BlobsWritten>(&last).unwrap();
     assert_eq!(written.info.unwrap().size, body.len() as u64);
 
-    let (got, downloaded, last) =
-        download(&mut client, &BlobsAt { handle, folder: Vec::new(), path: "big.bin".to_owned() }, credit);
-    assert!(got.bytes.len() as u64 <= credit / 2, "the first bytes within half the credit");
-    assert_eq!(answered::<Empty>(&last), Ok(Empty {}));
+    let (downloaded, ended) = whole(&mut client, handle, "big.bin", credit);
+    assert_eq!(ended, Ok(()));
     assert!(downloaded == body, "the bytes that went up come down");
     assert_eq!(client.pipe.streams(), 0);
 }
 
 #[test]
-fn a_get_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
+fn a_range_reads_only_its_bytes_and_is_not_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, credit) = connect(dir.path(), Hello { protocol: 2, ..Hello::default() });
+    let handle = open(&mut client, "videos");
+    let body = bytes(5 << 20);
+    let write = BlobsWrite { handle, path: "film.mp4".to_owned(), ..BlobsWrite::default() };
+    answered::<BlobsWritten>(&upload(&mut client, &write, &body, 1 << 20, credit)).unwrap();
+    let range = |offset: u64, length: Option<u64>| BlobsRead {
+        handle,
+        path: "film.mp4".to_owned(),
+        offset: Some(offset),
+        length,
+        ..BlobsRead::default()
+    };
+
+    let (middle, ended) = read(&mut client, &range(1_000_000, Some(3_000_000)), 2 << 20);
+    assert_eq!(ended, Ok(()));
+    assert!(middle == body[1_000_000..4_000_000], "the range is its bytes");
+    let (tail, _) = read(&mut client, &range(body.len() as u64 - 500, None), 2 << 20);
+    assert!(tail == body[body.len() - 500..], "a range to the end");
+    let (past, ended) = read(&mut client, &range(body.len() as u64 + 1, Some(10)), 2 << 20);
+    assert_eq!((past.len(), ended), (0, Ok(())), "a range past the end is empty");
+
+    let fan = std::fs::read_dir(dir.path().join("blobs/objects")).unwrap().next().unwrap().unwrap().path();
+    let file = std::fs::read_dir(fan).unwrap().next().unwrap().unwrap().path();
+    let mut changed = std::fs::read(&file).unwrap();
+    changed[4096] ^= 0x5a;
+    std::fs::write(&file, changed).unwrap();
+    let (head, ended) = read(&mut client, &range(0, Some(8192)), 2 << 20);
+    assert_eq!((head.len(), ended), (8192, Ok(())), "a range is not checked");
+}
+
+#[test]
+fn a_read_on_an_etag_the_path_no_longer_holds_is_a_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, credit) = connect(dir.path(), Hello { protocol: 2, ..Hello::default() });
+    let handle = open(&mut client, "docs");
+    let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
+    answered::<BlobsWritten>(&upload(&mut client, &write, &bytes(3 << 20), 1 << 20, credit)).unwrap();
+    let at = BlobsAt { handle, folder: Vec::new(), path: "a".to_owned() };
+    let got: BlobsGot = client.call(method::BLOBS_GET, &at).unwrap();
+    let on =
+        BlobsRead { handle, path: "a".to_owned(), if_match: got.info.map(|info| info.etag), ..BlobsRead::default() };
+
+    client.call::<BlobsWritten>(method::BLOBS_PUT, &BlobsWrite { bytes: b"other".to_vec(), ..write }).unwrap();
+    let (_, ended) = read(&mut client, &on, 2 << 20);
+    assert_eq!(ended.unwrap_err().code, "conflict", "a file replaced since its get");
+    let (now, ended) = read(&mut client, &BlobsRead { if_match: None, ..on.clone() }, 2 << 20);
+    assert_eq!((now, ended), (b"other".to_vec(), Ok(())), "without an ETag, what is there now");
+
+    let delete = BlobsDelete { handle, path: "a".to_owned(), ..BlobsDelete::default() };
+    client.call::<Empty>(method::BLOBS_DELETE, &delete).unwrap();
+    let (_, ended) = read(&mut client, &on, 2 << 20);
+    assert_eq!(ended.unwrap_err().code, "conflict", "a file deleted since its get");
+    let (_, ended) = read(&mut client, &BlobsRead { if_match: None, ..on }, 2 << 20);
+    assert_eq!(ended.unwrap_err().code, "not_found");
+}
+
+#[test]
+fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
     let dir = tempfile::tempdir().unwrap();
     let credit = 1 << 20;
     let (mut client, server_credit) =
@@ -146,10 +216,9 @@ fn a_get_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
     changed[4096] ^= 0x5a;
     std::fs::write(&file, changed).unwrap();
 
-    let at = BlobsAt { handle, folder: Vec::new(), path: "a".to_owned() };
-    let (_, downloaded, last) = download(&mut client, &at, credit);
+    let (downloaded, ended) = whole(&mut client, handle, "a", credit);
     assert!(downloaded.len() < body.len(), "the last bytes are held back");
-    let failed = answered::<Empty>(&last).unwrap_err();
+    let failed = ended.unwrap_err();
     assert_eq!(failed.code, "corrupt", "{}", failed.message);
 }
 

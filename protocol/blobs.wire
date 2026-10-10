@@ -50,18 +50,30 @@ message blobs.Written {
   1 info: blobs.Info?
 }
 
-# A piece of a file's bytes: an upload's DATA from the client, a get's from
+# A piece of a file's bytes: an upload's DATA from the client, a read's from
 # the server.
 message blobs.Piece {
   1 bytes: bin
 }
 
-# A get's answer: what the file carries, none when there is no file, and its
-# first bytes; the rest come as pieces, the last once the whole file matched
-# its SHA-256, and a file whose bytes changed ends the stream corrupt instead.
+# A get's answer: what the file carries, none when there is no file, and all
+# its bytes when they fit one message; a larger file's are left to blobs.read,
+# so that a read of a range sends no byte before it.
 message blobs.Got {
   1 info: blobs.Info?
-  2 bytes: bin
+  2 bytes: bin                    # the whole file, or nothing when it is larger
+}
+
+# A read of a file's bytes, as S3's GET with a range and If-Match: the whole
+# file, checked, its last piece sent once its bytes matched their SHA-256 and a
+# changed byte ending the stream corrupt instead; or a range, not checked.
+message blobs.Read {
+  1 handle: uint
+  2 folder: [str]
+  3 path: str
+  4 ifMatch: str?                 # the ETag a get gave: another file there, or none, is a conflict
+  5 offset: uint?                 # from the first byte when absent
+  6 length: uint?                 # to the last byte when absent
 }
 
 message blobs.Head {
@@ -123,7 +135,7 @@ message blobs.Usage {
 method 0x0401 blobs.open(blobs.Open) -> Handle
 method 0x0402 blobs.put(blobs.Write) -> blobs.Written
 method 0x0403 blobs.upload(blobs.Write) -> exchange blobs.Written for blobs.Piece
-method 0x0404 blobs.get(blobs.At) -> download blobs.Got until Empty
+method 0x0404 blobs.get(blobs.At) -> blobs.Got
 method 0x0405 blobs.head(blobs.At) -> blobs.Head
 method 0x0406 blobs.delete(blobs.Delete) -> Empty
 method 0x0407 blobs.copy(blobs.Move) -> blobs.Info
@@ -132,3 +144,4 @@ method 0x0409 blobs.expire(blobs.Expire) -> blobs.Found
 method 0x040a blobs.list(blobs.List) -> blobs.Page
 method 0x040b blobs.usage(blobs.Folder) -> blobs.Usage
 method 0x040c blobs.clear(blobs.Folder) -> Empty
+method 0x040d blobs.read(blobs.Read) -> download blobs.Piece until Empty

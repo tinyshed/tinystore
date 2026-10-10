@@ -382,7 +382,7 @@ impl Message for BlobsWritten {
     }
 }
 
-/// A piece of a file's bytes: an upload's DATA from the client, a get's from
+/// A piece of a file's bytes: an upload's DATA from the client, a read's from
 /// the server.
 #[cfg(feature = "blobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -425,13 +425,14 @@ impl Message for BlobsPiece {
     }
 }
 
-/// A get's answer: what the file carries, none when there is no file, and its
-/// first bytes; the rest come as pieces, the last once the whole file matched
-/// its SHA-256, and a file whose bytes changed ends the stream corrupt instead.
+/// A get's answer: what the file carries, none when there is no file, and all
+/// its bytes when they fit one message; a larger file's are left to blobs.read,
+/// so that a read of a range sends no byte before it.
 #[cfg(feature = "blobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct BlobsGot {
     pub(crate) info: Option<BlobsInfo>,
+    /// The whole file, or nothing when it is larger.
     pub(crate) bytes: Vec<u8>,
 }
 
@@ -474,6 +475,93 @@ impl Message for BlobsGot {
     fn is_zero(&self) -> bool {
         self.info.is_none()
             && self.bytes.is_empty()
+    }
+}
+
+/// A read of a file's bytes, as S3's GET with a range and If-Match: the whole
+/// file, checked, its last piece sent once its bytes matched their SHA-256 and a
+/// changed byte ending the stream corrupt instead; or a range, not checked.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsRead {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) path: String,
+    /// The ETag a get gave: another file there, or none, is a conflict.
+    pub(crate) if_match: Option<String>,
+    /// From the first byte when absent.
+    pub(crate) offset: Option<u64>,
+    /// To the last byte when absent.
+    pub(crate) length: Option<u64>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsRead {
+    const NAME: &'static str = "blobs.Read";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.path = codec::str(r, "path")?,
+                4 => message.if_match = Some(codec::str(r, "ifMatch")?),
+                5 => message.offset = Some(codec::uint(r, "offset")?),
+                6 => message.length = Some(codec::uint(r, "length")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.path);
+        }
+        if let Some(if_match) = &self.if_match {
+            map.field(out, 4);
+            codec::write_str(out, if_match);
+        }
+        if let Some(offset) = &self.offset {
+            map.field(out, 5);
+            codec::write_uint(out, offset);
+        }
+        if let Some(length) = &self.length {
+            map.field(out, 6);
+            codec::write_uint(out, length);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.path.len()
+            + self.if_match.as_ref().map_or(0, |if_match| 1 + 5 + if_match.len())
+            + self.offset.map_or(0, |_| 10)
+            + self.length.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.path.is_empty()
+            && self.if_match.is_none()
+            && self.offset.is_none()
+            && self.length.is_none()
     }
 }
 
@@ -4884,6 +4972,8 @@ pub(crate) mod method {
     pub(crate) const BLOBS_USAGE: u16 = 0x040b;
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_CLEAR: u16 = 0x040c;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_READ: u16 = 0x040d;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_QUEUE_OPEN: u16 = 0x0201;
     #[cfg(feature = "jobs")]
@@ -5003,6 +5093,8 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
     ("blobs.usage", 0x040b),
     #[cfg(feature = "blobs")]
     ("blobs.clear", 0x040c),
+    #[cfg(feature = "blobs")]
+    ("blobs.read", 0x040d),
     #[cfg(feature = "jobs")]
     ("jobs.queue.open", 0x0201),
     #[cfg(feature = "jobs")]
@@ -5115,6 +5207,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "blobs.Piece" => BlobsPiece::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Got" => BlobsGot::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Read" => BlobsRead::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Head" => BlobsHead::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]

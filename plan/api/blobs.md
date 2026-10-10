@@ -107,16 +107,22 @@ avatars.delete(&format!("{id}.png"))?;
   `ReadableStream` or async iterable of `Uint8Array`; in Python `bytes`, `str`,
   a file object or an async iterator of `bytes`; in Go an `io.Reader`; in Rust
   bytes, and an `upload` for a reader.
-- `get` returns the file and the bytes it will read, which stay what they were
-  when `get` returned, through a replace, a delete or an expiry, on Windows
-  too. In TypeScript a `StoredFile` reads as a web `Blob` does, once:
-  `stream()`, `bytes()`, `text()`, `json()`, `arrayBuffer()`, and
-  `slice(start, end)` with the end left out, as `Blob.slice` leaves it. In
-  Python `read()` and `async for chunk in file`; in Go and Rust a reader.
+- In Rust and Go `get` holds the file open: the bytes it reads stay what they
+  were when `get` returned, through a replace, a delete or an expiry, on
+  Windows too.
+- Over the wire a read is S3's GET with `If-Match`, and the server holds
+  nothing between calls. `get` brings what the file carries, and its bytes
+  when they fit one message, about a megabyte; those stay what they were. A
+  larger file's bytes are read when they are read, on the ETag `get` gave:
+  a file replaced or deleted since is `conflict`, and no byte is sent before
+  the first read, so a range costs only its own.
+- In TypeScript a `StoredFile` reads as a web `Blob` does, as often as
+  asked: `stream()`, `bytes()`, `text()`, `json()`, `arrayBuffer()`, and
+  `slice(start, end)` as `Blob.slice` takes it, `slice(-500)` the last 500
+  bytes. In Python `read()` and `async for chunk in file`; in Go and Rust a
+  reader.
 - `bytes()`, `text()` and `json()` hold the whole file in memory; a large one
   is read with `stream()`.
-- A file left unread holds its bytes on the server until it is collected,
-  as a `fetch` body does; `await file.stream().cancel()` lets them go at once.
 - `head` reads what a file carries and none of its bytes.
 
 ## What a file carries
@@ -342,15 +348,15 @@ http.ServeContent(w, r, path, file.LastModified, file) // Range, If-None-Match a
 
 ## Errors
 
-| Error             | When                                                                                 | What to do                           |
-|-------------------|--------------------------------------------------------------------------------------|--------------------------------------|
-| `invalid`         | a bad name, path, folder or size; a body longer or shorter than its `size`           | fix the call                         |
-| `not found`       | `copy` or `rename` from a path with no file                                          | check the path                       |
-| `conflict`        | `ifMatch` did not match; `copy` or `rename` onto a file without it                   | read again and decide                |
-| `limit`           | past `maxFileSize`; a write that would leave the disk less than the store keeps free | write less, or free the disk         |
-| `corrupt`         | a whole read whose bytes do not match their hash                                     | restore the file from a backup       |
-| `closed`          | the store closed                                                                     | open it again                        |
-| `outcome unknown` | the commit failed after the write ran                                                | `head` the path before writing again |
+| Error             | When                                                                                                                         | What to do                           |
+|-------------------|------------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
+| `invalid`         | a bad name, path, folder or size; a body longer or shorter than its `size`                                                   | fix the call                         |
+| `not found`       | `copy` or `rename` from a path with no file                                                                                  | check the path                       |
+| `conflict`        | `ifMatch` did not match; `copy` or `rename` onto a file without it; over the wire, a read of a file replaced since its `get` | read again and decide                |
+| `limit`           | past `maxFileSize`; a write that would leave the disk less than the store keeps free                                         | write less, or free the disk         |
+| `corrupt`         | a whole read whose bytes do not match their hash                                                                             | restore the file from a backup       |
+| `closed`          | the store closed                                                                                                             | open it again                        |
+| `outcome unknown` | the commit failed after the write ran                                                                                        | `head` the path before writing again |
 
 Every error names the files and the path: `files avatars: "users/42/1.png": conflict`.
 `get` and `head` of a path with no file, and `delete` of one, are not errors.

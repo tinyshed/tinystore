@@ -1,12 +1,13 @@
-//! blobs over protocol 2: files by handle. A get answers what the file
-//! carries and its first bytes, and the rest goes as pieces within the
-//! client's credit, read from the file as credit comes and checked as it is
-//! read. An upload's pieces come as the client's DATA, written in order as
-//! they come, the credit of each given back once it is written, and its last
-//! DATA publishes the file.
+//! blobs over protocol 2: files by handle, the server holding nothing
+//! between calls, as S3 does. A get answers what the file carries, and all
+//! its bytes when they fit one message; a read streams a file's bytes, the
+//! whole file checked or a range, on the ETag a get gave, as pieces within
+//! the client's credit. An upload's pieces come as the client's DATA,
+//! written in order as they come, the credit of each given back once it is
+//! written, and its last DATA publishes the file.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -15,10 +16,10 @@ use super::Route;
 use super::codec::Message;
 use super::protocol::{
     BlobsAt, BlobsDelete, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot, BlobsHead, BlobsInfo, BlobsList, BlobsMove,
-    BlobsOpen, BlobsPage, BlobsPiece, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
+    BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
 };
 use crate::blobs::{FileCall, FileInfo, Files, StoredFile, Upload};
-use crate::{Store, unix_millis};
+use crate::{Error, ErrorKind, Store, unix_millis};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
 pub(crate) type Sender = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
@@ -28,7 +29,7 @@ pub(crate) type Spawn = Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
-        method::BLOBS_GET => Route::Get,
+        method::BLOBS_READ => Route::Read,
         method::BLOBS_UPLOAD => Route::Upload,
         _ => Route::Worker,
     }
@@ -55,7 +56,7 @@ pub(crate) struct Link {
 pub(crate) struct Handles {
     open: Mutex<HashMap<u64, Files>>,
     last: AtomicU64,
-    gets: Arc<Mutex<HashMap<u32, Arc<Getting>>>>,
+    reads: Arc<Mutex<HashMap<u32, Arc<Getting>>>>,
     uploads: Arc<Mutex<HashMap<u32, Arc<Uploading>>>>,
 }
 
@@ -69,9 +70,9 @@ impl Handles {
         Ok(folder.iter().fold(files, |files, segment| files.folder(segment.as_str())))
     }
 
-    /// Credit the client granted a get's stream.
+    /// Credit the client granted a read's stream.
     pub(crate) fn grant(&self, stream: u32, credit: u32) {
-        let getting = lock(&self.gets).get(&stream).cloned();
+        let getting = lock(&self.reads).get(&stream).cloned();
         if let Some(getting) = getting {
             getting.grant(credit);
         }
@@ -82,13 +83,13 @@ impl Handles {
         lock(&self.uploads).get(&stream).cloned()
     }
 
-    /// Ends a get or an upload the client cancelled; says whether there was one.
+    /// Ends a read or an upload the client cancelled; says whether there was one.
     pub(crate) fn cancel(&self, stream: u32) -> bool {
         // out of its map before it ends, which takes the map's lock again:
         // an `if let` on the lock would hold it and wait for itself
-        let getting = lock(&self.gets).remove(&stream);
+        let getting = lock(&self.reads).remove(&stream);
         if let Some(getting) = getting {
-            getting.end(Err(Failure::cancelled("the client cancelled its get")));
+            getting.end(Err(Failure::cancelled("the client cancelled its read")));
             return true;
         }
         let uploading = lock(&self.uploads).remove(&stream);
@@ -102,8 +103,8 @@ impl Handles {
     /// Lets go of every stream at the session's end: a file read is closed,
     /// an upload's bytes removed.
     pub(crate) fn end(&self) {
-        let gets: Vec<_> = lock(&self.gets).drain().map(|(_, getting)| getting).collect();
-        for getting in gets {
+        let reads: Vec<_> = lock(&self.reads).drain().map(|(_, getting)| getting).collect();
+        for getting in reads {
             getting.drop_file();
         }
         let uploads: Vec<_> = lock(&self.uploads).drain().map(|(_, uploading)| uploading).collect();
@@ -113,8 +114,8 @@ impl Handles {
     }
 }
 
-/// Answers a call of one message: everything but a get and an upload.
-pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8]) -> Answered {
+/// Answers a call of one message: everything but a read and an upload.
+pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], max_body: usize) -> Answered {
     match called {
         method::BLOBS_OPEN => {
             let asked = BlobsOpen::decode(body)?;
@@ -136,6 +137,16 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8]) -
             let bytes = std::mem::take(&mut asked.bytes);
             let info = options(files.key(&asked.path), &asked).written(&bytes, asked.create)?;
             Ok(BlobsWritten { info: info.map(info_of) }.encode())
+        }
+        method::BLOBS_GET => {
+            let asked = BlobsAt::decode(body)?;
+            let Some(mut file) = handles.at(asked.handle, &asked.folder)?.get(&asked.path)? else {
+                return Ok(BlobsGot::default().encode());
+            };
+            let info = file.info().clone();
+            // half a body, the rest room for what it carries; a larger file waits for its read
+            let bytes = if info.size <= (max_body / 2) as u64 { file.read_all()? } else { Vec::new() };
+            Ok(BlobsGot { info: Some(info_of(info)), bytes }.encode())
         }
         method::BLOBS_HEAD => {
             let asked = BlobsAt::decode(body)?;
@@ -239,38 +250,58 @@ fn piece_bound(link: &Link) -> usize {
     (link.max_body.min(credit) / 2).saturating_sub(16).max(1)
 }
 
-/// How a get's answer goes: whole in the RESPONSE, or the RESPONSE and then
-/// the rest of the file within the client's credit.
-pub(crate) enum Got {
+/// How a read's answer goes: whole in the RESPONSE, or the RESPONSE's piece
+/// and then the rest within the client's credit.
+pub(crate) enum Reading {
     Whole(Vec<u8>),
     Begun(Vec<u8>, Arc<Getting>),
 }
 
-/// Answers a get: what the file carries and its first bytes, and the rest to
-/// come when they do not fit.
-pub(crate) fn get(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> Result<Got, Failure> {
-    let asked = BlobsAt::decode(body)?;
+/// Reads a file's bytes: the whole file, checked, or a range, which is not.
+/// The file is opened here and held until the read ends, so that the bytes
+/// are those of the ETag it was asked on, through a replace.
+pub(crate) fn read(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> Result<Reading, Failure> {
+    let asked = BlobsRead::decode(body)?;
     let files = handles.at(asked.handle, &asked.folder)?;
-    let Some(mut file) = files.get(&asked.path)? else {
-        return Ok(Got::Whole(BlobsGot { info: None, bytes: Vec::new() }.encode()));
+    let mut file = match (files.get(&asked.path)?, &asked.if_match) {
+        (Some(file), Some(etag)) if file.info().etag != *etag => return Err(changed(&files, &asked.path)),
+        (None, Some(_)) => return Err(changed(&files, &asked.path)),
+        (None, None) => return Err(files.fail(&asked.path, Error::not_found("no file is there")).into()),
+        (Some(file), _) => file,
     };
+    let size = file.info().size;
+    let from = asked.offset.unwrap_or(0).min(size);
+    let left = asked.length.map_or(size - from, |length| length.min(size - from));
+    file.seek(SeekFrom::Start(from)).map_err(|error| Error::io("blobs: seek a file", error))?;
     let piece = piece_bound(link);
-    let first = read_piece(&mut file, piece)?;
-    let finished = first.len() < piece || file.info().size == first.len() as u64;
-    let response = BlobsGot { info: Some(info_of(file.info().clone())), bytes: first }.encode();
-    if finished {
-        return Ok(Got::Whole(response));
+    let first = read_piece(&mut file, bound(piece, left))?;
+    let left = left - first.len() as u64;
+    let response = BlobsPiece { bytes: first }.encode();
+    if left == 0 {
+        return Ok(Reading::Whole(response));
     }
-    let state = GetState { file: Some(file), credit: link.credit, busy: false, ended: false };
+    let state = GetState { file: Some(file), left, credit: link.credit, busy: false, ended: false };
     let getting = Arc::new(Getting {
         stream,
         piece,
         state: Mutex::new(state),
         link: link.clone(),
-        gets: Arc::downgrade(&handles.gets),
+        reads: Arc::downgrade(&handles.reads),
     });
-    lock(&handles.gets).insert(stream, Arc::clone(&getting));
-    Ok(Got::Begun(response, getting))
+    lock(&handles.reads).insert(stream, Arc::clone(&getting));
+    Ok(Reading::Begun(response, getting))
+}
+
+/// A read on an ETag the path no longer holds, as a write's `ifMatch` is.
+fn changed(files: &Files, path: &str) -> Failure {
+    let error = Error::new(ErrorKind::Conflict, "the path holds no file with the ETag given");
+    files.fail(path, error).into()
+}
+
+/// The bytes the next piece reads: a piece's, or fewer when the read has
+/// fewer left.
+fn bound(piece: usize, left: u64) -> usize {
+    usize::try_from(left).map_or(piece, |left| left.min(piece))
 }
 
 /// Reads the next piece of a file, at most `bound` bytes: fewer only at its
@@ -298,18 +329,20 @@ fn read_error(error: std::io::Error) -> crate::Error {
     }
 }
 
-/// A get's file going out a piece at a time within the client's credit.
+/// A read's bytes going out a piece at a time within the client's credit.
 pub(crate) struct Getting {
     stream: u32,
     piece: usize,
     state: Mutex<GetState>,
     link: Link,
-    gets: Weak<Mutex<HashMap<u32, Arc<Getting>>>>,
+    reads: Weak<Mutex<HashMap<u32, Arc<Getting>>>>,
 }
 
 struct GetState {
     /// The file, here between two runs of the pieces that go.
     file: Option<StoredFile>,
+    /// The read's bytes still to go.
+    left: u64,
     credit: u64,
     /// A worker sends pieces now.
     busy: bool,
@@ -339,10 +372,10 @@ impl Getting {
         // a piece's message: its bytes and a few of its own
         let room = (self.piece + 16) as u64;
         loop {
-            let mut file = {
+            let (mut file, left) = {
                 let mut state = lock(&self.state);
                 match state.file.take() {
-                    Some(file) if !state.ended && state.credit >= room => file,
+                    Some(file) if !state.ended && state.credit >= room => (file, state.left),
                     file => {
                         state.file = file;
                         state.busy = false;
@@ -350,23 +383,25 @@ impl Getting {
                     }
                 }
             };
-            match read_piece(&mut file, self.piece) {
+            let bytes = match read_piece(&mut file, bound(self.piece, left)) {
+                Ok(bytes) => bytes,
                 Err(failure) => return self.end(Err(failure)),
-                Ok(bytes) => {
-                    let last = bytes.len() < self.piece;
-                    if !bytes.is_empty() {
-                        let body = BlobsPiece { bytes }.encode();
-                        // the message's bytes, which the client gives back, and not the room:
-                        // counted apart, the two drift until the stream waits for good
-                        lock(&self.state).credit -= body.len() as u64;
-                        (self.link.send)(body);
-                    }
-                    if last {
-                        return self.end(Ok(Empty {}.encode()));
-                    }
-                }
+            };
+            let left = left - bytes.len() as u64;
+            let ended = left == 0 || bytes.is_empty();
+            if !bytes.is_empty() {
+                let body = BlobsPiece { bytes }.encode();
+                // the message's bytes, which the client gives back, and not the room:
+                // counted apart, the two drift until the stream waits for good
+                lock(&self.state).credit -= body.len() as u64;
+                (self.link.send)(body);
             }
-            lock(&self.state).file = Some(file);
+            if ended {
+                return self.end(Ok(Empty {}.encode()));
+            }
+            let mut state = lock(&self.state);
+            state.file = Some(file);
+            state.left = left;
         }
     }
 
@@ -378,8 +413,8 @@ impl Getting {
             }
             state.file = None;
         }
-        if let Some(gets) = self.gets.upgrade() {
-            lock(&gets).remove(&self.stream);
+        if let Some(reads) = self.reads.upgrade() {
+            lock(&reads).remove(&self.stream);
         }
         (self.link.finish)(last);
     }

@@ -122,17 +122,44 @@ for (const way of ways) {
 			const data = await bodies.get('data.json')
 			expect(data?.meta).toEqual({ name: 'Data.json' })
 			expect(await data?.json()).toEqual({ a: 1 })
-			expect(await caught(data!.text())).toBeInstanceOf(InvalidError)
+			expect(await data?.text()).toBe('{"a":1}')
 		})
 
-		test('a file read after a replace and a delete is the one get found', async () => {
-			const pinned = store.files('pinned')
-			const first = pattern(3 << 20)
-			await pinned.put('a.bin', first)
-			const file = await pinned.get('a.bin')
-			await pinned.put('a.bin', pattern(5))
-			await pinned.delete('a.bin')
-			expect(await file?.bytes()).toEqual(first)
+		test('a small file keeps the bytes its get brought, and a large one read after a replace is ConflictError', async () => {
+			const kept = store.files('kept-bytes')
+			await kept.put('small.txt', 'first')
+			const small = await kept.get('small.txt')
+			await kept.put('small.txt', 'second')
+			await kept.delete('small.txt')
+			expect(await small?.text()).toBe('first')
+
+			const large = pattern(3 << 20)
+			await kept.put('large.bin', large)
+			const file = await kept.get('large.bin')
+			expect(await file?.bytes()).toEqual(large)
+			expect(await file?.bytes()).toEqual(large)
+			await kept.put('large.bin', pattern(5))
+			expect(await caught(file!.bytes())).toBeInstanceOf(ConflictError)
+			await kept.delete('large.bin')
+			expect(await caught(file!.slice(0, 10).bytes())).toBeInstanceOf(ConflictError)
+		})
+
+		test('slice reads a range as Blob.slice takes one, from a large file or a small one', async () => {
+			const videos = store.files('videos')
+			const film = pattern(5 << 20, 13)
+			await videos.put('film.mp4', film)
+			const file = (await videos.get('film.mp4'))!
+			expect(await file.slice(1_000_000, 4_000_000).bytes()).toEqual(
+				film.slice(1_000_000, 4_000_000),
+			)
+			expect(await file.slice(-500).bytes()).toEqual(film.slice(-500))
+			expect(file.slice(10, 5).size).toBe(0)
+			expect(await file.slice(film.length + 10).bytes()).toEqual(new Uint8Array(0))
+
+			await videos.put('note.txt', 'hello world')
+			const note = (await videos.get('note.txt'))!
+			expect(await note.slice(6).text()).toBe('world')
+			expect(await note.slice(-5, -1).text()).toBe('worl')
 		})
 
 		test('a folder is whole segments, listed, counted and cleared', async () => {
@@ -275,6 +302,8 @@ for (const way of ways) {
 			)
 			expect(failed).toBeInstanceOf(CorruptError)
 			expect(joined(read).length).toBeLessThan(bytes.length)
+			const range = await (await checked.get('a.bin'))!.slice(0, 8192).bytes()
+			expect(range.length).toBe(8192)
 		})
 	})
 }

@@ -243,6 +243,41 @@
     },
     {
       "fields": {
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "ifMatch": {
+          "str": "ifMatch"
+        },
+        "length": {
+          "uint": "607"
+        },
+        "offset": {
+          "uint": "507"
+        },
+        "path": {
+          "str": "path"
+        }
+      },
+      "hex": "86016b0291a6666f6c64657203a47061746804a769664d6174636805cd01fb06cd025f",
+      "message": "blobs.Read",
+      "name": "blobs.Read with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Read",
+      "name": "blobs.Read with no field"
+    },
+    {
+      "fields": {
         "info": {
           "fields": {
             "contentType": {
@@ -2405,6 +2440,7 @@
     "blobs.list": 1034,
     "blobs.open": 1025,
     "blobs.put": 1026,
+    "blobs.read": 1037,
     "blobs.rename": 1032,
     "blobs.upload": 1027,
     "blobs.usage": 1035,

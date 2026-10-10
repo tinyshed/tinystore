@@ -518,7 +518,8 @@ module defines.
 - a blobs put answers whole, and a create over the wire writes once — `a_file_put_over_the_wire_reads_back_whole_in_one_answer`, `create_over_the_wire_writes_once` in `wire::blobs`
 - a file goes up and comes down in pieces, never past the credit of the side that takes them — `a_large_file_goes_up_and_comes_down_in_pieces_within_the_credit` in `wire::blobs`
 - a blobs upload cancelled, refused or cut by its connection leaves nothing, and `cancelled` comes once its bytes are gone — `an_upload_cancelled_or_refused_leaves_nothing`, `a_connection_that_ends_mid_upload_leaves_nothing` in `wire::blobs`
-- a whole blobs get of a changed byte ends corrupt before its last piece — `a_get_of_a_changed_byte_ends_corrupt_before_its_last_piece` in `wire::blobs`
+- a whole blobs read of a changed byte ends corrupt before its last piece — `a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece` in `wire::blobs`
+- a blobs read is its range, not checked, on the ETag a get gave: a file replaced or deleted since is `conflict` — `a_range_reads_only_its_bytes_and_is_not_checked`, `a_read_on_an_etag_the_path_no_longer_holds_is_a_conflict` in `wire::blobs`
 - the server module requires only the root — `TestTheServerRequiresOnlyTheRoot`
 - `server/wire` imports only the standard library — `TestWireImportsOnlyTheStandardLibrary`
 - a data client cannot change a schema — `TestADataClientCannotChangeTheSchema`, `TestEachLineOfTheCheckRefusesOnItsOwn`, `FuzzDataSQL`
@@ -578,6 +579,7 @@ module defines.
 - a Bun store's close frees its directory — `close returns once the child has exited` in `sdk/js/test/kv.test.ts`
 - the Bun SDK's files answer alike through the core in its process, a private child, a sidecar and a remote server, in one call and in pieces within each side's credit — `sdk/js/test/blobs.test.ts`, every test through each
 - a Bun file read whole whose bytes changed is `CorruptError` before its end — `a whole read of a changed byte fails CorruptError before its end` in `sdk/js/test/blobs.test.ts`
+- a Bun file's `slice` reads its range as `Blob.slice` takes one, and a large file read after a replace is `ConflictError` — `slice reads a range as Blob.slice takes one, from a large file or a small one`, `a small file keeps the bytes its get brought, and a large one read after a replace is ConflictError` in `sdk/js/test/blobs.test.ts`
 - the JS SDK runs under Node: its sidecar, a private child, TCP and TLS checked — `a remote server is reached over TLS, its certificate checked, under Node` and the rest of `sdk/js/test/under-node.ts`, run by `node --test`
 - a Python line takes the fields of the context it was logged in — `test_lines_take_the_fields_of_the_context_they_were_logged_in` in Python's suite
 - a byte the Bun encoder writes as its buffer grows is kept — `a byte written as the buffer grows is kept` in `sdk/js/test/wire.test.ts`

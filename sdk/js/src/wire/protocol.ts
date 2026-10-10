@@ -34,6 +34,7 @@ export const methods = {
 	'blobs.list': 0x040a,
 	'blobs.usage': 0x040b,
 	'blobs.clear': 0x040c,
+	'blobs.read': 0x040d,
 	'jobs.queue.open': 0x0201,
 	'jobs.schedule.open': 0x0202,
 	'jobs.add': 0x0203,
@@ -503,7 +504,7 @@ export const BlobsWritten = message(
 )
 
 /**
- * A piece of a file's bytes: an upload's DATA from the client, a get's from
+ * A piece of a file's bytes: an upload's DATA from the client, a read's from
  * the server.
  */
 export const BlobsPiece = message(
@@ -540,14 +541,15 @@ export const BlobsPiece = message(
 )
 
 /**
- * A get's answer: what the file carries, none when there is no file, and its
- * first bytes; the rest come as pieces, the last once the whole file matched
- * its SHA-256, and a file whose bytes changed ends the stream corrupt instead.
+ * A get's answer: what the file carries, none when there is no file, and all
+ * its bytes when they fit one message; a larger file's are left to blobs.read,
+ * so that a read of a range sends no byte before it.
  */
 export const BlobsGot = message(
 	'blobs.Got',
 	{
 		info: [1, BlobsInfo],
+		/** the whole file, or nothing when it is larger */
 		bytes: [2, bin],
 	},
 	{
@@ -583,6 +585,113 @@ export const BlobsGot = message(
 			}
 			r.leave()
 			return { info: $info, bytes: $bytes }
+		},
+	},
+)
+
+/**
+ * A read of a file's bytes, as S3's GET with a range and If-Match: the whole
+ * file, checked, its last piece sent once its bytes matched their SHA-256 and a
+ * changed byte ending the stream corrupt instead; or a range, not checked.
+ */
+export const BlobsRead = message(
+	'blobs.Read',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		path: [3, str],
+		/** the ETag a get gave: another file there, or none, is a conflict */
+		ifMatch: [4, str],
+		/** from the first byte when absent */
+		offset: [5, uint],
+		/** to the last byte when absent */
+		length: [6, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
+				w.str(v.path)
+				n++
+			}
+			if (v.ifMatch !== undefined) {
+				w.field(4)
+				w.str(v.ifMatch)
+				n++
+			}
+			if (v.offset !== undefined) {
+				w.field(5)
+				w.uint(v.offset)
+				n++
+			}
+			if (v.length !== undefined) {
+				w.field(6)
+				w.uint(v.length)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $path: string | undefined
+			let $ifMatch: string | undefined
+			let $offset: number | undefined
+			let $length: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$path = r.str()
+						break
+					case 4:
+						$ifMatch = r.str()
+						break
+					case 5:
+						$offset = r.uint()
+						break
+					case 6:
+						$length = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				folder: $folder,
+				path: $path,
+				ifMatch: $ifMatch,
+				offset: $offset,
+				length: $length,
+			}
 		},
 	},
 )
