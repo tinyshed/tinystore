@@ -17,8 +17,8 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsPage,
-    JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsWork, method,
+    Empty, Failure, Handle, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp,
+    JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
 };
 use super::{Lent, Route};
 #[cfg(feature = "sql")]
@@ -107,6 +107,7 @@ pub(crate) fn call(
             within(job.map_or_else(JobsJob::default, job_of).encode(), max_body)
         }
         method::JOBS_LIST => list(handles, JobsList::decode(body)?, max_body),
+        method::JOBS_TX => tx(store, handles, &JobsTx::decode(body)?),
         method::JOBS_STEP => step(handles, JobsStep::decode(body)?, max_body),
         method::JOBS_KEEP => keep(handles, JobsStep::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
@@ -131,6 +132,39 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
             within(job.map_or_else(JobsJob::default, job_of).encode(), max_body)
         }
         other => Err(Failure::invalid(format!("method {other:#06x} is not a queue's call inside a transaction"))),
+    }
+}
+
+/// A transaction's writes in one transaction of jobs.db, all of them or
+/// none; one that fails names its place in `what`.
+fn tx(store: &Store, handles: &Handles, asked: &JobsTx) -> Answered {
+    let outcomes = store.tx(|tx| -> Result<Vec<JobsChanged>, Failure> {
+        let mut outcomes = Vec::with_capacity(asked.writes.len());
+        for (index, op) in asked.writes.iter().enumerate() {
+            let changed = write_op(handles, tx.transaction(), op);
+            outcomes
+                .push(JobsChanged { changed: changed.map_err(|failure| failure.naming("write", index.to_string()))? });
+        }
+        Ok(outcomes)
+    })?;
+    Ok(JobsTxResults { outcomes }.encode())
+}
+
+/// One write of a transaction, and whether it changed anything.
+fn write_op(handles: &Handles, tx: &Transaction<'_>, op: &JobsOp) -> Result<bool, Failure> {
+    let called = u16::try_from(op.method).unwrap_or(0);
+    match (called, &op.call, &op.id) {
+        (method::JOBS_ADD, Some(call), _) => on_job(handles, call.clone(), Some(tx), |job, value| job.add(&value)),
+        (method::JOBS_SET, Some(call), _) => {
+            on_job(handles, call.clone(), Some(tx), |job, value| job.set(&value)).map(|()| true)
+        }
+        (method::JOBS_UPDATE, Some(call), _) => {
+            on_job(handles, call.clone(), Some(tx), |job, value| job.update(&value))
+        }
+        (method::JOBS_CANCEL, _, Some(id)) => Ok(handles.opened(id.handle)?.queue.cancel_in(&id.id, Some(tx))?),
+        _ => Err(Failure::invalid(format!(
+            "method {called:#06x} is not a write of a transaction, or lacks what it takes"
+        ))),
     }
 }
 

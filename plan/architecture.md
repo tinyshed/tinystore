@@ -229,9 +229,12 @@ imports another for it. Three things at the crate's root carry it:
 | `engine::Home`            | where a handle opens: its engine's own file of the store, or a file another engine lends                    |
 | `Transaction`, `TxHandle` | a transaction of one file as the handles it takes in see it: a savepoint a call, its bound, what runs after |
 
-kv's `store.tx` and a database's `db.tx` each hand their `Transaction` to the
-handles `tx.with` takes in, which run their calls in it and refuse it when
-they are kept in another file. `inside.rs` is the one place two engines meet,
+The store's `store.tx` and a database's `db.tx` each hand their `Transaction`
+to the handles `tx.with` takes in, which run their calls in it and refuse it
+when they are kept in another file. A database's begins on its file before
+its function runs; the store's begins on kv.db or jobs.db, whichever its
+first handle is kept in, and marks the thread for both from the start, so
+that a call around it is refused whichever it turns out to be of. `inside.rs` is the one place two engines meet,
 a line a handle: `db.bucket`, `db.queue`.
 
 An engine that lives in another's file:

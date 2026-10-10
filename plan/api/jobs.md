@@ -11,8 +11,8 @@ both books share. TypeScript comes first; Python, Go and Rust follow where
 they spell something differently. The Rust and TypeScript columns are
 built, the core in `crates/tinystore/src/jobs`, protocol 2 in
 `protocol/jobs.wire` and the Bun SDK in `sdk/js/src/jobs.ts`, queues opened
-from an SQL database and its transactions among them; a transaction of
-jobs.db, `store.tx` for a queue, is not.
+from an SQL database and transactions, a database's and the store's, among
+them.
 
 ## What a newcomer learns
 
@@ -376,7 +376,15 @@ await store.tx(async tx => {
   lives in jobs.db, and `store.tx` commits its jobs together, or none of them;
   a bucket and a queue of the store are two files, and one transaction takes
   the handles of one file.
-- `work` and `runDue` inside a transaction are `invalid`.
+- A transaction takes a queue's `add`, `set`, `update` and `cancel`, and in
+  Rust and in a database's transaction its `get`; `work`, `runDue`, a watch
+  and a page work outside it. A worker finds a job a transaction added once
+  the transaction commits.
+- In Rust, and in a database's transaction everywhere, each call answers as
+  the queue's own does. `store.tx` across a pipe or a network never holds the
+  writer while the host awaits: a queue's writes are kept and made at the
+  commit, all of them or none, so they answer nothing there, and one that
+  fails names its place.
 
 ## Tests
 

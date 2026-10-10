@@ -274,10 +274,15 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
   inside starts with `tx.`. A call made around it from inside, `stock.get(sku)`,
   is `invalid` in Rust: it would read the file without the transaction's own
   writes, or wait for the writer the transaction holds.
-- In Rust a transaction holds kv.db's writer alone while it reads and decides,
-  so two orders cannot both take the last item; it commits when the function
-  returns `Ok` and rolls back on an error or a panic. A call that fails inside
-  it leaves the transaction as it was before the call.
+- `store.tx` is a transaction of one of the store's own files: kv.db for
+  buckets and counters, jobs.db for queues, whichever its first handle is
+  kept in. A handle of the other is `invalid`, since no write is atomic across
+  two files; a program that commits keys and jobs together opens both from a
+  database, `db.bucket` and `db.queue`, and uses `db.tx`.
+- In Rust a transaction holds its file's writer alone while it reads and
+  decides, so two orders cannot both take the last item; it commits when the
+  function returns `Ok` and rolls back on an error or a panic. A call that
+  fails inside it leaves the transaction as it was before the call.
 - Across the pipe and the network a transaction never holds the writer while
   the host awaits: its reads go at once, its writes are sent together when the
   function returns, with a check that nothing it read has changed, and the

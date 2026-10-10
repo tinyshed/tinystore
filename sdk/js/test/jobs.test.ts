@@ -333,5 +333,38 @@ for (const way of ways) {
 			expect(await caught(odd.add(undefined))).toBeInstanceOf(InvalidError)
 			expect(await caught(odd.add({ big: 1n }))).toBeInstanceOf(InvalidError)
 		})
+
+		test('a transaction of the store makes its jobs together, or none of them', async () => {
+			const fanout = store.queue<{ member: string }>('fanout')
+			await store.tx(async tx => {
+				for (const member of ['ann', 'bob']) {
+					await tx.with(fanout).add({ member }, { id: member })
+				}
+				await tx.with(fanout).cancel('bob')
+			})
+			expect((await fanout.get('ann'))?.value).toEqual({ member: 'ann' })
+			expect(await fanout.get('bob')).toBeUndefined()
+
+			const refused = await caught(
+				store.tx(async tx => {
+					await tx.with(fanout).add({ member: 'eve' }, { id: 'eve' })
+					await tx.with(fanout).set('', { member: 'nobody' })
+				}),
+			)
+			expect(refused).toBeInstanceOf(InvalidError)
+			expect((refused as InvalidError).what.write).toBe('1')
+			expect(await fanout.get('eve')).toBeUndefined()
+
+			const mixed = await caught(
+				store.tx(async tx => {
+					await tx.with(fanout).add({ member: 'zed' }, { id: 'zed' })
+					await tx.with(store.bucket<boolean>('seen')).set('zed', true)
+				}),
+			)
+			expect((mixed as Error).message).toContain(
+				'kept in kv.db, outside this transaction of jobs.db',
+			)
+			expect(await fanout.get('zed')).toBeUndefined()
+		})
 	})
 }

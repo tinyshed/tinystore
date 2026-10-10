@@ -4,7 +4,7 @@ use std::thread;
 
 use super::*;
 use crate::kv::fixture::*;
-use crate::{ErrorKind, Options};
+use crate::{ErrorKind, Options, Store};
 
 #[test]
 fn a_transaction_commits_what_it_wrote_or_nothing() {

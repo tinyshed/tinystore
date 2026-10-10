@@ -42,7 +42,7 @@ pub use once::{Once, OnceBuilder};
 pub use path::Key;
 pub use quota::{Quota, QuotaBuilder};
 pub use rate_limit::{RateLimit, RateLimitBuilder};
-pub use tx::{Tx, TxBucket, TxCounters};
+pub use tx::{TxBucket, TxCounters};
 pub use value::{Bytes, Value};
 
 pub(crate) use batch::{Batch, Outcome, Place};

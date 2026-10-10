@@ -802,6 +802,85 @@ impl Message for JobsKept {
     }
 }
 
+/// One write of a transaction: an add, a set or an update with its call, or a
+/// cancel with its id.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsOp {
+    /// Jobs.add, jobs.set, jobs.update or jobs.cancel.
+    pub(crate) method: u64,
+    pub(crate) call: Option<JobsCall>,
+    pub(crate) id: Option<JobsId>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsOp {
+    const NAME: &'static str = "jobs.Op";
+    const KEYS: &'static [u64] = &[1, 2, 3];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsOp {
+            method: fields.get(1, "method", codec::uint)?.unwrap_or_default(),
+            call: fields.get(2, "call", codec::message::<JobsCall>)?,
+            id: fields.get(3, "id", codec::message::<JobsId>)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::uint_value(&self.method));
+        out.given(2, self.call.as_ref().map(codec::message_value));
+        out.given(3, self.id.as_ref().map(codec::message_value));
+    }
+}
+
+/// A transaction of jobs.db across the wire: its writes, all applied or none.
+/// One that fails names its place in what, as write.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsTx {
+    pub(crate) writes: Vec<JobsOp>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsTx {
+    const NAME: &'static str = "jobs.Tx";
+    const KEYS: &'static [u64] = &[1];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsTx {
+            writes: fields.get(1, "writes", codec::list(codec::message::<JobsOp>))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::list_value(&self.writes, codec::message_value));
+    }
+}
+
+/// What each write of a transaction did, in their order: whether an add added,
+/// an update changed or a cancel found a job; a set changes always.
+#[cfg(feature = "jobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct JobsTxResults {
+    pub(crate) outcomes: Vec<JobsChanged>,
+}
+
+#[cfg(feature = "jobs")]
+impl Message for JobsTxResults {
+    const NAME: &'static str = "jobs.TxResults";
+    const KEYS: &'static [u64] = &[1];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(JobsTxResults {
+            outcomes: fields.get(1, "outcomes", codec::list(codec::message::<JobsChanged>))?.unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.put(1, codec::list_value(&self.outcomes, codec::message_value));
+    }
+}
+
 /// Opens a bucket of values by key. Its keys expire ttl after they are written,
 /// or idle after they were last read or written; not both.
 #[cfg(feature = "kv")]
@@ -1891,6 +1970,8 @@ pub(crate) mod method {
     pub(crate) const JOBS_KEEP: u16 = 0x020b;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_WATCH: u16 = 0x020c;
+    #[cfg(feature = "jobs")]
+    pub(crate) const JOBS_TX: u16 = 0x020d;
     #[cfg(feature = "kv")]
     pub(crate) const KV_BUCKET_OPEN: u16 = 0x0101;
     #[cfg(feature = "kv")]
@@ -1984,6 +2065,8 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
     ("jobs.keep", 0x020b),
     #[cfg(feature = "jobs")]
     ("jobs.watch", 0x020c),
+    #[cfg(feature = "jobs")]
+    ("jobs.tx", 0x020d),
     #[cfg(feature = "kv")]
     ("kv.bucket.open", 0x0101),
     #[cfg(feature = "kv")]
@@ -2093,6 +2176,12 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure
         "jobs.Step" => JobsStep::decode(body).map(|message| message.encode()),
         #[cfg(feature = "jobs")]
         "jobs.Kept" => JobsKept::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Op" => JobsOp::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.Tx" => JobsTx::decode(body).map(|message| message.encode()),
+        #[cfg(feature = "jobs")]
+        "jobs.TxResults" => JobsTxResults::decode(body).map(|message| message.encode()),
         #[cfg(feature = "kv")]
         "kv.BucketOpen" => KvBucketOpen::decode(body).map(|message| message.encode()),
         #[cfg(feature = "kv")]

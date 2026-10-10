@@ -345,6 +345,7 @@ module defines.
 - a job in a batch commits with its rows or not at all — `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn`
 - a job batch does not wait for write slots held by its own prepared changes — `TestAJobBatchDoesNotWaitForItsOwnWriteSlots`
 - a job a Tx adds commits with its rows, and lets go of its turn either way — `TestAJobInATxCommitsWithItsRows`
+- a transaction of the store makes a queue's jobs together or not at all, takes the handles of one file, and refuses a call around it — `a_transaction_of_the_store_adds_its_jobs_together_or_not_at_all`, `a_transaction_of_the_store_is_of_one_file` in `jobs::queue_tests`, `a_transaction_of_jobs_writes_all_of_its_jobs_or_none` in `wire::jobs`; `a transaction of the store makes its jobs together, or none of them` in `sdk/js/test/jobs.test.ts`
 - an add that returned survives an abrupt exit — `TestAnEnqueuedJobSurvivesAnAbruptExit`, from many goroutines at once; a clean reopen `an_added_job_survives_a_reopen` in `jobs::queue_tests`
 - a job runs at its time and not before, in the order of its time — `a_job_runs_at_its_time_and_not_before`, `jobs_run_in_the_order_of_their_time_equal_times_in_the_order_added` in `jobs::queue_tests`
 - a write during a Work loop's read is not lost, nor keeps it awake — `TestAWriteDuringAnAlarmReadCannotBeLost`, `TestALaterWriteDuringAnAlarmReadLetsTheLoopSleep`

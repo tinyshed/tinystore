@@ -665,6 +665,152 @@
     },
     {
       "fields": {
+        "call": {
+          "fields": {
+            "at": {
+              "int": "1790000000000"
+            },
+            "cron": {
+              "str": "cron"
+            },
+            "delay": {
+              "uint": "1500"
+            },
+            "every": {
+              "uint": "1500"
+            },
+            "group": {
+              "str": "group"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "id": {
+              "str": "id"
+            },
+            "timeZone": {
+              "str": "timeZone"
+            },
+            "value": {
+              "str": "{\"a\":1}"
+            }
+          }
+        },
+        "id": {
+          "fields": {
+            "handle": {
+              "uint": "107"
+            },
+            "id": {
+              "str": "id"
+            }
+          }
+        },
+        "method": {
+          "uint": "107"
+        }
+      },
+      "hex": "83016b0289016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650382016b02a26964",
+      "message": "jobs.Op",
+      "name": "jobs.Op with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Op",
+      "name": "jobs.Op with no field"
+    },
+    {
+      "fields": {
+        "writes": {
+          "list": [
+            {
+              "fields": {
+                "call": {
+                  "fields": {
+                    "at": {
+                      "int": "1790000000000"
+                    },
+                    "cron": {
+                      "str": "cron"
+                    },
+                    "delay": {
+                      "uint": "1500"
+                    },
+                    "every": {
+                      "uint": "1500"
+                    },
+                    "group": {
+                      "str": "group"
+                    },
+                    "handle": {
+                      "uint": "107"
+                    },
+                    "id": {
+                      "str": "id"
+                    },
+                    "timeZone": {
+                      "str": "timeZone"
+                    },
+                    "value": {
+                      "str": "{\"a\":1}"
+                    }
+                  }
+                },
+                "id": {
+                  "fields": {
+                    "handle": {
+                      "uint": "107"
+                    },
+                    "id": {
+                      "str": "id"
+                    }
+                  }
+                },
+                "method": {
+                  "uint": "107"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "81019183016b0289016b02a2696403a77b2261223a317d04cf000001a0c4506c0005cd05dc06a567726f757007cd05dc08a463726f6e09a874696d655a6f6e650382016b02a26964",
+      "message": "jobs.Tx",
+      "name": "jobs.Tx with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.Tx",
+      "name": "jobs.Tx with no field"
+    },
+    {
+      "fields": {
+        "outcomes": {
+          "list": [
+            {
+              "fields": {
+                "changed": {
+                  "bool": true
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918101c3",
+      "message": "jobs.TxResults",
+      "name": "jobs.TxResults with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "jobs.TxResults",
+      "name": "jobs.TxResults with no field"
+    },
+    {
+      "fields": {
         "database": {
           "uint": "407"
         },
@@ -1726,6 +1872,7 @@
     "jobs.schedule.open": 514,
     "jobs.set": 516,
     "jobs.step": 522,
+    "jobs.tx": 525,
     "jobs.update": 517,
     "jobs.watch": 524,
     "jobs.work": 521,

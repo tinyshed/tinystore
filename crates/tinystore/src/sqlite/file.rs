@@ -136,14 +136,38 @@ impl File {
         let mut open = Open { connection, finished: false };
         let value = work(&Tx::new(connection))?;
         open.finished = true;
+        self.commit(connection)?;
+        Ok(value)
+    }
+
+    /// Commits the transaction on `connection`; a commit that fails may or may
+    /// not be in the file.
+    fn commit(&self, connection: &Connection) -> Result<()> {
         execute(connection, COMMIT).map_err(|error| {
             if !connection.is_autocommit() {
                 let _ = execute(connection, ROLLBACK);
             }
             Error::new(ErrorKind::OutcomeUnknown, format!("{}: a transaction's commit", self.describe()))
                 .with_source(error)
-        })?;
-        Ok(value)
+        })
+    }
+
+    /// Marks this thread as inside a transaction of the file that has not
+    /// begun yet, as the store's is until it takes its first handle in: a call
+    /// on the file around the transaction is refused from here on.
+    pub(crate) fn mark(&self) -> Result<Mark> {
+        self.refuse_when_closed("a transaction")?;
+        self.refuse_inside_a_transaction("a transaction", "would wait for the writer the transaction holds")?;
+        Ok(Mark(Held::enter(self.address())))
+    }
+
+    /// Begins the transaction `mark` announced, which holds the writer alone
+    /// until it commits, and rolls back when it is dropped before.
+    pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
+        self.refuse_when_closed("a transaction")?;
+        let connection = lock(&self.writer);
+        execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
+        Ok(Begun { file: self, connection, committed: false })
     }
 
     /// Whether this thread holds the file's writer in a transaction.
@@ -235,6 +259,40 @@ impl File {
 
     fn describe(&self) -> String {
         self.path.display().to_string()
+    }
+}
+
+/// This thread inside a transaction of a file, from before it begins.
+pub(crate) struct Mark(#[expect(dead_code, reason = "held for its drop, which lets the thread go")] Held);
+
+/// A transaction begun on a file by [`File::begin`].
+pub(crate) struct Begun<'f> {
+    file: &'f File,
+    connection: MutexGuard<'f, Connection>,
+    committed: bool,
+}
+
+impl Begun<'_> {
+    pub(crate) fn file(&self) -> &File {
+        self.file
+    }
+
+    /// The writer inside the transaction.
+    pub(crate) fn tx(&self) -> Tx<'_> {
+        Tx::new(&self.connection)
+    }
+
+    pub(crate) fn commit(mut self) -> Result<()> {
+        self.committed = true;
+        self.file.commit(&self.connection)
+    }
+}
+
+impl Drop for Begun<'_> {
+    fn drop(&mut self) {
+        if !self.committed && !self.connection.is_autocommit() {
+            let _ = execute(&self.connection, ROLLBACK);
+        }
     }
 }
 

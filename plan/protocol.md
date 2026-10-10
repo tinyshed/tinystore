@@ -153,6 +153,7 @@ imports be.
 | `jobs.work`                   | handle, concurrency, until idle                                                                                  | both ways: held jobs out, answers back                                                         |
 | `jobs.step`, `.keep`          | a run, a step's name; keep's answer as JSON                                                                      | the answer kept, found false for none; nothing                                                 |
 | `jobs.watch`                  | handle, id                                                                                                       | a download: the job as it is, then again each time it changes, until it ends                   |
+| `jobs.tx`                     | writes: each an add, a set or an update with its call, or a cancel with its id                                   | what each did, in their order; all of them are made in one transaction of jobs.db, or none     |
 
 `jobs.work` is a worker whose handlers are the client's. The server runs the
 queue's loop on a thread of the store's, claiming as every worker does, and

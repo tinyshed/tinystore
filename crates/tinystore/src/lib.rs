@@ -27,4 +27,4 @@ pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
 pub use error::{Constraint, ConstraintKind, Error, ErrorKind, Result};
 pub use memory::{Memory, Reservation};
 pub use store::{Options, Store};
-pub use transaction::{Transaction, TxHandle};
+pub use transaction::{Transaction, Tx, TxHandle};

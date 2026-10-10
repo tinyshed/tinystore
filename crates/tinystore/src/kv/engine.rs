@@ -64,8 +64,9 @@ impl Kv {
     pub(crate) fn of(store: &Store) -> Result<Arc<Kv>> {
         store.engine(|store| {
             let claim = store.claim("kv.db")?;
-            let file = File::open(claim.path(), Config::default())?;
-            Kv::start(store, Arc::new(file), None, Some(claim))
+            let file = Arc::new(File::open(claim.path(), Config::default())?);
+            store.keep_file(&file);
+            Kv::start(store, file, None, Some(claim))
         })
     }
 

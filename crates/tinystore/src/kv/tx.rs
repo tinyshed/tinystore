@@ -1,24 +1,6 @@
-//! A transaction of kv.db, for reads that decide what to write, and the calls
-//! of a bucket or counters inside any transaction of their file: kv.db's, or
-//! the database's they were opened from.
-//!
-//! ```no_run
-//! # fn main() -> tinystore::Result<()> {
-//! # let store = tinystore::Store::open("data", Default::default())?;
-//! let stock = store.bucket::<i64>("stock").open()?;
-//! let orders = store.bucket::<String>("orders").open()?;
-//! let placed = store.tx(|tx| -> tinystore::Result<bool> {
-//!     let left = tx.with(&stock).get("sku-1")?.unwrap_or(0);
-//!     if left < 1 {
-//!         return Ok(false); // sold out: nothing written
-//!     }
-//!     tx.with(&stock).set("sku-1", &(left - 1))?;
-//!     tx.with(&orders).set("order-7", &"sku-1".to_owned())?;
-//!     Ok(true)
-//! })?;
-//! # Ok(())
-//! # }
-//! ```
+//! The calls of a bucket or of counters inside a transaction of their file:
+//! the store's, when they are kept in kv.db, or the database's they were
+//! opened from.
 
 use std::fmt;
 use std::sync::atomic::AtomicI64;
@@ -26,51 +8,13 @@ use std::time::Duration;
 
 use super::bucket::{Bucket, Entry, PAGE_KEYS, Page, clear_work};
 use super::counters::Counters;
-use super::engine::Kv;
 use super::key_call::KeyCall;
 use super::path::Key;
 use super::scope::Scope;
 use super::value::Value;
 use crate::sqlite::Tx as SqlTx;
 use crate::transaction::sealed::Sealed;
-use crate::{Error, Result, Store, Transaction, TxHandle};
-
-impl Store {
-    /// Runs `work` in one transaction of kv.db that holds its writer alone, so
-    /// that what it reads cannot change before it writes: two orders cannot
-    /// both take the last item. It commits when `work` returns `Ok` and rolls
-    /// back when it returns an error or panics.
-    ///
-    /// Inside, every call goes through the transaction, `tx.with(&bucket)`. A
-    /// call on kv.db made around it from inside would not see what it wrote,
-    /// or would wait for the writer it holds: it fails `Invalid` instead.
-    /// Writes that need no reads need no transaction, since separate calls
-    /// already share commits.
-    pub fn tx<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
-        let kv = Kv::of(self).map_err(|error| E::from(error.within("kv tx")))?;
-        Transaction::run(kv.file(), kv.place(), None, |transaction| work(&Tx { transaction }))
-    }
-}
-
-/// A transaction of kv.db, given to the function `Store::tx` runs.
-pub struct Tx<'a> {
-    transaction: &'a Transaction<'a>,
-}
-
-impl Tx<'_> {
-    /// The calls of `handle` inside this transaction: what they read sees what
-    /// the transaction wrote, and what they write commits with it or not at
-    /// all. A handle kept in another file is refused at its first call.
-    pub fn with<'h, H: TxHandle>(&'h self, handle: &'h H) -> H::InTx<'h> {
-        handle.in_tx(self.transaction)
-    }
-}
-
-impl fmt::Debug for Tx<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Tx({:?})", self.transaction)
-    }
-}
+use crate::{Error, Result, Transaction, TxHandle};
 
 /// Runs one call of a handle of `scope` on `key` in a savepoint of the
 /// transaction, once the handle is kept in the transaction's file.

@@ -29,6 +29,7 @@ export const methods = {
 	'jobs.step': 0x020a,
 	'jobs.keep': 0x020b,
 	'jobs.watch': 0x020c,
+	'jobs.tx': 0x020d,
 	'kv.bucket.open': 0x0101,
 	'kv.get': 0x0102,
 	'kv.has': 0x0103,
@@ -354,6 +355,33 @@ export const JobsStep = message('jobs.Step', {
 export const JobsKept = message('jobs.Kept', {
 	found: [1, bool],
 	answer: [2, str],
+})
+
+/**
+ * One write of a transaction: an add, a set or an update with its call, or a
+ * cancel with its id.
+ */
+export const JobsOp = message('jobs.Op', {
+	/** jobs.add, jobs.set, jobs.update or jobs.cancel */
+	method: [1, uint],
+	call: [2, JobsCall],
+	id: [3, JobsId],
+})
+
+/**
+ * A transaction of jobs.db across the wire: its writes, all applied or none.
+ * One that fails names its place in what, as write.
+ */
+export const JobsTx = message('jobs.Tx', {
+	writes: [1, list(JobsOp)],
+})
+
+/**
+ * What each write of a transaction did, in their order: whether an add added,
+ * an update changed or a cancel found a job; a set changes always.
+ */
+export const JobsTxResults = message('jobs.TxResults', {
+	outcomes: [1, list(JobsChanged)],
 })
 
 /**

@@ -7,6 +7,7 @@
 import type { Link } from './connection.ts'
 import { ConflictError, InvalidError } from './errors.ts'
 import { handleOn } from './handles.ts'
+import { commitJobs, type JobOp, type Queue, queueParts, StoreTxQueue } from './jobs.ts'
 import {
 	type Bucket,
 	type Counters,
@@ -75,6 +76,9 @@ export class Tx {
 	readonly #written = new Map<string, { found: Found; at: number }>()
 	readonly #cleared: { handle: string; under: readonly string[]; at: number }[] = []
 	readonly #ops: Op[] = []
+	/** a queue's writes: a transaction takes the handles of one file, kv.db's or jobs.db's */
+	readonly #jobs: JobOp[] = []
+	#file: 'kv.db' | 'jobs.db' | undefined
 	#done = false
 
 	constructor(link: Link) {
@@ -83,21 +87,24 @@ export class Tx {
 
 	with<T>(bucket: Bucket<T>): TxBucket<T>
 	with(counters: Counters): TxCounters
-	with(handle: Bucket<unknown> | Counters): TxBucket<unknown> | TxCounters {
+	with<T>(queue: Queue<T>): StoreTxQueue<T>
+	with(
+		handle: Bucket<unknown> | Counters | Queue<unknown>,
+	): TxBucket<unknown> | TxCounters | StoreTxQueue<unknown> {
+		const queue = queueParts(handle)
+		if (queue !== undefined) {
+			const what = `jobs queue ${queue.name}`
+			this.#takes(queue.source.link, queue.source.home?.describe, 'jobs.db', what)
+			return new StoreTxQueue(queue, op => {
+				this.#open()
+				this.#jobs.push(op)
+			})
+		}
 		const parts = partsOf(handle)
 		if (parts === undefined) {
-			throw new InvalidError('tx.with takes a bucket or counters')
+			throw new InvalidError('tx.with takes a bucket, counters or a queue')
 		}
-		if (parts.link !== this.#link) {
-			throw new InvalidError(
-				`kv ${parts.name}: a handle of another store, in a transaction of this one`,
-			)
-		}
-		if (parts.home !== undefined) {
-			throw new InvalidError(
-				`${parts.home.describe}: kv bucket ${parts.name}: kept in the database's file, outside this transaction of kv.db: take it in with db.tx`,
-			)
-		}
+		this.#takes(parts.link, parts.home?.describe, 'kv.db', `kv ${parts.name}`)
 		if (parts.values === undefined) {
 			return new TxCounters(this, parts)
 		}
@@ -137,9 +144,34 @@ export class Tx {
 		this.#cleared.push({ handle: handleOf(parts), under: parts.under, at: this.#ops.length })
 	}
 
+	/**
+	 * Refuses a handle of another store, one kept in a database's file, and
+	 * one of the store's other file: a bucket and a queue of the store are two
+	 * files, and no write is atomic across two.
+	 */
+	#takes(link: Link, home: string | undefined, file: 'kv.db' | 'jobs.db', what: string): void {
+		if (link !== this.#link) {
+			throw new InvalidError(`${what}: a handle of another store, in a transaction of this one`)
+		}
+		if (home !== undefined) {
+			throw new InvalidError(
+				`${home}: ${what}: kept in the database's file, outside this transaction of the store: take it in with db.tx`,
+			)
+		}
+		if (this.#file !== undefined && this.#file !== file) {
+			throw new InvalidError(
+				`${what}: kept in ${file}, outside this transaction of ${this.#file}: open both from a database to commit them together`,
+			)
+		}
+		this.#file = file
+	}
+
 	/** Sends the writes in one kv.tx, after a check of each key read: still at its version, or still absent. */
 	async commit(): Promise<void> {
 		this.#done = true
+		if (this.#jobs.length > 0) {
+			return commitJobs(this.#link, this.#jobs)
+		}
 		const reads = await Promise.all(this.#reads.values())
 		if (reads.length === 0 && this.#ops.length === 0) {
 			return

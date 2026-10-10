@@ -462,3 +462,53 @@ fn a_progress_past_4_kib_is_refused() {
         .unwrap();
     assert_eq!(*refused.lock().unwrap(), Some(ErrorKind::Limit));
 }
+
+#[test]
+fn a_transaction_of_the_store_adds_its_jobs_together_or_not_at_all() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").open().unwrap();
+    f.store
+        .tx(|tx| -> Result<()> {
+            for member in ["ann", "bob", "eve"] {
+                assert!(tx.with(&pushes).id(member).add(&note("the build is green"))?);
+            }
+            assert!(tx.with(&pushes).get("ann")?.is_some(), "a read inside sees what the transaction added");
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(ran(&pushes).len(), 3);
+
+    pushes.id("kept").add(&note("stays")).unwrap();
+    let refused = f.store.tx(|tx| -> Result<()> {
+        tx.with(&pushes).id("zed").add(&note("never sent"))?;
+        assert!(tx.with(&pushes).cancel("kept")?);
+        Err(crate::Error::invalid("changed its mind"))
+    });
+    assert_eq!(refused.unwrap_err().kind(), ErrorKind::Invalid);
+    assert!(pushes.get("zed").unwrap().is_none(), "the add rolled back");
+    assert!(pushes.get("kept").unwrap().is_some(), "and the cancel");
+
+    let around = f.store.tx(|_| pushes.add(&note("outside the transaction"))).unwrap_err();
+    assert_eq!(around.kind(), ErrorKind::Invalid, "a call around the transaction is refused: {around}");
+}
+
+#[cfg(feature = "kv")]
+#[test]
+fn a_transaction_of_the_store_is_of_one_file() {
+    let f = fixture();
+    let pushes = f.store.queue::<Note>("pushes").open().unwrap();
+    let seen = f.store.bucket::<String>("seen").open().unwrap();
+    let error = f
+        .store
+        .tx(|tx| -> Result<()> {
+            tx.with(&pushes).add(&note("first"))?;
+            tx.with(&seen).set("ann", &"yes".to_owned())
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    assert!(error.to_string().contains("kept in kv.db, outside this transaction of jobs.db"), "{error}");
+    assert!(ran(&pushes).is_empty(), "the job rolled back with the transaction");
+
+    let nothing: Result<()> = f.store.tx(|_| Ok(()));
+    nothing.unwrap();
+}

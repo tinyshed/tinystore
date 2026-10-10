@@ -5,8 +5,8 @@ use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsPage,
-    JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsWork, method,
+    Empty, Handle, Hello, JobsAnswer, JobsCall, JobsChanged, JobsHeld, JobsId, JobsJob, JobsKept, JobsList, JobsOp,
+    JobsPage, JobsQueueOpen, JobsScheduleOpen, JobsStep, JobsTx, JobsTxResults, JobsWork, method,
 };
 use crate::{Options, Store};
 
@@ -429,4 +429,39 @@ fn a_schedule_opened_over_the_wire_keeps_its_one_job() {
     let zoneless = JobsScheduleOpen { time_zone: None, ..open };
     let failed = client.call::<Handle>(method::JOBS_SCHEDULE_OPEN, &zoneless).unwrap_err();
     assert!(failed.message.contains("needs a time zone"), "{}", failed.message);
+}
+
+#[test]
+fn a_transaction_of_jobs_writes_all_of_its_jobs_or_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let pushes = queue(&mut client, "pushes");
+    let adds = |ids: &[&str]| -> Vec<JobsOp> {
+        let op =
+            |id: &&str| JobsOp { method: u64::from(method::JOBS_ADD), call: Some(job(pushes, id, "{}")), id: None };
+        ids.iter().map(op).collect()
+    };
+
+    let mut writes = adds(&["ann", "bob"]);
+    writes.push(JobsOp {
+        method: u64::from(method::JOBS_SET),
+        call: Some(JobsCall { handle: pushes, ..job(pushes, "", "{}") }),
+        id: None,
+    });
+    let refused = client.call::<JobsTxResults>(method::JOBS_TX, &JobsTx { writes }).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+    assert_eq!(refused.what.unwrap().get("write").map(String::as_str), Some("2"), "the write that failed is named");
+    assert!(!get(&mut client, pushes, "ann").found, "and none of them was written");
+
+    let mut writes = adds(&["ann", "bob", "ann"]);
+    writes.push(JobsOp {
+        method: u64::from(method::JOBS_CANCEL),
+        call: None,
+        id: Some(JobsId { handle: pushes, id: "bob".to_owned() }),
+    });
+    let done: JobsTxResults = client.call(method::JOBS_TX, &JobsTx { writes }).unwrap();
+    let changed: Vec<bool> = done.outcomes.iter().map(|outcome| outcome.changed).collect();
+    assert_eq!(changed, [true, true, false, true], "an id taken inside the transaction adds nothing");
+    assert!(get(&mut client, pushes, "ann").found && !get(&mut client, pushes, "bob").found);
+    assert_eq!(client.pipe.streams(), 0);
 }

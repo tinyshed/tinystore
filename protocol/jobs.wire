@@ -156,6 +156,26 @@ message jobs.Kept {
   2 answer: json?
 }
 
+# One write of a transaction: an add, a set or an update with its call, or a
+# cancel with its id.
+message jobs.Op {
+  1 method: uint                  # jobs.add, jobs.set, jobs.update or jobs.cancel
+  2 call: jobs.Call?
+  3 id: jobs.Id?
+}
+
+# A transaction of jobs.db across the wire: its writes, all applied or none.
+# One that fails names its place in what, as write.
+message jobs.Tx {
+  1 writes: [jobs.Op]
+}
+
+# What each write of a transaction did, in their order: whether an add added,
+# an update changed or a cancel found a job; a set changes always.
+message jobs.TxResults {
+  1 outcomes: [jobs.Changed]
+}
+
 method 0x0201 jobs.queue.open(jobs.QueueOpen) -> Handle
 method 0x0202 jobs.schedule.open(jobs.ScheduleOpen) -> Handle
 method 0x0203 jobs.add(jobs.Call) -> jobs.Changed
@@ -168,3 +188,4 @@ method 0x0209 jobs.work(jobs.Work) -> exchange jobs.Held for jobs.Answer
 method 0x020a jobs.step(jobs.Step) -> jobs.Kept
 method 0x020b jobs.keep(jobs.Step) -> Empty
 method 0x020c jobs.watch(jobs.Id) -> download jobs.Job until Empty
+method 0x020d jobs.tx(jobs.Tx) -> jobs.TxResults

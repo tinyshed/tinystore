@@ -28,6 +28,7 @@ import {
 	JobsQueueOpen,
 	JobsScheduleOpen,
 	JobsStep,
+	JobsTx,
 	JobsWork,
 	methods,
 } from './wire/protocol.ts'
@@ -764,6 +765,81 @@ export class TxQueue<T> {
 	get(id: string): Promise<Job<T> | undefined> {
 		return this.#queue.get(id)
 	}
+}
+
+/** A write the store's transaction keeps for its commit: its method, and its call or the id it cancels. */
+export interface JobOp {
+	source: Source<unknown>
+	method: number
+	call?: Omit<Written<typeof JobsCall.fields>, 'handle'>
+	id?: string
+}
+
+/**
+ * A queue's writes inside the store's transaction, from `tx.with(queue)` in
+ * `store.tx`: each is kept for the commit, which makes them all or none, so
+ * what one did is known once the transaction has committed.
+ *
+ *     await store.tx(async tx => {
+ *       for (const member of members) await tx.with(pushes).add({ member, message }, { id: `${message}:${member}` })
+ *     })
+ */
+export class StoreTxQueue<T> {
+	readonly name: string
+	readonly #source: Source<T>
+	readonly #keep: (op: JobOp) => void
+
+	/** Comes from `tx.with(queue)` in `store.tx`. */
+	constructor(parts: QueueParts, keep: (op: JobOp) => void) {
+		this.name = parts.name
+		this.#source = parts.source as Source<T>
+		this.#keep = keep
+	}
+
+	/** Adds a job unless its id is taken, with the commit. */
+	async add(value: T, options: AddOptions = {}): Promise<void> {
+		this.#write('jobs.add', { ...jobFields(options), id: options.id }, value)
+	}
+
+	/** Makes the id's job this value at this time, whatever it was, with the commit. */
+	async set(id: string, value: T, options: JobOptions = {}): Promise<void> {
+		this.#write('jobs.set', { ...jobFields(options), id }, value)
+	}
+
+	/** Changes the id's job when it has not started, with the commit. */
+	async update(id: string, value: T, options: JobOptions = {}): Promise<void> {
+		this.#write('jobs.update', { ...jobFields(options), id }, value)
+	}
+
+	/** Takes the job under id, whatever its state, with the commit. */
+	async cancel(id: string): Promise<void> {
+		this.#keep({ source: this.#source as Source<unknown>, method: methods['jobs.cancel'], id })
+	}
+
+	#write(
+		method: 'jobs.add' | 'jobs.set' | 'jobs.update',
+		fields: Omit<Written<typeof JobsCall.fields>, 'handle' | 'value'>,
+		value: T,
+	): void {
+		const call = { ...fields, value: this.#source.values.encode(value) }
+		this.#keep({ source: this.#source as Source<unknown>, method: methods[method], call })
+	}
+}
+
+/** Sends a transaction's writes of jobs as one jobs.tx: all of them are made, or none. */
+export async function commitJobs(link: Link, ops: readonly JobOp[]): Promise<void> {
+	await link.run('write', async connection => {
+		const writes = []
+		for (const op of ops) {
+			const handle = await handleOn(connection, op.source.openMethod, op.source.open)
+			writes.push({
+				method: op.method,
+				call: op.call === undefined ? undefined : { ...op.call, handle },
+				id: op.id === undefined ? undefined : { handle, id: op.id },
+			})
+		}
+		await connection.session.call(methods['jobs.tx'], JobsTx.encode({ writes }))
+	})
 }
 
 /** A queue's parts, for a database's transaction that takes it in; undefined for anything else. */

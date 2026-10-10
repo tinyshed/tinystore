@@ -36,6 +36,7 @@ export type {
 	Schedule,
 	ScheduleOptions,
 	ScheduleWhen,
+	StoreTxQueue,
 	TxQueue,
 	Worker,
 	WorkOptions,

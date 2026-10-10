@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::engine::{Claim, Engine, Host};
 use crate::schedule::Scheduler;
+use crate::sqlite::File as EngineFile;
 use crate::{Clock, Error, ErrorKind, Memory, Result, SystemClock};
 
 /// How a store opens.
@@ -71,6 +72,9 @@ struct Inner {
     open: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     /// Shared with each claim's release, which must not keep the store open.
     claims: Arc<Mutex<HashSet<String>>>,
+    /// The engines' own files, kv.db and jobs.db, which the store's
+    /// transaction is a transaction of one of.
+    files: Mutex<Vec<Arc<EngineFile>>>,
     closed: AtomicBool,
 }
 
@@ -89,6 +93,7 @@ impl Store {
             engines: Mutex::new(Vec::new()),
             open: Mutex::new(HashMap::new()),
             claims: Arc::default(),
+            files: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
             dir,
         };
@@ -133,11 +138,21 @@ impl Store {
         WeakStore(Arc::downgrade(&self.inner))
     }
 
+    /// Keeps an engine's own file among those [`Store::tx`] may be a
+    /// transaction of.
+    pub(crate) fn keep_file(&self, file: &Arc<EngineFile>) {
+        lock(&self.inner.files).push(Arc::clone(file));
+    }
+
+    pub(crate) fn files(&self) -> Vec<Arc<EngineFile>> {
+        lock(&self.inner.files).clone()
+    }
+
     fn describe(&self) -> String {
         self.inner.describe()
     }
 
-    fn refuse_when_closed(&self, what: &str) -> Result<()> {
+    pub(crate) fn refuse_when_closed(&self, what: &str) -> Result<()> {
         if self.inner.closed.load(Ordering::SeqCst) {
             return Err(Error::closed(format!("{}: {what}", self.describe())));
         }
@@ -197,6 +212,7 @@ impl Inner {
             }
         }
         lock(&self.open).clear();
+        lock(&self.files).clear();
         drop(lock(&self.lock).take());
         first_failure.map_or(Ok(()), |error| Err(error.within(self.describe())))
     }
