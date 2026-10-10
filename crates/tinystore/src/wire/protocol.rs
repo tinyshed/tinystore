@@ -73,6 +73,16 @@ impl Message for Hello {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.client.len()
+            + self.token.as_ref().map_or(0, |token| 1 + 5 + token.len())
+            + self.max_body.map_or(0, |_| 10)
+            + self.stream_credit.map_or(0, |_| 10)
+            + self.challenge.as_ref().map_or(0, |challenge| 1 + 5 + challenge.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.protocol == 0
             && self.client.is_empty()
@@ -191,6 +201,22 @@ impl Message for Welcome {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.server.len()
+            + 1 + 5 + self.instance.len()
+            + 1 + 5 + self.capability.len()
+            + 10
+            + 10
+            + 10
+            + 10
+            + 1 + codec::list_size(&self.engines, |item| 5 + item.len())
+            + 10
+            + self.proof.as_ref().map_or(0, |proof| 1 + 5 + proof.len())
+            + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.protocol == 0
             && self.server.is_empty()
@@ -239,6 +265,11 @@ impl Message for StoreOptions {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.durability.is_none()
     }
@@ -278,6 +309,12 @@ impl Message for GoAway {
             codec::write_str(out, &self.message);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.code.len()
+            + 1 + 5 + self.message.len()
     }
 
     fn is_zero(&self) -> bool {
@@ -329,6 +366,13 @@ impl Message for Failure {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.code.len()
+            + 1 + 5 + self.message.len()
+            + self.what.as_ref().map_or(0, |what| 1 + codec::names_size(what, |item| 5 + item.len()))
+    }
+
     fn is_zero(&self) -> bool {
         self.code.is_empty()
             && self.message.is_empty()
@@ -366,6 +410,11 @@ impl Message for Handle {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
     }
@@ -388,6 +437,10 @@ impl Message for Empty {
 
     fn write(&self, out: &mut Vec<u8>) {
         Map::open(out).close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
     }
 
     fn is_zero(&self) -> bool {
@@ -432,6 +485,12 @@ impl Message for JobsConcurrency {
             codec::write_uint(out, group);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.total.map_or(0, |_| 10)
+            + self.group.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -480,6 +539,12 @@ impl Message for JobsBackoff {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+    }
+
     fn is_zero(&self) -> bool {
         self.initial == 0
             && self.max == 0
@@ -523,6 +588,12 @@ impl Message for JobsRate {
             codec::write_uint(out, &self.per);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
     }
 
     fn is_zero(&self) -> bool {
@@ -626,6 +697,20 @@ impl Message for JobsQueueOpen {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.attempts.map_or(0, |_| 10)
+            + self.backoff.as_ref().map_or(0, |backoff| 1 + backoff.size())
+            + self.timeout.map_or(0, |_| 10)
+            + self.concurrency.as_ref().map_or(0, |concurrency| 1 + concurrency.size())
+            + self.rate.as_ref().map_or(0, |rate| 1 + rate.size())
+            + self.dedupe.map_or(0, |_| 10)
+            + self.keep.map_or(0, |_| 10)
+            + self.max_waiting.map_or(0, |_| 10)
+            + self.database.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.attempts.is_none()
@@ -711,6 +796,17 @@ impl Message for JobsScheduleOpen {
             codec::write_uint(out, timeout);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.every.map_or(0, |_| 10)
+            + self.cron.as_ref().map_or(0, |cron| 1 + 5 + cron.len())
+            + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
+            + self.attempts.map_or(0, |_| 10)
+            + self.backoff.as_ref().map_or(0, |backoff| 1 + backoff.size())
+            + self.timeout.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -808,6 +904,19 @@ impl Message for JobsCall {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.id.as_ref().map_or(0, |id| 1 + 5 + id.len())
+            + 1 + 5 + self.value.len()
+            + self.at.map_or(0, |_| 10)
+            + self.delay.map_or(0, |_| 10)
+            + self.group.as_ref().map_or(0, |group| 1 + 5 + group.len())
+            + self.every.map_or(0, |_| 10)
+            + self.cron.as_ref().map_or(0, |cron| 1 + 5 + cron.len())
+            + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.id.is_none()
@@ -859,6 +968,12 @@ impl Message for JobsId {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.id.len()
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.id.is_empty()
@@ -896,6 +1011,11 @@ impl Message for JobsChanged {
             codec::write_bool(out, &self.changed);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -1013,6 +1133,23 @@ impl Message for JobsJob {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 2
+            + self.id.as_ref().map_or(0, |id| 1 + 5 + id.len())
+            + self.value.as_ref().map_or(0, |value| 1 + 5 + value.len())
+            + 1 + 5 + self.state.len()
+            + self.at.map_or(0, |_| 10)
+            + 10
+            + 10
+            + self.progress.as_ref().map_or(0, |progress| 1 + 5 + progress.len())
+            + self.error.as_ref().map_or(0, |error| 1 + 5 + error.len())
+            + self.group.as_ref().map_or(0, |group| 1 + 5 + group.len())
+            + self.repeat.as_ref().map_or(0, |repeat| 1 + 5 + repeat.len())
+            + self.started_at.map_or(0, |_| 10)
+            + self.ended_at.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         !self.found
             && self.id.is_none()
@@ -1091,6 +1228,15 @@ impl Message for JobsList {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.prefix.as_ref().map_or(0, |prefix| 1 + 5 + prefix.len())
+            + self.state.as_ref().map_or(0, |state| 1 + 5 + state.len())
+            + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
+            + self.limit.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.prefix.is_none()
@@ -1135,6 +1281,12 @@ impl Message for JobsPage {
             codec::write_str(out, next);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.jobs, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -1192,6 +1344,13 @@ impl Message for JobsWork {
             codec::write_bool(out, &self.until_idle);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.concurrency.map_or(0, |_| 10)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -1271,6 +1430,17 @@ impl Message for JobsHeld {
             codec::write_bool(out, &self.cancelled);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.id.as_ref().map_or(0, |id| 1 + 5 + id.len())
+            + self.value.as_ref().map_or(0, |value| 1 + 5 + value.len())
+            + 10
+            + 10
+            + self.group.as_ref().map_or(0, |group| 1 + 5 + group.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -1353,6 +1523,16 @@ impl Message for JobsAnswer {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.how.len()
+            + self.at.map_or(0, |_| 10)
+            + self.error.as_ref().map_or(0, |error| 1 + 5 + error.len())
+            + self.progress.as_ref().map_or(0, |progress| 1 + 5 + progress.len())
+            + self.delay.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.run == 0
             && self.how.is_empty()
@@ -1410,6 +1590,13 @@ impl Message for JobsStep {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.name.len()
+            + self.answer.as_ref().map_or(0, |answer| 1 + 5 + answer.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.run == 0
             && self.name.is_empty()
@@ -1452,6 +1639,12 @@ impl Message for JobsKept {
             codec::write_str(out, answer);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+            + self.answer.as_ref().map_or(0, |answer| 1 + 5 + answer.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -1506,6 +1699,13 @@ impl Message for JobsOp {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.call.as_ref().map_or(0, |call| 1 + call.size())
+            + self.id.as_ref().map_or(0, |id| 1 + id.size())
+    }
+
     fn is_zero(&self) -> bool {
         self.method == 0
             && self.call.is_none()
@@ -1546,6 +1746,11 @@ impl Message for JobsTx {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.writes, codec::message_size)
+    }
+
     fn is_zero(&self) -> bool {
         self.writes.is_empty()
     }
@@ -1582,6 +1787,11 @@ impl Message for JobsTxResults {
             codec::write_list(out, &self.outcomes, codec::write_message);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.outcomes, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -1642,6 +1852,14 @@ impl Message for KvBucketOpen {
             codec::write_uint(out, database);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.ttl.map_or(0, |_| 10)
+            + self.idle.map_or(0, |_| 10)
+            + self.database.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -1732,6 +1950,18 @@ impl Message for KvCall {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+            + 1 + 5 + self.key.len()
+            + self.value.as_ref().map_or(0, |value| 1 + codec::row_size(value))
+            + self.ttl.map_or(0, |_| 10)
+            + self.expires_at.map_or(0, |_| 10)
+            + self.if_version.as_ref().map_or(0, |if_version| 1 + 5 + if_version.len())
+            + self.n.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.under.is_empty()
@@ -1803,6 +2033,15 @@ impl Message for KvEntry {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 2
+            + self.value.as_ref().map_or(0, |value| 1 + codec::row_size(value))
+            + self.version.as_ref().map_or(0, |version| 1 + 5 + version.len())
+            + self.expires_at.map_or(0, |_| 10)
+            + self.key.as_ref().map_or(0, |key| 1 + 5 + key.len())
+    }
+
     fn is_zero(&self) -> bool {
         !self.found
             && self.value.is_none()
@@ -1858,6 +2097,13 @@ impl Message for KvWritten {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 2
+            + 1 + 5 + self.version.len()
+            + self.expires_at.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         !self.written
             && self.version.is_empty()
@@ -1894,6 +2140,11 @@ impl Message for KvFound {
             codec::write_bool(out, &self.found);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -1937,6 +2188,12 @@ impl Message for KvBranch {
             codec::write_list(out, &self.under, codec::write_str);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -1997,6 +2254,14 @@ impl Message for KvList {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+            + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
+            + self.limit.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.under.is_empty()
@@ -2042,6 +2307,12 @@ impl Message for KvPage {
             codec::write_str(out, next);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.entries, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -2096,6 +2367,13 @@ impl Message for KvCountersOpen {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.ttl.map_or(0, |_| 10)
+            + self.flush_every.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.ttl.is_none()
@@ -2132,6 +2410,11 @@ impl Message for KvCount {
             codec::write_int(out, &self.value);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
     }
 
     fn is_zero(&self) -> bool {
@@ -2191,6 +2474,14 @@ impl Message for KvRateLimitOpen {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 10
+            + 10
+            + self.burst.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.rate == 0
@@ -2245,6 +2536,13 @@ impl Message for KvWindow {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 10
+            + 10
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.limit == 0
@@ -2288,6 +2586,12 @@ impl Message for KvQuotaOpen {
             codec::write_list(out, &self.windows, codec::write_message);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::list_size(&self.windows, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -2353,6 +2657,15 @@ impl Message for KvWindowUse {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 10
+            + 10
+            + 10
+            + self.resets_at.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.used == 0
@@ -2415,6 +2728,14 @@ impl Message for KvAllowance {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 2
+            + 10
+            + self.retry_at.map_or(0, |_| 10)
+            + 1 + codec::list_size(&self.windows, codec::message_size)
+    }
+
     fn is_zero(&self) -> bool {
         !self.ok
             && self.left == 0
@@ -2462,6 +2783,12 @@ impl Message for KvOnceOpen {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.keep.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.keep.is_none()
@@ -2506,6 +2833,12 @@ impl Message for KvAnswer {
             codec::write_row(out, value);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+            + self.value.as_ref().map_or(0, |value| 1 + codec::row_size(value))
     }
 
     fn is_zero(&self) -> bool {
@@ -2566,6 +2899,14 @@ impl Message for KvCheck {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+            + 1 + 5 + self.key.len()
+            + self.version.as_ref().map_or(0, |version| 1 + 5 + version.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.under.is_empty()
@@ -2613,6 +2954,12 @@ impl Message for KvOp {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + self.call.size()
+    }
+
     fn is_zero(&self) -> bool {
         self.method == 0
             && self.call.is_zero()
@@ -2656,6 +3003,12 @@ impl Message for KvTx {
             codec::write_list(out, &self.writes, codec::write_message);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.checks, codec::message_size)
+            + 1 + codec::list_size(&self.writes, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -2731,6 +3084,16 @@ impl Message for KvOutcome {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 2
+            + 2
+            + self.value.as_ref().map_or(0, |value| 1 + codec::row_size(value))
+            + self.version.as_ref().map_or(0, |version| 1 + 5 + version.len())
+            + self.expires_at.map_or(0, |_| 10)
+            + self.count.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         !self.found
             && !self.written
@@ -2770,6 +3133,11 @@ impl Message for KvTxResults {
             codec::write_list(out, &self.outcomes, codec::write_message);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.outcomes, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -2816,6 +3184,12 @@ impl Message for ServerClock {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + self.at.map_or(0, |_| 10)
+            + self.advance.map_or(0, |_| 10)
+    }
+
     fn is_zero(&self) -> bool {
         self.at.is_none()
             && self.advance.is_none()
@@ -2859,6 +3233,12 @@ impl Message for SqlMigration {
             codec::write_str(out, &self.sql);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.sql.len()
     }
 
     fn is_zero(&self) -> bool {
@@ -2914,6 +3294,13 @@ impl Message for SqlOpen {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.migrations.as_ref().map_or(0, |migrations| 1 + codec::list_size(migrations, codec::message_size))
+            + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.migrations.is_none()
@@ -2957,6 +3344,12 @@ impl Message for SqlText {
             codec::write_list(out, &self.values, codec::write_cell);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.values, codec::cell_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -3007,6 +3400,13 @@ impl Message for SqlStatement {
             codec::write_list(out, &self.values, codec::write_cell);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.values, codec::cell_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -3068,6 +3468,14 @@ impl Message for SqlQuery {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.values, codec::cell_size)
+            + 1 + 5 + self.want.len()
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.text.is_empty()
@@ -3115,6 +3523,12 @@ impl Message for SqlRows {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.columns, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.rows, |item| codec::list_size(item, codec::cell_size))
+    }
+
     fn is_zero(&self) -> bool {
         self.columns.is_empty()
             && self.rows.is_empty()
@@ -3158,6 +3572,12 @@ impl Message for SqlDone {
             codec::write_int(out, &self.last_insert_rowid);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
     }
 
     fn is_zero(&self) -> bool {
@@ -3204,6 +3624,12 @@ impl Message for SqlBatch {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.statements, codec::message_size)
+    }
+
     fn is_zero(&self) -> bool {
         self.handle == 0
             && self.statements.is_empty()
@@ -3239,6 +3665,11 @@ impl Message for SqlBatched {
             codec::write_list(out, &self.done, codec::write_message);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.done, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -3277,6 +3708,11 @@ impl Message for SqlTxOpen {
             codec::write_uint(out, &self.handle);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
     }
 
     fn is_zero(&self) -> bool {
@@ -3352,6 +3788,16 @@ impl Message for SqlTxCall {
         map.close(out);
     }
 
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.text.len()
+            + 1 + codec::list_size(&self.values, codec::cell_size)
+            + 1 + 5 + self.want.len()
+            + 2
+            + self.method.map_or(0, |_| 10)
+            + self.body.as_ref().map_or(0, |body| 1 + 5 + body.len())
+    }
+
     fn is_zero(&self) -> bool {
         self.text.is_empty()
             && self.values.is_empty()
@@ -3412,6 +3858,14 @@ impl Message for SqlTxAnswer {
             codec::write_bin(out, body);
         }
         map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.rows.as_ref().map_or(0, |rows| 1 + rows.size())
+            + self.done.as_ref().map_or(0, |done| 1 + done.size())
+            + self.failure.as_ref().map_or(0, |failure| 1 + failure.size())
+            + self.body.as_ref().map_or(0, |body| 1 + 5 + body.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -3611,125 +4065,126 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
     ("sql.tx", 0x0305),
 ];
 
-/// A body of the message `name` read and written again, for the test that the
-/// vectors' bytes are what this codec writes; `None` for a name it lacks.
+/// A body of the message `name` read and written again, and the size the message
+/// says it takes, for the test that the vectors' bytes are what this codec writes
+/// within that size; `None` for a name it lacks.
 #[cfg(test)]
-pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure>> {
+pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize), Failure>> {
     let rewritten = match name {
-        "Hello" => Hello::decode(body).map(|message| message.encode()),
-        "Welcome" => Welcome::decode(body).map(|message| message.encode()),
-        "store.Options" => StoreOptions::decode(body).map(|message| message.encode()),
-        "GoAway" => GoAway::decode(body).map(|message| message.encode()),
-        "Failure" => Failure::decode(body).map(|message| message.encode()),
-        "Handle" => Handle::decode(body).map(|message| message.encode()),
-        "Empty" => Empty::decode(body).map(|message| message.encode()),
+        "Hello" => Hello::decode(body).map(|message| (message.encode(), message.size())),
+        "Welcome" => Welcome::decode(body).map(|message| (message.encode(), message.size())),
+        "store.Options" => StoreOptions::decode(body).map(|message| (message.encode(), message.size())),
+        "GoAway" => GoAway::decode(body).map(|message| (message.encode(), message.size())),
+        "Failure" => Failure::decode(body).map(|message| (message.encode(), message.size())),
+        "Handle" => Handle::decode(body).map(|message| (message.encode(), message.size())),
+        "Empty" => Empty::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Concurrency" => JobsConcurrency::decode(body).map(|message| message.encode()),
+        "jobs.Concurrency" => JobsConcurrency::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Backoff" => JobsBackoff::decode(body).map(|message| message.encode()),
+        "jobs.Backoff" => JobsBackoff::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Rate" => JobsRate::decode(body).map(|message| message.encode()),
+        "jobs.Rate" => JobsRate::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.QueueOpen" => JobsQueueOpen::decode(body).map(|message| message.encode()),
+        "jobs.QueueOpen" => JobsQueueOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.ScheduleOpen" => JobsScheduleOpen::decode(body).map(|message| message.encode()),
+        "jobs.ScheduleOpen" => JobsScheduleOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Call" => JobsCall::decode(body).map(|message| message.encode()),
+        "jobs.Call" => JobsCall::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Id" => JobsId::decode(body).map(|message| message.encode()),
+        "jobs.Id" => JobsId::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Changed" => JobsChanged::decode(body).map(|message| message.encode()),
+        "jobs.Changed" => JobsChanged::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Job" => JobsJob::decode(body).map(|message| message.encode()),
+        "jobs.Job" => JobsJob::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.List" => JobsList::decode(body).map(|message| message.encode()),
+        "jobs.List" => JobsList::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Page" => JobsPage::decode(body).map(|message| message.encode()),
+        "jobs.Page" => JobsPage::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Work" => JobsWork::decode(body).map(|message| message.encode()),
+        "jobs.Work" => JobsWork::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Held" => JobsHeld::decode(body).map(|message| message.encode()),
+        "jobs.Held" => JobsHeld::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Answer" => JobsAnswer::decode(body).map(|message| message.encode()),
+        "jobs.Answer" => JobsAnswer::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Step" => JobsStep::decode(body).map(|message| message.encode()),
+        "jobs.Step" => JobsStep::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Kept" => JobsKept::decode(body).map(|message| message.encode()),
+        "jobs.Kept" => JobsKept::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Op" => JobsOp::decode(body).map(|message| message.encode()),
+        "jobs.Op" => JobsOp::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.Tx" => JobsTx::decode(body).map(|message| message.encode()),
+        "jobs.Tx" => JobsTx::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "jobs")]
-        "jobs.TxResults" => JobsTxResults::decode(body).map(|message| message.encode()),
+        "jobs.TxResults" => JobsTxResults::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.BucketOpen" => KvBucketOpen::decode(body).map(|message| message.encode()),
+        "kv.BucketOpen" => KvBucketOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Call" => KvCall::decode(body).map(|message| message.encode()),
+        "kv.Call" => KvCall::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Entry" => KvEntry::decode(body).map(|message| message.encode()),
+        "kv.Entry" => KvEntry::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Written" => KvWritten::decode(body).map(|message| message.encode()),
+        "kv.Written" => KvWritten::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Found" => KvFound::decode(body).map(|message| message.encode()),
+        "kv.Found" => KvFound::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Branch" => KvBranch::decode(body).map(|message| message.encode()),
+        "kv.Branch" => KvBranch::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.List" => KvList::decode(body).map(|message| message.encode()),
+        "kv.List" => KvList::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Page" => KvPage::decode(body).map(|message| message.encode()),
+        "kv.Page" => KvPage::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.CountersOpen" => KvCountersOpen::decode(body).map(|message| message.encode()),
+        "kv.CountersOpen" => KvCountersOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Count" => KvCount::decode(body).map(|message| message.encode()),
+        "kv.Count" => KvCount::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.RateLimitOpen" => KvRateLimitOpen::decode(body).map(|message| message.encode()),
+        "kv.RateLimitOpen" => KvRateLimitOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Window" => KvWindow::decode(body).map(|message| message.encode()),
+        "kv.Window" => KvWindow::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.QuotaOpen" => KvQuotaOpen::decode(body).map(|message| message.encode()),
+        "kv.QuotaOpen" => KvQuotaOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.WindowUse" => KvWindowUse::decode(body).map(|message| message.encode()),
+        "kv.WindowUse" => KvWindowUse::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Allowance" => KvAllowance::decode(body).map(|message| message.encode()),
+        "kv.Allowance" => KvAllowance::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.OnceOpen" => KvOnceOpen::decode(body).map(|message| message.encode()),
+        "kv.OnceOpen" => KvOnceOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Answer" => KvAnswer::decode(body).map(|message| message.encode()),
+        "kv.Answer" => KvAnswer::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Check" => KvCheck::decode(body).map(|message| message.encode()),
+        "kv.Check" => KvCheck::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Op" => KvOp::decode(body).map(|message| message.encode()),
+        "kv.Op" => KvOp::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Tx" => KvTx::decode(body).map(|message| message.encode()),
+        "kv.Tx" => KvTx::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.Outcome" => KvOutcome::decode(body).map(|message| message.encode()),
+        "kv.Outcome" => KvOutcome::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
-        "kv.TxResults" => KvTxResults::decode(body).map(|message| message.encode()),
-        "server.Clock" => ServerClock::decode(body).map(|message| message.encode()),
+        "kv.TxResults" => KvTxResults::decode(body).map(|message| (message.encode(), message.size())),
+        "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Migration" => SqlMigration::decode(body).map(|message| message.encode()),
+        "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Open" => SqlOpen::decode(body).map(|message| message.encode()),
+        "sql.Open" => SqlOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Text" => SqlText::decode(body).map(|message| message.encode()),
+        "sql.Text" => SqlText::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Statement" => SqlStatement::decode(body).map(|message| message.encode()),
+        "sql.Statement" => SqlStatement::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Query" => SqlQuery::decode(body).map(|message| message.encode()),
+        "sql.Query" => SqlQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Rows" => SqlRows::decode(body).map(|message| message.encode()),
+        "sql.Rows" => SqlRows::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Done" => SqlDone::decode(body).map(|message| message.encode()),
+        "sql.Done" => SqlDone::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Batch" => SqlBatch::decode(body).map(|message| message.encode()),
+        "sql.Batch" => SqlBatch::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.Batched" => SqlBatched::decode(body).map(|message| message.encode()),
+        "sql.Batched" => SqlBatched::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.TxOpen" => SqlTxOpen::decode(body).map(|message| message.encode()),
+        "sql.TxOpen" => SqlTxOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.TxCall" => SqlTxCall::decode(body).map(|message| message.encode()),
+        "sql.TxCall" => SqlTxCall::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
-        "sql.TxAnswer" => SqlTxAnswer::decode(body).map(|message| message.encode()),
+        "sql.TxAnswer" => SqlTxAnswer::decode(body).map(|message| (message.encode(), message.size())),
         _ => return None,
     };
     Some(rewritten)

@@ -47,6 +47,7 @@ fn write_message(out: &mut String, message: &Message) {
     let fields = by_number(message);
     write_read(out, &fields);
     write_write(out, &fields);
+    write_size(out, &fields);
     write_is_zero(out, &fields);
     out.push_str("}\n");
 }
@@ -104,6 +105,64 @@ fn write_write(out: &mut String, fields: &[&Field]) {
     out.push_str("        map.close(out);\n    }\n\n");
 }
 
+/// The most bytes the message writes as: a map's head of three, and each
+/// field's number and value at their widest.
+fn write_size(out: &mut String, fields: &[&Field]) {
+    let mut parts = vec!["3".to_owned()];
+    for field in fields {
+        let member = rust_field(&field.name);
+        let part = match (fixed(&field.kind), field.optional) {
+            (Some(width), false) => format!("{}", 1 + width),
+            (Some(width), true) => format!("self.{member}.map_or(0, |_| {})", 1 + width),
+            (None, false) => format!("1 + {}", size(&field.kind, &format!("self.{member}"), false)),
+            (None, true) => {
+                let each = size(&field.kind, &member, true);
+                format!("self.{member}.as_ref().map_or(0, |{member}| 1 + {each})")
+            }
+        };
+        parts.push(part);
+    }
+    let _ = writeln!(out, "    fn size(&self) -> usize {{\n        {}\n    }}\n", parts.join("\n            + "));
+}
+
+/// The bytes a value of a kind of fixed width writes as at most: a bool one,
+/// a number nine.
+fn fixed(kind: &Kind) -> Option<usize> {
+    match kind {
+        Kind::Bool => Some(1),
+        Kind::Uint | Kind::Duration | Kind::Int | Kind::Int64 | Kind::Time | Kind::Nanos | Kind::Float => Some(9),
+        _ => None,
+    }
+}
+
+/// The most bytes a value of a kind writes as, from an expression that is
+/// the value's place, or a reference to it when `borrowed`.
+fn size(kind: &Kind, value: &str, borrowed: bool) -> String {
+    let reference = if borrowed { value.to_owned() } else { format!("&{value}") };
+    match kind {
+        Kind::Bool => "1".to_owned(),
+        Kind::Uint | Kind::Duration | Kind::Int | Kind::Int64 | Kind::Time | Kind::Nanos | Kind::Float => {
+            "9".to_owned()
+        }
+        Kind::Str | Kind::Json | Kind::Key | Kind::Bin => format!("5 + {value}.len()"),
+        Kind::Value => format!("codec::row_size({reference})"),
+        Kind::Cell => format!("codec::cell_size({reference})"),
+        Kind::List(item) => format!("codec::list_size({reference}, {})", item_size(item)),
+        Kind::Names(item) => format!("codec::names_size({reference}, {})", item_size(item)),
+        Kind::Message(_) => format!("{value}.size()"),
+    }
+}
+
+/// What sizes an item of a list or a map: a function, or a closure.
+fn item_size(kind: &Kind) -> String {
+    match kind {
+        Kind::Value => "codec::row_size".to_owned(),
+        Kind::Cell => "codec::cell_size".to_owned(),
+        Kind::Message(_) => "codec::message_size".to_owned(),
+        _ => format!("|item| {}", size(kind, "item", true)),
+    }
+}
+
 fn write_is_zero(out: &mut String, fields: &[&Field]) {
     let zero: Vec<String> = fields
         .iter()
@@ -157,14 +216,18 @@ fn write_methods(out: &mut String, schema: &Schema) {
 }
 
 /// Reads a body by its message's name and writes it again: the test that every
-/// vector's bytes are what this codec writes.
+/// vector's bytes are what this codec writes, in no more than its size.
 fn write_rewrite(out: &mut String, schema: &Schema) {
     out.push_str(
-        "/// A body of the message `name` read and written again, for the test that the
+        "/// A body of the message `name` read and written again, and the size the message
 ",
     );
     out.push_str(
-        "/// vectors' bytes are what this codec writes; `None` for a name it lacks.
+        "/// says it takes, for the test that the vectors' bytes are what this codec writes
+",
+    );
+    out.push_str(
+        "/// within that size; `None` for a name it lacks.
 ",
     );
     out.push_str(
@@ -172,7 +235,7 @@ fn write_rewrite(out: &mut String, schema: &Schema) {
 ",
     );
     out.push_str(
-        "pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure>> {
+        "pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize), Failure>> {
 ",
     );
     out.push_str(
@@ -183,7 +246,7 @@ fn write_rewrite(out: &mut String, schema: &Schema) {
         out.push_str(&gated(&message.name, "        "));
         let _ = writeln!(
             out,
-            "        \"{}\" => {}::decode(body).map(|message| message.encode()),",
+            "        \"{}\" => {}::decode(body).map(|message| (message.encode(), message.size())),",
             message.name,
             type_name(&message.name)
         );

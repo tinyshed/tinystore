@@ -31,6 +31,12 @@ pub(crate) trait Message: Sized + Default {
     /// which leaves the message out where a field holds it, as an empty map.
     fn is_zero(&self) -> bool;
 
+    /// The most bytes the message writes as, which `encode` reserves: a
+    /// buffer that grew as it was written was a realloc, which takes the
+    /// allocator's lock, and an answer's every write on sixteen workers made
+    /// them wait for it.
+    fn size(&self) -> usize;
+
     fn decode(body: &[u8]) -> Result<Self, Failure> {
         let mut r = Reader::new(body);
         let message = Self::read(&mut r)?;
@@ -39,7 +45,7 @@ pub(crate) trait Message: Sized + Default {
     }
 
     fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64);
+        let mut out = Vec::with_capacity(self.size());
         self.write(&mut out);
         out
     }
@@ -337,6 +343,38 @@ pub(crate) fn write_names<T>(out: &mut Vec<u8>, named: &BTreeMap<String, T>, ite
 
 pub(crate) fn write_message<M: Message>(out: &mut Vec<u8>, message: &M) {
     message.write(out);
+}
+
+/// The most bytes a row writes as: a bin's head of five and its bytes, or an
+/// integer's nine.
+pub(crate) fn row_size(row: &Row) -> usize {
+    match row {
+        Row::Bin(bytes) => 5 + bytes.len(),
+        Row::Nil | Row::Int(_) => 9,
+    }
+}
+
+/// The most bytes a cell writes as: a head of five and its text or bytes, or
+/// a number's nine.
+#[cfg(feature = "sql")]
+pub(crate) fn cell_size(cell: &Cell) -> usize {
+    match cell {
+        Cell::Str(text) => 5 + text.len(),
+        Cell::Bin(bytes) => 5 + bytes.len(),
+        Cell::Nil | Cell::Int(_) | Cell::Float(_) => 9,
+    }
+}
+
+pub(crate) fn list_size<T>(items: &[T], item: impl Fn(&T) -> usize) -> usize {
+    5 + items.iter().map(item).sum::<usize>()
+}
+
+pub(crate) fn names_size<T>(named: &BTreeMap<String, T>, item: impl Fn(&T) -> usize) -> usize {
+    5 + named.iter().map(|(name, each)| 5 + name.len() + item(each)).sum::<usize>()
+}
+
+pub(crate) fn message_size<M: Message>(message: &M) -> usize {
+    message.size()
 }
 
 /// Whether a row writes as a zero value of the profile, which a field that

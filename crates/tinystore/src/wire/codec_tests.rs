@@ -5,7 +5,7 @@ use serde_json::Value as Json;
 
 use super::*;
 use crate::wire::msgpack::tree::{self, Value};
-use crate::wire::protocol::{self, KvCall, KvEntry};
+use crate::wire::protocol::{self, KvCall, KvEntry, KvPage};
 
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
@@ -20,7 +20,10 @@ fn every_vector_of_the_schema_reads_and_writes_its_own_bytes() {
         let (name, message) = (vector["name"].as_str().unwrap(), vector["message"].as_str().unwrap());
         let bytes = hex(vector["hex"].as_str().unwrap());
         let rewritten = protocol::rewrite(message, &bytes).unwrap_or_else(|| panic!("{name}: no message {message}"));
-        assert_eq!(rewritten.unwrap(), bytes, "{name}");
+        let (rewritten, size) = rewritten.unwrap();
+        assert_eq!(rewritten, bytes, "{name}");
+        // what encode reserves holds the message, so that no answer's buffer grows as it is written
+        assert!(rewritten.len() <= size, "{name}: {} bytes, past the {size} its size says", rewritten.len());
     }
 }
 
@@ -116,4 +119,42 @@ fn a_map_of_more_than_fifteen_fields_writes_the_head_a_map_16_has() {
     let mut expected = vec![0xff];
     expected.extend(tree::encode(&Value::Map(pairs)));
     assert_eq!(out, expected, "the fields moved up past a head of three bytes, what came before them kept");
+}
+
+#[test]
+fn a_message_reserves_what_it_writes_however_large_its_values() {
+    fn reserved(message: &impl Message, name: &str) {
+        let (written, size) = (message.encode(), message.size());
+        assert!(written.len() <= size, "{name}: {} bytes written, past the {size} reserved", written.len());
+        assert_eq!(written.capacity(), size, "{name}: the buffer grew as it was written");
+    }
+    let text = |n: usize| "é".repeat(n);
+    let entry = KvEntry {
+        found: true,
+        value: Some(Row::Bin(vec![7; 70_000])),
+        version: Some(vec![1; 300]),
+        expires_at: Some(-1),
+        key: Some(text(40_000)),
+    };
+    reserved(&entry, "kv.Entry");
+    reserved(&KvPage { entries: vec![entry; 20], next: Some(text(300)) }, "kv.Page");
+    let call = KvCall {
+        handle: u64::MAX,
+        under: vec![text(100); 300],
+        key: text(70_000),
+        value: Some(Row::Int(i64::MIN)),
+        if_version: Some(vec![0; 70_000]),
+        n: Some(i64::MIN),
+        ..KvCall::default()
+    };
+    reserved(&call, "kv.Call");
+    let what = (0..300).map(|n| (format!("name {n}"), text(n))).collect();
+    reserved(&Failure { code: text(20), message: text(70_000), what: Some(what) }, "Failure");
+    #[cfg(feature = "sql")]
+    {
+        let row =
+            vec![Cell::Str(text(300)), Cell::Bin(vec![1; 300]), Cell::Float(-0.0), Cell::Int(i64::MIN), Cell::Nil];
+        let rows = protocol::SqlRows { columns: vec![text(30); 5], rows: vec![row; 2_000] };
+        reserved(&rows, "sql.Rows");
+    }
 }

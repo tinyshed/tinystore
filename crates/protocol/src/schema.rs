@@ -366,4 +366,24 @@ mod tests {
         schema.parse("test.wire", "message A {\n  1 b: B\n}\n").unwrap();
         assert!(schema.check().unwrap_err().contains("no message B"));
     }
+
+    #[test]
+    fn a_field_past_one_byte_or_a_value_past_eight_levels_is_refused() {
+        let checked = |text: &str| {
+            let mut schema = Schema::default();
+            schema.parse("test.wire", &format!("message Failure {{\n  1 code: str\n}}\n{text}")).unwrap();
+            schema.check()
+        };
+        assert!(checked("message A {\n  127 b: str\n}\n").is_ok());
+        assert_eq!(checked("message A {\n  128 b: str\n}\n").unwrap_err(), "A: field 128 is not 1 to 127");
+        assert_eq!(checked("message A {\n  0 b: str\n}\n").unwrap_err(), "A: field 0 is not 1 to 127");
+
+        // A's fields are at level 1 and each list goes one down: seven lists put a cell at 8, eight at 9
+        assert!(checked("message A {\n  1 b: [[[[[[[cell]]]]]]]\n}\n").is_ok());
+        let deep = checked("message A {\n  1 b: [[[[[[[[cell]]]]]]]]\n}\n").unwrap_err();
+        assert_eq!(deep, "A nests a value 9 levels down, past the profile's 8");
+        // a message held is a level too, its fields one below it
+        let held = checked("message A {\n  1 b: [[[[[[B]]]]]]\n}\nmessage B {\n  1 c: [cell]\n}\n").unwrap_err();
+        assert_eq!(held, "A nests a value 9 levels down, past the profile's 8");
+    }
 }
