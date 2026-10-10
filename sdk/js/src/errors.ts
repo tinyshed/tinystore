@@ -5,6 +5,7 @@
  */
 export type Code =
 	| 'invalid'
+	| 'not_found'
 	| 'limit'
 	| 'closed'
 	| 'in_use'
@@ -137,6 +138,13 @@ export const limits = Object.freeze({
 	rowBytes: "bytes of a call's rows",
 } as const)
 
+/** What the call needs is not there: a file to copy or rename. */
+export class NotFoundError extends TinystoreError {
+	constructor(message: string, what?: What) {
+		super('not_found', message, what)
+	}
+}
+
 /** The store, the handle or the connection closed. */
 export class ClosedError extends TinystoreError {
 	constructor(message: string, what?: What) {
@@ -248,6 +256,7 @@ export class UnauthenticatedError extends TinystoreError {
 
 const classes: Record<Code, new (message: string, what?: What) => TinystoreError> = {
 	invalid: InvalidError,
+	not_found: NotFoundError,
 	limit: LimitError,
 	closed: ClosedError,
 	in_use: InUseError,

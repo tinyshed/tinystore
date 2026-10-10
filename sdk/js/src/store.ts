@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { open as openFile, rename, rm } from 'node:fs/promises'
 
-import { Blobs } from './blobs.ts'
+import { type Files, type FilesOptions, openFiles } from './blobs.ts'
 import { Clock } from './clock.ts'
 import { Config, type ConfigLayer, type ConfigValue } from './config.ts'
 import {
@@ -122,7 +122,6 @@ export interface ConnectOptions {
  * a Go program closes its tinystore.Store: `await using store = await open(dir)`.
  */
 export class Store implements AsyncDisposable {
-	readonly blobs: Blobs
 	readonly records: Records
 	readonly metrics: Metrics
 	/** The test's clock of a private store opened with `clock`; on any other, its calls are InvalidError. */
@@ -134,7 +133,6 @@ export class Store implements AsyncDisposable {
 	constructor(link: Link) {
 		this.#link = link
 		this.clock = new Clock(link)
-		this.blobs = new Blobs(link)
 		this.records = new Records(link)
 		this.metrics = new Metrics(link)
 	}
@@ -263,6 +261,16 @@ export class Store implements AsyncDisposable {
 			engines: [...agreed.engines],
 			capability: agreed.capability === 'admin' ? 'admin' : 'data',
 		}
+	}
+
+	/**
+	 * A named set of files by path, written whole and replaced whole:
+	 *
+	 *     const avatars = store.files('avatars')
+	 *     const reports = store.files('reports', { ttl: '24h', maxFileSize: '2GiB' })
+	 */
+	files(name: string, options?: FilesOptions): Files {
+		return openFiles(this.#link, name, options)
 	}
 
 	/**

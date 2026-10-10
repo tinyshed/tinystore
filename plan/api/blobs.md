@@ -115,6 +115,8 @@ avatars.delete(&format!("{id}.png"))?;
   Python `read()` and `async for chunk in file`; in Go and Rust a reader.
 - `bytes()`, `text()` and `json()` hold the whole file in memory; a large one
   is read with `stream()`.
+- A file left unread holds its bytes on the server until it is collected,
+  as a `fetch` body does; `await file.stream().cancel()` lets them go at once.
 - `head` reads what a file carries and none of its bytes.
 
 ## What a file carries

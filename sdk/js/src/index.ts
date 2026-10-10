@@ -1,4 +1,15 @@
-export type { BlobBucket, BlobObject, Blobs, Body, Download, PutOptions } from './blobs.ts'
+export type {
+	Body,
+	FileInfo,
+	FileListOptions,
+	FileOptions,
+	FilePage,
+	Files,
+	FilesOptions,
+	Size,
+	StoredFile,
+	Upload,
+} from './blobs.ts'
 export { withSignal } from './cancel.ts'
 export type { Clock } from './clock.ts'
 export {

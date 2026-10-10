@@ -576,6 +576,8 @@ module defines.
 - a Bun call under an aborted signal is refused — `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts`
 - a Bun duration or rate misspelled does not compile — `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts`
 - a Bun store's close frees its directory — `close returns once the child has exited` in `sdk/js/test/kv.test.ts`
+- the Bun SDK's files answer alike through the core in its process, a private child, a sidecar and a remote server, in one call and in pieces within each side's credit — `sdk/js/test/blobs.test.ts`, every test through each
+- a Bun file read whole whose bytes changed is `CorruptError` before its end — `a whole read of a changed byte fails CorruptError before its end` in `sdk/js/test/blobs.test.ts`
 - the JS SDK runs under Node: its sidecar, a private child, TCP and TLS checked — `a remote server is reached over TLS, its certificate checked, under Node` and the rest of `sdk/js/test/under-node.ts`, run by `node --test`
 - a Python line takes the fields of the context it was logged in — `test_lines_take_the_fields_of_the_context_they_were_logged_in` in Python's suite
 - a byte the Bun encoder writes as its buffer grows is kept — `a byte written as the buffer grows is kept` in `sdk/js/test/wire.test.ts`
