@@ -15,6 +15,7 @@ pub(crate) enum Role {
 /// per connection in SQLite, so a reader opened again is the same reader.
 pub(crate) fn open(path: &Path, config: &Config, role: Role) -> Result<Connection> {
     let what = || format!("{}: {} connection", path.display(), role.name());
+    super::give_mutexes();
     let connection = Connection::open_with_flags(path, flags(role)).map_err(|error| sql_error(what(), error))?;
     connection.busy_timeout(config.busy_timeout).map_err(|error| sql_error(what(), error))?;
     connection.set_prepared_statement_cache_capacity(config.statements);

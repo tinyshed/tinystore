@@ -2,7 +2,7 @@
 //! grouped commits, a pool of `query_only` readers, checked migrations.
 //!
 //! Nothing here knows an engine's vocabulary. `unsafe` is allowed in this
-//! module alone, and only in [`memory`].
+//! module alone, and only in [`memory`] and [`mutex`].
 
 // The engines that use the adapter land one by one; until kv does, its calls
 // are reached only from tests.
@@ -15,6 +15,7 @@ mod file;
 mod group;
 mod memory;
 mod migrate;
+mod mutex;
 mod readers;
 
 use std::fmt;
@@ -28,6 +29,7 @@ pub(crate) use constraint::named as name_constraint;
 pub(crate) use file::{Begun, File, Mark};
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
+pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};
 
 /// The writer inside a transaction: a grouped write's savepoint, or a
 /// transaction of its own. It derefs to the connection, so an engine prepares

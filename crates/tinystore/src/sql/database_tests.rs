@@ -469,6 +469,9 @@ fn a_database_closes_with_its_store() {
 
 #[test]
 fn reading_past_the_bound_is_a_limit() {
+    // as the adapter does before a connection of its own, so that this one
+    // does not start SQLite with other mutexes than the adapter's
+    crate::sqlite::give_mutexes();
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     let mut statement = connection.prepare("select zeroblob(600) from (select 1 union all select 2)").unwrap();
     let read = super::rows::Rows::read(&mut statement, &[], (usize::MAX, 1000), super::rows::Held::default());

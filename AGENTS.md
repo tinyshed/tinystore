@@ -90,7 +90,8 @@ runtime.
   `sqlite`, and nothing of another engine. A file one engine lends another,
   a database's to its buckets and queues, goes through `engine::SharedFile`,
   and `inside.rs` alone names two engines: `db.bucket` and `db.queue`.
-- **`unsafe` lives in two places**: `sqlite::memory` and `crates/ffi`. The
+- **`unsafe` lives in three places**: `sqlite::memory`, `sqlite::mutex` and
+  `crates/ffi`. The
   workspace denies `unsafe_code` everywhere else, and clippy's
   `undocumented_unsafe_blocks` makes every block carry a `SAFETY:` comment
   saying what it relies on.
@@ -169,6 +170,13 @@ path cannot write by mistake. Every pragma is set on every connection when it
 opens, so a reader opened again is the same reader; one reader stays open, and
 the others close after a minute unused, since a burst of reads otherwise keeps
 their memory for good.
+
+**SQLite runs on the core's mutexes, a page cache a connection.** Both are
+the process's and set before SQLite starts. Its own mutexes park a thread the
+moment it finds one held, and every read takes its file's twice: two readers
+read less than one. The bundled build's shared cache puts every connection's
+pages behind one mutex. A program that started SQLite before the store opened
+keeps the mutexes it started with.
 
 **A read transaction covers fetching the bytes, not the query.** What one
 snapshot hands back stays consistent after it ends, so decoding, merging and

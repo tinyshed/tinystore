@@ -400,6 +400,13 @@ fn the_build_gives_each_connection_a_page_cache_of_its_own() {
 }
 
 #[test]
+fn sqlite_takes_the_cores_mutexes_before_its_first_connection() {
+    let (_dir, file) = open(Config::default());
+    assert_eq!(count(&file), 0);
+    assert!(crate::sqlite::mutexes_given(), "SQLite had started before the adapter opened a connection");
+}
+
+#[test]
 fn sqlite_counts_the_memory_it_holds() {
     let (_dir, file) = open(Config::default());
     insert(&file, "a").unwrap();

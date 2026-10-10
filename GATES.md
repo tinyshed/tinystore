@@ -255,6 +255,8 @@ module defines.
 ## SQLite under every engine
 
 - the build gives each connection a page cache of its own, and no mutex of the process on a page — `the_build_gives_each_connection_a_page_cache_of_its_own` in `sqlite::file`
+- SQLite takes the core's mutexes before its first connection — `sqlite_takes_the_cores_mutexes_before_its_first_connection` in `sqlite::file`
+- a mutex of the core's lets one thread in, parks a thread past its spins and wakes it, and is its holder's as often as it entered — `a_lock_lets_one_thread_in_at_a_time`, `a_thread_past_its_spins_parks_and_is_woken`, `a_reentrant_lock_is_its_holders_until_it_leaves_as_often_as_it_entered`, `sqlite_is_given_a_mutex_by_its_kind_and_the_same_one_by_its_number` in `sqlite::mutex`
 - a reader beyond one closes once idle, and the next read opens one that still refuses to write — `TestAnIdleReaderClosesAndTheNextReadOpensIt`
 - the store's Options.Readers bounds what an engine opens — `TestTheStoresReadersBoundWhatAnEngineWants`, `TestTheStoresReadersCapEveryDatabase`
 - a guest engine keeps its history in its owner's file — `TestAGuestKeepsItsOwnHistoryInItsOwnersFile`
