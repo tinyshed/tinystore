@@ -140,6 +140,22 @@ for (const way of ways) {
 			expect(await app.scalar<number>`select count(*) from notes where author_id = 7`).toBe(2)
 		})
 
+		test('a statement changes nothing of the connection it runs on', async () => {
+			const before = await app.scalar<number>`select count(*) from notes`
+			for (const text of [
+				"attach database 'other.db' as other",
+				'commit',
+				'pragma query_only = off',
+			]) {
+				expect(await caught(app.all(sql(text)))).toBeInstanceOf(InvalidError)
+				expect(await caught(app.exec(sql(text)))).toBeInstanceOf(InvalidError)
+			}
+			const kept = sql`insert into notes (id, author_id, title) values (${'g1'}, 11, 'before the commit')`
+			expect(await caught(app.batch([kept, sql`commit`]))).toBeInstanceOf(InvalidError)
+			expect(await app.scalar<number>`select count(*) from notes`).toBe(before)
+			expect((await app.all`pragma table_info(notes)`).length).toBeGreaterThan(0)
+		})
+
 		test('a transaction sees its own writes, commits what it returns and rolls back a throw', async () => {
 			const titles = await app.tx(async tx => {
 				await tx.exec`insert into notes (id, author_id, title) values (${'t1'}, 9, 'a')`

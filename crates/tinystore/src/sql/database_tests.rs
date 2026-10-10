@@ -551,3 +551,100 @@ fn a_query_is_known_by_its_first_word_past_spaces_and_comments() {
         assert!(!super::database::is_query(other), "{other}");
     }
 }
+
+/// What would change a connection for whoever uses it next.
+const CHANGES_ITS_CONNECTION: [&str; 17] = [
+    "attach database 'other.db' as other",
+    "attach database ('other' || '.db') as other",
+    "detach database other",
+    "begin",
+    "begin immediate",
+    "COMMIT",
+    "end",
+    "rollback",
+    "savepoint mine",
+    "release mine",
+    "rollback to mine",
+    "pragma query_only = off",
+    "pragma cache_size = 1000000",
+    "pragma foreign_keys(off)",
+    "pragma main.journal_mode = delete",
+    "explain pragma query_only = off",
+    // the text the store's own commit has, which is compiled and kept already
+    "/* tinystore */ commit",
+];
+
+#[test]
+fn a_statement_changes_nothing_of_the_connection_it_runs_on() {
+    let fixture = fixture();
+    let db = fixture.app();
+    let settings = |db: &Database| -> (i64, i64, i64) {
+        let query_only = db.scalar("pragma query_only").unwrap();
+        let cache_size = db.scalar("pragma cache_size").unwrap();
+        (query_only, cache_size, db.scalar("select count(*) from pragma_database_list").unwrap())
+    };
+    let before = settings(&db);
+    for text in CHANGES_ITS_CONNECTION {
+        let read = db.all::<IgnoredAny>(text).unwrap_err();
+        assert_eq!(read.kind(), ErrorKind::Invalid, "a read of {text}: {read}");
+        let written = db.exec(text).unwrap_err();
+        assert_eq!(written.kind(), ErrorKind::Invalid, "a write of {text}: {written}");
+        let in_a_transaction = db.tx(|tx| tx.exec(text)).unwrap_err();
+        assert_eq!(in_a_transaction.kind(), ErrorKind::Invalid, "{text} in a transaction: {in_a_transaction}");
+    }
+    assert_eq!(settings(&db), before);
+    insert(&db, &note("n1", "the writer still writes"));
+}
+
+#[test]
+fn a_statement_reads_no_other_database_through_an_attach() {
+    let fixture = fixture();
+    let db = fixture.app();
+    let secrets = fixture.store.database("secrets").migrations([("0001_keys.sql", "create table keys (key text)")]);
+    secrets.open().unwrap().exec("insert into keys values ('hunter2')").unwrap();
+    let file = fixture.dir.path().join("sql/secrets.db").display().to_string().replace(char::from(b'\\'), "/");
+
+    let attached = db.all::<IgnoredAny>(format!("attach database '{file}' as other")).unwrap_err();
+    assert_eq!(attached.kind(), ErrorKind::Invalid, "{attached}");
+    assert!(attached.to_string().contains("attaches no file"), "{attached}");
+    assert!(db.all::<String>("select key from other.keys").is_err());
+}
+
+#[test]
+fn a_batch_that_would_commit_writes_none_of_its_statements() {
+    let fixture = fixture();
+    let db = fixture.app();
+    for commit in ["commit", "/* tinystore */ commit", "rollback"] {
+        let kept = "insert into notes (id, author_id, title) values ('early', 1, 'before the commit')";
+        let failed = db.batch([kept, commit, "insert into nowhere values (1)"]).unwrap_err();
+        assert_eq!(failed.kind(), ErrorKind::Invalid, "{commit}: {failed}");
+        assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 0, "{commit}: all of a batch or none");
+    }
+}
+
+#[test]
+fn a_pragma_that_only_reads_runs() {
+    let fixture = fixture();
+    let db = fixture.app();
+    assert_eq!(db.all::<IgnoredAny>("pragma table_info(notes)").unwrap().len(), 6);
+    assert_eq!(db.all::<String>("select name from pragma_table_info('notes')").unwrap().len(), 6);
+    assert_eq!(db.scalar::<i64>("pragma user_version").unwrap(), 0);
+    assert_eq!(db.scalar::<String>("pragma integrity_check").unwrap(), "ok");
+    assert!(db.all::<IgnoredAny>("pragma foreign_key_check(notes)").unwrap().is_empty());
+    assert!(!db.all::<IgnoredAny>("explain query plan select * from notes").unwrap().is_empty());
+}
+
+#[test]
+fn a_migration_changes_tables_and_nothing_of_its_connection() {
+    let fixture = fixture();
+    let steps = ["pragma journal_mode = delete", "commit", "attach database 'other.db' as other"];
+    for step in steps {
+        let sql = format!("create table early (x); {step}; create table late (x)");
+        let refused = fixture.store.database("app").migrations([("0001_tables.sql", sql.as_str())]).open().unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Invalid, "{step}: {refused}");
+        assert!(refused.to_string().contains("0001_tables.sql"), "{refused}");
+    }
+    // a migration refused left nothing: `early` would be there had one committed
+    let db = fixture.store.database("app").migrations([("0001_tables.sql", "create table early (x)")]).open().unwrap();
+    assert_eq!(db.scalar::<i64>("select count(*) from early").unwrap(), 0);
+}

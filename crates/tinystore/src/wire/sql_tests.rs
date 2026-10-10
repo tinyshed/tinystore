@@ -410,3 +410,22 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
     assert_eq!(query(&mut owner, handle, "select title from notes", "all").rows.len(), 1);
     assert!(!copy.exists() && !other.exists(), "no file was made");
 }
+
+#[test]
+fn a_connection_that_writes_attaches_no_file_and_ends_no_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let mut client = Client::admitted(&store, crate::pipe::Capability::Data);
+    let handle = open(&mut client);
+    insert(&mut client, handle, "n1", "kept");
+    let kv = dir.path().join("kv.db").display().to_string().replace(char::from(b'\\'), "/");
+    for text in [format!("attach database '{kv}' as kv"), "pragma query_only = off".to_owned(), "commit".to_owned()] {
+        let asked = SqlQuery { handle, text: text.clone(), values: Vec::new(), want: "all".to_owned() };
+        let refused = client.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
+        assert_eq!(refused.code, "invalid", "a query of {text}: {}", refused.message);
+        let statement = SqlStatement { handle, text: text.clone(), values: Vec::new() };
+        let refused = client.call::<SqlDone>(method::SQL_EXEC, &statement).unwrap_err();
+        assert_eq!(refused.code, "invalid", "a write of {text}: {}", refused.message);
+    }
+    assert_eq!(query(&mut client, handle, "select title from notes", "all").rows.len(), 1);
+}

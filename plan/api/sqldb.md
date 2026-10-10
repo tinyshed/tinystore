@@ -226,6 +226,37 @@ db.batch([
   of its writes is `outcome unknown`. Read what you wrote before writing again:
   `stock = stock - 1` sent twice takes two.
 
+### What a statement may not do
+
+A connection is shared: the writer by every write of a commit, a reader by
+whoever reads next. A statement that would change its connection for them is
+`invalid`, in a read, a write, a batch, a transaction or a migration, and for
+every caller, the program in the store's process as a client with a token:
+
+```ts
+await db.all`pragma table_info(notes)`          // the table's columns: it only reads
+await db.exec`pragma foreign_keys = off`        // InvalidError: a statement sets no pragma
+await db.all`attach database ${file} as other`  // InvalidError: a statement attaches no file
+await db.batch([sql`insert …`, sql`commit`])    // InvalidError, and nothing of the batch is written
+```
+
+| The statement                              | What it would do                                 | Instead                                 |
+|--------------------------------------------|--------------------------------------------------|-----------------------------------------|
+| `attach`, `detach`                         | open another file, which stays on the connection | another database, opened by its name    |
+| `begin`, `commit`, `rollback`, a savepoint | end the transaction the writes beside it share   | `tx`, or `batch`                        |
+| a `pragma` that sets                       | change a setting every connection opens with     | nothing: the store sets each connection |
+
+A pragma that only reads runs: one without a value, as `pragma user_version`,
+and `table_info`, `table_xinfo`, `table_list`, `index_list`, `index_info`,
+`index_xinfo`, `foreign_key_list`, `foreign_key_check`, `integrity_check` and
+`quick_check` with theirs; so does its table, `select * from
+pragma_table_info('notes')`. A migration runs with foreign keys off already,
+and needs no pragma for it.
+
+SQLite's authorizer refuses these as it compiles the statement, so nothing of
+one runs. No connection of the store attaches a file at all, whoever wrote
+the statement.
+
 ## Tables
 
 ```ts
@@ -634,15 +665,15 @@ endings: `сообщения` does not find `сообщение`. A search that 
 
 ## Errors
 
-| Error             | When                                                                                                                                                                                                                  | What to do                          |
-|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------|
-| `invalid`         | two rows for `one`; a value that does not read as its field; a constraint other than a key; `undefined` in a condition or a row; a piece whose values do not match its `?`s; `update` or `delete` without a condition | fix the call                        |
-| `conflict`        | a unique or primary key already held                                                                                                                                                                                  | it exists: read it, or pick another |
-| `limit`           | `all` past 64 MiB; a transaction past five seconds; the store's memory                                                                                                                                                | read with `each`, or do less        |
-| `corrupt`         | a file SQLite finds damaged                                                                                                                                                                                           | restore it from a backup            |
-| `closed`          | the store closed                                                                                                                                                                                                      | open it again                       |
-| `unavailable`     | another process holds the writer past the busy timeout                                                                                                                                                                | try again                           |
-| `outcome unknown` | a shared commit whose disk sync failed                                                                                                                                                                                | read what you wrote, then write     |
+| Error             | When                                                                                                                                                                                                                                                                                                   | What to do                          |
+|-------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------|
+| `invalid`         | two rows for `one`; a value that does not read as its field; a constraint other than a key; `undefined` in a condition or a row; a piece whose values do not match its `?`s; `update` or `delete` without a condition; a statement that attaches a file, begins or ends a transaction or sets a pragma | fix the call                        |
+| `conflict`        | a unique or primary key already held                                                                                                                                                                                                                                                                   | it exists: read it, or pick another |
+| `limit`           | `all` past 64 MiB; a transaction past five seconds; the store's memory                                                                                                                                                                                                                                 | read with `each`, or do less        |
+| `corrupt`         | a file SQLite finds damaged                                                                                                                                                                                                                                                                            | restore it from a backup            |
+| `closed`          | the store closed                                                                                                                                                                                                                                                                                       | open it again                       |
+| `unavailable`     | another process holds the writer past the busy timeout                                                                                                                                                                                                                                                 | try again                           |
+| `outcome unknown` | a shared commit whose disk sync failed                                                                                                                                                                                                                                                                 | read what you wrote, then write     |
 
 Every error names its database, and the migration, table, column or
 constraint it is about: `sql app: migration 0002_tags.sql: changed after it

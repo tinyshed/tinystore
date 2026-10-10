@@ -8,6 +8,7 @@ use rusqlite::Connection;
 
 use super::Config;
 use super::connection::{self, Role, execute, sql_error};
+use super::given::own;
 use crate::{Error, ErrorKind, Result};
 
 /// How often a reader that comes back goes to the read that has waited
@@ -251,8 +252,8 @@ impl Drop for Lease<'_> {
     }
 }
 
-const BEGIN_READ: &str = "begin";
-const END_READ: &str = "commit";
+const BEGIN_READ: &str = own!("begin");
+const END_READ: &str = own!("commit");
 
 fn snapshot<T>(connection: &Connection, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     execute(connection, BEGIN_READ).map_err(|error| sql_error("a read: its snapshot", error))?;

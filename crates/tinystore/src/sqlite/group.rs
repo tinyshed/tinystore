@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rusqlite::Connection;
 
 use super::connection::{execute, sql_error};
+use super::given::own;
 use super::{GroupLimits, Tx};
 use crate::{Error, ErrorKind, Result};
 
@@ -27,12 +28,12 @@ pub(crate) type Done = Box<dyn FnOnce(Result<()>) + Send>;
 /// and the ones that commit answered.
 const GATHER_SHARE: u32 = 4;
 
-pub(crate) const BEGIN: &str = "begin immediate";
-pub(crate) const COMMIT: &str = "commit";
-pub(crate) const ROLLBACK: &str = "rollback";
-const SAVEPOINT: &str = "savepoint grouped";
-const RELEASE: &str = "release grouped";
-const ROLLBACK_TO: &str = "rollback to grouped";
+pub(crate) const BEGIN: &str = own!("begin immediate");
+pub(crate) const COMMIT: &str = own!("commit");
+pub(crate) const ROLLBACK: &str = own!("rollback");
+const SAVEPOINT: &str = own!("savepoint grouped");
+const RELEASE: &str = own!("release grouped");
+const ROLLBACK_TO: &str = own!("rollback to grouped");
 
 /// The writes waiting for a file's writer.
 ///

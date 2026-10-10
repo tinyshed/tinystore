@@ -175,6 +175,15 @@ opens, so a reader opened again is the same reader; one reader stays open, and
 the others close after a minute unused, since a burst of reads otherwise keeps
 their memory for good.
 
+**A statement the store was given changes nothing of its connection.** The
+writer is shared by every write of a commit and a reader by whoever reads
+next, so SQLite's authorizer refuses a given statement that attaches a file,
+begins or ends a transaction or sets a pragma, in a read, a write and a
+migration, for every caller; and no connection attaches a file at all. The
+authorizer sees a statement once, when it is compiled, and a compiled
+statement is found again by its text: the adapter writes its own `commit`
+with `own!`, and a given statement that starts as they do is refused.
+
 **SQLite runs on the core's mutexes, a page cache a connection.** Both are
 the process's and set before SQLite starts. Its own mutexes park a thread the
 moment it finds one held, and every read takes its file's twice: two readers

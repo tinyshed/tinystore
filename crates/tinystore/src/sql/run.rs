@@ -6,6 +6,7 @@ use rusqlite::{Connection, params_from_iter};
 use super::database::Done;
 use super::rows::{Held, MOST_READ, Rows, failure};
 use super::statement::Sql;
+use crate::sqlite::given;
 use crate::{Error, Result};
 
 /// What a call wants of a statement's rows.
@@ -64,29 +65,37 @@ pub(crate) enum Read {
 
 /// Runs `statement` on a reader, unless SQLite says it writes.
 pub(crate) fn read(connection: &Connection, statement: &Sql, wanted: Wanted, held: Held) -> Result<Read> {
-    let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
-    if !prepared.readonly() {
-        return Ok(Read::Writes);
-    }
-    statement.check(prepared.parameter_count())?;
-    let rows = Rows::read(&mut prepared, statement.values(), (wanted.most(false), MOST_READ), held)?;
-    wanted.check(&rows)?;
-    Ok(Read::Rows(rows))
+    given(statement.text(), || {
+        let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
+        if !prepared.readonly() {
+            return Ok(Read::Writes);
+        }
+        statement.check(prepared.parameter_count())?;
+        let rows = Rows::read(&mut prepared, statement.values(), (wanted.most(false), MOST_READ), held)?;
+        wanted.check(&rows)?;
+        Ok(Read::Rows(rows))
+    })
 }
 
 /// Runs `statement` on the writer and keeps its rows. Called in a savepoint,
 /// so a write whose rows break the call's shape, two for `one`, rolls back.
 pub(crate) fn write(connection: &Connection, statement: &Sql, wanted: Wanted, held: Held) -> Result<Rows> {
-    let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
-    statement.check(prepared.parameter_count())?;
-    let writes = !prepared.readonly();
-    let rows = Rows::read(&mut prepared, statement.values(), (wanted.most(writes), MOST_READ), held)?;
-    wanted.check(&rows)?;
-    Ok(rows)
+    given(statement.text(), || {
+        let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
+        statement.check(prepared.parameter_count())?;
+        let writes = !prepared.readonly();
+        let rows = Rows::read(&mut prepared, statement.values(), (wanted.most(writes), MOST_READ), held)?;
+        wanted.check(&rows)?;
+        Ok(rows)
+    })
 }
 
 /// Runs `statement` on the writer to its end and says what it changed.
 pub(crate) fn exec(connection: &Connection, statement: &Sql) -> Result<Done> {
+    given(statement.text(), || exec_given(connection, statement))
+}
+
+fn exec_given(connection: &Connection, statement: &Sql) -> Result<Done> {
     let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
     statement.check(prepared.parameter_count())?;
     let writes = !prepared.readonly();

@@ -1,8 +1,10 @@
 use std::path::Path;
 use std::sync::Once;
 
+use rusqlite::limits::Limit;
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 
+use super::given::{self, OWN};
 use super::{Config, Durability};
 use crate::{Error, ErrorKind, Result};
 
@@ -30,7 +32,16 @@ pub(crate) fn open(path: &Path, config: &Config, role: Role) -> Result<Connectio
         }
         Role::Reader => configure_reader(&connection, config).map_err(|error| sql_error(what(), error))?,
     }
+    keep_to_its_file(&connection).map_err(|error| sql_error(what(), error))?;
     Ok(connection)
+}
+
+/// Leaves the connection its one file and its settings: no statement
+/// attaches another, the store's own included, and a statement the store was
+/// given changes nothing the connection's next user would meet.
+fn keep_to_its_file(connection: &Connection) -> rusqlite::Result<()> {
+    connection.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
+    given::guard(connection)
 }
 
 /// Says once what the SQLite linked in costs readers, where it was built or
@@ -98,8 +109,10 @@ fn configure_shared(connection: &Connection, config: &Config) -> rusqlite::Resul
     connection.pragma_update(None, "cache_size", -i64::from(config.cache_kib))
 }
 
-/// Runs a statement that returns no rows, compiled once a connection.
+/// Runs a statement of the adapter's own that returns no rows, compiled once
+/// a connection.
 pub(crate) fn execute(connection: &Connection, sql: &str) -> rusqlite::Result<()> {
+    debug_assert!(sql.starts_with(OWN), "{sql}: the adapter's own statement is written with own!");
     connection.prepare_cached(sql)?.execute([]).map(|_| ())
 }
 

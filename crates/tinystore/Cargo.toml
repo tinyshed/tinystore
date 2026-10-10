@@ -19,7 +19,7 @@ blobs = ["dep:sha2"]
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the
 # flags in .cargo/config.toml, and nothing loaded at run time.
-rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "limits"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "hooks", "limits"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 serde = { version = "1.0.229", default-features = false, features = ["std"] }
 # raw_value: a job's JSON from another language is checked and kept as it came

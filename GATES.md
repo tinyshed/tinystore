@@ -199,6 +199,9 @@ module defines.
 - a read runs on a reader that cannot write, and a write with `returning` on the writer, its rows given once its commit is durable — `a_write_with_returning_runs_on_the_writer_and_gives_its_rows_once_durable`, `one_given_two_rows_of_a_write_rolls_the_write_back`, `a_constraint_failing_after_rows_came_rolls_the_whole_write_back` in `sql::database_tests`; `a write returns once it is durable, and the verbs say what comes back` in `sdk/js/test/sql.test.ts`
 - an application's writes share a commit, fail alone — `TestExecsShareACommitAndFailAlone`, `TestAPanicInsideAWriteRollsBackItsStatementAlone`
 - a batch commits whole in its group, and fails alone — `a_batch_writes_all_of_its_statements_or_none` in `sql::database_tests`; `a batch writes all of its statements or none` in `sdk/js/test/sql.test.ts`
+- a statement changes nothing of the connection it runs on: one that attaches or detaches a file, begins or ends a transaction or sets a pragma is `invalid`, in a read, a write, a transaction and a migration, for every caller — `a_statement_changes_nothing_of_the_connection_it_runs_on`, `a_statement_reads_no_other_database_through_an_attach`, `a_migration_changes_tables_and_nothing_of_its_connection` in `sql::database_tests`; `a_connection_that_writes_attaches_no_file_and_ends_no_transaction` in `wire::sql`; `a statement changes nothing of the connection it runs on` in `sdk/js/test/sql.test.ts`
+- a batch one of whose statements would commit or roll back writes none of them — `a_batch_that_would_commit_writes_none_of_its_statements` in `sql::database_tests`
+- a pragma that only reads runs — `a_pragma_that_only_reads_runs` in `sql::database_tests`
 - an applied migration cannot change under the file, nor be renamed, missing or put before another — `a_database_applies_each_migration_once_and_checks_them_at_every_open`, `a_migration_changed_renamed_missing_or_out_of_order_refuses_to_open` in `sql::database_tests`
 - a migration rebuilding a parent keeps its children, and one leaving a row without its parent refuses — `migrations_run_without_foreign_keys_and_leave_none_broken` in `sql::database_tests`
 - a schema is the SQL it prints — `TestASchemaIsTheSQLItPrints`, golden; `TestANameSQLWouldMisreadIsQuoted`
@@ -256,6 +259,8 @@ module defines.
 
 - the build gives each connection a page cache of its own, and no mutex of the process on a page — `the_build_gives_each_connection_a_page_cache_of_its_own` in `sqlite::file`
 - SQLite takes the core's mutexes before its first connection — `sqlite_takes_the_cores_mutexes_before_its_first_connection` in `sqlite::file`
+- no connection attaches a file, whoever wrote the statement — `no_connection_attaches_a_file_whoever_wrote_the_statement` in `sqlite::file`
+- a statement the store was given cannot be the adapter's own kept `commit`, found by its text — `a_given_statement_that_starts_as_the_adapters_own_is_refused_unrun` in `sqlite::file`
 - a mutex of the core's lets one thread in, parks a thread past its spins and wakes it, and is its holder's as often as it entered — `a_lock_lets_one_thread_in_at_a_time`, `a_thread_past_its_spins_parks_and_is_woken`, `a_reentrant_lock_is_its_holders_until_it_leaves_as_often_as_it_entered`, `sqlite_is_given_a_mutex_by_its_kind_and_the_same_one_by_its_number` in `sqlite::mutex`
 - a reader beyond one closes once idle, and the next read opens one that still refuses to write — `TestAnIdleReaderClosesAndTheNextReadOpensIt`
 - the read that has waited longest for a reader takes the next one before a read that came after it, a turn due every millisecond — `a_read_that_waited_takes_the_next_reader_before_one_that_came_after_it` in `sqlite::file`

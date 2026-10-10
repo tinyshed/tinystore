@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use rusqlite::Connection;
 
 use super::connection::{self, Role, execute, sql_error};
+use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Config, Tx};
 use crate::{Error, ErrorKind, Result};
 
-const FOREIGN_KEYS_OFF: &str = "pragma foreign_keys = off";
-const FOREIGN_KEYS_ON: &str = "pragma foreign_keys = on";
+const FOREIGN_KEYS_OFF: &str = own!("pragma foreign_keys = off");
+const FOREIGN_KEYS_ON: &str = own!("pragma foreign_keys = on");
 
 thread_local! {
     /// The files whose writer this thread holds in a transaction, by address.

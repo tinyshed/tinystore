@@ -485,3 +485,25 @@ fn writes_submitted_while_a_commit_runs_return_at_once_and_share_the_next() {
     assert_eq!(count(&file), 500);
     assert!(file.commits() - before <= 2, "{} commits for 500 writes", file.commits() - before);
 }
+
+#[test]
+fn no_connection_attaches_a_file_whoever_wrote_the_statement() {
+    let (dir, file) = open(Config::default());
+    let other = File::open(dir.path().join("other.db"), Config::default()).unwrap();
+    other.close().unwrap();
+    let attach = format!("attach database '{}' as other", dir.path().join("other.db").display());
+    // not a statement the store was given: the limit refuses it, not the guard of those
+    let refused = file.read(|connection| connection.execute_batch(&attach).map_err(|error| sql_error("attach", error)));
+    assert!(format!("{:?}", refused.unwrap_err()).contains("too many attached databases"));
+}
+
+#[test]
+fn a_given_statement_that_starts_as_the_adapters_own_is_refused_unrun() {
+    let (_dir, file) = open(Config::default());
+    insert(&file, "kept").unwrap();
+    let ran = file.write(0, |tx| {
+        crate::sqlite::given(COMMIT, || execute(tx, COMMIT).map_err(|error| sql_error("commit", error)))
+    });
+    assert_eq!(ran.unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(count(&file), 1);
+}
