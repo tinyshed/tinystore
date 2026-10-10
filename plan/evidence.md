@@ -127,6 +127,14 @@ and a shared AMD EPYC 9V74 VM with two CPUs (metrics, SQL); Go 1.27.1, Rust
   functions with 256 reads in flight fell to 0.70–0.73×; with each message's
   size reserved before it is written, it reads 1.07–1.12× of before
   (rust-codecs-2026-10-10).
+- **A store holds less than Go's, and an SQL database must close its idle
+  readers.** A Rust program with its store open holds 3.4 MiB to Go's 5.5,
+  its server 5.8 to 11, and after a case and a rest it holds less or as much
+  in every case but one, its server 1.3–3.1× less. The one was sql point
+  reads: a database never closed the readers a burst opened, and now does
+  every minute. glibc keeps what they held: `malloc_trim` hands back 3–9 MiB
+  of a resting process, after which Rust holds 10–16 MiB to Go's 14–20
+  (rust-memory-2026-10-10).
 
 ## Not measured
 
