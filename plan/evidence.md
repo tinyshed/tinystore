@@ -65,6 +65,15 @@ and a shared AMD EPYC 9V74 VM with two CPUs (metrics, SQL); Go 1.27.1, Rust
   a key 4.6× as fast at 8 callers, 9.3× at 16 and 7.9× at 64, which is 3.3–5.2×
   Go where it had been 0.42–0.82×; one caller is as before, and sixteen
   readers hold some 20 MiB more, a cache each (rust-slice-2026-10-10).
+- **A commit's leader does nothing a caller at a time.** One thread woke each
+  of 64 callers after their commit, and where a wake lands on a sleeping
+  processor it costs tens of microseconds: 45% of the processor's samples
+  were in `futex_wake`, the callers came back over as long as a commit takes,
+  and a commit carried 34 writes of 64 where Go's carried 47. The leader now
+  wakes two, each caller the firsts of the halves it was given, and no write
+  wakes a gathering leader but the one it waits for: a commit carries 46, and
+  64 callers write 1.30–1.53× as fast, 1.02–1.12× Go where they had been
+  0.67–0.84×, one to four as before (rust-slice-2026-10-10).
 
 ## Not measured
 
@@ -102,6 +111,7 @@ method of measuring; their code is not carried over.
 | Rowid groups for metrics                 | file −21.4 % on Alibaba, +0.45 % on TSBS                    | `metrics-layout-bench`, report metrics-layout-2026-10-09 |
 | `HAVE_FDATASYNC` in the SQLite build     | 64 KiB set 1.6×                                             | `kv-opt-bench`, report kv-optimization-2026-10-09        |
 | No shared page cache in the SQLite build | a read by 16 callers 9.3×, 5.2× Go                          | `slice-bench`, report rust-slice-2026-10-10              |
+| A commit's callers wake one another      | 64 writers 1.30–1.53×, 1.02–1.12× Go                        | `slice-bench`, report rust-slice-2026-10-10              |
 
 Measured and not worth it: an owned batch arena and lookaside (read16 0.96×),
 a no-result kv set (0.99–1.00×), immutable payload packs (sparse reads 8–33 %
