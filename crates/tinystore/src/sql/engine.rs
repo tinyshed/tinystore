@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::tx::BOUND;
 use crate::engine::{Claim, Engine, Host, SharedFile};
@@ -13,6 +13,11 @@ const HISTORY: &str = "migrations";
 /// Statements known to write that a database remembers; past them it forgets
 /// them all and asks SQLite again.
 const WRITES_KEPT: usize = 1024;
+
+/// How often each database closes the readers it has left unused for a minute,
+/// as kv and jobs do in their maintenance; a burst of reads otherwise kept
+/// every reader it opened, and its memory, for good.
+const SWEEP: Duration = Duration::from_secs(60);
 
 /// The store's application databases, by name: one file and one writer each,
 /// opened by the first handle and closed with the store.
@@ -36,9 +41,28 @@ pub(crate) struct Base {
 }
 
 impl Databases {
-    /// The store's databases, opened with the first.
+    /// The store's databases, opened with the first, their idle readers swept
+    /// on the store's background thread.
     pub(crate) fn of(store: &Store) -> Result<Arc<Databases>> {
-        store.engine(|_| Ok(Arc::new(Databases { open: Mutex::new(HashMap::new()) })))
+        store.engine(|store| {
+            let databases = Arc::new(Databases { open: Mutex::new(HashMap::new()) });
+            let weak = Arc::downgrade(&databases);
+            store.every("sql: idle readers", SWEEP, move || {
+                if let Some(databases) = weak.upgrade() {
+                    databases.sweep();
+                }
+                Ok(())
+            })?;
+            Ok(databases)
+        })
+    }
+
+    /// Closes each database's readers unused for long enough.
+    fn sweep(&self) {
+        let open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
+        for base in open {
+            base.file().sweep();
+        }
     }
 
     /// The database `name`, opened when it is not, after `migrations` are
