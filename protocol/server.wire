@@ -11,5 +11,5 @@ message server.Clock {
 
 # Stops the server as its closing does: the streams running finish, every
 # connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
-method 0x0001 server.stop(Empty) -> Empty
-method 0x0002 server.clock(server.Clock) -> server.Clock
+admin 0x0001 server.stop(Empty)         -> Empty
+admin 0x0002 server.clock(server.Clock) -> server.Clock

@@ -14,24 +14,29 @@
     "description": "A field line with its comment",
     "body": "${1:number} ${2:name}: ${3|bool,uint,int,int64,float,str,bin,duration,time,nanos,key,value,cell,json|}${4:?} # ${5:what it holds}"
   },
-  "method": {
-    "prefix": "method",
-    "description": "A method with one message as its answer",
-    "body": "method 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> ${4:engine.Answer}"
+  "read": {
+    "prefix": "read",
+    "description": "A method a read token may call, its answer one message",
+    "body": "read  0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> ${4:engine.Answer}"
+  },
+  "write": {
+    "prefix": "write",
+    "description": "A method that writes, its answer one message",
+    "body": "write 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> ${4:engine.Answer}"
   },
   "download": {
     "prefix": "download",
     "description": "A method whose answer downloads items until a trailer",
-    "body": "method 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> download ${4:engine.Item} until ${5:engine.Trailer}"
+    "body": "read  0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> download ${4:engine.Item} until ${5:engine.Trailer}"
   },
   "exchange": {
     "prefix": "exchange",
     "description": "A method that exchanges items both ways",
-    "body": "method 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> exchange ${4:engine.Out} for ${5:engine.Back}"
+    "body": "write 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> exchange ${4:engine.Out} for ${5:engine.Back}"
   },
   "handover": {
     "prefix": "handover",
     "description": "A method that hands the run to the client",
-    "body": "method 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> handover ${4:engine.Answer}"
+    "body": "write 0x${1:0000} ${2:engine.name}(${3:engine.Request}) -> handover ${4:engine.Answer}"
   }
 }

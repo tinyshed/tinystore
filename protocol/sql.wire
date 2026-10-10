@@ -6,16 +6,16 @@
 
 # A migration as its file has it: the name that numbers it, and its SQL.
 message sql.Migration {
-  1 name: str                     # 0001_notes.sql
+  1 name: str         # 0001_notes.sql
   2 sql: str
 }
 
 # Opens a database. Migrations, when given, are applied and checked; without
 # them the file opens as it is.
 message sql.Open {
-  1 name: str                     # [a-z0-9][a-z0-9_-]{0,63}
+  1 name: str         # [a-z0-9][a-z0-9_-]{0,63}
   2 migrations: [sql.Migration]?
-  3 durability: str?              # full or os: how far its commits go before they return; the store's own when absent
+  3 durability: str?  # full or os: how far its commits go before they return; the store's own when absent
 }
 
 # A statement's text and the values of its ?s, in order.
@@ -37,7 +37,7 @@ message sql.Query {
   1 handle: uint
   2 text: str
   3 values: [cell]
-  4 want: str                     # all, one or scalar
+  4 want: str         # all, one or scalar
 }
 
 # Rows a statement gave, a part of them a message: the first part names the
@@ -77,9 +77,9 @@ message sql.TxOpen {
 message sql.TxCall {
   1 text: str
   2 values: [cell]
-  3 want: str                     # all, one, scalar or exec; call for a method; nothing in the last
-  4 commit: bool                  # in the last: true commits, false rolls back
-  5 method: uint?                 # with want call: the method, its request in body
+  3 want: str         # all, one, scalar or exec; call for a method; nothing in the last
+  4 commit: bool      # in the last: true commits, false rolls back
+  5 method: uint?     # with want call: the method, its request in body
   6 body: bin?
 }
 
@@ -89,11 +89,11 @@ message sql.TxAnswer {
   1 rows: sql.Rows?
   2 done: sql.Done?
   3 failure: Failure?
-  4 body: bin?                    # what a method answered, as its own answer
+  4 body: bin?        # what a method answered, as its own answer
 }
 
-read method 0x0301 sql.open(sql.Open) -> Handle
-read method 0x0302 sql.query(sql.Query) -> download sql.Rows until sql.Rows
-method 0x0303 sql.exec(sql.Statement) -> sql.Done
-method 0x0304 sql.batch(sql.Batch) -> sql.Batched
-method 0x0305 sql.tx(sql.TxOpen) -> exchange sql.TxAnswer for sql.TxCall
+read  0x0301 sql.open(sql.Open)      -> Handle
+read  0x0302 sql.query(sql.Query)    -> download sql.Rows until sql.Rows
+write 0x0303 sql.exec(sql.Statement) -> sql.Done
+write 0x0304 sql.batch(sql.Batch)    -> sql.Batched
+write 0x0305 sql.tx(sql.TxOpen)      -> exchange sql.TxAnswer for sql.TxCall

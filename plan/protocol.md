@@ -67,16 +67,19 @@ message kv.Call {
   7 ifVersion: bin?
 }
 
-read method 0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
-read method 0x0102 kv.get(kv.Call) -> kv.Entry
-read method 0x010a kv.list(kv.List) -> kv.Page
-method 0x0131 kv.once.run(kv.Call) -> handover kv.Answer
+read  0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
+read  0x0102 kv.get(kv.Call)               -> kv.Entry
+read  0x010a kv.list(kv.List)              -> kv.Page
+write 0x0131 kv.once.run(kv.Call)          -> handover kv.Answer
 ```
 
-A method marked `read` writes nothing a client wrote, so that a connection
-a server admits to read only may call it; the generator writes them into
-`method::reads`, and a method left unmarked writes, so that a forgotten mark
-refuses rather than lets a write through.
+A method's line starts with who may call it: `read`, which a connection a
+server admits to read only may call, `write`, or `admin`, an admin's alone.
+There is no default, so that a method cannot be declared without saying it;
+the generator writes the words into `method::access`, which the session
+refuses by. `just protocol` lays the files out as `crates/protocol`'s
+`format` does, a run of methods in columns and a file's field comments in
+one, and `just protocol-check` fails on a file that is not.
 
 | Type                                         | On the wire                               | Rust                                             | TypeScript                                                        |
 |----------------------------------------------|-------------------------------------------|--------------------------------------------------|-------------------------------------------------------------------|

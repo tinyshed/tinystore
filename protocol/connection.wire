@@ -3,34 +3,34 @@
 
 # What a client says first.
 message Hello {
-  1 protocol: uint            # the newest the client speaks
-  2 client: str               # a name and version, for logs
-  3 token: str?               # required on TCP
-  4 maxBody: uint?            # the largest body the client takes; the server's when absent
-  5 streamCredit: uint?       # the DATA the server may send a stream before the client grants more; 2 MiB when absent
-  6 challenge: bin?           # 16 random bytes, when the client found the server through SERVE
+  1 protocol: uint          # the newest the client speaks
+  2 client: str             # a name and version, for logs
+  3 token: str?             # required on TCP
+  4 maxBody: uint?          # the largest body the client takes; the server's when absent
+  5 streamCredit: uint?     # the DATA the server may send a stream before the client grants more; 2 MiB when absent
+  6 challenge: bin?         # 16 random bytes, when the client found the server through SERVE
 }
 
 # What a server answers HELLO with: what the connection agrees.
 message Welcome {
-  1 protocol: uint            # the one this connection speaks
-  2 server: str               # its version
-  3 instance: bin             # 16 random bytes a start
-  4 capability: str           # admin or data
-  5 maxBody: uint             # the largest body either side sends
-  6 inFlight: uint            # the streams a client may have open at once
-  7 connectionCredit: uint    # the REQUEST and DATA bytes a client may send before credit comes back
-  8 streamCredit: uint        # the DATA bytes a client may send a stream before credit comes back
-  9 engines: [str]            # what this server serves
-  10 now: time                # the store's clock
-  11 proof: bin?              # the HMAC-SHA256 of HELLO's challenge, keyed with SERVE's secret
-  12 durability: str?         # full or os, when the store was opened with one: how far its files' commits go
+  1 protocol: uint          # the one this connection speaks
+  2 server: str             # its version
+  3 instance: bin           # 16 random bytes a start
+  4 capability: str         # admin or data
+  5 maxBody: uint           # the largest body either side sends
+  6 inFlight: uint          # the streams a client may have open at once
+  7 connectionCredit: uint  # the REQUEST and DATA bytes a client may send before credit comes back
+  8 streamCredit: uint      # the DATA bytes a client may send a stream before credit comes back
+  9 engines: [str]          # what this server serves
+  10 now: time              # the store's clock
+  11 proof: bin?            # the HMAC-SHA256 of HELLO's challenge, keyed with SERVE's secret
+  12 durability: str?       # full or os, when the store was opened with one: how far its files' commits go
 }
 
 # How a host opens the store in its own process: the pipe's open takes it,
 # and a server reads the same from its command line.
 message store.Options {
-  1 durability: str?          # full or os: how far a commit of the store's files goes before it returns; each engine's own when absent
+  1 durability: str?        # full or os: how far a commit of the store's files goes before it returns; each engine's own when absent
 }
 
 # The last frame of a connection.

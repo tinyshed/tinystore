@@ -5065,58 +5065,134 @@ pub(crate) mod method {
     #[cfg(feature = "sql")]
     pub(crate) const SQL_TX: u16 = 0x0305;
 
-    /// Whether a method only reads, so that a connection admitted to read only
-    /// may call it; a method the schema does not mark `read` writes.
-    #[allow(clippy::match_like_matches_macro, reason = "an arm a method, behind its engine's feature")]
-    pub(crate) fn reads(method: u16) -> bool {
+    /// Who may call a method: the word its schema line starts with.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Access {
+        Read,
+        Write,
+        Admin,
+    }
+
+    /// Who may call a method; none for a number the schema does not have.
+    pub(crate) fn access(method: u16) -> Option<Access> {
         match method {
             #[cfg(feature = "blobs")]
-            BLOBS_OPEN => true,
+            BLOBS_OPEN => Some(Access::Read),
             #[cfg(feature = "blobs")]
-            BLOBS_GET => true,
+            BLOBS_PUT => Some(Access::Write),
             #[cfg(feature = "blobs")]
-            BLOBS_HEAD => true,
+            BLOBS_UPLOAD => Some(Access::Write),
             #[cfg(feature = "blobs")]
-            BLOBS_LIST => true,
+            BLOBS_GET => Some(Access::Read),
             #[cfg(feature = "blobs")]
-            BLOBS_USAGE => true,
+            BLOBS_HEAD => Some(Access::Read),
             #[cfg(feature = "blobs")]
-            BLOBS_READ => true,
+            BLOBS_DELETE => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_COPY => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_RENAME => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_EXPIRE => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_LIST => Some(Access::Read),
+            #[cfg(feature = "blobs")]
+            BLOBS_USAGE => Some(Access::Read),
+            #[cfg(feature = "blobs")]
+            BLOBS_CLEAR => Some(Access::Write),
+            #[cfg(feature = "blobs")]
+            BLOBS_READ => Some(Access::Read),
             #[cfg(feature = "jobs")]
-            JOBS_QUEUE_OPEN => true,
+            JOBS_QUEUE_OPEN => Some(Access::Read),
             #[cfg(feature = "jobs")]
-            JOBS_GET => true,
+            JOBS_SCHEDULE_OPEN => Some(Access::Write),
             #[cfg(feature = "jobs")]
-            JOBS_LIST => true,
+            JOBS_ADD => Some(Access::Write),
             #[cfg(feature = "jobs")]
-            JOBS_WATCH => true,
+            JOBS_SET => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_UPDATE => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_CANCEL => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_GET => Some(Access::Read),
+            #[cfg(feature = "jobs")]
+            JOBS_LIST => Some(Access::Read),
+            #[cfg(feature = "jobs")]
+            JOBS_WORK => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_STEP => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_KEEP => Some(Access::Write),
+            #[cfg(feature = "jobs")]
+            JOBS_WATCH => Some(Access::Read),
+            #[cfg(feature = "jobs")]
+            JOBS_TX => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_BUCKET_OPEN => true,
+            KV_BUCKET_OPEN => Some(Access::Read),
             #[cfg(feature = "kv")]
-            KV_GET => true,
+            KV_GET => Some(Access::Read),
             #[cfg(feature = "kv")]
-            KV_HAS => true,
+            KV_HAS => Some(Access::Read),
             #[cfg(feature = "kv")]
-            KV_LIST => true,
+            KV_SET => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_COUNTERS_OPEN => true,
+            KV_CREATE => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_COUNTERS_GET => true,
+            KV_TAKE => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_RATE_LIMIT_OPEN => true,
+            KV_DELETE => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_QUOTA_OPEN => true,
+            KV_EXPIRE => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_PEEK => true,
+            KV_CLEAR => Some(Access::Write),
             #[cfg(feature = "kv")]
-            KV_ONCE_OPEN => true,
+            KV_LIST => Some(Access::Read),
             #[cfg(feature = "kv")]
-            KV_ONCE_GET => true,
+            KV_COUNTERS_OPEN => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_COUNTERS_ADD => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_COUNTERS_GET => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_COUNTERS_DELETE => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_COUNTERS_CLEAR => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_RATE_LIMIT_OPEN => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_QUOTA_OPEN => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_ALLOW => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_PEEK => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_RESET => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_REFUND => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_ONCE_OPEN => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_ONCE_RUN => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_ONCE_GET => Some(Access::Read),
+            #[cfg(feature = "kv")]
+            KV_ONCE_DELETE => Some(Access::Write),
+            #[cfg(feature = "kv")]
+            KV_TX => Some(Access::Write),
+            SERVER_STOP => Some(Access::Admin),
+            SERVER_CLOCK => Some(Access::Admin),
             #[cfg(feature = "sql")]
-            SQL_OPEN => true,
+            SQL_OPEN => Some(Access::Read),
             #[cfg(feature = "sql")]
-            SQL_QUERY => true,
-            _ => false,
+            SQL_QUERY => Some(Access::Read),
+            #[cfg(feature = "sql")]
+            SQL_EXEC => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_BATCH => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_TX => Some(Access::Write),
+            _ => None,
         }
     }
 }

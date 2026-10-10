@@ -7,9 +7,9 @@
 
 # Opens a set of files by name, made the first time.
 message blobs.Open {
-  1 name: str                     # [a-z0-9][a-z0-9_-]{0,63}
-  2 ttl: duration?                # the term of every file written without its own
-  3 maxFileSize: uint?            # the largest file a write may leave
+  1 name: str           # [a-z0-9][a-z0-9_-]{0,63}
+  2 ttl: duration?      # the term of every file written without its own
+  3 maxFileSize: uint?  # the largest file a write may leave
 }
 
 # Where a call stands: the files, a folder's segments, a path within it.
@@ -21,9 +21,9 @@ message blobs.At {
 
 # What a file carries: what serving it needs.
 message blobs.Info {
-  1 path: str                     # within the folder the call stood in
+  1 path: str           # within the folder the call stood in
   2 size: uint
-  3 etag: str                     # the SHA-256 of its bytes in hex, quoted
+  3 etag: str           # the SHA-256 of its bytes in hex, quoted
   4 contentType: str
   5 lastModified: time
   6 expires: time?
@@ -38,11 +38,11 @@ message blobs.Write {
   3 path: str
   4 contentType: str?
   5 meta: {str}?
-  6 ttl: duration?                # the file's own term, from its write
-  7 ifMatch: str?                 # the ETag of the one file it may replace
-  8 size: uint?                   # the body's length: one longer or shorter is refused
-  9 create: bool                  # writes only where no file is
-  10 bytes: bin                   # a put's whole body; nothing for an upload
+  6 ttl: duration?      # the file's own term, from its write
+  7 ifMatch: str?       # the ETag of the one file it may replace
+  8 size: uint?         # the body's length: one longer or shorter is refused
+  9 create: bool        # writes only where no file is
+  10 bytes: bin         # a put's whole body; nothing for an upload
 }
 
 # What a write wrote: none when a create found a file there.
@@ -61,7 +61,7 @@ message blobs.Piece {
 # so that a read of a range sends no byte before it.
 message blobs.Got {
   1 info: blobs.Info?
-  2 bytes: bin                    # the whole file, or nothing when it is larger
+  2 bytes: bin          # the whole file, or nothing when it is larger
 }
 
 # A read of a file's bytes, as S3's GET with a range and If-Match: the whole
@@ -71,9 +71,9 @@ message blobs.Read {
   1 handle: uint
   2 folder: [str]
   3 path: str
-  4 ifMatch: str?                 # the ETag a get gave: another file there, or none, is a conflict
-  5 offset: uint?                 # from the first byte when absent
-  6 length: uint?                 # to the last byte when absent
+  4 ifMatch: str?       # the ETag a get gave: another file there, or none, is a conflict
+  5 offset: uint?       # from the first byte when absent
+  6 length: uint?       # to the last byte when absent
 }
 
 message blobs.Head {
@@ -112,9 +112,9 @@ message blobs.Found {
 message blobs.List {
   1 handle: uint
   2 folder: [str]
-  3 prefix: str                   # text within the folder
-  4 after: str?                   # a page's next
-  5 limit: uint?                  # 1000 at most, and when absent
+  3 prefix: str         # text within the folder
+  4 after: str?         # a page's next
+  5 limit: uint?        # 1000 at most, and when absent
 }
 
 message blobs.Page {
@@ -132,16 +132,16 @@ message blobs.Usage {
   2 size: uint
 }
 
-read method 0x0401 blobs.open(blobs.Open) -> Handle
-method 0x0402 blobs.put(blobs.Write) -> blobs.Written
-method 0x0403 blobs.upload(blobs.Write) -> exchange blobs.Written for blobs.Piece
-read method 0x0404 blobs.get(blobs.At) -> blobs.Got
-read method 0x0405 blobs.head(blobs.At) -> blobs.Head
-method 0x0406 blobs.delete(blobs.Delete) -> Empty
-method 0x0407 blobs.copy(blobs.Move) -> blobs.Info
-method 0x0408 blobs.rename(blobs.Move) -> blobs.Info
-method 0x0409 blobs.expire(blobs.Expire) -> blobs.Found
-read method 0x040a blobs.list(blobs.List) -> blobs.Page
-read method 0x040b blobs.usage(blobs.Folder) -> blobs.Usage
-method 0x040c blobs.clear(blobs.Folder) -> Empty
-read method 0x040d blobs.read(blobs.Read) -> download blobs.Piece until Empty
+read  0x0401 blobs.open(blobs.Open)     -> Handle
+write 0x0402 blobs.put(blobs.Write)     -> blobs.Written
+write 0x0403 blobs.upload(blobs.Write)  -> exchange blobs.Written for blobs.Piece
+read  0x0404 blobs.get(blobs.At)        -> blobs.Got
+read  0x0405 blobs.head(blobs.At)       -> blobs.Head
+write 0x0406 blobs.delete(blobs.Delete) -> Empty
+write 0x0407 blobs.copy(blobs.Move)     -> blobs.Info
+write 0x0408 blobs.rename(blobs.Move)   -> blobs.Info
+write 0x0409 blobs.expire(blobs.Expire) -> blobs.Found
+read  0x040a blobs.list(blobs.List)     -> blobs.Page
+read  0x040b blobs.usage(blobs.Folder)  -> blobs.Usage
+write 0x040c blobs.clear(blobs.Folder)  -> Empty
+read  0x040d blobs.read(blobs.Read)     -> download blobs.Piece until Empty

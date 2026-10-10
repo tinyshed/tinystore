@@ -13,7 +13,8 @@ use super::frame::{self, Frame, Kind};
 #[cfg(feature = "jobs")]
 use super::jobs;
 use super::kv::{self, Run};
-use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome, method};
+use super::protocol::method::{self, Access};
+use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome};
 #[cfg(feature = "sql")]
 use super::sql;
 use super::workers::Workers;
@@ -394,14 +395,18 @@ impl Shared {
         if input.going_away {
             return self.answer(stream, Err(Failure::unavailable("the server is closing; ask another connection")));
         }
-        if method >> 8 == 0x00 {
-            if input.capability != Some(Capability::Admin) {
-                return self.answer(stream, Err(Failure::permission("the server's own calls are an admin's")));
+        let refused = match method::access(method) {
+            Some(Access::Admin) if input.capability != Some(Capability::Admin) => {
+                "the server's own calls are an admin's"
             }
-            return self.server_call(stream, method, &body);
+            Some(Access::Write) if input.capability == Some(Capability::Read) => "a read connection writes nothing",
+            _ => "",
+        };
+        if !refused.is_empty() {
+            return self.answer(stream, Err(Failure::permission(refused)));
         }
-        if input.capability == Some(Capability::Read) && !method::reads(method) {
-            return self.answer(stream, Err(Failure::permission("a read connection writes nothing")));
+        if method >> 8 == 0x00 {
+            return self.server_call(stream, method, &body);
         }
         // A point read is answered where it is read, in less time than
         // another thread takes to wake, while its host waits for nothing

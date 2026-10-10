@@ -73,9 +73,16 @@ pub(crate) struct Method {
     pub(crate) name: String,
     pub(crate) request: String,
     pub(crate) answer: Answer,
-    /// Marked `read`: it writes nothing a client wrote, so that a connection
-    /// admitted to read only may call it.
-    pub(crate) reads: bool,
+    pub(crate) access: Access,
+}
+
+/// Who may call a method: the word its line starts with. A connection
+/// admitted to read only calls `read` alone, and `admin` is an admin's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Access {
+    Read,
+    Write,
+    Admin,
 }
 
 /// What a method sends back, by the shape of its stream.
@@ -139,12 +146,13 @@ impl Schema {
                         other => return Err(refused(line, format!("fields on a message's first line: {other}"))),
                     }
                 }
-                _ if code.starts_with("read method ") => {
-                    let read = method(&code["read ".len()..]).map_err(|why| refused(line, why))?;
-                    self.methods.push(Method { reads: true, ..read });
-                    doc.clear();
-                }
                 _ if code.starts_with("method ") => {
+                    return Err(refused(
+                        line,
+                        "a method says who may call it, read, write or admin, for `method`".to_owned(),
+                    ));
+                }
+                _ if ["read ", "write ", "admin "].iter().any(|word| code.starts_with(word)) => {
                     self.methods.push(method(code).map_err(|why| refused(line, why))?);
                     doc.clear();
                 }
@@ -313,10 +321,15 @@ fn parse_kind(text: &str) -> Result<Kind, String> {
     })
 }
 
-/// `method 0x010a kv.list(kv.List) -> download kv.Entry until kv.Page`
+/// `read 0x010a kv.list(kv.List) -> download kv.Entry until kv.Page`
 fn method(code: &str) -> Result<Method, String> {
-    let rest = &code["method ".len()..];
-    let (id, rest) = rest.split_once(' ').ok_or_else(|| format!("a method without a name: {code}"))?;
+    let (word, rest) = code.split_once(' ').ok_or_else(|| format!("a method without a number: {code}"))?;
+    let access = match word {
+        "read" => Access::Read,
+        "write" => Access::Write,
+        _ => Access::Admin,
+    };
+    let (id, rest) = rest.trim_start().split_once(' ').ok_or_else(|| format!("a method without a name: {code}"))?;
     let id = id
         .strip_prefix("0x")
         .and_then(|hex| u16::from_str_radix(hex, 16).ok())
@@ -337,7 +350,7 @@ fn method(code: &str) -> Result<Method, String> {
         ["exchange", out, "for", back] => Answer::Exchange { out: (*out).to_owned(), back: (*back).to_owned() },
         _ => return Err(format!("an answer that is a message, a download, a handover or an exchange: {answer}")),
     };
-    Ok(Method { id, name: name.trim().to_owned(), request: request.trim().to_owned(), answer, reads: false })
+    Ok(Method { id, name: name.trim().to_owned(), request: request.trim().to_owned(), answer, access })
 }
 
 #[cfg(test)]
@@ -347,7 +360,7 @@ mod tests {
     #[test]
     fn a_schema_reads_its_messages_fields_and_methods() {
         let mut schema = Schema::default();
-        let text = "# a call\nmessage kv.Call {\n  1 handle: uint\n  2 under: [key]  # owners\n  4 value: value?\n}\n\nmessage kv.Page {\n  1 next: key?\n}\nmessage kv.Entry {\n  1 found: bool\n}\nmessage Failure {\n  1 code: str\n}\nmethod 0x010a kv.list(kv.Call) -> download kv.Entry until kv.Page\n";
+        let text = "# a call\nmessage kv.Call {\n  1 handle: uint\n  2 under: [key]  # owners\n  4 value: value?\n}\n\nmessage kv.Page {\n  1 next: key?\n}\nmessage kv.Entry {\n  1 found: bool\n}\nmessage Failure {\n  1 code: str\n}\nread  0x010a kv.list(kv.Call) -> download kv.Entry until kv.Page\n";
         schema.parse("test.wire", text).unwrap();
         schema.check().unwrap();
         let call = schema.message("kv.Call");
@@ -355,10 +368,19 @@ mod tests {
         assert_eq!(call.fields[1].kind, Kind::List(Box::new(Kind::Key)));
         assert_eq!(call.fields[1].doc.as_deref(), Some("owners"));
         assert!(call.fields[2].optional);
-        assert_eq!(schema.methods[0].id, 0x010a);
+        assert_eq!((schema.methods[0].id, schema.methods[0].access), (0x010a, Access::Read));
         assert!(
             matches!(&schema.methods[0].answer, Answer::Download { item, trailer } if item == "kv.Entry" && trailer == "kv.Page")
         );
+    }
+
+    #[test]
+    fn a_method_says_who_may_call_it() {
+        let mut schema = Schema::default();
+        let refused = schema.parse("test.wire", "method 0x0102 kv.get(kv.Call) -> kv.Entry\n").unwrap_err();
+        assert!(refused.to_string().contains("read, write or admin"), "{refused}");
+        schema.parse("test.wire", "admin 0x0001 server.stop(Empty) -> Empty\n").unwrap();
+        assert_eq!(schema.methods[0].access, Access::Admin);
     }
 
     #[test]

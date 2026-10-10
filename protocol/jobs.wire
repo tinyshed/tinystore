@@ -24,16 +24,16 @@ message jobs.Rate {
 
 # Opens a queue; an option left out takes its default.
 message jobs.QueueOpen {
-  1 name: str                     # [a-z0-9][a-z0-9_-]{0,63}
-  2 attempts: uint?               # 10 when absent, the first run counted
-  3 backoff: jobs.Backoff?        # 1 s doubling to 1 h when absent
-  4 timeout: duration?            # how long one run may take: a minute when absent
+  1 name: str                       # [a-z0-9][a-z0-9_-]{0,63}
+  2 attempts: uint?                 # 10 when absent, the first run counted
+  3 backoff: jobs.Backoff?          # 1 s doubling to 1 h when absent
+  4 timeout: duration?              # how long one run may take: a minute when absent
   5 concurrency: jobs.Concurrency?  # one at a time in each worker when absent
   6 rate: jobs.Rate?
-  7 dedupe: duration?             # how long a done job's id stays taken
-  8 keep: duration?               # how long a failed job stays: a week when absent
-  9 maxWaiting: uint?             # ten million when absent
-  10 database: uint?              # a database's handle: the queue lives in its file; jobs.db when absent
+  7 dedupe: duration?               # how long a done job's id stays taken
+  8 keep: duration?                 # how long a failed job stays: a week when absent
+  9 maxWaiting: uint?               # ten million when absent
+  10 database: uint?                # a database's handle: the queue lives in its file; jobs.db when absent
 }
 
 # Opens a schedule: one repeating job the code owns, under its name, whose
@@ -41,8 +41,8 @@ message jobs.QueueOpen {
 message jobs.ScheduleOpen {
   1 name: str
   2 every: duration?
-  3 cron: str?                    # five fields, with timeZone
-  4 timeZone: str?                # an IANA name, UTC among them
+  3 cron: str?                      # five fields, with timeZone
+  4 timeZone: str?                  # an IANA name, UTC among them
   5 attempts: uint?
   6 backoff: jobs.Backoff?
   7 timeout: duration?
@@ -51,12 +51,12 @@ message jobs.ScheduleOpen {
 # A call on one job: an add, a set or an update.
 message jobs.Call {
   1 handle: uint
-  2 id: str?                      # 1 to 1024 bytes; a set and an update need one
+  2 id: str?                        # 1 to 1024 bytes; a set and an update need one
   3 value: json
   4 at: time?
-  5 delay: duration?              # from now; not beside at
+  5 delay: duration?                # from now; not beside at
   6 group: str?
-  7 every: duration?              # a repeat, which needs an id
+  7 every: duration?                # a repeat, which needs an id
   8 cron: str?
   9 timeZone: str?
 }
@@ -78,15 +78,15 @@ message jobs.Job {
   1 found: bool
   2 id: str?
   3 value: json?
-  4 state: str                    # scheduled, waiting, running, done, failed or cancelled
-  5 at: time?                     # when it runs next; for one done or failed, when its last run was for
+  4 state: str                      # scheduled, waiting, running, done, failed or cancelled
+  5 at: time?                       # when it runs next; for one done or failed, when its last run was for
   6 attempt: uint
-  7 ahead: uint                   # the jobs that run before a waiting one, up to 10,000
+  7 ahead: uint                     # the jobs that run before a waiting one, up to 10,000
   8 progress: json?
   9 error: str?
   10 group: str?
-  11 repeat: str?                 # as the job keeps it: @every 30s +6178ms, 10 3 * * * Europe/Berlin
-  12 startedAt: time?             # the last run a handler finished
+  11 repeat: str?                   # as the job keeps it: @every 30s +6178ms, 10 3 * * * Europe/Berlin
+  12 startedAt: time?               # the last run a handler finished
   13 endedAt: time?
 }
 
@@ -96,9 +96,9 @@ message jobs.Job {
 message jobs.List {
   1 handle: uint
   2 prefix: str?
-  3 state: str?                   # scheduled, waiting, running or failed
-  4 after: str?                   # the page before's next
-  5 limit: uint?                  # 100 when absent, 1000 at most
+  3 state: str?                     # scheduled, waiting, running or failed
+  4 after: str?                     # the page before's next
+  5 limit: uint?                    # 100 when absent, 1000 at most
 }
 
 message jobs.Page {
@@ -114,8 +114,8 @@ message jobs.Page {
 # ends the worker at once, the attempt of a job it still holds failing.
 message jobs.Work {
   1 handle: uint
-  2 concurrency: uint?            # the handlers the client runs at once, 1024 at most: the queue's total, or one
-  3 untilIdle: bool               # runDue: the server ends the stream once no job is due and none is held
+  2 concurrency: uint?              # the handlers the client runs at once, 1024 at most: the queue's total, or one
+  3 untilIdle: bool                 # runDue: the server ends the stream once no job is due and none is held
 }
 
 # A job the server hands the client's worker. Its run's number names it to the
@@ -125,8 +125,8 @@ message jobs.Held {
   1 run: uint
   2 id: str?
   3 value: json?
-  4 at: time                      # when the run was due
-  5 attempt: uint                 # the first being 1
+  4 at: time                        # when the run was due
+  5 attempt: uint                   # the first being 1
   6 group: str?
   7 cancelled: bool
 }
@@ -136,19 +136,19 @@ message jobs.Held {
 # cancel took settles nothing.
 message jobs.Answer {
   1 run: uint
-  2 how: str                      # done, retry, snooze, fail, back, progress or stop
-  3 at: time?                     # when a retry or a snooze runs again; a retry without one waits its backoff
-  4 error: str?                   # why a retry or a failure
-  5 progress: json?               # 4 KiB at most
-  6 delay: duration?              # from now on the server's clock; not beside at
+  2 how: str                        # done, retry, snooze, fail, back, progress or stop
+  3 at: time?                       # when a retry or a snooze runs again; a retry without one waits its backoff
+  4 error: str?                     # why a retry or a failure
+  5 progress: json?                 # 4 KiB at most
+  6 delay: duration?                # from now on the server's clock; not beside at
 }
 
 # A step of a held job's run: jobs.step asks for its kept answer, jobs.keep
 # keeps one.
 message jobs.Step {
   1 run: uint
-  2 name: str                     # 1 to 256 bytes
-  3 answer: json?                 # jobs.keep's: 1 MiB at most
+  2 name: str                       # 1 to 256 bytes
+  3 answer: json?                   # jobs.keep's: 1 MiB at most
 }
 
 message jobs.Kept {
@@ -159,7 +159,7 @@ message jobs.Kept {
 # One write of a transaction: an add, a set or an update with its call, or a
 # cancel with its id.
 message jobs.Op {
-  1 method: uint                  # jobs.add, jobs.set, jobs.update or jobs.cancel
+  1 method: uint                    # jobs.add, jobs.set, jobs.update or jobs.cancel
   2 call: jobs.Call?
   3 id: jobs.Id?
 }
@@ -176,16 +176,16 @@ message jobs.TxResults {
   1 outcomes: [jobs.Changed]
 }
 
-read method 0x0201 jobs.queue.open(jobs.QueueOpen) -> Handle
-method 0x0202 jobs.schedule.open(jobs.ScheduleOpen) -> Handle
-method 0x0203 jobs.add(jobs.Call) -> jobs.Changed
-method 0x0204 jobs.set(jobs.Call) -> Empty
-method 0x0205 jobs.update(jobs.Call) -> jobs.Changed
-method 0x0206 jobs.cancel(jobs.Id) -> jobs.Changed
-read method 0x0207 jobs.get(jobs.Id) -> jobs.Job
-read method 0x0208 jobs.list(jobs.List) -> jobs.Page
-method 0x0209 jobs.work(jobs.Work) -> exchange jobs.Held for jobs.Answer
-method 0x020a jobs.step(jobs.Step) -> jobs.Kept
-method 0x020b jobs.keep(jobs.Step) -> Empty
-read method 0x020c jobs.watch(jobs.Id) -> download jobs.Job until Empty
-method 0x020d jobs.tx(jobs.Tx) -> jobs.TxResults
+read  0x0201 jobs.queue.open(jobs.QueueOpen)       -> Handle
+write 0x0202 jobs.schedule.open(jobs.ScheduleOpen) -> Handle
+write 0x0203 jobs.add(jobs.Call)                   -> jobs.Changed
+write 0x0204 jobs.set(jobs.Call)                   -> Empty
+write 0x0205 jobs.update(jobs.Call)                -> jobs.Changed
+write 0x0206 jobs.cancel(jobs.Id)                  -> jobs.Changed
+read  0x0207 jobs.get(jobs.Id)                     -> jobs.Job
+read  0x0208 jobs.list(jobs.List)                  -> jobs.Page
+write 0x0209 jobs.work(jobs.Work)                  -> exchange jobs.Held for jobs.Answer
+write 0x020a jobs.step(jobs.Step)                  -> jobs.Kept
+write 0x020b jobs.keep(jobs.Step)                  -> Empty
+read  0x020c jobs.watch(jobs.Id)                   -> download jobs.Job until Empty
+write 0x020d jobs.tx(jobs.Tx)                      -> jobs.TxResults

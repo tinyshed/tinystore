@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 
 use super::names::{const_name, rust_field, type_name};
-use super::schema::{Field, Kind, Message, Schema};
+use super::schema::{Access, Field, Kind, Message, Schema};
 
 pub(crate) fn write(schema: &Schema) -> String {
     let mut out = String::new();
@@ -175,24 +175,35 @@ fn write_is_zero(out: &mut String, fields: &[&Field]) {
     let _ = writeln!(out, "    fn is_zero(&self) -> bool {{\n        {zero}\n    }}");
 }
 
-/// `method::reads`: the methods the schema marks `read`, an arm each behind
-/// its engine's feature, which `matches!` cannot gate.
-fn write_reads(out: &mut String, schema: &Schema) {
+/// `method::access`: who may call each method, as its schema line says, an
+/// arm each behind its engine's feature.
+fn write_access(out: &mut String, schema: &Schema) {
     out.push_str(
         "
-    /// Whether a method only reads, so that a connection admitted to read only
-    /// may call it; a method the schema does not mark `read` writes.
-    #[allow(clippy::match_like_matches_macro, reason = \"an arm a method, behind its engine's feature\")]
-    pub(crate) fn reads(method: u16) -> bool {
+    /// Who may call a method: the word its schema line starts with.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Access {
+        Read,
+        Write,
+        Admin,
+    }
+
+    /// Who may call a method; none for a number the schema does not have.
+    pub(crate) fn access(method: u16) -> Option<Access> {
         match method {
 ",
     );
-    for method in schema.methods.iter().filter(|method| method.reads) {
+    for method in &schema.methods {
         out.push_str(&gated(&method.name, "            "));
-        let _ = writeln!(out, "            {} => true,", const_name(&method.name));
+        let access = match method.access {
+            Access::Read => "Read",
+            Access::Write => "Write",
+            Access::Admin => "Admin",
+        };
+        let _ = writeln!(out, "            {} => Some(Access::{access}),", const_name(&method.name));
     }
     out.push_str(
-        "            _ => false,
+        "            _ => None,
         }
     }
 ",
@@ -212,7 +223,7 @@ fn write_methods(out: &mut String, schema: &Schema) {
         out.push_str(&gated(&method.name, "    "));
         let _ = writeln!(out, "    pub(crate) const {}: u16 = {:#06x};", const_name(&method.name), method.id);
     }
-    write_reads(out, schema);
+    write_access(out, schema);
     out.push_str(
         "}
 

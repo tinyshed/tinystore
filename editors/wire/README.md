@@ -34,15 +34,21 @@ Or pack it and install the package:
 The `.vsix` file is written into `editors/wire`, whose `.gitignore` keeps it
 out of the repository.
 
+When the grammar changes, a link needs only **Developer: Reload Window**; a
+copy or a package needs copying or installing again first.
+
 ## RustRover and IntelliJ
 
 1. Open Settings (Ctrl+Alt+S) and go to Editor → TextMate Bundles.
 2. Click `+`, choose the `editors/wire` folder of the repository, and click OK.
 3. Open a file in `protocol/`.
 
+RustRover reads a bundle as it starts: after the grammar changes, restart it,
+or remove the bundle and add it again.
+
 ## Snippets
 
-In VS Code, type `message`, `field`, `method`, `download`, `exchange` or
-`handover`, then press Tab. RustRover takes the highlighting from this folder,
+In VS Code, type `message`, `field`, `read`, `write`, `download`, `exchange`
+or `handover`, then press Tab. RustRover takes the highlighting from this folder,
 but its snippets come from Live Templates (Settings → Editor → Live
 Templates), which this folder does not set up.
