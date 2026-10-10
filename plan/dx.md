@@ -73,35 +73,40 @@ passes and the owner agrees.
 
 Decided words are settled; draft words wait for their engine's book.
 
-| Word                               | Means                                                                             | Where                  | Was                                                 | State   |
-|------------------------------------|-----------------------------------------------------------------------------------|------------------------|-----------------------------------------------------|---------|
-| `channels`, `publish`, `subscribe` | messages between parts of an application                                          | runtime                | signals, an idea                                    | decided |
-| `durability`                       | a file's mode, `'full'` or `'os'`: a store's at `open`, a database's own          | every engine           | FULL only, until 10 October                         | decided |
-| `flushEvery`                       | kept in memory and written every span                                             | kv counters            | `loseAtMost`, `durability: '1s'`                    | draft   |
-| `concurrency`                      | how many run at once: `8` or `{ total, group }`                                   | jobs                   | `maxRunning`, `maxRunningInGroup`, `workers`        | decided |
-| `rate`                             | starts or calls a span, as text `'30/s'`                                          | jobs, kv limiter       | `Rate(n, per)` in Go                                | decided |
-| `peek`, `reset`                    | a limit's answer without using it; forgetting a key                               | kv limits              | `Get`, `Delete`, `check`                            | draft   |
-| `keep`                             | how long failed or old things stay                                                | jobs, records, metrics | `keepFailed`, `Retention`                           | draft   |
-| `dedupe`                           | how long a done job's id makes adding it again add nothing                        | jobs                   | `keepDone`                                          | draft   |
-| `ttl`                              | when a key expires                                                                | kv                     | the same                                            | draft   |
-| `idle`                             | expires after a span without reads or writes                                      | kv                     | `sliding`                                           | draft   |
-| `under`                            | a branch: whose keys these are, cleared in one call                               | kv                     | `Of`, `of`                                          | draft   |
-| `id`                               | a job's identity; adding an id that is taken adds nothing                         | jobs                   | `key`                                               | draft   |
-| `group`                            | jobs that share a group's `concurrency`                                           | jobs                   | the same                                            | draft   |
-| `add`                              | puts a job in a queue                                                             | jobs                   | `enqueue`                                           | draft   |
-| `delay`, `at`                      | when a job runs: after a span, at a time                                          | jobs                   | `after`, `at`                                       | draft   |
-| `every`, `cron`                    | repeats: an interval spread by id, or the wall clock of a time zone               | jobs                   | `every` with `spread: true`                         | draft   |
-| `set`                              | makes an id's job this value at this time, whatever it was                        | jobs                   | `move: true`, `reschedule`                          | draft   |
-| `update`                           | changes a job that has not started, and says whether it did                       | jobs                   | `Update`, which threw a conflict                    | draft   |
-| `schedule`                         | a repeat the code owns, given with its handler                                    | jobs                   | `OpenSchedule`                                      | draft   |
-| `run`                              | a handler's call on a job: its attempt, its steps, its answers                    | jobs                   | `job`, which also named the record                  | draft   |
-| `runDue`                           | runs what is due, then returns                                                    | jobs                   | `untilIdle: true`, `drain`, which deletes in BullMQ | draft   |
-| `tx`, `with`                       | a transaction that reads, then writes; `tx.with(handle)` takes a handle in        | every engine           | `batch()` in Bun and Python, `withTx`               | draft   |
-| `batch`                            | statements known before they run, written as one in a shared commit               | sql                    | `db.Batch(func)` in Go, `exec([…])` in a draft      | draft   |
-| `list`, `all`                      | an array in memory; an iterator over pages                                        | every engine           | `All` meant both                                    | draft   |
-| `db.bucket`, `db.queue`            | kv and jobs opened from an SQL database live in its file and commit with its rows | kv, jobs               | `In`, `in`, `in_`, `database: db`                   | decided |
-| `openBeside`                       | opens a directory another process holds, SQL only                                 | root                   | `Guest: true`                                       | draft   |
-| `background`                       | `false` stops all periodic work                                                   | root                   | `Manual: true`                                      | draft   |
+| Word                               | Means                                                                              | Where                  | Was                                                 | State   |
+|------------------------------------|------------------------------------------------------------------------------------|------------------------|-----------------------------------------------------|---------|
+| `channels`, `publish`, `subscribe` | messages between parts of an application                                           | runtime                | signals, an idea                                    | decided |
+| `durability`                       | a file's mode, `'full'` or `'os'`: a store's at `open`, a database's own           | every engine           | FULL only, until 10 October                         | decided |
+| `flushEvery`                       | kept in memory and written every span                                              | kv counters            | `loseAtMost`, `durability: '1s'`                    | draft   |
+| `concurrency`                      | how many run at once: `8` or `{ total, group }`                                    | jobs                   | `maxRunning`, `maxRunningInGroup`, `workers`        | decided |
+| `rate`                             | starts or calls a span, as text `'30/s'`                                           | jobs, kv limiter       | `Rate(n, per)` in Go                                | decided |
+| `peek`, `reset`                    | a limit's answer without using it; forgetting a key                                | kv limits              | `Get`, `Delete`, `check`                            | draft   |
+| `keep`                             | how long failed or old things stay                                                 | jobs, records, metrics | `keepFailed`, `Retention`                           | draft   |
+| `dedupe`                           | how long a done job's id makes adding it again add nothing                         | jobs                   | `keepDone`                                          | draft   |
+| `ttl`                              | when a key expires                                                                 | kv                     | the same                                            | draft   |
+| `idle`                             | expires after a span without reads or writes                                       | kv                     | `sliding`                                           | draft   |
+| `under`                            | a branch: whose keys these are, cleared in one call                                | kv                     | `Of`, `of`                                          | draft   |
+| `id`                               | a job's identity; adding an id that is taken adds nothing                          | jobs                   | `key`                                               | draft   |
+| `group`                            | jobs that share a group's `concurrency`                                            | jobs                   | the same                                            | draft   |
+| `add`                              | puts a job in a queue                                                              | jobs                   | `enqueue`                                           | draft   |
+| `delay`, `at`                      | when a job runs: after a span, at a time                                           | jobs                   | `after`, `at`                                       | draft   |
+| `every`, `cron`                    | repeats: an interval spread by id, or the wall clock of a time zone                | jobs                   | `every` with `spread: true`                         | draft   |
+| `set`                              | makes an id's job this value at this time, whatever it was                         | jobs                   | `move: true`, `reschedule`                          | draft   |
+| `update`                           | changes a job that has not started, and says whether it did                        | jobs                   | `Update`, which threw a conflict                    | draft   |
+| `schedule`                         | a repeat the code owns, given with its handler                                     | jobs                   | `OpenSchedule`                                      | draft   |
+| `run`                              | a handler's call on a job: its attempt, its steps, its answers                     | jobs                   | `job`, which also named the record                  | draft   |
+| `runDue`                           | runs what is due, then returns                                                     | jobs                   | `untilIdle: true`, `drain`, which deletes in BullMQ | draft   |
+| `tx`, `with`                       | a transaction that reads, then writes; `tx.with(handle)` takes a handle in         | every engine           | `batch()` in Bun and Python, `withTx`               | draft   |
+| `batch`                            | statements known before they run, written as one in a shared commit                | sql                    | `db.Batch(func)` in Go, `exec([…])` in a draft      | draft   |
+| `list`, `all`                      | an array in memory; an iterator over pages                                         | every engine           | `All` meant both                                    | draft   |
+| `db.bucket`, `db.queue`            | kv and jobs opened from an SQL database live in its file and commit with its rows  | kv, jobs               | `In`, `in`, `in_`, `database: db`                   | decided |
+| `openBeside`                       | opens a directory another process holds, SQL only                                  | root                   | `Guest: true`                                       | draft   |
+| `background`                       | `false` stops all periodic work                                                    | root                   | `Manual: true`                                      | draft   |
+| `files`, `folder`                  | a named set of files by path; the files under a path, its segments one with theirs | blobs                  | `blobs.bucket`, `Of`                                | draft   |
+| `upload`, `commit`                 | a file written a piece at a time, published whole at `commit`                      | blobs                  | `Create`                                            | draft   |
+| `head`                             | what a file carries, none of its bytes                                             | blobs                  | `Stat`                                              | draft   |
+| `create`                           | writes only where nothing is, and says whether it did                              | kv, blobs              | `SetIfAbsent`, `IfNoneMatch("*")`                   | draft   |
+| `maxFileSize`                      | the largest file a set of files takes; nothing stored is removed for room          | blobs                  | `MaxSize`                                           | draft   |
 
 ## jobs, today and the draft
 
