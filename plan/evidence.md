@@ -119,6 +119,14 @@ and a shared AMD EPYC 9V74 VM with two CPUs (metrics, SQL); Go 1.27.1, Rust
   some 30,000 sets a second on the round's host the modes are one: the file's
   writer is the bound. It is built as a store's `durability`, and a
   database's own (rust-slice-2026-10-10).
+- **A codec writes each message out, and reserves its bytes first.** A tree
+  of values in the core and a table of fields in the SDK gave way to a reader
+  and a writer a message: through Bun keys are read 1.05–1.08× as fast and
+  25,000 rows 1.21–1.24×. Written out, an answer grew its buffer by glibc's
+  `realloc`, which takes its arena's lock, and a bare loop over the C
+  functions with 256 reads in flight fell to 0.70–0.73×; with each message's
+  size reserved before it is written, it reads 1.07–1.12× of before
+  (rust-codecs-2026-10-10).
 
 ## Not measured
 
@@ -163,6 +171,7 @@ method of measuring; their code is not carried over.
 | A call in place in the Bun SDK            | Bun, 64 reads in flight 2.5× with the core's, 2.7× Go's sidecar | `slice-bench`, report rust-slice-2026-10-10              |
 | The host's bytes for the core's frames    | Bun, one read at a time 1.18×, 64 in flight 1.19×               | `slice-bench`, report rust-slice-2026-10-10              |
 | `durability: 'os'`                        | one writer 22–96×, 64 writers 1.2–2.0×, 1,024 1.0×              | `slice-bench`, report rust-slice-2026-10-10              |
+| Codecs written out, their bytes reserved  | Bun, keys 1.05–1.08×, rows 1.21–1.24×; bare loop 1.07–1.12×     | `slice-bench`, report rust-codecs-2026-10-10             |
 
 Measured and not worth it: an owned batch arena and lookaside (read16 0.96×),
 a no-result kv set (0.99–1.00×), immutable payload packs (sparse reads 8–33 %
