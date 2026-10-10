@@ -477,7 +477,8 @@ module defines.
 - a client that read a stream's last frame finds the stream ended, counted out as its frame is queued — `a_client_that_read_its_answer_finds_its_stream_ended` in `wire::jobs`
 - kv's writes in flight over the wire hold no thread of the session, a counter's add, a quota's use, a transaction and a clear among them — `writes_of_kv_in_flight_hold_no_thread_of_the_session` in `pipe`
 - a write sent through a query holds no thread of the session until its commit — `writes_through_a_query_in_flight_hold_no_thread_of_the_session` in `wire::sql`
-- reads sent together are each answered, the crowd of them on the store's workers and the last where they are read — `reads_sent_together_are_each_answered_though_workers_take_the_crowd` in `pipe`, `a_reader_says_how_many_frames_wait_whole` in `wire::frame`
+- reads sent together are each answered, a crowd of them on the store's workers — `reads_sent_together_are_each_answered_though_workers_take_the_crowd` in `pipe`, `a_reader_says_how_many_frames_wait_whole` in `wire::frame`
+- a read alone is answered before its write returns, a crowd goes to the workers, and a read that comes while they have reads of its connection goes with it — `a_read_goes_to_the_workers_while_they_have_reads_of_its_connection` in `wire::session`
 - jobs queued for sleeping workers wake them one through another, and start no thread more — `jobs_queued_for_sleeping_threads_wake_them_one_through_another` in `wire::workers`
 - a worker lingers for the next job while jobs come close together, which then wakes nobody and starts no thread, and sleeps once none comes within the linger — `a_thread_that_lingers_takes_the_next_job_with_no_wake_and_no_thread_more`, `a_thread_sleeps_once_no_job_comes_within_the_linger` in `wire::workers`
 - answers queued during a write leave in the next — `TestQueuedAnswersShareAWrite` in `server/internal/flow`

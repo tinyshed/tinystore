@@ -39,8 +39,10 @@ const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
 const HELLO_MOST: usize = 1 << 16;
 /// The bytes of a HELLO's challenge, which a local server's proof answers.
 const CHALLENGE: usize = 16;
-/// Requests waiting behind a point read that send it to a worker.
-const CROWD: usize = 4;
+/// Requests read from a connection at once that send its point reads to the
+/// workers. Five in flight are answered as fast where they are read, on a
+/// host whose threads wake slowly; six are not.
+const CROWD: usize = 6;
 
 /// What a session calls when frames become ready after the host took the last
 /// ones: once, until the host takes again. It must return quickly and not call
@@ -72,6 +74,8 @@ struct Shared {
     /// Streams whose final frame has not left, which a closing server waits
     /// for.
     in_flight: AtomicUsize,
+    /// Point reads the workers have of this connection, not yet answered.
+    reads_away: AtomicUsize,
     ready: Condvar,
     connect: Connect,
 }
@@ -98,6 +102,8 @@ struct Input {
     /// What the client may do, once its HELLO was admitted.
     capability: Option<Capability>,
     ended: bool,
+    /// Whether the bytes last taken held a crowd of requests.
+    crowd: bool,
 }
 
 #[derive(Default)]
@@ -126,6 +132,7 @@ impl Session {
             runs: Mutex::new(HashMap::new()),
             asked: AtomicU64::new(0),
             in_flight: AtomicUsize::new(0),
+            reads_away: AtomicUsize::new(0),
             ready: Condvar::new(),
             connect,
         };
@@ -141,6 +148,7 @@ impl Session {
             return;
         }
         input.reader.push(bytes);
+        input.crowd = input.reader.holds(CROWD);
         while !input.ended {
             let max_body = input.max_body.unwrap_or(HELLO_MOST);
             match input.reader.next(max_body) {
@@ -323,13 +331,16 @@ impl Shared {
             return self.server_call(stream, method, &body);
         }
         // A point read is answered where it is read, in less time than
-        // another thread takes to wake. With a crowd of requests behind it,
-        // each would wait its turn on this one thread: it goes to a worker,
-        // where sixteen run together.
-        let route = match route(method) {
-            Route::Inline if input.reader.holds(CROWD) => Route::Worker,
-            route => route,
-        };
+        // another thread takes to wake, while its host waits for nothing
+        // else. A crowd of them would each wait its turn on this thread,
+        // which is all a host with one thread has: a crowd goes to the
+        // workers, where sixteen run together, and so does a read that comes
+        // while they still have reads of this connection, whose answers the
+        // host comes back for anyway.
+        let route = route(method);
+        if route == Route::Inline && (input.crowd || self.reads_away.load(Ordering::Acquire) > 0) {
+            return self.read_away(stream, method, body, max_body);
+        }
         match route {
             Route::Inline => self.answer(stream, guarded(|| self.call(method, &body, max_body))),
             Route::Submit => {
@@ -373,6 +384,17 @@ impl Shared {
                 }));
             }
         }
+    }
+
+    /// Answers a point read on a worker, counted as away until it is.
+    fn read_away(self: &Arc<Self>, stream: u32, method: u16, body: Vec<u8>, max_body: usize) {
+        self.reads_away.fetch_add(1, Ordering::AcqRel);
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || {
+            let answered = guarded(|| shared.call(method, &body, max_body));
+            shared.reads_away.fetch_sub(1, Ordering::AcqRel);
+            shared.answer(stream, answered);
+        }));
     }
 
     /// Starts a client's worker: the stream's `RESPONSE`, then the jobs it
@@ -433,7 +455,7 @@ impl Shared {
         let shared = Arc::clone(self);
         self.workers.run(Box::new(move || {
             let (answering, sending) = (Arc::clone(&shared), link.clone());
-            let done = move |queried| match queried {
+            let done = move |queried: std::result::Result<sql::Queried, Failure>| match queried {
                 Ok(sql::Queried::Whole(rows)) => answering.answer(stream, Ok(rows)),
                 Ok(sql::Queried::Parts(parts, held)) => {
                     answering.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
@@ -861,3 +883,7 @@ fn instance() -> Vec<u8> {
     }
     bytes
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

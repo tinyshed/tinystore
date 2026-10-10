@@ -232,8 +232,7 @@ fn reads_sent_together_are_each_answered_though_workers_take_the_crowd() {
         let set = KvCall { handle, key: format!("k{n}"), value: Some(Row::Int(n)), ..KvCall::default() };
         client.call::<KvWritten>(method::KV_SET, &set).unwrap();
     }
-    // forty gets in one write: the first of them find a crowd behind them,
-    // the last few are answered where they are read
+    // forty gets in one write are a crowd: the workers answer them, in any order
     let mut bytes = Vec::new();
     for n in 0..40 {
         let get = KvCall { handle, key: format!("k{n}"), ..KvCall::default() };
