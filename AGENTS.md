@@ -68,6 +68,7 @@ Do not describe unbuilt behaviour as though it works.
 | `crates/protocol/`             | the generator: `protocol/*.wire` to the Rust and TypeScript codecs and the vectors; nothing ships it |
 | `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                             |
 | `protocol/`                    | the wire protocol's schema, a file an engine, which every codec and vector is written from           |
+| `editors/wire/`                | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover       |
 | `testdata/wire/`               | the protocol's vectors, which Rust and every SDK read                                                |
 | `plan/`                        | the rewrite: decisions, evidence, architecture, the API books, phases                                |
 | `docs/`, `web/`                | the guides and the docs site, built from `main`                                                      |

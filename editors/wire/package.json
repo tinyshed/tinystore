@@ -1,0 +1,36 @@
+{
+  "name": "tinystore-wire",
+  "displayName": "TinyStore wire schema",
+  "description": "Syntax highlighting for the wire protocol schema files (.wire) of TinyStore.",
+  "version": "0.0.1",
+  "publisher": "tinyshed",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "wire",
+        "aliases": ["Wire", "wire"],
+        "extensions": [".wire"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "wire",
+        "scopeName": "source.wire",
+        "path": "./syntaxes/wire.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "wire",
+        "path": "./snippets/wire.json"
+      }
+    ]
+  }
+}

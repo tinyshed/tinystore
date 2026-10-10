@@ -1,0 +1,138 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "TinyStore wire schema",
+  "scopeName": "source.wire",
+  "fileTypes": ["wire"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#message-one-line" },
+    { "include": "#message" },
+    { "include": "#method" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.wire"
+    },
+    "message-one-line": {
+      "match": "^\\s*(message)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\s*(\\{)\\s*(\\})",
+      "captures": {
+        "1": { "name": "keyword.declaration.message.wire" },
+        "2": { "name": "entity.name.type.message.wire" },
+        "3": { "name": "punctuation.section.block.begin.wire" },
+        "4": { "name": "punctuation.section.block.end.wire" }
+      }
+    },
+    "message": {
+      "begin": "^\\s*(message)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": { "name": "keyword.declaration.message.wire" },
+        "2": { "name": "entity.name.type.message.wire" },
+        "3": { "name": "punctuation.section.block.begin.wire" }
+      },
+      "end": "^\\s*(\\})",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.block.end.wire" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#field" }
+      ]
+    },
+    "field": {
+      "begin": "^\\s*(\\d+)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+      "beginCaptures": {
+        "1": { "name": "constant.numeric.wire" },
+        "2": { "name": "variable.other.property.wire" },
+        "3": { "name": "punctuation.separator.key-value.wire" }
+      },
+      "end": "$",
+      "patterns": [
+        { "include": "#kind" }
+      ]
+    },
+    "kind": {
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#list" },
+        { "include": "#map" },
+        { "include": "#builtin" },
+        { "include": "#type-name" },
+        { "include": "#optional" }
+      ]
+    },
+    "list": {
+      "begin": "(\\[)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.section.brackets.begin.wire" }
+      },
+      "end": "(\\])|$",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.brackets.end.wire" }
+      },
+      "patterns": [
+        { "include": "#kind" }
+      ]
+    },
+    "map": {
+      "begin": "(\\{)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.section.braces.begin.wire" }
+      },
+      "end": "(\\})|$",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.braces.end.wire" }
+      },
+      "patterns": [
+        { "include": "#kind" }
+      ]
+    },
+    "builtin": {
+      "match": "\\b(?:bool|int64|int|uint|float|str|bin|duration|time|nanos|key|value|cell|json)\\b",
+      "name": "support.type.builtin.wire"
+    },
+    "type-name": {
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*\\b",
+      "name": "entity.name.type.wire"
+    },
+    "optional": {
+      "match": "\\?",
+      "name": "keyword.operator.optional.wire"
+    },
+    "method": {
+      "patterns": [
+        {
+          "match": "^\\s*(method)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.method.wire" }
+          }
+        },
+        {
+          "match": "\\b0x[0-9A-Fa-f]+\\b",
+          "name": "constant.numeric.hex.wire"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?=\\s*\\()",
+          "name": "entity.name.function.wire"
+        },
+        {
+          "match": "\\(",
+          "name": "punctuation.section.parens.begin.wire"
+        },
+        {
+          "match": "\\)",
+          "name": "punctuation.section.parens.end.wire"
+        },
+        {
+          "match": "->",
+          "name": "punctuation.separator.arrow.wire"
+        },
+        {
+          "match": "\\b(?:download|until|handover|exchange|for)\\b",
+          "name": "keyword.control.wire"
+        },
+        { "include": "#type-name" }
+      ]
+    }
+  }
+}
