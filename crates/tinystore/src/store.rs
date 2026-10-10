@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use crate::engine::{Claim, Engine, Host};
 use crate::schedule::Scheduler;
 use crate::sqlite::File as EngineFile;
-use crate::{Clock, Error, ErrorKind, Memory, Result, SystemClock};
+use crate::{Clock, Durability, Error, ErrorKind, Memory, Result, SystemClock};
 
 /// How a store opens.
 pub struct Options {
@@ -23,11 +23,15 @@ pub struct Options {
     /// Whether the store runs periodic work, expiry and maintenance among it.
     /// Tests turn it off and run each engine's maintenance themselves.
     pub background: bool,
+    /// How far a commit of the store's files goes before it returns: `kv.db`,
+    /// `jobs.db`, and every database that does not say its own. `None` leaves
+    /// each engine its own, which for these is [`Durability::Full`].
+    pub durability: Option<Durability>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { memory: None, clock: None, background: true }
+        Self { memory: None, clock: None, background: true, durability: None }
     }
 }
 
@@ -37,6 +41,7 @@ impl fmt::Debug for Options {
             .field("memory", &self.memory)
             .field("clock", &self.clock.as_ref().map(|_| "custom"))
             .field("background", &self.background)
+            .field("durability", &self.durability)
             .finish()
     }
 }
@@ -75,6 +80,7 @@ struct Inner {
     /// The engines' own files, kv.db and jobs.db, which the store's
     /// transaction is a transaction of one of.
     files: Mutex<Vec<Arc<EngineFile>>>,
+    durability: Option<Durability>,
     closed: AtomicBool,
 }
 
@@ -94,6 +100,7 @@ impl Store {
             open: Mutex::new(HashMap::new()),
             claims: Arc::default(),
             files: Mutex::new(Vec::new()),
+            durability: options.durability,
             closed: AtomicBool::new(false),
             dir,
         };
@@ -102,6 +109,12 @@ impl Store {
 
     pub fn dir(&self) -> &Path {
         &self.inner.dir
+    }
+
+    /// What the store's options said of its files' commits, for an engine
+    /// that opens one.
+    pub(crate) fn durability(&self) -> Option<Durability> {
+        self.inner.durability
     }
 
     pub fn now(&self) -> SystemTime {

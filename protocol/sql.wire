@@ -15,6 +15,7 @@ message sql.Migration {
 message sql.Open {
   1 name: str                     # [a-z0-9][a-z0-9_-]{0,63}
   2 migrations: [sql.Migration]?
+  3 durability: str?              # full or os: how far its commits go before they return; the store's own when absent
 }
 
 # A statement's text and the values of its ?s, in order.

@@ -10,7 +10,7 @@ use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
 use crate::engine::SharedFile;
-use crate::{Error, Result, Store, Transaction};
+use crate::{Durability, Error, Result, Store, Transaction};
 
 impl Store {
     /// The application's database `name`, `sql/<name>.db` in the store's
@@ -24,7 +24,7 @@ impl Store {
     /// # }
     /// ```
     pub fn database(&self, name: &str) -> DatabaseBuilder {
-        DatabaseBuilder { store: self.clone(), name: name.to_owned(), migrations: None }
+        DatabaseBuilder { store: self.clone(), name: name.to_owned(), migrations: None, durability: None }
     }
 }
 
@@ -35,6 +35,7 @@ pub struct DatabaseBuilder {
     store: Store,
     name: String,
     migrations: Option<Migrations>,
+    durability: Option<Durability>,
 }
 
 impl DatabaseBuilder {
@@ -47,11 +48,22 @@ impl DatabaseBuilder {
         self
     }
 
+    /// How far this database's commits go before they return, where the
+    /// store's own setting is not this file's: what may be lost to a power
+    /// loss beside what may not. Its buckets and queues commit with it. A
+    /// database open already keeps the durability it was opened with, and
+    /// asking for another is `Invalid`.
+    pub fn durability(mut self, durability: Durability) -> Self {
+        self.durability = Some(durability);
+        self
+    }
+
     pub fn open(self) -> Result<Database> {
         let describe = format!("sql {}", self.name);
+        let durability = self.durability;
         let opened = check_name(&self.name)
             .and_then(|()| self.migrations.map(Migrations::load).transpose())
-            .and_then(|migrations| Databases::of(&self.store)?.open(&self.store, &self.name, migrations));
+            .and_then(|migrations| Databases::of(&self.store)?.open(&self.store, &self.name, migrations, durability));
         opened.map(|base| Database { base }).map_err(|error| error.within(describe))
     }
 }

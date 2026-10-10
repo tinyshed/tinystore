@@ -14,6 +14,8 @@ const symbols = {
 		args: [
 			FFIType.ptr,
 			FFIType.u64,
+			FFIType.ptr,
+			FFIType.u64,
 			FFIType.function,
 			FFIType.ptr,
 			FFIType.ptr,
@@ -50,8 +52,16 @@ const room = 1 << 16
 /** Room past this is given back once nothing is held in it. */
 const kept = 1 << 20
 
-/** Opens a pipe to the store in a directory, the core loaded from `library`. */
-export function openPipe(library: string, dir: string, events: PipeEvents): Transport {
+/**
+ * Opens a pipe to the store in a directory, the core loaded from `library`.
+ * `options` is the wire's store.Options, how this process opens the store.
+ */
+export function openPipe(
+	library: string,
+	dir: string,
+	options: Uint8Array,
+	events: PipeEvents,
+): Transport {
 	const lib = dlopen(library, symbols)
 	const name = new TextEncoder().encode(dir)
 	const opened = new BigUint64Array(1)
@@ -136,6 +146,8 @@ export function openPipe(library: string, dir: string, events: PipeEvents): Tran
 		lib.symbols.tinystore_open(
 			ptr(name),
 			name.length,
+			ptr(options),
+			options.length,
 			wake,
 			null,
 			ptr(opened),

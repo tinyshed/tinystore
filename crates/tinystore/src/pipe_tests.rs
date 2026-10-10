@@ -74,7 +74,7 @@ fn a_client_of_protocol_one_is_refused_with_goaway() {
 #[test]
 fn a_frame_before_hello_ends_the_pipe_with_goaway() {
     let dir = tempfile::tempdir().unwrap();
-    let pipe = Pipe::open(dir.path(), None).unwrap();
+    let pipe = Pipe::open(dir.path(), &[], None).unwrap();
     let mut bytes = Vec::new();
     Frame::new(Kind::Ping, 0, vec![0; 8]).encode_into(&mut bytes);
     let mut reader = frame::Reader::default();
@@ -434,4 +434,32 @@ fn a_host_reading_into_its_own_bytes_gets_the_stream_in_order_and_a_wake_for_wha
     assert_eq!(pipe.recv_into(std::time::Duration::ZERO, &mut pong), 20, "a PONG, whole");
     drop(pipe);
     store.close().unwrap();
+}
+
+#[test]
+fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_same_or_nothing() {
+    use crate::wire::protocol::StoreOptions;
+
+    let asking = |word: &str| StoreOptions { durability: Some(word.to_owned()) }.encode();
+    let dir = tempfile::tempdir().unwrap();
+    let mut first = Client::over(Pipe::open(dir.path(), &asking("os"), None).unwrap());
+    assert_eq!(first.hello(2).unwrap().durability.as_deref(), Some("os"), "the WELCOME says what the store has");
+
+    let unasked = Pipe::open(dir.path(), &[], None).unwrap();
+    let same = Pipe::open(dir.path(), &asking("os"), None).unwrap();
+    let refused = Pipe::open(dir.path(), &asking("full"), None).unwrap_err();
+    assert_eq!(refused.to_string(), "pipe: the store is open with durability os, and asked for full: invalid");
+    drop((first, unasked, same));
+
+    // a store opened with nothing said keeps each engine's own, which a pipe asking for one is not given
+    let dir = tempfile::tempdir().unwrap();
+    let mut plain = Client::over(Pipe::open(dir.path(), &[], None).unwrap());
+    assert_eq!(plain.hello(2).unwrap().durability, None);
+    let refused = Pipe::open(dir.path(), &asking("full"), None).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "pipe: the store is open with durability each engine's own, and asked for full: invalid"
+    );
+    let unknown = Pipe::open(tempfile::tempdir().unwrap().path(), &asking("fast"), None).unwrap_err();
+    assert_eq!(unknown.to_string(), "pipe: durability \"fast\": it is full or os: invalid");
 }

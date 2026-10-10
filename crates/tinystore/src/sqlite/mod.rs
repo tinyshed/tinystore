@@ -23,7 +23,8 @@ use std::ops::Deref;
 
 use rusqlite::Connection;
 
-pub(crate) use config::{Config, Durability, GroupLimits};
+pub use config::Durability;
+pub(crate) use config::{Config, GroupLimits};
 pub(crate) use connection::{execute, sql_error};
 pub(crate) use constraint::named as name_constraint;
 pub(crate) use file::{Begun, File, Mark};

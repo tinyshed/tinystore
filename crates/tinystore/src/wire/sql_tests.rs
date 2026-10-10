@@ -15,6 +15,7 @@ fn open(client: &mut Client) -> u64 {
     let open = SqlOpen {
         name: "app".to_owned(),
         migrations: Some(vec![SqlMigration { name: "0001_notes.sql".to_owned(), sql: NOTES.to_owned() }]),
+        durability: None,
     };
     client.call::<Handle>(method::SQL_OPEN, &open).unwrap().handle
 }
@@ -361,4 +362,20 @@ fn writes_through_a_query_in_flight_hold_no_thread_of_the_session() {
     assert_eq!(client.pipe.streams(), 0, "every stream ended once");
     drop(client);
     store.close().unwrap();
+}
+
+#[test]
+fn a_client_says_how_far_a_databases_commits_go_and_one_open_keeps_what_it_has() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let asking = |word: &str| SqlOpen { name: "fast".to_owned(), migrations: None, durability: Some(word.to_owned()) };
+    client.call::<Handle>(method::SQL_OPEN, &asking("os")).unwrap();
+    client.call::<Handle>(method::SQL_OPEN, &asking("os")).unwrap();
+
+    let other = client.call::<Handle>(method::SQL_OPEN, &asking("full")).unwrap_err();
+    assert_eq!(other.code, "invalid");
+    assert_eq!(other.message, "sql fast: open with durability os, and asked for full: invalid");
+    let unknown = SqlOpen { name: "other".to_owned(), migrations: None, durability: Some("fast".to_owned()) };
+    let refused = client.call::<Handle>(method::SQL_OPEN, &unknown).unwrap_err();
+    assert_eq!(refused.message, "sql other: durability \"fast\": it is full or os: invalid");
 }

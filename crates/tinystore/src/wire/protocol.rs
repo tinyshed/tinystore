@@ -74,11 +74,13 @@ pub(crate) struct Welcome {
     pub(crate) now: i64,
     /// The HMAC-SHA256 of HELLO's challenge, keyed with SERVE's secret.
     pub(crate) proof: Option<Vec<u8>>,
+    /// Full or os, when the store was opened with one: how far its files' commits go.
+    pub(crate) durability: Option<String>,
 }
 
 impl Message for Welcome {
     const NAME: &'static str = "Welcome";
-    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    const KEYS: &'static [u64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
     fn read(fields: &Fields) -> Result<Self, Failure> {
         Ok(Welcome {
@@ -93,6 +95,7 @@ impl Message for Welcome {
             engines: fields.get(9, "engines", codec::list(codec::str))?.unwrap_or_default(),
             now: fields.get(10, "now", codec::int)?.unwrap_or_default(),
             proof: fields.get(11, "proof", codec::bin)?,
+            durability: fields.get(12, "durability", codec::str)?,
         })
     }
 
@@ -108,6 +111,30 @@ impl Message for Welcome {
         out.put(9, codec::list_value(&self.engines, codec::str_value));
         out.put(10, codec::int_value(&self.now));
         out.given(11, self.proof.as_ref().map(codec::bin_value));
+        out.given(12, self.durability.as_ref().map(codec::str_value));
+    }
+}
+
+/// How a host opens the store in its own process: the pipe's open takes it,
+/// and a server reads the same from its command line.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct StoreOptions {
+    /// Full or os: how far a commit of the store's files goes before it returns; each engine's own when absent.
+    pub(crate) durability: Option<String>,
+}
+
+impl Message for StoreOptions {
+    const NAME: &'static str = "store.Options";
+    const KEYS: &'static [u64] = &[1];
+
+    fn read(fields: &Fields) -> Result<Self, Failure> {
+        Ok(StoreOptions {
+            durability: fields.get(1, "durability", codec::str)?,
+        })
+    }
+
+    fn write(&self, out: &mut Out) {
+        out.given(1, self.durability.as_ref().map(codec::str_value));
     }
 }
 
@@ -1631,23 +1658,27 @@ pub(crate) struct SqlOpen {
     /// [a-z0-9][a-z0-9_-]{0,63}.
     pub(crate) name: String,
     pub(crate) migrations: Option<Vec<SqlMigration>>,
+    /// Full or os: how far its commits go before they return; the store's own when absent.
+    pub(crate) durability: Option<String>,
 }
 
 #[cfg(feature = "sql")]
 impl Message for SqlOpen {
     const NAME: &'static str = "sql.Open";
-    const KEYS: &'static [u64] = &[1, 2];
+    const KEYS: &'static [u64] = &[1, 2, 3];
 
     fn read(fields: &Fields) -> Result<Self, Failure> {
         Ok(SqlOpen {
             name: fields.get(1, "name", codec::str)?.unwrap_or_default(),
             migrations: fields.get(2, "migrations", codec::list(codec::message::<SqlMigration>))?,
+            durability: fields.get(3, "durability", codec::str)?,
         })
     }
 
     fn write(&self, out: &mut Out) {
         out.put(1, codec::str_value(&self.name));
         out.given(2, self.migrations.as_ref().map(|items| codec::list_value(items, codec::message_value)));
+        out.given(3, self.durability.as_ref().map(codec::str_value));
     }
 }
 
@@ -2140,6 +2171,7 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<Vec<u8>, Failure
     let rewritten = match name {
         "Hello" => Hello::decode(body).map(|message| message.encode()),
         "Welcome" => Welcome::decode(body).map(|message| message.encode()),
+        "store.Options" => StoreOptions::decode(body).map(|message| message.encode()),
         "GoAway" => GoAway::decode(body).map(|message| message.encode()),
         "Failure" => Failure::decode(body).map(|message| message.encode()),
         "Handle" => Handle::decode(body).map(|message| message.encode()),

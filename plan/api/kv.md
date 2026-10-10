@@ -99,6 +99,8 @@ let user: Option<i64> = codes.take(&digest(&code))?;
   may lengthen or shorten its life, and keeps its value.
 - `delete` removes a key and says whether it was there.
 - A write returns once it is durable; writes from many callers share a commit.
+  A store opened with `durability: 'os'` returns it once the operating system
+  has it, and a bucket kept in a database commits as that database does.
 - A token or a code is a key through its digest: the file then holds nothing
   that signs anybody in, and an error that names the key names the digest.
 - Every call blocks its thread in Rust, as file access does; async code runs it

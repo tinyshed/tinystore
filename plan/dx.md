@@ -76,7 +76,7 @@ Decided words are settled; draft words wait for their engine's book.
 | Word                               | Means                                                                             | Where                  | Was                                                 | State   |
 |------------------------------------|-----------------------------------------------------------------------------------|------------------------|-----------------------------------------------------|---------|
 | `channels`, `publish`, `subscribe` | messages between parts of an application                                          | runtime                | signals, an idea                                    | decided |
-| `durability`                       | a file's mode: `'full'` or `'os'`                                                 | every engine           | FULL only                                           | decided |
+| `durability`                       | a file's mode, `'full'` or `'os'`: a store's at `open`, a database's own          | every engine           | FULL only, until 10 October                         | decided |
 | `flushEvery`                       | kept in memory and written every span                                             | kv counters            | `loseAtMost`, `durability: '1s'`                    | draft   |
 | `concurrency`                      | how many run at once: `8` or `{ total, group }`                                   | jobs                   | `maxRunning`, `maxRunningInGroup`, `workers`        | decided |
 | `rate`                             | starts or calls a span, as text `'30/s'`                                          | jobs, kv limiter       | `Rate(n, per)` in Go                                | decided |

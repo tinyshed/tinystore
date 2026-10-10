@@ -60,7 +60,13 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         }
     };
     let clock = serve.clock.map(|start| Arc::new(TestClock::new(start)));
-    let store = match open(&serve.dir, clock.clone(), serve.memory) {
+    let options = Options {
+        memory: serve.memory,
+        clock: clock.clone().map(|clock| clock as Arc<dyn Clock>),
+        durability: serve.durability,
+        ..Options::default()
+    };
+    let store = match open(&serve.dir, options) {
         Ok(store) => store,
         Err((code, error)) => {
             console.fail(&error);
@@ -89,8 +95,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
 }
 
 /// Opens the store, or says why not: a directory another holds exits with 3.
-fn open(dir: &Path, clock: Option<Arc<TestClock>>, memory: Option<u64>) -> Result<Store, (ExitCode, String)> {
-    let options = Options { clock: clock.map(|clock| clock as Arc<dyn Clock>), memory, ..Options::default() };
+fn open(dir: &Path, options: Options) -> Result<Store, (ExitCode, String)> {
     Store::open(dir, options).map_err(|error| {
         let code = if error.kind() == ErrorKind::InUse { ExitCode::from(HELD) } else { ExitCode::FAILURE };
         (code, error.to_string())

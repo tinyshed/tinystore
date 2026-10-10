@@ -40,6 +40,9 @@
         "connectionCredit": {
           "uint": "707"
         },
+        "durability": {
+          "str": "durability"
+        },
         "engines": {
           "list": [
             {
@@ -72,7 +75,7 @@
           "uint": "807"
         }
       },
-      "hex": "8b016b02a673657276657203c40201ff04aa6361706162696c69747905cd01fb06cd025f07cd02c308cd03270991a7656e67696e65730acf000001a0c4506c000bc40201ff",
+      "hex": "8c016b02a673657276657203c40201ff04aa6361706162696c69747905cd01fb06cd025f07cd02c308cd03270991a7656e67696e65730acf000001a0c4506c000bc40201ff0caa6475726162696c697479",
       "message": "Welcome",
       "name": "Welcome with every field"
     },
@@ -81,6 +84,22 @@
       "hex": "80",
       "message": "Welcome",
       "name": "Welcome with no field"
+    },
+    {
+      "fields": {
+        "durability": {
+          "str": "durability"
+        }
+      },
+      "hex": "8101aa6475726162696c697479",
+      "message": "store.Options",
+      "name": "store.Options with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "store.Options",
+      "name": "store.Options with no field"
     },
     {
       "fields": {
@@ -1528,6 +1547,9 @@
     },
     {
       "fields": {
+        "durability": {
+          "str": "durability"
+        },
         "migrations": {
           "list": [
             {
@@ -1546,7 +1568,7 @@
           "str": "name"
         }
       },
-      "hex": "8201a46e616d6502918201a46e616d6502a373716c",
+      "hex": "8301a46e616d6502918201a46e616d6502a373716c03aa6475726162696c697479",
       "message": "sql.Open",
       "name": "sql.Open with every field"
     },

@@ -4,7 +4,16 @@ import { open as openFile, rename, rm } from 'node:fs/promises'
 import { Blobs } from './blobs.ts'
 import { Clock } from './clock.ts'
 import { Config, type ConfigLayer, type ConfigValue } from './config.ts'
-import { embedded, Link, privateChild, remote, sidecar } from './connection.ts'
+import {
+	asking,
+	checkDurability,
+	type Durability,
+	embedded,
+	Link,
+	privateChild,
+	remote,
+	sidecar,
+} from './connection.ts'
 import { ClosedError, InvalidError } from './errors.ts'
 import {
 	openQueue,
@@ -74,6 +83,15 @@ export interface OpenOptions {
 	 * come due and records age at once. Needs `private`.
 	 */
 	clock?: Time
+	/**
+	 * How far a commit of the store's files goes before it returns: `'full'`
+	 * unless given. `'os'` does not wait for the disk, so a write returns in
+	 * microseconds, survives this program's crash, and may be lost with the
+	 * last others to a power loss. It is the store's, set by whoever opens it
+	 * first: a sidecar found running with another is refused. A database may
+	 * say its own, `store.database('audit', { durability: 'full' })`.
+	 */
+	durability?: Durability
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */
@@ -350,13 +368,15 @@ export async function openWith(
 		)
 	}
 	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
-	const link = new Link(
+	const durability = options.durability
+	checkDurability(durability, 'open')
+	const dial =
 		options.embedded === true
-			? embedded(runtime, dir, () => findLibrary(options.library))
+			? embedded(runtime, dir, () => findLibrary(options.library), durability)
 			: options.private === true
-				? privateChild(runtime, dir, binary, clock)
-				: sidecar(runtime, dir, binary, idle),
-	)
+				? privateChild(runtime, dir, binary, clock, durability)
+				: sidecar(runtime, dir, binary, { idle, durability })
+	const link = new Link(asking(dial, dir, durability))
 	await link.connection()
 	return new Store(link)
 }

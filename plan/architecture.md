@@ -146,6 +146,13 @@ kind is one wire code and one error class in every SDK.
 | `'full'` | WAL, `synchronous=FULL`: syncs before it returns                    | crash of the application, of the OS, power loss | kv, jobs, sql    |
 | `'os'`   | WAL, `synchronous=NORMAL`: written to the OS, synced at checkpoints | crash of the application                        | records, metrics |
 
+It is the store's: `open` gives it for every file, and a database may say
+its own, with which the buckets and queues kept in it commit. A store has
+one, its first opener's: a pipe that joins it, or a client that finds its
+sidecar running, asks for the same or for nothing, and is refused another.
+On the round's host one writer writes fifty times as many keys with `'os'`,
+64 writers half as many again ([evidence.md](evidence.md)).
+
 Counters opened with `flushEvery: '1s'` are kept in memory and written every
 second, losing at most that second to a crash, and a rate limit's times always
 are; neither is a file's mode, so each has its own word.

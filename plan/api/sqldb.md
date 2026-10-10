@@ -92,8 +92,11 @@ create index notes_author on notes (author_id, created_at);
   none: for scripts and first tries. A program that owns a database passes
   them, so that every start checks the file is what the code expects.
 - `await` is where a migration that fails is told: at the start, not at the
-  first query. A database is `durability: 'full'`, as kv and jobs are: a write
-  that returned survives a power loss.
+  first query. A database commits as its store does, `durability: 'full'`
+  unless the store was opened with another: a write that returned survives a
+  power loss. It may say its own, `store.database('cache', { durability:
+  'os' })`, for what may be lost to one; a database open already keeps what
+  it was opened with, and asking for another is `invalid`.
 
 ## Read
 

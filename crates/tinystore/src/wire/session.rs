@@ -365,6 +365,7 @@ impl Shared {
             engines: engines(),
             now: unix_millis(self.store.now()),
             proof,
+            durability: self.store.durability().map(|durability| durability.to_string()),
         };
         welcome.encode()
     }

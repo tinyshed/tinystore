@@ -367,3 +367,27 @@ fn an_expired_key_is_absent_to_every_call() {
     assert!(codes.create("gone", &3).unwrap(), "create takes an expired key");
     assert_eq!(codes.get("gone").unwrap(), Some(3));
 }
+
+/// SQLite's `synchronous` on a file's writer: 2 syncs each commit, 1 leaves
+/// the sync to checkpoints.
+fn synchronous(file: &crate::sqlite::File) -> i64 {
+    file.transaction(|tx| -> crate::Result<i64> {
+        tx.pragma_query_value(None, "synchronous", |row| row.get(0))
+            .map_err(|error| crate::sqlite::sql_error("synchronous", error))
+    })
+    .unwrap()
+}
+
+#[test]
+fn kv_db_commits_as_far_as_its_store_says_and_syncs_each_commit_unless_told() {
+    for (durability, level) in [(None, 2), (Some(crate::Durability::Full), 2), (Some(crate::Durability::Os), 1)] {
+        let dir = tempfile::tempdir().unwrap();
+        let options = crate::Options { durability, background: false, ..crate::Options::default() };
+        let store = crate::Store::open(dir.path(), options).unwrap();
+        let hits = store.bucket::<i64>("hits").open().unwrap();
+        hits.set("a", &1).unwrap();
+        assert_eq!(synchronous(Kv::of(&store).unwrap().file()), level, "{durability:?}");
+        assert_eq!(hits.get("a").unwrap(), Some(1));
+        store.close().unwrap();
+    }
+}

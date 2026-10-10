@@ -506,3 +506,36 @@ fn rows_hold_the_stores_memory_while_a_call_holds_them() {
     assert_eq!(db.all::<IgnoredAny>(sql!("select body from blobs where id <= 8")).unwrap().len(), 8);
     assert_eq!(store.memory().used(), 0);
 }
+
+/// SQLite's `synchronous` on a database's writer, which a transaction runs
+/// on: 2 syncs each commit, 1 leaves the sync to checkpoints.
+fn synchronous(db: &Database) -> i64 {
+    db.tx(|tx| tx.scalar(sql!("pragma synchronous"))).unwrap()
+}
+
+#[test]
+fn a_database_commits_as_far_as_it_says_or_as_its_store_does() {
+    use crate::Durability::{Full, Os};
+
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { durability: Some(Os), background: false, ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let cache = store.database("cache").open().unwrap();
+    let audit = store.database("audit").durability(Full).open().unwrap();
+    assert_eq!((synchronous(&cache), synchronous(&audit)), (1, 2), "the store's, and the database's own");
+
+    // open already, a database keeps what it was opened with: the same again is itself, another is refused
+    assert_eq!(synchronous(&store.database("audit").durability(Full).open().unwrap()), 2);
+    assert_eq!(synchronous(&store.database("audit").open().unwrap()), 2, "nothing asked is nothing changed");
+    let refused = store.database("audit").durability(Os).open().unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid);
+    assert_eq!(refused.to_string(), "sql audit: open with durability full, and asked for os: invalid");
+    store.close().unwrap();
+
+    // a store that says nothing syncs each commit, and a database may still say its own
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    assert_eq!(synchronous(&store.database("app").open().unwrap()), 2);
+    assert_eq!(synchronous(&store.database("cache").durability(Os).open().unwrap()), 1);
+    store.close().unwrap();
+}

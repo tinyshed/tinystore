@@ -111,6 +111,17 @@ export const Welcome = message('Welcome', {
 	now: [10, int],
 	/** the HMAC-SHA256 of HELLO's challenge, keyed with SERVE's secret */
 	proof: [11, bin],
+	/** full or os, when the store was opened with one: how far its files' commits go */
+	durability: [12, str],
+})
+
+/**
+ * How a host opens the store in its own process: the pipe's open takes it,
+ * and a server reads the same from its command line.
+ */
+export const StoreOptions = message('store.Options', {
+	/** full or os: how far a commit of the store's files goes before it returns; each engine's own when absent */
+	durability: [1, str],
 })
 
 /**
@@ -636,6 +647,8 @@ export const SqlOpen = message('sql.Open', {
 	/** [a-z0-9][a-z0-9_-]{0,63} */
 	name: [1, str],
 	migrations: [2, list(SqlMigration)],
+	/** full or os: how far its commits go before they return; the store's own when absent */
+	durability: [3, str],
 })
 
 /**

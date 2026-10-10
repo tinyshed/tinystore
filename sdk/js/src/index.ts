@@ -16,6 +16,7 @@ export {
 	type Validate,
 	validate,
 } from './config.ts'
+export type { Durability } from './connection.ts'
 export { type ConsoleFormat, type ConsoleTime, secrets } from './console.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::Duration;
 
 /// How a file's connections are set up. Every setting travels with every
@@ -39,6 +40,14 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// The settings of a file whose commits go as far as `durability` says:
+    /// `Full` where it says nothing, as kv, jobs and sql keep theirs.
+    pub(crate) fn committing(durability: Option<Durability>) -> Config {
+        Config { durability: durability.unwrap_or(Durability::Full), ..Config::default() }
+    }
+}
+
 /// The readers a file opens at most: one a processor, four to sixteen.
 ///
 /// A caller that finds every reader taken sleeps until one comes back, and
@@ -51,16 +60,44 @@ fn readers_of_this_machine() -> usize {
     std::thread::available_parallelism().map_or(4, std::num::NonZero::get).clamp(4, 16)
 }
 
-/// How far a commit goes before it returns.
+/// How far a commit goes before it returns: a setting of a store's files,
+/// `kv.db`, `jobs.db` and each database's, which [`Options`](crate::Options)
+/// gives for them all and a database may say for itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Durability {
-    /// WAL with `synchronous=FULL`: every commit syncs before it returns, and
-    /// survives a power loss.
+pub enum Durability {
+    /// Every commit is synced to the disk before it returns, and survives a
+    /// crash of the operating system and a power loss. WAL with
+    /// `synchronous=FULL`.
     Full,
-    /// WAL with `synchronous=NORMAL`: a commit reaches the operating system and
-    /// syncs come at checkpoints. It survives the application's crash; a power
-    /// loss may take the last commits, never the file's consistency.
+    /// A commit is written to the operating system and returns; the disk is
+    /// synced at checkpoints. It survives the program's crash. A crash of the
+    /// operating system or a power loss may take the last commits, never the
+    /// file's consistency. WAL with `synchronous=NORMAL`.
     Os,
+}
+
+impl fmt::Display for Durability {
+    /// The word every SDK says it with: `full` or `os`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Durability::Full => "full",
+            Durability::Os => "os",
+        })
+    }
+}
+
+impl std::str::FromStr for Durability {
+    type Err = crate::Error;
+
+    /// Reads the word every SDK, the wire and the server's command line say
+    /// it with.
+    fn from_str(word: &str) -> Result<Durability, crate::Error> {
+        match word {
+            "full" => Ok(Durability::Full),
+            "os" => Ok(Durability::Os),
+            other => Err(crate::Error::invalid(format!("durability {other:?}: it is full or os"))),
+        }
+    }
 }
 
 /// How much one grouped commit carries. A write heavier than `bytes` commits

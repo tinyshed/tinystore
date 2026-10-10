@@ -19,7 +19,7 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn connect(dir: &Path) -> Client {
-        Client::over(Pipe::open(dir, None).unwrap())
+        Client::over(Pipe::open(dir, &[], None).unwrap())
     }
 
     pub(crate) fn over(pipe: Pipe) -> Client {

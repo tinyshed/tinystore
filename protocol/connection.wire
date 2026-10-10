@@ -24,6 +24,13 @@ message Welcome {
   9 engines: [str]            # what this server serves
   10 now: time                # the store's clock
   11 proof: bin?              # the HMAC-SHA256 of HELLO's challenge, keyed with SERVE's secret
+  12 durability: str?         # full or os, when the store was opened with one: how far its files' commits go
+}
+
+# How a host opens the store in its own process: the pipe's open takes it,
+# and a server reads the same from its command line.
+message store.Options {
+  1 durability: str?          # full or os: how far a commit of the store's files goes before it returns; each engine's own when absent
 }
 
 # The last frame of a connection.

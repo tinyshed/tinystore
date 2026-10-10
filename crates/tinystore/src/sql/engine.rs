@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use super::tx::BOUND;
 use crate::engine::{Claim, Engine, Host, SharedFile};
 use crate::sqlite::{Config, File, Migration};
-use crate::{Clock, Error, Memory, Result, Store};
+use crate::{Clock, Durability, Error, Memory, Result, Store};
 
 /// The history a database's own migrations are kept under.
 const HISTORY: &str = "migrations";
@@ -31,6 +31,7 @@ pub(crate) struct Base {
     /// Statements known to write, by their text. SQLite says whether one
     /// writes when it compiles it, and a read call sends those to the writer.
     writes: Mutex<HashSet<String>>,
+    durability: Durability,
     _claim: Claim,
 }
 
@@ -42,18 +43,33 @@ impl Databases {
 
     /// The database `name`, opened when it is not, after `migrations` are
     /// applied and checked; one already open applies what it lacks of them.
-    pub(crate) fn open(&self, store: &Store, name: &str, migrations: Option<Vec<Migration>>) -> Result<Arc<Base>> {
+    /// Its commits go as far as `durability` says, or the store's options
+    /// where it says nothing; a file has one, so one already open refuses
+    /// another.
+    pub(crate) fn open(
+        &self,
+        store: &Store,
+        name: &str,
+        migrations: Option<Vec<Migration>>,
+        durability: Option<Durability>,
+    ) -> Result<Arc<Base>> {
         let mut open = lock(&self.open);
         if let Some(base) = open.get(name) {
             let base = Arc::clone(base);
             drop(open);
+            if let Some(asked) = durability.filter(|asked| *asked != base.durability) {
+                let opened = base.durability;
+                return Err(Error::invalid(format!("open with durability {opened}, and asked for {asked}")));
+            }
             if let Some(migrations) = migrations {
                 base.file().migrate_checked(HISTORY, &migrations)?;
             }
             return Ok(base);
         }
         let claim = store.claim(&format!("sql/{name}.db"))?;
-        let file = File::open(claim.path(), config())?;
+        let config = config(durability.or(store.durability()));
+        let durability = config.durability;
+        let file = File::open(claim.path(), config)?;
         if let Some(migrations) = migrations {
             file.migrate_checked(HISTORY, &migrations)?;
         }
@@ -63,6 +79,7 @@ impl Databases {
             clock: store.clock(),
             memory: Arc::clone(store.memory()),
             writes: Mutex::new(HashSet::new()),
+            durability,
             _claim: claim,
         };
         let base = Arc::new(base);
@@ -127,8 +144,8 @@ impl Base {
 
 /// A database's connections: every file's, with room for an application's
 /// statements.
-fn config() -> Config {
-    Config { statements: 128, ..Config::default() }
+fn config(durability: Option<Durability>) -> Config {
+    Config { statements: 128, ..Config::committing(durability) }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

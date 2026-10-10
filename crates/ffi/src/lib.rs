@@ -47,6 +47,8 @@ impl HostWake {
 
 /// Opens the store in the directory `dir` names, as UTF-8 of `dir_len` bytes,
 /// or joins it when this process holds it through another connection.
+/// `options` is the wire's `store.Options` in `options_len` bytes of
+/// MessagePack, none for a store as it opens unasked.
 ///
 /// On success it writes the connection to `connection` and returns 0. On
 /// failure it writes a message, UTF-8, into `error`, as much of it as
@@ -56,14 +58,17 @@ impl HostWake {
 ///
 /// # Safety
 ///
-/// `dir` points to `dir_len` readable bytes; `connection` points to a
-/// writable pointer; `error` points to `error_room` writable bytes; `wake`,
+/// `dir` points to `dir_len` readable bytes and `options` to `options_len`;
+/// `connection` points to a writable pointer; `error` points to `error_room`
+/// writable bytes; `wake`,
 /// when given, may be called from any thread with `context` until
 /// `tinystore_close` returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinystore_open(
     dir: *const u8,
     dir_len: usize,
+    options: *const u8,
+    options_len: usize,
     wake: Option<unsafe extern "C" fn(*mut c_void)>,
     context: *mut c_void,
     connection: *mut *mut Connection,
@@ -72,13 +77,15 @@ pub unsafe extern "C" fn tinystore_open(
 ) -> usize {
     // SAFETY: the caller promises dir points to dir_len readable bytes.
     let dir = unsafe { std::slice::from_raw_parts(dir, dir_len) };
+    // SAFETY: the caller promises options points to options_len readable bytes.
+    let options = if options_len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(options, options_len) } };
     let opened = catch_unwind(AssertUnwindSafe(|| {
         let dir = std::str::from_utf8(dir).map_err(|_| "a directory name that is not UTF-8".to_owned())?;
         let wake = wake.map(|wake| {
             let host = HostWake { wake, context };
             Arc::new(move || host.call()) as Wake
         });
-        Pipe::open(dir, wake).map_err(|failure| failure.to_string())
+        Pipe::open(dir, options, wake).map_err(|failure| failure.to_string())
     }));
     let outcome = opened.unwrap_or_else(|_| Err("tinystore_open panicked".to_owned()));
     match outcome {
@@ -198,7 +205,17 @@ mod tests {
         let mut error = [0u8; 256];
         // SAFETY: every pointer is to a live value of this function, of the length said.
         let failed = unsafe {
-            tinystore_open(name.as_ptr(), name.len(), None, ptr::null_mut(), &mut connection, error.as_mut_ptr(), 256)
+            tinystore_open(
+                name.as_ptr(),
+                name.len(),
+                ptr::null(),
+                0,
+                None,
+                ptr::null_mut(),
+                &mut connection,
+                error.as_mut_ptr(),
+                256,
+            )
         };
         assert_eq!(failed, 0, "{}", String::from_utf8_lossy(&error[..failed]));
         connection
@@ -267,14 +284,34 @@ mod tests {
         let mut error = [0u8; 256];
         // SAFETY: every pointer is to a live value of this function, of the length said.
         let failed = unsafe {
-            tinystore_open(name.as_ptr(), name.len(), None, ptr::null_mut(), &mut connection, error.as_mut_ptr(), 256)
+            tinystore_open(
+                name.as_ptr(),
+                name.len(),
+                ptr::null(),
+                0,
+                None,
+                ptr::null_mut(),
+                &mut connection,
+                error.as_mut_ptr(),
+                256,
+            )
         };
         assert!(failed > 0 && connection.is_null(), "a file is no store's directory");
         assert!(std::str::from_utf8(&error[..failed]).unwrap().contains("a-file"), "the message names what failed");
 
         // SAFETY: as above, with room for eight bytes of the message.
         let cut = unsafe {
-            tinystore_open(name.as_ptr(), name.len(), None, ptr::null_mut(), &mut connection, error.as_mut_ptr(), 8)
+            tinystore_open(
+                name.as_ptr(),
+                name.len(),
+                ptr::null(),
+                0,
+                None,
+                ptr::null_mut(),
+                &mut connection,
+                error.as_mut_ptr(),
+                8,
+            )
         };
         assert_eq!(cut, 8, "a message longer than its room is cut to it");
     }

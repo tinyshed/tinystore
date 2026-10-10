@@ -8,8 +8,8 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import type { Connection, Idempotence, Link } from './connection.ts'
-import { download } from './connection.ts'
+import type { Connection, Durability, Idempotence, Link } from './connection.ts'
+import { checkDurability, download } from './connection.ts'
 import { errorOf, InvalidError } from './errors.ts'
 import {
 	askByCall,
@@ -63,6 +63,13 @@ export type Migrations = string | Record<string, string> | readonly { name: stri
 export interface DatabaseOptions {
 	/** applied when the file has not, and checked at every open; without them the file opens as it is */
 	migrations?: Migrations
+	/**
+	 * How far this database's commits go before they return, where the
+	 * store's own is not this file's: `'os'` for what may be lost to a power
+	 * loss, beside a store of what may not. Its buckets and queues commit
+	 * with it. A database open already keeps what it was opened with.
+	 */
+	durability?: Durability
 }
 
 /** What a write changed: the rows, and SQLite's rowid of the row it inserted, 0 when none. */
@@ -483,9 +490,11 @@ export async function openDatabase(
 	options: DatabaseOptions = {},
 ): Promise<Database> {
 	checkName(name, 'database')
+	checkDurability(options.durability, `sql ${name}`)
 	const migrations =
 		options.migrations === undefined ? undefined : await migrationFiles(options.migrations)
-	const db = new Database(link, workers, name, SqlOpen.encode({ name, migrations }))
+	const open = SqlOpen.encode({ name, migrations, durability: options.durability })
+	const db = new Database(link, workers, name, open)
 	await link.run('read', connection => db.handle(connection))
 	return db
 }

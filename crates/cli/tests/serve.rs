@@ -76,6 +76,30 @@ fn wait(child: &mut Child) -> i32 {
 }
 
 #[test]
+fn a_server_started_with_a_durability_opens_its_store_with_it_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(BINARY)
+        .args(["serve", "--dir"])
+        .arg(dir.path())
+        .args(["--stdio", "--durability", "os"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(&hello(None)).unwrap();
+    let (kind, _, _, welcome) = read_frame(child.stdout.as_mut().unwrap());
+    assert_eq!(kind, WELCOME);
+    // WELCOME's field 12, a str of two bytes
+    assert!(
+        welcome.windows(4).any(|window| window == [12, 0xa2, b'o', b's']),
+        "the WELCOME names the store's durability"
+    );
+    drop(child.stdin.take());
+    assert_eq!(wait(&mut child), 0);
+}
+
+#[test]
 fn a_private_child_answers_hello_and_leaves_when_its_stdin_ends() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(BINARY)

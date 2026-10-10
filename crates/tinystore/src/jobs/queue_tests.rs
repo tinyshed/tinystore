@@ -512,3 +512,26 @@ fn a_transaction_of_the_store_is_of_one_file() {
     let nothing: Result<()> = f.store.tx(|_| Ok(()));
     nothing.unwrap();
 }
+
+/// SQLite's `synchronous` on a file's writer: 2 syncs each commit, 1 leaves
+/// the sync to checkpoints.
+fn synchronous(file: &crate::sqlite::File) -> i64 {
+    file.transaction(|tx| -> crate::Result<i64> {
+        tx.pragma_query_value(None, "synchronous", |row| row.get(0))
+            .map_err(|error| crate::sqlite::sql_error("synchronous", error))
+    })
+    .unwrap()
+}
+
+#[test]
+fn jobs_db_commits_as_far_as_its_store_says_and_syncs_each_commit_unless_told() {
+    for (durability, level) in [(None, 2), (Some(crate::Durability::Os), 1)] {
+        let dir = tempfile::tempdir().unwrap();
+        let options = crate::Options { durability, background: false, ..crate::Options::default() };
+        let store = crate::Store::open(dir.path(), options).unwrap();
+        let mail = store.queue::<i64>("mail").open().unwrap();
+        mail.add(&1).unwrap();
+        assert_eq!(synchronous(super::engine::Jobs::of(&store).unwrap().file()), level, "{durability:?}");
+        store.close().unwrap();
+    }
+}

@@ -121,6 +121,7 @@ credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
 | 9   | engines           | array of str | what this server serves                                                                                                                |
 | 10  | now               | int          | the store's clock, unix milliseconds                                                                                                   |
 | 11  | proof             | bin          | on a local connection whose `HELLO` carried a challenge: the HMAC-SHA256 of the challenge, keyed with the 32 bytes of `SERVE`'s secret |
+| 12  | durability        | str          | `full` or `os`, when the store was opened with one: how far its files' commits go before they return                                   |
 
 A client that found the server through `SERVE` sends no `REQUEST` before the
 proof checks, compared in constant time: only the store directory's owner can

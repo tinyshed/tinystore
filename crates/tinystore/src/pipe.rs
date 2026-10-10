@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use crate::wire::Session;
 pub use crate::wire::Wake;
-use crate::{Options, Result, Store, TestClock};
+use crate::wire::codec::Message;
+use crate::wire::protocol::StoreOptions;
+use crate::{Durability, Error, Options, Result, Store, TestClock};
 
 /// The stores this process holds through pipes, by directory, and how many
 /// pipes each has: one store a directory, closed with its last pipe.
@@ -84,11 +86,15 @@ pub struct Pipe {
 
 impl Pipe {
     /// Opens the store in `dir`, or joins it when this process holds it through
-    /// another pipe. `wake` is called when frames become ready after the last
-    /// were taken; a host that reads with a blocking [`Pipe::recv`] passes none.
-    pub fn open(dir: impl AsRef<Path>, wake: Option<Wake>) -> Result<Pipe> {
+    /// another pipe. `options` is the wire's `store.Options`, none of its
+    /// bytes for a store as it opens unasked; a store this process holds
+    /// already keeps what it was opened with, and one that asks for another
+    /// durability is `Invalid`. `wake` is called when frames become ready
+    /// after the last were taken; a host that reads with a blocking
+    /// [`Pipe::recv`] passes none.
+    pub fn open(dir: impl AsRef<Path>, options: &[u8], wake: Option<Wake>) -> Result<Pipe> {
         let dir = std::path::absolute(dir.as_ref()).map_err(|error| crate::Error::io("pipe: its directory", error))?;
-        let store = join(&dir)?;
+        let store = join(&dir, durability_asked(options)?)?;
         match Session::new(store, Connect { wake, ..Connect::default() }) {
             Ok(session) => Ok(Pipe { session, dir: Some(dir) }),
             Err(error) => {
@@ -185,13 +191,31 @@ impl fmt::Debug for Pipe {
     }
 }
 
-fn join(dir: &Path) -> Result<Store> {
+/// The durability a host's options ask its store's files for, if any.
+fn durability_asked(options: &[u8]) -> Result<Option<Durability>> {
+    if options.is_empty() {
+        return Ok(None);
+    }
+    let asked = StoreOptions::decode(options)
+        .map_err(|refused| Error::invalid(format!("pipe: its options: {}", refused.message)))?;
+    asked.durability.map(|word| word.parse().map_err(|error: Error| error.within("pipe"))).transpose()
+}
+
+fn join(dir: &Path, durability: Option<Durability>) -> Result<Store> {
     let mut stores = stores();
     if let Some((store, pipes)) = stores.get_mut(dir) {
+        if let Some(asked) = durability
+            && store.durability() != Some(asked)
+        {
+            let opened = store.durability().map_or_else(|| "each engine's own".to_owned(), |opened| opened.to_string());
+            return Err(Error::invalid(format!(
+                "pipe: the store is open with durability {opened}, and asked for {asked}"
+            )));
+        }
         *pipes += 1;
         return Ok(store.clone());
     }
-    let store = Store::open(dir, Options::default())?;
+    let store = Store::open(dir, Options { durability, ..Options::default() })?;
     stores.insert(dir.to_path_buf(), (store.clone(), 1));
     Ok(store)
 }

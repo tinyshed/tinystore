@@ -8,10 +8,58 @@ import { join, resolve } from 'node:path'
 
 import manifest from '../package.json' with { type: 'json' }
 import { currentSignal } from './cancel.ts'
-import { ClosedError, OutcomeUnknownError, TinystoreError, UnavailableError } from './errors.ts'
+import {
+	ClosedError,
+	InvalidError,
+	OutcomeUnknownError,
+	TinystoreError,
+	UnavailableError,
+} from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
 import { LostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
-import { Empty, methods } from './wire/protocol.ts'
+import { Empty, methods, StoreOptions } from './wire/protocol.ts'
+
+/**
+ * How far a commit goes before it returns, for the files of a store or of
+ * one database:
+ *
+ *     'full'   synced to the disk: it survives a crash of the operating
+ *              system and a power loss. What every file is unless told.
+ *     'os'     written to the operating system, synced a little later: it
+ *              survives the program's crash, and a power loss may take the
+ *              last commits, never the file.
+ */
+export type Durability = 'full' | 'os'
+
+/** Refuses a durability that is neither word, before anything leaves. */
+export function checkDurability(durability: Durability | undefined, of: string): void {
+	if (durability !== undefined && durability !== 'full' && durability !== 'os') {
+		throw new InvalidError(`${of}: durability ${JSON.stringify(durability)}: it is 'full' or 'os'`)
+	}
+}
+
+/**
+ * Dials as `dial` does, and refuses a store whose files commit another way
+ * than this program asked for: a store has one durability, its first
+ * opener's, and a program that needs another must not be told it has it.
+ */
+export function asking(dial: Dialer, dir: string, durability: Durability | undefined): Dialer {
+	if (durability === undefined) {
+		return dial
+	}
+	return async () => {
+		const connection = await dial()
+		const opened = (await connection.session.welcomed).durability
+		if (opened !== durability) {
+			await connection.close()
+			const as = opened === undefined ? 'with none said' : `with durability '${opened}'`
+			throw new InvalidError(
+				`the store in ${dir} is open ${as}, and this program asked for '${durability}'`,
+			)
+		}
+		return connection
+	}
+}
 
 /** How long a server may take to answer HELLO. */
 const handshakeTime = 5000
@@ -141,13 +189,14 @@ export function sidecar(
 	runtime: Runtime,
 	dir: string,
 	binary: () => string,
-	idle?: number,
+	started: Started = {},
 	older: (server: string) => boolean = server => olderRelease(server, manifest.version),
 ): Dialer {
 	const absolute = resolve(dir)
 	const serve = join(absolute, 'server', 'SERVE')
 	const log = join(absolute, 'server', 'serve.log')
-	const idling = idle === undefined ? [] : ['--idle', `${idle}ms`]
+	const idling = started.idle === undefined ? [] : ['--idle', `${started.idle}ms`]
+	const committing = started.durability === undefined ? [] : ['--durability', started.durability]
 	let told = false
 	return async () => {
 		const found = await reachServe(runtime, serve)
@@ -168,9 +217,17 @@ export function sidecar(
 				return found.connection
 			}
 		}
-		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log', log, ...idling]
+		const flags = [...idling, ...committing]
+		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log', log, ...flags]
 		return startSidecar(runtime, serve, log, command, stoppedInstance)
 	}
+}
+
+/** What a server this process starts is started with; one found running keeps its own. */
+export interface Started {
+	/** how long a sidecar stays once its last connection has gone, in milliseconds */
+	idle?: number | undefined
+	durability?: Durability | undefined
 }
 
 /**
@@ -356,12 +413,14 @@ export function privateChild(
 	dir: string,
 	binary: () => string,
 	clock?: Date,
+	durability?: Durability,
 ): Dialer {
 	// a test's clock starts where the first child's did, and a child started again starts it there
 	const clocked = clock === undefined ? [] : ['--clock', clock.toISOString()]
+	const committing = durability === undefined ? [] : ['--durability', durability]
 	return async () => {
 		let session: Session | undefined
-		const argv = [binary(), 'serve', '--dir', resolve(dir), '--stdio', ...clocked]
+		const argv = [binary(), 'serve', '--dir', resolve(dir), '--stdio', ...clocked, ...committing]
 		const child = runtime.spawnPrivate(argv, {
 			data: bytes => session?.receive(bytes),
 			end: err => session?.end(err),
@@ -386,11 +445,17 @@ export function privateChild(
  * The core in this process, through its C ABI: no server and no socket, the
  * frames handed to the library and back. Bun alone, through bun:ffi.
  */
-export function embedded(runtime: Runtime, dir: string, library: () => string): Dialer {
+export function embedded(
+	runtime: Runtime,
+	dir: string,
+	library: () => string,
+	durability?: Durability,
+): Dialer {
+	const options = StoreOptions.encode({ durability })
 	return async () => {
 		const { openPipe } = await import('./runtime/pipe.ts')
 		let session: Session | undefined
-		const transport = openPipe(library(), resolve(dir), {
+		const transport = openPipe(library(), resolve(dir), options, {
 			frames: (bytes, length) => session?.read(bytes, length) ?? length,
 			end: err => session?.end(err),
 		})

@@ -183,3 +183,19 @@ fn the_store_closes_what_a_database_keeps_before_its_file() {
     let expires = entry.expires_at.unwrap().duration_since(f.store.now()).unwrap();
     assert_eq!(expires, Duration::from_secs(3600), "the renewal was written before the file closed");
 }
+
+#[cfg(feature = "kv")]
+#[test]
+fn a_bucket_kept_in_a_database_commits_as_far_as_the_database_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let fast = store.database("fast").durability(crate::Durability::Os).open().unwrap();
+    let sessions = fast.bucket::<i64>("sessions").open().unwrap();
+    sessions.set("a", &1).unwrap();
+    // the bucket's rows are in the database's file, whose commits are the database's
+    let kept: i64 = fast.scalar(sql!("select count(*) from sqlite_schema where name = '_tinystore_kv_cells'")).unwrap();
+    assert_eq!(kept, 1, "kv's tables are in the database's file");
+    assert_eq!(fast.tx(|tx| tx.scalar::<i64>(sql!("pragma synchronous"))).unwrap(), 1);
+    assert_eq!(sessions.get("a").unwrap(), Some(1));
+    store.close().unwrap();
+}

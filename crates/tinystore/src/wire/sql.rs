@@ -124,6 +124,10 @@ fn open(store: &Store, handles: &Handles, asked: SqlOpen) -> Answered {
         let files = migrations.into_iter().map(|migration| (migration.name, migration.sql)).collect();
         builder = builder.migrations(Migrations::Files(files));
     }
+    if let Some(word) = asked.durability {
+        let durability = word.parse().map_err(|error: Error| error.within(format!("sql {}", asked.name)))?;
+        builder = builder.durability(durability);
+    }
     let database = builder.open()?;
     let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
     lock(&handles.open).insert(handle, database);

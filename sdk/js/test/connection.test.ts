@@ -56,7 +56,7 @@ test('a sidecar of an older release is stopped, and every client moves to the on
 				bunRuntime,
 				dir,
 				() => binary,
-				1000,
+				{ idle: 1000 },
 				() => true,
 			),
 		).connection()

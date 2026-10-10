@@ -3,12 +3,14 @@
 //! ```text
 //! tinystore serve --dir <dir> --local --log <dir>/server/serve.log [--idle 30000ms]   a sidecar
 //! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]            a private child
-//! tinystore serve <dir>                                                            a person's server
+//! tinystore serve <dir> [--durability os]                                          a person's server
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
 //! ```
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tinystore::Durability;
 
 use crate::remote::Address;
 
@@ -30,6 +32,8 @@ pub(crate) struct Serve {
     pub(crate) remote: Option<Remote>,
     /// The bytes the engines' work may hold at once.
     pub(crate) memory: Option<u64>,
+    /// How far a commit of the store's files goes; each engine's own when `None`.
+    pub(crate) durability: Option<Durability>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -54,6 +58,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let (mut stdio, mut local) = (false, false);
     let (mut log, mut idle, mut clock) = (None, None, None);
     let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
+    let mut durability = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
@@ -69,6 +74,10 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--tls-key" => key = Some(PathBuf::from(value("--tls-key")?)),
             "--tokens" => tokens = Some(PathBuf::from(value("--tokens")?)),
             "--memory" => memory = Some(size(&value("--memory")?)?),
+            "--durability" => {
+                let word = value("--durability")?;
+                durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
+            }
             flag if flag.starts_with("--") => return Err(format!("no flag {flag}")),
             _ if dir.is_none() => dir = Some(PathBuf::from(arg)),
             _ => return Err(format!("one directory, not {arg} too")),
@@ -98,7 +107,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    Ok(Serve { dir, transport, log, idle, clock, remote, memory })
+    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability })
 }
 
 fn remote(
@@ -195,6 +204,14 @@ mod tests {
 
     fn args(text: &str) -> Vec<String> {
         text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn durability_is_full_or_os_and_each_engines_own_unless_said() {
+        assert_eq!(serve(&args("d")).unwrap().durability, None);
+        assert_eq!(serve(&args("d --durability os")).unwrap().durability, Some(Durability::Os));
+        assert_eq!(serve(&args("--dir d --stdio --durability full")).unwrap().durability, Some(Durability::Full));
+        assert_eq!(serve(&args("d --durability fast")).unwrap_err(), "--durability fast: full or os");
     }
 
     #[test]
