@@ -189,6 +189,8 @@ fn a_row_reads_as_the_programs_type_and_each_value_as_it_went_in() {
     assert_eq!(status, Status::Closed, "an enum is the name of its variant");
     let bytes: Vec<u8> = db.scalar(sql!("select ?", vec![0u8, 255, 7])).unwrap();
     assert_eq!(bytes, [0, 255, 7], "a Vec<u8> is a BLOB");
+    let kind: String = db.scalar(sql!("select typeof(?)", Some(vec![0u8, 255, 7]))).unwrap();
+    assert_eq!(kind, "blob", "and so is the Vec<u8> an Option has");
     let nothing: Option<i64> = db.scalar("select max(author_id) from notes where author_id > 100").unwrap();
     assert_eq!(nothing, None, "max over no rows is NULL");
 }

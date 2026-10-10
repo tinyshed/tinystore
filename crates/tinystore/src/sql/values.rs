@@ -439,9 +439,19 @@ impl ser::Serializer for Bytes {
         Ok(ByteList(Vec::with_capacity(len.unwrap_or(0))))
     }
 
+    /// An `Option<Vec<u8>>` that has its bytes is those bytes, as it is `NULL`
+    /// when it has none.
+    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<Vec<u8>, Refusal> {
+        value.serialize(self)
+    }
+
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _: &'static str, value: &T) -> Result<Vec<u8>, Refusal> {
+        value.serialize(self)
+    }
+
     refuse! {
-        bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str none some unit unit_struct unit_variant
-        newtype_struct newtype_variant tuple tuple_struct tuple_variant map struct struct_variant
+        bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str none unit unit_struct unit_variant
+        newtype_variant tuple tuple_struct tuple_variant map struct struct_variant
     }
 }
 
