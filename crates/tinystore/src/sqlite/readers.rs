@@ -1,12 +1,21 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::{self, Thread};
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
 use super::Config;
 use super::connection::{self, Role, execute, sql_error};
 use crate::{Error, ErrorKind, Result};
+
+/// How often a reader that comes back goes to the read that has waited
+/// longest, rather than to the first thread that asks. A thread already
+/// running uses a reader at once where a woken one idles it for a wake; but
+/// left to that alone, a read woke to find its reader taken, slept again, and
+/// waited while thousands passed it.
+const FAIR_EVERY: Duration = Duration::from_millis(1);
 
 /// A file's readers: `query_only` connections opened as reads need them, up to
 /// the configured count. One stays open; the others close once unused for the
@@ -16,7 +25,6 @@ pub(crate) struct Readers {
     path: PathBuf,
     config: Arc<Config>,
     pool: Mutex<Pool>,
-    freed: Condvar,
 }
 
 #[derive(Default)]
@@ -24,9 +32,15 @@ struct Pool {
     /// The least recently used first.
     idle: Vec<Idle>,
     open: usize,
-    /// Reads waiting for a reader. A reader that comes back wakes one only
-    /// when there is one: a wake is a system call, and it was one a read.
-    waiting: usize,
+    /// Reads waiting for a reader, the longest waiting first. A reader that
+    /// comes back wakes the first only when there is one: a wake is a system
+    /// call, and it was one a read.
+    waiting: VecDeque<Waiter>,
+    /// Readers given to a waiting read, by its ticket, until it wakes to take them.
+    handed: Vec<(u64, Connection)>,
+    tickets: u64,
+    /// When a reader that comes back next goes to the longest waiting read.
+    fair_from: Option<Instant>,
     closed: bool,
 }
 
@@ -35,9 +49,14 @@ struct Idle {
     since: Instant,
 }
 
+struct Waiter {
+    ticket: u64,
+    thread: Thread,
+}
+
 impl Readers {
     pub(crate) fn new(path: PathBuf, config: Arc<Config>) -> Self {
-        Self { path, config, pool: Mutex::new(Pool::default()), freed: Condvar::new() }
+        Self { path, config, pool: Mutex::new(Pool::default()) }
     }
 
     /// Runs `read` in one read transaction, so every statement it runs sees the
@@ -70,19 +89,26 @@ impl Readers {
     /// Closes the idle readers and those in use as they come back; reads that
     /// wait for a reader fail as closed.
     pub(crate) fn close(&self) {
-        let idle = {
+        let (idle, handed, waiting) = {
             let mut pool = self.lock();
             pool.closed = true;
             let idle = std::mem::take(&mut pool.idle);
-            pool.open -= idle.len();
-            idle
+            let handed = std::mem::take(&mut pool.handed);
+            pool.open -= idle.len() + handed.len();
+            let waiting: Vec<Thread> = pool.waiting.iter().map(|waiter| waiter.thread.clone()).collect();
+            (idle, handed, waiting)
         };
-        drop(idle);
-        self.freed.notify_all();
+        drop((idle, handed));
+        waiting.iter().for_each(Thread::unpark);
     }
 
     pub(crate) fn open(&self) -> usize {
         self.lock().open
+    }
+
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> usize {
+        self.lock().waiting.len()
     }
 
     fn lease(&self) -> Result<Lease<'_>> {
@@ -92,29 +118,40 @@ impl Readers {
 
     fn take(&self) -> Result<Connection> {
         let deadline = Instant::now() + self.config.reader_patience;
+        let mut ticket = None;
         let mut pool = self.lock();
         loop {
+            if let Some(connection) = ticket.and_then(|ticket| pool.handed_to(ticket)) {
+                return Ok(connection);
+            }
             if pool.closed {
+                pool.leave(ticket);
                 return Err(Error::closed(format!("{}: a read", self.path.display())));
             }
             if let Some(idle) = pool.idle.pop() {
+                pool.leave(ticket);
                 return Ok(idle.connection);
             }
             if pool.open < self.config.readers {
+                pool.leave(ticket);
                 pool.open += 1;
                 drop(pool);
                 return self.open_one();
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                pool.leave(ticket);
                 return Err(Error::new(
                     ErrorKind::Unavailable,
                     format!("{}: all {} readers are busy", self.path.display(), self.config.readers),
                 ));
             }
-            pool.waiting += 1;
-            pool = self.freed.wait_timeout(pool, left).unwrap_or_else(PoisonError::into_inner).0;
-            pool.waiting -= 1;
+            if ticket.is_none() {
+                ticket = Some(pool.queue());
+            }
+            drop(pool);
+            thread::park_timeout(left);
+            pool = self.lock();
         }
     }
 
@@ -130,26 +167,60 @@ impl Readers {
             drop(connection);
             return;
         }
-        pool.idle.push(Idle { connection, since: Instant::now() });
-        let wake = pool.waiting > 0;
+        let wake = pool.give(connection);
         drop(pool);
-        if wake {
-            self.freed.notify_one();
+        if let Some(thread) = wake {
+            thread.unpark();
         }
     }
 
     fn discard(&self) {
         let mut pool = self.lock();
         pool.open -= 1;
-        let wake = pool.waiting > 0;
+        let wake = pool.waiting.front().map(|waiter| waiter.thread.clone());
         drop(pool);
-        if wake {
-            self.freed.notify_one();
+        if let Some(thread) = wake {
+            thread.unpark();
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, Pool> {
         self.pool.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Pool {
+    /// Takes a reader back: to the longest waiting read once a fair turn is
+    /// due, otherwise to the idle, waking that read to try for it. Says whom
+    /// to wake.
+    fn give(&mut self, connection: Connection) -> Option<Thread> {
+        let now = Instant::now();
+        let due = self.fair_from.is_none_or(|from| now >= from);
+        if due && let Some(oldest) = self.waiting.pop_front() {
+            self.fair_from = Some(now + FAIR_EVERY);
+            self.handed.push((oldest.ticket, connection));
+            return Some(oldest.thread);
+        }
+        self.idle.push(Idle { connection, since: now });
+        self.waiting.front().map(|waiter| waiter.thread.clone())
+    }
+
+    fn queue(&mut self) -> u64 {
+        let ticket = self.tickets;
+        self.tickets += 1;
+        self.waiting.push_back(Waiter { ticket, thread: thread::current() });
+        ticket
+    }
+
+    fn leave(&mut self, ticket: Option<u64>) {
+        if let Some(ticket) = ticket {
+            self.waiting.retain(|waiter| waiter.ticket != ticket);
+        }
+    }
+
+    fn handed_to(&mut self, ticket: u64) -> Option<Connection> {
+        let at = self.handed.iter().position(|(to, _)| *to == ticket)?;
+        Some(self.handed.swap_remove(at).1)
     }
 }
 

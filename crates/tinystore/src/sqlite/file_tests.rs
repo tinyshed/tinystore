@@ -1,6 +1,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -321,6 +321,47 @@ fn a_read_waits_for_a_busy_reader_and_then_gives_up() {
     release.0.send(()).unwrap();
     holder.join().unwrap().unwrap();
     file.read(|_| Ok(())).unwrap();
+}
+
+#[test]
+fn a_read_that_waited_takes_the_next_reader_before_one_that_came_after_it() {
+    let (_dir, file) = open(Config { readers: 1, ..Config::default() });
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let (reading, release) = (mpsc::channel(), mpsc::channel::<()>());
+    let holder = {
+        let (file, order) = (Arc::clone(&file), Arc::clone(&order));
+        let (started, held) = (reading.0, release.1);
+        thread::spawn(move || {
+            file.read(move |_| {
+                started.send(()).unwrap();
+                held.recv().unwrap();
+                Ok(())
+            })
+            .unwrap();
+            // straight back for another, while the read that waited sleeps
+            file.read(|_| {
+                order.lock().unwrap().push("came after");
+                Ok(())
+            })
+            .unwrap();
+        })
+    };
+    reading.1.recv().unwrap();
+    let waited = {
+        let (file, order) = (Arc::clone(&file), Arc::clone(&order));
+        thread::spawn(move || {
+            file.read(|_| {
+                order.lock().unwrap().push("waited");
+                Ok(())
+            })
+            .unwrap();
+        })
+    };
+    wait_until(|| file.readers_waiting() == 1);
+    release.0.send(()).unwrap();
+    holder.join().unwrap();
+    waited.join().unwrap();
+    assert_eq!(*order.lock().unwrap(), ["waited", "came after"]);
 }
 
 const STEP_ONE: Migration = Migration::of(1, "0001_a.sql", "create table a (x integer)");

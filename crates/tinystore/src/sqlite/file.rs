@@ -217,6 +217,11 @@ impl File {
         self.readers.open()
     }
 
+    #[cfg(test)]
+    pub(crate) fn readers_waiting(&self) -> usize {
+        self.readers.waiting()
+    }
+
     pub(crate) fn commits(&self) -> u64 {
         self.group.commits()
     }
