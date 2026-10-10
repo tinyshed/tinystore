@@ -636,16 +636,16 @@ was applied`.
 
 ## Bounds
 
-| What                                 | Bound                                     |
-|--------------------------------------|-------------------------------------------|
-| a database's name                    | `[a-z0-9][a-z0-9_-]{0,63}`                |
-| rows `all` holds                     | 64 MiB of values, or the store's memory   |
-| an `each` snapshot                   | 5 seconds                                 |
-| a transaction                        | 5 seconds                                 |
-| writes in one shared commit          | 1,024, or 8 MiB                           |
-| a shared commit's hold on the writer | 10 seconds                                |
-| readers                              | 8, closed after a minute unused but one   |
-| statements compiled a connection     | 128, the least recently used closed first |
+| What                                 | Bound                                                          |
+|--------------------------------------|----------------------------------------------------------------|
+| a database's name                    | `[a-z0-9][a-z0-9_-]{0,63}`                                     |
+| rows `all` holds                     | 64 MiB of values, or the store's memory                        |
+| an `each` snapshot                   | 5 seconds                                                      |
+| a transaction                        | 5 seconds                                                      |
+| writes in one shared commit          | 1,024, or 8 MiB                                                |
+| a shared commit's hold on the writer | 10 seconds                                                     |
+| readers                              | one a processor, 4 to 16, closed after a minute unused but one |
+| statements compiled a connection     | 128, the least recently used closed first                      |
 
 A call's rows hold the store's memory, `memory` of the store's options, while
 the call holds them: until `all` has read them as the program's values, and

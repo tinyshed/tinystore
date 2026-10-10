@@ -29,7 +29,7 @@ impl Default for Config {
             durability: Durability::Full,
             page_size: 4096,
             cache_kib: 1024,
-            readers: 4,
+            readers: readers_of_this_machine(),
             reader_idle: Duration::from_secs(60),
             reader_patience: Duration::from_secs(10),
             statements: 32,
@@ -37,6 +37,18 @@ impl Default for Config {
             group: GroupLimits::default(),
         }
     }
+}
+
+/// The readers a file opens at most: one a processor, four to sixteen.
+///
+/// A caller that finds every reader taken sleeps until one comes back, and
+/// that wake costs several reads: with 4 readers, 64 threads read a third as
+/// many keys a second as 4 threads did, and with 8 readers 16 threads read
+/// 0.6 of what 8 did (research rust-slice-2026-10-10). A reader opens when a
+/// read needs it and closes a minute unused, so the bound costs nothing until
+/// that many threads read at once.
+fn readers_of_this_machine() -> usize {
+    std::thread::available_parallelism().map_or(4, std::num::NonZero::get).clamp(4, 16)
 }
 
 /// How far a commit goes before it returns.

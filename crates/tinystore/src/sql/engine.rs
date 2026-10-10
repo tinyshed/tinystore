@@ -125,11 +125,10 @@ impl Base {
     }
 }
 
-/// A database's connections: eight readers, which in the Go engine's round
-/// served as many point reads as four on Windows and 15 to 26 % more in a
-/// Linux container, and room for an application's statements.
+/// A database's connections: every file's, with room for an application's
+/// statements.
 fn config() -> Config {
-    Config { readers: 8, statements: 128, ..Config::default() }
+    Config { statements: 128, ..Config::default() }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
