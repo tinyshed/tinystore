@@ -87,6 +87,44 @@ fn writes_from_many_threads_share_their_commits() {
 }
 
 #[test]
+fn a_commit_gathers_the_write_that_waited_and_the_one_its_last_answered() {
+    // a quarter of the first commit's 400 ms, so that a loaded machine has
+    // the time to wake the answered caller
+    let slow = GroupLimits { gather: Duration::from_secs(1), ..GroupLimits::default() };
+    let (_dir, file) = open(Config { group: slow, ..Config::default() });
+    let before = file.commits();
+    let (entered, enter) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let first = {
+        let file = Arc::clone(&file);
+        thread::spawn(move || {
+            file.write(1, move |tx| {
+                entered.send(()).unwrap();
+                released.recv().unwrap();
+                thread::sleep(Duration::from_millis(400));
+                tx.execute("insert into t (v) values ('first')", [])
+                    .map(drop)
+                    .map_err(|error| sql_error("insert", error))
+            })
+            .unwrap();
+            // answered, it writes again at once, as a caller in a loop does
+            insert(&file, "first again").unwrap();
+        })
+    };
+    enter.recv().unwrap();
+    let second = {
+        let file = Arc::clone(&file);
+        thread::spawn(move || insert(&file, "second").unwrap())
+    };
+    wait_until(|| file.group.waiting() == 1);
+    release.send(()).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(count(&file), 3);
+    assert_eq!(file.commits() - before, 2, "the second commit waited for the first one's caller");
+}
+
+#[test]
 fn a_failing_write_rolls_back_alone() {
     let (_dir, file) = open(Config::default());
     insert(&file, "taken").unwrap();
@@ -123,7 +161,7 @@ fn a_panicking_write_fails_alone_and_the_writer_goes_on() {
 
 #[test]
 fn a_write_heavier_than_the_group_commits_alone() {
-    let config = Config { group: GroupLimits { writes: 1024, bytes: 100 }, ..Config::default() };
+    let config = Config { group: GroupLimits { bytes: 100, ..GroupLimits::default() }, ..Config::default() };
     let (_dir, file) = open(config);
     let before = file.commits();
     let heavy = |value: &'static str| -> Call<i64> {

@@ -69,10 +69,12 @@ pub(crate) enum Durability {
 pub(crate) struct GroupLimits {
     pub(crate) writes: usize,
     pub(crate) bytes: usize,
+    /// The longest a commit waits for the writes it expects.
+    pub(crate) gather: Duration,
 }
 
 impl Default for GroupLimits {
     fn default() -> Self {
-        Self { writes: 1024, bytes: 8 << 20 }
+        Self { writes: 1024, bytes: 8 << 20, gather: Duration::from_millis(2) }
     }
 }

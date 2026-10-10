@@ -15,15 +15,17 @@ pub(crate) type Work = Box<dyn FnOnce(&Tx<'_>) -> Result<()> + Send>;
 /// What a submitted write calls with its answer, on the thread that commits it.
 pub(crate) type Done = Box<dyn FnOnce(Result<()>) + Send>;
 
-/// A leader gathers for at most a quarter of the last commit, and never more
-/// than `GATHER_MOST`.
+/// A leader gathers for at most a quarter of the last commit, counted from
+/// its end, and never more than the limits' `gather`.
 ///
 /// The callers a commit answers need tens of microseconds to wake and write
 /// again, and a leader that took the queue at once left them all to the next
-/// commit: in Go, 64 writers made groups of about 32, half the writes a sync
-/// could carry (research compare-2026-09-30).
+/// commit. 64 writers then made groups of 32 for good: the half that had
+/// waited while the other half's commit ran, each half a commit, half the
+/// writes a sync could carry (research rust-slice-2026-10-10). So a leader
+/// waits for both halves, the writes that waited when the last commit ended
+/// and the ones that commit answered.
 const GATHER_SHARE: u32 = 4;
-const GATHER_MOST: Duration = Duration::from_millis(2);
 
 pub(crate) const BEGIN: &str = "begin immediate";
 pub(crate) const COMMIT: &str = "commit";
@@ -57,9 +59,12 @@ struct Queue {
     waiting: VecDeque<Arc<Write>>,
     leading: bool,
     closed: bool,
-    /// Writes the last commit answered, whose callers may be about to write again.
-    last_answered: usize,
+    /// The writes the next commit may expect: those that waited when the last
+    /// commit ended, and the ones it answered, whose callers may be about to
+    /// write again.
+    expected: usize,
     last_held: Duration,
+    last_ended: Option<Instant>,
 }
 
 /// One caller's write, from its queueing to its answer.
@@ -172,13 +177,16 @@ impl Group {
         }
     }
 
-    /// Waits a little for the writers the last commit answered, then takes a
-    /// batch from the front of the queue.
+    /// Waits a little for the writes the last commit lets it expect, then
+    /// takes a batch from the front of the queue. A leader that comes long
+    /// after that commit waits for nothing: its callers are not coming back
+    /// together.
     fn gather(&self) -> Vec<Arc<Write>> {
         let mut queue = self.lock();
-        let wanted = queue.last_answered;
-        let deadline = Instant::now() + (queue.last_held / GATHER_SHARE).min(GATHER_MOST);
-        while wanted > 1 && queue.waiting.len() < wanted && !queue.closed {
+        let wanted = queue.expected.min(self.limits.writes);
+        let window = (queue.last_held / GATHER_SHARE).min(self.limits.gather);
+        let deadline = queue.last_ended.map_or_else(Instant::now, |ended| ended + window);
+        while queue.waiting.len() < wanted && !queue.closed {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -206,8 +214,9 @@ impl Group {
     /// whether this thread leads on because that write was submitted.
     fn hand_off(&self, answered: usize, held: Duration) -> bool {
         let mut queue = self.lock();
-        queue.last_answered = answered;
+        queue.expected = queue.waiting.len() + answered;
         queue.last_held = held;
+        queue.last_ended = Some(Instant::now());
         match queue.waiting.front() {
             Some(next) if next.is_submitted() => true,
             Some(next) => {
