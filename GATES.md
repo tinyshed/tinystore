@@ -479,6 +479,7 @@ module defines.
 - a write sent through a query holds no thread of the session until its commit — `writes_through_a_query_in_flight_hold_no_thread_of_the_session` in `wire::sql`
 - reads sent together are each answered, the crowd of them on the store's workers and the last where they are read — `reads_sent_together_are_each_answered_though_workers_take_the_crowd` in `pipe`, `a_reader_says_how_many_frames_wait_whole` in `wire::frame`
 - jobs queued for sleeping workers wake them one through another, and start no thread more — `jobs_queued_for_sleeping_threads_wake_them_one_through_another` in `wire::workers`
+- a worker lingers for the next job while jobs come close together, which then wakes nobody and starts no thread, and sleeps once none comes within the linger — `a_thread_that_lingers_takes_the_next_job_with_no_wake_and_no_thread_more`, `a_thread_sleeps_once_no_job_comes_within_the_linger` in `wire::workers`
 - answers queued during a write leave in the next — `TestQueuedAnswersShareAWrite` in `server/internal/flow`
 - a connection grant wakes every sender whose body fits — `TestAGrantWakesEverySenderWhoseBodyFits` in `server/internal/flow`
 - a Go test client's upload stops with its stream or connection — `TestAFinalResponseStopsAnUploadWaitingForCredit`, `TestALostConnectionStopsAnUploadWaitingForCredit` in `server/internal/client`
