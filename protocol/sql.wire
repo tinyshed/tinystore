@@ -92,8 +92,8 @@ message sql.TxAnswer {
   4 body: bin?                    # what a method answered, as its own answer
 }
 
-method 0x0301 sql.open(sql.Open) -> Handle
-method 0x0302 sql.query(sql.Query) -> download sql.Rows until sql.Rows
+read method 0x0301 sql.open(sql.Open) -> Handle
+read method 0x0302 sql.query(sql.Query) -> download sql.Rows until sql.Rows
 method 0x0303 sql.exec(sql.Statement) -> sql.Done
 method 0x0304 sql.batch(sql.Batch) -> sql.Batched
 method 0x0305 sql.tx(sql.TxOpen) -> exchange sql.TxAnswer for sql.TxCall

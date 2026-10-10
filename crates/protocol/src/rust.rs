@@ -175,6 +175,30 @@ fn write_is_zero(out: &mut String, fields: &[&Field]) {
     let _ = writeln!(out, "    fn is_zero(&self) -> bool {{\n        {zero}\n    }}");
 }
 
+/// `method::reads`: the methods the schema marks `read`, an arm each behind
+/// its engine's feature, which `matches!` cannot gate.
+fn write_reads(out: &mut String, schema: &Schema) {
+    out.push_str(
+        "
+    /// Whether a method only reads, so that a connection admitted to read only
+    /// may call it; a method the schema does not mark `read` writes.
+    #[allow(clippy::match_like_matches_macro, reason = \"an arm a method, behind its engine's feature\")]
+    pub(crate) fn reads(method: u16) -> bool {
+        match method {
+",
+    );
+    for method in schema.methods.iter().filter(|method| method.reads) {
+        out.push_str(&gated(&method.name, "            "));
+        let _ = writeln!(out, "            {} => true,", const_name(&method.name));
+    }
+    out.push_str(
+        "            _ => false,
+        }
+    }
+",
+    );
+}
+
 fn write_methods(out: &mut String, schema: &Schema) {
     out.push_str(
         "/// Every method's number, by its name in the schema.
@@ -188,6 +212,7 @@ fn write_methods(out: &mut String, schema: &Schema) {
         out.push_str(&gated(&method.name, "    "));
         let _ = writeln!(out, "    pub(crate) const {}: u16 = {:#06x};", const_name(&method.name), method.id);
     }
+    write_reads(out, schema);
     out.push_str(
         "}
 

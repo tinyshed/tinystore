@@ -22,6 +22,16 @@ impl Client {
         Client::over(Pipe::open(dir, &[], None).unwrap())
     }
 
+    /// A client of `store` admitted as a server admits a token of `capability`.
+    pub(crate) fn admitted(store: &crate::Store, capability: super::Capability) -> Client {
+        let admit: super::Admit = std::sync::Arc::new(move |_: Option<&str>| Some(capability));
+        let connect = super::Connect { admit: Some(admit), ..super::Connect::default() };
+        let mut client = Client::over(Pipe::connect(store, connect).unwrap());
+        let welcome = client.greet(Hello { protocol: 2, token: Some("a token".to_owned()), ..Hello::default() });
+        assert!(welcome.is_ok(), "{welcome:?}");
+        client
+    }
+
     pub(crate) fn over(pipe: Pipe) -> Client {
         Client { pipe, reader: frame::Reader::default(), early: Vec::new(), next_stream: 0 }
     }

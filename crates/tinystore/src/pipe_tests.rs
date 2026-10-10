@@ -463,3 +463,26 @@ fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_
     let unknown = Pipe::open(tempfile::tempdir().unwrap().path(), &asking("fast"), None).unwrap_err();
     assert_eq!(unknown.to_string(), "pipe: durability \"fast\": it is full or os: invalid");
 }
+
+#[test]
+fn a_read_connection_reads_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let mut owner = Client::admitted(&store, Capability::Data);
+    let handle = owner.bucket("sessions");
+    let key = KvCall { handle, key: "42".to_owned(), ..KvCall::default() };
+    let kept = KvCall { value: Some(Row::Bin(b"kept".to_vec())), ..key.clone() };
+    owner.call::<KvWritten>(method::KV_SET, &kept).unwrap();
+
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let handle = reader.bucket("sessions");
+    let entry: KvEntry = reader.call(method::KV_GET, &KvCall { handle, ..key.clone() }).unwrap();
+    assert_eq!(entry.value, Some(Row::Bin(b"kept".to_vec())));
+    let changed = KvCall { handle, value: Some(Row::Bin(b"changed".to_vec())), ..key };
+    let refused = reader.call::<KvWritten>(method::KV_SET, &changed).unwrap_err();
+    assert_eq!(refused.code, "permission", "{}", refused.message);
+    let refused = reader.call::<Empty>(method::SERVER_STOP, &Empty {}).unwrap_err();
+    assert_eq!(refused.code, "permission", "{}", refused.message);
+    let entry: KvEntry = owner.call(method::KV_GET, &KvCall { handle: 1, ..changed }).unwrap();
+    assert_eq!(entry.value, Some(Row::Bin(b"kept".to_vec())));
+}

@@ -110,17 +110,20 @@ impl Handles {
     }
 }
 
-/// Answers a call that runs to its end on this thread.
-pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8]) -> Answered {
+/// Answers a call that runs to its end on this thread; a read connection's
+/// is `read_only`.
+pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], read_only: bool) -> Answered {
     match called {
-        method::SQL_OPEN => open(store, handles, SqlOpen::decode(body)?),
+        method::SQL_OPEN => open(store, handles, SqlOpen::decode(body)?, read_only),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
 
-fn open(store: &Store, handles: &Handles, asked: SqlOpen) -> Answered {
+/// Opens a database by name, its migrations applied and checked; a read
+/// connection's applies none, and opens the file as it is.
+fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> Answered {
     let mut builder = store.database(&asked.name);
-    if let Some(migrations) = asked.migrations {
+    if let Some(migrations) = asked.migrations.filter(|_| !read_only) {
         let files = migrations.into_iter().map(|migration| (migration.name, migration.sql)).collect();
         builder = builder.migrations(Migrations::Files(files));
     }
@@ -177,6 +180,7 @@ pub(crate) fn query(
     handles: &Handles,
     body: &[u8],
     link: &Link,
+    read_only: bool,
     done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
 ) {
     let prepared = || -> Result<_, Failure> {
@@ -191,6 +195,13 @@ pub(crate) fn query(
         Err(failure) => return done(Err(failure)),
     };
     let bound = part_bound(link);
+    if read_only {
+        let rows = database
+            .read(&statement, wanted)
+            .map_err(Failure::from)
+            .and_then(|rows| rows.ok_or_else(|| Failure::permission("a read connection's SQL writes nothing")));
+        return done(rows.and_then(|rows| queried(rows, bound)));
+    }
     database.rows_then(statement, wanted, move |rows| {
         done(rows.map_err(Failure::from).and_then(|rows| queried(rows, bound)));
     });

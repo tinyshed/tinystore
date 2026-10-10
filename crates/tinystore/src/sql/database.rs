@@ -208,6 +208,25 @@ impl Database {
         self.base.file().submit(weight, write, move |rows| done(rows.map_err(describe)));
     }
 
+    /// A statement's rows from a reader alone, for a connection that may not
+    /// write: none when SQLite says the statement writes, or when it is not a
+    /// query, since SQLite counts an ATTACH, which opens a file and stays on
+    /// the shared reader, and a PRAGMA that changes the reader, as reads.
+    pub(crate) fn read(&self, statement: &Sql, wanted: Wanted) -> Result<Option<Rows>> {
+        if !is_query(statement.text()) || self.base.writes(statement.text()) {
+            return Ok(None);
+        }
+        let held = Held::of(&self.base.memory);
+        let read = self.base.file().read(|connection| run::read(connection, statement, wanted, held));
+        match read.map_err(|error| self.failed(statement, error))? {
+            Read::Rows(rows) => Ok(Some(rows)),
+            Read::Writes => {
+                self.base.remember_write(statement.text());
+                Ok(None)
+            }
+        }
+    }
+
     /// A statement's rows from a reader, or from the writer when SQLite says
     /// it writes; a statement known to write goes to the writer at once.
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
@@ -249,4 +268,27 @@ fn check_name(name: &str) -> Result<()> {
         return Ok(());
     }
     Err(Error::invalid("a database's name is a-z, 0-9, _ and -, at most 64, and starts with a letter or a digit"))
+}
+
+/// Whether a statement is a query: its first word, past spaces and comments,
+/// one of those that only answer rows.
+///
+/// ```text
+/// "/* hourly */ with t as (select 1) select * from t"  → a query
+/// "attach database 'other.db' as other"                 → not one
+/// ```
+pub(super) fn is_query(text: &str) -> bool {
+    let mut rest = text;
+    loop {
+        rest = rest.trim_start();
+        if let Some(line) = rest.strip_prefix("--") {
+            rest = line.split_once('\n').map_or("", |(_, after)| after);
+        } else if let Some(block) = rest.strip_prefix("/*") {
+            rest = block.split_once("*/").map_or("", |(_, after)| after);
+        } else {
+            break;
+        }
+    }
+    let word: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+    ["select", "with", "values", "explain"].iter().any(|query| word.eq_ignore_ascii_case(query))
 }

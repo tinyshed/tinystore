@@ -164,33 +164,33 @@ message kv.TxResults {
   1 outcomes: [kv.Outcome]
 }
 
-method 0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
-method 0x0102 kv.get(kv.Call) -> kv.Entry
-method 0x0103 kv.has(kv.Call) -> kv.Found
+read method 0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
+read method 0x0102 kv.get(kv.Call) -> kv.Entry
+read method 0x0103 kv.has(kv.Call) -> kv.Found
 method 0x0104 kv.set(kv.Call) -> kv.Written
 method 0x0105 kv.create(kv.Call) -> kv.Written
 method 0x0106 kv.take(kv.Call) -> kv.Entry
 method 0x0107 kv.delete(kv.Call) -> kv.Found
 method 0x0108 kv.expire(kv.Call) -> kv.Found
 method 0x0109 kv.clear(kv.Branch) -> Empty
-method 0x010a kv.list(kv.List) -> kv.Page
+read method 0x010a kv.list(kv.List) -> kv.Page
 
-method 0x0110 kv.counters.open(kv.CountersOpen) -> Handle
+read method 0x0110 kv.counters.open(kv.CountersOpen) -> Handle
 method 0x0111 kv.counters.add(kv.Call) -> kv.Count
-method 0x0112 kv.counters.get(kv.Call) -> kv.Count
+read method 0x0112 kv.counters.get(kv.Call) -> kv.Count
 method 0x0113 kv.counters.delete(kv.Call) -> kv.Found
 method 0x0114 kv.counters.clear(kv.Branch) -> Empty
 
-method 0x0120 kv.rateLimit.open(kv.RateLimitOpen) -> Handle
-method 0x0121 kv.quota.open(kv.QuotaOpen) -> Handle
+read method 0x0120 kv.rateLimit.open(kv.RateLimitOpen) -> Handle
+read method 0x0121 kv.quota.open(kv.QuotaOpen) -> Handle
 method 0x0122 kv.allow(kv.Call) -> kv.Allowance
-method 0x0123 kv.peek(kv.Call) -> kv.Allowance
+read method 0x0123 kv.peek(kv.Call) -> kv.Allowance
 method 0x0124 kv.reset(kv.Call) -> Empty
 method 0x0125 kv.refund(kv.Call) -> Empty
 
-method 0x0130 kv.once.open(kv.OnceOpen) -> Handle
+read method 0x0130 kv.once.open(kv.OnceOpen) -> Handle
 method 0x0131 kv.once.run(kv.Call) -> handover kv.Answer
-method 0x0132 kv.once.get(kv.Call) -> kv.Answer
+read method 0x0132 kv.once.get(kv.Call) -> kv.Answer
 method 0x0133 kv.once.delete(kv.Call) -> kv.Found
 
 method 0x0140 kv.tx(kv.Tx) -> kv.TxResults

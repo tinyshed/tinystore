@@ -102,9 +102,10 @@
     "method": {
       "patterns": [
         {
-          "match": "^\\s*(method)\\b",
+          "match": "^\\s*(?:(read)\\s+)?(method)\\b",
           "captures": {
-            "1": { "name": "keyword.declaration.method.wire" }
+            "1": { "name": "storage.modifier.read.wire" },
+            "2": { "name": "keyword.declaration.method.wire" }
           }
         },
         {

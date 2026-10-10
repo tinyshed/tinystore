@@ -67,11 +67,16 @@ message kv.Call {
   7 ifVersion: bin?
 }
 
-method 0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
-method 0x0102 kv.get(kv.Call) -> kv.Entry
-method 0x010a kv.list(kv.List) -> kv.Page
+read method 0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
+read method 0x0102 kv.get(kv.Call) -> kv.Entry
+read method 0x010a kv.list(kv.List) -> kv.Page
 method 0x0131 kv.once.run(kv.Call) -> handover kv.Answer
 ```
+
+A method marked `read` writes nothing a client wrote, so that a connection
+a server admits to read only may call it; the generator writes them into
+`method::reads`, and a method left unmarked writes, so that a forgotten mark
+refuses rather than lets a write through.
 
 | Type                                         | On the wire                               | Rust                                             | TypeScript                                                        |
 |----------------------------------------------|-------------------------------------------|--------------------------------------------------|-------------------------------------------------------------------|

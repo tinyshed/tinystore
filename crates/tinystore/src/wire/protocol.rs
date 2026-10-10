@@ -5064,6 +5064,61 @@ pub(crate) mod method {
     pub(crate) const SQL_BATCH: u16 = 0x0304;
     #[cfg(feature = "sql")]
     pub(crate) const SQL_TX: u16 = 0x0305;
+
+    /// Whether a method only reads, so that a connection admitted to read only
+    /// may call it; a method the schema does not mark `read` writes.
+    #[allow(clippy::match_like_matches_macro, reason = "an arm a method, behind its engine's feature")]
+    pub(crate) fn reads(method: u16) -> bool {
+        match method {
+            #[cfg(feature = "blobs")]
+            BLOBS_OPEN => true,
+            #[cfg(feature = "blobs")]
+            BLOBS_GET => true,
+            #[cfg(feature = "blobs")]
+            BLOBS_HEAD => true,
+            #[cfg(feature = "blobs")]
+            BLOBS_LIST => true,
+            #[cfg(feature = "blobs")]
+            BLOBS_USAGE => true,
+            #[cfg(feature = "blobs")]
+            BLOBS_READ => true,
+            #[cfg(feature = "jobs")]
+            JOBS_QUEUE_OPEN => true,
+            #[cfg(feature = "jobs")]
+            JOBS_GET => true,
+            #[cfg(feature = "jobs")]
+            JOBS_LIST => true,
+            #[cfg(feature = "jobs")]
+            JOBS_WATCH => true,
+            #[cfg(feature = "kv")]
+            KV_BUCKET_OPEN => true,
+            #[cfg(feature = "kv")]
+            KV_GET => true,
+            #[cfg(feature = "kv")]
+            KV_HAS => true,
+            #[cfg(feature = "kv")]
+            KV_LIST => true,
+            #[cfg(feature = "kv")]
+            KV_COUNTERS_OPEN => true,
+            #[cfg(feature = "kv")]
+            KV_COUNTERS_GET => true,
+            #[cfg(feature = "kv")]
+            KV_RATE_LIMIT_OPEN => true,
+            #[cfg(feature = "kv")]
+            KV_QUOTA_OPEN => true,
+            #[cfg(feature = "kv")]
+            KV_PEEK => true,
+            #[cfg(feature = "kv")]
+            KV_ONCE_OPEN => true,
+            #[cfg(feature = "kv")]
+            KV_ONCE_GET => true,
+            #[cfg(feature = "sql")]
+            SQL_OPEN => true,
+            #[cfg(feature = "sql")]
+            SQL_QUERY => true,
+            _ => false,
+        }
+    }
 }
 
 /// Every method, its name and number, for the test that the server answers each.

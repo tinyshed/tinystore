@@ -176,16 +176,16 @@ message jobs.TxResults {
   1 outcomes: [jobs.Changed]
 }
 
-method 0x0201 jobs.queue.open(jobs.QueueOpen) -> Handle
+read method 0x0201 jobs.queue.open(jobs.QueueOpen) -> Handle
 method 0x0202 jobs.schedule.open(jobs.ScheduleOpen) -> Handle
 method 0x0203 jobs.add(jobs.Call) -> jobs.Changed
 method 0x0204 jobs.set(jobs.Call) -> Empty
 method 0x0205 jobs.update(jobs.Call) -> jobs.Changed
 method 0x0206 jobs.cancel(jobs.Id) -> jobs.Changed
-method 0x0207 jobs.get(jobs.Id) -> jobs.Job
-method 0x0208 jobs.list(jobs.List) -> jobs.Page
+read method 0x0207 jobs.get(jobs.Id) -> jobs.Job
+read method 0x0208 jobs.list(jobs.List) -> jobs.Page
 method 0x0209 jobs.work(jobs.Work) -> exchange jobs.Held for jobs.Answer
 method 0x020a jobs.step(jobs.Step) -> jobs.Kept
 method 0x020b jobs.keep(jobs.Step) -> Empty
-method 0x020c jobs.watch(jobs.Id) -> download jobs.Job until Empty
+read method 0x020c jobs.watch(jobs.Id) -> download jobs.Job until Empty
 method 0x020d jobs.tx(jobs.Tx) -> jobs.TxResults

@@ -42,6 +42,9 @@ pub enum Capability {
     Admin,
     /// Reads and writes.
     Data,
+    /// Reads only: a method the schema does not mark `read` is refused, and
+    /// its SQL runs on a reader and applies no migration.
+    Read,
 }
 
 /// What a connection to a store needs of its host beyond the frames.

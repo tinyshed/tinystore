@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -83,6 +83,8 @@ struct Shared {
     in_flight: AtomicUsize,
     /// Point reads the workers have of this connection, not yet answered.
     reads_away: AtomicUsize,
+    /// The connection's HELLO admitted it to read only.
+    read_only: AtomicBool,
     ready: Condvar,
     connect: Connect,
 }
@@ -176,6 +178,7 @@ impl Session {
             asked: AtomicU64::new(0),
             in_flight: AtomicUsize::new(0),
             reads_away: AtomicUsize::new(0),
+            read_only: AtomicBool::new(false),
             ready: Condvar::new(),
             connect,
         };
@@ -347,6 +350,7 @@ impl Shared {
             },
         };
         input.capability = Some(capability);
+        self.read_only.store(capability == Capability::Read, Ordering::Relaxed);
         let client_most = hello.max_body.unwrap_or(MAX_BODY);
         let stream_credit = hello.stream_credit.unwrap_or(CLIENT_STREAM_CREDIT);
         let max_body = MAX_BODY.min(client_most).min(stream_credit);
@@ -360,6 +364,7 @@ impl Shared {
         let capability = match capability {
             Capability::Admin => "admin",
             Capability::Data => "data",
+            Capability::Read => "read",
         };
         let welcome = Welcome {
             protocol: PROTOCOL,
@@ -394,6 +399,9 @@ impl Shared {
                 return self.answer(stream, Err(Failure::permission("the server's own calls are an admin's")));
             }
             return self.server_call(stream, method, &body);
+        }
+        if input.capability == Some(Capability::Read) && !method::reads(method) {
+            return self.answer(stream, Err(Failure::permission("a read connection writes nothing")));
         }
         // A point read is answered where it is read, in less time than
         // another thread takes to wake, while its host waits for nothing
@@ -533,7 +541,7 @@ impl Shared {
                 Err(failure) => answering.answer(stream, Err(failure)),
             };
             let queued = guarded(|| {
-                sql::query(&shared.sql, &body, &link, done);
+                sql::query(&shared.sql, &body, &link, shared.read_only.load(Ordering::Relaxed), done);
                 Ok(())
             });
             if let Err(failure) = queued {
@@ -872,7 +880,7 @@ impl Shared {
             #[cfg(feature = "jobs")]
             0x02 => jobs::call(&self.store, &self.jobs, &lent, method, body, max_body),
             #[cfg(feature = "sql")]
-            0x03 => sql::call(&self.store, &self.sql, method, body),
+            0x03 => sql::call(&self.store, &self.sql, method, body, self.read_only.load(Ordering::Relaxed)),
             #[cfg(feature = "blobs")]
             0x04 => blobs::call(&self.store, &self.blobs, method, body, max_body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),

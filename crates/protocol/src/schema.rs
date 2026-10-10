@@ -73,6 +73,9 @@ pub(crate) struct Method {
     pub(crate) name: String,
     pub(crate) request: String,
     pub(crate) answer: Answer,
+    /// Marked `read`: it writes nothing a client wrote, so that a connection
+    /// admitted to read only may call it.
+    pub(crate) reads: bool,
 }
 
 /// What a method sends back, by the shape of its stream.
@@ -135,6 +138,11 @@ impl Schema {
                         "}" => self.messages.push(message),
                         other => return Err(refused(line, format!("fields on a message's first line: {other}"))),
                     }
+                }
+                _ if code.starts_with("read method ") => {
+                    let read = method(&code["read ".len()..]).map_err(|why| refused(line, why))?;
+                    self.methods.push(Method { reads: true, ..read });
+                    doc.clear();
                 }
                 _ if code.starts_with("method ") => {
                     self.methods.push(method(code).map_err(|why| refused(line, why))?);
@@ -329,7 +337,7 @@ fn method(code: &str) -> Result<Method, String> {
         ["exchange", out, "for", back] => Answer::Exchange { out: (*out).to_owned(), back: (*back).to_owned() },
         _ => return Err(format!("an answer that is a message, a download, a handover or an exchange: {answer}")),
     };
-    Ok(Method { id, name: name.trim().to_owned(), request: request.trim().to_owned(), answer })
+    Ok(Method { id, name: name.trim().to_owned(), request: request.trim().to_owned(), answer, reads: false })
 }
 
 #[cfg(test)]

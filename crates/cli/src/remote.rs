@@ -90,7 +90,8 @@ fn token(line: &str) -> Result<(Capability, String), String> {
     let capability = match capability {
         "admin" => Capability::Admin,
         "data" => Capability::Data,
-        other => return Err(format!("a capability is admin or data, not {other}")),
+        "read" => Capability::Read,
+        other => return Err(format!("a capability is admin, data or read, not {other}")),
     };
     let base64url = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
     if token.len() != TOKEN_TEXT || !token.bytes().all(base64url) {
@@ -165,13 +166,16 @@ mod tests {
 
     const ADMIN: &str = "4dGQ6tR2kq0SxVZpLWn8E1yHf7cJmB3aUoN9Tz5Ki0E";
     const DATA: &str = "Yq8wHn2xLz5Rb7Tc0Vm3Kj6Fd9Gs1Ap4Ue8Wo2Ni5Qt";
+    const READ: &str = "9xK2pQ7vLm4Ns8Bt1Cw5Dz3Fy6Gh0Jk2Al9Ro4Su7Ve";
 
     #[test]
     fn a_token_admits_its_capability_and_nothing_else_admits() {
-        let tokens = Tokens::parse(&format!("# who may connect\nadmin {ADMIN}\n\ndata  {DATA}\n")).unwrap();
+        let tokens =
+            Tokens::parse(&format!("# who may connect\nadmin {ADMIN}\n\ndata  {DATA}\nread  {READ}\n")).unwrap();
         let admit = tokens.admit();
         assert_eq!(admit(Some(ADMIN)), Some(Capability::Admin));
         assert_eq!(admit(Some(DATA)), Some(Capability::Data));
+        assert_eq!(admit(Some(READ)), Some(Capability::Read));
         assert_eq!(admit(Some(&ADMIN[1..])), None);
         assert_eq!(admit(None), None);
     }

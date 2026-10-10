@@ -539,3 +539,15 @@ fn a_database_commits_as_far_as_it_says_or_as_its_store_does() {
     assert_eq!(synchronous(&store.database("cache").durability(Os).open().unwrap()), 1);
     store.close().unwrap();
 }
+
+#[test]
+fn a_query_is_known_by_its_first_word_past_spaces_and_comments() {
+    for query in
+        ["select 1", "  WITH t AS (select 1) select * from t", "-- why\n/* how */ values (1)", "explain select 1"]
+    {
+        assert!(super::database::is_query(query), "{query}");
+    }
+    for other in ["attach database 'x.db' as x", "pragma query_only = 0", "/* select */ delete from t", "-- select"] {
+        assert!(!super::database::is_query(other), "{other}");
+    }
+}

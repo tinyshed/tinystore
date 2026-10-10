@@ -248,6 +248,14 @@ let receipt = charges.run(&request_id, || pay.charge(&order, &request_id))?;
   not be charged again is an answer, not an error.
 - In Rust the function's error is the caller's own type, which a `tinystore`
   error converts into: `run::<E: From<tinystore::Error>>`.
+- A memo is `once` with a short `keep`: the callers that ask for a key at
+  once, in any process, share one run of the function, and the next
+  `keep` answer from what it kept.
+
+```ts
+const panels = store.once<Panel[]>('panels', { keep: '30s' })
+const data = await panels.run(`dashboard:${id}`, () => computePanels(id))
+```
 
 ## Transactions
 

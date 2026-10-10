@@ -502,6 +502,8 @@ module defines.
 - a private child answers its parent and leaves when its stdin ends — `a_private_child_answers_hello_and_leaves_when_its_stdin_ends` in `crates/cli/tests/serve.rs`
 - a local server publishes `SERVE`, proves itself, holds its directory against a second, and stops on `server.stop`, `SERVE` gone before the directory is let go — `a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_meanwhile` in `crates/cli/tests/serve.rs`
 - a stop runs once its answer has left, a private clock moves only forward, and an embedded store refuses both — `a_store_the_program_holds_answers_its_servers_calls`, `an_embedded_store_refuses_to_stop_and_has_no_clock_to_move` in `pipe::tests`
+- a read token reads and writes nothing: a method the schema does not mark `read` is `permission` — `a_read_connection_reads_and_writes_nothing` in `pipe::tests`, `a_token_admits_its_capability_and_nothing_else_admits` in `crates/cli/src/remote.rs`
+- a read connection's SQL runs on a reader and is a query: a write, an `ATTACH` or a `PRAGMA` is `permission` and makes no file, and its open applies no migration — `a_read_connection_queries_on_a_reader_and_changes_nothing` in `wire::sql`, `a_query_is_known_by_its_first_word_past_spaces_and_comments` in `sql::tests`
 - a challenge of another length than 16 bytes is a `HELLO` the server cannot take — `a_challenge_of_another_length_is_a_hello_the_server_cannot_take` in `pipe::tests`
 - the Bun SDK's kv answers alike through the core in its process, a private child and a sidecar — `sdk/js/test/kv.test.ts`, every test through each
 - a remote connection needs its token, and may do what its line says — `a_remote_client_is_admitted_by_its_token_and_may_do_what_its_line_says` in `crates/cli/tests/serve.rs`

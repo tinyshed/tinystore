@@ -64,13 +64,20 @@ start on sqldb, kv and jobs.
 Decided or built for the Go engines, and in no book or phase of this plan
 yet; each is decided again, in its order, once blobs are on the wire:
 
-- C9: values sealed beside the store, such as a source's password.
-- B10: a memo, one computation a key for the callers that ask at once.
-- C2: a token that reads and never writes, for viewers and agents.
-- C8: an SQL answer as typed columns rather than rows.
+- C9: values kept encrypted beside the store, such as a source's password:
+  `{ encrypted: true }` on a bucket, its key `<dir>/secret.key` made at the
+  first write or given at open and to `serve`, a `read` token never opening
+  its values; one key first, its id in every value so that named keys and
+  rotation can follow.
+- C8: an SQL answer as typed columns rather than rows, `db.columns`, once a
+  round measures it against `db.all`: a null mask beside the values, and
+  integers as numbers or bigints as the call says.
 - B2: histograms and exact quantiles; B5: aggregates over records; B6: the
   names a store holds, for a query builder; B11: a live tail of records — for
   the records and metrics books, before phase 3.
+
+Closed: C2, the `read` token; B10, a memo, which `once` with a short `keep`
+is, across processes too.
 
 ## 3. records and metrics
 

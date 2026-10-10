@@ -379,3 +379,34 @@ fn a_client_says_how_far_a_databases_commits_go_and_one_open_keeps_what_it_has()
     let refused = client.call::<Handle>(method::SQL_OPEN, &unknown).unwrap_err();
     assert_eq!(refused.message, "sql other: durability \"fast\": it is full or os: invalid");
 }
+
+#[test]
+fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let mut owner = Client::admitted(&store, crate::pipe::Capability::Data);
+    let handle = open(&mut owner);
+    insert(&mut owner, handle, "n1", "kept");
+
+    let mut reader = Client::admitted(&store, crate::pipe::Capability::Read);
+    let read = open(&mut reader);
+    let rows = query(&mut reader, read, "select title from notes", "all");
+    assert_eq!(rows.rows.len(), 1);
+    let copy = dir.path().join("copy.db");
+    let other = dir.path().join("other.db");
+    let writes = [
+        "delete from notes returning id".to_owned(),
+        format!("vacuum into '{}'", copy.display()),
+        format!("attach database '{}' as other", other.display()),
+        "pragma query_only = 0".to_owned(),
+    ];
+    for text in writes {
+        let asked = SqlQuery { handle: read, text: text.clone(), values: Vec::new(), want: "all".to_owned() };
+        let refused = reader.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
+        assert_eq!(refused.code, "permission", "{text}: {}", refused.message);
+    }
+    let statement = SqlStatement { handle: read, text: "delete from notes".to_owned(), values: Vec::new() };
+    assert_eq!(reader.call::<SqlDone>(method::SQL_EXEC, &statement).unwrap_err().code, "permission");
+    assert_eq!(query(&mut owner, handle, "select title from notes", "all").rows.len(), 1);
+    assert!(!copy.exists() && !other.exists(), "no file was made");
+}

@@ -113,7 +113,7 @@ credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
 | 1   | protocol          | uint         | the one this connection speaks                                                                                                         |
 | 2   | server            | str          | its version                                                                                                                            |
 | 3   | instance          | bin          | 16 random bytes a start                                                                                                                |
-| 4   | capability        | str          | `admin` or `data`                                                                                                                      |
+| 4   | capability        | str          | `admin`, `data` or `read`                                                                                                              |
 | 5   | max body          | uint         | the largest body either side sends                                                                                                     |
 | 6   | in flight         | uint         | the streams a client may have open at once                                                                                             |
 | 7   | connection credit | uint         | the bytes of `REQUEST` and `DATA` bodies a client may send before credit comes back; at least the max body                             |
@@ -214,6 +214,15 @@ Where a local server listens:
   instance of its name with a DACL naming its owner alone, which refuses
   remote clients. No local endpoint takes a token: its permission is the file
   system's, and a local connection is `admin`.
+
+A remote server's tokens file gives each token one capability: `admin`
+may do anything, `data` reads and writes, and `read` reads only. A `read`
+connection may call only the methods the schema marks `read`, every other
+one being `permission`; its SQL runs on a reader and is a query, a
+statement that writes, attaches a file or sets a pragma being `permission`
+too; and its `sql.open` applies no migration. Its opens may still name a
+bucket, a queue or files the store did not have, as any first open does,
+and its reads of an `idle` key renew it, as any read does.
 
 ## Streams
 
