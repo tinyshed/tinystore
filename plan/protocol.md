@@ -92,7 +92,10 @@ to the client and its answer back, `exchange T for U` for items both ways, a
 worker's jobs out and its answers back, and `download T until U` for items as
 `DATA` and a trailer, which records and blobs will use. `Failure` is the
 schema's own message, the one a stream that failed ends with, so that no
-schema leaves it out.
+schema leaves it out. Its `what` holds the facts a program acts on, by name:
+a limit's `limit`, `wanted` and `bound`; a broken constraint's `constraint`,
+`table`, `columns` (as SQLite writes them, `org, email`) and `name`; the
+`check` or `write` a kv transaction failed at.
 
 ## The generator
 

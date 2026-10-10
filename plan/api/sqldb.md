@@ -203,9 +203,22 @@ db.batch([
   [transaction](#transactions), which holds the writer and pays a sync of its
   own: another verb, since it costs another thing.
 - A unique or primary key already held is `conflict`; another constraint, a
-  check, a foreign key, a `not null`, is `invalid`. Either says which, in
-  `constraint`: `'unique'`, `'primaryKey'`, `'foreignKey'`, `'check'` or
-  `'notNull'`, with the table and the constraint when SQLite names them.
+  check, a foreign key, a `not null`, is `invalid`. Either says which in
+  `err.constraint`, `error.constraint()` in Rust: its `kind`, `'unique'`,
+  `'primaryKey'`, `'foreignKey'`, `'check'` or `'notNull'`, and the `table`
+  and the `columns`, or the constraint's `name`, as SQLite names them: a
+  check's name or its text, the index of a unique key on an expression, and
+  for a foreign key the kind alone, since SQLite says no more. A value a
+  `strict` column refuses is `invalid` and no constraint.
+
+  ```ts
+  try {
+  	await users.insert({ id, org, email })
+  } catch (err) {
+  	if (err instanceof ConflictError && err.constraint?.columns.includes('email')) return 'that email is taken'
+  	throw err
+  }
+  ```
 - A shared commit whose disk sync fails cannot say whether it was saved: each
   of its writes is `outcome unknown`. Read what you wrote before writing again:
   `stock = stock - 1` sent twice takes two.

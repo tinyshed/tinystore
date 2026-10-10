@@ -24,7 +24,7 @@ mod transaction;
 pub(crate) mod wire;
 
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
-pub use error::{Error, ErrorKind, Result};
+pub use error::{Constraint, ConstraintKind, Error, ErrorKind, Result};
 pub use memory::{Memory, Reservation};
 pub use store::{Options, Store};
 pub use transaction::{Transaction, TxHandle};

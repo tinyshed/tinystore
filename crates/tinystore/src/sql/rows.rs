@@ -120,7 +120,7 @@ pub(crate) fn failure(what: &str, error: rusqlite::Error) -> Error {
         if code.code == rusqlite::ErrorCode::ConstraintViolation {
             let kind =
                 if held.contains(&code.extended_code) { crate::ErrorKind::Conflict } else { crate::ErrorKind::Invalid };
-            return Error::new(kind, what).with_source(error);
+            return crate::sqlite::name_constraint(Error::new(kind, what), &error).with_source(error);
         }
     }
     crate::sqlite::sql_error(what, error)

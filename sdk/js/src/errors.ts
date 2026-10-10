@@ -29,15 +29,61 @@ export type Code =
  */
 export type What = Record<string, string | Uint8Array>
 
+/**
+ * A constraint a database's write broke, as SQLite names it: a unique or a
+ * primary key already held is a ConflictError, any other an InvalidError.
+ *
+ *     if (err instanceof ConflictError && err.constraint?.columns.includes('email')) return 'that email is taken'
+ */
+export interface Constraint {
+	kind: 'unique' | 'primaryKey' | 'foreignKey' | 'check' | 'notNull'
+	/** the table, when SQLite names it */
+	table: string | undefined
+	/** the columns, when SQLite names them */
+	columns: string[]
+	/** a check's name, or its text when it has none; the index of a unique key on an expression */
+	name: string | undefined
+}
+
+const constraintKinds: readonly string[] = [
+	'unique',
+	'primaryKey',
+	'foreignKey',
+	'check',
+	'notNull',
+]
+
 export class TinystoreError extends Error {
 	readonly code: Code
 	readonly what: What
+	/** the constraint a database's write broke; undefined for any other failure */
+	readonly constraint: Constraint | undefined
 
 	constructor(code: Code, message: string, what: What = {}) {
 		super(message)
 		this.name = new.target.name
 		this.code = code
 		this.what = what
+		this.constraint = constraintOf(what)
+	}
+}
+
+/** The constraint the server named in what, by its constraint, table, columns and name. */
+function constraintOf(what: What): Constraint | undefined {
+	const text = (name: string) => {
+		const value = what[name]
+		return typeof value === 'string' ? value : undefined
+	}
+	const kind = text('constraint')
+	if (kind === undefined || !constraintKinds.includes(kind)) {
+		return undefined
+	}
+	const columns = text('columns')
+	return {
+		kind: kind as Constraint['kind'],
+		table: text('table'),
+		columns: columns === undefined ? [] : columns.split(', '),
+		name: text('name'),
 	}
 }
 

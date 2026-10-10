@@ -10,6 +10,7 @@ import { join } from 'node:path'
 
 import {
 	ConflictError,
+	type Constraint,
 	type Database,
 	InvalidError,
 	LimitError,
@@ -91,15 +92,35 @@ for (const way of ways) {
 			expect(await app.scalar<number>`select count(*) from notes where done = 1`).toBe(1)
 		})
 
-		test('a key already held is a conflict, and the error names the database', async () => {
+		test('a key already held is a conflict, and the error names the database and the constraint', async () => {
 			await app.exec`insert into notes (id, author_id, title) values (${'k1'}, 1, 'a')`
 			const taken = await caught(
 				app.exec`insert into notes (id, author_id, title) values (${'k1'}, 1, 'b')`,
 			)
 			expect(taken).toBeInstanceOf(ConflictError)
 			expect((taken as Error).message).toContain('sql app')
+			const key: Constraint = {
+				kind: 'primaryKey',
+				table: 'notes',
+				columns: ['id'],
+				name: undefined,
+			}
+			expect((taken as ConflictError).constraint).toEqual(key)
+			const checked = await caught(
+				app.tx(
+					tx => tx.exec`insert into notes (id, author_id, title, done) values ('k2', 1, 'b', 7)`,
+				),
+			)
+			expect(checked).toBeInstanceOf(InvalidError)
+			expect((checked as InvalidError).constraint).toEqual({
+				kind: 'check',
+				table: undefined,
+				columns: [],
+				name: 'done in (0, 1)',
+			})
 			const missing = await caught(app.all`select * from no_such_table`)
 			expect((missing as Error).message).toContain('no_such_table')
+			expect((missing as InvalidError).constraint).toBeUndefined()
 		})
 
 		test('a batch writes all of its statements or none', async () => {

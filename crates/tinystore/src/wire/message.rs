@@ -87,8 +87,10 @@ impl Failure {
 }
 
 impl From<Error> for Failure {
+    /// The error's code, its text, and its facts by their names in `what`.
     fn from(error: Error) -> Failure {
-        Failure { code: code_of(error.kind()).to_owned(), message: error.to_string(), what: None }
+        let failure = Failure { code: code_of(error.kind()).to_owned(), message: error.to_string(), what: None };
+        error.facts().iter().fold(failure, |failure, (name, value)| failure.naming(name, value.clone()))
     }
 }
 

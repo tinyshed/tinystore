@@ -932,7 +932,11 @@ export class SqlTx implements Runner {
 			this.#stream.consumed(event.body.length)
 			const answer = SqlTxAnswer.decode(event.body)
 			if (answer.failure !== undefined) {
-				throw errorOf(answer.failure.code ?? 'internal', answer.failure.message ?? '')
+				throw errorOf(
+					answer.failure.code ?? 'internal',
+					answer.failure.message ?? '',
+					answer.failure.what ?? {},
+				)
 			}
 			return answer
 		}

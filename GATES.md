@@ -221,7 +221,8 @@ module defines.
 - a transaction sees its own writes, rolls back on an error, and a call that fails leaves it as before the call — `a_transaction_sees_its_writes_and_rolls_back_on_an_error` in `sql::database_tests`; `a transaction sees its own writes, commits what it returns and rolls back a throw` in `sdk/js/test/sql.test.ts`
 - a transaction past its five seconds rolls back — `a_transaction_past_its_bound_rolls_back` in `sql::database_tests`
 - an sqldb snapshot ends at its bound and says so — `TestEachHoldsOneSnapshotAndOneRow`, `TestASnapshotHeldPastItsBoundSaysSo`
-- a key already held is a conflict, and any other constraint invalid — `a_key_already_held_is_a_conflict_and_another_constraint_is_invalid` in `sql::database_tests`; `a key already held is a conflict, and the error names the database` in `sdk/js/test/sql.test.ts`
+- a key already held is a conflict, and any other constraint invalid — `a_key_already_held_is_a_conflict_and_another_constraint_is_invalid` in `sql::database_tests`; `a key already held is a conflict, and the error names the database and the constraint` in `sdk/js/test/sql.test.ts`
+- a broken constraint says which, its table and columns or its name, as SQLite names it, and a strict column's type is none — `a_broken_constraint_says_which_as_sqlite_names_it` in `sql::database_tests`, `a_constraint_is_named_as_sqlite_says_it` in `sqlite::constraint`; `a key already held is a conflict, and the error names the database and the constraint` in `sdk/js/test/sql.test.ts`
 - a write says what it changed, and the rowid of its own insert alone — `exec_says_what_it_changed_and_the_rowid_of_its_insert` in `sql::database_tests`
 - a statement is compiled once a connection — `TestAStatementIsCompiledOnceAConnection`, `TestAConnectionKeepsTheStatementsItsFileWasOpenedWith`
 - sqldb holds the store's memory before it decodes — `TestStoreMemoryBoundsReadsAndWrites`

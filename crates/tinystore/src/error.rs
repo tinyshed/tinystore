@@ -64,13 +64,60 @@ pub struct Error {
     kind: ErrorKind,
     what: String,
     source: Option<Box<dyn StdError + Send + Sync>>,
+    /// What a program acts on without reading `what`, by name: the constraint
+    /// a write broke, the bound a limit reached. The wire carries them by the
+    /// same names, which every SDK reads.
+    facts: Vec<(&'static str, String)>,
+}
+
+/// A constraint a write broke, as SQLite names it: its kind always, and the
+/// table and the columns, or the constraint's own name, when SQLite says them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Constraint {
+    pub kind: ConstraintKind,
+    pub table: Option<String>,
+    pub columns: Vec<String>,
+    /// A check's name, or its text when it has none; the index of a unique
+    /// key on an expression.
+    pub name: Option<String>,
+}
+
+/// A unique or a primary key already held is `conflict`; any other is
+/// `invalid`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConstraintKind {
+    Unique,
+    PrimaryKey,
+    ForeignKey,
+    Check,
+    NotNull,
+}
+
+impl ConstraintKind {
+    /// The kind as the wire and every SDK say it: `primaryKey`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unique => "unique",
+            Self::PrimaryKey => "primaryKey",
+            Self::ForeignKey => "foreignKey",
+            Self::Check => "check",
+            Self::NotNull => "notNull",
+        }
+    }
+
+    fn named(name: &str) -> Option<Self> {
+        [Self::Unique, Self::PrimaryKey, Self::ForeignKey, Self::Check, Self::NotNull]
+            .into_iter()
+            .find(|kind| kind.as_str() == name)
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl Error {
     pub fn new(kind: ErrorKind, what: impl Into<String>) -> Self {
-        Self { kind, what: what.into(), source: None }
+        Self { kind, what: what.into(), source: None, facts: Vec::new() }
     }
 
     pub fn invalid(what: impl Into<String>) -> Self {
@@ -120,7 +167,52 @@ impl Error {
         if let Some(source) = &self.source {
             copy.source = Some(source.to_string().into());
         }
+        copy.facts.clone_from(&self.facts);
         copy
+    }
+
+    /// The same error with one fact more, which a program reads by its name.
+    pub(crate) fn naming(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.facts.push((name, value.into()));
+        self
+    }
+
+    /// A fact the error carries by name: a limit's `limit`, `wanted` and
+    /// `bound`; a broken constraint's `constraint`, `table`, `columns` and
+    /// `name`, which [`Error::constraint`] reads as one.
+    pub fn fact(&self, name: &str) -> Option<&str> {
+        self.facts.iter().find(|(named, _)| *named == name).map(|(_, value)| value.as_str())
+    }
+
+    pub(crate) fn facts(&self) -> &[(&'static str, String)] {
+        &self.facts
+    }
+
+    /// The constraint a write broke, as SQLite names it:
+    ///
+    /// ```no_run
+    /// # use tinystore::{ConstraintKind, sql};
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// # let db = store.database("app").open()?;
+    /// match db.exec(sql!("insert into users (email) values (?)", "ann@example.com")) {
+    ///     Err(error) if error.constraint().is_some_and(|broken| broken.columns == ["email"]) => {
+    ///         println!("that email is taken")
+    ///     }
+    ///     done => drop(done?),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn constraint(&self) -> Option<Constraint> {
+        let kind = ConstraintKind::named(self.fact("constraint")?)?;
+        let columns = self.fact("columns").map(|columns| columns.split(", ").map(str::to_owned).collect());
+        Some(Constraint {
+            kind,
+            table: self.fact("table").map(str::to_owned),
+            columns: columns.unwrap_or_default(),
+            name: self.fact("name").map(str::to_owned),
+        })
     }
 
     pub fn kind(&self) -> ErrorKind {

@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::{Database, Done, Migrations};
-use crate::{ErrorKind, Options, Store, TestClock, sql};
+use crate::{ConstraintKind, ErrorKind, Options, Store, TestClock, sql};
 
 const NOTES: &str = "create table notes (
     id         text primary key,
@@ -295,6 +295,69 @@ fn a_key_already_held_is_a_conflict_and_another_constraint_is_invalid() {
     let null = db.exec("insert into notes (id, author_id, title) values ('n9', 1, null)").unwrap_err();
     assert_eq!(null.kind(), ErrorKind::Invalid, "{null}");
     assert!(taken.to_string().starts_with(r#"sql app: statement "insert into notes"#), "{taken}");
+}
+
+#[test]
+fn a_broken_constraint_says_which_as_sqlite_names_it() {
+    let f = fixture();
+    let schema = "create table orgs (id integer primary key);
+        create table users (
+            id     text primary key,
+            org    integer not null references orgs (id),
+            email  text not null,
+            seats  integer not null constraint seats_positive check (seats > 0),
+            age    integer check (age >= 18),
+            unique (org, email)
+        ) strict;
+        create unique index users_lower_email on users (lower(email)) where org = 2;";
+    let db = f.store.database("app").migrations([("0001_users.sql", schema)]).open().unwrap();
+    db.exec("insert into orgs (id) values (1), (2)").unwrap();
+    db.exec("insert into users (id, org, email, seats) values ('u1', 1, 'ann@example.com', 1)").unwrap();
+    db.exec("insert into users (id, org, email, seats) values ('u3', 2, 'bob@example.com', 1)").unwrap();
+
+    let broken = |text: &str| {
+        let error = db.exec(text).unwrap_err();
+        let constraint = error.constraint().unwrap_or_else(|| panic!("{error}"));
+        (error.kind(), constraint.kind, constraint.table, constraint.columns, constraint.name)
+    };
+    let held = |columns: &[&str]| columns.iter().map(|column| (*column).to_owned()).collect::<Vec<_>>();
+    let insert = |values: &str| format!("insert into users (id, org, email, seats, age) values {values}");
+    assert_eq!(
+        broken(&insert("('u1', 1, 'bob@example.com', 1, null)")),
+        (ErrorKind::Conflict, ConstraintKind::PrimaryKey, Some("users".into()), held(&["id"]), None)
+    );
+    assert_eq!(
+        broken(&insert("('u2', 1, 'ann@example.com', 1, null)")),
+        (ErrorKind::Conflict, ConstraintKind::Unique, Some("users".into()), held(&["org", "email"]), None)
+    );
+    assert_eq!(
+        broken(&insert("('u2', 2, 'BOB@example.com', 1, null)")),
+        (ErrorKind::Conflict, ConstraintKind::Unique, None, held(&[]), Some("users_lower_email".into())),
+        "a unique index on an expression names itself"
+    );
+    assert_eq!(
+        broken(&insert("('u2', 1, null, 1, null)")),
+        (ErrorKind::Invalid, ConstraintKind::NotNull, Some("users".into()), held(&["email"]), None)
+    );
+    assert_eq!(
+        broken(&insert("('u2', 1, 'bob@example.com', 0, null)")),
+        (ErrorKind::Invalid, ConstraintKind::Check, None, held(&[]), Some("seats_positive".into()))
+    );
+    assert_eq!(
+        broken(&insert("('u2', 1, 'bob@example.com', 1, 9)")),
+        (ErrorKind::Invalid, ConstraintKind::Check, None, held(&[]), Some("age >= 18".into())),
+        "a check without a name is its text"
+    );
+    assert_eq!(
+        broken(&insert("('u2', 7, 'bob@example.com', 1, null)")),
+        (ErrorKind::Invalid, ConstraintKind::ForeignKey, None, held(&[]), None)
+    );
+    let typed = db.exec(&*insert("('u2', 1, 'bob@example.com', 'many', null)")).unwrap_err();
+    assert_eq!(
+        (typed.kind(), typed.constraint()),
+        (ErrorKind::Invalid, None),
+        "a strict column's type is no constraint"
+    );
 }
 
 #[test]

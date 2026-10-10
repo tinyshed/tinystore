@@ -10,6 +10,7 @@
 
 mod config;
 mod connection;
+mod constraint;
 mod file;
 mod group;
 mod memory;
@@ -23,6 +24,7 @@ use rusqlite::Connection;
 
 pub(crate) use config::{Config, Durability, GroupLimits};
 pub(crate) use connection::{execute, sql_error};
+pub(crate) use constraint::named as name_constraint;
 pub(crate) use file::File;
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
