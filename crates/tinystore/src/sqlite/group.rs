@@ -306,9 +306,7 @@ impl Write {
         let Some(Answer { own, passed_on }) = answer else {
             return Err(Error::internal("a grouped write was answered twice"));
         };
-        for (write, answer) in passed_on {
-            write.answer(answer, Vec::new());
-        }
+        answer_in_halves(passed_on);
         own
     }
 
@@ -318,29 +316,39 @@ impl Write {
 }
 
 /// Answers a commit's writes: a submitted one through its `done`, here, and
-/// a caller that waits by waking it.
+/// the callers that wait by waking them.
 ///
-/// A wake costs tens of microseconds where the processor it lands on sleeps,
-/// and a leader that woke 64 callers one after another spent on it what
-/// their commit had taken, so that half of them missed the next commit
-/// (research rust-slice-2026-10-10). The leader wakes one caller in every
-/// share, the square root of them, and that caller wakes the rest of its
-/// share as it returns: a caller slow to wake delays that many answers and
-/// no more. The leader's own write passes none on, since its thread may lead
+/// The writer does nothing a caller at a time. A wake costs tens of
+/// microseconds where the processor it lands on sleeps, and a leader that
+/// woke 64 callers one after another spent on it what their commit had
+/// taken, so that half of them missed the next commit (research
+/// rust-slice-2026-10-10). So the callers wake one another, in halves. The
+/// leader's own write is given none to pass on, since its thread may lead
 /// the next commit first.
 fn answer_all(batch: Vec<Arc<Write>>, answers: Vec<Result<()>>, own: Option<&Arc<Write>>) {
-    let mut waiting = Vec::with_capacity(batch.len());
+    let mut callers = Vec::with_capacity(batch.len());
     for (write, answer) in batch.into_iter().zip(answers) {
         if write.is_submitted() || own.is_some_and(|own| Arc::ptr_eq(own, &write)) {
             write.answer(answer, Vec::new());
         } else {
-            waiting.push((write, answer));
+            callers.push((write, answer));
         }
     }
-    let share = waiting.len().isqrt().max(1);
-    let mut waiting = waiting.into_iter();
-    while let Some((first, answer)) = waiting.next() {
-        first.answer(answer, waiting.by_ref().take(share).collect());
+    answer_in_halves(callers);
+}
+
+/// Answers callers with two wakes, however many they are: each half through
+/// its first, whose caller answers the rest of its half the same way as it
+/// returns. An answer travels with its wake, so no caller wakes to find none,
+/// and the last is awake after as many wakes in a row as the callers halve
+/// to one, six for 64.
+fn answer_in_halves(mut callers: Vec<(Arc<Write>, Result<()>)>) {
+    let second = callers.split_off(callers.len().div_ceil(2));
+    for half in [callers, second] {
+        let mut half = half.into_iter();
+        if let Some((first, answer)) = half.next() {
+            first.answer(answer, half.collect());
+        }
     }
 }
 

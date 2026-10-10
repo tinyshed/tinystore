@@ -125,6 +125,22 @@ fn a_commit_gathers_the_write_that_waited_and_the_one_its_last_answered() {
 }
 
 #[test]
+fn every_caller_of_a_commit_gets_its_own_answer_though_callers_wake_one_another() {
+    let (_dir, file) = open(Config::default());
+    let before = file.commits();
+    // The caller that leads, and 25 its commit answers: it wakes two, and
+    // each caller the firsts of the halves it was given. Two write the same value.
+    let value = |n: usize| if n == 20 { "v7".to_owned() } else { format!("v{n}") };
+    let writes: Vec<Call<i64>> =
+        (0..26).map(|n| Box::new(move |file: &File| insert(file, &value(n))) as Call<i64>).collect();
+    let answers = queue_behind_the_writer(&file, writes);
+    assert_eq!(file.commits() - before, 1, "one commit carried every write");
+    let refused: Vec<usize> = (0..26).filter(|n| answers[*n].is_err()).collect();
+    assert!(refused == [7] || refused == [20], "the second of the two alone is refused: {refused:?}");
+    assert_eq!(count(&file), 25);
+}
+
+#[test]
 fn a_failing_write_rolls_back_alone() {
     let (_dir, file) = open(Config::default());
     insert(&file, "taken").unwrap();

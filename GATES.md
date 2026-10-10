@@ -266,7 +266,8 @@ module defines.
 - a snapshot does not stop the writer — `TestSnapshotCopiesWhileTheWriterWrites`
 - writer programs stay bounded and transactional — `TestPreparedWriterUsesOneTransactionAndRetainsPrograms` and `TestPreparedWriterCacheStaysBounded`
 - writes queued for the writer share a commit, fail alone — `TestGroupedWritesShareACommitAndFailAlone`
-- a commit gathers the writers its last one answered — `TestAGroupGathersTheWritesItsLastBatchAnswered`
+- a commit gathers the writes that waited and the ones its last answered — `a_commit_gathers_the_write_that_waited_and_the_one_its_last_answered` in `sqlite::file`
+- every caller of a commit gets its own answer, though the leader wakes few and callers wake the rest — `every_caller_of_a_commit_gets_its_own_answer_though_callers_wake_one_another` in `sqlite::file`
 - a write whose caller left before its turn writes nothing — `TestACallerCancelledBeforeItsTurnWritesNothing`
 - a grouped write that has started finishes with its group — `TestAWriteThatHasStartedFinishesWithItsGroup`, cancelled or past its deadline mid-statement
 - the application's grouped SQL ends at its deadline — `TestAStatementUntilItsDeadlineEndsThere`, `TestADataStatementEndsAtItsDeadline`
