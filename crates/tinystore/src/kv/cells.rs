@@ -103,6 +103,8 @@ const SELECT_REVISION: &str = "select value from _tinystore_kv_meta where name =
 const KEEP_REVISION: &str = "update _tinystore_kv_meta set value = ?1 where name = 'revision' and value < ?1";
 const SELECT_BUCKET: &str = "select id, role from _tinystore_kv_buckets where name = ?1";
 const INSERT_BUCKET: &str = "insert into _tinystore_kv_buckets (name, role) values (?1, ?2) returning id";
+const SELECT_BUCKET_KEY: &str = "select key from _tinystore_kv_buckets where id = ?1";
+const KEEP_BUCKET_KEY: &str = "update _tinystore_kv_buckets set key = ?2 where id = ?1";
 
 /// A live cell as a read finds it.
 #[derive(Debug)]
@@ -331,6 +333,21 @@ pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<
         .and_then(|mut insert| insert.query_row(params![name, role], |row| row.get(0)))
         .map_err(|error| sql_error("its record", error))?;
     Ok((id, role.to_owned()))
+}
+
+/// The id of the encryption key a bucket's values are sealed with, if it has
+/// taken one.
+pub(crate) fn bucket_key(connection: &Connection, bucket: i64) -> Result<Option<String>> {
+    connection
+        .prepare_cached(SELECT_BUCKET_KEY)
+        .and_then(|mut select| select.query_row([bucket], |row| row.get(0)))
+        .map_err(|error| sql_error("its bucket's key", error))
+}
+
+/// Keeps the id of the key a bucket's values are sealed with, or none once
+/// the bucket holds no value.
+pub(crate) fn keep_bucket_key(connection: &Connection, bucket: i64, key: Option<&str>) -> Result<()> {
+    execute(connection, KEEP_BUCKET_KEY, params![bucket, key], "its bucket's key")
 }
 
 /// A row's value: a spilled value when the cell names one, else what the cell

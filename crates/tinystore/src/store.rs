@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, SystemTime};
 
+#[cfg(feature = "kv")]
+use crate::encryption::{self, EncryptionKey};
 use crate::engine::{Claim, Engine, Host};
 use crate::schedule::Scheduler;
 use crate::sqlite::File as EngineFile;
@@ -30,6 +32,11 @@ pub struct Options {
     /// Bytes of the disk the store keeps free: a file that would leave less is
     /// a `Limit` error and leaves nothing. 1 GiB unless said; 0 keeps none.
     pub keep_free: u64,
+    /// The file of the store's encryption key, which seals the values of its
+    /// encrypted buckets: 64 hex digits, as `openssl rand -hex 32` writes. The
+    /// store reads it and never makes it. `None` is `encryption.key` in the
+    /// store's directory, which the store makes the first time it needs one.
+    pub encryption_key_file: Option<PathBuf>,
 }
 
 /// The disk a store keeps free unless its options say otherwise.
@@ -37,7 +44,14 @@ pub(crate) const KEEP_FREE: u64 = 1 << 30;
 
 impl Default for Options {
     fn default() -> Self {
-        Self { memory: None, clock: None, background: true, durability: None, keep_free: KEEP_FREE }
+        Self {
+            memory: None,
+            clock: None,
+            background: true,
+            durability: None,
+            keep_free: KEEP_FREE,
+            encryption_key_file: None,
+        }
     }
 }
 
@@ -49,6 +63,7 @@ impl fmt::Debug for Options {
             .field("background", &self.background)
             .field("durability", &self.durability)
             .field("keep_free", &self.keep_free)
+            .field("encryption_key_file", &self.encryption_key_file)
             .finish()
     }
 }
@@ -89,6 +104,11 @@ struct Inner {
     files: Mutex<Vec<Arc<EngineFile>>>,
     durability: Option<Durability>,
     keep_free: u64,
+    encryption_key_file: Option<PathBuf>,
+    /// The key, once a handle needed it: a store that seals nothing reads no
+    /// key and makes none.
+    #[cfg(feature = "kv")]
+    encryption_key: Mutex<Option<Arc<EncryptionKey>>>,
     closed: AtomicBool,
 }
 
@@ -110,6 +130,9 @@ impl Store {
             files: Mutex::new(Vec::new()),
             durability: options.durability,
             keep_free: options.keep_free,
+            encryption_key_file: options.encryption_key_file,
+            #[cfg(feature = "kv")]
+            encryption_key: Mutex::new(None),
             closed: AtomicBool::new(false),
             dir,
         };
@@ -126,9 +149,46 @@ impl Store {
         self.inner.durability
     }
 
+    /// The file its options named for its encryption key, if they named one.
+    pub(crate) fn encryption_key_file(&self) -> Option<&Path> {
+        self.inner.encryption_key_file.as_deref()
+    }
+
     /// The bytes of the disk the store keeps free, as its options said.
     pub fn keep_free(&self) -> u64 {
         self.inner.keep_free
+    }
+
+    /// The store's encryption key: the one in the file its options named, or
+    /// in `encryption.key` of its directory, which the store makes when it is
+    /// not there. For a bucket that holds nothing sealed yet.
+    #[cfg(feature = "kv")]
+    pub(crate) fn encryption_key(&self) -> Result<Arc<EncryptionKey>> {
+        self.read_encryption_key(true)
+    }
+
+    /// The store's encryption key, which is there already: a key lost is not
+    /// replaced, since values sealed with it open with no other.
+    #[cfg(feature = "kv")]
+    pub(crate) fn encryption_key_there(&self) -> Result<Arc<EncryptionKey>> {
+        self.read_encryption_key(false)
+    }
+
+    #[cfg(feature = "kv")]
+    fn read_encryption_key(&self, make: bool) -> Result<Arc<EncryptionKey>> {
+        self.refuse_when_closed("its encryption key")?;
+        let mut kept = lock(&self.inner.encryption_key);
+        if let Some(key) = &*kept {
+            return Ok(Arc::clone(key));
+        }
+        let own = self.inner.dir.join(encryption::FILE);
+        let key = Arc::new(match &self.inner.encryption_key_file {
+            Some(file) => EncryptionKey::read(file)?,
+            None if make => EncryptionKey::read_or_make(&own)?,
+            None => EncryptionKey::read(&own)?,
+        });
+        *kept = Some(Arc::clone(&key));
+        Ok(key)
     }
 
     pub fn now(&self) -> SystemTime {

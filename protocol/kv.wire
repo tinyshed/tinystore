@@ -10,6 +10,7 @@ message kv.BucketOpen {
   2 ttl: duration?
   3 idle: duration?
   4 database: uint?          # a database's handle: the bucket lives in its file; kv.db when absent
+  5 encrypted: bool          # its values are sealed with the server's encryption key; a read connection opens none
 }
 
 # A call on one key of a handle's branch.

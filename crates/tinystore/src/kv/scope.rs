@@ -17,6 +17,8 @@ use crate::{Error, Result};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     Values,
+    /// Values sealed with the store's encryption key.
+    Encrypted,
     Counters,
     RateLimit,
     Quota,
@@ -28,6 +30,7 @@ impl Kind {
     pub(crate) fn role(self) -> &'static str {
         match self {
             Kind::Values => "values",
+            Kind::Encrypted => "encrypted values",
             Kind::Counters => "counters",
             Kind::RateLimit => "rate limit",
             Kind::Quota => "quota",
@@ -38,7 +41,7 @@ impl Kind {
     /// What an error calls a handle of this kind: `kv counters hits`.
     fn shown(self) -> &'static str {
         match self {
-            Kind::Values => "bucket",
+            Kind::Values | Kind::Encrypted => "bucket",
             Kind::Counters => "counters",
             Kind::RateLimit => "rate limit",
             Kind::Quota => "quota",
@@ -92,6 +95,10 @@ impl Scope {
     /// The store's time, in unix milliseconds.
     pub(crate) fn now(&self) -> i64 {
         self.kv.now()
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 
     /// The handle as an error names it: `kv counters hits`.

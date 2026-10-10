@@ -352,6 +352,14 @@ module defines.
 - a run of a key inside its own run fails rather than waits — `a_run_of_a_key_inside_its_own_run_fails_rather_than_waits` in `kv::once`
 - counters kept in memory reach the file at a flush, at close, and when the store is dropped unclosed — `counters_in_memory_reach_the_file_at_a_flush_and_at_close`, `counters_in_memory_reach_the_file_when_the_store_is_dropped_unclosed` in `kv::counters`
 
+- an encrypted bucket's file shows no value, in kv.db and in a database's file, and every call gives what was written — `an_encrypted_bucket_keeps_no_value_a_file_shows`, `every_call_of_an_encrypted_bucket_gives_what_was_written` in `kv::encrypted`; `an_encrypted_bucket_of_a_database_commits_with_its_rows_and_shows_no_value_in_its_file` in `inside`; `its files show no value, and its key is made beside them` in `sdk/js/test/encrypted.test.ts`
+- a sealed value opens only at its place, with its key and unchanged: copied to another place it is `corrupt`, and under another key of the store `invalid`, naming both — `a_value_opens_only_at_its_place_with_its_key_and_unchanged` in `encryption`; `a_value_copied_under_another_key_does_not_open_and_can_be_deleted` in `kv::encrypted`
+- a bucket keeps the key that encrypts it: a store opened with another reads and writes nothing of it until the bucket is cleared whole, and a delete needs no key — `a_store_opened_with_another_key_reads_and_writes_nothing_until_the_bucket_is_cleared` in `kv::encrypted`
+- a key lost is never replaced while a bucket holds values sealed with it, and found again it opens them — `a_key_lost_is_not_replaced_while_a_bucket_holds_values_sealed_with_it` in `kv::encrypted`
+- a name keeps whether it is encrypted — `a_name_keeps_whether_it_is_encrypted` in `kv::encrypted`
+- the store's key is made once, its owner's alone and durable before it seals, or read from the file the options name and never made there; a store that seals nothing makes none — `a_key_is_made_once_and_read_after`, `a_file_that_is_not_a_key_or_not_there_says_so` in `encryption`; `the_key_is_the_file_the_options_name_which_the_store_never_makes`, `a_store_that_seals_nothing_makes_no_key` in `kv::encrypted`; `a_pipes_store_reads_its_encryption_key_from_the_file_its_options_name` in `pipe::tests`; `the_encryption_key_is_the_stores_own_file_unless_one_is_named` in `crates/cli/src/args.rs`; `its key is the file the options name, which the store only reads` in `sdk/js/test/encrypted.test.ts`
+- a read token opens no encrypted bucket, by its name or as a plain one — `an_encrypted_bucket_opens_for_a_connection_that_writes_and_for_none_that_only_reads` in `pipe::tests`
+
 ## Jobs
 
 - a job in a batch commits with its rows or not at all — `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn`

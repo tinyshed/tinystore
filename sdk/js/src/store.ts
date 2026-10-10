@@ -92,6 +92,15 @@ export interface OpenOptions {
 	 * say its own, `store.database('audit', { durability: 'full' })`.
 	 */
 	durability?: Durability
+	/**
+	 * The file of the store's encryption key, which seals the values of its
+	 * encrypted buckets: 64 hex digits, as `openssl rand -hex 32` writes, kept
+	 * apart from the store's data. The store reads it and never makes it.
+	 * Without it the key is `encryption.key` in the store's directory, which the
+	 * store makes when the first encrypted bucket opens. A sidecar found
+	 * running keeps the key it was started with.
+	 */
+	encryptionKeyFile?: string
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */
@@ -294,7 +303,7 @@ export class Store implements AsyncDisposable {
 	 *
 	 * A backup holds no file but the engines' unless `files` names it: a file
 	 * of the application's inside the store's directory, such as a key kept
-	 * beside the data, `{ files: ['secret.key'] }`.
+	 * beside the data, `{ files: ['encryption.key'] }`.
 	 */
 	async backup(path: string, options: BackupOptions = {}): Promise<void> {
 		const part = `${path}.${randomBytes(4).toString('hex')}.part`
@@ -378,12 +387,13 @@ export async function openWith(
 	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
 	const durability = options.durability
 	checkDurability(durability, 'open')
+	const started = { durability, encryptionKeyFile: options.encryptionKeyFile }
 	const dial =
 		options.embedded === true
-			? embedded(runtime, dir, () => findLibrary(options.library), durability)
+			? embedded(runtime, dir, () => findLibrary(options.library), started)
 			: options.private === true
-				? privateChild(runtime, dir, binary, clock, durability)
-				: sidecar(runtime, dir, binary, { idle, durability })
+				? privateChild(runtime, dir, binary, clock, started)
+				: sidecar(runtime, dir, binary, { idle, ...started })
 	const link = new Link(asking(dial, dir, durability))
 	await link.connection()
 	return new Store(link)

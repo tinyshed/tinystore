@@ -167,6 +167,99 @@ const page = await sessions.under(user.id).list({ limit: 100, after: page.next }
   `list()` reads one page, at most 1000 keys, in the byte order of the keys
   (`"10"` before `"9"`), and `next` is where the following page starts.
 
+## Encrypted buckets
+
+```ts
+const passwords = store.bucket<string>('source-passwords', { encrypted: true })
+await passwords.set(source.id, 'hunter2')     // the file holds what only the encryption key opens
+await passwords.get(source.id)                // 'hunter2'
+```
+
+```ts
+// kept in a database, a password commits with its source's row
+const passwords = db.bucket<string>('source-passwords', { encrypted: true })
+await db.tx(async tx => {
+	await tx.exec`insert into sources (id, url) values (${source.id}, ${source.url})`
+	await tx.with(passwords).set(source.id, password)
+})
+```
+
+```rust
+let passwords = store.bucket::<String>("source-passwords").encrypted().open()?;
+passwords.set(&source.id, &password)?;
+```
+
+An encrypted bucket is a bucket: every call, option and error above is its
+own. What differs is what its file holds.
+
+- **A value is encrypted; its key in the bucket, its bucket's name and its
+  size are not.** What must stay secret is a value, never the name it is
+  kept under: `passwords.set(source.id, password)`.
+- **The store encrypts and decrypts, with its encryption key.** The program
+  never holds that key: a client of a server sends the value and gets it back
+  as any other. So any token that writes reads every value: give it only to
+  the program the values are for, and serve with TLS, without which they cross
+  a network in the clear.
+- **A `read` token opens no encrypted bucket**: `permission`.
+- **A bucket's name keeps whether it is encrypted.** Opening it the other
+  way is `invalid`, so no call writes a plain value among encrypted ones. To
+  encrypt what a plain bucket holds, write it into a new bucket.
+- **A value decrypts only where it was written.** It is bound to its bucket,
+  its owners and its key in the bucket: someone who can write the file and
+  copies it to another place gets `corrupt`, as for a value changed. What a
+  delete leaves in the file's free pages is as encrypted as it was.
+
+### The encryption key
+
+```sh
+data/encryption.key                                              # made by the store, beside its data
+tinystore serve data --encryption-key-file /run/secrets/ts.key   # or kept apart, and only read
+openssl rand -hex 32 > /run/secrets/ts.key                       # an encryption key: 64 hex digits
+```
+
+```ts
+const store = await open('data', { encryptionKeyFile: '/run/secrets/ts.key' })
+```
+
+| Where the key is                                                                     | Who makes it                                                     |
+|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| `encryption.key` in the store's directory                                            | the store, when the first encrypted bucket opens                 |
+| the file `encryptionKeyFile`, `--encryption-key-file` or `encryption_key_file` names | you: the store reads it and never makes it, and fails without it |
+
+A store has one encryption key, for every encrypted bucket in kv.db and in
+its databases; it is read when the first of them opens, and a store that
+opens none reads no key and makes none. The file is 64 hex digits and may end
+with a line's end. On Unix the `encryption.key` the store makes is readable
+by its owner alone; on Windows it has the access of its folder.
+
+| Who has                            | Reads the values                                       |
+|------------------------------------|--------------------------------------------------------|
+| a copy of the data without the key | no: a backup, a dump or a stolen disk image shows none |
+| the data and the key               | yes                                                    |
+| a `read` token                     | no                                                     |
+| a token that writes                | yes: it is the program the values are for              |
+
+The key the store makes lies beside the data it encrypts, so a copy of the
+whole directory reads everything: that protects a database's file that
+leaves alone, a dump or a backup that takes no key. Where a stolen disk or a
+copied directory is the worry, keep the key apart with `encryptionKeyFile`.
+
+**Lose the encryption key and the values are gone.** Nothing recovers them:
+keep a copy of the key apart from the data. The store never replaces a key
+by itself, and never writes under a second one:
+
+| The store opens with                             | An encrypted bucket that holds values                                       |
+|--------------------------------------------------|-----------------------------------------------------------------------------|
+| the key that encrypted them                      | reads and writes                                                            |
+| no key: `encryption.key` is gone                 | does not open, and no key is made: put the file back                        |
+| another key                                      | reads and writes are `invalid`, naming both keys; `delete` and `clear` work |
+| another key, after `clear()` on the whole bucket | starts again with this key                                                  |
+
+No call changes a store's key yet. The cipher is XChaCha20-Poly1305 with a
+random nonce a value. An encrypted value is 46 bytes longer than its own and
+carries its key's id, the first bytes of a SHA-256 over the key, so that
+several keys by name and a change of key can follow without a new format.
+
 ## Counters
 
 ```ts
@@ -307,15 +400,15 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
 
 ## Errors
 
-| Error             | When                                                                                                  | What to do                        |
-|-------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------|
-| `invalid`         | a bad name, key or option; a value the bucket cannot keep; a call around a transaction from inside it | fix the call                      |
-| `conflict`        | `ifVersion` did not match                                                                             | read again and decide             |
-| `limit`           | a value over 1 MiB, a counter past int64, the store's memory                                          | write less                        |
-| `corrupt`         | a stored value does not read as the bucket's type                                                     | open the bucket with its type     |
-| `closed`          | the store closed                                                                                      | open it again                     |
-| `unavailable`     | another process holds the writer past the busy timeout                                                | try again                         |
-| `outcome unknown` | the commit failed after the write ran                                                                 | read the key before writing again |
+| Error             | When                                                                                                                                                               | What to do                        |
+|-------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------|
+| `invalid`         | a bad name, key or option; a value the bucket cannot keep; a call around a transaction from inside it; an encrypted value sealed with another key than the store's | fix the call                      |
+| `conflict`        | `ifVersion` did not match                                                                                                                                          | read again and decide             |
+| `limit`           | a value over 1 MiB, a counter past int64, the store's memory                                                                                                       | write less                        |
+| `corrupt`         | a stored value does not read as the bucket's type; an encrypted value changed, or moved from another key                                                           | open the bucket with its type     |
+| `closed`          | the store closed                                                                                                                                                   | open it again                     |
+| `unavailable`     | another process holds the writer past the busy timeout                                                                                                             | try again                         |
+| `outcome unknown` | the commit failed after the write ran                                                                                                                              | read the key before writing again |
 
 Every error names the bucket and the key, owners first:
 `kv bucket sessions: key "42/9f86d0…": conflict`.

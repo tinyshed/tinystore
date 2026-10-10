@@ -1309,6 +1309,8 @@ impl Message for Welcome {
 pub(crate) struct StoreOptions {
     /// Full or os: how far a commit of the store's files goes before it returns; each engine's own when absent.
     pub(crate) durability: Option<String>,
+    /// The file of the store's encryption key, which the store only reads; encryption.key of its directory, made when needed, when absent.
+    pub(crate) encryption_key_file: Option<String>,
 }
 
 impl Message for StoreOptions {
@@ -1320,6 +1322,7 @@ impl Message for StoreOptions {
         for _ in 0..codec::fields(r, Self::NAME)? {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.durability = Some(codec::str(r, "durability")?),
+                2 => message.encryption_key_file = Some(codec::str(r, "encryptionKeyFile")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -1332,16 +1335,22 @@ impl Message for StoreOptions {
             map.field(out, 1);
             codec::write_str(out, durability);
         }
+        if let Some(encryption_key_file) = &self.encryption_key_file {
+            map.field(out, 2);
+            codec::write_str(out, encryption_key_file);
+        }
         map.close(out);
     }
 
     fn size(&self) -> usize {
         3
             + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
+            + self.encryption_key_file.as_ref().map_or(0, |encryption_key_file| 1 + 5 + encryption_key_file.len())
     }
 
     fn is_zero(&self) -> bool {
         self.durability.is_none()
+            && self.encryption_key_file.is_none()
     }
 }
 
@@ -2882,6 +2891,8 @@ pub(crate) struct KvBucketOpen {
     pub(crate) idle: Option<u64>,
     /// A database's handle: the bucket lives in its file; kv.db when absent.
     pub(crate) database: Option<u64>,
+    /// Its values are sealed with the server's encryption key; a read connection opens none.
+    pub(crate) encrypted: bool,
 }
 
 #[cfg(feature = "kv")]
@@ -2897,6 +2908,7 @@ impl Message for KvBucketOpen {
                 2 => message.ttl = Some(codec::uint(r, "ttl")?),
                 3 => message.idle = Some(codec::uint(r, "idle")?),
                 4 => message.database = Some(codec::uint(r, "database")?),
+                5 => message.encrypted = codec::bool(r, "encrypted")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2921,6 +2933,10 @@ impl Message for KvBucketOpen {
             map.field(out, 4);
             codec::write_uint(out, database);
         }
+        if self.encrypted {
+            map.field(out, 5);
+            codec::write_bool(out, &self.encrypted);
+        }
         map.close(out);
     }
 
@@ -2930,6 +2946,7 @@ impl Message for KvBucketOpen {
             + self.ttl.map_or(0, |_| 10)
             + self.idle.map_or(0, |_| 10)
             + self.database.map_or(0, |_| 10)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -2937,6 +2954,7 @@ impl Message for KvBucketOpen {
             && self.ttl.is_none()
             && self.idle.is_none()
             && self.database.is_none()
+            && !self.encrypted
     }
 }
 

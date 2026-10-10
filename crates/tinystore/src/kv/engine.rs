@@ -8,6 +8,7 @@ use super::cells;
 use super::once::Runs;
 use super::renewals::Renewals;
 use super::scope::Kind;
+use crate::encryption::EncryptionKey;
 use crate::engine::{Claim, Engine, Home, Host};
 use crate::sqlite::{Config, File, Migration, Tx};
 use crate::store::WeakStore;
@@ -133,6 +134,20 @@ impl Kv {
 
     pub(crate) fn revision(&self) -> Arc<AtomicI64> {
         Arc::clone(&self.revision)
+    }
+
+    /// The store's encryption key, for a bucket whose values are sealed with
+    /// the key of the id `kept`, or with none yet. A bucket that has a key
+    /// takes no new one: the store makes a key only for a bucket that holds
+    /// nothing sealed, so that a key lost is never replaced unseen.
+    pub(crate) fn encryption_key(&self, kept: Option<&str>) -> Result<Arc<EncryptionKey>> {
+        let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: its store", self.place())))?;
+        match kept {
+            None => store.encryption_key(),
+            Some(kept) => store.encryption_key_there().map_err(|error| {
+                error.within(format!("its values are encrypted with the key {kept}, and the store makes no other"))
+            }),
+        }
     }
 
     pub(crate) fn renewals(&self) -> &Renewals {

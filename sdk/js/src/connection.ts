@@ -196,7 +196,6 @@ export function sidecar(
 	const serve = join(absolute, 'server', 'SERVE')
 	const log = join(absolute, 'server', 'serve.log')
 	const idling = started.idle === undefined ? [] : ['--idle', `${started.idle}ms`]
-	const committing = started.durability === undefined ? [] : ['--durability', started.durability]
 	let told = false
 	return async () => {
 		const found = await reachServe(runtime, serve)
@@ -217,7 +216,7 @@ export function sidecar(
 				return found.connection
 			}
 		}
-		const flags = [...idling, ...committing]
+		const flags = [...idling, ...storeFlags(started)]
 		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log', log, ...flags]
 		return startSidecar(runtime, serve, log, command, stoppedInstance)
 	}
@@ -228,6 +227,15 @@ export interface Started {
 	/** how long a sidecar stays once its last connection has gone, in milliseconds */
 	idle?: number | undefined
 	durability?: Durability | undefined
+	/** the file of the store's encryption key, when it is not the store's own */
+	encryptionKeyFile?: string | undefined
+}
+
+/** The flags of `tinystore serve` that say how its store opens. */
+function storeFlags(started: Started): string[] {
+	const committing = started.durability === undefined ? [] : ['--durability', started.durability]
+	const key = started.encryptionKeyFile
+	return key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
 }
 
 /**
@@ -413,14 +421,21 @@ export function privateChild(
 	dir: string,
 	binary: () => string,
 	clock?: Date,
-	durability?: Durability,
+	started: Started = {},
 ): Dialer {
 	// a test's clock starts where the first child's did, and a child started again starts it there
 	const clocked = clock === undefined ? [] : ['--clock', clock.toISOString()]
-	const committing = durability === undefined ? [] : ['--durability', durability]
 	return async () => {
 		let session: Session | undefined
-		const argv = [binary(), 'serve', '--dir', resolve(dir), '--stdio', ...clocked, ...committing]
+		const argv = [
+			binary(),
+			'serve',
+			'--dir',
+			resolve(dir),
+			'--stdio',
+			...clocked,
+			...storeFlags(started),
+		]
 		const child = runtime.spawnPrivate(argv, {
 			data: bytes => session?.receive(bytes),
 			end: err => session?.end(err),
@@ -449,9 +464,11 @@ export function embedded(
 	runtime: Runtime,
 	dir: string,
 	library: () => string,
-	durability?: Durability,
+	started: Started = {},
 ): Dialer {
-	const options = StoreOptions.encode({ durability })
+	const encryptionKeyFile =
+		started.encryptionKeyFile === undefined ? undefined : resolve(started.encryptionKeyFile)
+	const options = StoreOptions.encode({ durability: started.durability, encryptionKeyFile })
 	return async () => {
 		const { openPipe } = await import('./runtime/pipe.ts')
 		let session: Session | undefined

@@ -97,7 +97,7 @@ impl Pipe {
     /// [`Pipe::recv`] passes none.
     pub fn open(dir: impl AsRef<Path>, options: &[u8], wake: Option<Wake>) -> Result<Pipe> {
         let dir = std::path::absolute(dir.as_ref()).map_err(|error| crate::Error::io("pipe: its directory", error))?;
-        let store = join(&dir, durability_asked(options)?)?;
+        let store = join(&dir, asked(options)?)?;
         match Session::new(store, Connect { wake, ..Connect::default() }) {
             Ok(session) => Ok(Pipe { session, dir: Some(dir) }),
             Err(error) => {
@@ -194,20 +194,30 @@ impl fmt::Debug for Pipe {
     }
 }
 
-/// The durability a host's options ask its store's files for, if any.
-fn durability_asked(options: &[u8]) -> Result<Option<Durability>> {
+/// What a host's options ask of its store: its files' durability, and the
+/// file of its encryption key.
+#[derive(Default)]
+struct Asked {
+    durability: Option<Durability>,
+    encryption_key_file: Option<PathBuf>,
+}
+
+fn asked(options: &[u8]) -> Result<Asked> {
     if options.is_empty() {
-        return Ok(None);
+        return Ok(Asked::default());
     }
     let asked = StoreOptions::decode(options)
         .map_err(|refused| Error::invalid(format!("pipe: its options: {}", refused.message)))?;
-    asked.durability.map(|word| word.parse().map_err(|error: Error| error.within("pipe"))).transpose()
+    let durability = asked.durability.map(|word| word.parse().map_err(|error: Error| error.within("pipe")));
+    Ok(Asked { durability: durability.transpose()?, encryption_key_file: asked.encryption_key_file.map(PathBuf::from) })
 }
 
-fn join(dir: &Path, durability: Option<Durability>) -> Result<Store> {
+/// The store of `dir`, opened as asked, or the one this process has open
+/// already, which is refused when it was opened another way.
+fn join(dir: &Path, asked: Asked) -> Result<Store> {
     let mut stores = stores();
     if let Some((store, pipes)) = stores.get_mut(dir) {
-        if let Some(asked) = durability
+        if let Some(asked) = asked.durability
             && store.durability() != Some(asked)
         {
             let opened = store.durability().map_or_else(|| "each engine's own".to_owned(), |opened| opened.to_string());
@@ -215,10 +225,20 @@ fn join(dir: &Path, durability: Option<Durability>) -> Result<Store> {
                 "pipe: the store is open with durability {opened}, and asked for {asked}"
             )));
         }
+        if let Some(asked) = &asked.encryption_key_file
+            && store.encryption_key_file() != Some(asked)
+        {
+            return Err(Error::invalid(format!(
+                "pipe: the store is open with another encryption key file than {}",
+                asked.display()
+            )));
+        }
         *pipes += 1;
         return Ok(store.clone());
     }
-    let store = Store::open(dir, Options { durability, ..Options::default() })?;
+    let options =
+        Options { durability: asked.durability, encryption_key_file: asked.encryption_key_file, ..Options::default() };
+    let store = Store::open(dir, options)?;
     stores.insert(dir.to_path_buf(), (store.clone(), 1));
     Ok(store)
 }

@@ -4,6 +4,7 @@
 //! tinystore serve --dir <dir> --local --log <dir>/server/serve.log [--idle 30000ms]   a sidecar
 //! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]            a private child
 //! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                      a person's server
+//! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key              its key kept apart from its data
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
 //! ```
 
@@ -36,6 +37,9 @@ pub(crate) struct Serve {
     pub(crate) durability: Option<Durability>,
     /// The disk the store keeps free; the store's own 1 GiB when `None`.
     pub(crate) keep_free: Option<u64>,
+    /// The file of the store's encryption key; `encryption.key` of its directory,
+    /// which the store makes, unless said.
+    pub(crate) encryption_key_file: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -60,7 +64,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let (mut stdio, mut local) = (false, false);
     let (mut log, mut idle, mut clock) = (None, None, None);
     let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
-    let (mut durability, mut keep_free) = (None, None);
+    let (mut durability, mut keep_free, mut encryption_key_file) = (None, None, None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
@@ -77,6 +81,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--tokens" => tokens = Some(PathBuf::from(value("--tokens")?)),
             "--memory" => memory = Some(size(&value("--memory")?)?),
             "--keep-free" => keep_free = Some(size(&value("--keep-free")?)?),
+            "--encryption-key-file" => encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?)),
             "--durability" => {
                 let word = value("--durability")?;
                 durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
@@ -110,7 +115,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability, keep_free })
+    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability, keep_free, encryption_key_file })
 }
 
 fn remote(
@@ -207,6 +212,14 @@ mod tests {
 
     fn args(text: &str) -> Vec<String> {
         text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn the_encryption_key_is_the_stores_own_file_unless_one_is_named() {
+        assert_eq!(serve(&args("d")).unwrap().encryption_key_file, None);
+        let named = serve(&args("d --encryption-key-file /run/secrets/tinystore.key")).unwrap();
+        assert_eq!(named.encryption_key_file, Some(PathBuf::from("/run/secrets/tinystore.key")));
+        assert_eq!(serve(&args("d --encryption-key-file")).unwrap_err(), "--encryption-key-file takes a value");
     }
 
     #[test]

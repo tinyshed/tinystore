@@ -7,6 +7,9 @@
 #[cfg(feature = "blobs")]
 pub mod blobs;
 mod clock;
+mod durable;
+#[cfg(feature = "kv")]
+mod encryption;
 pub mod engine;
 mod error;
 #[cfg(all(feature = "sql", any(feature = "kv", feature = "jobs")))]

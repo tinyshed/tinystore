@@ -1519,6 +1519,8 @@ export const StoreOptions = message(
 	{
 		/** full or os: how far a commit of the store's files goes before it returns; each engine's own when absent */
 		durability: [1, str],
+		/** the file of the store's encryption key, which the store only reads; encryption.key of its directory, made when needed, when absent */
+		encryptionKeyFile: [2, str],
 	},
 	{
 		write(w, v) {
@@ -1529,21 +1531,30 @@ export const StoreOptions = message(
 				w.str(v.durability)
 				n++
 			}
+			if (v.encryptionKeyFile !== undefined) {
+				w.field(2)
+				w.str(v.encryptionKeyFile)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $durability: string | undefined
+			let $encryptionKeyFile: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
 						$durability = r.str()
+						break
+					case 2:
+						$encryptionKeyFile = r.str()
 						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { durability: $durability }
+			return { durability: $durability, encryptionKeyFile: $encryptionKeyFile }
 		},
 	},
 )
@@ -3149,6 +3160,8 @@ export const KvBucketOpen = message(
 		idle: [3, uint],
 		/** a database's handle: the bucket lives in its file; kv.db when absent */
 		database: [4, uint],
+		/** its values are sealed with the server's encryption key; a read connection opens none */
+		encrypted: [5, bool],
 	},
 	{
 		write(w, v) {
@@ -3174,6 +3187,11 @@ export const KvBucketOpen = message(
 				w.uint(v.database)
 				n++
 			}
+			if (v.encrypted !== undefined) {
+				w.field(5)
+				w.bool(v.encrypted)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -3181,6 +3199,7 @@ export const KvBucketOpen = message(
 			let $ttl: number | undefined
 			let $idle: number | undefined
 			let $database: number | undefined
+			let $encrypted: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -3195,12 +3214,15 @@ export const KvBucketOpen = message(
 					case 4:
 						$database = r.uint()
 						break
+					case 5:
+						$encrypted = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, ttl: $ttl, idle: $idle, database: $database }
+			return { name: $name, ttl: $ttl, idle: $idle, database: $database, encrypted: $encrypted }
 		},
 	},
 )

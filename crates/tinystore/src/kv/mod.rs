@@ -20,6 +20,7 @@ mod bucket;
 mod buffer;
 mod cells;
 mod counters;
+mod encrypted;
 mod engine;
 #[cfg(test)]
 mod fixture;

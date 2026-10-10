@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use rusqlite::Connection;
 
 use super::cells::{self, Cell, MAX_VALUE};
+use super::encrypted::Encrypted;
 use super::engine::next_version;
 use super::key_call::KeyCall;
 use super::path::Key;
@@ -30,12 +31,14 @@ pub const PAGE_KEYS: usize = 1000;
 const REFRESHES: i64 = 30;
 const RENEW_AT_ONCE: i64 = 60_000;
 
-/// A bucket being opened: its name, its type, how its keys expire.
+/// A bucket being opened: its name, its type, how its keys expire, whether
+/// its values are encrypted.
 #[must_use = "a bucket opens with open()"]
 pub struct BucketBuilder<V> {
     home: Home,
     name: String,
     expiry: Expiry,
+    encrypted: bool,
     _value: PhantomData<fn() -> V>,
 }
 
@@ -59,7 +62,7 @@ impl Store {
 
 impl<V: Value> BucketBuilder<V> {
     fn new(home: Home, name: &str) -> Self {
-        BucketBuilder { home, name: name.to_owned(), expiry: Expiry::Never, _value: PhantomData }
+        BucketBuilder { home, name: name.to_owned(), expiry: Expiry::Never, encrypted: false, _value: PhantomData }
     }
 
     /// A bucket kept in a file another engine lends, a database's.
@@ -82,10 +85,31 @@ impl<V: Value> BucketBuilder<V> {
         self
     }
 
+    /// Keeps every value sealed with the store's encryption key, as a password
+    /// or a token is kept: the file holds what nobody reads without the key,
+    /// and a value copied under another key does not open. A key is not
+    /// sealed, so a secret is a value and never a key. A name keeps whether
+    /// it is encrypted: it opens the same way every time.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let passwords = store.bucket::<String>("source-passwords").encrypted().open()?;
+    /// passwords.set("source-42", &"hunter2".to_owned())?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn encrypted(mut self) -> Self {
+        self.encrypted = true;
+        self
+    }
+
     pub fn open(self) -> Result<Bucket<V>> {
         check_expiry(self.expiry).map_err(|error| error.within(format!("kv bucket {}", self.name)))?;
-        let scope = Scope::open(&self.home, &self.name, Kind::Values)?;
-        Ok(Bucket::new(scope, self.expiry))
+        let kind = if self.encrypted { Kind::Encrypted } else { Kind::Values };
+        let scope = Scope::open(&self.home, &self.name, kind)?;
+        let encrypted = self.encrypted.then(|| Encrypted::of(&scope)).transpose()?;
+        Ok(Bucket { encrypted, ..Bucket::new(scope, self.expiry) })
     }
 }
 
@@ -94,6 +118,8 @@ impl<V: Value> BucketBuilder<V> {
 pub struct Bucket<V> {
     pub(crate) scope: Scope,
     expiry: Expiry,
+    /// What seals its rows, when the bucket is encrypted.
+    encrypted: Option<Encrypted>,
     _value: PhantomData<fn() -> V>,
 }
 
@@ -274,9 +300,9 @@ impl<V: Value> Bucket<V> {
     }
 
     pub(crate) fn take_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<Option<V>> + use<V>> {
-        let remove = self.remove_work(key, options)?;
+        let take = self.take_cell_work(key, options)?;
         Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
-            let cell = remove(tx, revision)?;
+            let cell = take(tx, revision)?;
             cell.map(|cell| decode::<V>(&cell.raw)).transpose()
         })
     }
@@ -308,13 +334,13 @@ impl<V: Value> Bucket<V> {
 /// the row-level ones the wire's handles use.
 impl<V> Bucket<V> {
     pub(crate) fn new(scope: Scope, expiry: Expiry) -> Bucket<V> {
-        Bucket { scope, expiry, _value: PhantomData }
+        Bucket { scope, expiry, encrypted: None, _value: PhantomData }
     }
 
     /// The same bucket seen from the branch `owner` names under this one:
     /// `sessions.under(user_id).clear()` signs a user out everywhere.
     pub fn under(&self, owner: impl Key) -> Bucket<V> {
-        Bucket::new(self.scope.under(owner), self.expiry)
+        Bucket { encrypted: self.encrypted.clone(), ..Bucket::new(self.scope.under(owner), self.expiry) }
     }
 
     pub fn has(&self, key: impl Key) -> Result<bool> {
@@ -328,7 +354,7 @@ impl<V> Bucket<V> {
 
     /// Removes `key` and says whether a live key was there.
     pub fn delete(&self, key: impl Key) -> Result<bool> {
-        Ok(self.remove(&key.text(), WriteOptions::default())?.is_some())
+        self.remove(&key.text(), WriteOptions::default())
     }
 
     /// Gives a live key a new expiry, `ttl` from now, as Redis's EXPIRE does,
@@ -397,10 +423,15 @@ impl<V> Bucket<V> {
         let now = self.scope.now();
         let (id, path, given, default) =
             (self.scope.id, self.scope.path(key)?, options.expires(now), self.default_expires(now));
+        let raw = self.kept(&path, raw).map_err(|error| error.within(self.scope.shown_key(key)))?;
         let (if_version, bytes) = (options.if_version, raw.len());
         // a write is a use of an idle key, which lives on from it; a key with a ttl keeps its own
         let keeps_its_expiry = !matches!(self.expiry, Expiry::Idle(_));
+        let encrypted = self.encrypted.clone();
         let work = move |tx: &Tx<'_>, revision: &AtomicI64| {
+            if let Some(encrypted) = &encrypted {
+                encrypted.claim(tx)?;
+            }
             let current = cells::current(tx, id, &path, now)?;
             let live = current.filter(|current| current.live);
             if let (Put::OnlyNew, Some(live)) = (put, live) {
@@ -418,19 +449,19 @@ impl<V> Bucket<V> {
         Ok((bytes, work))
     }
 
-    /// Removes a live key, at the version asked when one is, and hands back its
-    /// cell.
-    pub(crate) fn remove(&self, key: &str, options: WriteOptions) -> Result<Option<Cell>> {
+    /// Removes a live key, at the version asked when one is, and says whether
+    /// one was there.
+    pub(crate) fn remove(&self, key: &str, options: WriteOptions) -> Result<bool> {
         let work = self.remove_work(key, options)?;
         self.scope.write(key, 0, work)
     }
 
-    /// `remove` without waiting: `done` gets the cell once the commit ends.
+    /// `remove` without waiting: `done` hears once the commit ends.
     pub(crate) fn remove_then(
         &self,
         key: &str,
         options: WriteOptions,
-        done: impl FnOnce(Result<Option<Cell>>) + Send + 'static,
+        done: impl FnOnce(Result<bool>) + Send + 'static,
     ) {
         match self.remove_work(key, options) {
             Ok(work) => self.scope.submit(key, 0, work, done),
@@ -438,16 +469,47 @@ impl<V> Bucket<V> {
         }
     }
 
-    pub(crate) fn remove_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<Option<Cell>> + use<V>> {
+    /// The delete of a key. It reads no value, so a key whose value no longer
+    /// opens, sealed with a key the store has lost, can still be deleted.
+    pub(crate) fn remove_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<bool> + use<V>> {
         let now = self.scope.now();
         let (id, path, if_version) = (self.scope.id, self.scope.path(key)?, options.if_version);
+        Ok(move |tx: &Tx<'_>, _: &AtomicI64| {
+            let Some(found) = live_at(tx, id, &path, now, if_version)? else {
+                return Ok(false);
+            };
+            cells::remove(tx, id, &path, found.spill)?;
+            Ok(true)
+        })
+    }
+
+    /// `take_cell_work` without waiting: `done` gets the cell once the commit
+    /// ends.
+    pub(crate) fn take_cell_then(
+        &self,
+        key: &str,
+        options: WriteOptions,
+        done: impl FnOnce(Result<Option<Cell>>) + Send + 'static,
+    ) {
+        match self.take_cell_work(key, options) {
+            Ok(work) => self.scope.submit(key, 0, work, done),
+            Err(error) => done(Err(error)),
+        }
+    }
+
+    /// The take of a key: its delete, which hands back the cell it removed. A
+    /// cell that does not open fails the take, and stays.
+    pub(crate) fn take_cell_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<Option<Cell>> + use<V>> {
+        let now = self.scope.now();
+        let (id, path, if_version) = (self.scope.id, self.scope.path(key)?, options.if_version);
+        let encrypted = self.encrypted.clone();
         Ok(move |tx: &Tx<'_>, _: &AtomicI64| {
             let Some(found) = live_at(tx, id, &path, now, if_version)? else {
                 return Ok(None);
             };
             let cell = cells::live(tx, id, &path, now)?;
             cells::remove(tx, id, &path, found.spill)?;
-            Ok(cell)
+            cell.map(|cell| opened(encrypted.as_ref(), &path, cell)).transpose()
         })
     }
 
@@ -469,16 +531,21 @@ impl<V> Bucket<V> {
     /// Reads a live cell on a reader, renewing an idle key when it is due.
     pub(crate) fn read_cell(&self, key: &str) -> Result<Option<Cell>> {
         let (id, path, now) = (self.scope.id, self.scope.path(key)?, self.scope.now());
-        let found = self.scope.read(key, |connection| cells::live(connection, id, &path, now))?;
+        let read = |connection: &Connection| {
+            let found = cells::live(connection, id, &path, now)?;
+            found.map(|cell| opened(self.encrypted.as_ref(), &path, cell)).transpose()
+        };
+        let found = self.scope.read(key, read)?;
         Ok(found.map(|cell| self.renew(key, path, cell, now)))
     }
 
     /// Reads a live cell inside a transaction, renewing an idle key in it.
     pub(crate) fn read_cell_in(&self, tx: &Tx<'_>, key: &str) -> Result<Option<Cell>> {
         let (id, path, now) = (self.scope.id, self.scope.path(key)?, self.scope.now());
-        let Some(mut cell) = cells::live(tx, id, &path, now)? else {
+        let Some(cell) = cells::live(tx, id, &path, now)? else {
             return Ok(None);
         };
+        let mut cell = opened(self.encrypted.as_ref(), &path, cell)?;
         if let Some(renewal) = self.renewal_due(&cell, now)
             && cells::renew(tx, id, &path, (renewal.version, renewal.seen), renewal.until)?
         {
@@ -514,7 +581,20 @@ impl<V> Bucket<V> {
         after: Option<&str>,
     ) -> Result<Vec<(Vec<u8>, Cell)>> {
         let (from, past) = self.scope.branch()?.own_keys_after(after);
-        cells::page(connection, self.scope.id, (&from, &past), self.scope.now(), limit)
+        let rows = cells::page(connection, self.scope.id, (&from, &past), self.scope.now(), limit)?;
+        let read = |(path, cell): (Vec<u8>, Cell)| {
+            let cell = opened(self.encrypted.as_ref(), &path, cell)?;
+            Ok((path, cell))
+        };
+        rows.into_iter().map(read).collect()
+    }
+
+    /// The row as the file keeps it: sealed when the bucket is encrypted.
+    fn kept(&self, path: &[u8], raw: Raw) -> Result<Raw> {
+        match &self.encrypted {
+            Some(encrypted) => encrypted.seal(path, &raw),
+            None => Ok(raw),
+        }
     }
 
     /// Renews a due idle key: with the next flush of renewals, or before the
@@ -570,7 +650,7 @@ impl Bucket<()> {
 
 impl<V> Clone for Bucket<V> {
     fn clone(&self) -> Self {
-        Bucket::new(self.scope.clone(), self.expiry)
+        Bucket { encrypted: self.encrypted.clone(), ..Bucket::new(self.scope.clone(), self.expiry) }
     }
 }
 
@@ -632,12 +712,25 @@ pub(crate) fn clear_work(scope: &Scope) -> Result<impl Work<()> + use<>> {
     let branch = scope.branch()?;
     let (id, prefix, everything) = (scope.id, branch.prefix().to_vec(), branch.everything());
     Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
+        // a bucket cleared whole holds no value of any key, and takes the key of its next write
+        if prefix.is_empty() {
+            cells::keep_bucket_key(tx, id, None)?;
+        }
         if cells::delete_under(tx, id, (&everything.0, &everything.1), CLEAR_BOUND)? {
             return Ok(());
         }
         let cleared = next_version(revision, tx)?;
         cells::mark_cleared(tx, id, &prefix, cleared)
     })
+}
+
+/// A cell of the file as a caller reads it: opened when its bucket is
+/// encrypted.
+fn opened(encrypted: Option<&Encrypted>, path: &[u8], mut cell: Cell) -> Result<Cell> {
+    if let Some(encrypted) = encrypted {
+        cell.raw = encrypted.open(path, &cell.raw)?;
+    }
+    Ok(cell)
 }
 
 /// A row read back as `V`; a row that is not one is corrupt.

@@ -881,7 +881,10 @@ impl Shared {
     fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
         let lent = |handle| self.lent(handle);
         match method >> 8 {
-            0x01 => kv::call(&self.store, &self.kv, &lent, method, body, max_body),
+            0x01 => {
+                let read_only = self.read_only.load(Ordering::Relaxed);
+                kv::call(&self.store, &self.kv, &lent, method, body, (max_body, read_only))
+            }
             #[cfg(feature = "jobs")]
             0x02 => jobs::call(&self.store, &self.jobs, &lent, method, body, max_body),
             #[cfg(feature = "sql")]

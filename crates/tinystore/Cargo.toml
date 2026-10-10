@@ -11,7 +11,7 @@ publish.workspace = true
 [features]
 default = ["kv", "jobs", "sql", "blobs"]
 # Each engine is a feature: a program links the engines it opens.
-kv = []
+kv = ["dep:chacha20poly1305", "dep:sha2"]
 jobs = ["dep:jiff"]
 sql = []
 blobs = ["dep:sha2"]
@@ -27,9 +27,13 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 # a cron's wall clock in its IANA zone: the system's zone database first, the
 # bundled one where there is none, on Windows and in a slim container
 jiff = { version = "0.2.38", optional = true, features = ["tzdb-bundle-always"] }
-# a file's SHA-256, taken as its bytes are written and checked on a whole read:
-# RustCrypto's, with the processor's SHA instructions where it has them
+# a file's SHA-256, taken as its bytes are written and checked on a whole read,
+# and the id of the store's encryption key: RustCrypto's, with the processor's SHA
+# instructions where it has them
 sha2 = { version = "0.11.0", default-features = false, optional = true }
+# the values of an encrypted bucket, sealed with the store's encryption key:
+# XChaCha20-Poly1305, RustCrypto's, its key and nonces from the system's source
+chacha20poly1305 = { version = "0.11.0", optional = true }
 
 # the disk's free space, which blobs keep some of: statvfs, and statfs on
 # Apple's systems; Windows asks kernel32, which every program links

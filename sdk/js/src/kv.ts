@@ -52,6 +52,14 @@ export interface BucketOptions {
 	idle?: Duration | undefined
 	/** how values are kept when they are not JSON */
 	type?: ValueType | undefined
+	/**
+	 * Keeps every value sealed with the store's encryption key, as a password or a
+	 * token is kept: the file holds what nobody reads without the key. The
+	 * store seals and opens, so this program never holds the key. A key is not
+	 * sealed, so a secret is a value and never a key, and a name keeps whether
+	 * it is encrypted.
+	 */
+	encrypted?: boolean | undefined
 }
 
 export interface WriteOptions {
@@ -398,6 +406,7 @@ export function bucketOpen(
 		ttl: options.ttl === undefined ? undefined : ms(options.ttl),
 		idle: options.idle === undefined ? undefined : ms(options.idle),
 		database,
+		encrypted: options.encrypted === true,
 	})
 }
 

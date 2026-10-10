@@ -635,9 +635,12 @@
       "fields": {
         "durability": {
           "str": "durability"
+        },
+        "encryptionKeyFile": {
+          "str": "encryptionKeyFile"
         }
       },
-      "hex": "8101aa6475726162696c697479",
+      "hex": "8201aa6475726162696c69747902b1656e6372797074696f6e4b657946696c65",
       "message": "store.Options",
       "name": "store.Options with every field"
     },
@@ -1379,6 +1382,9 @@
         "database": {
           "uint": "407"
         },
+        "encrypted": {
+          "bool": true
+        },
         "idle": {
           "uint": "1500"
         },
@@ -1389,7 +1395,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8401a46e616d6502cd05dc03cd05dc04cd0197",
+      "hex": "8501a46e616d6502cd05dc03cd05dc04cd019705c3",
       "message": "kv.BucketOpen",
       "name": "kv.BucketOpen with every field"
     },

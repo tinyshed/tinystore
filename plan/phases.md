@@ -64,11 +64,6 @@ start on sqldb, kv and jobs.
 Decided or built for the Go engines, and in no book or phase of this plan
 yet; each is decided again, in its order, once blobs are on the wire:
 
-- C9: values kept encrypted beside the store, such as a source's password:
-  `{ encrypted: true }` on a bucket, its key `<dir>/secret.key` made at the
-  first write or given at open and to `serve`, a `read` token never opening
-  its values; one key first, its id in every value so that named keys and
-  rotation can follow.
 - C8: an SQL answer as typed columns rather than rows, `db.columns`, once a
   round measures it against `db.all`: a null mask beside the values, and
   integers as numbers or bigints as the call says.
@@ -77,7 +72,10 @@ yet; each is decided again, in its order, once blobs are on the wire:
   the records and metrics books, before phase 3.
 
 Closed: C2, the `read` token; B10, a memo, which `once` with a short `keep`
-is, across processes too.
+is, across processes too; C9, values kept encrypted, which an encrypted
+bucket keeps ([api/kv.md](api/kv.md#encrypted-buckets)): the Rust core,
+protocol 2 and the Bun SDK, one key a store, keys by name and a change of
+key left for when someone needs them.
 
 ## 3. records and metrics
 
@@ -92,7 +90,9 @@ that ran clean.
 
 ## 4. Backup, the command line, the release
 
-- [ ] Backup and restore; a recovery tool's `openBeside`.
+- [ ] Backup and restore; a recovery tool's `openBeside`. A backup leaves the
+  store's encryption key out unless told to take it, and says so when the store
+  holds encrypted buckets, since their values open with no other key.
 - [ ] `tinystore` serve, status, logs, mcp, backup, restore, migrate, schema.
 - [ ] Self-metrics.
 - [ ] The thin Go SDK on cgo and a sidecar, under the root module path.

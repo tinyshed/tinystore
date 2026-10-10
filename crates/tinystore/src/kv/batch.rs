@@ -75,11 +75,20 @@ impl Batch {
         self.write(&bucket.scope, key, move |tx, revision| work(tx, revision).map(stamped))
     }
 
-    /// A take, or a delete, which answers what it found the same way.
+    /// A take, which answers the value it removed.
+    pub(crate) fn take(&mut self, bucket: &Bucket<()>, key: &str, options: WriteOptions) -> Result<()> {
+        self.join(&bucket.scope)?;
+        let work = bucket.take_cell_work(key, options)?;
+        self.write(&bucket.scope, key, move |tx, revision| work(tx, revision).map(taken))
+    }
+
+    /// A delete, which answers whether a key was there and reads no value.
     pub(crate) fn remove(&mut self, bucket: &Bucket<()>, key: &str, options: WriteOptions) -> Result<()> {
         self.join(&bucket.scope)?;
         let work = bucket.remove_work(key, options)?;
-        self.write(&bucket.scope, key, move |tx, revision| work(tx, revision).map(taken))
+        self.write(&bucket.scope, key, move |tx, revision| {
+            work(tx, revision).map(|found| Outcome { found, ..Outcome::default() })
+        })
     }
 
     pub(crate) fn expire(&mut self, bucket: &Bucket<()>, key: &str, options: WriteOptions) -> Result<()> {

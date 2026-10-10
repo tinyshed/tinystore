@@ -440,7 +440,7 @@ fn a_host_reading_into_its_own_bytes_gets_the_stream_in_order_and_a_wake_for_wha
 fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_same_or_nothing() {
     use crate::wire::protocol::StoreOptions;
 
-    let asking = |word: &str| StoreOptions { durability: Some(word.to_owned()) }.encode();
+    let asking = |word: &str| StoreOptions { durability: Some(word.to_owned()), ..StoreOptions::default() }.encode();
     let dir = tempfile::tempdir().unwrap();
     let mut first = Client::over(Pipe::open(dir.path(), &asking("os"), None).unwrap());
     assert_eq!(first.hello(2).unwrap().durability.as_deref(), Some("os"), "the WELCOME says what the store has");
@@ -485,4 +485,49 @@ fn a_read_connection_reads_and_writes_nothing() {
     assert_eq!(refused.code, "permission", "{}", refused.message);
     let entry: KvEntry = owner.call(method::KV_GET, &KvCall { handle: 1, ..changed }).unwrap();
     assert_eq!(entry.value, Some(Row::Bin(b"kept".to_vec())));
+}
+
+#[test]
+fn an_encrypted_bucket_opens_for_a_connection_that_writes_and_for_none_that_only_reads() {
+    use crate::wire::protocol::KvBucketOpen;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let encrypted = KvBucketOpen { name: "passwords".to_owned(), encrypted: true, ..KvBucketOpen::default() };
+    let mut owner = Client::admitted(&store, Capability::Data);
+    let handle = owner.call::<Handle>(method::KV_BUCKET_OPEN, &encrypted).unwrap().handle;
+    let key = KvCall { handle, key: "source-42".to_owned(), ..KvCall::default() };
+    let password = Row::Bin(b"hunter2-the-password".to_vec());
+    owner.call::<KvWritten>(method::KV_SET, &KvCall { value: Some(password.clone()), ..key.clone() }).unwrap();
+    assert_eq!(owner.call::<KvEntry>(method::KV_GET, &key).unwrap().value, Some(password.clone()));
+    assert_eq!(owner.call::<KvEntry>(method::KV_TAKE, &key).unwrap().value, Some(password));
+
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let refused = reader.call::<Handle>(method::KV_BUCKET_OPEN, &encrypted).unwrap_err();
+    assert_eq!(refused.code, "permission", "{}", refused.message);
+    // nor as a bucket that is not: the name keeps that its values are sealed
+    let plain = KvBucketOpen { encrypted: false, ..encrypted };
+    let refused = reader.call::<Handle>(method::KV_BUCKET_OPEN, &plain).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{}", refused.message);
+}
+
+#[test]
+fn a_pipes_store_reads_its_encryption_key_from_the_file_its_options_name() {
+    use crate::wire::protocol::{KvBucketOpen, StoreOptions};
+
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("tinystore.key");
+    std::fs::write(&key, "5a".repeat(32)).unwrap();
+    let data = dir.path().join("data");
+    let named = |file: &std::path::Path| {
+        StoreOptions { encryption_key_file: Some(file.display().to_string()), ..StoreOptions::default() }.encode()
+    };
+    let mut client = Client::over(Pipe::open(&data, &named(&key), None).unwrap());
+    client.hello(2).unwrap();
+    let encrypted = KvBucketOpen { name: "passwords".to_owned(), encrypted: true, ..KvBucketOpen::default() };
+    client.call::<Handle>(method::KV_BUCKET_OPEN, &encrypted).unwrap();
+    assert!(!data.join("encryption.key").exists(), "the store made no key of its own");
+
+    let other = Pipe::open(&data, &named(&dir.path().join("another.key")), None).unwrap_err();
+    assert!(other.to_string().contains("another encryption key file"), "{other}");
 }

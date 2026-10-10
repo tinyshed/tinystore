@@ -369,7 +369,7 @@ An error is the final frame of its stream, with ERROR set:
 | `too_old`, `too_new` | a time outside its engine's window                                                                                                  | no                          |
 | `suspended`          | a series in quarantine                                                                                                              | after its repair            |
 | `outcome_unknown`    | a commit whose result is unknown                                                                                                    | after reading what it wrote |
-| `permission`         | the connection's capability does not allow it                                                                                       | no                          |
+| `permission`         | the connection's capability does not allow it, as a `read` connection opening an encrypted bucket                                   | no                          |
 | `unimplemented`      | a method, or a field of a request, this server does not have: `what` names the field, the message the server's version              | no                          |
 | `cancelled`          | the client cancelled it                                                                                                             | —                           |
 | `unavailable`        | the server is closing                                                                                                               | on another connection       |

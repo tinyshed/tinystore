@@ -199,3 +199,23 @@ fn a_bucket_kept_in_a_database_commits_as_far_as_the_database_does() {
     assert_eq!(sessions.get("a").unwrap(), Some(1));
     store.close().unwrap();
 }
+
+#[test]
+fn an_encrypted_bucket_of_a_database_commits_with_its_rows_and_shows_no_value_in_its_file() {
+    let fixture = fixture();
+    let db = fixture.app();
+    let passwords = db.bucket::<String>("source-passwords").encrypted().open().unwrap();
+    db.tx(|tx| -> Result<(), Error> {
+        tx.exec(sql!("insert into orders (id, total) values (?, ?)", 7, 100))?;
+        tx.with(&passwords).set(7, &"hunter2-the-password".to_owned())
+    })
+    .unwrap();
+    assert_eq!(passwords.get(7).unwrap().as_deref(), Some("hunter2-the-password"));
+
+    let files = std::fs::read_dir(fixture.dir.path().join("sql")).unwrap().map(|entry| entry.unwrap().path());
+    for file in files {
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(!bytes.windows(7).any(|window| window == b"hunter2"), "{} shows the value", file.display());
+    }
+    assert!(fixture.dir.path().join("encryption.key").exists(), "the store's key, not the database's");
+}

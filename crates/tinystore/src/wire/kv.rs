@@ -62,10 +62,10 @@ pub(crate) fn call(
     lent: Lent<'_>,
     called: u16,
     body: &[u8],
-    max_body: usize,
+    (max_body, read_only): (usize, bool),
 ) -> Answered {
     match called {
-        method::KV_BUCKET_OPEN => handles.open(open_bucket(store, lent, KvBucketOpen::decode(body)?)?),
+        method::KV_BUCKET_OPEN => handles.open(open_bucket(store, lent, KvBucketOpen::decode(body)?, read_only)?),
         method::KV_COUNTERS_OPEN => handles.open(open_counters(store, KvCountersOpen::decode(body)?)?),
         method::KV_RATE_LIMIT_OPEN => handles.open(open_rate_limit(store, KvRateLimitOpen::decode(body)?)?),
         method::KV_QUOTA_OPEN => handles.open(open_quota(store, KvQuotaOpen::decode(body)?)?),
@@ -137,10 +137,10 @@ fn key_call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, call: &KvCa
             let (_, work) = bucket.put_work(key, raw, options(call)?, put)?;
             Ok(written(call_on_key(tx, scope, key, work)?))
         }
-        method::KV_TAKE => Ok(taken(call_on_key(tx, scope, key, bucket.remove_work(key, options(call)?)?)?)),
+        method::KV_TAKE => Ok(taken(call_on_key(tx, scope, key, bucket.take_cell_work(key, options(call)?)?)?)),
         method::KV_DELETE => {
-            let cell = call_on_key(tx, scope, key, bucket.remove_work(key, options(call)?)?)?;
-            Ok(KvFound { found: cell.is_some() }.encode())
+            let found = call_on_key(tx, scope, key, bucket.remove_work(key, options(call)?)?)?;
+            Ok(KvFound { found }.encode())
         }
         method::KV_EXPIRE => {
             let found = call_on_key(tx, scope, key, bucket.expire_work(key, options(call)?)?)?;
@@ -183,9 +183,11 @@ fn write(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered
             bucket
                 .put_raw_then(&key, (raw, options, put), move |stamp| done(stamp.map(written).map_err(Failure::from)));
         }
-        method::KV_TAKE => bucket.remove_then(&key, options, move |cell| done(cell.map(taken).map_err(Failure::from))),
-        method::KV_DELETE => bucket.remove_then(&key, options, move |cell| {
-            done(cell.map(|cell| KvFound { found: cell.is_some() }.encode()).map_err(Failure::from));
+        method::KV_TAKE => {
+            bucket.take_cell_then(&key, options, move |cell| done(cell.map(taken).map_err(Failure::from)));
+        }
+        method::KV_DELETE => bucket.remove_then(&key, options, move |found| {
+            done(found.map(|found| KvFound { found }.encode()).map_err(Failure::from));
         }),
         method::KV_EXPIRE => match bucket.expire_work(&key, options) {
             Ok(work) => bucket.scope.submit(&key, 0, work, move |found| {
@@ -264,7 +266,12 @@ impl Handles {
     }
 }
 
-fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen) -> Result<Opened, Failure> {
+/// Opens a bucket as the call says. A connection that only reads opens no
+/// encrypted one: what it may read is what the file shows without the key.
+fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen, read_only: bool) -> Result<Opened, Failure> {
+    if open.encrypted && read_only {
+        return Err(Failure::permission("a read connection opens no encrypted bucket"));
+    }
     let mut builder = match open.database {
         Some(database) => BucketBuilder::in_file(lent(database)?, &open.name),
         None => store.bucket::<()>(&open.name),
@@ -274,6 +281,9 @@ fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen) -> Result<Open
     }
     if let Some(idle) = open.idle {
         builder = builder.idle(Duration::from_millis(idle));
+    }
+    if open.encrypted {
+        builder = builder.encrypted();
     }
     Ok(Opened::Bucket(builder.open()?))
 }
@@ -329,7 +339,7 @@ fn forget(handles: &Handles, body: &[u8], done: impl FnOnce(Answered) + Send + '
     let answers = KvCall::decode(body).and_then(|call| Ok((handles.once(call.handle, &call.under)?, call.key)));
     match answers {
         Ok((answers, key)) => answers.remove_then(&key, WriteOptions::default(), move |removed| {
-            done(removed.map(|removed| KvFound { found: removed.is_some() }.encode()).map_err(Failure::from));
+            done(removed.map(|found| KvFound { found }.encode()).map_err(Failure::from));
         }),
         Err(failure) => done(Err(failure)),
     }
@@ -490,7 +500,8 @@ fn add_write(handles: &Handles, batch: &mut Batch, called: u64, call: &KvCall) -
             let raw = raw_of(call.value.clone().unwrap_or_default());
             Ok(batch.put(&bucket, &call.key, (raw, options, put))?)
         }
-        method::KV_TAKE | method::KV_DELETE => Ok(batch.remove(&bucket, &call.key, options)?),
+        method::KV_TAKE => Ok(batch.take(&bucket, &call.key, options)?),
+        method::KV_DELETE => Ok(batch.remove(&bucket, &call.key, options)?),
         method::KV_EXPIRE => Ok(batch.expire(&bucket, &call.key, options)?),
         method::KV_CLEAR => Ok(batch.clear(&bucket.scope)?),
         other => Err(Failure::invalid(format!("method {other:#06x} in a transaction, which writes"))),

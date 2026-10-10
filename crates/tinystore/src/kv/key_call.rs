@@ -59,7 +59,7 @@ impl<'a, V: Value> KeyCall<'a, V> {
     pub fn delete(self) -> Result<bool> {
         self.refuse_expiry("delete")?;
         let work = self.bucket.remove_work(&self.key, self.options)?;
-        Ok(self.run(0, work)?.is_some())
+        self.run(0, work)
     }
 
     /// Gives a live key the expiry `ttl` or `expires_at` named, keeping its

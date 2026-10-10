@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use super::engine::lock;
 use super::ids::Ids;
+use crate::durable::sync_directory;
 use crate::{Error, Result};
 
 pub(crate) const UPLOADS: &str = "uploads";
@@ -232,26 +233,6 @@ impl DirSync {
             None => Ok(()),
         }
     }
-}
-
-/// Makes a directory's names durable: its own sync.
-#[cfg(not(windows))]
-fn sync_directory(dir: &Path) -> io::Result<()> {
-    std::fs::File::open(dir)?.sync_all()
-}
-
-/// Makes a directory's names durable. Windows opens a directory only for
-/// backup and flushes it as a file, in about a millisecond.
-#[cfg(windows)]
-fn sync_directory(dir: &Path) -> io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    std::fs::OpenOptions::new()
-        .access_mode(GENERIC_WRITE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(dir)?
-        .sync_all()
 }
 
 /// Whether a rename failed because another program, a scanner or a backup
