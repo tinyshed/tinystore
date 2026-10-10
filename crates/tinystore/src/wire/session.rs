@@ -6,6 +6,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::Route;
+#[cfg(feature = "blobs")]
+use super::blobs;
 use super::codec::Message;
 use super::frame::{self, Frame, Kind};
 #[cfg(feature = "jobs")]
@@ -67,6 +69,8 @@ struct Shared {
     jobs: jobs::Handles,
     #[cfg(feature = "sql")]
     sql: sql::Handles,
+    #[cfg(feature = "blobs")]
+    blobs: blobs::Handles,
     input: Mutex<Input>,
     output: Mutex<Output>,
     /// Clients' runs of once, by stream, from the REQUEST to the last frame.
@@ -164,6 +168,8 @@ impl Session {
             jobs: jobs::Handles::default(),
             #[cfg(feature = "sql")]
             sql: sql::Handles::default(),
+            #[cfg(feature = "blobs")]
+            blobs: blobs::Handles::default(),
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
@@ -298,6 +304,8 @@ impl Session {
         }
         #[cfg(feature = "sql")]
         self.shared.sql.end();
+        #[cfg(feature = "blobs")]
+        self.shared.blobs.end();
     }
 }
 
@@ -434,6 +442,10 @@ impl Shared {
             Route::Download => self.download(input, stream, body),
             #[cfg(feature = "sql")]
             Route::Transaction => self.transaction(input, stream, &body),
+            #[cfg(feature = "blobs")]
+            Route::Get => self.get(input, stream, body),
+            #[cfg(feature = "blobs")]
+            Route::Upload => self.upload(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -550,6 +562,64 @@ impl Shared {
         }
     }
 
+    /// Answers a get on a worker: what the file carries and its first bytes
+    /// in the RESPONSE, and the rest as pieces within the client's credit.
+    #[cfg(feature = "blobs")]
+    fn get(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
+        let link = self.blobs_link(input, stream);
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || match guarded(|| blobs::get(&shared.blobs, stream, &body, &link)) {
+            Ok(blobs::Got::Whole(response)) => shared.answer(stream, Ok(response)),
+            Ok(blobs::Got::Begun(response, getting)) => {
+                shared.send(&[Frame::new(Kind::Response, stream, response)]);
+                getting.pump();
+            }
+            Err(failure) => shared.answer(stream, Err(failure)),
+        }));
+    }
+
+    /// Begins an upload: the stream's RESPONSE, then the client's pieces as
+    /// DATA, its last publishing the file.
+    #[cfg(feature = "blobs")]
+    fn upload(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.blobs_link(input, stream);
+        match guarded(|| blobs::upload(&self.blobs, stream, body, &link)) {
+            Ok(()) => self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]),
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
+    /// What a stream of a file's bytes needs of the session.
+    #[cfg(feature = "blobs")]
+    fn blobs_link(self: &Arc<Self>, input: &Input, stream: u32) -> blobs::Link {
+        let (sending, finishing, granting, spawning) =
+            (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
+        blobs::Link {
+            send: Arc::new(move |body| {
+                if let Some(shared) = sending.upgrade() {
+                    shared.send(&[Frame::new(Kind::Data, stream, body)]);
+                }
+            }),
+            finish: Arc::new(move |last| {
+                if let Some(shared) = finishing.upgrade() {
+                    shared.end_stream(stream, last);
+                }
+            }),
+            grant: Arc::new(move |bytes: u32| {
+                if let Some(shared) = granting.upgrade() {
+                    shared.send(&[Frame::new(Kind::Credit, stream, bytes.to_le_bytes().to_vec())]);
+                }
+            }),
+            spawn: Arc::new(move |task| {
+                if let Some(shared) = spawning.upgrade() {
+                    shared.workers.run(task);
+                }
+            }),
+            credit: input.stream_credit,
+            max_body: input.max_body.unwrap_or(HELLO_MOST),
+        }
+    }
+
     /// What an sql stream that sends DATA needs of the session.
     #[cfg(feature = "sql")]
     fn sql_link(self: &Arc<Self>, input: &Input, stream: u32) -> sql::Link {
@@ -616,6 +686,11 @@ impl Shared {
     /// dropped, its credit still given back.
     fn data(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
+        #[cfg(feature = "blobs")]
+        if let Some(uploading) = self.blobs.uploading(frame.stream) {
+            let last = frame.flags & frame::END != 0;
+            return uploading.piece(frame.body, last);
+        }
         #[cfg(feature = "sql")]
         if let Some(tx) = self.sql.tx(frame.stream) {
             // a call is read once it is queued: its credit goes back at once
@@ -684,8 +759,8 @@ impl Shared {
     /// what waited for it. No other stream sends DATA a client grants credit
     /// for: a call answers in one message, within the body agreed.
     #[cfg_attr(
-        not(any(feature = "jobs", feature = "sql")),
-        expect(unused_variables, reason = "only jobs' and sql's streams take credit")
+        not(any(feature = "jobs", feature = "sql", feature = "blobs")),
+        expect(unused_variables, reason = "only jobs', sql's and blobs' streams take credit")
     )]
     fn credit(&self, frame: &Frame) {
         let Ok(granted) = <[u8; 4]>::try_from(frame.body.as_slice()) else {
@@ -696,6 +771,8 @@ impl Shared {
         self.jobs.grant(frame.stream, granted);
         #[cfg(feature = "sql")]
         self.sql.grant(frame.stream, granted);
+        #[cfg(feature = "blobs")]
+        self.blobs.grant(frame.stream, granted);
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
@@ -705,6 +782,10 @@ impl Shared {
     fn cancel(self: &Arc<Self>, stream: u32) {
         #[cfg(feature = "sql")]
         if self.sql.cancel(stream) {
+            return;
+        }
+        #[cfg(feature = "blobs")]
+        if self.blobs.cancel(stream) {
             return;
         }
         #[cfg(feature = "jobs")]
@@ -792,6 +873,8 @@ impl Shared {
             0x02 => jobs::call(&self.store, &self.jobs, &lent, method, body, max_body),
             #[cfg(feature = "sql")]
             0x03 => sql::call(&self.store, &self.sql, method, body),
+            #[cfg(feature = "blobs")]
+            0x04 => blobs::call(&self.store, &self.blobs, method, body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -909,6 +992,8 @@ fn route(method: u16) -> Route {
         0x02 => jobs::route(method),
         #[cfg(feature = "sql")]
         0x03 => sql::route(method),
+        #[cfg(feature = "blobs")]
+        0x04 => blobs::route(method),
         _ => Route::Worker,
     }
 }
@@ -917,7 +1002,8 @@ fn route(method: u16) -> Route {
 fn engines() -> Vec<String> {
     let jobs = cfg!(feature = "jobs").then_some("jobs");
     let sql = cfg!(feature = "sql").then_some("sql");
-    [Some("kv"), jobs, sql].into_iter().flatten().map(str::to_owned).collect()
+    let blobs = cfg!(feature = "blobs").then_some("blobs");
+    [Some("kv"), jobs, sql, blobs].into_iter().flatten().map(str::to_owned).collect()
 }
 
 /// A call that panics answers `internal` rather than leaving its stream open.

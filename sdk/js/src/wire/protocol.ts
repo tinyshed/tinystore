@@ -22,6 +22,18 @@ import {
 } from './codec.ts'
 
 export const methods = {
+	'blobs.open': 0x0401,
+	'blobs.put': 0x0402,
+	'blobs.upload': 0x0403,
+	'blobs.get': 0x0404,
+	'blobs.head': 0x0405,
+	'blobs.delete': 0x0406,
+	'blobs.copy': 0x0407,
+	'blobs.rename': 0x0408,
+	'blobs.expire': 0x0409,
+	'blobs.list': 0x040a,
+	'blobs.usage': 0x040b,
+	'blobs.clear': 0x040c,
 	'jobs.queue.open': 0x0201,
 	'jobs.schedule.open': 0x0202,
 	'jobs.add': 0x0203,
@@ -71,6 +83,1040 @@ export const methods = {
 } as const
 
 export type Method = keyof typeof methods
+
+/**
+ * Opens a set of files by name, made the first time.
+ */
+export const BlobsOpen = message(
+	'blobs.Open',
+	{
+		/** [a-z0-9][a-z0-9_-]{0,63} */
+		name: [1, str],
+		/** the term of every file written without its own */
+		ttl: [2, uint],
+		/** the largest file a write may leave */
+		maxFileSize: [3, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.ttl !== undefined) {
+				w.field(2)
+				w.uint(v.ttl)
+				n++
+			}
+			if (v.maxFileSize !== undefined) {
+				w.field(3)
+				w.uint(v.maxFileSize)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $ttl: number | undefined
+			let $maxFileSize: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$ttl = r.uint()
+						break
+					case 3:
+						$maxFileSize = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, ttl: $ttl, maxFileSize: $maxFileSize }
+		},
+	},
+)
+
+/**
+ * Where a call stands: the files, a folder's segments, a path within it.
+ */
+export const BlobsAt = message(
+	'blobs.At',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		path: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
+				w.str(v.path)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $path: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$path = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder, path: $path }
+		},
+	},
+)
+
+/**
+ * What a file carries: what serving it needs.
+ */
+export const BlobsInfo = message(
+	'blobs.Info',
+	{
+		/** within the folder the call stood in */
+		path: [1, str],
+		size: [2, uint],
+		/** the SHA-256 of its bytes in hex, quoted */
+		etag: [3, str],
+		contentType: [4, str],
+		lastModified: [5, int],
+		expires: [6, int],
+		meta: [7, names(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.path !== undefined) {
+				w.field(1)
+				w.str(v.path)
+				n++
+			}
+			if (v.size !== undefined) {
+				w.field(2)
+				w.uint(v.size)
+				n++
+			}
+			if (v.etag !== undefined) {
+				w.field(3)
+				w.str(v.etag)
+				n++
+			}
+			if (v.contentType !== undefined) {
+				w.field(4)
+				w.str(v.contentType)
+				n++
+			}
+			if (v.lastModified !== undefined) {
+				w.field(5)
+				w.int(v.lastModified)
+				n++
+			}
+			if (v.expires !== undefined) {
+				w.field(6)
+				w.int(v.expires)
+				n++
+			}
+			if (v.meta !== undefined) {
+				w.field(7)
+				writeNames(w, v.meta, str.write)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $path: string | undefined
+			let $size: number | undefined
+			let $etag: string | undefined
+			let $contentType: string | undefined
+			let $lastModified: number | undefined
+			let $expires: number | undefined
+			let $meta: Record<string, string> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$path = r.str()
+						break
+					case 2:
+						$size = r.uint()
+						break
+					case 3:
+						$etag = r.str()
+						break
+					case 4:
+						$contentType = r.str()
+						break
+					case 5:
+						$lastModified = r.int()
+						break
+					case 6:
+						$expires = r.int()
+						break
+					case 7:
+						$meta = readNames(r, str.read)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				path: $path,
+				size: $size,
+				etag: $etag,
+				contentType: $contentType,
+				lastModified: $lastModified,
+				expires: $expires,
+				meta: $meta,
+			}
+		},
+	},
+)
+
+/**
+ * A write of a whole file: a put, or with create a write only where no file
+ * is. Its bytes are in the message, or, for an upload, the DATA that follow.
+ */
+export const BlobsWrite = message(
+	'blobs.Write',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		path: [3, str],
+		contentType: [4, str],
+		meta: [5, names(str)],
+		/** the file's own term, from its write */
+		ttl: [6, uint],
+		/** the ETag of the one file it may replace */
+		ifMatch: [7, str],
+		/** the body's length: one longer or shorter is refused */
+		size: [8, uint],
+		/** writes only where no file is */
+		create: [9, bool],
+		/** a put's whole body; nothing for an upload */
+		bytes: [10, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
+				w.str(v.path)
+				n++
+			}
+			if (v.contentType !== undefined) {
+				w.field(4)
+				w.str(v.contentType)
+				n++
+			}
+			if (v.meta !== undefined) {
+				w.field(5)
+				writeNames(w, v.meta, str.write)
+				n++
+			}
+			if (v.ttl !== undefined) {
+				w.field(6)
+				w.uint(v.ttl)
+				n++
+			}
+			if (v.ifMatch !== undefined) {
+				w.field(7)
+				w.str(v.ifMatch)
+				n++
+			}
+			if (v.size !== undefined) {
+				w.field(8)
+				w.uint(v.size)
+				n++
+			}
+			if (v.create !== undefined) {
+				w.field(9)
+				w.bool(v.create)
+				n++
+			}
+			if (v.bytes !== undefined) {
+				w.field(10)
+				w.bin(v.bytes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $path: string | undefined
+			let $contentType: string | undefined
+			let $meta: Record<string, string> | undefined
+			let $ttl: number | undefined
+			let $ifMatch: string | undefined
+			let $size: number | undefined
+			let $create: boolean | undefined
+			let $bytes: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$path = r.str()
+						break
+					case 4:
+						$contentType = r.str()
+						break
+					case 5:
+						$meta = readNames(r, str.read)
+						break
+					case 6:
+						$ttl = r.uint()
+						break
+					case 7:
+						$ifMatch = r.str()
+						break
+					case 8:
+						$size = r.uint()
+						break
+					case 9:
+						$create = r.bool()
+						break
+					case 10:
+						$bytes = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				folder: $folder,
+				path: $path,
+				contentType: $contentType,
+				meta: $meta,
+				ttl: $ttl,
+				ifMatch: $ifMatch,
+				size: $size,
+				create: $create,
+				bytes: $bytes,
+			}
+		},
+	},
+)
+
+/**
+ * What a write wrote: none when a create found a file there.
+ */
+export const BlobsWritten = message(
+	'blobs.Written',
+	{
+		info: [1, BlobsInfo],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.info !== undefined) {
+				w.field(1)
+				BlobsInfo.write(w, v.info)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $info: Read<typeof BlobsInfo.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$info = BlobsInfo.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { info: $info }
+		},
+	},
+)
+
+/**
+ * A piece of a file's bytes: an upload's DATA from the client, a get's from
+ * the server.
+ */
+export const BlobsPiece = message(
+	'blobs.Piece',
+	{
+		bytes: [1, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.bytes !== undefined) {
+				w.field(1)
+				w.bin(v.bytes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $bytes: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$bytes = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { bytes: $bytes }
+		},
+	},
+)
+
+/**
+ * A get's answer: what the file carries, none when there is no file, and its
+ * first bytes; the rest come as pieces, the last once the whole file matched
+ * its SHA-256, and a file whose bytes changed ends the stream corrupt instead.
+ */
+export const BlobsGot = message(
+	'blobs.Got',
+	{
+		info: [1, BlobsInfo],
+		bytes: [2, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.info !== undefined) {
+				w.field(1)
+				BlobsInfo.write(w, v.info)
+				n++
+			}
+			if (v.bytes !== undefined) {
+				w.field(2)
+				w.bin(v.bytes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $info: Read<typeof BlobsInfo.fields> | undefined
+			let $bytes: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$info = BlobsInfo.read(r)
+						break
+					case 2:
+						$bytes = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { info: $info, bytes: $bytes }
+		},
+	},
+)
+
+export const BlobsHead = message(
+	'blobs.Head',
+	{
+		info: [1, BlobsInfo],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.info !== undefined) {
+				w.field(1)
+				BlobsInfo.write(w, v.info)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $info: Read<typeof BlobsInfo.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$info = BlobsInfo.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { info: $info }
+		},
+	},
+)
+
+export const BlobsDelete = message(
+	'blobs.Delete',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		path: [3, str],
+		ifMatch: [4, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
+				w.str(v.path)
+				n++
+			}
+			if (v.ifMatch !== undefined) {
+				w.field(4)
+				w.str(v.ifMatch)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $path: string | undefined
+			let $ifMatch: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$path = r.str()
+						break
+					case 4:
+						$ifMatch = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder, path: $path, ifMatch: $ifMatch }
+		},
+	},
+)
+
+/**
+ * A copy or a rename: from a path to another of the same folder. A file at
+ * to is a conflict, unless ifMatch names the version to replace.
+ */
+export const BlobsMove = message(
+	'blobs.Move',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		from: [3, str],
+		to: [4, str],
+		ifMatch: [5, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(3)
+				w.str(v.from)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(4)
+				w.str(v.to)
+				n++
+			}
+			if (v.ifMatch !== undefined) {
+				w.field(5)
+				w.str(v.ifMatch)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $from: string | undefined
+			let $to: string | undefined
+			let $ifMatch: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$from = r.str()
+						break
+					case 4:
+						$to = r.str()
+						break
+					case 5:
+						$ifMatch = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder, from: $from, to: $to, ifMatch: $ifMatch }
+		},
+	},
+)
+
+export const BlobsExpire = message(
+	'blobs.Expire',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		path: [3, str],
+		after: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
+				w.str(v.path)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(4)
+				w.uint(v.after)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $path: string | undefined
+			let $after: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$path = r.str()
+						break
+					case 4:
+						$after = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder, path: $path, after: $after }
+		},
+	},
+)
+
+export const BlobsFound = message(
+	'blobs.Found',
+	{
+		found: [1, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.found !== undefined) {
+				w.field(1)
+				w.bool(v.found)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $found: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$found = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { found: $found }
+		},
+	},
+)
+
+/**
+ * A page of a folder's files, in the byte order of their paths.
+ */
+export const BlobsList = message(
+	'blobs.List',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+		/** text within the folder */
+		prefix: [3, str],
+		/** a page's next */
+		after: [4, str],
+		/** 1000 at most, and when absent */
+		limit: [5, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.prefix !== undefined) {
+				w.field(3)
+				w.str(v.prefix)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(4)
+				w.str(v.after)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(5)
+				w.uint(v.limit)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			let $prefix: string | undefined
+			let $after: string | undefined
+			let $limit: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					case 3:
+						$prefix = r.str()
+						break
+					case 4:
+						$after = r.str()
+						break
+					case 5:
+						$limit = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder, prefix: $prefix, after: $after, limit: $limit }
+		},
+	},
+)
+
+export const BlobsPage = message(
+	'blobs.Page',
+	{
+		files: [1, list(BlobsInfo)],
+		next: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.files !== undefined) {
+				w.field(1)
+				w.array(v.files.length)
+				for (const item0 of v.files) {
+					BlobsInfo.write(w, item0)
+				}
+				n++
+			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $files: Read<typeof BlobsInfo.fields>[] | undefined
+			let $next: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof BlobsInfo.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(BlobsInfo.read(r))
+						}
+						r.leave()
+						$files = items0
+						break
+					}
+					case 2:
+						$next = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { files: $files, next: $next }
+		},
+	},
+)
+
+export const BlobsFolder = message(
+	'blobs.Folder',
+	{
+		handle: [1, uint],
+		folder: [2, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.folder !== undefined) {
+				w.field(2)
+				w.array(v.folder.length)
+				for (const item0 of v.folder) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $folder: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$folder = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, folder: $folder }
+		},
+	},
+)
+
+export const BlobsUsage = message(
+	'blobs.Usage',
+	{
+		count: [1, uint],
+		size: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.count !== undefined) {
+				w.field(1)
+				w.uint(v.count)
+				n++
+			}
+			if (v.size !== undefined) {
+				w.field(2)
+				w.uint(v.size)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $count: number | undefined
+			let $size: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$count = r.uint()
+						break
+					case 2:
+						$size = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { count: $count, size: $size }
+		},
+	},
+)
 
 /**
  * What a client says first.

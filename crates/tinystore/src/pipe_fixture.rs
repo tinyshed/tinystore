@@ -81,6 +81,22 @@ impl Client {
         }
     }
 
+    /// The credit the server gives back next on `stream`, for the DATA the
+    /// client sent on it; the frames of other kinds kept for later.
+    #[cfg(feature = "blobs")]
+    pub(crate) fn credit_on(&mut self, stream: u32) -> u64 {
+        loop {
+            let frame = self.read();
+            match frame.kind {
+                Kind::Credit if frame.stream == stream => {
+                    return u64::from(u32::from_le_bytes(frame.body[..4].try_into().unwrap()));
+                }
+                Kind::Credit => {}
+                _ => self.early.push(frame),
+            }
+        }
+    }
+
     /// Whether no frame of `stream` arrives within `wait`, the frames that do
     /// arrive kept for later.
     #[cfg(any(feature = "jobs", feature = "sql"))]

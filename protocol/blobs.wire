@@ -1,0 +1,134 @@
+# blobs, as plan/api/blobs.md has it: files by path in named sets, written
+# whole and replaced whole. A file's bytes travel as DATA, a piece a message,
+# within the credit the side that takes them grants: a get's from the server,
+# an upload's from the client. Every call names its files by a handle, the
+# folder it stands in by its segments, and a path within that folder; what a
+# file carries comes back with its path within the same folder.
+
+# Opens a set of files by name, made the first time.
+message blobs.Open {
+  1 name: str                     # [a-z0-9][a-z0-9_-]{0,63}
+  2 ttl: duration?                # the term of every file written without its own
+  3 maxFileSize: uint?            # the largest file a write may leave
+}
+
+# Where a call stands: the files, a folder's segments, a path within it.
+message blobs.At {
+  1 handle: uint
+  2 folder: [str]
+  3 path: str
+}
+
+# What a file carries: what serving it needs.
+message blobs.Info {
+  1 path: str                     # within the folder the call stood in
+  2 size: uint
+  3 etag: str                     # the SHA-256 of its bytes in hex, quoted
+  4 contentType: str
+  5 lastModified: time
+  6 expires: time?
+  7 meta: {str}?
+}
+
+# A write of a whole file: a put, or with create a write only where no file
+# is. Its bytes are in the message, or, for an upload, the DATA that follow.
+message blobs.Write {
+  1 handle: uint
+  2 folder: [str]
+  3 path: str
+  4 contentType: str?
+  5 meta: {str}?
+  6 ttl: duration?                # the file's own term, from its write
+  7 ifMatch: str?                 # the ETag of the one file it may replace
+  8 size: uint?                   # the body's length: one longer or shorter is refused
+  9 create: bool                  # writes only where no file is
+  10 bytes: bin                   # a put's whole body; nothing for an upload
+}
+
+# What a write wrote: none when a create found a file there.
+message blobs.Written {
+  1 info: blobs.Info?
+}
+
+# A piece of a file's bytes: an upload's DATA from the client, a get's from
+# the server.
+message blobs.Piece {
+  1 bytes: bin
+}
+
+# A get's answer: what the file carries, none when there is no file, and its
+# first bytes; the rest come as pieces, the last once the whole file matched
+# its SHA-256, and a file whose bytes changed ends the stream corrupt instead.
+message blobs.Got {
+  1 info: blobs.Info?
+  2 bytes: bin
+}
+
+message blobs.Head {
+  1 info: blobs.Info?
+}
+
+message blobs.Delete {
+  1 handle: uint
+  2 folder: [str]
+  3 path: str
+  4 ifMatch: str?
+}
+
+# A copy or a rename: from a path to another of the same folder. A file at
+# to is a conflict, unless ifMatch names the version to replace.
+message blobs.Move {
+  1 handle: uint
+  2 folder: [str]
+  3 from: str
+  4 to: str
+  5 ifMatch: str?
+}
+
+message blobs.Expire {
+  1 handle: uint
+  2 folder: [str]
+  3 path: str
+  4 after: duration
+}
+
+message blobs.Found {
+  1 found: bool
+}
+
+# A page of a folder's files, in the byte order of their paths.
+message blobs.List {
+  1 handle: uint
+  2 folder: [str]
+  3 prefix: str                   # text within the folder
+  4 after: str?                   # a page's next
+  5 limit: uint?                  # 1000 at most, and when absent
+}
+
+message blobs.Page {
+  1 files: [blobs.Info]
+  2 next: str?
+}
+
+message blobs.Folder {
+  1 handle: uint
+  2 folder: [str]
+}
+
+message blobs.Usage {
+  1 count: uint
+  2 size: uint
+}
+
+method 0x0401 blobs.open(blobs.Open) -> Handle
+method 0x0402 blobs.put(blobs.Write) -> blobs.Written
+method 0x0403 blobs.upload(blobs.Write) -> exchange blobs.Written for blobs.Piece
+method 0x0404 blobs.get(blobs.At) -> download blobs.Got until Empty
+method 0x0405 blobs.head(blobs.At) -> blobs.Head
+method 0x0406 blobs.delete(blobs.Delete) -> Empty
+method 0x0407 blobs.copy(blobs.Move) -> blobs.Info
+method 0x0408 blobs.rename(blobs.Move) -> blobs.Info
+method 0x0409 blobs.expire(blobs.Expire) -> blobs.Found
+method 0x040a blobs.list(blobs.List) -> blobs.Page
+method 0x040b blobs.usage(blobs.Folder) -> blobs.Usage
+method 0x040c blobs.clear(blobs.Folder) -> Empty

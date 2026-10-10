@@ -7,6 +7,988 @@ use super::codec::{self, Map, Message, Row};
 use super::codec::Cell;
 use super::msgpack::Reader;
 
+/// Opens a set of files by name, made the first time.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsOpen {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    /// The term of every file written without its own. Milliseconds.
+    pub(crate) ttl: Option<u64>,
+    /// The largest file a write may leave.
+    pub(crate) max_file_size: Option<u64>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsOpen {
+    const NAME: &'static str = "blobs.Open";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.ttl = Some(codec::uint(r, "ttl")?),
+                3 => message.max_file_size = Some(codec::uint(r, "maxFileSize")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(ttl) = &self.ttl {
+            map.field(out, 2);
+            codec::write_uint(out, ttl);
+        }
+        if let Some(max_file_size) = &self.max_file_size {
+            map.field(out, 3);
+            codec::write_uint(out, max_file_size);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.ttl.map_or(0, |_| 10)
+            + self.max_file_size.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.ttl.is_none()
+            && self.max_file_size.is_none()
+    }
+}
+
+/// Where a call stands: the files, a folder's segments, a path within it.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsAt {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) path: String,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsAt {
+    const NAME: &'static str = "blobs.At";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.path = codec::str(r, "path")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.path);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.path.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.path.is_empty()
+    }
+}
+
+/// What a file carries: what serving it needs.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsInfo {
+    /// Within the folder the call stood in.
+    pub(crate) path: String,
+    pub(crate) size: u64,
+    /// The SHA-256 of its bytes in hex, quoted.
+    pub(crate) etag: String,
+    pub(crate) content_type: String,
+    /// Unix milliseconds.
+    pub(crate) last_modified: i64,
+    /// Unix milliseconds.
+    pub(crate) expires: Option<i64>,
+    pub(crate) meta: Option<BTreeMap<String, String>>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsInfo {
+    const NAME: &'static str = "blobs.Info";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.path = codec::str(r, "path")?,
+                2 => message.size = codec::uint(r, "size")?,
+                3 => message.etag = codec::str(r, "etag")?,
+                4 => message.content_type = codec::str(r, "contentType")?,
+                5 => message.last_modified = codec::int(r, "lastModified")?,
+                6 => message.expires = Some(codec::int(r, "expires")?),
+                7 => message.meta = Some(codec::names(r, "meta", codec::str)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.path.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.path);
+        }
+        if self.size != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.size);
+        }
+        if !self.etag.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.etag);
+        }
+        if !self.content_type.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.content_type);
+        }
+        if self.last_modified != 0 {
+            map.field(out, 5);
+            codec::write_int(out, &self.last_modified);
+        }
+        if let Some(expires) = &self.expires {
+            map.field(out, 6);
+            codec::write_int(out, expires);
+        }
+        if let Some(meta) = &self.meta {
+            map.field(out, 7);
+            codec::write_names(out, meta, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.path.len()
+            + 10
+            + 1 + 5 + self.etag.len()
+            + 1 + 5 + self.content_type.len()
+            + 10
+            + self.expires.map_or(0, |_| 10)
+            + self.meta.as_ref().map_or(0, |meta| 1 + codec::names_size(meta, |item| 5 + item.len()))
+    }
+
+    fn is_zero(&self) -> bool {
+        self.path.is_empty()
+            && self.size == 0
+            && self.etag.is_empty()
+            && self.content_type.is_empty()
+            && self.last_modified == 0
+            && self.expires.is_none()
+            && self.meta.is_none()
+    }
+}
+
+/// A write of a whole file: a put, or with create a write only where no file
+/// is. Its bytes are in the message, or, for an upload, the DATA that follow.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsWrite {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) path: String,
+    pub(crate) content_type: Option<String>,
+    pub(crate) meta: Option<BTreeMap<String, String>>,
+    /// The file's own term, from its write. Milliseconds.
+    pub(crate) ttl: Option<u64>,
+    /// The ETag of the one file it may replace.
+    pub(crate) if_match: Option<String>,
+    /// The body's length: one longer or shorter is refused.
+    pub(crate) size: Option<u64>,
+    /// Writes only where no file is.
+    pub(crate) create: bool,
+    /// A put's whole body; nothing for an upload.
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsWrite {
+    const NAME: &'static str = "blobs.Write";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.path = codec::str(r, "path")?,
+                4 => message.content_type = Some(codec::str(r, "contentType")?),
+                5 => message.meta = Some(codec::names(r, "meta", codec::str)?),
+                6 => message.ttl = Some(codec::uint(r, "ttl")?),
+                7 => message.if_match = Some(codec::str(r, "ifMatch")?),
+                8 => message.size = Some(codec::uint(r, "size")?),
+                9 => message.create = codec::bool(r, "create")?,
+                10 => message.bytes = codec::bin(r, "bytes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.path);
+        }
+        if let Some(content_type) = &self.content_type {
+            map.field(out, 4);
+            codec::write_str(out, content_type);
+        }
+        if let Some(meta) = &self.meta {
+            map.field(out, 5);
+            codec::write_names(out, meta, codec::write_str);
+        }
+        if let Some(ttl) = &self.ttl {
+            map.field(out, 6);
+            codec::write_uint(out, ttl);
+        }
+        if let Some(if_match) = &self.if_match {
+            map.field(out, 7);
+            codec::write_str(out, if_match);
+        }
+        if let Some(size) = &self.size {
+            map.field(out, 8);
+            codec::write_uint(out, size);
+        }
+        if self.create {
+            map.field(out, 9);
+            codec::write_bool(out, &self.create);
+        }
+        if !self.bytes.is_empty() {
+            map.field(out, 10);
+            codec::write_bin(out, &self.bytes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.path.len()
+            + self.content_type.as_ref().map_or(0, |content_type| 1 + 5 + content_type.len())
+            + self.meta.as_ref().map_or(0, |meta| 1 + codec::names_size(meta, |item| 5 + item.len()))
+            + self.ttl.map_or(0, |_| 10)
+            + self.if_match.as_ref().map_or(0, |if_match| 1 + 5 + if_match.len())
+            + self.size.map_or(0, |_| 10)
+            + 2
+            + 1 + 5 + self.bytes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.path.is_empty()
+            && self.content_type.is_none()
+            && self.meta.is_none()
+            && self.ttl.is_none()
+            && self.if_match.is_none()
+            && self.size.is_none()
+            && !self.create
+            && self.bytes.is_empty()
+    }
+}
+
+/// What a write wrote: none when a create found a file there.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsWritten {
+    pub(crate) info: Option<BlobsInfo>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsWritten {
+    const NAME: &'static str = "blobs.Written";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.info = Some(BlobsInfo::read(r)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(info) = &self.info {
+            map.field(out, 1);
+            codec::write_message(out, info);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.info.as_ref().map_or(0, |info| 1 + info.size())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.info.is_none()
+    }
+}
+
+/// A piece of a file's bytes: an upload's DATA from the client, a get's from
+/// the server.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsPiece {
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsPiece {
+    const NAME: &'static str = "blobs.Piece";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.bytes = codec::bin(r, "bytes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.bytes.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.bytes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.bytes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+/// A get's answer: what the file carries, none when there is no file, and its
+/// first bytes; the rest come as pieces, the last once the whole file matched
+/// its SHA-256, and a file whose bytes changed ends the stream corrupt instead.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsGot {
+    pub(crate) info: Option<BlobsInfo>,
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsGot {
+    const NAME: &'static str = "blobs.Got";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.info = Some(BlobsInfo::read(r)?),
+                2 => message.bytes = codec::bin(r, "bytes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(info) = &self.info {
+            map.field(out, 1);
+            codec::write_message(out, info);
+        }
+        if !self.bytes.is_empty() {
+            map.field(out, 2);
+            codec::write_bin(out, &self.bytes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.info.as_ref().map_or(0, |info| 1 + info.size())
+            + 1 + 5 + self.bytes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.info.is_none()
+            && self.bytes.is_empty()
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsHead {
+    pub(crate) info: Option<BlobsInfo>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsHead {
+    const NAME: &'static str = "blobs.Head";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.info = Some(BlobsInfo::read(r)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(info) = &self.info {
+            map.field(out, 1);
+            codec::write_message(out, info);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.info.as_ref().map_or(0, |info| 1 + info.size())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.info.is_none()
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsDelete {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) path: String,
+    pub(crate) if_match: Option<String>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsDelete {
+    const NAME: &'static str = "blobs.Delete";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.path = codec::str(r, "path")?,
+                4 => message.if_match = Some(codec::str(r, "ifMatch")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.path);
+        }
+        if let Some(if_match) = &self.if_match {
+            map.field(out, 4);
+            codec::write_str(out, if_match);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.path.len()
+            + self.if_match.as_ref().map_or(0, |if_match| 1 + 5 + if_match.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.path.is_empty()
+            && self.if_match.is_none()
+    }
+}
+
+/// A copy or a rename: from a path to another of the same folder. A file at
+/// to is a conflict, unless ifMatch names the version to replace.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsMove {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) if_match: Option<String>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsMove {
+    const NAME: &'static str = "blobs.Move";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.from = codec::str(r, "from")?,
+                4 => message.to = codec::str(r, "to")?,
+                5 => message.if_match = Some(codec::str(r, "ifMatch")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.from.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.from);
+        }
+        if !self.to.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.to);
+        }
+        if let Some(if_match) = &self.if_match {
+            map.field(out, 5);
+            codec::write_str(out, if_match);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.from.len()
+            + 1 + 5 + self.to.len()
+            + self.if_match.as_ref().map_or(0, |if_match| 1 + 5 + if_match.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.from.is_empty()
+            && self.to.is_empty()
+            && self.if_match.is_none()
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsExpire {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    pub(crate) path: String,
+    /// Milliseconds.
+    pub(crate) after: u64,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsExpire {
+    const NAME: &'static str = "blobs.Expire";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.path = codec::str(r, "path")?,
+                4 => message.after = codec::uint(r, "after")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.path);
+        }
+        if self.after != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.after);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.path.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.path.is_empty()
+            && self.after == 0
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsFound {
+    pub(crate) found: bool,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsFound {
+    const NAME: &'static str = "blobs.Found";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+    }
+}
+
+/// A page of a folder's files, in the byte order of their paths.
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsList {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+    /// Text within the folder.
+    pub(crate) prefix: String,
+    /// A page's next.
+    pub(crate) after: Option<String>,
+    /// 1000 at most, and when absent.
+    pub(crate) limit: Option<u64>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsList {
+    const NAME: &'static str = "blobs.List";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                3 => message.prefix = codec::str(r, "prefix")?,
+                4 => message.after = Some(codec::str(r, "after")?),
+                5 => message.limit = Some(codec::uint(r, "limit")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        if !self.prefix.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.prefix);
+        }
+        if let Some(after) = &self.after {
+            map.field(out, 4);
+            codec::write_str(out, after);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 5);
+            codec::write_uint(out, limit);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+            + 1 + 5 + self.prefix.len()
+            + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
+            + self.limit.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+            && self.prefix.is_empty()
+            && self.after.is_none()
+            && self.limit.is_none()
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsPage {
+    pub(crate) files: Vec<BlobsInfo>,
+    pub(crate) next: Option<String>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsPage {
+    const NAME: &'static str = "blobs.Page";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.files = codec::list(r, "files", codec::message::<BlobsInfo>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.files.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.files, codec::write_message);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.files, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.files.is_empty()
+            && self.next.is_none()
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsFolder {
+    pub(crate) handle: u64,
+    pub(crate) folder: Vec<String>,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsFolder {
+    const NAME: &'static str = "blobs.Folder";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.folder = codec::list(r, "folder", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.folder.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.folder, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.folder, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.folder.is_empty()
+    }
+}
+
+#[cfg(feature = "blobs")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlobsUsage {
+    pub(crate) count: u64,
+    pub(crate) size: u64,
+}
+
+#[cfg(feature = "blobs")]
+impl Message for BlobsUsage {
+    const NAME: &'static str = "blobs.Usage";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.count = codec::uint(r, "count")?,
+                2 => message.size = codec::uint(r, "size")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.count != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.count);
+        }
+        if self.size != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.size);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.count == 0
+            && self.size == 0
+    }
+}
+
 /// What a client says first.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Hello {
@@ -3878,6 +4860,30 @@ impl Message for SqlTxAnswer {
 
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_OPEN: u16 = 0x0401;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_PUT: u16 = 0x0402;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_UPLOAD: u16 = 0x0403;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_GET: u16 = 0x0404;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_HEAD: u16 = 0x0405;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_DELETE: u16 = 0x0406;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_COPY: u16 = 0x0407;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_RENAME: u16 = 0x0408;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_EXPIRE: u16 = 0x0409;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_LIST: u16 = 0x040a;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_USAGE: u16 = 0x040b;
+    #[cfg(feature = "blobs")]
+    pub(crate) const BLOBS_CLEAR: u16 = 0x040c;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_QUEUE_OPEN: u16 = 0x0201;
     #[cfg(feature = "jobs")]
@@ -3973,6 +4979,30 @@ pub(crate) mod method {
 /// Every method, its name and number, for the test that the server answers each.
 #[cfg(test)]
 pub(crate) const METHODS: &[(&str, u16)] = &[
+    #[cfg(feature = "blobs")]
+    ("blobs.open", 0x0401),
+    #[cfg(feature = "blobs")]
+    ("blobs.put", 0x0402),
+    #[cfg(feature = "blobs")]
+    ("blobs.upload", 0x0403),
+    #[cfg(feature = "blobs")]
+    ("blobs.get", 0x0404),
+    #[cfg(feature = "blobs")]
+    ("blobs.head", 0x0405),
+    #[cfg(feature = "blobs")]
+    ("blobs.delete", 0x0406),
+    #[cfg(feature = "blobs")]
+    ("blobs.copy", 0x0407),
+    #[cfg(feature = "blobs")]
+    ("blobs.rename", 0x0408),
+    #[cfg(feature = "blobs")]
+    ("blobs.expire", 0x0409),
+    #[cfg(feature = "blobs")]
+    ("blobs.list", 0x040a),
+    #[cfg(feature = "blobs")]
+    ("blobs.usage", 0x040b),
+    #[cfg(feature = "blobs")]
+    ("blobs.clear", 0x040c),
     #[cfg(feature = "jobs")]
     ("jobs.queue.open", 0x0201),
     #[cfg(feature = "jobs")]
@@ -4071,6 +5101,38 @@ pub(crate) const METHODS: &[(&str, u16)] = &[
 #[cfg(test)]
 pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize), Failure>> {
     let rewritten = match name {
+        #[cfg(feature = "blobs")]
+        "blobs.Open" => BlobsOpen::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.At" => BlobsAt::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Info" => BlobsInfo::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Write" => BlobsWrite::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Written" => BlobsWritten::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Piece" => BlobsPiece::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Got" => BlobsGot::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Head" => BlobsHead::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Delete" => BlobsDelete::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Move" => BlobsMove::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Expire" => BlobsExpire::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Found" => BlobsFound::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.List" => BlobsList::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Page" => BlobsPage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Folder" => BlobsFolder::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "blobs")]
+        "blobs.Usage" => BlobsUsage::decode(body).map(|message| (message.encode(), message.size())),
         "Hello" => Hello::decode(body).map(|message| (message.encode(), message.size())),
         "Welcome" => Welcome::decode(body).map(|message| (message.encode(), message.size())),
         "store.Options" => StoreOptions::decode(body).map(|message| (message.encode(), message.size())),

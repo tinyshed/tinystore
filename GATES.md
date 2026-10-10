@@ -515,8 +515,10 @@ module defines.
 - a remote worker's outcomes settle its jobs — `TestARemoteWorkerSettlesByItsOutcomes`, a retry counted
 - a lost connection aborts uploads, fails attempts in hand — `TestALostConnectionAbortsUploadsAndFailsAttemptsInHand`, `TestALostWorkerFailsTheAttemptsInItsHands`
 - a jobs enqueue of many is one transaction — `TestAJobsEnqueueIsOneTransaction`
-- a blobs put that does not commit leaves nothing — `TestAnUploadThatDoesNotCommitLeavesNothing`
-- a whole blobs get of a changed object ends corrupt — `TestAWholeReadOfAChangedObjectEndsCorrupt`
+- a blobs put answers whole, and a create over the wire writes once — `a_file_put_over_the_wire_reads_back_whole_in_one_answer`, `create_over_the_wire_writes_once` in `wire::blobs`
+- a file goes up and comes down in pieces, never past the credit of the side that takes them — `a_large_file_goes_up_and_comes_down_in_pieces_within_the_credit` in `wire::blobs`
+- a blobs upload cancelled, refused or cut by its connection leaves nothing, and `cancelled` comes once its bytes are gone — `an_upload_cancelled_or_refused_leaves_nothing`, `a_connection_that_ends_mid_upload_leaves_nothing` in `wire::blobs`
+- a whole blobs get of a changed byte ends corrupt before its last piece — `a_get_of_a_changed_byte_ends_corrupt_before_its_last_piece` in `wire::blobs`
 - the server module requires only the root — `TestTheServerRequiresOnlyTheRoot`
 - `server/wire` imports only the standard library — `TestWireImportsOnlyTheStandardLibrary`
 - a data client cannot change a schema — `TestADataClientCannotChangeTheSchema`, `TestEachLineOfTheCheckRefusesOnItsOwn`, `FuzzDataSQL`

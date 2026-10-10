@@ -2,6 +2,8 @@
 //! session that answers them, and each engine's messages. The server's
 //! sockets and the FFI's pipe carry the same frames through the same session.
 
+#[cfg(feature = "blobs")]
+mod blobs;
 pub(crate) mod codec;
 pub(crate) mod frame;
 #[cfg(feature = "jobs")]
@@ -40,5 +42,9 @@ pub(crate) enum Route {
     Download,
     #[cfg(feature = "sql")]
     Transaction,
+    #[cfg(feature = "blobs")]
+    Get,
+    #[cfg(feature = "blobs")]
+    Upload,
     Worker,
 }

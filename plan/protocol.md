@@ -228,6 +228,40 @@ its own, and its answer is the method's own, in `body`. A handle's first open
 writes the file, so a client opens the database's handles before `sql.tx`,
 whose transaction holds the writer an open would wait for.
 
+## blobs
+
+| Method                       | Request                                          | Answer                                                                                  |
+|------------------------------|--------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `blobs.open`                 | name, a term for its files, the largest file     | a handle                                                                                |
+| `blobs.put`                  | where, the file's fields and its bytes; `create` | what it wrote, none when a create found a file                                          |
+| `blobs.upload`               | where and the file's fields, its bytes to follow | both ways: the client's pieces in, the server's credit out; the last publishes the file |
+| `blobs.get`                  | where                                            | a download: what the file carries and its first bytes, the rest as pieces               |
+| `blobs.head`                 | where                                            | what the file carries, or none                                                          |
+| `blobs.delete`               | where, an ETag                                   | nothing                                                                                 |
+| `blobs.copy`, `blobs.rename` | a folder, from, to, an ETag                      | what the file at `to` carries                                                           |
+| `blobs.expire`               | where, a term                                    | whether there was a file                                                                |
+| `blobs.list`                 | a folder, a prefix, after, a limit               | a page of what its files carry, and the next                                            |
+| `blobs.usage`                | a folder                                         | its files and their bytes                                                               |
+| `blobs.clear`                | a folder                                         | nothing                                                                                 |
+
+Where is a handle, a folder as its segments and a path within it, so that
+the server joins no string a client wrote. A file's bytes travel as
+`blobs.Piece`, each at most half the stream credit of the side that takes
+them, and credit counts the bytes of the messages sent, which the taker gives
+back.
+
+`blobs.get` answers what the file carries and its first piece in the
+RESPONSE, and the rest as DATA within the client's credit, read from the file
+as credit comes. A whole read holds its last piece back until the file
+matched its SHA-256: a changed byte ends the stream `corrupt` instead.
+
+`blobs.upload`'s RESPONSE says the server is ready. The client's pieces come
+as DATA within the server's stream credit, each given back once it is
+written, and its DATA·END publishes the file, answered `blobs.Written` in the
+server's DATA·END. A CANCEL or the connection's end removes the bytes before
+the stream ends `cancelled`; a last piece the server took already publishes,
+and the answer says so.
+
 ## The server
 
 | Method         | Request                                   | Answer                                                                   |

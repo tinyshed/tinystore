@@ -50,10 +50,10 @@ taken against Go `e81a050` and written up as a research round.
 
 ## 2. sqldb, jobs, blobs
 
-- [ ] Downloads and uploads under credit, which blobs and records need.
+- [x] Downloads and uploads under credit, which blobs and records need: blobs' get and upload pace both ways in protocol 2.
 - [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree. The Rust core, protocol 2 and the Bun SDK are built to the book, `include` among them; FTS5 and R*Tree have no test yet, and Python and Go come with their bindings.
 - [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, a queue in the store's transaction among them; Python and Go come with their bindings.
-- [ ] blobs to its accepted book ([api/blobs.md](api/blobs.md)): files inline or a file each, uploads, conditions, copies, expiry, checked reads, the scrub. The Rust core is built; its downloads and uploads in the protocol and the Bun SDK come next, and `keepFree` with them.
+- [ ] blobs to its accepted book ([api/blobs.md](api/blobs.md)): files inline or a file each, uploads, conditions, copies, expiry, checked reads, the scrub. The Rust core and protocol 2 are built; the Bun SDK comes next, and `keepFree` with it.
 - [x] kv and jobs inside an sql database: `db.bucket` and `db.queue`, which commit with its rows, in the Rust core, protocol 2 and the Bun SDK.
 
 **Gate:** their GATES.md lines pass in Rust and through every SDK; Dashbin can

@@ -3,6 +3,517 @@
   "messages": [
     {
       "fields": {
+        "maxFileSize": {
+          "uint": "307"
+        },
+        "name": {
+          "str": "name"
+        },
+        "ttl": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8301a46e616d6502cd05dc03cd0133",
+      "message": "blobs.Open",
+      "name": "blobs.Open with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Open",
+      "name": "blobs.Open with no field"
+    },
+    {
+      "fields": {
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "path": {
+          "str": "path"
+        }
+      },
+      "hex": "83016b0291a6666f6c64657203a470617468",
+      "message": "blobs.At",
+      "name": "blobs.At with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.At",
+      "name": "blobs.At with no field"
+    },
+    {
+      "fields": {
+        "contentType": {
+          "str": "contentType"
+        },
+        "etag": {
+          "str": "etag"
+        },
+        "expires": {
+          "int": "1790000000000"
+        },
+        "lastModified": {
+          "int": "1790000000000"
+        },
+        "meta": {
+          "names": {
+            "a": {
+              "str": "meta"
+            }
+          }
+        },
+        "path": {
+          "str": "path"
+        },
+        "size": {
+          "uint": "207"
+        }
+      },
+      "hex": "8701a47061746802cccf03a46574616704ab636f6e74656e745479706505cf000001a0c4506c0006cf000001a0c4506c000781a161a46d657461",
+      "message": "blobs.Info",
+      "name": "blobs.Info with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Info",
+      "name": "blobs.Info with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        },
+        "contentType": {
+          "str": "contentType"
+        },
+        "create": {
+          "bool": true
+        },
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "ifMatch": {
+          "str": "ifMatch"
+        },
+        "meta": {
+          "names": {
+            "a": {
+              "str": "meta"
+            }
+          }
+        },
+        "path": {
+          "str": "path"
+        },
+        "size": {
+          "uint": "807"
+        },
+        "ttl": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8a016b0291a6666f6c64657203a47061746804ab636f6e74656e74547970650581a161a46d65746106cd05dc07a769664d6174636808cd032709c30ac40201ff",
+      "message": "blobs.Write",
+      "name": "blobs.Write with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Write",
+      "name": "blobs.Write with no field"
+    },
+    {
+      "fields": {
+        "info": {
+          "fields": {
+            "contentType": {
+              "str": "contentType"
+            },
+            "etag": {
+              "str": "etag"
+            },
+            "expires": {
+              "int": "1790000000000"
+            },
+            "lastModified": {
+              "int": "1790000000000"
+            },
+            "meta": {
+              "names": {
+                "a": {
+                  "str": "meta"
+                }
+              }
+            },
+            "path": {
+              "str": "path"
+            },
+            "size": {
+              "uint": "207"
+            }
+          }
+        }
+      },
+      "hex": "81018701a47061746802cccf03a46574616704ab636f6e74656e745479706505cf000001a0c4506c0006cf000001a0c4506c000781a161a46d657461",
+      "message": "blobs.Written",
+      "name": "blobs.Written with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Written",
+      "name": "blobs.Written with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8101c40201ff",
+      "message": "blobs.Piece",
+      "name": "blobs.Piece with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Piece",
+      "name": "blobs.Piece with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        },
+        "info": {
+          "fields": {
+            "contentType": {
+              "str": "contentType"
+            },
+            "etag": {
+              "str": "etag"
+            },
+            "expires": {
+              "int": "1790000000000"
+            },
+            "lastModified": {
+              "int": "1790000000000"
+            },
+            "meta": {
+              "names": {
+                "a": {
+                  "str": "meta"
+                }
+              }
+            },
+            "path": {
+              "str": "path"
+            },
+            "size": {
+              "uint": "207"
+            }
+          }
+        }
+      },
+      "hex": "82018701a47061746802cccf03a46574616704ab636f6e74656e745479706505cf000001a0c4506c0006cf000001a0c4506c000781a161a46d65746102c40201ff",
+      "message": "blobs.Got",
+      "name": "blobs.Got with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Got",
+      "name": "blobs.Got with no field"
+    },
+    {
+      "fields": {
+        "info": {
+          "fields": {
+            "contentType": {
+              "str": "contentType"
+            },
+            "etag": {
+              "str": "etag"
+            },
+            "expires": {
+              "int": "1790000000000"
+            },
+            "lastModified": {
+              "int": "1790000000000"
+            },
+            "meta": {
+              "names": {
+                "a": {
+                  "str": "meta"
+                }
+              }
+            },
+            "path": {
+              "str": "path"
+            },
+            "size": {
+              "uint": "207"
+            }
+          }
+        }
+      },
+      "hex": "81018701a47061746802cccf03a46574616704ab636f6e74656e745479706505cf000001a0c4506c0006cf000001a0c4506c000781a161a46d657461",
+      "message": "blobs.Head",
+      "name": "blobs.Head with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Head",
+      "name": "blobs.Head with no field"
+    },
+    {
+      "fields": {
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "ifMatch": {
+          "str": "ifMatch"
+        },
+        "path": {
+          "str": "path"
+        }
+      },
+      "hex": "84016b0291a6666f6c64657203a47061746804a769664d61746368",
+      "message": "blobs.Delete",
+      "name": "blobs.Delete with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Delete",
+      "name": "blobs.Delete with no field"
+    },
+    {
+      "fields": {
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "from": {
+          "str": "from"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "ifMatch": {
+          "str": "ifMatch"
+        },
+        "to": {
+          "str": "to"
+        }
+      },
+      "hex": "85016b0291a6666f6c64657203a466726f6d04a2746f05a769664d61746368",
+      "message": "blobs.Move",
+      "name": "blobs.Move with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Move",
+      "name": "blobs.Move with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "uint": "1500"
+        },
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "path": {
+          "str": "path"
+        }
+      },
+      "hex": "84016b0291a6666f6c64657203a47061746804cd05dc",
+      "message": "blobs.Expire",
+      "name": "blobs.Expire with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Expire",
+      "name": "blobs.Expire with no field"
+    },
+    {
+      "fields": {
+        "found": {
+          "bool": true
+        }
+      },
+      "hex": "8101c3",
+      "message": "blobs.Found",
+      "name": "blobs.Found with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Found",
+      "name": "blobs.Found with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "str": "after"
+        },
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "limit": {
+          "uint": "507"
+        },
+        "prefix": {
+          "str": "prefix"
+        }
+      },
+      "hex": "85016b0291a6666f6c64657203a670726566697804a5616674657205cd01fb",
+      "message": "blobs.List",
+      "name": "blobs.List with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.List",
+      "name": "blobs.List with no field"
+    },
+    {
+      "fields": {
+        "files": {
+          "list": [
+            {
+              "fields": {
+                "contentType": {
+                  "str": "contentType"
+                },
+                "etag": {
+                  "str": "etag"
+                },
+                "expires": {
+                  "int": "1790000000000"
+                },
+                "lastModified": {
+                  "int": "1790000000000"
+                },
+                "meta": {
+                  "names": {
+                    "a": {
+                      "str": "meta"
+                    }
+                  }
+                },
+                "path": {
+                  "str": "path"
+                },
+                "size": {
+                  "uint": "207"
+                }
+              }
+            }
+          ]
+        },
+        "next": {
+          "str": "next"
+        }
+      },
+      "hex": "8201918701a47061746802cccf03a46574616704ab636f6e74656e745479706505cf000001a0c4506c0006cf000001a0c4506c000781a161a46d65746102a46e657874",
+      "message": "blobs.Page",
+      "name": "blobs.Page with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Page",
+      "name": "blobs.Page with no field"
+    },
+    {
+      "fields": {
+        "folder": {
+          "list": [
+            {
+              "str": "folder"
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b0291a6666f6c646572",
+      "message": "blobs.Folder",
+      "name": "blobs.Folder with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Folder",
+      "name": "blobs.Folder with no field"
+    },
+    {
+      "fields": {
+        "count": {
+          "uint": "107"
+        },
+        "size": {
+          "uint": "207"
+        }
+      },
+      "hex": "82016b02cccf",
+      "message": "blobs.Usage",
+      "name": "blobs.Usage with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "blobs.Usage",
+      "name": "blobs.Usage with no field"
+    },
+    {
+      "fields": {
         "challenge": {
           "bin": "01ff"
         },
@@ -1885,6 +2396,18 @@
     }
   ],
   "methods": {
+    "blobs.clear": 1036,
+    "blobs.copy": 1031,
+    "blobs.delete": 1030,
+    "blobs.expire": 1033,
+    "blobs.get": 1028,
+    "blobs.head": 1029,
+    "blobs.list": 1034,
+    "blobs.open": 1025,
+    "blobs.put": 1026,
+    "blobs.rename": 1032,
+    "blobs.upload": 1027,
+    "blobs.usage": 1035,
     "jobs.add": 515,
     "jobs.cancel": 518,
     "jobs.get": 519,

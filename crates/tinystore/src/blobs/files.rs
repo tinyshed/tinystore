@@ -410,6 +410,14 @@ impl FileCall<'_> {
         self.files.copy_to(&source, &target, &self.options, rename).map_err(|error| self.files.fail(&target, error))
     }
 
+    /// Writes the whole file, or with `create` only where no file is; says
+    /// what it wrote, nothing when a create found a file. The wire's put.
+    pub(crate) fn written(self, bytes: &[u8], create: bool) -> Result<Option<FileInfo>> {
+        let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
+        let condition = Condition { if_match: self.options.if_match.clone(), when_there };
+        self.write_all(bytes, condition)
+    }
+
     fn write_all(self, bytes: &[u8], condition: Condition) -> Result<Option<FileInfo>> {
         let whole = self.files.whole(&self.path)?;
         self.options.check().map_err(|error| self.files.fail(&whole, error))?;
