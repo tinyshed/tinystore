@@ -12,7 +12,7 @@ says.
 | [decisions.md](decisions.md)       | what was decided, when and why; where two files disagree, this one wins                               |
 | [evidence.md](evidence.md)         | what the Rust research measured and what it did not, and what to take from its prototypes             |
 | [architecture.md](architecture.md) | the layers, the crates, the runtime model, config and logger, durability, the modules that come later |
-| [ffi.md](ffi.md)                   | the byte pipe: its five functions, the bindings per language, async hosts, what ships per platform    |
+| [ffi.md](ffi.md)                   | the byte pipe: its four functions, the bindings per language, async hosts, what ships per platform    |
 | [protocol.md](protocol.md)         | protocol 2: the books as messages, one schema, the codecs generated for every language                |
 | [dx.md](dx.md)                     | the API's vocabulary: the rules, the newcomer check, the words decided and the drafts                 |
 | [phases.md](phases.md)             | the order of work: each phase's tasks and the gate that closes it, with their status                  |

@@ -46,6 +46,21 @@ test.skipIf(!library)('many writes at once share the core and all land', async (
 	expect(read).toEqual(Array.from({ length: 200 }, (_, n) => n))
 })
 
+test.skipIf(!library)('an answer longer than the room it is read into comes whole', async () => {
+	const store = await embeddedStore()
+	const blobs = store.bucket<Uint8Array>('pictures', { type: 'bytes' })
+	// 300 KiB, past the 64 KiB the pipe reads into at first: the frame comes in
+	// parts, the room grown for it
+	const picture = Uint8Array.from({ length: 300_000 }, (_, n) => n % 251)
+	await blobs.set('one', picture)
+	const [read, again] = await Promise.all([blobs.get('one'), blobs.get('one')])
+	expect(read).toEqual(picture)
+	expect(again).toEqual(picture)
+	// and a small answer after it is read as before
+	await blobs.set('two', Uint8Array.of(1, 2, 3))
+	expect(await blobs.get('two')).toEqual(Uint8Array.of(1, 2, 3))
+})
+
 test.skipIf(!library)('take reads a key once', async () => {
 	const store = await embeddedStore()
 	const codes = store.bucket<number>('login-codes', { ttl: '15m' })

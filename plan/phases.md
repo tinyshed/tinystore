@@ -34,7 +34,7 @@ them; the workspace builds and tests on three operating systems.
 - [x] The server's TCP and TLS, rustls on ring: a client's capability is its token's line, the tokens and the certificate read before the store opens, a HELLO awaited five seconds; the kv suite passes through a remote server.
 - [ ] `tinystore stop`, `status` and `logs`; an owner-only DACL on the named pipe and on `server/` on Windows.
 - [x] The pipe: the C ABI and bun:ffi; the Bun SDK's kv is the book's over protocol 2, and its suite passes `embedded`.
-- [ ] napi-rs, PyO3 and cgo over the same five functions; the Python and Go SDKs.
+- [ ] napi-rs, PyO3 and cgo over the same four functions; the Python and Go SDKs.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,

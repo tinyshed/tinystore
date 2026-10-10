@@ -18,7 +18,9 @@ owner proposed a dumb FFI of a few universal functions passing bytes, so that
 everything new goes into the wire layer and nothing into the FFI. Refined the
 same day: the FFI is an in-memory connection that carries whole wire frames,
 five functions in C and four in each binding ([ffi.md](ffi.md)). Rust programs
-call the engines directly, without bytes.
+call the engines directly, without bytes. On 10 October the fifth went: the
+host gives the bytes the core writes its frames into, so no memory of the
+core's crosses and nothing is left to free.
 
 **3. Config and logger move into the core.** They exist three times today, in
 Go, TypeScript and Python, held together only by test vectors. Config gets a

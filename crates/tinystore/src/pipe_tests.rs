@@ -392,3 +392,46 @@ fn writes_of_kv_in_flight_hold_no_thread_of_the_session() {
     drop(client);
     store.close().unwrap();
 }
+
+#[test]
+fn a_host_reading_into_its_own_bytes_gets_the_stream_in_order_and_a_wake_for_what_became_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let wakes = std::sync::Arc::new(AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&wakes);
+    let wake: Wake = std::sync::Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let pipe = Pipe::connect(&store, Connect { wake: Some(wake), ..Connect::default() }).unwrap();
+    let mut hello = Vec::new();
+    let said = Hello { protocol: 2, client: "test/0".to_owned(), ..Hello::default() };
+    Frame::new(Kind::Hello, 0, said.encode()).encode_into(&mut hello);
+
+    // given no room, a send leaves the WELCOME to the read, and the host is woken for it
+    assert_eq!(pipe.send_into(&hello, &mut []), 0);
+    assert_eq!(wakes.load(Ordering::SeqCst), 1);
+
+    // five bytes at a time: a read that fills its room says more may wait, and no wake does
+    let (mut welcome, mut piece) = (Vec::new(), [0u8; 5]);
+    loop {
+        let read = pipe.recv_into(std::time::Duration::ZERO, &mut piece);
+        welcome.extend_from_slice(&piece[..read]);
+        if read < piece.len() {
+            break;
+        }
+    }
+    assert_eq!(wakes.load(Ordering::SeqCst), 1, "what a read left wakes nobody");
+    let mut reader = frame::Reader::default();
+    reader.push(&welcome);
+    assert_eq!(reader.next(1 << 16).unwrap().expect("the frame came whole").kind, Kind::Welcome);
+
+    // read to its end, the stream wakes the host for the next frame
+    let mut ping = Vec::new();
+    Frame::new(Kind::Ping, 0, vec![7; 8]).encode_into(&mut ping);
+    assert_eq!(pipe.send_into(&ping, &mut []), 0);
+    assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    let mut pong = [0u8; 64];
+    assert_eq!(pipe.recv_into(std::time::Duration::ZERO, &mut pong), 20, "a PONG, whole");
+    drop(pipe);
+    store.close().unwrap();
+}

@@ -913,6 +913,7 @@ dependencies = [
 name = "tinystore-ffi"
 version = "0.0.0"
 dependencies = [
+ "tempfile",
  "tinystore",
 ]
 

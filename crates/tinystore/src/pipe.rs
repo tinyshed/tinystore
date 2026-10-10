@@ -122,6 +122,26 @@ impl Pipe {
         self.session.take(wait)
     }
 
+    /// As [`Pipe::send`], the frames ready at once written into the host's
+    /// own bytes: it returns how many were written. The bytes are a stream,
+    /// so a frame may end in the next read; when they fill `into`, more may
+    /// wait, which no wake announces: the host reads on with
+    /// [`Pipe::recv_into`]. With no room it is [`Pipe::push`].
+    ///
+    /// One reader at a time takes the stream: a host that sends from many
+    /// threads gives its sends no room and reads in one place.
+    pub fn send_into(&self, frames: &[u8], into: &mut [u8]) -> usize {
+        self.session.receive(frames);
+        self.session.take_ready_into(into)
+    }
+
+    /// As [`Pipe::recv`], written into the host's own bytes: it returns how
+    /// many were written, and filled bytes may have left more, as
+    /// [`Pipe::send_into`] says.
+    pub fn recv_into(&self, wait: Duration, into: &mut [u8]) -> usize {
+        self.session.take_into(wait, into)
+    }
+
     /// Tells the client the server is closing: a `GOAWAY`, after which a
     /// `REQUEST` is answered `unavailable` unrun, while the streams running
     /// finish.

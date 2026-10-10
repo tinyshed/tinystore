@@ -39,6 +39,9 @@ const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
 const HELLO_MOST: usize = 1 << 16;
 /// The bytes of a HELLO's challenge, which a local server's proof answers.
 const CHALLENGE: usize = 16;
+/// The room a session keeps for what it owes between two reads of it: a
+/// result of megabytes read once does not stay a session's for good.
+const KEPT: usize = 1 << 20;
 /// Requests read from a connection at once that send its point reads to the
 /// workers. Five in flight are answered as fast where they are read, on a
 /// host whose threads wake slowly; six are not.
@@ -109,11 +112,45 @@ struct Input {
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
+    /// How many of the bytes a host that reads into its own has read: the
+    /// rest is what it is owed.
+    read: usize,
     woken: bool,
     ended: bool,
     /// Whether a thread waits in `take` for bytes: queueing them wakes it,
     /// and wakes nobody where the host is woken through its callback.
     awaited: bool,
+}
+
+impl Output {
+    fn owes_nothing(&self) -> bool {
+        self.read == self.bytes.len()
+    }
+
+    /// Everything owed, as bytes of their own.
+    fn take_all(&mut self) -> Vec<u8> {
+        let mut bytes = std::mem::take(&mut self.bytes);
+        bytes.drain(..std::mem::take(&mut self.read));
+        bytes
+    }
+
+    /// Copies what is owed into `into`, as much as fits, and says how much.
+    /// Read to their end, the bytes start over in the room they had, unless
+    /// that is more than a session keeps.
+    fn take_into(&mut self, into: &mut [u8]) -> usize {
+        let owed = &self.bytes[self.read..];
+        let taken = owed.len().min(into.len());
+        into[..taken].copy_from_slice(&owed[..taken]);
+        self.read += taken;
+        if self.owes_nothing() {
+            self.read = 0;
+            self.bytes.clear();
+            if self.bytes.capacity() > KEPT {
+                self.bytes = Vec::new();
+            }
+        }
+        taken
+    }
 }
 
 impl Session {
@@ -163,15 +200,33 @@ impl Session {
     /// read after a write, which a wake in flight answers anyway, so that a
     /// host writing often is not woken once a commit.
     pub(crate) fn take_ready(&self) -> Vec<u8> {
-        std::mem::take(&mut self.shared.lock_output().bytes)
+        self.shared.lock_output().take_all()
+    }
+
+    /// As `take_ready`, into the host's own bytes: as many as fit, and how
+    /// many they were.
+    pub(crate) fn take_ready_into(&self, into: &mut [u8]) -> usize {
+        self.shared.lock_output().take_into(into)
     }
 
     /// The bytes the client is owed, waiting up to `wait` for the first; the
     /// next bytes ready wake the host again.
     pub(crate) fn take(&self, wait: Duration) -> Vec<u8> {
+        self.awaited(wait).take_all()
+    }
+
+    /// As `take`, into the host's own bytes: as many as fit, and how many
+    /// they were. What did not fit stays for the next read, and wakes nobody.
+    pub(crate) fn take_into(&self, wait: Duration, into: &mut [u8]) -> usize {
+        self.awaited(wait).take_into(into)
+    }
+
+    /// The output once it owes bytes or `wait` has passed, the host counted
+    /// as having read: the next bytes ready wake it again.
+    fn awaited(&self, wait: Duration) -> MutexGuard<'_, Output> {
         let deadline = Instant::now() + wait;
         let mut output = self.shared.lock_output();
-        while output.bytes.is_empty() && !output.ended {
+        while output.owes_nothing() && !output.ended {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -181,7 +236,7 @@ impl Session {
         }
         output.awaited = false;
         output.woken = false;
-        std::mem::take(&mut output.bytes)
+        output
     }
 
     /// Tells the client the server is closing; the streams running finish, and
@@ -214,7 +269,7 @@ impl Session {
     /// Whether the session reads nothing more and owes nothing more.
     pub(crate) fn finished(&self) -> bool {
         let output = self.shared.lock_output();
-        output.ended && output.bytes.is_empty()
+        output.ended && output.owes_nothing()
     }
 
     /// Ends the session: calls under way finish, what they answer is dropped,
@@ -227,6 +282,7 @@ impl Session {
         let mut output = self.shared.lock_output();
         output.ended = true;
         output.bytes.clear();
+        output.read = 0;
         drop(output);
         self.shared.ready.notify_all();
         let runs = std::mem::take(&mut *self.shared.lock_runs());

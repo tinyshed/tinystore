@@ -391,7 +391,7 @@ export function embedded(runtime: Runtime, dir: string, library: () => string): 
 		const { openPipe } = await import('./runtime/pipe.ts')
 		let session: Session | undefined
 		const transport = openPipe(library(), resolve(dir), {
-			data: bytes => session?.receive(bytes),
+			frames: (bytes, length) => session?.read(bytes, length) ?? length,
 			end: err => session?.end(err),
 		})
 		session = new Session(bytes => transport.write(bytes), { client: runtime.client })

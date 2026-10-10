@@ -1,6 +1,6 @@
 [package]
 name = "tinystore-ffi"
-description = "TinyStore's C ABI: five functions that carry the wire's frames to a store in this process"
+description = "TinyStore's C ABI: four functions that carry the wire's frames to a store in this process"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,9 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 tinystore = { path = "../tinystore" }
+
+[dev-dependencies]
+tempfile = "3.27"
 
 [lints]
 workspace = true

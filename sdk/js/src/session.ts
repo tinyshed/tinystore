@@ -548,25 +548,39 @@ export class Session {
 			bytes.set(chunk, this.#rest.length)
 			this.#rest = undefined
 		}
+		const at = this.read(bytes, bytes.length)
+		if (at < bytes.length && this.#ended === undefined) {
+			this.#rest = bytes.slice(at)
+		}
+	}
+
+	/**
+	 * Takes the frames whole in the first `length` bytes and says how many
+	 * bytes they were: the rest is a frame's first part, which whoever owns
+	 * the bytes keeps for its end. Nothing of the bytes is kept here, so their
+	 * owner may write them over once this returns.
+	 */
+	read(bytes: Uint8Array, length: number): number {
+		if (this.#ended !== undefined) {
+			return length
+		}
 		let at = 0
 		try {
-			while (bytes.length - at >= 12) {
+			while (length - at >= headerSize) {
 				const h = parseHeader(bytes, at)
 				checkHeader(h, this.#agreed?.maxBody ?? welcomeMost)
-				const stop = at + 12 + h.length
-				if (stop > bytes.length) {
+				const stop = at + headerSize + h.length
+				if (stop > length) {
 					break
 				}
-				this.#take(h, bytes, at + 12, stop)
+				this.#take(h, bytes, at + headerSize, stop)
 				at = stop
 			}
 		} catch (err) {
 			this.fault(err instanceof Error ? err : new ProtocolError(String(err)))
-			return
+			return length
 		}
-		if (at < bytes.length) {
-			this.#rest = bytes.slice(at)
-		}
+		return at
 	}
 
 	// takes the frame whose body is the bytes from `from` to `to`

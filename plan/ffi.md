@@ -9,35 +9,47 @@ process.
 
 So the pipe never changes. A new call, a new engine, channels, indexes: each
 is new messages in the protocol, negotiated in `HELLO` like a server's
-version, and the five functions below stay as they are.
+version, and the four functions below stay as they are.
 
 ## The functions
 
 ```c
 typedef struct tinystore_conn tinystore_conn;
-typedef struct { uint8_t *ptr; size_t len; } tinystore_bytes;
 
-/* Opens the store in dir, or joins it when this process has it open. */
-int32_t tinystore_open(const uint8_t *dir, size_t dir_len,
-                       const uint8_t *options, size_t options_len,   /* MessagePack */
-                       void (*wake)(void *ctx), void *ctx,
-                       tinystore_conn **conn, tinystore_bytes *error);
+/* Opens the store in dir, or joins it when this process has it open. Returns 0,
+   or the length of the message it wrote into error, cut to error_room. */
+size_t tinystore_open(const uint8_t *dir, size_t dir_len,
+                      const uint8_t *options, size_t options_len,   /* MessagePack */
+                      void (*wake)(void *ctx), void *ctx,
+                      tinystore_conn **conn, uint8_t *error, size_t error_room);
 
-/* Takes frames; returns the frames ready at once, perhaps none. */
-tinystore_bytes tinystore_send(tinystore_conn *conn, const uint8_t *frames, size_t len);
+/* Takes frames; writes the frames ready at once into `into`, as many of their
+   bytes as fit, and returns how many it wrote. */
+size_t tinystore_send(tinystore_conn *conn, const uint8_t *frames, size_t len,
+                      uint8_t *into, size_t room);
 
-/* Returns the frames ready since, waiting up to wait_ms for the first; 0 does not wait. */
-tinystore_bytes tinystore_recv(tinystore_conn *conn, uint32_t wait_ms);
+/* Writes the frames ready since into `into`, waiting up to wait_ms for the
+   first; 0 does not wait. */
+size_t tinystore_recv(tinystore_conn *conn, uint32_t wait_ms, uint8_t *into, size_t room);
 
 /* Ends the connection; the store closes with its last connection. */
 void tinystore_close(tinystore_conn *conn);
-
-/* Gives back what send, recv or open returned. */
-void tinystore_free(tinystore_bytes bytes);
 ```
 
-The napi-rs and PyO3 bindings expose `open`, `send`, `recv` and `close`; their
-runtimes own the memory, so they need no `free`.
+The napi-rs and PyO3 bindings expose the same four, a buffer of their runtime
+where C takes a pointer and a length.
+
+- **No memory of the core's crosses.** The host gives the bytes its frames
+  are in and the bytes the core's are written into; the core reads the one
+  and writes the other before it returns, and keeps neither. A host keeps
+  two buffers for a connection's life, and nothing is left to free: the first
+  shape handed the host a buffer of the core's each call, which bun:ffi had
+  to wrap, copy and give back, three crossings where one does.
+- **What the core writes is a stream.** A frame may end in the next read, as
+  a socket's would. A call that fills its room may have left frames, which
+  no wake announces: the host reads on with `recv` until one returns less.
+- **One reader at a time.** A host that sends from many threads, as Go may
+  from many goroutines, gives `send` no room and reads in one place.
 
 - **A connection is local.** Its capability is `admin`, with no token and no
   proof: the process opened the directory itself.
@@ -51,13 +63,15 @@ runtimes own the memory, so they need no `free`.
   the commit. A point read may answer inline once phase 1 has measured that it
   pays; the functions do not change either way.
 - **`wake` is edge-triggered.** A core thread calls it once when frames become
-  ready after an empty `recv`, and not again until the host has called `recv`.
+  ready after the host's last `recv`, and not again until the host has called
+  `recv`.
   It must return quickly and must not call into the core. A host that reads
   with a blocking `recv`, as Go does from a goroutine, passes no `wake`.
 - **A panic never crosses.** Every function catches unwinding; a panic in the
   core ends the connection with `GOAWAY` and the code `internal`.
 - **A connection is safe from any thread**, so Go may call `send` from many
-  goroutines; frames from one call stay together.
+  goroutines; frames from one call stay together, and what they answer is
+  read by the one goroutine in `recv`.
 - **Credit is smaller than a socket's.** A stream's credit on the pipe is a
   fraction of the 2 MiB a socket gets, so a slow consumer holds little memory;
   phase 1 picks the number.
