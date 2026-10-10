@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Once;
 
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 
@@ -16,6 +17,7 @@ pub(crate) enum Role {
 pub(crate) fn open(path: &Path, config: &Config, role: Role) -> Result<Connection> {
     let what = || format!("{}: {} connection", path.display(), role.name());
     super::give_mutexes();
+    warn_of_a_slow_build();
     let connection = Connection::open_with_flags(path, flags(role)).map_err(|error| sql_error(what(), error))?;
     connection.busy_timeout(config.busy_timeout).map_err(|error| sql_error(what(), error))?;
     connection.set_prepared_statement_cache_capacity(config.statements);
@@ -29,6 +31,30 @@ pub(crate) fn open(path: &Path, config: &Config, role: Role) -> Result<Connectio
         Role::Reader => configure_reader(&connection, config).map_err(|error| sql_error(what(), error))?,
     }
     Ok(connection)
+}
+
+/// Says once what the SQLite linked in costs readers, where it was built or
+/// started without what the workspace gives it: a program that builds the
+/// crate elsewhere finds out from its log, not from a profile.
+fn warn_of_a_slow_build() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if super::memory::shares_page_cache() {
+            tracing::warn!(
+                target: "tinystore",
+                "SQLite was built with SQLITE_ENABLE_MEMORY_MANAGEMENT, so every connection shares one page cache \
+                 behind one mutex and readers stop one another: build with \
+                 LIBSQLITE3_FLAGS=\"SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT\""
+            );
+        }
+        if !super::mutexes_given() {
+            tracing::warn!(
+                target: "tinystore",
+                "SQLite had started before the store opened and keeps its own mutexes, which park a thread at once: \
+                 a few threads reading one file wait on each other; open the store before the program's own SQLite"
+            );
+        }
+    });
 }
 
 fn flags(role: Role) -> OpenFlags {
