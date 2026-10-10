@@ -8,6 +8,23 @@ pub(crate) fn used() -> i64 {
     unsafe { rusqlite::ffi::sqlite3_memory_used() }
 }
 
+/// Hands the system back what glibc keeps of freed memory for later
+/// allocations; elsewhere nothing. Readers that closed leave their memory with
+/// it: 3–9 MiB of a resting process (research rust-memory-2026-10-10).
+pub(crate) fn give_back() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> std::ffi::c_int;
+        }
+        // SAFETY: malloc_trim takes no pointer, walks glibc's arenas under
+        // their own locks and only hands free pages back to the system.
+        unsafe {
+            malloc_trim(0);
+        }
+    }
+}
+
 /// Whether the SQLite linked in keeps one page cache for every connection of
 /// the process, as libsqlite3-sys builds it unless told otherwise.
 pub(crate) fn shares_page_cache() -> bool {

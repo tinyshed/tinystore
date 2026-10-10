@@ -210,7 +210,11 @@ impl File {
     /// Closes the readers left unused for too long; the store runs it now and
     /// then.
     pub(crate) fn sweep(&self) -> usize {
-        self.readers.sweep()
+        let closed = self.readers.sweep();
+        if closed > 0 {
+            super::memory::give_back();
+        }
+        closed
     }
 
     pub(crate) fn readers_open(&self) -> usize {
