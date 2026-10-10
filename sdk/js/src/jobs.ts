@@ -937,7 +937,7 @@ export function openQueue<T>(
 		openMethod: methods['jobs.queue.open'],
 		open,
 		home,
-		via: viaLink(link),
+		via: home === undefined ? viaLink(link) : home.via(`jobs queue ${name}`),
 		values: valuesOf<T>(options.schema),
 		timeout: options.timeout === undefined ? 60_000 : ms(options.timeout),
 		workers,

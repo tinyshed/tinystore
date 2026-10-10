@@ -217,7 +217,7 @@ module defines.
 - an expression spelled otherwise never refuses a file — `TestOpenDoesNotRefuseAnExpressionSpelledOtherwise`
 - a partial unique index is declared and checked, its condition's spelling a line — `TestAPartialUniqueIndexIsDeclaredAndChecked`, `TestOpenRefusesAPartialIndexWithTheDeclaredName`
 - a long transaction fails no grouped write behind it — `TestALongTransactionFailsNoWriteBehindIt`, `TestALongTransactionFailsNoGroupedWriteBehindIt`
-- a call around a transaction from inside it is refused rather than waits — `a_call_around_a_transaction_from_inside_it_is_invalid` in `sql::database_tests`
+- a call around a transaction from inside it is refused rather than waits — `a_call_around_a_transaction_from_inside_it_is_invalid` in `sql::database_tests`; by the async context in Bun, where a call beside it waits its turn, `a call around a transaction from inside it is refused, and one beside it waits its turn` in `sdk/js/test/sql.test.ts`
 - a transaction sees its own writes, rolls back on an error, and a call that fails leaves it as before the call — `a_transaction_sees_its_writes_and_rolls_back_on_an_error` in `sql::database_tests`; `a transaction sees its own writes, commits what it returns and rolls back a throw` in `sdk/js/test/sql.test.ts`
 - a transaction past its five seconds rolls back — `a_transaction_past_its_bound_rolls_back` in `sql::database_tests`
 - an sqldb snapshot ends at its bound and says so — `TestEachHoldsOneSnapshotAndOneRow`, `TestASnapshotHeldPastItsBoundSaysSo`

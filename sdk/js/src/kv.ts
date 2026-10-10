@@ -141,7 +141,7 @@ export class Bucket<T> {
 		this.#values = values
 		this.#under = under
 		this.#home = home
-		this.#via = via ?? viaLink(link)
+		this.#via = via ?? home?.via(`kv bucket ${name}`) ?? viaLink(link)
 		const own = { link, name, open, openMethod: 'kv.bucket.open', under, home } as const
 		parts.set(this, { ...own, values: values as Values<unknown> })
 	}

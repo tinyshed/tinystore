@@ -520,6 +520,43 @@ for (const way of ways) {
 			)
 		})
 
+		test('a call around a transaction from inside it is refused, and one beside it waits its turn', async () => {
+			const emails = app.queue<{ note: string }>('around')
+			const sessions = app.bucket<{ user: string }>('around')
+			const notes = app.table('notes')
+			const around = [
+				() => app.exec`delete from notes where id = 'none'`,
+				() => app.all`select 1`,
+				() => app.batch([sql`delete from notes where id = 'none'`]),
+				() => app.tx(async () => {}),
+				() => notes.count(),
+				() => emails.add({ note: 'around' }),
+				() => sessions.get('k'),
+			]
+			let release = () => {}
+			const gate = new Promise<void>(resolve => {
+				release = resolve
+			})
+			const held = app.tx(async tx => {
+				for (const call of around) {
+					const refused = await caught(call())
+					expect(refused).toBeInstanceOf(InvalidError)
+					expect((refused as Error).message).toContain('make it through the transaction')
+				}
+				await tx.with(emails).add({ note: 'inside' }, { id: 'inside' })
+				await gate
+			})
+			// a call of another flow is no call from inside: it waits for the writer, and is made
+			const beside = emails.add({ note: 'beside' }, { id: 'beside' })
+			release()
+			await held
+			expect(await beside).toBe(true)
+			expect((await emails.get('inside'))?.state).toBe('waiting')
+			for (const call of around) {
+				await call()
+			}
+		})
+
 		test('a worker runs a job its transaction added, once the transaction commits', async () => {
 			const sent = app.queue<{ note: string }>('sent')
 			const seen: string[] = []

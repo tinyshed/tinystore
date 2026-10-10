@@ -550,7 +550,9 @@ let placed = db.tx(|tx| -> Result<bool, ShopError> {
 - `tx.with(handle)` takes a bucket or a queue of the same database in, so that
   a job or a key commits with the rows; a call around the transaction from
   inside it, `db.exec` or `emails.add`, is `invalid`, since it would wait for
-  the writer the transaction holds.
+  the writer the transaction holds. Rust knows such a call by its thread, Bun
+  and Node by its async context, so that another request's call beside the
+  transaction waits its turn and is made.
 - Over the pipe a statement costs microseconds; across a network each costs a
   round trip, so a transaction there keeps to a few statements.
 
@@ -723,7 +725,40 @@ An agent the owner works with read the book after the check.
 | a cursor could be given to another query                                        | a cursor holds a digest of its query, and another's is `invalid`                         |
 | an empty condition refused reads as a safety                                    | said to stop a mistake, not to authorize                                                 |
 
+## Third check, 10 October
+
+Three reviewers with no context read what the slice's end added, the buckets
+and queues in a database's file, the constraint an error names and `include`:
+a free review, a newcomer's reading of fourteen call sites, and a blind choice
+among spellings.
+
+| It found                                                                                   | Change                                                                                       |
+|--------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| a bare `emails.add` inside `db.tx` read as a write outside it; all three named the trap    | `invalid` in Bun too, by the async context: it had waited five seconds, then committed alone |
+| an `include` without its `limit` or its `select` expected to give every row, whole         | kept refused; each refusal says what the query needs                                         |
+| the `limit` of an included query counts for each row, where elsewhere it is a total        | kept and said here; `perRow(3)` is the other spelling, the owner's to choose                 |
+| the link wanted beside the name, `include('posts', latest, { on })`, by one of three       | kept: the `where` is the query's own, and takes values as any other                          |
+| a queue's `add` answers nothing in `store.tx` across a pipe, where Rust and `db.tx` answer | open, below                                                                                  |
+| `where_` chosen over `filter` for Rust                                                     | kept: the first check read `where_` as a typo                                                |
+| a foreign key's constraint names no table                                                  | SQLite says no more, as the book says                                                        |
+
+Read right and kept, in the blind choice: `include` (over `with`, `nest`,
+`attach` and a `select` of queries), a `limit` the query must have (over
+every row and a silent default), `tx.with(handle)`, `db.queue` and
+`db.bucket`, `kind` with `'primaryKey'`, and a key held as `conflict` where
+another constraint is `invalid`. The newcomer read eleven of the fourteen
+sites at four of five or better; the three below that were the bare call
+inside a transaction, how many statements an `include` runs, and the Rust
+`include`, whose list is found by its field's name.
+
 ## Open
+
+- **A queue's writes in `store.tx` across a pipe** are kept and made at the
+  commit, so `tx.with(queue).add(…)` answers nothing there, where in Rust and
+  in `db.tx` it says whether the job was added. Two reviewers of the third
+  check asked for one answer everywhere, or another verb for what is a batch,
+  `store.batch([…])`. The types say it, `Promise<void>`, and kv's `store.tx`
+  defers its writes the same way; whether the word stays is the owner's.
 
 - **kv's `store.tx` over the wire** is optimistic and runs its function again
   when a read it made changed, where SQL's holds the writer and runs it once.

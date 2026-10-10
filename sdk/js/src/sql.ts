@@ -4,13 +4,14 @@
 // which every open applies and checks. A statement leaves as its text and the
 // values of its ?s, each as SQLite keeps it.
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { download } from './connection.ts'
 import { errorOf, InvalidError } from './errors.ts'
-import { checkName, type Home, handleOn, type Open, type Via } from './handles.ts'
+import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import {
 	openQueue,
 	type Queue,
@@ -547,6 +548,17 @@ async function scalar<T>(runner: Runner, statement: Sql): Promise<T> {
 	return answered.rows[0]?.[0] as T
 }
 
+/** A transaction whose function is running. */
+interface Running {
+	database: Database
+	/** set once the function returned or threw: what it left running is outside the transaction */
+	ended: boolean
+}
+
+// The transactions whose functions the caller runs inside, as its async
+// context carries them: a thread's own stack, for a runtime of one thread.
+const running = new AsyncLocalStorage<readonly Running[]>()
+
 /**
  * An application's database: `await store.database('app', { migrations })`.
  * The verb says what comes back: all the rows, one or none, one value, or
@@ -587,6 +599,29 @@ export class Database implements Runner, Home {
 		}
 		this.#guests.set(key, { method, open: make })
 		return make
+	}
+
+	via(what: string): Via {
+		const link = viaLink(this.#link)
+		return {
+			call: async (openMethod, open, method, body, idempotence) => {
+				this.#refuseAround(what)
+				return link.call(openMethod, open, method, body, idempotence)
+			},
+		}
+	}
+
+	/**
+	 * Refuses a call made around the database's transaction from inside its
+	 * function. It would wait for the writer the transaction holds until the
+	 * server rolled the transaction back, and then commit alone.
+	 */
+	#refuseAround(what: string): void {
+		if (running.getStore()?.some(each => each.database === this && !each.ended)) {
+			throw new InvalidError(
+				`${this.describe}: ${what}: made around the database's transaction from inside it, where it would wait for the writer the transaction holds: make it through the transaction, as tx.exec or tx.with(queue).add`,
+			)
+		}
 	}
 
 	/**
@@ -642,6 +677,7 @@ export class Database implements Runner, Home {
 	 * one snapshot, at most 64 MiB.
 	 */
 	async *each<T = Row>(...statement: Statement): AsyncGenerator<T> {
+		this.#refuseAround('a read')
 		const piece = statementOf(statement)
 		const connection = await this.#link.connection()
 		const handle = await this.handle(connection)
@@ -701,6 +737,7 @@ export class Database implements Runner, Home {
 			}
 			return { text: each.text, values: [...each.values] }
 		})
+		this.#refuseAround('a batch')
 		const answered = await this.#link.run('write', async connection => {
 			const handle = await this.handle(connection)
 			return connection.session.call(
@@ -724,6 +761,7 @@ export class Database implements Runner, Home {
 	 *     })
 	 */
 	async tx<T>(fn: (tx: SqlTx) => T | Promise<T>): Promise<T> {
+		this.#refuseAround('a transaction')
 		const connection = await this.#link.connection()
 		const handle = await this.handle(connection)
 		const guests = await this.#openGuests(connection)
@@ -734,13 +772,16 @@ export class Database implements Runner, Home {
 		)
 		await stream.next()
 		const tx = new SqlTx(stream, this, connection, guests)
+		const inside: Running = { database: this, ended: false }
 		let value: T
 		try {
-			value = await fn(tx)
+			value = await running.run([...(running.getStore() ?? []), inside], () => fn(tx))
 		} catch (err) {
+			inside.ended = true
 			await tx.end(false).catch(() => {})
 			throw err
 		}
+		inside.ended = true
 		await tx.end(true)
 		return value
 	}
@@ -767,6 +808,7 @@ export class Database implements Runner, Home {
 	}
 
 	async rows(statement: Sql, want: Want): Promise<Answered> {
+		this.#refuseAround('a statement')
 		const idempotence: Idempotence = mayWrite(statement.text) ? 'write' : 'read'
 		return this.#link.run(idempotence, async connection => {
 			const handle = await this.handle(connection)
@@ -783,6 +825,7 @@ export class Database implements Runner, Home {
 
 	/** Runs a write once it is durable; writes from many callers share a commit, each failing alone. */
 	async exec(...statement: Statement): Promise<Done> {
+		this.#refuseAround('a write')
 		const piece = statementOf(statement)
 		const answered = await this.#link.run('write', async connection => {
 			const handle = await this.handle(connection)

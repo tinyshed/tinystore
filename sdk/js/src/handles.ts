@@ -24,6 +24,13 @@ export interface Home {
 		bytes: Uint8Array,
 		make: (connection: Connection) => Promise<Uint8Array>,
 	): Open
+	/**
+	 * How a handle kept in the database's file reaches the server outside a
+	 * transaction: on the link's connection, and refused from inside the
+	 * database's own transaction, where it would wait for the writer the
+	 * transaction holds.
+	 */
+	via(what: string): Via
 }
 
 /**
