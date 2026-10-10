@@ -55,26 +55,26 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path                           | What it is                                                                                           |
-|--------------------------------|------------------------------------------------------------------------------------------------------|
-| `crates/tinystore/`            | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features     |
-| `crates/tinystore/src/sqlite/` | the SQLite every engine stands on; no engine vocabulary                                              |
-| `crates/tinystore/src/kv/`     | kv: buckets, counters, rate limits, quotas, `once`, transactions                                     |
-| `crates/tinystore/src/jobs/`   | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                       |
-| `crates/tinystore/src/sql/`    | sql: the application's databases, their migrations, reads, writes, batches and transactions          |
-| `crates/tinystore/src/blobs/`  | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory        |
-| `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                               |
-| `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                             |
-| `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                     |
-| `crates/cli/`                  | `tinystore`: `serve` over stdio, a local socket or a named pipe, TCP and TLS, on tokio               |
-| `crates/protocol/`             | the generator: `protocol/*.wire` to the Rust and TypeScript codecs and the vectors; nothing ships it |
-| `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                             |
-| `protocol/`                    | the wire protocol's schema, a file an engine, which every codec and vector is written from           |
-| `editors/wire/`                | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover       |
-| `testdata/wire/`               | the protocol's vectors, which Rust and every SDK read                                                |
-| `plan/`                        | the rewrite: decisions, evidence, architecture, the API books, phases                                |
-| `docs/`, `web/`                | the guides and the docs site, built from `main`                                                      |
-| `.agents/skills/`              | how recurring work is done; `.claude/skills/` points to it                                           |
+| Path                           | What it is                                                                                         |
+|--------------------------------|----------------------------------------------------------------------------------------------------|
+| `crates/tinystore/`            | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features   |
+| `crates/tinystore/src/sqlite/` | the SQLite every engine stands on; no engine vocabulary                                            |
+| `crates/tinystore/src/kv/`     | kv: buckets, counters, rate limits, quotas, `once`, transactions                                   |
+| `crates/tinystore/src/jobs/`   | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                     |
+| `crates/tinystore/src/sql/`    | sql: the application's databases, their migrations, reads, writes, batches and transactions        |
+| `crates/tinystore/src/blobs/`  | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory      |
+| `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                             |
+| `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                           |
+| `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                   |
+| `crates/cli/`                  | `tinystore`: `serve` over stdio, a local socket or a named pipe, TCP and TLS, on tokio             |
+| `crates/protocol/`             | the `.wire` language's parser and layout, and what writes every codec and vector; nothing ships it |
+| `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                           |
+| `protocol/`                    | the wire protocol's schema, a file an engine, which every codec and vector is written from         |
+| `editors/wire/`                | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover     |
+| `testdata/wire/`               | the protocol's vectors, which Rust and every SDK read                                              |
+| `plan/`                        | the rewrite: decisions, evidence, architecture, the API books, phases                              |
+| `docs/`, `web/`                | the guides and the docs site, built from `main`                                                    |
+| `.agents/skills/`              | how recurring work is done; `.claude/skills/` points to it                                         |
 
 ## Crates
 
@@ -275,6 +275,7 @@ bytes a sample in a real file.
 | [plan/](plan/README.md)                                                       | the rewrite: what is decided and when, the evidence, the architecture, the API books, the phases                                             |
 | [GATES.md](GATES.md)                                                          | every promise and the test that fails when it breaks, by engine; a line names a Rust test once it lands, the Go test at `e81a050` until then |
 | [docs/wire.md](docs/wire.md)                                                  | the wire protocol's bytes: frames, credit, MessagePack, errors                                                                               |
+| [protocol/README.md](protocol/README.md)                                      | the `.wire` language the protocol's schema is written in: its lines, types, methods and layout                                               |
 | research's [tinystore/design][design]                                         | why each engine has its shape, as designed                                                                                                   |
 | [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions                                                                              |
 

@@ -5,7 +5,9 @@ protocol is written from. One TextMate grammar,
 `syntaxes/wire.tmLanguage.json`, serves VS Code and RustRover (IntelliJ).
 
 It only colours the text. The parser in `crates/protocol` is what checks a
-schema.
+schema, and [protocol/README.md](../../protocol/README.md) is the language's
+reference. A test there, `agreement_tests`, fails when the grammar or a
+snippet falls behind the words the parser reads.
 
 ## VS Code
 

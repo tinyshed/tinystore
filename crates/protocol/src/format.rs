@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! read  0x0102 kv.get(kv.Call)        -> kv.Entry
+//! # A comment in a run is the doc of the method below it.
 //! write 0x0104 kv.set(kv.Call)        -> kv.Written
 //!
 //! message kv.Call {
@@ -14,95 +15,158 @@
 //! }
 //! ```
 
-/// A schema file in its layout; what is laid out already comes back as it was.
-pub(crate) fn format(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+use std::fmt::Write as _;
+
+use super::syntax::{Field, File, Line, Method};
+
+/// A schema file's lines in their layout: what is laid out already prints as
+/// it was.
+pub(crate) fn print(file: &File) -> String {
+    let lines: Vec<&Line> = file.iter().map(|(_, line)| line).collect();
     let column = comment_column(&lines);
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    while at < lines.len() {
-        let run = lines[at..].iter().take_while(|line| method(line).is_some()).count();
-        if run > 0 {
-            write_methods(&mut out, &lines[at..at + run]);
-            at += run;
-            continue;
+    let mut out = String::new();
+    let mut indent = "";
+    let mut run = None;
+    for (at, line) in lines.iter().enumerate() {
+        match line {
+            Line::Blank => {}
+            Line::Comment(text) if text.is_empty() => out.push_str(&format!("{indent}#")),
+            Line::Comment(text) => out.push_str(&format!("{indent}# {text}")),
+            Line::Message { name, empty: true } => out.push_str(&format!("message {name} {{}}")),
+            Line::Message { name, empty: false } => out.push_str(&format!("message {name} {{")),
+            Line::End => out.push('}'),
+            Line::Field(field) => write_field(&mut out, field, column),
+            Line::Method(method) => write_method(&mut out, method, *run.get_or_insert_with(|| run_width(&lines[at..]))),
         }
-        match field(lines[at]) {
-            Some((code, Some(comment))) => out.push_str(&format!("{code:<column$}# {comment}\n")),
-            Some((code, None)) => out.push_str(&format!("{code}\n")),
-            None => out.push_str(&format!("{}\n", lines[at])),
+        out.push('\n');
+        match line {
+            Line::Message { empty: false, .. } => indent = "  ",
+            Line::End => indent = "",
+            _ => {}
         }
-        at += 1;
+        if !matches!(line, Line::Method(_) | Line::Comment(_)) {
+            run = None;
+        }
     }
     out
 }
 
-/// A run of methods, their calls padded so that every `->` lines up.
-fn write_methods(out: &mut String, run: &[&str]) {
-    let methods: Vec<_> = run.iter().filter_map(|line| method(line)).collect();
-    let width = methods.iter().map(|method| method.call.len()).max().unwrap_or(0);
-    for Method { access, id, call, answer } in methods {
-        out.push_str(&format!("{access:<5} {id} {call:<width$} -> {answer}\n"));
-    }
+fn write_field(out: &mut String, field: &Field, column: usize) {
+    let code = code(field);
+    let _ = match &field.doc {
+        Some(doc) => write!(out, "{code:<column$}# {doc}"),
+        None => write!(out, "{code}"),
+    };
+}
+
+fn write_method(out: &mut String, method: &Method, width: usize) {
+    let Method { access, id, answer, .. } = method;
+    let _ = write!(out, "{:<5} {id:#06x} {:<width$} -> {answer}", access.word(), call(method));
+}
+
+/// A field without its comment: `  4 value: value?`
+fn code(field: &Field) -> String {
+    let Field { number, name, kind, optional, .. } = field;
+    format!("  {number} {name}: {kind}{}", if *optional { "?" } else { "" })
+}
+
+/// A method's name and what it takes: `kv.get(kv.Call)`
+fn call(method: &Method) -> String {
+    format!("{}({})", method.name, method.request)
 }
 
 /// The column a file's field comments start at: two past its longest
 /// commented field.
-fn comment_column(lines: &[&str]) -> usize {
-    let longest = lines.iter().filter_map(|line| field(line)).filter(|(_, comment)| comment.is_some());
-    longest.map(|(code, _)| code.len()).max().unwrap_or(0) + 2
+fn comment_column(lines: &[&Line]) -> usize {
+    let commented = lines.iter().filter_map(|line| match line {
+        Line::Field(field) if field.doc.is_some() => Some(code(field).len()),
+        _ => None,
+    });
+    commented.max().unwrap_or(0) + 2
 }
 
-struct Method<'a> {
-    access: &'a str,
-    id: &'a str,
-    call: String,
-    answer: String,
-}
-
-/// A method's line in its parts: `read 0x0102 kv.get(kv.Call) -> kv.Entry`.
-fn method(line: &str) -> Option<Method<'_>> {
-    let (access, rest) = line.split_once(' ')?;
-    if !matches!(access, "read" | "write" | "admin") {
-        return None;
-    }
-    let (id, rest) = rest.trim_start().split_once(' ')?;
-    let (call, answer) = rest.split_once("->")?;
-    let call = call.split_whitespace().collect::<String>();
-    let answer = answer.split_whitespace().collect::<Vec<_>>().join(" ");
-    Some(Method { access, id, call, answer })
-}
-
-/// A field's line, its spaces made single, and its comment apart.
-fn field(line: &str) -> Option<(String, Option<&str>)> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with(|c: char| c.is_ascii_digit()) {
-        return None;
-    }
-    let (code, comment) = match trimmed.split_once('#') {
-        Some((code, comment)) => (code, Some(comment.trim())),
-        None => (trimmed, None),
-    };
-    Some((format!("  {}", code.split_whitespace().collect::<Vec<_>>().join(" ")), comment))
+/// The width of the calls in the run of methods that starts the lines: its
+/// methods and the comments among them, up to a blank line or a message.
+fn run_width(lines: &[&Line]) -> usize {
+    let run = lines.iter().take_while(|line| matches!(line, Line::Method(_) | Line::Comment(_)));
+    let calls = run.filter_map(|line| match line {
+        Line::Method(method) => Some(call(method).len()),
+        _ => None,
+    });
+    calls.max().unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::format;
+    use super::super::syntax::parse;
+    use super::print;
+
+    fn format(text: &str) -> String {
+        print(&parse(text).unwrap())
+    }
+
+    fn text(lines: &[&str]) -> String {
+        lines.iter().map(|line| format!("{line}\n")).collect()
+    }
 
     #[test]
     fn methods_line_up_their_answers_and_fields_their_comments() {
-        let text = "message kv.Call {\n  1 handle: uint   # its handle\n  6 expiresAt:  time?  # when\n  7 n: int64?\n}\n\n\
-                    read 0x0102 kv.get(kv.Call) -> kv.Entry\nwrite  0x010a kv.list(kv.List)   ->  download kv.Entry until kv.Page\n";
-        let laid = "message kv.Call {\n  1 handle: uint      # its handle\n  6 expiresAt: time?  # when\n  7 n: int64?\n}\n\n\
-                    read  0x0102 kv.get(kv.Call)  -> kv.Entry\nwrite 0x010a kv.list(kv.List) -> download kv.Entry until kv.Page\n";
-        assert_eq!(format(text), laid);
-        assert_eq!(format(laid), laid, "what is laid out comes back as it was");
+        let written = text(&[
+            "message kv.Call {",
+            "  1 handle: uint   # its handle",
+            "  6 expiresAt:  time?  # when",
+            "  7 n: int64?",
+            "}",
+            "",
+            "read 0x0102 kv.get(kv.Call) -> kv.Entry",
+            "write  0x010a kv.list(kv.List)   ->  download kv.Entry until kv.Page",
+        ]);
+        let laid = text(&[
+            "message kv.Call {",
+            "  1 handle: uint      # its handle",
+            "  6 expiresAt: time?  # when",
+            "  7 n: int64?",
+            "}",
+            "",
+            "read  0x0102 kv.get(kv.Call)  -> kv.Entry",
+            "write 0x010a kv.list(kv.List) -> download kv.Entry until kv.Page",
+        ]);
+        assert_eq!(format(&written), laid);
+        assert_eq!(format(&laid), laid, "what is laid out comes back as it was");
+    }
+
+    #[test]
+    fn a_run_of_methods_keeps_its_columns_past_a_methods_doc() {
+        let written = text(&[
+            "read 0x0102 kv.get(kv.Call) -> kv.Entry",
+            "#  Lists a branch.",
+            "read 0x010a kv.list(kv.List) -> kv.Page",
+            "",
+            "write 0x0140 kv.tx(kv.Tx) -> kv.TxResults",
+        ]);
+        let laid = text(&[
+            "read  0x0102 kv.get(kv.Call)  -> kv.Entry",
+            "#  Lists a branch.",
+            "read  0x010a kv.list(kv.List) -> kv.Page",
+            "",
+            "write 0x0140 kv.tx(kv.Tx) -> kv.TxResults",
+        ]);
+        assert_eq!(format(&written), laid);
     }
 
     #[test]
     fn comments_and_blank_lines_stay_as_they_were() {
-        let text = "# kv, as its book has it\n\n# a call\nmessage kv.Page {\n  1 next: key?\n}\n";
-        assert_eq!(format(text), text);
+        let laid = text(&[
+            "# kv, as its book has it",
+            "#",
+            "",
+            "# a call",
+            "message kv.Page {",
+            "  # what follows it",
+            "  1 next: key?",
+            "}",
+            "message Empty {}",
+        ]);
+        assert_eq!(format(&laid), laid);
     }
 }

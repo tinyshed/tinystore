@@ -467,6 +467,7 @@ module defines.
 - a body the profile does not allow is refused — `FuzzMessages`, a refused vector for each rule
 - a request is understood whole or refused, naming the field, its message and the server's version — `a_field_the_core_does_not_know_is_unimplemented_and_named` in `pipe::tests`, `a_field_of_another_type_is_refused_by_its_name` in `wire::codec`
 - every method of the schema is answered — `every_method_of_the_schema_is_answered` in `pipe::tests`
+- a method runs as the shape its schema line says, a call, a download, a handover or an exchange — `every_method_runs_as_the_shape_its_schema_line_says` in `wire::session`
 - a client of protocol 1 is told the server's protocol and turned away — `a_client_of_protocol_one_is_refused_with_goaway` in `pipe::tests`
 - a client newer than its server speaks the server's protocol — `TestAClientOfANewerProtocolIsWelcomedInTheServers`
 - the vectors are the bytes — `TestVectors`, `TestFrameVectors`, `TestTheExamplesAreWhatTheMessagesWrite`
@@ -476,7 +477,9 @@ module defines.
 - a message reserves the bytes it writes, however large its values, so that no answer's buffer grows as it is written — `a_message_reserves_what_it_writes_however_large_its_values` in `wire::codec`, and every vector within its size in `every_vector_of_the_schema_reads_and_writes_its_own_bytes`
 - a schema numbers a field in one byte and nests no value past the profile's eight levels, which a reader that follows it relies on — `a_field_past_one_byte_or_a_value_past_eight_levels_is_refused` in `crates/protocol`'s `schema`
 - each message's written-out reader and writer do what its table of fields does: the same bytes for random values from the edges of each type, and the same message or the same refusal for those bytes cut short or changed — `a message's own reader and writer` in `sdk/js/test/protocol.test.ts`
-- every codec and vector is what `protocol/*.wire` writes — `protocol --check`, `just protocol-check` and CI's quality job
+- every codec and vector is what `protocol/*.wire` writes, and every schema file is in the language's one layout — `protocol --check`, `just protocol-check` and CI's quality job
+- a line that is not the `.wire` language's is refused with why, a method without `read`, `write` or `admin` among them — `a_line_that_is_not_the_languages_says_why` in `crates/protocol`'s `syntax`
+- the editor colours the words the parser reads and its snippets parse, and the language's reference shows every word in examples that are laid out — `the_grammar_colours_the_words_the_parser_reads`, `every_snippet_is_what_the_parser_reads_and_offers_every_type` and `the_reference_shows_every_word_and_its_examples_are_laid_out` in `crates/protocol`'s `agreement_tests`
 - the largest kv or jobs value travels in one body — `TestTheLargestValueTravelsInOneBody`
 - a work stream asked to end when idle ends — `a_worker_until_idle_runs_what_is_due_and_then_its_stream_ends` in `wire::jobs`; `runDue`, `a private store runs on the clock it is given, which moves only forward` in `sdk/js/test/clock.test.ts`
 - an extend on a work stream is refused, not an ack — `TestAnExtendOnAWorkStreamIsRefused`

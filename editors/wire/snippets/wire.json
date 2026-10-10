@@ -12,7 +12,7 @@
   "field": {
     "prefix": "field",
     "description": "A field line with its comment",
-    "body": "${1:number} ${2:name}: ${3|bool,uint,int,int64,float,str,bin,duration,time,nanos,key,value,cell,json|}${4:?} # ${5:what it holds}"
+    "body": "${1:1} ${2:name}: ${3|bool,uint,int,int64,float,str,bin,duration,time,nanos,key,value,cell,json|}${4:?} # ${5:what it holds}"
   },
   "read": {
     "prefix": "read",

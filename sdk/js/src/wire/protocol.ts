@@ -74,6 +74,10 @@ export const methods = {
 	'kv.once.get': 0x0132,
 	'kv.once.delete': 0x0133,
 	'kv.tx': 0x0140,
+	/**
+	 * Stops the server as its closing does: the streams running finish, every
+	 * connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
+	 */
 	'server.stop': 0x0001,
 	'server.clock': 0x0002,
 	'sql.open': 0x0301,
@@ -1338,7 +1342,7 @@ export const Welcome = message(
 		server: [2, str],
 		/** 16 random bytes a start */
 		instance: [3, bin],
-		/** admin or data */
+		/** admin, data or read */
 		capability: [4, str],
 		/** the largest body either side sends */
 		maxBody: [5, uint],

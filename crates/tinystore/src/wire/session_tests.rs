@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::super::workers::{MOST, Workers};
-use super::CROWD;
+use super::{CROWD, Route, route};
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
-use crate::wire::protocol::{KvCall, KvEntry, method};
+use crate::wire::protocol::{KvCall, KvEntry, METHODS, method};
 use crate::{Options, Store};
 
 /// Writes gets of one key on `streams` in one write, and returns what the
@@ -66,4 +66,29 @@ fn a_read_goes_to_the_workers_while_they_have_reads_of_its_connection() {
     assert!(!get_at_once(&mut client, handle, 4000..4001).is_empty(), "with none away, a read is answered here again");
     drop(client);
     store.close().unwrap();
+}
+
+/// A method's line in the schema and its engine's `route` are written apart;
+/// a download that ran as a plain call would end its stream on the first item.
+#[test]
+fn every_method_runs_as_the_shape_its_schema_line_says() {
+    for &(name, called, shape) in METHODS {
+        let runs = match route(called) {
+            Route::Inline | Route::Submit | Route::Worker => "call",
+            Route::Handover => "handover",
+            #[cfg(feature = "jobs")]
+            Route::Exchange => "exchange",
+            #[cfg(feature = "jobs")]
+            Route::Watch => "download",
+            #[cfg(feature = "sql")]
+            Route::Download => "download",
+            #[cfg(feature = "sql")]
+            Route::Transaction => "exchange",
+            #[cfg(feature = "blobs")]
+            Route::Read => "download",
+            #[cfg(feature = "blobs")]
+            Route::Upload => "exchange",
+        };
+        assert_eq!(runs, shape, "{name}");
+    }
 }

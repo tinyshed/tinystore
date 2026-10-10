@@ -220,6 +220,9 @@ fn write_methods(out: &mut String, schema: &Schema) {
 ",
     );
     for method in &schema.methods {
+        for line in &method.doc {
+            let _ = writeln!(out, "    /// {line}");
+        }
         out.push_str(&gated(&method.name, "    "));
         let _ = writeln!(out, "    pub(crate) const {}: u16 = {:#06x};", const_name(&method.name), method.id);
     }
@@ -230,7 +233,8 @@ fn write_methods(out: &mut String, schema: &Schema) {
 ",
     );
     out.push_str(
-        "/// Every method, its name and number, for the test that the server answers each.
+        "/// Every method: its name, its number and the shape of its answer, `call` for
+/// one message, for the tests that the server answers each, and as its line says.
 ",
     );
     out.push_str(
@@ -238,12 +242,12 @@ fn write_methods(out: &mut String, schema: &Schema) {
 ",
     );
     out.push_str(
-        "pub(crate) const METHODS: &[(&str, u16)] = &[
+        "pub(crate) const METHODS: &[(&str, u16, &str)] = &[
 ",
     );
     for method in &schema.methods {
         out.push_str(&gated(&method.name, "    "));
-        let _ = writeln!(out, "    (\"{}\", {:#06x}),", method.name, method.id);
+        let _ = writeln!(out, "    (\"{}\", {:#06x}, \"{}\"),", method.name, method.id, method.answer.shape());
     }
     out.push_str(
         "];

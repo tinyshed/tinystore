@@ -1172,7 +1172,7 @@ pub(crate) struct Welcome {
     pub(crate) server: String,
     /// 16 random bytes a start.
     pub(crate) instance: Vec<u8>,
-    /// Admin or data.
+    /// Admin, data or read.
     pub(crate) capability: String,
     /// The largest body either side sends.
     pub(crate) max_body: u64,
@@ -5052,6 +5052,8 @@ pub(crate) mod method {
     pub(crate) const KV_ONCE_DELETE: u16 = 0x0133;
     #[cfg(feature = "kv")]
     pub(crate) const KV_TX: u16 = 0x0140;
+    /// Stops the server as its closing does: the streams running finish, every
+    /// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     pub(crate) const SERVER_STOP: u16 = 0x0001;
     pub(crate) const SERVER_CLOCK: u16 = 0x0002;
     #[cfg(feature = "sql")]
@@ -5197,125 +5199,126 @@ pub(crate) mod method {
     }
 }
 
-/// Every method, its name and number, for the test that the server answers each.
+/// Every method: its name, its number and the shape of its answer, `call` for
+/// one message, for the tests that the server answers each, and as its line says.
 #[cfg(test)]
-pub(crate) const METHODS: &[(&str, u16)] = &[
+pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     #[cfg(feature = "blobs")]
-    ("blobs.open", 0x0401),
+    ("blobs.open", 0x0401, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.put", 0x0402),
+    ("blobs.put", 0x0402, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.upload", 0x0403),
+    ("blobs.upload", 0x0403, "exchange"),
     #[cfg(feature = "blobs")]
-    ("blobs.get", 0x0404),
+    ("blobs.get", 0x0404, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.head", 0x0405),
+    ("blobs.head", 0x0405, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.delete", 0x0406),
+    ("blobs.delete", 0x0406, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.copy", 0x0407),
+    ("blobs.copy", 0x0407, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.rename", 0x0408),
+    ("blobs.rename", 0x0408, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.expire", 0x0409),
+    ("blobs.expire", 0x0409, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.list", 0x040a),
+    ("blobs.list", 0x040a, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.usage", 0x040b),
+    ("blobs.usage", 0x040b, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.clear", 0x040c),
+    ("blobs.clear", 0x040c, "call"),
     #[cfg(feature = "blobs")]
-    ("blobs.read", 0x040d),
+    ("blobs.read", 0x040d, "download"),
     #[cfg(feature = "jobs")]
-    ("jobs.queue.open", 0x0201),
+    ("jobs.queue.open", 0x0201, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.schedule.open", 0x0202),
+    ("jobs.schedule.open", 0x0202, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.add", 0x0203),
+    ("jobs.add", 0x0203, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.set", 0x0204),
+    ("jobs.set", 0x0204, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.update", 0x0205),
+    ("jobs.update", 0x0205, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.cancel", 0x0206),
+    ("jobs.cancel", 0x0206, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.get", 0x0207),
+    ("jobs.get", 0x0207, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.list", 0x0208),
+    ("jobs.list", 0x0208, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.work", 0x0209),
+    ("jobs.work", 0x0209, "exchange"),
     #[cfg(feature = "jobs")]
-    ("jobs.step", 0x020a),
+    ("jobs.step", 0x020a, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.keep", 0x020b),
+    ("jobs.keep", 0x020b, "call"),
     #[cfg(feature = "jobs")]
-    ("jobs.watch", 0x020c),
+    ("jobs.watch", 0x020c, "download"),
     #[cfg(feature = "jobs")]
-    ("jobs.tx", 0x020d),
+    ("jobs.tx", 0x020d, "call"),
     #[cfg(feature = "kv")]
-    ("kv.bucket.open", 0x0101),
+    ("kv.bucket.open", 0x0101, "call"),
     #[cfg(feature = "kv")]
-    ("kv.get", 0x0102),
+    ("kv.get", 0x0102, "call"),
     #[cfg(feature = "kv")]
-    ("kv.has", 0x0103),
+    ("kv.has", 0x0103, "call"),
     #[cfg(feature = "kv")]
-    ("kv.set", 0x0104),
+    ("kv.set", 0x0104, "call"),
     #[cfg(feature = "kv")]
-    ("kv.create", 0x0105),
+    ("kv.create", 0x0105, "call"),
     #[cfg(feature = "kv")]
-    ("kv.take", 0x0106),
+    ("kv.take", 0x0106, "call"),
     #[cfg(feature = "kv")]
-    ("kv.delete", 0x0107),
+    ("kv.delete", 0x0107, "call"),
     #[cfg(feature = "kv")]
-    ("kv.expire", 0x0108),
+    ("kv.expire", 0x0108, "call"),
     #[cfg(feature = "kv")]
-    ("kv.clear", 0x0109),
+    ("kv.clear", 0x0109, "call"),
     #[cfg(feature = "kv")]
-    ("kv.list", 0x010a),
+    ("kv.list", 0x010a, "call"),
     #[cfg(feature = "kv")]
-    ("kv.counters.open", 0x0110),
+    ("kv.counters.open", 0x0110, "call"),
     #[cfg(feature = "kv")]
-    ("kv.counters.add", 0x0111),
+    ("kv.counters.add", 0x0111, "call"),
     #[cfg(feature = "kv")]
-    ("kv.counters.get", 0x0112),
+    ("kv.counters.get", 0x0112, "call"),
     #[cfg(feature = "kv")]
-    ("kv.counters.delete", 0x0113),
+    ("kv.counters.delete", 0x0113, "call"),
     #[cfg(feature = "kv")]
-    ("kv.counters.clear", 0x0114),
+    ("kv.counters.clear", 0x0114, "call"),
     #[cfg(feature = "kv")]
-    ("kv.rateLimit.open", 0x0120),
+    ("kv.rateLimit.open", 0x0120, "call"),
     #[cfg(feature = "kv")]
-    ("kv.quota.open", 0x0121),
+    ("kv.quota.open", 0x0121, "call"),
     #[cfg(feature = "kv")]
-    ("kv.allow", 0x0122),
+    ("kv.allow", 0x0122, "call"),
     #[cfg(feature = "kv")]
-    ("kv.peek", 0x0123),
+    ("kv.peek", 0x0123, "call"),
     #[cfg(feature = "kv")]
-    ("kv.reset", 0x0124),
+    ("kv.reset", 0x0124, "call"),
     #[cfg(feature = "kv")]
-    ("kv.refund", 0x0125),
+    ("kv.refund", 0x0125, "call"),
     #[cfg(feature = "kv")]
-    ("kv.once.open", 0x0130),
+    ("kv.once.open", 0x0130, "call"),
     #[cfg(feature = "kv")]
-    ("kv.once.run", 0x0131),
+    ("kv.once.run", 0x0131, "handover"),
     #[cfg(feature = "kv")]
-    ("kv.once.get", 0x0132),
+    ("kv.once.get", 0x0132, "call"),
     #[cfg(feature = "kv")]
-    ("kv.once.delete", 0x0133),
+    ("kv.once.delete", 0x0133, "call"),
     #[cfg(feature = "kv")]
-    ("kv.tx", 0x0140),
-    ("server.stop", 0x0001),
-    ("server.clock", 0x0002),
+    ("kv.tx", 0x0140, "call"),
+    ("server.stop", 0x0001, "call"),
+    ("server.clock", 0x0002, "call"),
     #[cfg(feature = "sql")]
-    ("sql.open", 0x0301),
+    ("sql.open", 0x0301, "call"),
     #[cfg(feature = "sql")]
-    ("sql.query", 0x0302),
+    ("sql.query", 0x0302, "download"),
     #[cfg(feature = "sql")]
-    ("sql.exec", 0x0303),
+    ("sql.exec", 0x0303, "call"),
     #[cfg(feature = "sql")]
-    ("sql.batch", 0x0304),
+    ("sql.batch", 0x0304, "call"),
     #[cfg(feature = "sql")]
-    ("sql.tx", 0x0305),
+    ("sql.tx", 0x0305, "exchange"),
 ];
 
 /// A body of the message `name` read and written again, and the size the message

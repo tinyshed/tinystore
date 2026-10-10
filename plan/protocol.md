@@ -47,63 +47,50 @@ of `testdata/wire/vectors.json`:
 
 ## The schema
 
-A small language, read like code and parsed once, by the generator:
+A small language, read like code and parsed once, by the generator.
+[protocol/README.md](../protocol/README.md) is its reference: its lines, its
+types and what each is in Rust and TypeScript, a method's access and the
+shapes of its answer, what is refused, and the layout.
 
 ```text
 # A bucket of values by key; a comment documents what follows it.
 message kv.BucketOpen {
-  1 name: str               # [a-z0-9][a-z0-9_-]{0,63}
+  1 name: str       # [a-z0-9][a-z0-9_-]{0,63}
   2 ttl: duration?
   3 idle: duration?
 }
 
-message kv.Call {
-  1 handle: uint
-  2 under: [key]
-  3 key: key
-  4 value: value?
-  5 ttl: duration?
-  6 expiresAt: time?
-  7 ifVersion: bin?
-}
-
 read  0x0101 kv.bucket.open(kv.BucketOpen) -> Handle
 read  0x0102 kv.get(kv.Call)               -> kv.Entry
-read  0x010a kv.list(kv.List)              -> kv.Page
 write 0x0131 kv.once.run(kv.Call)          -> handover kv.Answer
 ```
 
-A method's line starts with who may call it: `read`, which a connection a
-server admits to read only may call, `write`, or `admin`, an admin's alone.
-There is no default, so that a method cannot be declared without saying it;
-the generator writes the words into `method::access`, which the session
-refuses by. `just protocol` lays the files out as `crates/protocol`'s
-`format` does, a run of methods in columns and a file's field comments in
-one, and `just protocol-check` fails on a file that is not.
+- **One parser.** `crates/protocol`'s `syntax` reads a file into its lines,
+  and the layout, the schema's checks and every codec start from those lines.
+  Tests hold what is written about the language elsewhere to its words: the
+  editor's grammar and snippets, and the reference.
+- **A method says who may call it**: `read`, which a connection a server
+  admits to read only may call, `write`, or `admin`, an admin's alone. There
+  is no default, so that a method cannot be declared without saying it; the
+  generator writes the words into `method::access`, which the session refuses
+  by.
+- **A method's shape follows its arrow**: one message, `handover T` for a run
+  handed to the client and its answer back, `exchange T for U` for items both
+  ways, a worker's jobs out and its answers back, and `download T until U`
+  for items as `DATA` and a trailer. A test holds each engine's `route` to
+  the shape its line says.
+- **A comment is a doc.** The one above a message or a method, and the one
+  after a field, is its doc comment in the code written.
+- **One layout.** `just protocol` writes the files back as `format` prints
+  them, a run of methods in columns and a file's field comments in one, and
+  `just protocol-check` fails on a file that is not.
 
-| Type                                         | On the wire                               | Rust                                             | TypeScript                                                        |
-|----------------------------------------------|-------------------------------------------|--------------------------------------------------|-------------------------------------------------------------------|
-| `bool`, `uint`, `int`, `float`, `str`, `bin` | as the profile says                       | `bool`, `u64`, `i64`, `f64`, `String`, `Vec<u8>` | `boolean`, `number`, `number`, `number`, `string`, `Uint8Array`   |
-| `int64`                                      | int, past what a JavaScript number holds  | `i64`                                            | `bigint`                                                          |
-| `duration`                                   | uint, milliseconds                        | `Duration`                                       | a duration's text or milliseconds, refused bare at the SDK's edge |
-| `time`                                       | int, unix milliseconds                    | `SystemTime`                                     | `Date`                                                            |
-| `nanos`                                      | int, unix nanoseconds                     | `i64`                                            | `bigint`                                                          |
-| `key`                                        | str, or bin when not UTF-8, or an integer | `String`                                         | `string`                                                          |
-| `value`                                      | nil, int or bin: a kv row as it is kept   | `Raw`                                            | `Raw`                                                             |
-| `json`                                       | str                                       | `String`                                         | `unknown`, parsed                                                 |
-| `[T]`, `{T}`                                 | array; map of names                       | `Vec<T>`, `BTreeMap<String, T>`                  | `T[]`, `Record<string, T>`                                        |
-| `T?`                                         | absent when not given                     | `Option<T>`                                      | `T \| undefined`                                                  |
-
-A field without `?` is absent at its zero value and reads back as it. A
-method's shape follows its arrow: one message, `handover T` for a run handed
-to the client and its answer back, `exchange T for U` for items both ways, a
-worker's jobs out and its answers back, and `download T until U` for items as
-`DATA` and a trailer, which records and blobs will use. `Failure` is the
-schema's own message, the one a stream that failed ends with, so that no
-schema leaves it out. Its `what` holds the facts a program acts on, by name:
-a limit's `limit`, `wanted` and `bound`; a broken constraint's `constraint`,
-`table`, `columns` (as SQLite writes them, `org, email`) and `name`; the
-`check` or `write` a kv transaction failed at.
+A field without `?` is absent at its zero value and reads back as it.
+`Failure` is the schema's own message, the one a stream that failed ends
+with, so that no schema leaves it out. Its `what` holds the facts a program
+acts on, by name: a limit's `limit`, `wanted` and `bound`; a broken
+constraint's `constraint`, `table`, `columns` (as SQLite writes them,
+`org, email`) and `name`; the `check` or `write` a kv transaction failed at.
 
 ## The generator
 

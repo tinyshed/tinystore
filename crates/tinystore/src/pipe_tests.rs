@@ -31,7 +31,7 @@ fn a_client_sets_and_gets_a_key_through_the_pipe() {
 fn every_method_of_the_schema_is_answered() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
-    for &(name, called) in METHODS {
+    for &(name, called, _) in METHODS {
         let stream = client.start(called, &Empty {});
         let answer = client.next_on(stream);
         if let Err(failed) = answered::<Empty>(&answer) {

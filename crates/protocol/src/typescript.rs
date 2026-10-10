@@ -41,6 +41,7 @@ pub(crate) fn write(schema: &Schema) -> String {
     out.push_str("} from './codec.ts'\n\n");
     out.push_str("export const methods = {\n");
     for method in &schema.methods {
+        write_doc(&mut out, &method.doc, "\t");
         let _ = writeln!(out, "\t'{}': {:#06x},", method.name, method.id);
     }
     out.push_str("} as const\n\nexport type Method = keyof typeof methods\n");
@@ -51,14 +52,20 @@ pub(crate) fn write(schema: &Schema) -> String {
     out
 }
 
-fn write_message(out: &mut String, message: &Message) {
-    if !message.doc.is_empty() {
-        out.push_str("/**\n");
-        for line in &message.doc {
-            let _ = writeln!(out, " * {line}");
-        }
-        out.push_str(" */\n");
+/// A message's or a method's doc as a JSDoc block, nothing for none.
+fn write_doc(out: &mut String, doc: &[String], indent: &str) {
+    if doc.is_empty() {
+        return;
     }
+    let _ = writeln!(out, "{indent}/**");
+    for line in doc {
+        let _ = writeln!(out, "{indent} * {line}");
+    }
+    let _ = writeln!(out, "{indent} */");
+}
+
+fn write_message(out: &mut String, message: &Message) {
+    write_doc(out, &message.doc, "");
     let name = type_name(&message.name);
     let _ = writeln!(out, "export const {name} = message(");
     let _ = writeln!(out, "\t'{}',", message.name);

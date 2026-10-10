@@ -1,11 +1,21 @@
 //! Writes the wire protocol's codecs and vectors from protocol/*.wire, the one
 //! place a message is declared. `protocol --check` writes nothing and fails
 //! when a file is not what the schema writes, as CI runs it.
+//!
+//! | Module                          | What it does with a `.wire` file                     |
+//! |---------------------------------|------------------------------------------------------|
+//! | `syntax`                        | reads its text into lines: the language's one parser |
+//! | `format`                        | prints the lines back in the language's one layout   |
+//! | `schema`                        | joins every file's lines and checks them together    |
+//! | `rust`, `typescript`, `vectors` | write a codec, or the vectors, from the schema       |
 
+#[cfg(test)]
+mod agreement_tests;
 mod format;
 mod names;
 mod rust;
 mod schema;
+mod syntax;
 mod typescript;
 mod vectors;
 
@@ -28,8 +38,7 @@ fn main() -> ExitCode {
 }
 
 fn run(root: &Path, check: bool) -> Result<(), String> {
-    let mut stale = lay_out(&root.join("protocol"), check)?;
-    let schema = read(&root.join("protocol"))?;
+    let (schema, mut stale) = read(&root.join("protocol"), check)?;
     let outputs = [
         ("crates/tinystore/src/wire/protocol.rs", rust::write(&schema)),
         ("sdk/js/src/wire/protocol.ts", typescript::write(&schema)),
@@ -54,25 +63,27 @@ fn run(root: &Path, check: bool) -> Result<(), String> {
     }
 }
 
-/// Lays every schema file out as `format` does: written, or when checking,
-/// named among the files that are not.
-fn lay_out(dir: &Path, check: bool) -> Result<Vec<String>, String> {
+/// Every schema file, in the order of their names, read once: its lines make
+/// the schema, and are laid out as `format` prints them, the file written
+/// again or, when checking, named among those that are not laid out.
+fn read(dir: &Path, check: bool) -> Result<(Schema, Vec<String>), String> {
+    let mut schema = Schema::default();
     let mut stale = Vec::new();
     for file in wire_files(dir)? {
-        let text = fs::read_to_string(&file).map_err(|error| format!("{}: {error}", file.display()))?;
-        let laid = format::format(&text);
-        if laid == text {
-            continue;
-        }
         let name = format!("protocol/{}", file.file_name().unwrap_or_default().to_string_lossy());
-        if check {
+        let text = fs::read_to_string(&file).map_err(|error| format!("{name}: {error}"))?;
+        let lines = syntax::parse(&text).map_err(|(line, why)| format!("{name}:{line}: {why}"))?;
+        let laid = format::print(&lines);
+        if laid != text && check {
             stale.push(name);
-        } else {
+        } else if laid != text {
             fs::write(&file, laid).map_err(|error| format!("{name}: {error}"))?;
             println!("laid out {name}");
         }
+        schema.add(&lines);
     }
-    Ok(stale)
+    schema.check()?;
+    Ok((schema, stale))
 }
 
 /// The schema files, in the order of their names.
@@ -84,16 +95,4 @@ fn wire_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
         .collect();
     files.sort();
     Ok(files)
-}
-
-/// Every schema file, in the order of their names.
-fn read(dir: &Path) -> Result<Schema, String> {
-    let mut schema = Schema::default();
-    for file in &wire_files(dir)? {
-        let text = fs::read_to_string(file).map_err(|error| format!("{}: {error}", file.display()))?;
-        let name = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        schema.parse(&name, &text).map_err(|refused| refused.to_string())?;
-    }
-    schema.check()?;
-    Ok(schema)
 }

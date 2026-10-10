@@ -16,7 +16,7 @@ message Welcome {
   1 protocol: uint          # the one this connection speaks
   2 server: str             # its version
   3 instance: bin           # 16 random bytes a start
-  4 capability: str         # admin or data
+  4 capability: str         # admin, data or read
   5 maxBody: uint           # the largest body either side sends
   6 inFlight: uint          # the streams a client may have open at once
   7 connectionCredit: uint  # the REQUEST and DATA bytes a client may send before credit comes back
