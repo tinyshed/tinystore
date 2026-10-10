@@ -1,6 +1,11 @@
 [env]
 # Flags for the bundled SQLite, beside the ones libsqlite3-sys sets. Double-quoted
 # strings are identifiers only, so a misspelled column is an error, not a string.
+# libsqlite3-sys defines SQLITE_ENABLE_MEMORY_MANAGEMENT, which makes one page
+# cache of every connection's in the process, behind one mutex: undefined here,
+# since reads by sixteen callers ran 9x slower with it (research
+# rust-slice-2026-10-10). A program that builds the crate outside this workspace
+# sets the same flags.
 # Linux builds add HAVE_FDATASYNC in CI and the release: without it the Unix VFS
 # calls fsync, which cost a 64 KiB set 1.5x (research kv-optimization-2026-10-09).
-LIBSQLITE3_FLAGS = "SQLITE_DQS=0"
+LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT"

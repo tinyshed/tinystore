@@ -330,6 +330,22 @@ fn durability_sets_how_far_a_commit_goes() {
 }
 
 #[test]
+fn the_build_gives_each_connection_a_page_cache_of_its_own() {
+    // With SQLITE_ENABLE_MEMORY_MANAGEMENT, which libsqlite3-sys defines and
+    // .cargo/config.toml undefines, every page a reader fetches or lets go
+    // takes one mutex of the whole process, and readers stop one another.
+    let (_dir, file) = open(Config::default());
+    let shared: bool = file
+        .read(|connection| {
+            connection
+                .query_row("select sqlite_compileoption_used('ENABLE_MEMORY_MANAGEMENT')", [], |row| row.get(0))
+                .map_err(|error| sql_error("compile options", error))
+        })
+        .unwrap();
+    assert!(!shared, "build with LIBSQLITE3_FLAGS as .cargo/config.toml has them");
+}
+
+#[test]
 fn sqlite_counts_the_memory_it_holds() {
     let (_dir, file) = open(Config::default());
     insert(&file, "a").unwrap();

@@ -41,7 +41,7 @@ jobs:
       - name: SQLite's flags on Linux
         if: runner.os == 'Linux'
         shell: bash
-        run: echo 'LIBSQLITE3_FLAGS=SQLITE_DQS=0 -DHAVE_FDATASYNC=1' >> "$GITHUB_ENV"
+        run: echo 'LIBSQLITE3_FLAGS=SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT -DHAVE_FDATASYNC=1' >> "$GITHUB_ENV"
 
       # each platform's code is linted where it compiles: cfg hides it elsewhere
       - name: Lint

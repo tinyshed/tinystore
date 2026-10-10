@@ -254,6 +254,7 @@ module defines.
 
 ## SQLite under every engine
 
+- the build gives each connection a page cache of its own, and no mutex of the process on a page — `the_build_gives_each_connection_a_page_cache_of_its_own` in `sqlite::file`
 - a reader beyond one closes once idle, and the next read opens one that still refuses to write — `TestAnIdleReaderClosesAndTheNextReadOpensIt`
 - the store's Options.Readers bounds what an engine opens — `TestTheStoresReadersBoundWhatAnEngineWants`, `TestTheStoresReadersCapEveryDatabase`
 - a guest engine keeps its history in its owner's file — `TestAGuestKeepsItsOwnHistoryInItsOwnersFile`

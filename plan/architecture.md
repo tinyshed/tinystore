@@ -75,16 +75,16 @@ transport, and the Go SDK takes the root module path,
 
 ## The stack
 
-| Need               | Choice                                                | Note                                                                                       |
-|--------------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| SQLite             | rusqlite 0.40, bundled                                | build flags pinned: FTS5, R*Tree, JSON in; `HAVE_FDATASYNC` on Linux; `fullfsync` on macOS |
-| Compression        | zstd 0.14 (libzstd 1.5.7)                             | every decoder sets `window_log_max`                                                        |
-| Entropy coders     | our own huff0 and FSE                                 | safe Rust, golden vectors; or a format that needs neither                                  |
-| MessagePack        | rmp 0.8                                               | under the protocol's own profile, as the Go codec is today                                 |
-| Directory lock     | `std::fs::File::lock`                                 | stable since Rust 1.89                                                                     |
-| Server             | tokio 1                                               | only behind the `server` feature                                                           |
-| Rust logs, metrics | `tracing`, `metrics`                                  | a layer and a recorder, so a Rust program uses the ecosystem's macros                      |
-| Tests              | proptest, insta, cargo-fuzz, nextest, loom or shuttle | [tests.md](tests.md)                                                                       |
+| Need               | Choice                                                | Note                                                                                 |
+|--------------------|-------------------------------------------------------|--------------------------------------------------------------------------------------|
+| SQLite             | rusqlite 0.40, bundled                                | flags pinned: FTS5, R*Tree, JSON in; no shared page cache; `HAVE_FDATASYNC` on Linux |
+| Compression        | zstd 0.14 (libzstd 1.5.7)                             | every decoder sets `window_log_max`                                                  |
+| Entropy coders     | our own huff0 and FSE                                 | safe Rust, golden vectors; or a format that needs neither                            |
+| MessagePack        | rmp 0.8                                               | under the protocol's own profile, as the Go codec is today                           |
+| Directory lock     | `std::fs::File::lock`                                 | stable since Rust 1.89                                                               |
+| Server             | tokio 1                                               | only behind the `server` feature                                                     |
+| Rust logs, metrics | `tracing`, `metrics`                                  | a layer and a recorder, so a Rust program uses the ecosystem's macros                |
+| Tests              | proptest, insta, cargo-fuzz, nextest, loom or shuttle | [tests.md](tests.md)                                                                 |
 
 ## The runtime model
 

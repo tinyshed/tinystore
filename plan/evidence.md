@@ -57,6 +57,14 @@ and a shared AMD EPYC 9V74 VM with two CPUs (metrics, SQL); Go 1.27.1, Rust
   calls `fsync` where Go's translated SQLite calls `fdatasync`, and a 64 KiB
   set took 2637 µs native against 1737 µs in Go; the flag alone made native
   1.5–1.6× faster on 4 and 64 KiB sets.
+- **Native SQLite needs `SQLITE_ENABLE_MEMORY_MANAGEMENT` undefined.**
+  libsqlite3-sys's bundled build defines it, and with it every connection of
+  the process shares one page cache behind one mutex, taken for each page a
+  read fetches and lets go. Half the processor's time at sixteen callers went
+  to waking and parking threads on it. The same commit without the flag reads
+  a key 4.6× as fast at 8 callers, 9.3× at 16 and 7.9× at 64, which is 3.3–5.2×
+  Go where it had been 0.42–0.82×; one caller is as before, and sixteen
+  readers hold some 20 MiB more, a cache each (rust-slice-2026-10-10).
 
 ## Not measured
 
@@ -93,6 +101,7 @@ method of measuring; their code is not carried over.
 | One owned buffer per records result      | full read 2.9×, held memory 335 → 141.5 MiB                 | `records-opt-bench/rust/src/optimized.rs`                |
 | Rowid groups for metrics                 | file −21.4 % on Alibaba, +0.45 % on TSBS                    | `metrics-layout-bench`, report metrics-layout-2026-10-09 |
 | `HAVE_FDATASYNC` in the SQLite build     | 64 KiB set 1.6×                                             | `kv-opt-bench`, report kv-optimization-2026-10-09        |
+| No shared page cache in the SQLite build | a read by 16 callers 9.3×, 5.2× Go                          | `slice-bench`, report rust-slice-2026-10-10              |
 
 Measured and not worth it: an owned batch arena and lookaside (read16 0.96×),
 a no-result kv set (0.99–1.00×), immutable payload packs (sparse reads 8–33 %
