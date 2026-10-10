@@ -223,6 +223,32 @@ fn an_embedded_store_refuses_to_stop_and_has_no_clock_to_move() {
 }
 
 #[test]
+fn reads_sent_together_are_each_answered_though_workers_take_the_crowd() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = client.bucket("sessions");
+    for n in 0..40 {
+        let set = KvCall { handle, key: format!("k{n}"), value: Some(Row::Int(n)), ..KvCall::default() };
+        client.call::<KvWritten>(method::KV_SET, &set).unwrap();
+    }
+    // forty gets in one write: the first of them find a crowd behind them,
+    // the last few are answered where they are read
+    let mut bytes = Vec::new();
+    for n in 0..40 {
+        let get = KvCall { handle, key: format!("k{n}"), ..KvCall::default() };
+        let frame = Frame { method: method::KV_GET, ..Frame::new(Kind::Request, 1000 + n, get.encode()) };
+        frame.ending().encode_into(&mut bytes);
+    }
+    let ready = client.pipe.send(&bytes);
+    client.reader.push(&ready);
+    for n in 0..40 {
+        let got: KvEntry = answered(&client.next_on(1000 + n)).unwrap();
+        assert_eq!((got.found, got.value), (true, Some(Row::Int(i64::from(n)))), "k{n}");
+    }
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+}
+
+#[test]
 fn a_challenge_of_another_length_is_a_hello_the_server_cannot_take() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());

@@ -25,6 +25,12 @@ pub(crate) struct Workers {
 struct Queue {
     jobs: VecDeque<Job>,
     idle: usize,
+    /// Whether a thread was woken and has not taken its job yet. One wake is
+    /// under way at a time: whoever queues a job wakes one thread, and that
+    /// thread wakes the next when jobs still wait. A wake a job cost the
+    /// thread that reads a connection more than the job itself, and with 64
+    /// calls in flight that thread is all the connection has.
+    waking: bool,
     started: usize,
     stopped: bool,
 }
@@ -50,11 +56,13 @@ impl Workers {
         if queue.idle == 0 && queue.started < MOST {
             queue.started += 1;
             drop(queue);
-            self.start();
-        } else {
-            drop(queue);
+            return self.start();
         }
-        self.ready.notify_one();
+        let wakes = queue.wakes_one();
+        drop(queue);
+        if wakes {
+            self.ready.notify_one();
+        }
     }
 
     fn start(self: &Arc<Self>) {
@@ -71,7 +79,11 @@ impl Workers {
         let mut queue = self.lock();
         loop {
             if let Some(job) = queue.jobs.pop_front() {
+                let wakes = queue.wakes_one();
                 drop(queue);
+                if wakes {
+                    self.ready.notify_one();
+                }
                 job();
                 queue = self.lock();
                 continue;
@@ -82,11 +94,22 @@ impl Workers {
             queue.idle += 1;
             queue = self.ready.wait(queue).unwrap_or_else(PoisonError::into_inner);
             queue.idle -= 1;
+            queue.waking = false;
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Queue {
+    /// Whether to wake a thread: a job waits, a thread sleeps, and no wake is
+    /// under way. It marks the wake as under way.
+    fn wakes_one(&mut self) -> bool {
+        let wakes = !self.jobs.is_empty() && self.idle > 0 && !self.waking;
+        self.waking |= wakes;
+        wakes
     }
 }
 
@@ -107,5 +130,48 @@ impl Engine for Workers {
 impl std::fmt::Debug for Workers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Workers({})", self.lock().started)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Barrier;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::Options;
+
+    /// Queues four jobs that end only once all four run at one time.
+    fn run_four_together(workers: &Arc<Workers>) {
+        let (together, ended) = (Arc::new(Barrier::new(4)), mpsc::channel());
+        for _ in 0..4 {
+            let (together, ended) = (Arc::clone(&together), ended.0.clone());
+            workers.run(Box::new(move || {
+                together.wait();
+                ended.send(()).unwrap();
+            }));
+        }
+        for _ in 0..4 {
+            ended.1.recv_timeout(Duration::from_secs(10)).expect("four jobs run together");
+        }
+    }
+
+    #[test]
+    fn jobs_queued_for_sleeping_threads_wake_them_one_through_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let workers = Workers::of(&store).unwrap();
+        // the first four find no thread and start one each
+        run_four_together(&workers);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while workers.lock().idle < 4 {
+            assert!(Instant::now() < deadline, "the threads never slept");
+            thread::sleep(Duration::from_millis(1));
+        }
+        // the next four find them asleep: the first wakes one, which wakes the next
+        run_four_together(&workers);
+        assert_eq!(workers.lock().started, 4, "no thread more was started");
+        store.close().unwrap();
     }
 }

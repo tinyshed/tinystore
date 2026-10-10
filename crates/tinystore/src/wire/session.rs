@@ -39,6 +39,8 @@ const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
 const HELLO_MOST: usize = 1 << 16;
 /// The bytes of a HELLO's challenge, which a local server's proof answers.
 const CHALLENGE: usize = 16;
+/// Requests waiting behind a point read that send it to a worker.
+const CROWD: usize = 4;
 
 /// What a session calls when frames become ready after the host took the last
 /// ones: once, until the host takes again. It must return quickly and not call
@@ -103,6 +105,9 @@ struct Output {
     bytes: Vec<u8>,
     woken: bool,
     ended: bool,
+    /// Whether a thread waits in `take` for bytes: queueing them wakes it,
+    /// and wakes nobody where the host is woken through its callback.
+    awaited: bool,
 }
 
 impl Session {
@@ -163,8 +168,10 @@ impl Session {
             if left.is_zero() {
                 break;
             }
+            output.awaited = true;
             output = self.shared.ready.wait_timeout(output, left).unwrap_or_else(PoisonError::into_inner).0;
         }
+        output.awaited = false;
         output.woken = false;
         std::mem::take(&mut output.bytes)
     }
@@ -315,7 +322,15 @@ impl Shared {
             }
             return self.server_call(stream, method, &body);
         }
-        match route(method) {
+        // A point read is answered where it is read, in less time than
+        // another thread takes to wake. With a crowd of requests behind it,
+        // each would wait its turn on this one thread: it goes to a worker,
+        // where sixteen run together.
+        let route = match route(method) {
+            Route::Inline if input.reader.holds(CROWD) => Route::Worker,
+            route => route,
+        };
+        match route {
             Route::Inline => self.answer(stream, guarded(|| self.call(method, &body, max_body))),
             Route::Submit => {
                 let shared = Arc::clone(self);
@@ -768,8 +783,11 @@ impl Shared {
             return;
         }
         let wake = !std::mem::replace(&mut output.woken, true);
+        let awaited = output.awaited;
         drop(output);
-        self.ready.notify_all();
+        if awaited {
+            self.ready.notify_all();
+        }
         if let (true, Some(wake)) = (wake, &self.connect.wake) {
             wake();
         }

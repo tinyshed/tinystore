@@ -74,6 +74,22 @@ impl Reader {
         self.buffer.extend_from_slice(bytes);
     }
 
+    /// Whether as many frames as `count` have arrived whole and wait to be
+    /// read.
+    pub(crate) fn holds(&self, count: usize) -> bool {
+        let mut at = 0;
+        for _ in 0..count {
+            let Some(length) = self.buffer.get(at..at + 4) else {
+                return false;
+            };
+            at += HEADER + u32::from_le_bytes(length.try_into().expect("four bytes")) as usize;
+            if self.buffer.len() < at {
+                return false;
+            }
+        }
+        true
+    }
+
     /// The next whole frame, `None` until its bytes have all arrived. A frame
     /// that breaks a rule is refused before a byte of its body is kept, and the
     /// connection ends.
@@ -220,6 +236,22 @@ mod tests {
             frame.encode_into(&mut encoded);
             assert_eq!(encoded, bytes, "{name}: encodes back to its bytes");
         }
+    }
+
+    #[test]
+    fn a_reader_says_how_many_frames_wait_whole() {
+        let mut bytes = Vec::new();
+        for stream in 1..=3 {
+            Frame { method: 0x0101, ..Frame::new(Kind::Request, stream, vec![7; 20]) }.ending().encode_into(&mut bytes);
+        }
+        let mut reader = Reader::default();
+        reader.push(&bytes[..bytes.len() - 1]);
+        assert!(reader.holds(0) && reader.holds(2), "two are whole");
+        assert!(!reader.holds(3), "the third lacks a byte");
+        reader.push(&bytes[bytes.len() - 1..]);
+        assert!(reader.holds(3) && !reader.holds(4));
+        reader.next(1 << 20).unwrap().unwrap();
+        assert!(reader.holds(2) && !reader.holds(3), "one was read");
     }
 
     #[test]
