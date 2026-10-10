@@ -23,10 +23,13 @@ import {
 	Flag,
 	frame,
 	granted,
+	headerSize,
 	Kind,
 	kindName,
 	parseHeader,
+	putHeader,
 } from './wire/frame.ts'
+import { Reader, Writer } from './wire/msgpack.ts'
 import { Failure, GoAway, Hello, Welcome } from './wire/protocol.ts'
 
 export const protocol = 2
@@ -36,6 +39,9 @@ export const downloadWindow = 2 << 20
 
 /** The largest body a WELCOME may come in, before a body is agreed. */
 const welcomeMost = 1 << 20
+
+/** A frame past this leaves by itself, so that what a turn's calls are written into stays small. */
+const largeFrame = 1 << 15
 
 export type Agreed = Required<Omit<Read<typeof Welcome.fields>, 'proof'>>
 
@@ -212,6 +218,27 @@ export class Stream {
 	#unwatch: (() => void) | undefined
 }
 
+/**
+ * A call that left the moment it was made, a REQUEST the RESPONSE answers:
+ * its answer is read where it arrives and given to whoever asked, with no
+ * stream's state between. Nothing cancels it.
+ */
+class Direct {
+	readonly read: (r: Reader) => unknown
+	readonly resolve: (value: never) => void
+	readonly reject: (err: Error) => void
+
+	constructor(
+		read: (r: Reader) => unknown,
+		resolve: (value: never) => void,
+		reject: (err: Error) => void,
+	) {
+		this.read = read
+		this.resolve = resolve
+		this.reject = reject
+	}
+}
+
 /** A frame waiting for the connection's credit, in the order it was asked for. */
 interface Queued {
 	stream: Stream
@@ -233,15 +260,18 @@ export class Session {
 	#welcome: Waiter<Agreed>
 	#agreed: Agreed | undefined
 
-	#streams = new Map<number, Stream>()
+	#streams = new Map<number, Stream | Direct>()
 	#next = 0
 	#waitingToOpen: Waiter<void>[] = []
 	#queue: Queued[] = []
 	#credit = 0
 
-	#out: Uint8Array[] = []
-	#outBytes = 0
+	// what leaves in this turn's one write: every frame asked for is written
+	// here, a call's body straight from its fields
+	#out = new Writer(1 << 12)
 	#flushing = false
+	readonly #leave = () => this.#flush()
+	readonly #reader = new Reader(new Uint8Array(0))
 
 	#rest: Uint8Array | undefined
 	#goingAway = false
@@ -348,6 +378,57 @@ export class Session {
 		return undefined
 	}
 
+	/**
+	 * Makes a call in place when nothing makes it wait: `write` writes its
+	 * body into the bytes that leave next, and `read` reads its answer where
+	 * it arrived, for `resolve`. It says false, having sent nothing, when the
+	 * call must wait or may be cancelled: before the WELCOME, under a signal,
+	 * with every stream in use, or past the connection's credit. Then `call`
+	 * makes it.
+	 *
+	 * A call an event loop makes costs it a promise and nothing more this way.
+	 * Through a stream it cost five, and a copy of its body three times.
+	 */
+	direct<T>(
+		method: number,
+		write: (w: Writer) => void,
+		read: (r: Reader) => T,
+		resolve: (value: T) => void,
+		reject: (err: Error) => void,
+	): boolean {
+		const agreed = this.#agreed
+		if (
+			agreed === undefined ||
+			this.#ended !== undefined ||
+			this.#goingAway ||
+			this.#queue.length > 0 ||
+			this.#streams.size >= agreed.inFlight ||
+			currentSignal() !== undefined
+		) {
+			return false
+		}
+		const out = this.#out
+		const start = out.reserve(headerSize)
+		let length: number
+		try {
+			write(out)
+			length = out.length - start - headerSize
+		} catch (err) {
+			out.truncate(start)
+			throw err
+		}
+		if (length > agreed.maxBody || length > this.#credit) {
+			out.truncate(start)
+			return false
+		}
+		const id = this.#nextID()
+		putHeader(out.buffer, start, Kind.request, Flag.end, method, id, length)
+		this.#credit -= length
+		this.#streams.set(id, new Direct(read, resolve as (value: never) => void, reject))
+		this.#soon()
+		return true
+	}
+
 	/** A call: one REQUEST, and the RESPONSE that answers it. */
 	async call(method: number, body: Uint8Array, signal?: AbortSignal): Promise<Uint8Array> {
 		signal?.throwIfAborted()
@@ -408,11 +489,19 @@ export class Session {
 		if (this.#ended !== undefined) {
 			return
 		}
-		this.#out.push(bytes)
-		this.#outBytes += bytes.length
+		if (bytes.length > largeFrame) {
+			this.#flush()
+			this.#send(bytes)
+			return
+		}
+		this.#out.raw(bytes)
+		this.#soon()
+	}
+
+	#soon(): void {
 		if (!this.#flushing) {
 			this.#flushing = true
-			queueMicrotask(() => this.#flush())
+			queueMicrotask(this.#leave)
 		}
 	}
 
@@ -422,19 +511,8 @@ export class Session {
 		if (this.#out.length === 0 || this.#ended !== undefined) {
 			return
 		}
-		let bytes: Uint8Array
-		if (this.#out.length === 1) {
-			bytes = this.#out[0]!
-		} else {
-			bytes = new Uint8Array(this.#outBytes)
-			let at = 0
-			for (const each of this.#out) {
-				bytes.set(each, at)
-				at += each.length
-			}
-		}
-		this.#out = []
-		this.#outBytes = 0
+		const bytes = this.#out.bytes()
+		this.#out.truncate(0)
 		this.#send(bytes)
 	}
 
@@ -479,8 +557,7 @@ export class Session {
 				if (stop > bytes.length) {
 					break
 				}
-				// a body of its own, since events outlive the read's buffer
-				this.#take(h, bytes.slice(at + 12, stop))
+				this.#take(h, bytes, at + 12, stop)
 				at = stop
 			}
 		} catch (err) {
@@ -492,16 +569,18 @@ export class Session {
 		}
 	}
 
-	#take(h: ReturnType<typeof parseHeader>, body: Uint8Array): void {
+	// takes the frame whose body is the bytes from `from` to `to`
+	#take(h: ReturnType<typeof parseHeader>, bytes: Uint8Array, from: number, to: number): void {
+		if (this.#agreed !== undefined && (h.kind === Kind.response || h.kind === Kind.data)) {
+			this.#answer(h, bytes, from, to)
+			return
+		}
+		const body = bytes.slice(from, to)
 		if (this.#agreed === undefined) {
 			this.#handshake(h.kind, body)
 			return
 		}
 		switch (h.kind) {
-			case Kind.response:
-			case Kind.data:
-				this.#answer(h.kind, h.flags, h.stream, body)
-				return
 			case Kind.credit:
 				this.#credited(h.stream, granted(body))
 				return
@@ -559,11 +638,18 @@ export class Session {
 		this.#welcome.resolve(agreed)
 	}
 
-	#answer(kind: number, flags: number, id: number, body: Uint8Array): void {
+	#answer(h: ReturnType<typeof parseHeader>, bytes: Uint8Array, from: number, to: number): void {
+		const { kind, flags, stream: id } = h
 		const stream = this.#streams.get(id)
 		if (stream === undefined) {
 			throw new ProtocolError(`a ${kindName(kind)} on stream ${id}, which is not in use`)
 		}
+		if (stream instanceof Direct) {
+			this.#answerDirect(stream, h, bytes, from, to)
+			return
+		}
+		// a body of its own, since events outlive the read's buffer
+		const body = bytes.slice(from, to)
 		const end = (flags & Flag.end) !== 0
 		if (end) {
 			this.#release(stream)
@@ -578,13 +664,48 @@ export class Session {
 		}
 	}
 
+	// reads a call's answer where it arrived: what `read` returns holds none of these bytes
+	#answerDirect(
+		call: Direct,
+		h: ReturnType<typeof parseHeader>,
+		bytes: Uint8Array,
+		from: number,
+		to: number,
+	): void {
+		if (h.kind !== Kind.response || (h.flags & Flag.end) === 0) {
+			throw new ProtocolError(
+				`a ${kindName(h.kind)} without END answering a call on stream ${h.stream}`,
+			)
+		}
+		this.#streams.delete(h.stream)
+		this.#waitingToOpen.shift()?.resolve()
+		if ((h.flags & Flag.error) !== 0) {
+			call.reject(failureOf(bytes.slice(from, to)))
+			return
+		}
+		const reader = this.#reader
+		reader.reset(bytes, from, to)
+		let value: unknown
+		try {
+			value = call.read(reader)
+			reader.end()
+		} catch (err) {
+			call.reject(err instanceof Error ? err : new ProtocolError(String(err)))
+			return
+		}
+		call.resolve(value as never)
+	}
+
 	#credited(id: number, n: number): void {
 		if (id === 0) {
 			this.#credit += n
 			this.#drain()
 			return
 		}
-		this.#streams.get(id)?.grant(n)
+		const stream = this.#streams.get(id)
+		if (stream instanceof Stream) {
+			stream.grant(n)
+		}
 	}
 
 	// after a GOAWAY no stream opens; a REQUEST still waiting for credit goes
@@ -618,6 +739,10 @@ export class Session {
 		this.#ended = err
 		this.#welcome.reject(err)
 		for (const stream of this.#streams.values()) {
+			if (stream instanceof Direct) {
+				stream.reject(new LostError(`the connection ended: ${err.message}`, true))
+				continue
+			}
 			stream.fail(new LostError(`the connection ended: ${err.message}`, stream.sent))
 			stream.finish()
 		}

@@ -51,7 +51,7 @@ build:
 [working-directory: 'sdk/js']
 sdk: build
     bun install --frozen-lockfile
-    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/protocol.test.ts
+    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/protocol.test.ts
 
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']

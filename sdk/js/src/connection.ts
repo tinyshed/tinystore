@@ -23,6 +23,8 @@ export class Connection {
 	readonly #closing: () => Promise<unknown>
 	/** the handles this connection opened, by what they are: a bucket's name and options */
 	readonly handles = new Map<string, Promise<number>>()
+	/** the handle each open was answered, once it was: what a call made in place reads without waiting */
+	readonly opened = new Map<object, number>()
 
 	constructor(
 		session: Session,
@@ -414,6 +416,7 @@ export type Idempotence = 'read' | 'write'
 export class Link {
 	readonly #dial: Dialer
 	#current: Promise<Connection> | undefined
+	#dialled: Connection | undefined
 	#closed = false
 
 	constructor(dial: Dialer) {
@@ -435,6 +438,12 @@ export class Link {
 		return this.#redial(undefined)
 	}
 
+	/** The connection a call goes on, when one is there to take it without waiting. */
+	ready(): Connection | undefined {
+		const c = this.#dialled
+		return c !== undefined && c.session.ended === undefined && !c.session.goingAway ? c : undefined
+	}
+
 	// one dial at a time: every caller that found the same dead connection
 	// waits for the one new one
 	#redial(dead: Promise<Connection> | undefined): Promise<Connection> {
@@ -443,11 +452,19 @@ export class Link {
 		}
 		const dialled = this.#dial()
 		this.#current = dialled
-		dialled.catch(() => {
-			if (this.#current === dialled) {
-				this.#current = undefined
-			}
-		})
+		this.#dialled = undefined
+		dialled.then(
+			connection => {
+				if (this.#current === dialled) {
+					this.#dialled = connection
+				}
+			},
+			() => {
+				if (this.#current === dialled) {
+					this.#current = undefined
+				}
+			},
+		)
 		return dialled
 	}
 
@@ -466,14 +483,8 @@ export class Link {
 			try {
 				return await attempt(connection)
 			} catch (err) {
-				if (tries < 2 && (err instanceof LostError || err instanceof UnavailableError)) {
-					const sent = err instanceof LostError && err.sent
-					if (!sent || idempotence === 'read') {
-						continue
-					}
-					throw new OutcomeUnknownError(
-						`the connection was lost with the write in flight; read what it wrote before writing again: ${err.message}`,
-					)
+				if (tries < 2 && goesAgain(err, idempotence)) {
+					continue
 				}
 				throw err
 			}
@@ -485,11 +496,30 @@ export class Link {
 		this.#closed = true
 		const current = this.#current
 		this.#current = undefined
+		this.#dialled = undefined
 		await current?.then(
 			c => c.close(),
 			() => {},
 		)
 	}
+}
+
+/**
+ * Whether a call that failed goes on another connection: one whose REQUEST
+ * had not left, and a read that had. A write that had is OutcomeUnknownError,
+ * thrown here; any other failure is the call's own.
+ */
+export function goesAgain(err: unknown, idempotence: Idempotence): boolean {
+	if (!(err instanceof LostError || err instanceof UnavailableError)) {
+		return false
+	}
+	const sent = err instanceof LostError && err.sent
+	if (!sent || idempotence === 'read') {
+		return true
+	}
+	throw new OutcomeUnknownError(
+		`the connection was lost with the write in flight; read what it wrote before writing again: ${err.message}`,
+	)
 }
 
 /** What a download sent: its header, its items, and the trailer that ended it. */

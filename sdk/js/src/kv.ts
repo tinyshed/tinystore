@@ -16,6 +16,7 @@ import {
 } from './handles.ts'
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf, type Written } from './wire/codec.ts'
+import type { Reader } from './wire/msgpack.ts'
 import {
 	KvBranch,
 	KvBucketOpen,
@@ -91,6 +92,8 @@ export interface CountersOptions {
 export interface Values<T> {
 	encode(value: T): Raw
 	decode(raw: Raw): T
+	/** decode returns the bytes it was given, which must then be a copy of the answer's */
+	readonly keeps?: boolean
 }
 
 /** What a transaction needs of a handle it takes in. */
@@ -120,6 +123,8 @@ export class Bucket<T> {
 	readonly #under: readonly string[]
 	readonly #home: Home | undefined
 	readonly #via: Via
+	/** reads a get's or a take's answer: the value, undefined where the key held none */
+	readonly #value: (r: Reader) => T | undefined
 
 	/**
 	 * Buckets come from `store.bucket`, `db.bucket` and their `under`; inside
@@ -142,6 +147,7 @@ export class Bucket<T> {
 		this.#under = under
 		this.#home = home
 		this.#via = via ?? home?.via(`kv bucket ${name}`) ?? viaLink(link)
+		this.#value = r => valueIn(r, values)
 		const own = { link, name, open, openMethod: 'kv.bucket.open', under, home } as const
 		parts.set(this, { ...own, values: values as Values<unknown> })
 	}
@@ -153,41 +159,37 @@ export class Bucket<T> {
 	}
 
 	/** The key's value, undefined when it holds none. */
-	async get(key: Key): Promise<T | undefined> {
-		return (await this.entry(key))?.value
+	get(key: Key): Promise<T | undefined> {
+		return this.#ask('kv.get', { key }, 'read', this.#value)
 	}
 
 	/** The key's value with its version and expiry, undefined when it holds none. */
-	async entry(key: Key): Promise<Entry<T> | undefined> {
-		const found = KvEntry.decode(await this.#call('kv.get', { key }, 'read'))
-		return found.found === true ? entryOf(key, found, this.#values) : undefined
+	entry(key: Key): Promise<Entry<T> | undefined> {
+		return this.#ask('kv.get', { key }, 'read', r => {
+			const found = KvEntry.read(r)
+			return found.found === true ? entryOf(key, found, this.#values) : undefined
+		})
 	}
 
-	async has(key: Key): Promise<boolean> {
-		return KvFound.decode(await this.#call('kv.has', { key }, 'read')).found === true
+	has(key: Key): Promise<boolean> {
+		return this.#ask('kv.has', { key }, 'read', found)
 	}
 
 	/** Writes the value; a key that exists keeps its expiry unless the options give one. */
 	async set(key: Key, value: T, options?: WriteOptions): Promise<void> {
 		const raw = this.#values.encode(value)
-		await this.#call('kv.set', { key, value: raw, ...writeFields(options) }, 'write')
+		await this.#ask('kv.set', { key, value: raw, ...writeFields(options) }, 'write', unread)
 	}
 
 	/** Writes the value only where no live key is, and says whether it did. */
 	async create(key: Key, value: T, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean> {
 		const raw = this.#values.encode(value)
-		const body = await this.#call(
-			'kv.create',
-			{ key, value: raw, ...writeFields(options) },
-			'write',
-		)
-		return KvWritten.decode(body).written === true
+		return this.#ask('kv.create', { key, value: raw, ...writeFields(options) }, 'write', written)
 	}
 
 	/** Puts the key in a bucket used as a set; false when it was there. */
 	async add(key: Key, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean> {
-		const body = await this.#call('kv.create', { key, ...writeFields(options) }, 'write')
-		return KvWritten.decode(body).written === true
+		return this.#ask('kv.create', { key, ...writeFields(options) }, 'write', written)
 	}
 
 	/**
@@ -195,16 +197,12 @@ export class Bucket<T> {
 	 * a one-time code at once, one gets it.
 	 */
 	async take(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<T | undefined> {
-		const taken = KvEntry.decode(
-			await this.#call('kv.take', { key, ...writeFields(options) }, 'write'),
-		)
-		return taken.found === true ? this.#values.decode(taken.value ?? null) : undefined
+		return this.#ask('kv.take', { key, ...writeFields(options) }, 'write', this.#value)
 	}
 
 	/** Removes the key, and says whether it was there. */
 	async delete(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<boolean> {
-		const body = await this.#call('kv.delete', { key, ...writeFields(options) }, 'write')
-		return KvFound.decode(body).found === true
+		return this.#ask('kv.delete', { key, ...writeFields(options) }, 'write', found)
 	}
 
 	/**
@@ -217,12 +215,8 @@ export class Bucket<T> {
 		options?: Pick<WriteOptions, 'ifVersion'>,
 	): Promise<boolean> {
 		const expiry = when instanceof Date ? { expiresAt: when } : { ttl: when }
-		const body = await this.#call(
-			'kv.expire',
-			{ key, ...writeFields({ ...options, ...expiry }) },
-			'write',
-		)
-		return KvFound.decode(body).found === true
+		const fields = { key, ...writeFields({ ...options, ...expiry }) }
+		return this.#ask('kv.expire', fields, 'write', found)
 	}
 
 	/** Removes this branch's keys and every branch under it, at once however many. */
@@ -269,17 +263,62 @@ export class Bucket<T> {
 		}
 	}
 
-	async #call(method: Method, fields: CallFields, idempotence: Idempotence): Promise<Uint8Array> {
-		const under = underField(this.#under)
-		return this.#via.call(
+	// a call on one key: its fields written where they leave from, its answer read where it arrived
+	#ask<A>(
+		method: Method,
+		fields: CallFields,
+		idempotence: Idempotence,
+		read: (r: Reader) => A,
+	): Promise<A> {
+		// the caller's own fields, made the call's: an object more a call is one too many
+		const call = fields as { -readonly [K in keyof Call]: Call[K] }
+		call.under = underField(this.#under)
+		return this.#via.ask(
 			methods['kv.bucket.open'],
 			this.#open,
 			methods[method],
-			handle => KvCall.encode({ ...fields, handle, under }),
+			(w, handle) => {
+				call.handle = handle
+				KvCall.write(w, call)
+			},
+			read,
 			idempotence,
 		)
 	}
 }
+
+const [foundField] = KvEntry.fields.found
+const [valueField] = KvEntry.fields.value
+
+/**
+ * Reads an entry for its value alone, undefined where the key held none: the
+ * two fields a get needs, the value decoded from where the answer lies unless
+ * its bucket keeps the bytes.
+ */
+function valueIn<T>(r: Reader, values: Values<T>): T | undefined {
+	let found = false
+	let raw: Raw = null
+	r.fields(field => {
+		if (field === foundField) {
+			found = r.bool()
+			return true
+		}
+		if (field !== valueField) {
+			return false
+		}
+		if (r.nil()) {
+			return true
+		}
+		raw = r.type() !== 'bin' ? r.int64() : values.keeps === true ? r.bytes() : r.bin()
+		return true
+	})
+	return found ? values.decode(raw) : undefined
+}
+
+const found = (r: Reader): boolean => KvFound.read(r).found === true
+const written = (r: Reader): boolean => KvWritten.read(r).written === true
+/** Reads past an answer nobody asked to see. */
+const unread = (r: Reader): void => r.skip()
 
 /** Numbers by key that only add up: 0 for one never added to or expired. */
 export class Counters {
@@ -374,7 +413,8 @@ export function countersOpen(name: string, options: CountersOptions = {}): Uint8
 	})
 }
 
-type CallFields = Omit<Written<typeof KvCall.fields>, 'handle' | 'under'>
+type Call = Written<typeof KvCall.fields>
+type CallFields = Omit<Call, 'handle' | 'under'>
 
 /** Calls a method of a handle's branch on the link's connection, the handle opened there first. */
 export function callOn(
@@ -499,6 +539,7 @@ export function valuesOf(type: ValueType | undefined): Values<unknown> {
 			}
 		case 'bytes':
 			return {
+				keeps: true,
 				encode: v => {
 					if (!(v instanceof Uint8Array)) {
 						throw new InvalidError(`a ${typeof v} in a bucket of bytes`)

@@ -1,6 +1,7 @@
-import type { Connection, Idempotence, Link } from './connection.ts'
+import { type Connection, goesAgain, type Idempotence, type Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
 import type { Key } from './wire/codec.ts'
+import { Reader, Writer } from './wire/msgpack.ts'
 import { Handle } from './wire/protocol.ts'
 
 /**
@@ -45,16 +46,77 @@ export interface Via {
 		body: (handle: number) => Uint8Array,
 		idempotence: Idempotence,
 	): Promise<Uint8Array>
+	/**
+	 * The same call, its body written by `write` and its answer read by `read`
+	 * where the bytes are: on a connection that takes it at once it costs a
+	 * promise and no copy. What `read` returns holds none of the bytes it read.
+	 */
+	ask<T>(
+		openMethod: number,
+		open: Open,
+		method: number,
+		write: (w: Writer, handle: number) => void,
+		read: (r: Reader) => T,
+		idempotence: Idempotence,
+	): Promise<T>
+}
+
+/** Asks through `call`, the body and the answer each in bytes of their own. */
+export function askByCall<T>(
+	call: Via['call'],
+	openMethod: number,
+	open: Open,
+	method: number,
+	write: (w: Writer, handle: number) => void,
+	read: (r: Reader) => T,
+	idempotence: Idempotence,
+): Promise<T> {
+	const body = (handle: number) => {
+		const w = new Writer()
+		write(w, handle)
+		return w.bytes()
+	}
+	return call(openMethod, open, method, body, idempotence).then(answer => {
+		const r = new Reader(answer)
+		const value = read(r)
+		r.end()
+		return value
+	})
 }
 
 /** Calls on whichever connection the link has, dialled again as it says. */
 export function viaLink(link: Link): Via {
+	const call: Via['call'] = (openMethod, open, method, body, idempotence) =>
+		link.run(idempotence, async connection => {
+			const handle = await handleOn(connection, openMethod, open)
+			return connection.session.call(method, body(handle))
+		})
 	return {
-		call: (openMethod, open, method, body, idempotence) =>
-			link.run(idempotence, async connection => {
-				const handle = await handleOn(connection, openMethod, open)
-				return connection.session.call(method, body(handle))
-			}),
+		call,
+		ask: (openMethod, open, method, write, read, idempotence) => {
+			const waiting = () => askByCall(call, openMethod, open, method, write, read, idempotence)
+			const connection = link.ready()
+			const handle = connection?.opened.get(open)
+			if (connection === undefined || handle === undefined) {
+				return waiting()
+			}
+			return new Promise((resolve, reject) => {
+				// a call that fails here goes on as its first try through the link would
+				const failed = (err: Error) => {
+					try {
+						if (!goesAgain(err, idempotence)) {
+							return reject(err)
+						}
+					} catch (unknown) {
+						return reject(unknown)
+					}
+					waiting().then(resolve, reject)
+				}
+				if (!connection.session.direct(method, w => write(w, handle), read, resolve, failed)) {
+					waiting().then(resolve, reject)
+				}
+			})
+		},
 	}
 }
 
@@ -81,7 +143,10 @@ export function handleOn(connection: Connection, method: number, open: Open): Pr
 			const kept = byConnection
 			opening = open(connection).then(bytes => handleOn(connection, method, bytes))
 			kept.set(connection, opening)
-			opening.catch(() => kept.delete(connection))
+			opening.then(
+				handle => connection.opened.set(open, handle),
+				() => kept.delete(connection),
+			)
 		}
 		return opening
 	}
@@ -96,6 +161,13 @@ export function handleOn(connection: Connection, method: number, open: Open): Pr
 		opening = connection.session.call(method, open).then(body => Handle.decode(body).handle ?? 0)
 		connection.handles.set(key, opening)
 		opening.catch(() => connection.handles.delete(key))
+	}
+	// by these bytes themselves too: a second handle of the same open has bytes of its own
+	if (!connection.opened.has(open)) {
+		opening.then(
+			handle => connection.opened.set(open, handle),
+			() => {},
+		)
 	}
 	return opening
 }

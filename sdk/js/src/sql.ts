@@ -11,7 +11,15 @@ import { join } from 'node:path'
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { download } from './connection.ts'
 import { errorOf, InvalidError } from './errors.ts'
-import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
+import {
+	askByCall,
+	checkName,
+	type Home,
+	handleOn,
+	type Open,
+	type Via,
+	viaLink,
+} from './handles.ts'
 import {
 	openQueue,
 	type Queue,
@@ -608,6 +616,10 @@ export class Database implements Runner, Home {
 				this.#refuseAround(what)
 				return link.call(openMethod, open, method, body, idempotence)
 			},
+			ask: async (openMethod, open, method, write, read, idempotence) => {
+				this.#refuseAround(what)
+				return link.ask(openMethod, open, method, write, read, idempotence)
+			},
 		}
 	}
 
@@ -860,12 +872,11 @@ export class SqlTx implements Runner {
 		this.#connection = connection
 		this.#guests = guests
 		this.describe = database.describe
-		this.#via = {
-			call: async (openMethod, open, method, body) => {
-				const handle = await handleOn(this.#connection, openMethod, open)
-				return this.#nested(method, body(handle))
-			},
+		const call: Via['call'] = async (openMethod, open, method, body) => {
+			const handle = await handleOn(this.#connection, openMethod, open)
+			return this.#nested(method, body(handle))
 		}
+		this.#via = { call, ask: (...asked) => askByCall(call, ...asked) }
 	}
 
 	/**
