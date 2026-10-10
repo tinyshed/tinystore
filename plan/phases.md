@@ -59,6 +59,19 @@ taken against Go `e81a050` and written up as a research round.
 **Gate:** their GATES.md lines pass in Rust and through every SDK; Dashbin can
 start on sqldb, kv and jobs.
 
+### Dashbin's asks the rewrite has not carried yet
+
+Decided or built for the Go engines, and in no book or phase of this plan
+yet; each is decided again, in its order, once blobs are on the wire:
+
+- C9: values sealed beside the store, such as a source's password.
+- B10: a memo, one computation a key for the callers that ask at once.
+- C2: a token that reads and never writes, for viewers and agents.
+- C8: an SQL answer as typed columns rather than rows.
+- B2: histograms and exact quantiles; B5: aggregates over records; B6: the
+  names a store holds, for a query builder; B11: a live tail of records — for
+  the records and metrics books, before phase 3.
+
 ## 3. records and metrics
 
 - [ ] The codecs: huff0 and FSE in safe Rust or a format without them, the word-based reader, the exact accumulator.
