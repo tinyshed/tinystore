@@ -24,6 +24,9 @@ struct Pool {
     /// The least recently used first.
     idle: Vec<Idle>,
     open: usize,
+    /// Reads waiting for a reader. A reader that comes back wakes one only
+    /// when there is one: a wake is a system call, and it was one a read.
+    waiting: usize,
     closed: bool,
 }
 
@@ -109,7 +112,9 @@ impl Readers {
                     format!("{}: all {} readers are busy", self.path.display(), self.config.readers),
                 ));
             }
+            pool.waiting += 1;
             pool = self.freed.wait_timeout(pool, left).unwrap_or_else(PoisonError::into_inner).0;
+            pool.waiting -= 1;
         }
     }
 
@@ -126,13 +131,21 @@ impl Readers {
             return;
         }
         pool.idle.push(Idle { connection, since: Instant::now() });
+        let wake = pool.waiting > 0;
         drop(pool);
-        self.freed.notify_one();
+        if wake {
+            self.freed.notify_one();
+        }
     }
 
     fn discard(&self) {
-        self.lock().open -= 1;
-        self.freed.notify_one();
+        let mut pool = self.lock();
+        pool.open -= 1;
+        let wake = pool.waiting > 0;
+        drop(pool);
+        if wake {
+            self.freed.notify_one();
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Pool> {
