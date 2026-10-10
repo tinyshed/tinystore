@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use super::{Database, Done, Migrations};
@@ -468,6 +469,35 @@ fn a_database_closes_with_its_store() {
 fn reading_past_the_bound_is_a_limit() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     let mut statement = connection.prepare("select zeroblob(600) from (select 1 union all select 2)").unwrap();
-    let error = super::rows::Rows::read(&mut statement, &[], usize::MAX, 1000).map(drop).unwrap_err();
+    let read = super::rows::Rows::read(&mut statement, &[], (usize::MAX, 1000), super::rows::Held::default());
+    let error = read.map(drop).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
+    assert_eq!((error.fact("limit"), error.fact("bound")), (Some("bytes of a call's rows"), Some("1000")));
+}
+
+#[test]
+fn rows_hold_the_stores_memory_while_a_call_holds_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { memory: Some(1 << 20), background: false, ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let schema = "create table blobs (id integer primary key, body blob not null) strict";
+    let db = store.database("app").migrations([("0001_blobs.sql", schema)]).open().unwrap();
+    for _ in 0..12 {
+        db.exec(sql!("insert into blobs (body) values (zeroblob(100000))")).unwrap();
+    }
+
+    let whole: Vec<IgnoredAny> = db.all(sql!("select body from blobs where id <= 8")).unwrap();
+    assert_eq!(whole.len(), 8);
+    assert_eq!(store.memory().used(), 0, "the rows' memory is given back with the call");
+
+    let past = db.all::<IgnoredAny>(sql!("select body from blobs")).unwrap_err();
+    let limit = (past.kind(), past.fact("limit"), past.fact("bound"));
+    assert_eq!(limit, (ErrorKind::Limit, Some("store memory"), Some("1048576")), "{past}");
+
+    let held = store.memory().try_reserve(600 << 10, "another call").unwrap();
+    let now = db.all::<IgnoredAny>(sql!("select body from blobs where id <= 8")).unwrap_err();
+    assert_eq!((now.kind(), now.fact("limit")), (ErrorKind::Limit, Some("store memory, now")), "{now}");
+    drop(held);
+    assert_eq!(db.all::<IgnoredAny>(sql!("select body from blobs where id <= 8")).unwrap().len(), 8);
+    assert_eq!(store.memory().used(), 0);
 }

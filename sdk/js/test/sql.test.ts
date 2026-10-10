@@ -14,6 +14,7 @@ import {
 	type Database,
 	InvalidError,
 	LimitError,
+	limits,
 	type SqlTx,
 	type Store,
 	sql,
@@ -211,9 +212,12 @@ for (const way of ways) {
 			expect((await app.all`select id from notes where author_id = 3`).length).toBe(3000)
 		})
 
-		test('a query past its bound is a limit', async () => {
+		test('a query past its bound is a limit, which names the bound', async () => {
 			const error = await caught(app.all`select zeroblob(70 * 1024 * 1024)`)
 			expect(error).toBeInstanceOf(LimitError)
+			const limit = error as LimitError
+			expect([limit.limit, limit.bound]).toEqual([limits.rowBytes, 64 * 1024 * 1024])
+			expect(limit.wanted).toBeGreaterThan(64 * 1024 * 1024)
 		})
 
 		interface Typed {

@@ -13,26 +13,84 @@ use serde::de::value::{SeqDeserializer, StrDeserializer};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, IntoDeserializer, Visitor};
 
 use super::values::Value;
-use crate::{Error, Result};
+use crate::{Error, Memory, Reservation, Result};
 
 /// Values a call reads at most, in bytes, before it is `limit`: past them a
 /// program reads in pages, or a row at a time.
 pub(crate) const MOST_READ: usize = 64 << 20;
 
-/// The rows a statement gave, each `columns.len()` values long.
+/// What a `limit` of a call's rows names in its `limit` fact.
+const ROW_BYTES: &str = "bytes of a call's rows";
+
+/// The store's memory a call reserves first for its rows, and at least each
+/// time it grows.
+const FIRST_HELD: u64 = 64 << 10;
+
+/// The rows a statement gave, each `columns.len()` values long, and the
+/// store's memory they hold.
 pub(crate) struct Rows {
     columns: Arc<[String]>,
     values: Vec<Value>,
+    held: Held,
+}
+
+/// The store's memory a call's rows hold, reserved as they are read: twice
+/// what it holds while that is free, so that a large answer reserves a few
+/// times rather than a row at a time. It never waits, since the call holds a
+/// snapshot or the writer that the work holding the memory may wait for: what
+/// is not free now is `limit`. A store without a budget counts nothing.
+#[derive(Debug, Default)]
+pub(crate) struct Held {
+    reservation: Option<Reservation>,
+    bytes: u64,
+}
+
+impl Held {
+    pub(crate) fn of(memory: &Arc<Memory>) -> Held {
+        Held { reservation: memory.bounded().then(|| memory.nothing()), bytes: 0 }
+    }
+
+    /// Covers `bytes` of rows, or fails `limit` naming the store's memory.
+    fn reach(&mut self, bytes: u64) -> Result<()> {
+        self.bytes = bytes;
+        let Some(reservation) = &mut self.reservation else {
+            return Ok(());
+        };
+        let Some(short) = bytes.checked_sub(reservation.bytes()).filter(|short| *short > 0) else {
+            return Ok(());
+        };
+        let doubled = short.max(reservation.bytes()).max(FIRST_HELD);
+        reservation.grow(doubled, "its rows").or_else(|_| reservation.grow(short, "its rows"))
+    }
+
+    /// Gives back what the rows no longer hold: a part of them sent.
+    pub(crate) fn give_back(&mut self, bytes: u64) {
+        self.bytes = self.bytes.saturating_sub(bytes);
+        self.settle();
+    }
+
+    /// Keeps no more than the rows hold.
+    fn settle(&mut self) {
+        if let Some(reservation) = &mut self.reservation {
+            reservation.shrink(self.bytes);
+        }
+    }
 }
 
 impl Rows {
     /// Steps `statement` to its end, or until it gave `most` rows, keeping
-    /// what each row holds; past `bytes` of values it is `limit`.
-    pub(crate) fn read(statement: &mut Statement<'_>, values: &[Value], most: usize, bytes: usize) -> Result<Rows> {
+    /// what each row holds within the store's memory; past `bytes` of values
+    /// it is `limit`.
+    pub(crate) fn read(
+        statement: &mut Statement<'_>,
+        values: &[Value],
+        (most, bytes): (usize, usize),
+        mut held: Held,
+    ) -> Result<Rows> {
         let columns: Arc<[String]> = statement.column_names().into_iter().map(str::to_owned).collect();
         let width = columns.len();
         let mut rows = statement.query(params_from_iter(values)).map_err(|error| failure("its rows", error))?;
-        let (mut kept, mut held) = (Vec::new(), 0usize);
+        let (mut kept, mut size) = (Vec::new(), 0usize);
         let mut count = 0;
         while count < most {
             let Some(row) = rows.next().map_err(|error| failure("its rows", error))? else {
@@ -40,22 +98,27 @@ impl Rows {
             };
             for index in 0..width {
                 let value = Value::of(row.get_ref(index).map_err(|error| failure("its rows", error))?);
-                held += value.size();
+                size += value.size();
                 kept.push(value);
             }
-            if held > bytes {
-                return Err(Error::limit(format!(
-                    "its rows pass {} MiB: read them a page at a time, or one at a time",
-                    bytes >> 20
-                )));
+            if size > bytes {
+                return Err(past_bound(size, bytes));
             }
+            held.reach(size as u64)?;
             count += 1;
         }
-        Ok(Rows { columns, values: kept })
+        held.settle();
+        Ok(Rows { columns, values: kept, held })
     }
 
     pub(crate) fn columns(&self) -> &[String] {
         &self.columns
+    }
+
+    /// The store's memory the rows hold, for whoever keeps them after the
+    /// call: a download until its last part is sent.
+    pub(crate) fn held(&mut self) -> Held {
+        std::mem::take(&mut self.held)
     }
 
     /// The values, a row after another, each `width()` long.
@@ -67,8 +130,10 @@ impl Rows {
     #[cfg(test)]
     pub(crate) fn answered(wanted: super::run::Wanted) -> Rows {
         match wanted {
-            super::run::Wanted::Scalar => Rows { columns: Arc::from([String::new()]), values: vec![Value::Integer(0)] },
-            _ => Rows { columns: Arc::from([]), values: Vec::new() },
+            super::run::Wanted::Scalar => {
+                Rows { columns: Arc::from([String::new()]), values: vec![Value::Integer(0)], held: Held::default() }
+            }
+            _ => Rows { columns: Arc::from([]), values: Vec::new(), held: Held::default() },
         }
     }
 
@@ -109,6 +174,14 @@ impl Rows {
         let column = self.columns.first().cloned().unwrap_or_default();
         T::deserialize(ValueDecoder(value)).map_err(|failure| Error::invalid(format!("column {column}: {}", failure.0)))
     }
+}
+
+/// The `limit` of a call's rows past their bound, with its facts.
+fn past_bound(size: usize, bytes: usize) -> Error {
+    Error::limit(format!("its rows pass {} MiB: read them a page at a time, or one at a time", bytes >> 20))
+        .naming("limit", ROW_BYTES)
+        .naming("wanted", size.to_string())
+        .naming("bound", bytes.to_string())
 }
 
 /// A statement's failure as the error a caller acts on: a unique or primary

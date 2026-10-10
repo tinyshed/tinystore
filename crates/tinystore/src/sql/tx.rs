@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 
 use super::database::Done;
 use super::engine::Base;
-use super::rows::Rows;
+use super::rows::{Held, Rows};
 use super::run::{self, Wanted};
 use super::statement::Sql;
 use crate::{Result, Transaction, TxHandle};
@@ -79,7 +79,7 @@ impl<'t> Tx<'t> {
     }
 
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
-        self.transaction.call(|raw| run::write(raw, statement, wanted))
+        self.transaction.call(|raw| run::write(raw, statement, wanted, Held::of(&self.base.memory)))
     }
 
     fn failed(&self, statement: &Sql, error: crate::Error) -> crate::Error {

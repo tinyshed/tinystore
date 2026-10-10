@@ -17,7 +17,7 @@ use super::protocol::{
     SqlTxCall, SqlTxOpen, method,
 };
 use crate::engine::SharedFile;
-use crate::sql::{Database, Done, Migrations, Rows, Sql, Tx, Value, Wanted};
+use crate::sql::{Database, Done, Held, Migrations, Rows, Sql, Tx, Value, Wanted};
 use crate::{Error, ErrorKind, Store, Transaction};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -170,27 +170,30 @@ pub(crate) fn query(handles: &Handles, body: &[u8], link: &Link) -> Result<Queri
     let database = handles.database(asked.handle)?;
     let wanted = Wanted::named(&asked.want)
         .ok_or_else(|| Failure::invalid(format!("want {:?}: a query wants all, one or scalar", asked.want)))?;
-    let rows = database.rows_of(&statement(asked.text, asked.values)?, wanted)?;
+    let mut rows = database.rows_of(&statement(asked.text, asked.values)?, wanted)?;
+    let held = rows.held();
     let mut parts = parts(rows, part_bound(link))?;
     if parts.len() == 1 {
         return Ok(Queried::Whole(parts.pop_front().unwrap_or_default()));
     }
-    Ok(Queried::Parts(parts))
+    Ok(Queried::Parts(parts, held))
 }
 
 /// Sends a query's parts within the client's credit, its RESPONSE gone out;
-/// a cancel that came before finds nothing, and the parts still go.
-pub(crate) fn download(handles: &Handles, stream: u32, parts: VecDeque<Vec<u8>>, link: &Link) {
-    let state = DownloadState { parts, credit: link.credit, ended: false };
+/// a cancel that came before finds nothing, and the parts still go. The
+/// store's memory the rows held is given back as their parts go.
+pub(crate) fn download(handles: &Handles, stream: u32, (parts, held): (VecDeque<Vec<u8>>, Held), link: &Link) {
+    let state = DownloadState { parts, held, credit: link.credit, ended: false };
     let download = Arc::new(Downloading { stream, state: Mutex::new(state), link: link.clone() });
     lock(&handles.downloads).insert(stream, Arc::clone(&download));
     download.flush(&handles.downloads);
 }
 
-/// A query's answer: its rows whole, or their parts.
+/// A query's answer: its rows whole, or their parts and the store's memory
+/// they hold.
 pub(crate) enum Queried {
     Whole(Vec<u8>),
-    Parts(VecDeque<Vec<u8>>),
+    Parts(VecDeque<Vec<u8>>, Held),
 }
 
 /// The largest part of a query's rows: half of what the client takes at
@@ -247,6 +250,7 @@ pub(crate) struct Downloading {
 
 struct DownloadState {
     parts: VecDeque<Vec<u8>>,
+    held: Held,
     credit: u64,
     ended: bool,
 }
@@ -269,6 +273,7 @@ impl Downloading {
             }
             let part = state.parts.pop_front().unwrap_or_default();
             state.credit -= part.len() as u64;
+            state.held.give_back(part.len() as u64);
             if state.parts.is_empty() {
                 state.ended = true;
                 drop(state);

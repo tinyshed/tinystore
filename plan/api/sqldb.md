@@ -647,6 +647,21 @@ was applied`.
 | readers                              | 8, closed after a minute unused but one   |
 | statements compiled a connection     | 128, the least recently used closed first |
 
+A call's rows hold the store's memory, `memory` of the store's options, while
+the call holds them: until `all` has read them as the program's values, and
+over a pipe or a network until their last part is sent. A read never waits
+for memory, since it holds a snapshot or the writer meanwhile: what does not
+fit is `limit`, and its `limit` says which bound it met, with what the call
+`wanted` and the `bound`.
+
+| `limit`                  | It means                                                      | What to do                        |
+|--------------------------|---------------------------------------------------------------|-----------------------------------|
+| `bytes of a call's rows` | one call's rows past 64 MiB                                   | read a page, or `each`            |
+| `store memory`           | one call's rows past all of the store's memory                | read a page, or `each`            |
+| `store memory, now`      | the rows do not fit beside what other calls hold at this time | try again; fewer at once, or less |
+
+A store opened without `memory` counts nothing, and only the 64 MiB holds.
+
 ## Newcomer check, 10 October
 
 Three Haiku agents at the highest effort, with no other context: one said what

@@ -134,6 +134,7 @@ export const limits = Object.freeze({
 	jobValueBytes: "bytes of a job's value",
 	stepBytes: "bytes of a step's answer",
 	objectBytes: "bytes of an object, the bucket's MaxSize",
+	rowBytes: "bytes of a call's rows",
 } as const)
 
 /** The store, the handle or the connection closed. */

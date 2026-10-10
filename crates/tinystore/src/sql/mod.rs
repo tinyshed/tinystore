@@ -39,7 +39,7 @@ pub use query::{Direction, Page, Query, Table, Upsert};
 pub use statement::Sql;
 pub use tx::Tx;
 
-pub(crate) use rows::Rows;
+pub(crate) use rows::{Held, Rows};
 pub(crate) use run::Wanted;
 pub(crate) use values::Value;
 

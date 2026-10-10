@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use super::tx::BOUND;
 use crate::engine::{Claim, Engine, Host, SharedFile};
 use crate::sqlite::{Config, File, Migration};
-use crate::{Clock, Error, Result, Store};
+use crate::{Clock, Error, Memory, Result, Store};
 
 /// The history a database's own migrations are kept under.
 const HISTORY: &str = "migrations";
@@ -26,6 +26,8 @@ pub(crate) struct Base {
     pub(crate) name: String,
     pub(crate) shared: Arc<SharedFile>,
     clock: Arc<dyn Clock>,
+    /// The store's memory, which a call's rows hold while it holds them.
+    pub(crate) memory: Arc<Memory>,
     /// Statements known to write, by their text. SQLite says whether one
     /// writes when it compiles it, and a read call sends those to the writer.
     writes: Mutex<HashSet<String>>,
@@ -59,6 +61,7 @@ impl Databases {
             name: name.to_owned(),
             shared: Arc::new(SharedFile::new(file, format!("sql {name}"), store)),
             clock: store.clock(),
+            memory: Arc::clone(store.memory()),
             writes: Mutex::new(HashSet::new()),
             _claim: claim,
         };

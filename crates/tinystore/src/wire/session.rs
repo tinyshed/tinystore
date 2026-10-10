@@ -416,9 +416,9 @@ impl Shared {
         let shared = Arc::clone(self);
         self.workers.run(Box::new(move || match guarded(|| sql::query(&shared.sql, &body, &link)) {
             Ok(sql::Queried::Whole(rows)) => shared.answer(stream, Ok(rows)),
-            Ok(sql::Queried::Parts(parts)) => {
+            Ok(sql::Queried::Parts(parts, held)) => {
                 shared.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
-                sql::download(&shared.sql, stream, parts, &link);
+                sql::download(&shared.sql, stream, (parts, held), &link);
             }
             Err(failure) => shared.answer(stream, Err(failure)),
         }));

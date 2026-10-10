@@ -225,8 +225,8 @@ module defines.
 - a broken constraint says which, its table and columns or its name, as SQLite names it, and a strict column's type is none — `a_broken_constraint_says_which_as_sqlite_names_it` in `sql::database_tests`, `a_constraint_is_named_as_sqlite_says_it` in `sqlite::constraint`; `a key already held is a conflict, and the error names the database and the constraint` in `sdk/js/test/sql.test.ts`
 - a write says what it changed, and the rowid of its own insert alone — `exec_says_what_it_changed_and_the_rowid_of_its_insert` in `sql::database_tests`
 - a statement is compiled once a connection — `TestAStatementIsCompiledOnceAConnection`, `TestAConnectionKeepsTheStatementsItsFileWasOpenedWith`
-- sqldb holds the store's memory before it decodes — `TestStoreMemoryBoundsReadsAndWrites`
-- a read past 64 MiB is a limit — `reading_past_the_bound_is_a_limit` in `sql::database_tests`; `a query past its bound is a limit` in `sdk/js/test/sql.test.ts`
+- a call's rows hold the store's memory while the call holds them, a download's until its last part is sent, and rows the memory has no room for are a limit that says which bound it met — `rows_hold_the_stores_memory_while_a_call_holds_them` in `sql::database_tests`, `a_download_holds_the_stores_memory_until_its_last_part_is_sent` in `wire::sql`, `a_reservation_grows_while_the_memory_is_free_and_says_which_bound_it_met` in `memory`
+- a read past 64 MiB is a limit, which names its bound — `reading_past_the_bound_is_a_limit` in `sql::database_tests`; `a query past its bound is a limit, which names the bound` in `sdk/js/test/sql.test.ts`
 - a schema check writes a migration only when asked — `TestCheckSchemaFindsWhatIsMissingAndWritesOnlyWhenAsked`, `TestTwoChecksOfOneNameFail`
 - an ambiguous change is a draft that does not run — `TestAnAmbiguousChangeIsADraftThatDoesNotRun`
 - a database no one opened is copied without opening it — `TestCopyTakesADatabaseNoOneOpened` in `sqldb`

@@ -130,6 +130,45 @@ fn rows_past_one_message_come_in_parts_within_the_clients_credit() {
     assert_eq!(client.pipe.streams(), 0);
 }
 
+#[test]
+fn a_download_holds_the_stores_memory_until_its_last_part_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = crate::Options { memory: Some(4 << 20), background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let mut client = Client::over(crate::pipe::Pipe::connect(&store, crate::pipe::Connect::default()).unwrap());
+    client.greet(Hello { protocol: 2, stream_credit: Some(64 << 10), ..Hello::default() }).unwrap();
+    let handle = open(&mut client);
+    let title = "x".repeat(1000);
+    for n in 0..200 {
+        insert(&mut client, handle, &format!("n{n:03}"), &title);
+    }
+
+    let asked = SqlQuery {
+        handle,
+        text: "select id, title from notes order by id".to_owned(),
+        values: Vec::new(),
+        want: "all".to_owned(),
+    };
+    let stream = client.start(method::SQL_QUERY, &asked);
+    assert_eq!(client.next_on(stream).kind, Kind::Response);
+    let mut taken = 0u64;
+    loop {
+        while client.silent_on(stream, Duration::from_millis(50)) {
+            assert!(store.memory().used() > 0, "the parts not sent yet hold the store's memory");
+            client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
+            taken = 0;
+        }
+        let part = client.next_on(stream);
+        taken += part.body.len() as u64;
+        if part.flags & frame::END != 0 {
+            break;
+        }
+    }
+    assert_eq!(store.memory().used(), 0, "the last part gave the rest back");
+    drop(client);
+    store.close().unwrap();
+}
+
 /// Opens a transaction on `handle`, its stream open both ways.
 fn begin(client: &mut Client, handle: u64) -> u32 {
     let stream = client.open_stream(method::SQL_TX, &SqlTxOpen { handle });

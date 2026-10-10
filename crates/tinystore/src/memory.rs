@@ -4,6 +4,13 @@ use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 
+/// What a `Limit` of the store's memory names in its `limit` fact: one call
+/// past the whole budget, and calls together past what is free now. Its
+/// `wanted` is what the call, or every call, would have held, and its `bound`
+/// the budget.
+pub(crate) const STORE_MEMORY: &str = "store memory";
+pub(crate) const STORE_MEMORY_NOW: &str = "store memory, now";
+
 /// The bytes a store's work may hold at once.
 ///
 /// Work reserves before it allocates and gives the bytes back by dropping its
@@ -29,15 +36,32 @@ impl Memory {
         *self.lock()
     }
 
+    /// Whether the store was given a budget; without one, work reserves
+    /// nothing and pays nothing for it.
+    pub fn bounded(&self) -> bool {
+        self.limit != u64::MAX
+    }
+
     /// Takes `bytes` now, or fails with `Limit`.
     pub fn try_reserve(self: &Arc<Self>, bytes: u64, what: &str) -> Result<Reservation> {
-        self.refuse_past_limit(bytes, what)?;
+        self.take_now(0, bytes, what)?;
+        Ok(self.reservation(bytes))
+    }
+
+    /// A reservation of nothing yet, which grows as its work holds more.
+    pub fn nothing(self: &Arc<Self>) -> Reservation {
+        self.reservation(0)
+    }
+
+    /// Takes `bytes` more for work that holds `held` already, now or not at all.
+    fn take_now(&self, held: u64, bytes: u64, what: &str) -> Result<()> {
+        self.refuse_past_limit(held.saturating_add(bytes), what)?;
         let mut used = self.lock();
         if *used + bytes > self.limit {
             return Err(self.exhausted(bytes, *used, what));
         }
         *used += bytes;
-        Ok(self.reservation(bytes))
+        Ok(())
     }
 
     /// Takes `bytes`, waiting up to `patience` for other work to give them back.
@@ -60,14 +84,22 @@ impl Memory {
         if bytes <= self.limit {
             return Ok(());
         }
-        Err(Error::limit(format!("{what}: {bytes} bytes is more than the store's memory, {} bytes", self.limit)))
+        let error =
+            Error::limit(format!("{what}: {bytes} bytes is more than the store's memory, {} bytes", self.limit));
+        Err(self.named(error, STORE_MEMORY, bytes))
     }
 
     fn exhausted(&self, bytes: u64, used: u64, what: &str) -> Error {
-        Error::limit(format!(
+        let error = Error::limit(format!(
             "{what}: {bytes} bytes do not fit in the store's memory, {used} of {} bytes in use",
             self.limit
-        ))
+        ));
+        self.named(error, STORE_MEMORY_NOW, used.saturating_add(bytes))
+    }
+
+    /// A limit of the store's memory with its facts, which every SDK reads.
+    fn named(&self, error: Error, limit: &str, wanted: u64) -> Error {
+        error.naming("limit", limit).naming("wanted", wanted.to_string()).naming("bound", self.limit.to_string())
     }
 
     fn reservation(self: &Arc<Self>, bytes: u64) -> Reservation {
@@ -101,6 +133,13 @@ pub struct Reservation {
 impl Reservation {
     pub fn bytes(&self) -> u64 {
         self.bytes
+    }
+
+    /// Takes `bytes` more now, or fails with `Limit` and keeps what it held.
+    pub fn grow(&mut self, bytes: u64, what: &str) -> Result<()> {
+        self.memory.take_now(self.bytes, bytes, what)?;
+        self.bytes += bytes;
+        Ok(())
     }
 
     /// Gives back what the work turned out not to need.
@@ -163,6 +202,29 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         drop(held);
         assert_eq!(waiter.join().unwrap().unwrap(), 60);
+        assert_eq!(memory.used(), 0);
+    }
+
+    #[test]
+    fn a_reservation_grows_while_the_memory_is_free_and_says_which_bound_it_met() {
+        let memory = Memory::new(100);
+        let mut rows = memory.nothing();
+        rows.grow(60, "rows").unwrap();
+        let other = memory.try_reserve(30, "other").unwrap();
+        let now = rows.grow(20, "rows").unwrap_err();
+        assert_eq!(
+            (now.kind(), now.fact("limit"), now.fact("wanted")),
+            (ErrorKind::Limit, Some(STORE_MEMORY_NOW), Some("110"))
+        );
+        assert_eq!(rows.bytes(), 60, "a growth refused keeps what was held");
+        drop(other);
+        let whole = rows.grow(41, "rows").unwrap_err();
+        assert_eq!(
+            (whole.fact("limit"), whole.fact("wanted"), whole.fact("bound")),
+            (Some(STORE_MEMORY), Some("101"), Some("100"))
+        );
+        rows.grow(40, "rows").unwrap();
+        drop(rows);
         assert_eq!(memory.used(), 0);
     }
 

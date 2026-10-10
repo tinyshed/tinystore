@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 
 use super::engine::{Base, Databases};
 use super::migrations::Migrations;
-use super::rows::Rows;
+use super::rows::{Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
@@ -182,13 +182,14 @@ impl Database {
     /// it writes; a statement known to write goes to the writer at once.
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
         if !self.base.writes(statement.text()) {
-            match self.base.file().read(|connection| run::read(connection, statement, wanted))? {
+            let held = Held::of(&self.base.memory);
+            match self.base.file().read(|connection| run::read(connection, statement, wanted, held))? {
                 Read::Rows(rows) => return Ok(rows),
                 Read::Writes => self.base.remember_write(statement.text()),
             }
         }
-        let running = statement.clone();
-        self.base.file().write(statement.weight(), move |tx| run::write(tx, &running, wanted))
+        let (running, held) = (statement.clone(), Held::of(&self.base.memory));
+        self.base.file().write(statement.weight(), move |tx| run::write(tx, &running, wanted, held))
     }
 
     fn failed(&self, statement: &Sql, error: Error) -> Error {
