@@ -48,18 +48,18 @@ read, latest, aggregate: plan ──► one short snapshot of bytes ──► de
 `metrics.db`, `durability: 'os'` unless the store opened `'full'`. The schema
 is one migration, `0001`, until `v0.1.0`.
 
-| Table          | Holds                                                                                     | Why this shape                                                                              |
-|----------------|-------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| `store_state`  | the count of series, the next payload id                                                  | one row                                                                                     |
-| `names`        | a name's id, kind, `keep`, buckets, unit and help                                         | what the book says a name owns, set by instruments, `ingest` and `describe`                 |
-| `series`       | its id, its identity, its name, its label ids gap-coded                                   | the identity is the SHA-256 of the canonical labels as 32 bytes, where Go kept 44 of base64 |
-| `label_values` | a pair's id, name, value and the count of its series                                      | the dictionary: a pair kept once, its count choosing the shortest posting list              |
-| `postings`     | a pair and a series, `WITHOUT ROWID`, no foreign key                                      | which series hold a pair, so that nothing scans every series; a removal goes by their key   |
-| `series_state` | the newest time seen, what is sealed, a version, when it is due to expire, ready, failure | fixed in size, with partial indexes for ready, due and failed series                        |
-| `heads`        | a series' packed head                                                                     | its growing and shrinking stays out of the state rows; Go kept it in them                   |
-| `clocks`       | a digest, the groups that use it, the timestamps                                          | shared by digest and bytes: series written at the same ticks share one                      |
-| `groups`       | a series, its start and end, its clock, its directory; unique on series and start         | a rowid table, where Go's was `WITHOUT ROWID`                                               |
-| `payloads`     | an id and a body                                                                          | bodies over 16 bytes; smaller ones live in the directory, a constant block has none         |
+| Table          | Holds                                                                                                                           | Why this shape                                                                              |
+|----------------|---------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `store_state`  | the count of series, the next payload id                                                                                        | one row                                                                                     |
+| `names`        | a name's id, kind, `keep`, buckets, unit and help                                                                               | what the book says a name owns, set by instruments, `ingest` and `describe`                 |
+| `series`       | its id, its identity, its name, its label ids gap-coded                                                                         | the identity is the SHA-256 of the canonical labels as 32 bytes, where Go kept 44 of base64 |
+| `label_values` | a pair's id, name, value and the count of its series                                                                            | the dictionary: a pair kept once, its count choosing the shortest posting list              |
+| `postings`     | a pair and a series, `WITHOUT ROWID`, no foreign key                                                                            | which series hold a pair, so that nothing scans every series; a removal goes by their key   |
+| `series_state` | the newest time seen, what is sealed, a version, when it is due to expire, whether retention took samples of it, ready, failure | fixed in size, with partial indexes for ready, due and failed series                        |
+| `heads`        | a series' packed head                                                                                                           | its growing and shrinking stays out of the state rows; Go kept it in them                   |
+| `clocks`       | a digest, the groups that use it, the timestamps                                                                                | shared by digest and bytes: series written at the same ticks share one                      |
+| `groups`       | a series, its start and end, its clock, its directory; unique on series and start                                               | a rowid table, where Go's was `WITHOUT ROWID`                                               |
+| `payloads`     | an id and a body                                                                                                                | bodies over 16 bytes; smaller ones live in the directory, a constant block has none         |
 
 - The identity as 32 bytes took 12 bytes from the row and 12 from its index a
   series: −5.56% on 512 short series, never more bytes elsewhere (density
@@ -213,7 +213,11 @@ bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
   their summaries, which decode, the bytes it reads and the samples it
   decodes, and the first bound it passes. `explain` returns the plan, and
   `read` and `aggregate` carry it out, so that what a plan says is what the
-  call spends.
+  call spends. A plan leaves every payload in the file, counted by its
+  directory. Past the samples a call may decode it goes on counting, which
+  costs it nothing, so that `exceeds` says how many the call wants; at the
+  series it finds and the bytes it reads, which are its own work, it stops
+  where the call would.
 - **A snapshot** then copies bytes only, directories, clocks, payloads and
   head chunks, inside one read transaction, each row's bytes checked against
   what the read may still copy before it is, and ends before anything is
@@ -225,23 +229,39 @@ bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
   parallel decode helped some reads and slowed others; it waits for a
   measurement on this engine.
 - `read` gives columns a series; `latest` decodes one head chunk, or answers
-  from the last block's directory, a series.
+  from the last block's directory, a series: the newest chunk the range
+  touches, else the newest block, decoded only when the range ends inside
+  it. A series whose newest group ended before the range costs no directory.
 
 ## Aggregates
 
 - Buckets of `every` counted from 1970 in UTC, clipped by the range and by
-  each series' `keep`.
+  each series' `keep`. `at` is where a bucket begins on that grid, for one
+  the range cuts too; without `every` it is the range's start, and a query
+  that says no start begins where the name's `keep` does.
 - Each series has an accumulator a bucket for its `op`: a count; an exact
   sum; the least and the greatest, `-0` before `+0`; the first and the last,
   bit for bit; an increase, a rate and a delta, which carry the previous
   sample into the next bucket, the step rule; and its resets, `partial` and
-  `gap`.
+  `gap`. A histogram's `_bucket` series is a counter to every `op`.
+- `gap` is a first step that began before the bucket before its own; without
+  `every` the yardstick is the range's own width.
+- `partial` is a bucket that begins before the oldest time its name keeps;
+  and, for an `op` that counts steps, the bucket of a series' oldest sample
+  when retention took samples of the series, since the step into it began at
+  one. `series_state.trimmed` says it took some, set in the transaction that
+  expires a sample, and so does a sample the file still holds though its
+  name keeps it no longer. A series that begins in the range lost none.
+- Of the samples before the range only the newest is taken, and checked: an
+  older NaN there refuses nothing.
 - A block wholly inside one bucket and the clipped range answers from its
   summary, and its body is never fetched; one cut by either decodes. The
   first bucket's step comes from the newest sample before the range, found as
   `latest` finds it, a whole block's from its directory.
 - A group joins its series' buckets exactly and rounds once; the series of
-  `__overflow` is a group of its own.
+  `__overflow` is a group of its own. Groups are answered one at a time, so
+  that the store's memory holds one group's exact sums, a fixed 35 words a
+  bucket, reserved as its buckets come.
 - A gauge's percentile gathers its bucket's samples within the decode bound
   and selects the rank without sorting them all. A timer's adds the increase
   of each of its `_bucket` series across the group, finds the bucket holding

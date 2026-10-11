@@ -489,6 +489,10 @@ counters, one a bound, each counting the durations at most its `le`, the last
 const cpu = await store.metrics.latest({ name: 'cpu', since: '5m' })   // [{ name, labels, at, value }, …]
 ```
 
+```rust
+let cpu = stats.query().name("cpu").since(Duration::from_mins(5)).latest()?;
+```
+
 - `latest` gives the newest sample of each series in the range, one a series,
   in `read`'s order. A series without one is left out, so the range bounds
   how stale an answer may be: a host that went down leaves the answer rather
@@ -506,11 +510,19 @@ const heavy = await store.metrics.explain({ name: 'cpu', since: '30d', every: '1
 // { series: 40, bytes: 14_680_064, decoded: 6_912_000, exceeds: { limit: 'samples decoded', wanted: 6_912_000, bound: 1_048_576 } }
 ```
 
+```rust
+let month = stats.query().name("cpu").since(Duration::from_hours(30 * 24));
+let plan = month.clone().every(Duration::from_hours(1)).explain(Op::Avg)?;
+let read = month.explain(None)?;   // of a read
+```
+
 - `explain` takes what `read` or `aggregate` takes, and says what the call
   would spend of each bound: the series it finds, the bytes it reads, the
   samples it decodes; and in `exceeds`, the bound it would stop at, as the
   `limit` error would name it. It reads what the file keeps about each
-  series and decodes no sample.
+  series and decodes no sample. Past `samples decoded` it goes on counting,
+  so `wanted` is every sample the call would decode; at `series` and `bytes
+  read` it stops where the call would.
 - The store cuts a series' packed samples into blocks where whole hours
   begin, or the longer spans that divide a day for a series that writes less
   often, and each block keeps an exact summary. A bucket that holds whole

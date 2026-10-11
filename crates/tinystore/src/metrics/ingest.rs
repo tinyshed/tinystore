@@ -207,7 +207,8 @@ const STATE: &str = "select s.sealed_before, s.version, s.max_seen, s.ready, s.d
 macro_rules! save_state {
     ($set:literal) => {
         concat!(
-            "update series_state set max_seen = ?2, version = version + 1, head_count = ?3, head_start = ?4, head_end = ?5",
+            "update series_state set max_seen = ?2, version = version + 1, head_count = ?3, head_start = ?4,",
+            " head_end = ?5",
             $set,
             " where series_id = ?1"
         )

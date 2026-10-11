@@ -148,6 +148,12 @@ them.
   once; publication of eight series a transaction, a savepoint each, groups taking in the one before while it holds
   no more live blocks; reads across blocks and the head; blocks expiring whole. A series is reclaimed through the
   pairs its row names, since postings, which now carry no foreign key, have no index by series.
+  Built, slice 3: `aggregate` with `count`, `sum`, `avg`, `min`, `max`, `increase`, `rate`, `delta`, `first` and
+  `last`, buckets on the grid from 1970, the step rule with the first step from the newest sample before the range,
+  `gap`, `partial` with a flag a series keeps once retention took samples of it, groups by `by` and `without`
+  answered one at a time, whole blocks from their summaries; `latest` from one chunk or one directory a series;
+  `explain`, the plan the calls carry out. The ladder now reaches 200 milliseconds, and a pass goes on while a series
+  holds more complete units than a group takes: a series a sample a millisecond had filled its head.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

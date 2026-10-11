@@ -49,7 +49,9 @@ const SAVE_HEAD: &str = "update heads set body = ?2 where series_id = ?1";
 const DROP_HEAD: &str = "delete from heads where series_id = ?1";
 const SAVE_STATE: &str = "update series_state set version = version + 1, ready = ?2,
     head_count = ?3, head_start = ?4, head_end = ?5 where series_id = ?1";
-const SET_DUE: &str = "update series_state set due = ?2 where series_id = ?1";
+/// A series retention took samples of says so from then on: the step from
+/// the last of them into its oldest sample is one no read counts.
+const SET_DUE: &str = "update series_state set due = ?2, trimmed = max(trimmed, ?3) where series_id = ?1";
 const HAS_GROUPS: &str = "select exists (select 1 from groups where series_id = ?1)";
 const OLDEST: &str = "select id, start_ts, end_ts, clock, directory from groups
     where series_id = ?1 order by start_ts limit 1";
@@ -131,7 +133,7 @@ fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
     }
     let next = publish::due(tx, zstd, due.id, points.first().map(|point| point.at))?;
     let next = next.map(|oldest| expires(oldest, due.keep));
-    execute(tx, SET_DUE, params![due.id, next], "write when a series is due").map(drop)?;
+    execute(tx, SET_DUE, params![due.id, next, expired.samples > 0], "write when a series is due").map(drop)?;
     Ok(expired)
 }
 

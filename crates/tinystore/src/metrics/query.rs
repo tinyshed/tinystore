@@ -1,5 +1,7 @@
 //! A query: the series of a name, of labels under conditions, or of both,
-//! over a range of time; `read` gives their samples.
+//! over a range of time. `read` gives their samples, `aggregate` their
+//! buckets, `latest` the newest sample of each, and `explain` what a read or
+//! an aggregate would cost.
 //!
 //! ```no_run
 //! # use std::time::Duration;
@@ -21,8 +23,11 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use super::aggregate::{Aggregate, Op, Shape};
 use super::engine::Engine;
+use super::explain::Plan;
 use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
+use super::latest::Latest;
 use super::series::Series;
 use crate::{Error, Result, unix_millis};
 
@@ -121,7 +126,8 @@ impl<T: Into<String>> From<Prefix<T>> for Condition {
     }
 }
 
-/// A query being asked: its name, conditions and range, which `read` runs.
+/// A query being asked: its name, conditions and range, and for an
+/// aggregate its buckets and groups.
 #[derive(Clone)]
 pub struct Query {
     pub(super) engine: Arc<Engine>,
@@ -130,6 +136,9 @@ pub struct Query {
     since: Option<Duration>,
     from: Option<SystemTime>,
     to: Option<SystemTime>,
+    every: Option<Duration>,
+    by: Option<Vec<String>>,
+    without: Option<Vec<String>>,
 }
 
 impl fmt::Debug for Query {
@@ -140,6 +149,9 @@ impl fmt::Debug for Query {
             .field("since", &self.since)
             .field("from", &self.from)
             .field("to", &self.to)
+            .field("every", &self.every)
+            .field("by", &self.by)
+            .field("without", &self.without)
             .finish()
     }
 }
@@ -157,10 +169,20 @@ pub(super) struct Asked {
 
 impl Query {
     pub(super) fn of(engine: Arc<Engine>) -> Query {
-        Query { engine, name: None, conditions: Vec::new(), since: None, from: None, to: None }
+        Query {
+            engine,
+            name: None,
+            conditions: Vec::new(),
+            since: None,
+            from: None,
+            to: None,
+            every: None,
+            by: None,
+            without: None,
+        }
     }
 
-    /// The series of this name; a timer's name, the series it writes.
+    /// The series of this name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
@@ -192,12 +214,91 @@ impl Query {
         self
     }
 
+    /// An aggregate's buckets: spans this long, each beginning at a whole
+    /// number of them since 1970 in UTC, the range cutting the first and the
+    /// last. Without it the range is one bucket.
+    pub fn every(mut self, span: Duration) -> Self {
+        self.every = Some(span);
+        self
+    }
+
+    /// The labels an aggregate keeps: the series of a name that share them
+    /// are one group. Without `by` and `without`, every series of a name is
+    /// one group.
+    pub fn by(mut self, labels: &[&str]) -> Self {
+        self.by.get_or_insert_default().extend(labels.iter().map(|label| (*label).to_owned()));
+        self
+    }
+
+    /// The labels an aggregate leaves out, keeping every other: `&[]` keeps
+    /// every series apart.
+    pub fn without(mut self, labels: &[&str]) -> Self {
+        self.without.get_or_insert_default().extend(labels.iter().map(|label| (*label).to_owned()));
+        self
+    }
+
     /// The samples of each series the query finds, in its range: a series
     /// without one is left out. Past a bound of a read it is a `limit`
     /// error, naming the bound, never fewer series or samples.
     pub fn read(&self) -> Result<Vec<Series>> {
-        let asked = self.asked().map_err(|error| error.within("metrics"))?;
-        self.engine.read(&asked).map_err(|error| error.within("metrics"))
+        let read = self.plain("read").and_then(|()| self.asked()).and_then(|asked| self.engine.read(&asked));
+        read.map_err(|error| error.within("metrics"))
+    }
+
+    /// The buckets of each group of the series the query finds, each one
+    /// exact value of `op`, rounded once: a group without a sample in the
+    /// range is left out, and so is a bucket without one. An `op` a series'
+    /// kind has not is `invalid`, and so is a bucket over a NaN, an infinity
+    /// or a counter below zero; past a bound it is a `limit` error, naming
+    /// the bound, never fewer buckets.
+    pub fn aggregate(&self, op: Op) -> Result<Vec<Aggregate>> {
+        let aggregate = self.shape(op).and_then(|shape| self.engine.aggregate(&self.asked()?, &shape));
+        aggregate.map_err(|error| error.within("metrics"))
+    }
+
+    /// The newest sample of each series the query finds, when it has one in
+    /// the range: a series that stopped writing leaves the answer rather
+    /// than show its last value for ever.
+    pub fn latest(&self) -> Result<Vec<Latest>> {
+        let latest = self.plain("latest").and_then(|()| self.asked()).and_then(|asked| self.engine.latest(&asked));
+        latest.map_err(|error| error.within("metrics"))
+    }
+
+    /// What `read`, or `aggregate` when given its `op`, would spend of each
+    /// bound of a query, and the bound it would stop at. It decodes no
+    /// sample.
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # fn f(stats: tinystore::metrics::Metrics) -> tinystore::Result<()> {
+    /// use tinystore::metrics::Op;
+    /// let month = stats.query().name("cpu").since(Duration::from_hours(30 * 24));
+    /// let plan = month.clone().every(Duration::from_hours(1)).explain(Op::Avg)?;
+    /// assert!(plan.exceeds.is_none(), "whole hours answer from their summaries");
+    /// let read = month.explain(None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn explain(&self, op: impl Into<Option<Op>>) -> Result<Plan> {
+        let shape = match op.into() {
+            Some(op) => self.shape(op).map(Some),
+            None => self.plain("a read").map(|()| None),
+        };
+        let plan = shape.and_then(|shape| self.engine.explain(&self.asked()?, shape.as_ref()));
+        plan.map_err(|error| error.within("metrics"))
+    }
+
+    /// An aggregate's buckets and groups, checked.
+    fn shape(&self, op: Op) -> Result<Shape> {
+        Shape::of(op, self.every, self.by.as_deref(), self.without.as_deref())
+    }
+
+    /// Refuses what only an aggregate takes, for a call that is none.
+    fn plain(&self, call: &str) -> Result<()> {
+        if self.every.is_some() || self.by.is_some() || self.without.is_some() {
+            return Err(Error::invalid(format!("`every`, `by` and `without` are an aggregate's: {call} takes none")));
+        }
+        Ok(())
     }
 
     /// The query checked against what a read may ask, at the store's time.
@@ -225,7 +326,8 @@ impl Query {
         }
         if !conditions.iter().any(|(_, condition)| !matches!(condition, Condition::NoneOf(_))) {
             return Err(Error::invalid(
-                "a query finds its series by a name, or a label's value, list or prefix: `Not` alone would read every series",
+                "a query finds its series by a name, or a label's value, list or prefix: `Not` alone would read every \
+                 series",
             ));
         }
         if conditions.len() > MOST_LABELS {

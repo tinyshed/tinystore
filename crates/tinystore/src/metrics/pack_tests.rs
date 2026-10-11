@@ -77,7 +77,7 @@ fn a_range_reads_the_blocks_and_the_head_it_touches_and_no_more() {
     assert_eq!(read[0].samples()[0].value, 1000.0);
     let mut budget = crate::metrics::budget::Budget::default();
     let asked = f.metrics().query().name("cpu").from(start).to(start + 10 * MINUTE).asked().unwrap();
-    f.engine().take(&asked, &mut budget).unwrap();
+    f.engine().take(&asked, crate::metrics::snapshot::Want::Samples, &mut budget).unwrap();
     assert!(budget.decoded <= 480, "one or two hourly blocks, not ten: {budget:?}");
 }
 

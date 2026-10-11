@@ -6,7 +6,8 @@
 //!
 //! ```text
 //! 0.1 + 0.2       as floats 0.30000000000000004
-//!                 exactly   0.3000000000000000166533453693773481063544750213623046875, rounded once: 0.30000000000000004
+//!                 exactly   0.3000000000000000166533453693773481063544750213623046875
+//!                           rounded once: 0.30000000000000004
 //! 1e308 + 1e308 − 1e308     as floats inf, exactly 1e308
 //! ```
 //!
@@ -44,7 +45,7 @@ impl Exact {
     pub(super) const ZERO: Exact = Exact([0; WORDS]);
 
     /// A finite float's units; none for an infinity or a NaN.
-    #[cfg_attr(not(test), expect(dead_code, reason = "aggregates take it, from the next slice"))]
+    #[cfg(test)]
     pub(super) fn of(value: f64) -> Option<Exact> {
         let mut exact = Exact::ZERO;
         exact.add_float(value).then_some(exact)
@@ -66,7 +67,6 @@ impl Exact {
         self.add_float(-value)
     }
 
-    #[expect(dead_code, reason = "aggregates take it, from the next slice")]
     pub(super) fn add(&mut self, other: &Exact) {
         let mut carry = false;
         for (word, more) in self.0.iter_mut().zip(other.0) {
@@ -120,7 +120,7 @@ impl Exact {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "aggregates take it, from the next slice"))]
+    #[cfg(test)]
     pub(super) fn is_zero(&self) -> bool {
         self.0.iter().all(|word| *word == 0)
     }
@@ -146,14 +146,12 @@ impl Exact {
     }
 
     /// It divided by `divisor` and rounded once: a mean.
-    #[cfg_attr(not(test), expect(dead_code, reason = "aggregates take it, from the next slice"))]
     pub(super) fn divided(&self, divisor: u64) -> f64 {
         self.scaled(1, divisor)
     }
 
     /// It times `factor` over `divisor`, rounded once: a rate, a thousand
     /// over a bucket's milliseconds.
-    #[cfg_attr(not(test), expect(dead_code, reason = "aggregates take it, from the next slice"))]
     pub(super) fn scaled(&self, factor: u64, divisor: u64) -> f64 {
         if divisor == 0 {
             return f64::NAN;

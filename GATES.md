@@ -67,12 +67,12 @@ module defines.
 - a reader sees one consistent state — `TestReadersSeeOneSnapshotWhilePackingAndIngesting`, including retention
 - shared clocks live as long as their owners — `series_written_at_the_same_ticks_share_a_clock_until_the_last_lets_go` in `metrics::pack`
 - production stays independent of research — `TestEngineDoesNotImportExperimentsOrFutureEngines`
-- a counter's increase survives a reset — `TestCounterSummaryIncludesResets`, `TestACounterStepCountsInTheBucketItEndsIn`
+- a counter's increase survives a reset — `a_counters_increase_counts_a_reset_as_its_new_value` in `metrics::summary`, `an_increase_counts_a_reset_as_its_new_value_and_a_first_step_from_the_sample_before` in `metrics::bucket`, `a_restart_counts_the_same_across_blocks` in `metrics::aggregate`
 - only the safe prefix is sealed — `TestWatermarkIsStrictAndFollowsTheSeries`, on the strict edge
 - a late sample cannot enter a sealed block — `a_sample_behind_what_its_series_has_packed_is_too_old` in `metrics::pack`
-- a partial range is not answered from a summary — `TestWholeSummarySkipsPayloadButPartialBlocksCheckIt`: a cut block decodes raw
-- retention clips before it summarises — `TestAggregateClipsRetentionBeforeSummingSealedEdges`
-- a bucket retention cut says so — `TestAggregateMarksOnlyTheBucketRetentionCut`
+- a partial range is not answered from a summary — `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing` in `metrics::explain`: an hour the range or a bucket cuts decodes, and its payload is read
+- retention clips before it summarises — `a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took` in `metrics::aggregate`, packed: a block the oldest kept time cuts is decoded, its older samples left out
+- a bucket retention cut says so, and no other — `a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took` in `metrics::aggregate`
 - a quiet tail expires without becoming a block — `a_quiet_series_is_not_forced_into_a_block` in `metrics::pack`
 - one expired sample does not delete a block, and a group partly expired keeps its payloads' addresses — `a_block_expires_whole_once_its_last_sample_has_and_a_group_keeps_its_payloads_addresses` in `metrics::pack`
 - one damaged series does not stop its neighbors — `TestCorruptSeriesDoesNotStopOtherMaintenance`
@@ -96,23 +96,23 @@ module defines.
 - an engine's work honors the store's memory — `TestStoreMemoryBoundsReadsIngestAndMaintenance`
 - streaming owns each result and exposes partial failure — `TestStreamOwnsResultsAndReportsPartialFailure`
 - an error about one series carries its labels — `a_refused_series_names_itself_and_its_sample` in `metrics::ingest`
-- a metrics plan is what the call then spends — `TestAPlanSaysWhatTheCallThenSpends`, no payload fetched
+- a metrics plan is what the call then spends, names the bound the call would stop at, and counts every sample it would decode past theirs — `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing`, `a_plan_names_the_bound_a_call_would_stop_at`, `a_plan_counts_every_sample_a_call_would_decode_past_their_bound` in `metrics::explain`, `a_plan_counts_on_past_the_samples_a_call_decodes_and_stops_at_the_bytes_it_reads` in `metrics::budget`
 - a read or an ingest past a bound is a `limit` naming it, never a smaller answer — `a_read_past_a_bound_is_a_limit_naming_it` in `metrics::query`, `an_ingest_past_its_bound_is_a_limit`, `a_series_past_the_stores_bound_is_a_limit` in `metrics::ingest`, `a_limit_names_its_bound_what_was_wanted_and_the_bound` in `metrics::budget`
 - a series is its name and its labels, `__` the store's — `a_series_is_its_name_and_its_labels_in_any_order` in `metrics::labels` and `metrics::ingest`, `an_ingest_is_atomic_and_a_time_given_twice_keeps_the_last_value`
 - a range over the last `since` starts that long before now, and without `to` takes a sample of now — `a_range_is_its_start_to_its_end_excluded_or_now_included` in `metrics::query`
 - a condition finds series beyond equality, `Not` alone refused — `a_condition_finds_series_beyond_equality`, `a_condition_that_finds_nothing_or_cannot_be_taken_is_refused` in `metrics::query`; `TestConditionsOverTheWire` at `e81a050` until the wire
 - a series that cannot be repaired can still be dropped — `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours`
 - long-head append preserves bits and frontier — `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`
-- exact aggregates cross blocks, resets and retention — `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestACounterStepCountsInTheBucketItEndsIn` and `TestAggregateClipsRetentionBeforeSummingSealedEdges`
+- exact aggregates cross blocks, resets and retention — `a_block_inside_a_bucket_answers_as_its_samples_would`, `a_restart_counts_the_same_across_blocks`, `a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took` in `metrics::aggregate`, `sums_are_exact_and_rounded_once` in `metrics::bucket`
 - the schema admits a histogram series before the engine ingests one, so the kind needs no rebuilt table — `TestTheSchemaAdmitsAHistogramTheEngineDoesNotIngestYet`
-- a whole block's summary answers as its samples do — `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`, every operation, kind and boundary
-- an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range — `TestAnHourOfACounterIncreasesBy3585AtEveryWidth`, `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange`, `TestAggregateOverTheWire` in `server`; `an increase counts the step into each bucket, the first from before the range` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
-- the first bucket steps from the newest sample a lookback before the range, which a block's summary answers undecoded — `TestTheFirstBucketTakesItsStepFromBeforeTheRange`
-- a step from a sample retention expired is not counted, and its bucket is partial — `TestAStepFromAnExpiredSampleIsNotCounted`
-- first and last are a bucket's first and last samples bit for bit, from a summary as from raw, and a group adds them up — `TestTheLastOfABucketIsItsNewestSample`, `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`
-- latest is each series' newest sample in its range, which bounds its staleness — `TestLatestLeavesOutASeriesOlderThanItsRange`, `TestLatestIsTheLastSampleOfARead`, `TestLatestOverTheWire` in `server`; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
-- latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `TestLatestDecodesAtMostOneChunkASeries`
-- latest pays no sample budget for blocks older than its selected head — `TestLatestSpendsNoBudgetOnBlocksOlderThanItsHead`
+- a whole block's summary answers as its samples do — `a_block_inside_a_bucket_answers_as_its_samples_would` in `metrics::aggregate`: every `op` of a gauge and of a counter with resets, three ranges and four widths, bit for bit before and after packing
+- an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range, and two adjacent ranges to the range they make — `buckets_of_any_width_add_up_to_the_range` in `metrics::aggregate`, in the head and packed; `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange` at `e81a050` until the fuzz target lands, `TestAggregateOverTheWire` in `server` until the wire; `an increase counts the step into each bucket, the first from before the range` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
+- the first bucket steps from the newest sample before the range, however far, which a block's directory answers undecoded — `buckets_of_any_width_add_up_to_the_range` in `metrics::aggregate`, `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing` in `metrics::explain`; of the samples before a range that one alone is taken — `an_op_a_kind_has_not_and_a_value_no_aggregate_takes_are_invalid`
+- a step from a sample retention expired is not counted, and its bucket is partial, while a series that begins there lost none — `a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took` in `metrics::aggregate`
+- first and last are a bucket's first and last samples bit for bit, from a summary as from raw, and a group adds only those of the series with a sample in the bucket — `last_adds_only_series_with_a_sample_in_the_bucket`, `a_block_inside_a_bucket_answers_as_its_samples_would` in `metrics::aggregate`, `the_least_and_the_greatest_put_minus_zero_before_plus_zero_and_ends_keep_their_bits` in `metrics::bucket`
+- latest is each series' newest sample in its range, which bounds its staleness — `latest_is_the_newest_sample_of_each_series_that_has_one_in_the_range` in `metrics::latest`; `TestLatestOverTheWire` in `server` until the wire; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
+- latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `latest_reads_one_small_piece_of_each_series_however_long_the_range` in `metrics::latest`
+- latest pays no sample budget for blocks older than its selected head, and no directory for a series whose last block ended before the range — `latest_reads_one_small_piece_of_each_series_however_long_the_range` in `metrics::latest`
 - expired heads and blocks spend no sample or payload budget — `TestBatchedReadsSpendNothingOnExpiredSeries`
 - expiry selects bounded prefixes from both retention indexes — `TestExpirySelectsABoundedPrefixOfEachIndex`
 - a retention prefix reads no unrelated later names — `TestARetentionPrefixReadsOnlyItsNames`
@@ -121,11 +121,16 @@ module defines.
 - a description is kept by name, replaced by the next and removed by an empty one — `TestADescriptionIsKeptByName`, `TestADescriptionOverTheWire` in `server`; `a description is kept by name, and an instrument's is written at its flush` in `sdk/js/test/metrics.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
 - an instrument describes the names it writes at its flush, a timer's sum and longest in milliseconds, and a failed flush keeps them — `TestAnInstrumentDescribesItsSeries`, `TestAFailedFlushKeepsItsDescriptionsForTheNext`
 - an invalid description keeps no good instrument out of a flush — `an invalid description cannot prevent good instruments from flushing` in Bun, `test_an_invalid_description_keeps_no_good_instrument_out` in Python
-- a group joins its series exactly and rounds once — `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined`
-- a whole-block summary spends no decoded-sample budget — `TestWholeExactBlocksNeedNoDecodedSampleBudget`
+- a group joins its series exactly and rounds once, is the series of one name that share the labels kept, and never two names — `a_group_is_the_series_of_a_name_that_share_the_labels_kept` in `metrics::aggregate`, `a_group_adds_its_series_buckets_and_rounds_once` in `metrics::bucket`
+- a whole-block summary spends no decoded-sample budget — `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing` in `metrics::explain`
 - a malformed exact summary is refused — `another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused` in `metrics::exact`; `FuzzExactSummary` at `e81a050` until the fuzz target lands
 - exact summaries keep a directory within its bound — `TestLargeExactSummariesStayWithinDirectoryBounds`
 - a directory written once still reads — `TestDirectoriesWrittenBeforeStillRead`, inline and external
+- a step across a whole empty bucket of the query's `every` says `gap`, and none else does — `only_a_step_across_an_empty_bucket_is_a_gap` in `metrics::aggregate`
+- an `op` a kind has not is `invalid`, and so is a bucket over a NaN, an infinity or a counter below zero, naming the series and the sample — `an_op_a_kind_has_not_and_a_value_no_aggregate_takes_are_invalid` in `metrics::aggregate`
+- a rate is a second of what the range leaves of a bucket, and a bucket begins on the grid from 1970 — `a_rate_is_a_second_of_what_the_range_leaves_of_a_bucket_and_a_bucket_begins_on_the_grid` in `metrics::aggregate`
+- an answer past 100,000 buckets is a `limit` naming `answer` — `an_answer_past_its_buckets_is_a_limit` in `metrics::aggregate`
+- the series of `__overflow` is a group of its own whatever a query groups by — `an_overflowed_set_is_a_group_of_its_own_whatever_a_query_groups_by` in `metrics::aggregate`, the grouping alone until an instrument writes one
 
 ## Records
 

@@ -15,19 +15,23 @@
 //! # }
 //! ```
 
+mod aggregate;
 mod binary;
+mod bucket;
 mod budget;
 mod clock;
 mod codec;
 mod directory;
 mod engine;
 mod exact;
+mod explain;
 #[cfg(test)]
 mod fixture;
 mod head;
 mod ingest;
 mod labels;
 mod ladder;
+mod latest;
 mod maintain;
 mod matching;
 mod names;
@@ -39,6 +43,7 @@ mod registry;
 mod residuals;
 mod retention;
 mod series;
+mod snapshot;
 mod summary;
 mod timestamp;
 mod values;
@@ -46,6 +51,9 @@ mod values;
 use std::fmt;
 use std::sync::Arc;
 
+pub use aggregate::{Aggregate, Bucket, Op};
+pub use explain::{Exceeds, Plan};
+pub use latest::Latest;
 pub use maintain::{Maintenance, maintain};
 pub use query::{Condition, Not, Prefix, Query, Values};
 pub use series::{Kind, Labels, Sample, Series};
@@ -82,7 +90,8 @@ impl Metrics {
         self.engine.ingest(series)
     }
 
-    /// A query of series by name and labels, over a range of time.
+    /// A query of series by name and labels, over a range of time, which
+    /// `read`, `aggregate`, `latest` or `explain` then runs.
     pub fn query(&self) -> Query {
         Query::of(Arc::clone(&self.engine))
     }

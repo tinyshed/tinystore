@@ -51,9 +51,10 @@ create table postings (
 
 -- A series' state, fixed in size: the newest time it has seen, what it has
 -- packed (null: nothing), a version every change of its head moves, whether a
--- block's worth waits to be packed, when its next sample expires, the scale
--- its next block's grid tries first, its head's extent, and why it stopped
--- taking samples when it did.
+-- block's worth waits to be packed, when its next sample expires, whether
+-- retention has taken samples of it, so that the step from one into its
+-- oldest is known not to be counted, the scale its next block's grid tries
+-- first, its head's extent, and why it stopped taking samples when it did.
 create table series_state (
     series_id     integer primary key references series (id),
     max_seen      integer not null,
@@ -61,6 +62,7 @@ create table series_state (
     version       integer not null default 0 check (version >= 0),
     ready         integer not null default 0 check (ready in (0, 1)),
     due           integer,
+    trimmed       integer not null default 0 check (trimmed in (0, 1)),
     scale         integer not null default -2 check (scale between -2 and 15),
     head_count    integer not null default 0 check (head_count >= 0),
     head_start    integer,

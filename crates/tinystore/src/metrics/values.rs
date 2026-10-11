@@ -6,7 +6,8 @@
 //! |----------|--------------------------------------------------------------------------------|
 //! | ordinary | the codec's stream of the values                                               |
 //! | changes  | where a value changes and by how much: whole numbers, hundredths or raw bits   |
-//! | grid     | the integers a scale of ten makes of them, through the codec, and the residuals that give each one's bits back |
+//! | grid     | the integers a scale of ten makes of them, through the codec, and each value's |
+//! |          | residual, which gives its bits back                                            |
 //!
 //! ```text
 //! body = way | its bytes | crc-32 of the block's extent, first value and clock, and the body
