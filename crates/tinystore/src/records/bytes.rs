@@ -113,10 +113,13 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The CRC-32 of zlib and Ethernet, a byte at a time.
+/// The CRC-32 of zlib and Ethernet, sixteen bytes at a time: table `n`
+/// holds what a byte adds to the remainder with `n` bytes after it, so that
+/// the sixteen of a step are looked up apart and summed, and a block's
+/// checksum costs a few times less than its bytes one at a time.
 pub(super) fn crc32(data: &[u8]) -> u32 {
-    const TABLE: [u32; 256] = {
-        let mut table = [0_u32; 256];
+    const TABLES: [[u32; 256]; 16] = {
+        let mut tables = [[0_u32; 256]; 16];
         let mut byte = 0;
         while byte < 256 {
             let mut crc = byte as u32;
@@ -125,12 +128,29 @@ pub(super) fn crc32(data: &[u8]) -> u32 {
                 crc = if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
                 bit += 1;
             }
-            table[byte] = crc;
+            tables[0][byte] = crc;
             byte += 1;
         }
-        table
+        let mut table = 1;
+        while table < 16 {
+            let mut byte = 0;
+            while byte < 256 {
+                let before = tables[table - 1][byte];
+                tables[table][byte] = (before >> 8) ^ tables[0][(before & 0xff) as usize];
+                byte += 1;
+            }
+            table += 1;
+        }
+        tables
     };
-    !data.iter().fold(!0_u32, |crc, &byte| TABLE[((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8))
+    let (steps, rest) = data.as_chunks::<16>();
+    let mut crc = !0_u32;
+    for step in steps {
+        let mut bytes = *step;
+        crc.to_le_bytes().iter().enumerate().for_each(|(place, byte)| bytes[place] ^= byte);
+        crc = bytes.iter().enumerate().fold(0, |sum, (place, byte)| sum ^ TABLES[15 - place][usize::from(*byte)]);
+    }
+    !rest.iter().fold(crc, |crc, &byte| TABLES[0][((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8))
 }
 
 #[cfg(test)]
@@ -173,5 +193,15 @@ mod tests {
     fn the_checksum_is_zlibs() {
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
         assert_eq!(crc32(b""), 0);
+        // sixteen bytes at a time give what a byte at a time gives, across every way a length ends
+        let bitwise = |data: &[u8]| {
+            let step =
+                |crc: u32| (0..8).fold(crc, |crc, _| if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 });
+            !data.iter().fold(!0_u32, |crc, byte| step(crc ^ u32::from(*byte)))
+        };
+        let data: Vec<u8> = (0..300_u32).map(|n| (n.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        for length in 0..data.len() {
+            assert_eq!(crc32(&data[..length]), bitwise(&data[..length]), "{length}");
+        }
     }
 }

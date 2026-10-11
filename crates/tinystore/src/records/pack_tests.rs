@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use super::super::fixture::{DAY, Fixture, SECOND, fixture, names};
@@ -175,7 +176,16 @@ fn a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_w
     fixture.events("api").append("request", &()).unwrap();
     let records = fixture.records();
     let stream = records.stream("api").unwrap().id;
-    let made = Made { first: 0, last: 0, events: 1, weight: 1, shared: Vec::new(), blocks: Vec::new() };
+    let made = Made {
+        first: 0,
+        last: 0,
+        events: 1,
+        weight: 1,
+        shared: Vec::new(),
+        keys: BTreeSet::new(),
+        blocks: Vec::new(),
+        blooms: Vec::new(),
+    };
     let failed = records.publish((stream, false), (vec![1, 99], 1), &made).unwrap_err();
     assert_eq!(failed.kind(), crate::ErrorKind::Internal);
     assert_eq!(lie(&fixture), (1, 0, 0));

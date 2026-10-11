@@ -74,6 +74,15 @@ create index segments_by_size on segments (stream, held) where holder is null;
 -- a holder's places, found when it merges again or expires
 create index segments_by_holder on segments (holder) where holder is not null;
 
+-- what a segment holds, so that a read passes one that cannot hold what it
+-- asks: kind 0 an event's name, 1 a field's key, 2 a context's key
+create table segment_keys (
+    segment integer not null,
+    kind    integer not null,
+    key     text    not null,
+    primary key (segment, kind, key)
+) without rowid, strict;
+
 -- a block is up to 1024 of its segment's events, the first block's times
 -- before the second's. Ids never repeat, so a block's bytes are known by its id
 create table blocks (
@@ -92,3 +101,19 @@ create table blocks (
 create index blocks_by_first on blocks (first_at, id, last_at, levels, stream, segment, count, size);
 create index blocks_by_last on blocks (last_at, id, first_at, levels, stream, segment, count, size);
 create index blocks_by_segment on blocks (segment);
+
+-- a bloom filter of a block's trace ids, so that a read for a trace passes a
+-- block without it; a block without a trace has none
+create table block_traces (
+    block integer primary key,
+    bloom blob    not null
+) strict;
+
+-- a bloom filter of the values of each field of a block whose values look
+-- like ids, short strings nearly all distinct, which a read names one of
+create table block_filters (
+    block integer not null,
+    key   text    not null,
+    bloom blob    not null,
+    primary key (block, key)
+) without rowid, strict;

@@ -188,3 +188,37 @@ fn a_corpus_by_its_columns() {
         println!("rust field {name:<22} columns={columns:<6} bytes={:.4}", per(bytes));
     }
 }
+
+#[test]
+fn a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_none_is_left() {
+    let mut codec = Codec::default();
+    let events = mixed();
+    let (schema, row) = block_of(&events, &mut codec);
+    let pair = |key: &str, json: &str| (key.to_owned(), json.to_owned());
+    let wanted = |names: &[String], filters: &[(String, String)]| {
+        let kept = Wanted { first: 0, last: i64::MAX, names, min_level: None, trace: None, filters };
+        parse_wanted(&schema, &row.body, &mut Codec::default(), &kept).unwrap()
+    };
+    let places = |kept: Vec<(usize, Kept)>| kept.into_iter().map(|(place, _)| place).collect::<Vec<_>>();
+    let exact = wanted(&[], &[pair("route", "\"/notes\""), pair("ms", "1203")]);
+    assert_eq!(exact.iter().map(|(place, event)| (*place, event)).collect::<Vec<_>>(), [(3, &events[3])]);
+    assert_eq!(places(wanted(&["click".to_owned(), "bare".to_owned()], &[])), [20, 21]);
+    // a value its context holds, and one of a key written twice, are narrowed by as well
+    assert_eq!(places(wanted(&[], &[pair("tenant", "7"), pair("ok", "true")])), [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]);
+    assert_eq!(places(wanted(&[], &[pair("e", "\"caf\u{e9}\"")])), [23]);
+    let grave =
+        Wanted { first: 0, last: i64::MAX, names: &[], min_level: Some(Level::ERROR), trace: None, filters: &[] };
+    assert_eq!(places(parse_wanted(&schema, &row.body, &mut codec, &grave).unwrap()), [2, 5, 8, 11, 14, 17, 24]);
+
+    // a message column no read can parse, its checksum made again: a read that leaves no event never reads it
+    let mut broken = row.body.clone();
+    let messages = columns_of(&schema, &row.body).unwrap()[MESSAGES].as_ptr() as usize - row.body.as_ptr() as usize;
+    broken[messages] = 0x7f;
+    let framed = broken.len() - 4;
+    let sum = super::super::bytes::crc32(&broken[..framed]);
+    broken[framed..].copy_from_slice(&sum.to_le_bytes());
+    assert_eq!(parse(&schema, &broken, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt);
+    let nowhere = [pair("tenant", "8")];
+    let none = Wanted { first: 0, last: i64::MAX, names: &[], min_level: None, trace: None, filters: &nowhere };
+    assert!(parse_wanted(&schema, &broken, &mut codec, &none).unwrap().is_empty());
+}

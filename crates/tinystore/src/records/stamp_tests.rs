@@ -21,7 +21,7 @@ fn stamped(values: &[&str], times: &[i64]) -> Option<Vec<u8>> {
         return None;
     }
     let mut reader = Reader::new(&out);
-    let read = read_stamped(&mut reader, times, &mut Decoder { codec: &mut codec, left: 1 << 20 });
+    let read = read_stamped(&mut reader, times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
     reader.finish().unwrap();
     assert_eq!(read, values);
     Some(out)
@@ -135,19 +135,23 @@ fn stamps_read_with_other_times_or_from_changed_bytes_are_other_text_or_refused_
     let mut codec = Codec::default();
     // an event's time is part of what spells its stamp back
     let mut reader = Reader::new(&column);
-    let moved =
-        read_stamped(&mut reader, &[written() + 1_000_000_000; 12], &mut Decoder { codec: &mut codec, left: 1 << 20 });
+    let moved = read_stamped(
+        &mut reader,
+        &[written() + 1_000_000_000; 12],
+        &mut Decoder { codec: &mut codec, left: 1 << 20 },
+        None,
+    );
     assert!(moved[0].starts_with("2026-09-23 00:47:21,000"), "{}", moved[0]);
     for at in 0..column.len() {
         let mut changed = column.clone();
         changed[at] ^= 0x11;
         for bytes in [&changed[..], &column[..at]] {
             let mut reader = Reader::new(bytes);
-            read_stamped(&mut reader, &[written(); 12], &mut Decoder { codec: &mut codec, left: 1 << 20 });
+            read_stamped(&mut reader, &[written(); 12], &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
             let _ = reader.finish();
         }
     }
     let mut reader = Reader::new(&column);
-    read_stamped(&mut reader, &[written(); 12], &mut Decoder { codec: &mut codec, left: 100 });
+    read_stamped(&mut reader, &[written(); 12], &mut Decoder { codec: &mut codec, left: 100 }, None);
     assert!(reader.finish().is_err());
 }

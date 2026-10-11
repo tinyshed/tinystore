@@ -126,34 +126,70 @@ pub(super) fn read_blob(reader: &mut Reader<'_>, decoder: &mut Decoder<'_>) -> V
     }
 }
 
-/// A column of `count` texts; of none, without reading anything.
-pub(super) fn read_texts(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<String> {
-    read_column(reader, count, decoder, |value| String::from_utf8(value).ok())
-}
-
-/// A column of `count` byte strings; of none, without reading anything.
-pub(super) fn read_bytes(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<Vec<u8>> {
-    read_column(reader, count, decoder, Some)
-}
-
-/// A column's values, each made what `make` makes of its bytes, which a
-/// dictionary's values are made once.
-fn read_column<T: Clone>(
+/// A column of `count` texts, those `keep` drops left empty; of none,
+/// without reading anything.
+pub(super) fn read_texts(
     reader: &mut Reader<'_>,
     count: usize,
     decoder: &mut Decoder<'_>,
-    make: fn(Vec<u8>) -> Option<T>,
+    keep: Keep<'_>,
+) -> Vec<String> {
+    read_column(reader, count, decoder, (keep, |value: &[u8]| std::str::from_utf8(value).ok().map(str::to_owned)))
+}
+
+/// A column of `count` byte strings, those `keep` drops left empty; of none,
+/// without reading anything.
+pub(super) fn read_bytes(
+    reader: &mut Reader<'_>,
+    count: usize,
+    decoder: &mut Decoder<'_>,
+    keep: Keep<'_>,
+) -> Vec<Vec<u8>> {
+    read_column(reader, count, decoder, (keep, |value: &[u8]| Some(value.to_vec())))
+}
+
+/// Which of a column's `count` texts are `target`: a dictionary's distinct
+/// values are compared once, and none is copied to be compared.
+pub(super) fn texts_equal(
+    reader: &mut Reader<'_>,
+    count: usize,
+    decoder: &mut Decoder<'_>,
+    target: &[u8],
+) -> Vec<bool> {
+    read_column(reader, count, decoder, (None, |value: &[u8]| Some(value == target)))
+}
+
+/// Which values of a column a read builds: every one, or those it says, the
+/// others left empty so that they cost no string.
+pub(super) type Keep<'k> = Option<&'k [bool]>;
+
+/// Whether a read builds the value at `place` of a column.
+pub(super) fn wants(keep: Keep<'_>, place: usize) -> bool {
+    keep.is_none_or(|keep| keep.get(place).is_none_or(|kept| *kept))
+}
+
+/// A column's values, each made what `make` makes of its bytes where they
+/// lie, which a dictionary's values are made once.
+fn read_column<T: Clone + Default>(
+    reader: &mut Reader<'_>,
+    count: usize,
+    decoder: &mut Decoder<'_>,
+    (keep, make): (Keep<'_>, impl Fn(&[u8]) -> Option<T> + Copy),
 ) -> Vec<T> {
     if count == 0 {
         return Vec::new();
     }
     match reader.byte() {
-        VALUES => read_whole(reader, count, decoder, make),
+        VALUES => read_whole(reader, count, decoder, (keep, make)),
         DICTIONARY => {
             let distinct = reader.count(count);
-            let values = read_whole(reader, distinct, decoder, make);
+            let values = read_whole(reader, distinct, decoder, (None, make));
             let ids = read_ints(reader, count);
-            let named = ids.iter().map(|id| usize::try_from(*id).ok().and_then(|id| values.get(id)).cloned());
+            let value = |id: &i64| usize::try_from(*id).ok().and_then(|id| values.get(id)).cloned();
+            let named = ids
+                .iter()
+                .enumerate()
+                .map(|(place, id)| if wants(keep, place) { value(id) } else { Some(T::default()) });
             named.collect::<Option<Vec<T>>>().unwrap_or_else(|| {
                 reader.fail("a text column's id past its dictionary");
                 Vec::new()
@@ -166,31 +202,30 @@ fn read_column<T: Clone>(
     }
 }
 
-fn read_whole<T>(
+fn read_whole<T: Default>(
     reader: &mut Reader<'_>,
     count: usize,
     decoder: &mut Decoder<'_>,
-    make: fn(Vec<u8>) -> Option<T>,
+    (keep, make): (Keep<'_>, impl Fn(&[u8]) -> Option<T>),
 ) -> Vec<T> {
     let layout = reader.byte();
     let lengths = if layout == LENGTHS { read_ints(reader, count) } else { Vec::new() };
     let blob = read_blob(reader, decoder);
-    let values: Option<Vec<Vec<u8>>> = match layout {
+    let values: Option<Vec<&[u8]>> = match layout {
         LINES => {
             // whole lines end with a break, past which a split finds nothing
             let mut lines: Vec<&[u8]> = blob.split(|byte| *byte == b'\n').collect();
-            (lines.pop() == Some(&[][..]) && lines.len() == count)
-                .then(|| lines.into_iter().map(<[u8]>::to_vec).collect())
+            (lines.pop() == Some(&[][..]) && lines.len() == count).then_some(lines)
         }
         LENGTHS => {
             let mut from = 0_usize;
             let cut = |length: &i64| {
                 let to = from.checked_add(usize::try_from(*length).ok()?)?;
-                let value = blob.get(from..to)?.to_vec();
+                let value = blob.get(from..to)?;
                 from = to;
                 Some(value)
             };
-            let values: Option<Vec<Vec<u8>>> = lengths.iter().map(cut).collect();
+            let values: Option<Vec<&[u8]>> = lengths.iter().map(cut).collect();
             values.filter(|values| values.len() == count && from == blob.len())
         }
         _ => None,
@@ -199,7 +234,9 @@ fn read_whole<T>(
         reader.fail("a text column whose values are not its count");
         return Vec::new();
     };
-    values.into_iter().map(make).collect::<Option<Vec<T>>>().unwrap_or_else(|| {
+    let made = values.into_iter().enumerate();
+    let made = made.map(|(place, value)| if wants(keep, place) { make(value) } else { Some(T::default()) });
+    made.collect::<Option<Vec<T>>>().unwrap_or_else(|| {
         reader.fail("text that is not UTF-8");
         Vec::new()
     })
@@ -214,7 +251,7 @@ mod tests {
         let mut out = Vec::new();
         put_texts(&mut out, values, &mut codec).unwrap();
         let mut reader = Reader::new(&out);
-        let read = read_texts(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        let read = read_texts(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
         reader.finish().unwrap();
         assert_eq!(read, values);
         out
@@ -239,12 +276,12 @@ mod tests {
         let mut out = Vec::new();
         put_bytes(&mut out, &values, &mut codec).unwrap();
         let mut reader = Reader::new(&out);
-        let read = read_bytes(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        let read = read_bytes(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
         reader.finish().unwrap();
         assert_eq!(read, values);
         // the same bytes read as text are refused, a byte that starts a letter and ends nothing among them
         let mut reader = Reader::new(&out);
-        read_texts(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        read_texts(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
         assert_eq!(reader.finish().unwrap_err().to_string(), "text that is not UTF-8: corrupt");
     }
 
@@ -256,7 +293,7 @@ mod tests {
             put_count(&mut column, blob.len() as u64);
             column.extend_from_slice(blob);
             let mut reader = Reader::new(&column);
-            read_texts(&mut reader, count, &mut Decoder { codec: &mut codec, left: 1 << 20 });
+            read_texts(&mut reader, count, &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
             assert!(reader.finish().is_err(), "{blob:?}");
         }
     }
@@ -279,7 +316,7 @@ mod tests {
         let mut out = Vec::new();
         put_texts(&mut out, &[&long], &mut codec).unwrap();
         let mut reader = Reader::new(&out);
-        read_texts(&mut reader, 1, &mut Decoder { codec: &mut codec, left: 4000 });
+        read_texts(&mut reader, 1, &mut Decoder { codec: &mut codec, left: 4000 }, None);
         assert_eq!(reader.finish().unwrap_err().to_string(), "a count past its bound: corrupt");
     }
 
@@ -291,10 +328,10 @@ mod tests {
         put_texts(&mut column, &[&long], &mut codec).unwrap();
         let mut decoder = Decoder { codec: &mut codec, left: 4000 };
         let mut first = Reader::new(&column);
-        assert_eq!(read_texts(&mut first, 1, &mut decoder), [long.as_str()]);
+        assert_eq!(read_texts(&mut first, 1, &mut decoder, None), [long.as_str()]);
         first.finish().unwrap();
         let mut second = Reader::new(&column);
-        read_texts(&mut second, 1, &mut decoder);
+        read_texts(&mut second, 1, &mut decoder, None);
         assert_eq!(second.finish().unwrap_err().to_string(), "a count past its bound: corrupt");
     }
 
@@ -310,7 +347,7 @@ mod tests {
                 for bytes in [&changed[..], &column[..at]] {
                     let mut reader = Reader::new(bytes);
                     let count = if column.len() > 60 { 40 } else { 5 };
-                    read_texts(&mut reader, count, &mut Decoder { codec: &mut codec, left: 1 << 20 });
+                    read_texts(&mut reader, count, &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
                     // a changed byte of the text itself reads as other text: the row's checksum is what catches it
                     let _ = reader.finish();
                 }

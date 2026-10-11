@@ -174,6 +174,9 @@ module defines.
 - a stream's events are packed once they are a segment's worth or their oldest row has waited an hour, each stream by itself — `a_streams_events_are_packed_once_its_oldest_row_has_waited_an_hour`, `a_segments_worth_is_packed_at_once_and_what_is_left_waits`, `each_stream_is_packed_by_itself` in `records::pack`
 - a segment is cut into blocks of the events and the bytes a block holds — `a_segment_is_cut_into_blocks_of_the_events_and_the_bytes_a_block_holds` in `records::pack`
 - what a read looks for is found in a block as in a head — `what_a_read_looks_for_is_found_in_a_block_as_in_a_head` in `records::pack`
+- a read passes a block whose segment lacks a name or a key it asks for, or whose filters say it holds no trace or id it asks for — `a_read_passes_a_block_whose_segment_or_filters_say_it_holds_nothing_asked` in `records::read`, `a_filter_holds_every_value_it_was_made_of_and_few_others`, `only_short_strings_nearly_all_distinct_look_like_ids` in `records::bloom`
+- a read rebuilds only the events a block's columns leave it, and reads no other column when they leave none — `a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_none_is_left` in `records::block`, `a_column_read_for_a_few_values_leaves_the_others_empty`, `a_column_is_compared_as_it_keeps_its_values_and_none_is_spelled` in `records::values`
+- an exact filter, a single trace and an absent context value read no slower than the Go engine's — `three_reads_of_a_packed_corpus` in `records::read`, by hand against the Go engine's same fixture
 - a read merges segments and the head by time, and finds each event once — `a_read_finds_each_event_once_in_what_is_packed_and_what_waits` in `records::pack`
 - an appended record reads before it is sealed — `an_appended_event_is_read_at_once_with_what_it_carries` in `records::events`
 - a reader finds each record once while sealing — `TestReadersSeeEveryRecordOnceWhileSealing`

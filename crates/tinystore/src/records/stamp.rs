@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use super::bytes::{Reader, put_count};
 use super::head::Codec;
 use super::ints::{put_ints, read_ints};
-use super::text::{Decoder, put_texts, read_texts};
+use super::text::{Decoder, Keep, put_texts, read_texts, wants};
 use crate::Result;
 
 const YEAR: u8 = 1; // four digits
@@ -338,8 +338,14 @@ fn cut(values: &[&str], times: &[i64], stamps: &[Stamp], ends: &[usize]) -> Cut 
     cut
 }
 
-/// The values `put_stamped` wrote, one a time of `times`, their events'.
-pub(super) fn read_stamped(reader: &mut Reader<'_>, times: &[i64], decoder: &mut Decoder<'_>) -> Vec<String> {
+/// The values `put_stamped` wrote, one a time of `times`, their events',
+/// those `keep` drops left empty.
+pub(super) fn read_stamped(
+    reader: &mut Reader<'_>,
+    times: &[i64],
+    decoder: &mut Decoder<'_>,
+    keep: Keep<'_>,
+) -> Vec<String> {
     let layouts: Vec<&[u8]> = (0..reader.count(MOST_LAYOUTS)).map(|_| reader.counted(MOST_LAYOUT)).collect();
     if layouts.iter().any(|layout| layout_digits(layout).is_none()) {
         reader.fail("a stamp's layout");
@@ -351,7 +357,7 @@ pub(super) fn read_stamped(reader: &mut Reader<'_>, times: &[i64], decoder: &mut
     }
     let total = counts.iter().sum::<i64>() as usize;
     let (ids, gaps, distances) = (read_ints(reader, total), read_ints(reader, total), read_ints(reader, total));
-    let rest = read_texts(reader, times.len(), decoder);
+    let rest = read_texts(reader, times.len(), decoder, keep);
     let of = |id: &i64| usize::try_from(*id).ok().and_then(|id| layouts.get(id)).copied();
     let Some(spelling) = ids.iter().map(of).collect::<Option<Vec<&[u8]>>>() else {
         reader.fail("a stamp's layout past its column's");
@@ -365,7 +371,11 @@ pub(super) fn read_stamped(reader: &mut Reader<'_>, times: &[i64], decoder: &mut
     }
     decoder.left -= added;
     let mut stamps = spelling.iter().zip(gaps.iter().zip(&distances));
-    let rebuilt = rest.iter().zip(times).zip(&counts).map(|((rest, at), count)| {
+    let rebuilt = rest.iter().zip(times).zip(&counts).enumerate().map(|(place, ((rest, at), count))| {
+        if !wants(keep, place) {
+            (0..*count).try_for_each(|_| stamps.next().map(drop))?;
+            return Some(String::new());
+        }
         let (mut value, mut from) = (String::with_capacity(rest.len() + 32), 0);
         for _ in 0..*count {
             let (layout, (gap, distance)) = stamps.next()?;

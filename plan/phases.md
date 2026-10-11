@@ -92,7 +92,17 @@ them.
   a late head of its own, packed apart, so that the segments of those on time stay narrow in time; what each head
   holds is a row beside it, so that finding what is ready reads a row a head. A stream's small segments merge
   four of a size in the order of their times, into the one of lowest id, and the others stay as places that say
-  where their events begin among its, which `poll` will follow. A block keeps its events by columns: integers by their steps, a steady one, a
+  where their events begin among its, which `poll` will follow. A read passes a block whose segment lacks a
+  name or a key it asks for, or whose bloom filters of trace ids and of fields that look like ids rule out what it
+  asks; in a block it fetches it reads the columns it asks about first and builds only the events they leave. On
+  65,536 requests of one stream, packed (a request id, one of sixteen routes, a status and a duration each, a host
+  in their context, a trace one in sixty-four; made by a scratch test of the Go engine at `e81a050` and appended
+  to both), medians of fifteen runs of ten, release, the two one after the other on this Windows machine, 11 October: an exact filter (a name, a
+  route and a status; 896 found) 13.61 ms against the Go engine's 18.47, a single trace 0.18 against 0.41, an
+  absent context value 1.89 against 2.95 (`TINYSTORE_READS=<the lines> cargo test --release -p tinystore --lib
+  three_reads_of_a_packed_corpus -- --ignored --nocapture`). Before it built only what it keeps, compared a
+  column as it keeps its values and summed its checksum sixteen bytes at a time, the exact filter took 76.24.
+  A block keeps its events by columns: integers by their steps, a steady one, a
   dictionary or the value most share; text by a dictionary or through zstd, with the times it spells cut out; a
   value's quotes taken off, uuids and hex as their bytes, integers that count time as how far behind their
   events they lie. On the 1,713,543 records two production hosts' containers wrote, 178,796 of them JSON and

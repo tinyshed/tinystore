@@ -199,3 +199,118 @@ fn a_search_finds_its_phrase_in_the_message_the_name_and_the_values_whatever_its
     assert!(found("cause").is_empty());
     assert!(found("failed charge").is_empty());
 }
+
+/// What three reads take over a corpus the Go engine wrote, packed: an exact
+/// filter, a single trace and an absent context value. Run by hand with
+/// `TINYSTORE_READS=<the lines>` and `--release -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn three_reads_of_a_packed_corpus() {
+    #[derive(serde::Deserialize)]
+    struct Line {
+        at: u64,
+        name: String,
+        level: i32,
+        body: String,
+        fields: Vec<(String, String)>,
+        context: Vec<(String, String)>,
+        trace: Option<String>,
+        span: Option<String>,
+    }
+    let Ok(path) = std::env::var("TINYSTORE_READS") else { return };
+    let object = |pairs: &[(String, String)]| {
+        let pairs: Vec<String> =
+            pairs.iter().map(|(key, json)| format!("{}:{json}", serde_json::Value::from(key.as_str()))).collect();
+        serde_json::value::RawValue::from_string(format!("{{{}}}", pairs.join(","))).unwrap()
+    };
+    let bytes = |text: &str| -> Vec<u8> {
+        (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
+    };
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let base = fixture.now() - Duration::from_secs(30 * 60);
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut events = Vec::new();
+    let mut trace = None;
+    for (place, line) in text.lines().enumerate() {
+        let line: Line = serde_json::from_str(line).unwrap();
+        let mut event = NewEvent::new(&line.name).at(base + Duration::from_nanos(line.at)).level(Level::of(line.level));
+        event = event.message(&line.body).fields(&object(&line.fields)).context(&object(&line.context));
+        if let (Some(trace_id), Some(span)) = (&line.trace, &line.span) {
+            let (trace_id, span) =
+                (TraceId(bytes(trace_id).try_into().unwrap()), SpanId(bytes(span).try_into().unwrap()));
+            if place == 64 * 500 {
+                trace = Some(trace_id);
+            }
+            event = event.trace(trace_id, span);
+        }
+        events.push(event);
+    }
+    while !events.is_empty() {
+        let rest = events.split_off(events.len().min(1000));
+        api.append_all(std::mem::replace(&mut events, rest)).unwrap();
+    }
+    fixture.pass(Duration::from_secs(2 * 60 * 60));
+    let done = super::super::maintain::maintain(&fixture.store).unwrap();
+    println!("rust packed {} events into {} segments", done.packed, done.segments);
+    let read = |name: &str| match name {
+        "exact" => api.list().names(["request"]).filter("route", &"/route/7").filter("status", &500),
+        "trace" => api.list().trace_id(trace.unwrap()),
+        _ => api.list().filter("host", &"nowhere"),
+    };
+    for name in ["exact", "trace", "absent"] {
+        let run = || read(name).limit(10_000).all().map(Result::unwrap).count();
+        let found = (0..3).fold(0, |_, _| run());
+        let mut runs: Vec<Duration> = (0..15)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                (0..10).for_each(|_| assert_eq!(run(), found));
+                started.elapsed() / 10
+            })
+            .collect();
+        runs.sort();
+        let ms = |span: Duration| span.as_secs_f64() * 1000.0;
+        println!("rust read={name:<7} found={found:<5} median={:.3}ms min={:.3}ms", ms(runs[7]), ms(runs[0]));
+    }
+}
+
+#[test]
+fn a_read_passes_a_block_whose_segment_or_filters_say_it_holds_nothing_asked() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let traced = TraceId([7; 16]);
+    let request = |n: usize| {
+        let event =
+            NewEvent::new("request").fields(&json!({ "request": format!("r-{n:03}"), "user": format!("u-{n:03}") }));
+        let event = event.context(&json!({ "host": "web", "user": "from-context" }));
+        if n == 5 { event.trace(traced, SpanId([1; 8])) } else { event }
+    };
+    api.append_all((0..32).map(request)).unwrap();
+    fixture.pass(Duration::from_secs(60 * 60));
+    super::super::maintain::maintain(&fixture.store).unwrap();
+    let records = fixture.records();
+    let block = |connection: &Connection| {
+        let row = connection.query_row("select id, segment from blocks", [], |row| Ok((row.get(0)?, row.get(1)?)));
+        Ok(row.unwrap())
+    };
+    let (id, segment) = records.file.read(block).unwrap();
+    let picked = Picked { kind: Kind::Block, id, segment, stream: 1, first_at: 0, last_at: 0, events: 32, size: 0 };
+    let may_find = |list: List| {
+        let query = &list.query;
+        records
+            .file
+            .read(|connection| Passing { query, connection, segments: HashMap::new() }.may_find(&picked))
+            .unwrap()
+    };
+    assert!(may_find(api.list().trace_id(traced)));
+    assert!(!may_find(api.list().trace_id(TraceId([8; 16]))));
+    assert!(may_find(api.list().filter("request", &"r-005")));
+    assert!(!may_find(api.list().filter("request", &"r-999")));
+    assert!(!may_find(api.list().names(["missing"])));
+    assert!(!may_find(api.list().filter("tenant", &7)));
+    // a context holds no filter of its own, so a value it may hold passes no block
+    assert!(may_find(api.list().filter("host", &"nowhere")));
+    // nor does a field whose key a context has too
+    assert!(may_find(api.list().filter("user", &"from-context")));
+    assert!(may_find(api.list().names(["missing", "request"]).filter("request", &"r-031")));
+}

@@ -7,7 +7,11 @@
 //! ```
 //!
 //! An event is in a head row until its stream is packed and in a block after
-//! it, and a read picks among both by the same rule.
+//! it, and a read picks among both by the same rule. A block whose segment
+//! lacks a name or a key the read asks for, or whose filters say it holds
+//! no trace or id it asks for, is passed without its body being fetched; a
+//! block fetched has the columns the read asks about read first, and its
+//! others only when an event in it may be kept.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -15,13 +19,15 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{Connection, Rows, ToSql};
+use rusqlite::{Connection, OptionalExtension, Rows, ToSql, params};
 use serde::Serialize;
 
-use super::block;
+use super::block::{self, Wanted};
+use super::bloom::may_hold;
 use super::engine::{Records, Stream, nanos};
 use super::event::{Event, Fields, Kept, Level, TraceId};
 use super::head::{self, Codec};
+use super::pack::{CONTEXT_KEY, FIELD_KEY, NAME_KEY};
 use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
@@ -345,6 +351,9 @@ const BLOCKS_NEWEST: &str = rows_of!("blocks", "segment", "last_at desc, id desc
 const HEAD_BODY: &str = "select body from heads where id = ?1";
 const BLOCK_BODY: &str = "select body from blocks where id = ?1";
 const SEGMENT_BODY: &str = "select body from segments where id = ?1";
+const HAS_KEY: &str = "select exists (select 1 from segment_keys where segment = ?1 and kind = ?2 and key = ?3)";
+const TRACES_BLOOM: &str = "select bloom from block_traces where block = ?1";
+const FIELD_BLOOM: &str = "select bloom from block_filters where block = ?1 and key = ?2";
 
 impl Records {
     /// One page: work out the range → pick and fetch its rows → parse and
@@ -409,6 +418,7 @@ impl Records {
             let mut heads = heads.query(range).map_err(failed)?;
             let mut blocks = blocks.query(range).map_err(failed)?;
             let mut waiting = [picked(&mut blocks, Kind::Block)?, picked(&mut heads, Kind::Head)?];
+            let mut passing = Passing { query, connection, segments: HashMap::new() };
             let (mut taken, mut events, mut bytes) = (Vec::new(), 0, 0);
             let mut horizon = None;
             loop {
@@ -426,13 +436,15 @@ impl Records {
                     horizon = Some(asked.edge(&row));
                     break;
                 }
-                (events, bytes) = (events + row.events, bytes + row.size);
                 waiting[nearer] = if row.kind == Kind::Block {
                     picked(&mut blocks, Kind::Block)?
                 } else {
                     picked(&mut heads, Kind::Head)?
                 };
-                taken.push(row);
+                if row.kind == Kind::Head || passing.may_find(&row)? {
+                    (events, bytes) = (events + row.events, bytes + row.size);
+                    taken.push(row);
+                }
             }
             let mut segments = HashMap::new();
             for row in taken.iter().filter(|row| row.kind == Kind::Block) {
@@ -446,6 +458,85 @@ impl Records {
             });
             Ok((Fetched { rows: rows.collect::<Result<_>>()?, segments }, horizon))
         })
+    }
+}
+
+/// What a read asks that tells it to pass a block without fetching it.
+struct Passing<'q> {
+    query: &'q Query,
+    connection: &'q Connection,
+    /// Whether each segment met holds a name and every key the read asks
+    /// for, by its id.
+    segments: HashMap<i64, bool>,
+}
+
+impl Passing<'_> {
+    /// Whether a block may hold an event the read asks for: its segment
+    /// holds one of the names asked and every key a filter names, in a field
+    /// or a context; its traces may hold the trace asked; and the values of
+    /// a field that look like ids may hold the one a filter names, unless a
+    /// context holds the key.
+    fn may_find(&mut self, block: &Picked) -> Result<bool> {
+        let query = self.query;
+        if query.names.is_empty() && query.trace_id.is_none() && query.filters.is_empty() {
+            return Ok(true);
+        }
+        let holds = match self.segments.get(&block.segment) {
+            Some(holds) => *holds,
+            None => {
+                let holds = self.segment_holds(block.segment)?;
+                *self.segments.entry(block.segment).or_insert(holds)
+            }
+        };
+        if !holds {
+            return Ok(false);
+        }
+        if let Some(trace) = query.trace_id
+            && !self.bloom(TRACES_BLOOM, params![block.id])?.is_some_and(|bloom| may_hold(&bloom, &trace.0))
+        {
+            return Ok(false);
+        }
+        for (key, json) in &query.filters {
+            let bloom = self.bloom(FIELD_BLOOM, params![block.id, key])?;
+            if bloom.is_some_and(|bloom| !may_hold(&bloom, json.as_bytes()))
+                && !self.has(block.segment, CONTEXT_KEY, key)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn segment_holds(&self, segment: i64) -> Result<bool> {
+        let mut named = self.query.names.is_empty();
+        for name in &self.query.names {
+            named = named || self.has(segment, NAME_KEY, name)?;
+        }
+        if !named {
+            return Ok(false);
+        }
+        for (key, _) in &self.query.filters {
+            if !self.has(segment, FIELD_KEY, key)? && !self.has(segment, CONTEXT_KEY, key)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn has(&self, segment: i64, kind: u8, key: &str) -> Result<bool> {
+        let found = self
+            .connection
+            .prepare_cached(HAS_KEY)
+            .and_then(|mut select| select.query_row(params![segment, kind, key], |row| row.get(0)));
+        found.map_err(|error| sql_error("look up what a segment holds", error))
+    }
+
+    fn bloom(&self, sql: &str, key: impl rusqlite::Params) -> Result<Option<Vec<u8>>> {
+        let found = self
+            .connection
+            .prepare_cached(sql)
+            .and_then(|mut select| select.query_row(key, |row| row.get(0)).optional());
+        found.map_err(|error| sql_error("read a block's filter", error))
     }
 }
 
@@ -504,18 +595,26 @@ fn found(asked: &Asked, query: &Query, fetched: Fetched, horizon: Option<i64>) -
         let schema = Schema::parse(row, &mut codec).map_err(|error| error.within(format!("segment {id}")))?;
         schemas.insert(*id, schema);
     }
+    let wanted = Wanted {
+        first: asked.first,
+        last: asked.last,
+        names: &query.names,
+        min_level: query.min_level,
+        trace: query.trace_id,
+        filters: &query.filters,
+    };
     let mut found = Vec::new();
     for (row, body) in fetched.rows {
         let Some((stream, kept)) = asked.streams.get(&row.stream) else { continue };
         let parsed = match (row.kind, schemas.get(&row.segment)) {
-            (Kind::Head, _) => {
-                head::parse(&body, &mut codec).map_err(|error| error.within(format!("head row {} of {stream}", row.id)))
-            }
-            (Kind::Block, Some(schema)) => block::parse(schema, &body, &mut codec)
+            (Kind::Head, _) => head::parse(&body, &mut codec)
+                .map(|events| events.into_iter().enumerate().collect())
+                .map_err(|error| error.within(format!("head row {} of {stream}", row.id))),
+            (Kind::Block, Some(schema)) => block::parse_wanted(schema, &body, &mut codec, &wanted)
                 .map_err(|error| error.within(format!("block {} of {stream}", row.id))),
             (Kind::Block, None) => Err(Error::internal(format!("records: block {} has no segment", row.id))),
         };
-        for (place, event) in parsed?.into_iter().enumerate() {
+        for (place, event) in parsed? {
             let at = event.at;
             let in_range = at >= asked.first.max(*kept) && at <= asked.last;
             let whole = horizon.is_none_or(|edge| if asked.newest { at > edge } else { at < edge });

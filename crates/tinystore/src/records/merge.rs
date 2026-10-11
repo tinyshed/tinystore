@@ -22,7 +22,9 @@ use super::block;
 use super::engine::{Records, execute};
 use super::event::Kept;
 use super::head::Codec;
-use super::pack::{HELD, Made, PATIENCE, SEGMENT_EVENTS, SEGMENT_WEIGHT, insert_blocks, made_of, rows_of_blocks};
+use super::pack::{
+    HELD, Made, PATIENCE, SEGMENT_EVENTS, SEGMENT_WEIGHT, insert_blocks, insert_keys, made_of, rows_of_blocks,
+};
 use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
@@ -51,7 +53,13 @@ const SMALL: &str = "select id, first_at, last_at, held, weight from segments
     where stream = ?1 and holder is null and held < ?2 and weight < ?3 order by id";
 const MEMBER_ROW: &str = "select body from segments where id = ?1 and holder is null";
 const MEMBER_BLOCKS: &str = "select body from blocks where segment = ?1 order by id";
-const DROP_MEMBER_BLOCKS: &str = "delete from blocks where segment = ?1";
+/// A member's blocks with their filters, and what it held.
+const DROP_MEMBER: [&str; 4] = [
+    "delete from block_traces where block in (select id from blocks where segment = ?1)",
+    "delete from block_filters where block in (select id from blocks where segment = ?1)",
+    "delete from blocks where segment = ?1",
+    "delete from segment_keys where segment = ?1",
+];
 /// A segment's places go to the holder, their events now beginning `?2` on.
 const MOVE_PLACES: &str = "update segments set holder = ?1, start = start + ?2 where holder = ?3";
 const MAKE_PLACE: &str = "update segments set holder = ?1, start = start + ?2, first_at = null,
@@ -153,13 +161,14 @@ impl Records {
         let holder_begins = begins.iter().find(|(id, _)| *id == holder).map_or(0, |(_, begin)| *begin);
         let bytes = made.blocks.iter().map(|block| block.body.len()).sum();
         let (first, last, events, weight) = (made.first, made.last, made.events as i64, made.weight as i64);
-        let (shared, blocks) = (made.shared.clone(), rows_of_blocks(&made.blocks));
+        let (shared, keys, blocks) = (made.shared.clone(), made.keys.clone(), rows_of_blocks(made));
         self.file.write(bytes, move |tx| {
             let changed = |id: i64| Error::internal(format!("records: segment {id} changed while it was merged"));
-            for (member, _) in &begins {
-                execute(tx, DROP_MEMBER_BLOCKS, [member], "remove a merged segment's blocks")?;
+            for (member, sql) in begins.iter().flat_map(|(member, _)| DROP_MEMBER.map(|sql| (member, sql))) {
+                execute(tx, sql, [member], "remove what a merged segment held")?;
             }
             insert_blocks(tx, holder, stream, &blocks)?;
+            insert_keys(tx, holder, &keys)?;
             // the holder's own places first, so that none moves twice
             execute(tx, MOVE_PLACES, params![holder, holder_begins, holder], "move a merged segment's places")?;
             for (member, begin) in begins.iter().filter(|(member, _)| *member != holder) {

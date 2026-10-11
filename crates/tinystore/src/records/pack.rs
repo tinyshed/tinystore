@@ -13,13 +13,14 @@
 //! A segment's row holds what its blocks share, and a block its events by
 //! columns: see `segment` and `block`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::PoisonError;
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::block;
+use super::bloom::{bloom_of, id_like};
 use super::engine::{Records, execute, nanos};
 use super::event::Kept;
 use super::head::{self, Codec, ROW_EVENTS, ROW_WEIGHT, Row};
@@ -71,15 +72,45 @@ pub(super) struct Made {
     pub(super) weight: usize,
     /// The segment's row.
     pub(super) shared: Vec<u8>,
+    /// What its events hold, by kind: their names, their fields' keys and
+    /// their contexts' keys.
+    pub(super) keys: BTreeSet<(u8, String)>,
     pub(super) blocks: Vec<Row>,
+    pub(super) blooms: Vec<Blooms>,
 }
+
+/// What a block's filters say of it: its trace ids, and the values of each
+/// of its fields that look like ids.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Blooms {
+    pub(super) traces: Option<Vec<u8>>,
+    pub(super) fields: Vec<(String, Vec<u8>)>,
+}
+
+/// A block as its rows are written.
+pub(super) struct BlockRow {
+    first: i64,
+    last: i64,
+    levels: i64,
+    count: i64,
+    body: Vec<u8>,
+    blooms: Blooms,
+}
+
+// the kinds of a segment's keys
+pub(super) const NAME_KEY: u8 = 0;
+pub(super) const FIELD_KEY: u8 = 1;
+pub(super) const CONTEXT_KEY: u8 = 2;
 
 const HEADS: &str = "select stream, late, count, weight, since from head_state";
 const HEAD_ROWS: &str = "select id, count, weight, body from heads where stream = ?1 and late = ?2 order by id";
 const INSERT_SEGMENT: &str = "insert into segments (stream, first_at, last_at, count, start, held, weight, body)
     values (?1, ?2, ?3, ?4, 0, ?4, ?5, ?6) returning id";
-pub(super) const INSERT_BLOCK: &str = "insert into blocks
-    (segment, stream, first_at, last_at, levels, count, size, body) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+const INSERT_BLOCK: &str = "insert into blocks (segment, stream, first_at, last_at, levels, count, size, body)
+    values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) returning id";
+const INSERT_TRACES: &str = "insert into block_traces (block, bloom) values (?1, ?2)";
+const INSERT_FILTER: &str = "insert into block_filters (block, key, bloom) values (?1, ?2, ?3)";
+const INSERT_KEY: &str = "insert into segment_keys (segment, kind, key) values (?1, ?2, ?3)";
 const DROP_HEAD: &str = "delete from heads where id = ?1";
 const SUBTRACT_FROM_HEAD: &str =
     "update head_state set count = count - ?3, weight = weight - ?4 where stream = ?1 and late = ?2";
@@ -173,14 +204,15 @@ impl Records {
     fn publish(&self, (stream, late): (i64, bool), (rows, weight): (Vec<i64>, usize), made: &Made) -> Result<bool> {
         let bytes = made.blocks.iter().map(|block| block.body.len()).sum();
         let (first, last, events, weight) = (made.first, made.last, made.events as i64, weight as i64);
-        let shared = made.shared.clone();
-        let blocks = rows_of_blocks(&made.blocks);
+        let (shared, keys) = (made.shared.clone(), made.keys.clone());
+        let blocks = rows_of_blocks(made);
         self.file.write(bytes, move |tx| {
             let inserted = tx.prepare_cached(INSERT_SEGMENT);
             let inserted = inserted.and_then(|mut insert| {
                 insert.query_row(params![stream, first, last, events, weight, shared], |row| row.get(0))
             });
             let segment: i64 = inserted.map_err(|error| sql_error("write a segment", error))?;
+            insert_keys(tx, segment, &keys)?;
             insert_blocks(tx, segment, stream, &blocks)?;
             for row in &rows {
                 if execute(tx, DROP_HEAD, [row], "remove a packed head row")? != 1 {
@@ -192,21 +224,41 @@ impl Records {
     }
 }
 
-/// A block as its row is written: its times, levels, events and body.
-pub(super) type BlockRow = (i64, i64, i64, i64, Vec<u8>);
-
-pub(super) fn rows_of_blocks(blocks: &[Row]) -> Vec<BlockRow> {
-    let row = |block: &Row| (block.first, block.last, block.levels, block.count as i64, block.body.clone());
-    blocks.iter().map(row).collect()
+/// A segment's blocks as their rows are written.
+pub(super) fn rows_of_blocks(made: &Made) -> Vec<BlockRow> {
+    let row = |(block, blooms): (&Row, &Blooms)| BlockRow {
+        first: block.first,
+        last: block.last,
+        levels: block.levels,
+        count: block.count as i64,
+        body: block.body.clone(),
+        blooms: blooms.clone(),
+    };
+    made.blocks.iter().zip(&made.blooms).map(row).collect()
 }
 
-/// Writes a segment's blocks, in their order.
+/// Writes a segment's blocks in their order, each with its filters.
 pub(super) fn insert_blocks(tx: &Connection, segment: i64, stream: i64, blocks: &[BlockRow]) -> Result<()> {
-    for (first, last, levels, count, body) in blocks {
-        let block = params![segment, stream, first, last, levels, count, body.len() as i64, body];
-        execute(tx, INSERT_BLOCK, block, "write a block")?;
+    for block in blocks {
+        let size = block.body.len() as i64;
+        let row = params![segment, stream, block.first, block.last, block.levels, block.count, size, block.body];
+        let inserted = tx.prepare_cached(INSERT_BLOCK).and_then(|mut insert| insert.query_row(row, |row| row.get(0)));
+        let id: i64 = inserted.map_err(|error| sql_error("write a block", error))?;
+        if let Some(traces) = &block.blooms.traces {
+            execute(tx, INSERT_TRACES, params![id, traces], "write a block's traces")?;
+        }
+        for (key, bloom) in &block.blooms.fields {
+            execute(tx, INSERT_FILTER, params![id, key, bloom], "write a block's filter")?;
+        }
     }
     Ok(())
+}
+
+/// Writes what a segment's events hold.
+pub(super) fn insert_keys(tx: &Connection, segment: i64, keys: &BTreeSet<(u8, String)>) -> Result<()> {
+    keys.iter().try_for_each(|(kind, key)| {
+        execute(tx, INSERT_KEY, params![segment, kind, key], "write what a segment holds").map(drop)
+    })
 }
 
 /// Takes what left a head, packed or expired, from what it holds: its oldest
@@ -243,16 +295,47 @@ pub(super) fn made_of(events: &[Kept], codec: &mut Codec) -> Result<Made> {
         events: events.len(),
         weight: events.iter().map(Kept::weight).sum(),
         shared: schema.encode(codec)?,
+        keys: keys_of(&schema, events),
         blocks: Vec::new(),
+        blooms: Vec::new(),
     };
     let mut from = 0;
     for events in cut(events) {
         let to = from + events.len();
         let ids = [&ids.names[from..to], &ids.shapes[from..to], &ids.contexts[from..to]];
         made.blocks.push(block::encode(&schema, events, ids, codec)?);
+        made.blooms.push(blooms_of(events));
         from = to;
     }
     Ok(made)
+}
+
+/// The names of a segment's events, the keys of their fields and the keys
+/// of their contexts.
+fn keys_of(schema: &Schema, events: &[Kept]) -> BTreeSet<(u8, String)> {
+    let names = schema.names.iter().map(|name| (NAME_KEY, name.clone()));
+    let contexts =
+        schema.contexts.iter().flat_map(|context| context.iter().map(|(key, _)| (CONTEXT_KEY, key.to_owned())));
+    let fields = events.iter().flat_map(|event| event.fields.iter().map(|(key, _)| (FIELD_KEY, key.to_owned())));
+    names.chain(contexts).chain(fields).collect()
+}
+
+/// A block's filters: of its trace ids, and of the values of each field
+/// whose values in it look like ids.
+fn blooms_of(events: &[Kept]) -> Blooms {
+    let traces: Vec<&[u8]> =
+        events.iter().filter_map(|event| event.trace_id.as_ref()).map(|trace| &trace.0[..]).collect();
+    let mut values: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (key, json) in events.iter().flat_map(|event| event.fields.iter()) {
+        values.entry(key).or_default().push(json);
+    }
+    let fields = values.into_iter().filter(|(_, values)| id_like(values));
+    Blooms {
+        traces: (!traces.is_empty()).then(|| bloom_of(traces.into_iter())),
+        fields: fields
+            .map(|(key, values)| (key.to_owned(), bloom_of(values.iter().map(|value| value.as_bytes()))))
+            .collect(),
+    }
 }
 
 /// A segment's events cut into its blocks: each a block's events at most, or

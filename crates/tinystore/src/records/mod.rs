@@ -14,6 +14,7 @@
 
 mod bits;
 mod block;
+mod bloom;
 mod bytes;
 mod engine;
 mod event;

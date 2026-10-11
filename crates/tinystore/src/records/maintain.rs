@@ -37,6 +37,12 @@ const COUNT_EXPIRED: &str = "select
 const EXPIRED_HEADS: &str =
     "select late, sum(count), sum(weight) from heads where stream = ?1 and last_at < ?2 group by late";
 const DROP_HEADS: &str = "delete from heads where stream = ?1 and last_at < ?2";
+const DROP_TRACES: &str = "delete from block_traces where block in (select id from blocks where segment in
+    (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
+const DROP_FILTERS: &str = "delete from block_filters where block in (select id from blocks where segment in
+    (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
+const DROP_KEYS: &str = "delete from segment_keys where segment in
+    (select id from segments where stream = ?1 and holder is null and last_at < ?2)";
 const DROP_BLOCKS: &str = "delete from blocks where segment in
     (select id from segments where stream = ?1 and holder is null and last_at < ?2)";
 const DROP_PLACES: &str = "delete from segments where holder in
@@ -95,8 +101,15 @@ fn drop_past(tx: &Connection, stream: i64, cutoff: i64) -> Result<()> {
         heads.and_then(Iterator::collect::<rusqlite::Result<Vec<(bool, i64, i64)>>>)
     });
     let left = left.map_err(|error| sql_error("count the head rows a stream keeps no longer", error))?;
-    let drops =
-        [(DROP_HEADS, "head rows"), (DROP_BLOCKS, "blocks"), (DROP_PLACES, "places"), (DROP_SEGMENTS, "segments")];
+    let drops = [
+        (DROP_HEADS, "head rows"),
+        (DROP_TRACES, "blocks' traces"),
+        (DROP_FILTERS, "blocks' filters"),
+        (DROP_KEYS, "segments' keys"),
+        (DROP_BLOCKS, "blocks"),
+        (DROP_PLACES, "places"),
+        (DROP_SEGMENTS, "segments"),
+    ];
     for (sql, what) in drops {
         execute(tx, sql, params![stream, cutoff], &format!("remove the {what} a stream keeps no longer"))?;
     }

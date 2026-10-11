@@ -20,7 +20,7 @@ use super::bytes::{Reader, put_count};
 use super::head::Codec;
 use super::ints::{put_direct, put_ints, read_direct, read_ints};
 use super::stamp::{MOST_DIGITS, behind, put_stamped, read_stamped};
-use super::text::{Decoder, put_bytes, put_texts, read_bytes, read_texts};
+use super::text::{Decoder, Keep, put_bytes, put_texts, read_bytes, read_texts, texts_equal, wants};
 use crate::Result;
 
 // what a column's values are, in the low bits of its first byte
@@ -184,14 +184,19 @@ fn put_hex(out: &mut Vec<u8>, inner: &[&str], codec: &mut Codec) -> Result<()> {
     put_bytes(out, &bytes.iter().map(Vec::as_slice).collect::<Vec<_>>(), codec)
 }
 
-/// A column of values, one a time of `times`, their events'; of none,
-/// without reading anything.
-pub(super) fn read_values(reader: &mut Reader<'_>, times: &[i64], decoder: &mut Decoder<'_>) -> Vec<String> {
+/// A column of values, one a time of `times`, their events', those `keep`
+/// drops left empty; of none, without reading anything.
+pub(super) fn read_values(
+    reader: &mut Reader<'_>,
+    times: &[i64],
+    decoder: &mut Decoder<'_>,
+    keep: Keep<'_>,
+) -> Vec<String> {
     if times.is_empty() {
         return Vec::new();
     }
     let kind = reader.byte();
-    let values = read_inner(reader, kind, times, decoder);
+    let values = read_inner(reader, kind, (times, keep), decoder);
     if kind & QUOTED == 0 {
         return values;
     }
@@ -201,22 +206,51 @@ pub(super) fn read_values(reader: &mut Reader<'_>, times: &[i64], decoder: &mut 
         return Vec::new();
     }
     decoder.left -= 2 * values.len();
-    values.into_iter().map(|value| format!("\"{value}\"")).collect()
+    let quoted = |(place, value): (usize, String)| if wants(keep, place) { format!("\"{value}\"") } else { value };
+    values.into_iter().enumerate().map(quoted).collect()
+}
+
+/// Which values of a column are written as `json`, compared as the column
+/// keeps them: text by its bytes, a dictionary's distinct values once, and
+/// integers as integers, so that no value is spelled to be compared. A
+/// quoted column's values are its quotes' insides.
+pub(super) fn values_equal(reader: &mut Reader<'_>, times: &[i64], decoder: &mut Decoder<'_>, json: &str) -> Vec<bool> {
+    if times.is_empty() {
+        return Vec::new();
+    }
+    let kind = reader.byte();
+    let inner = if kind & QUOTED == 0 { Some(json) } else { unquoted(json) };
+    match (kind & KIND, kind & !(KIND | QUOTED), inner) {
+        (TEXT, 0, Some(inner)) => texts_equal(reader, times.len(), decoder, inner.as_bytes()),
+        (INTEGERS, 0, Some(inner)) => {
+            let integer = integer(inner);
+            read_ints(reader, times.len()).iter().map(|value| Some(*value) == integer).collect()
+        }
+        // a JSON without quotes is no value of a quoted column, which is still read through
+        _ => {
+            read_inner(reader, kind, (times, None), decoder).iter().map(|value| inner == Some(value.as_str())).collect()
+        }
+    }
 }
 
 /// What is inside a column's values, by the kind its first byte says.
-fn read_inner(reader: &mut Reader<'_>, kind: u8, times: &[i64], decoder: &mut Decoder<'_>) -> Vec<String> {
+fn read_inner(
+    reader: &mut Reader<'_>,
+    kind: u8,
+    (times, keep): (&[i64], Keep<'_>),
+    decoder: &mut Decoder<'_>,
+) -> Vec<String> {
     let count = times.len();
     match (kind & KIND, kind & !(KIND | QUOTED)) {
-        (TEXT, 0) => read_texts(reader, count, decoder),
-        (INTEGERS, 0) => read_ints(reader, count).iter().map(i64::to_string).collect(),
-        (INTEGERS, TIMED) => read_timed(reader, times),
+        (TEXT, 0) => read_texts(reader, count, decoder, keep),
+        (INTEGERS, 0) => spelled(read_ints(reader, count).into_iter().map(Some), keep).unwrap_or_default(),
+        (INTEGERS, TIMED) => read_timed(reader, times, keep),
         (INTEGERS, EXCEPTIONS) if kind & QUOTED == 0 => read_exceptions(reader, count, decoder),
-        (STAMPED, 0) => read_stamped(reader, times, decoder),
-        (UUID, 0) => read_hex(reader, count, 16, true, decoder),
+        (STAMPED, 0) => read_stamped(reader, times, decoder, keep),
+        (UUID, 0) => read_hex(reader, Fixed { count, width: 16, uuid: true }, decoder, keep),
         (HEX, 0) => {
             let width = reader.count(decoder.left);
-            read_hex(reader, count, width, false, decoder)
+            read_hex(reader, Fixed { count, width, uuid: false }, decoder, keep)
         }
         _ => {
             reader.fail("a value column's kind");
@@ -225,8 +259,17 @@ fn read_inner(reader: &mut Reader<'_>, kind: u8, times: &[i64], decoder: &mut De
     }
 }
 
+/// Integers as they are written, those `keep` drops left empty; none when one
+/// is missing.
+fn spelled(integers: impl Iterator<Item = Option<i64>>, keep: Keep<'_>) -> Option<Vec<String>> {
+    let spell = |(place, integer): (usize, Option<i64>)| {
+        if wants(keep, place) { integer.map(|integer| integer.to_string()) } else { Some(String::new()) }
+    };
+    integers.enumerate().map(spell).collect()
+}
+
 /// Integers kept as how far behind their events' times they lie.
-fn read_timed(reader: &mut Reader<'_>, times: &[i64]) -> Vec<String> {
+fn read_timed(reader: &mut Reader<'_>, times: &[i64], keep: Keep<'_>) -> Vec<String> {
     let digits = reader.byte();
     let distances = read_ints(reader, times.len());
     if digits > MOST_DIGITS {
@@ -234,7 +277,7 @@ fn read_timed(reader: &mut Reader<'_>, times: &[i64]) -> Vec<String> {
         return Vec::new();
     }
     let integers = distances.iter().zip(times).map(|(distance, at)| behind(*at, *distance, digits));
-    integers.map(|integer| integer.map(|integer| integer.to_string())).collect::<Option<_>>().unwrap_or_else(|| {
+    spelled(integers, keep).unwrap_or_else(|| {
         reader.fail("an integer counting time past sixty-four bits");
         Vec::new()
     })
@@ -244,7 +287,7 @@ fn read_timed(reader: &mut Reader<'_>, times: &[i64]) -> Vec<String> {
 fn read_exceptions(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<String> {
     let apart = reader.count(count);
     let places = read_direct(reader, apart);
-    let texts = read_texts(reader, apart, decoder);
+    let texts = read_texts(reader, apart, decoder, None);
     let mut integers = read_ints(reader, count - apart).into_iter().map(|integer| integer.to_string());
     let mut values = Vec::with_capacity(count);
     for (place, text) in places.iter().zip(texts) {
@@ -259,20 +302,30 @@ fn read_exceptions(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<
     values
 }
 
-/// Bytes of `width` each as lowercase hex, a uuid's with its dashes.
-fn read_hex(reader: &mut Reader<'_>, count: usize, width: usize, uuid: bool, decoder: &mut Decoder<'_>) -> Vec<String> {
-    let bytes = read_bytes(reader, count, decoder);
+/// The values of a column of hex: how many, the bytes of each, and whether
+/// they are uuids, spelled with their dashes.
+struct Fixed {
+    count: usize,
+    width: usize,
+    uuid: bool,
+}
+
+/// Bytes of a width each as lowercase hex, those `keep` drops left empty.
+fn read_hex(reader: &mut Reader<'_>, fixed: Fixed, decoder: &mut Decoder<'_>, keep: Keep<'_>) -> Vec<String> {
+    let Fixed { count, width, uuid } = fixed;
+    let bytes = read_bytes(reader, count, decoder, keep);
     // what the digits add to the bytes is counted before they are spelled
     let spelled = count.saturating_mul(width.saturating_add(4));
-    if width == 0 || spelled > decoder.left || bytes.iter().any(|bytes| bytes.len() != width) {
+    let wrong = bytes.iter().enumerate().any(|(place, bytes)| wants(keep, place) && bytes.len() != width);
+    if width == 0 || spelled > decoder.left || wrong {
         reader.fail("hex values of a width other than their column's");
         return Vec::new();
     }
     decoder.left -= spelled;
-    let spell = |bytes: &Vec<u8>| {
-        let mut text = String::with_capacity(2 * width + 4);
-        for (place, byte) in bytes.iter().enumerate() {
-            if uuid && matches!(place, 4 | 6 | 8 | 10) {
+    let spell = |(place, bytes): (usize, &Vec<u8>)| {
+        let mut text = String::with_capacity(if wants(keep, place) { 2 * width + 4 } else { 0 });
+        for (at, byte) in bytes.iter().enumerate() {
+            if uuid && matches!(at, 4 | 6 | 8 | 10) {
                 text.push('-');
             }
             text.push(char::from(b"0123456789abcdef"[usize::from(byte >> 4)]));
@@ -280,7 +333,7 @@ fn read_hex(reader: &mut Reader<'_>, count: usize, width: usize, uuid: bool, dec
         }
         text
     };
-    bytes.iter().map(spell).collect()
+    bytes.iter().enumerate().map(spell).collect()
 }
 
 /// What a column's first byte says it holds, for a measurement.
@@ -303,7 +356,7 @@ mod tests {
         let mut out = Vec::new();
         put_values(&mut out, values, times, &mut codec).unwrap();
         let mut reader = Reader::new(&out);
-        let read = read_values(&mut reader, times, &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        let read = read_values(&mut reader, times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
         reader.finish().unwrap();
         assert_eq!(read, values);
         out
@@ -386,6 +439,50 @@ mod tests {
     }
 
     #[test]
+    fn a_column_is_compared_as_it_keeps_its_values_and_none_is_spelled() {
+        let equal = |values: &[&str], json: &str| {
+            let mut codec = Codec::default();
+            let (mut out, times) = (Vec::new(), vec![AT; values.len()]);
+            put_values(&mut out, values, &times, &mut codec).unwrap();
+            let mut reader = Reader::new(&out);
+            let equal = values_equal(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, json);
+            reader.finish().unwrap();
+            assert_eq!(equal, values.iter().map(|value| *value == json).collect::<Vec<_>>(), "{json}");
+        };
+        let routes: Vec<&str> = (0..40).map(|n| ["\"/notes\"", "\"/buy\""][n % 3 / 2]).collect();
+        equal(&routes, "\"/buy\"");
+        // a JSON without quotes is no value of a quoted column
+        equal(&routes, "/buy");
+        equal(&["7", "12", "7"], "7");
+        equal(&["7", "12", "7"], "07");
+        let lines: Vec<String> = (0..40).map(|n| format!("line {n}")).collect();
+        equal(&strs(&lines), "line 17");
+        let uuids: Vec<String> = (0..16).map(|n| format!("\"9cbaf3d1-0c27-47bc-8fed-cb6e0763b9{n:02x}\"")).collect();
+        equal(&strs(&uuids), &uuids[5]);
+        let mut apart: Vec<&str> = vec!["1"; 16];
+        apart[3] = "null";
+        equal(&apart, "null");
+    }
+
+    #[test]
+    fn a_column_read_for_a_few_values_leaves_the_others_empty() {
+        let lines: Vec<String> = (0..40).map(|n| format!("2027-01-15 08:00:00,{n:03} GET /notes/{n}")).collect();
+        let uuids: Vec<String> = (0..40).map(|n| format!("\"9cbaf3d1-0c27-47bc-8fed-cb6e0763b9{n:02x}\"")).collect();
+        let numbers: Vec<String> = (0..40).map(|n| (n * 37).to_string()).collect();
+        let keep: Vec<bool> = (0..40).map(|n| n % 7 == 2).collect();
+        for values in [&lines, &uuids, &numbers] {
+            let mut codec = Codec::default();
+            let (mut out, times) = (Vec::new(), vec![AT; values.len()]);
+            put_values(&mut out, &strs(values), &times, &mut codec).unwrap();
+            let mut reader = Reader::new(&out);
+            let read = read_values(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, Some(&keep));
+            reader.finish().unwrap();
+            let expected = values.iter().zip(&keep).map(|(value, kept)| if *kept { value.as_str() } else { "" });
+            assert_eq!(read, expected.collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
     fn a_counter_takes_no_bit_a_value() {
         let counted: Vec<String> = (1000..2024).map(|n| n.to_string()).collect();
         assert!(written(&strs(&counted)).len() <= 8);
@@ -404,14 +501,14 @@ mod tests {
             put_values(&mut column, &strs(&values), &times, &mut codec).unwrap();
             for cut in 0..column.len() {
                 let mut reader = Reader::new(&column[..cut]);
-                read_values(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 });
+                read_values(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
                 assert!(reader.finish().is_err(), "cut at {cut} of {}", column.len());
             }
         }
         let refused = |column: &[u8], count: usize, left: usize| {
             let mut codec = Codec::default();
             let mut reader = Reader::new(column);
-            read_values(&mut reader, &times[..count], &mut Decoder { codec: &mut codec, left });
+            read_values(&mut reader, &times[..count], &mut Decoder { codec: &mut codec, left }, None);
             assert!(reader.finish().is_err(), "{column:?}");
         };
         let mut timed = vec![INTEGERS | TIMED, 10];
@@ -437,7 +534,7 @@ mod tests {
             let mut decoder = Decoder { codec: &mut codec, left };
             (0..columns).all(|_| {
                 let mut reader = Reader::new(&uuid);
-                read_values(&mut reader, &times[..1], &mut decoder);
+                read_values(&mut reader, &times[..1], &mut decoder, None);
                 reader.finish().is_ok()
             })
         };
