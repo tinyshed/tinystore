@@ -1,0 +1,244 @@
+//! A stream of events as a program opens it, `store.events("audit")`, and
+//! every stream as it reads them, `store.all_events()`.
+
+use std::fmt;
+use std::sync::{Arc, PoisonError};
+use std::time::{Duration, SystemTime};
+
+use rusqlite::params;
+use serde::Serialize;
+
+use super::engine::{AHEAD, Records, Stream, execute, nanos};
+use super::event::{Level, MAX_EVENT, MAX_KEYS, NewEvent, SpanId, TraceId};
+use super::head::{self, Checked, ROW_EVENTS, ROW_WEIGHT, Row};
+use super::read::List;
+use crate::{Error, ErrorKind, Result, Store, unix_nanos};
+
+/// What one append carries at most: more is sent in pieces.
+const MAX_APPEND: usize = 4 << 20;
+/// How long an append waits for the store's memory.
+const PATIENCE: Duration = Duration::from_secs(10);
+
+/// What opens a stream of events: its name, and how long it keeps them.
+#[derive(Debug)]
+pub struct EventsBuilder<'s> {
+    store: &'s Store,
+    stream: String,
+    keep: Option<Duration>,
+}
+
+impl<'s> EventsBuilder<'s> {
+    pub(crate) fn new(store: &'s Store, stream: &str) -> Self {
+        EventsBuilder { store, stream: stream.to_owned(), keep: None }
+    }
+
+    /// How long the stream keeps its events. It is the stream's own, kept in
+    /// the file: an open that says none leaves it, fourteen days until one
+    /// says, and another than an earlier open of this store said is
+    /// `invalid`.
+    pub fn keep(mut self, keep: Duration) -> Self {
+        self.keep = Some(keep);
+        self
+    }
+
+    pub fn open(self) -> Result<Events> {
+        let records = Records::of(self.store)?;
+        let opened = records.open_stream(&self.stream, self.keep);
+        let stream = opened.map_err(|error| error.within(format!("events {}", self.stream)))?;
+        Ok(Events { records, stream })
+    }
+}
+
+/// A stream of events: written with `append`, which waits for the file, and
+/// read back by time and by what they hold.
+#[derive(Clone)]
+pub struct Events {
+    pub(super) records: Arc<Records>,
+    pub(super) stream: Stream,
+}
+
+impl fmt::Debug for Events {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Events({})", self.stream.name)
+    }
+}
+
+impl Events {
+    /// Writes an event of `name` with `fields`, a struct or a map, at the
+    /// store's time. It returns once the event is written, and a read finds
+    /// it at once.
+    pub fn append(&self, name: &str, fields: &impl Serialize) -> Result<()> {
+        self.event(name).append(fields)
+    }
+
+    /// An append of one event, what it carries beside its fields before its
+    /// verb:
+    ///
+    /// ```no_run
+    /// # fn f(audit: tinystore::records::Events, at: std::time::SystemTime) -> tinystore::Result<()> {
+    /// let (actor, change) = (serde_json::json!({ "actor": 7 }), serde_json::json!({ "user": 42 }));
+    /// audit.event("role.changed").at(at).context(&actor).append(&change)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn event(&self, name: &str) -> EventCall<'_> {
+        EventCall { events: self, event: NewEvent::new(name) }
+    }
+
+    /// Writes a list of events, all of them or none: a refused one names its
+    /// place in the list and its name.
+    pub fn append_all(&self, events: impl IntoIterator<Item = NewEvent>) -> Result<()> {
+        let appended = self.records.append(&self.stream, events.into_iter().collect());
+        appended.map_err(|error| error.within(format!("events {}", self.stream.name)))
+    }
+
+    /// The stream's events, found by the conditions the answer adds.
+    pub fn list(&self) -> List {
+        List::of(Arc::clone(&self.records), Some(self.stream.clone()))
+    }
+}
+
+/// One event on its way into a stream.
+#[derive(Debug)]
+pub struct EventCall<'e> {
+    events: &'e Events,
+    event: NewEvent,
+}
+
+impl EventCall<'_> {
+    /// Its time, from as long ago as the stream keeps to ten minutes ahead
+    /// of the store's clock.
+    pub fn at(mut self, at: SystemTime) -> Self {
+        self.event = self.event.at(at);
+        self
+    }
+
+    pub fn level(mut self, level: Level) -> Self {
+        self.event = self.event.level(level);
+        self
+    }
+
+    pub fn message(mut self, message: &str) -> Self {
+        self.event = self.event.message(message);
+        self
+    }
+
+    /// What it happened in: who asked, which request.
+    pub fn context(mut self, context: &impl Serialize) -> Self {
+        self.event = self.event.context(context);
+        self
+    }
+
+    pub fn trace(mut self, trace_id: TraceId, span_id: SpanId) -> Self {
+        self.event = self.event.trace(trace_id, span_id);
+        self
+    }
+
+    pub fn append(self, fields: &impl Serialize) -> Result<()> {
+        self.events.append_all([self.event.fields(fields)])
+    }
+}
+
+/// Every stream's events, to read.
+#[derive(Clone)]
+pub struct AllEvents {
+    pub(super) records: Arc<Records>,
+}
+
+impl fmt::Debug for AllEvents {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AllEvents")
+    }
+}
+
+impl AllEvents {
+    /// The events of every stream, or of those `streams` names, found by
+    /// the conditions the answer adds.
+    pub fn list(&self) -> List {
+        List::of(Arc::clone(&self.records), None)
+    }
+}
+
+const INSERT_HEAD: &str = "insert into heads (stream, first_at, last_at, levels, count, size, written_at, body)
+    values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+
+impl Records {
+    /// Appends `events` to a stream: check → reserve → cut into rows → write
+    /// them in one commit.
+    fn append(&self, stream: &Stream, events: Vec<NewEvent>) -> Result<()> {
+        let now = self.now();
+        let window = (now.saturating_sub(nanos(stream.keeps())), now.saturating_add(nanos(AHEAD)));
+        let mut checked = Vec::with_capacity(events.len());
+        let mut weight = 0;
+        for (place, event) in events.into_iter().enumerate() {
+            let named = format!("event {place} {:?}", event.name);
+            weight += event.weight();
+            checked.push(check(event, now, window).map_err(|error| error.within(named))?);
+        }
+        if checked.is_empty() {
+            return Ok(());
+        }
+        if weight > MAX_APPEND {
+            return Err(Error::limit(format!("an append of {weight} bytes, past the {MAX_APPEND} one carries")));
+        }
+        let _held = self.memory.reserve(weight as u64, "records: an append", PATIENCE)?;
+        let rows = self.rows_of(&checked)?;
+        let bytes = rows.iter().map(|row| row.body.len()).sum();
+        let stream = stream.id;
+        self.file.write(bytes, move |tx| {
+            rows.iter().try_for_each(|row| {
+                let (count, size) = (row.count as i64, row.body.len() as i64);
+                let head = params![stream, row.first, row.last, row.levels, count, size, now, row.body];
+                execute(tx, INSERT_HEAD, head, "write a head row").map(drop)
+            })
+        })
+    }
+
+    /// The rows of `events` in their order: a row is cut at the events it
+    /// holds at most, or at what they weigh.
+    fn rows_of(&self, events: &[Checked]) -> Result<Vec<Row>> {
+        let mut codec = self.codec.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mut rows, mut from, mut weight) = (Vec::new(), 0, 0);
+        for (index, event) in events.iter().enumerate() {
+            let added = event.event.weight();
+            if index > from && (index - from == ROW_EVENTS || weight + added > ROW_WEIGHT) {
+                rows.push(head::encode(&events[from..index], &mut codec)?);
+                (from, weight) = (index, 0);
+            }
+            weight += added;
+        }
+        rows.push(head::encode(&events[from..], &mut codec)?);
+        Ok(rows)
+    }
+}
+
+/// An event with its time, once it is one the file keeps: a name, fields
+/// within their bounds, a time within its stream's window.
+fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Checked> {
+    if let Some(refused) = &event.refused {
+        return Err(Error::invalid(refused.clone()));
+    }
+    if event.name.is_empty() {
+        return Err(Error::invalid("an event has a name"));
+    }
+    for (what, fields) in [("fields", &event.fields), ("context", &event.context)] {
+        if fields.len() > MAX_KEYS {
+            return Err(Error::invalid(format!("{} keys in its {what}, past {MAX_KEYS}", fields.len())));
+        }
+    }
+    if event.weight() > MAX_EVENT {
+        return Err(Error::limit(format!("{} bytes, past the {MAX_EVENT} an event weighs", event.weight())));
+    }
+    let at = event.at.map_or(now, unix_nanos);
+    if at < oldest {
+        return Err(Error::new(ErrorKind::TooOld, "older than its stream keeps"));
+    }
+    if at > newest {
+        return Err(Error::new(ErrorKind::TooNew, "more than ten minutes ahead of the store's clock"));
+    }
+    Ok(Checked { at, event })
+}
+
+#[cfg(test)]
+#[path = "events_tests.rs"]
+mod tests;

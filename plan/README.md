@@ -30,7 +30,7 @@ and is not the source of truth; these files are.
 | 0. Decisions, vocabulary, workspace                | in progress |
 | 1. Vertical slice: core and KV through every layer | in progress |
 | 2. sqldb, jobs, blobs                              | in progress |
-| 3. records and metrics                             | not started |
+| 3. records and metrics                             | in progress |
 | 4. Backup, CLI, guest, SDKs, v0.1.0                | not started |
 | 5. Channels and locks                              | not started |
 | 6. Indexes                                         | not started |

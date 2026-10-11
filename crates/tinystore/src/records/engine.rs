@@ -1,0 +1,201 @@
+//! The records engine: `records.db` in the store's directory, its streams and
+//! what each keeps.
+//!
+//! ```text
+//! append ──► heads: a row a stream a write, under zstd, durable
+//! list   ◄── the rows of its range, fetched in one read and parsed after it
+//! ```
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+
+use rusqlite::{Connection, Params, params};
+
+use super::head::Codec;
+use crate::engine::{Claim, Engine, Host};
+use crate::sqlite::{Config, File, Migration, sql_error};
+use crate::{Clock, Durability, Error, Memory, Result, Store, unix_nanos};
+
+const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+
+/// How long a stream keeps its events until an open says.
+pub(crate) const KEEP: Duration = Duration::from_hours(14 * 24);
+/// How far ahead of the store's clock an event's time may be: a later one
+/// would hold its row past what its stream keeps.
+pub(crate) const AHEAD: Duration = Duration::from_mins(10);
+/// How often maintenance runs: what streams no longer keep is removed.
+const MAINTENANCE: Duration = Duration::from_mins(1);
+
+pub(crate) struct Records {
+    pub(crate) file: File,
+    pub(crate) memory: Arc<Memory>,
+    clock: Arc<dyn Clock>,
+    streams: Mutex<HashMap<String, Stream>>,
+    /// The zstd context every append writes its rows with.
+    pub(super) codec: Mutex<Codec>,
+    _claim: Claim,
+}
+
+/// A stream as the engine knows it.
+#[derive(Clone, Debug)]
+pub(crate) struct Stream {
+    pub(crate) id: i64,
+    pub(crate) name: Arc<str>,
+    /// What the file says it keeps.
+    keep: Option<Duration>,
+    /// What an open of this run gave: another is refused till the store
+    /// closes.
+    said: Option<Duration>,
+}
+
+impl Stream {
+    pub(crate) fn keeps(&self) -> Duration {
+        self.keep.unwrap_or(KEEP)
+    }
+}
+
+impl Engine for Records {
+    fn close(&self) -> Result<()> {
+        self.file.close()
+    }
+}
+
+const SELECT_STREAMS: &str = "select id, name, keep from streams";
+const INSERT_STREAM: &str = "insert into streams (name, keep) values (?1, ?2) returning id";
+const SET_KEEP: &str = "update streams set keep = ?2 where id = ?1";
+
+impl Records {
+    /// The store's records engine, opened by the first logger or events: its
+    /// file claimed and migrated, its streams read.
+    pub(crate) fn of(store: &Store) -> Result<Arc<Records>> {
+        store.engine(|store| {
+            let claim = store.claim("records.db")?;
+            // 'os' unless the store says: a log line a commit is not worth a sync
+            let durability = store.durability().or(Some(Durability::Os));
+            let config = Config { page_size: 1024, ..Config::committing(durability) };
+            let file = File::open(claim.path(), config)?;
+            file.migrate("records", MIGRATIONS)?;
+            let records = Arc::new(Records {
+                streams: Mutex::new(read_streams(&file)?),
+                file,
+                memory: Arc::clone(store.memory()),
+                clock: store.clock(),
+                codec: Mutex::default(),
+                _claim: claim,
+            });
+            let weak = Arc::downgrade(&records);
+            store.every("records: maintenance", MAINTENANCE, move || {
+                weak.upgrade().map_or(Ok(()), |records| records.maintain().map(drop))
+            })?;
+            Ok(records)
+        })
+    }
+
+    /// The store's clock, in nanoseconds since 1970.
+    pub(crate) fn now(&self) -> i64 {
+        unix_nanos(self.clock.now())
+    }
+
+    fn streams(&self) -> MutexGuard<'_, HashMap<String, Stream>> {
+        self.streams.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Every stream the file has, as it is now.
+    pub(crate) fn every_stream(&self) -> Vec<Stream> {
+        self.streams().values().cloned().collect()
+    }
+
+    pub(crate) fn stream(&self, name: &str) -> Option<Stream> {
+        self.streams().get(name).cloned()
+    }
+
+    /// Opens the stream `name`, made the first time, and gives it `keep`
+    /// when the open says one.
+    ///
+    /// A stream's keep is its own, in the file: an open that says none
+    /// changes nothing, and while the store is open one that says another
+    /// than an earlier open said is refused, so that one part of a program
+    /// never shortens what another keeps.
+    pub(crate) fn open_stream(&self, name: &str, keep: Option<Duration>) -> Result<Stream> {
+        check_name(name)?;
+        if keep.is_some_and(|keep| keep.is_zero()) {
+            return Err(Error::invalid("a stream keeps its events for more than no time"));
+        }
+        let mut streams = self.streams();
+        let Some(stream) = streams.get_mut(name) else {
+            let (named, kept) = (name.to_owned(), keep.map(millis));
+            let id = self.file.write(name.len(), move |tx| {
+                let made = tx.prepare_cached(INSERT_STREAM);
+                let id = made.and_then(|mut insert| insert.query_row(params![named, kept], |row| row.get(0)));
+                id.map_err(|error| sql_error("write a stream", error))
+            })?;
+            let stream = Stream { id, name: Arc::from(name), keep, said: keep };
+            streams.insert(name.to_owned(), stream.clone());
+            return Ok(stream);
+        };
+        let Some(keep) = keep else { return Ok(stream.clone()) };
+        if let Some(said) = stream.said.filter(|said| *said != keep) {
+            let (said, keep) = (span(said), span(keep));
+            return Err(Error::invalid(format!("keep {keep}, where the stream is open with keep {said}")));
+        }
+        if stream.keep != Some(keep) {
+            let id = stream.id;
+            self.file.write(8, move |tx| execute(tx, SET_KEEP, params![id, millis(keep)], "write a stream's keep"))?;
+        }
+        (stream.keep, stream.said) = (Some(keep), Some(keep));
+        Ok(stream.clone())
+    }
+}
+
+fn read_streams(file: &File) -> Result<HashMap<String, Stream>> {
+    file.read(|connection| {
+        let mut select = connection.prepare(SELECT_STREAMS).map_err(|error| sql_error("read the streams", error))?;
+        let streams = select.query_map([], |row| {
+            let (name, keep): (String, Option<i64>) = (row.get(1)?, row.get(2)?);
+            let keep = keep.map(|millis| Duration::from_millis(millis.max(0) as u64));
+            Ok((name.clone(), Stream { id: row.get(0)?, name: Arc::from(name), keep, said: None }))
+        });
+        let streams = streams.and_then(Iterator::collect);
+        streams.map_err(|error| sql_error("read the streams", error))
+    })
+}
+
+/// Runs a statement the connection keeps prepared; `what` says it in an
+/// error.
+pub(super) fn execute(connection: &Connection, sql: &str, params: impl Params, what: &str) -> Result<usize> {
+    let ran = connection.prepare_cached(sql).and_then(|mut statement| statement.execute(params));
+    ran.map_err(|error| sql_error(what, error))
+}
+
+pub(super) fn nanos(span: Duration) -> i64 {
+    i64::try_from(span.as_nanos()).unwrap_or(i64::MAX)
+}
+
+fn millis(span: Duration) -> i64 {
+    i64::try_from(span.as_millis()).unwrap_or(i64::MAX)
+}
+
+/// A span as a program writes it: `30d`, `12h`, `90s`, `250ms`.
+fn span(span: Duration) -> String {
+    let millis = span.as_millis();
+    let units = [("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1000)];
+    match units.iter().find(|(_, unit)| millis >= *unit && millis.is_multiple_of(*unit)) {
+        Some((name, unit)) => format!("{}{name}", millis / unit),
+        None => format!("{millis}ms"),
+    }
+}
+
+fn check_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if first && rest && name.len() <= 64 {
+        return Ok(());
+    }
+    Err(Error::invalid(format!("a stream's name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))
+}
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod tests;

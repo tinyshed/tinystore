@@ -1,0 +1,70 @@
+//! What records' tests share: a store with no background work, on a clock
+//! the test moves, and a look at what lies in records.db.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use super::engine::Records;
+use super::event::Event;
+use super::events::Events;
+use crate::{Options, Store, TestClock};
+
+pub(crate) const SECOND: Duration = Duration::from_secs(1);
+pub(crate) const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+pub(crate) struct Fixture {
+    pub(crate) dir: tempfile::TempDir,
+    pub(crate) store: Store,
+    pub(crate) clock: Arc<TestClock>,
+}
+
+/// A store without background work, on a clock the test moves.
+pub(crate) fn fixture() -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_800_000_000)));
+    let store = open(dir.path(), &clock);
+    Fixture { dir, store, clock }
+}
+
+fn open(dir: &Path, clock: &Arc<TestClock>) -> Store {
+    Store::open(dir, Options { clock: Some(clock.clone()), background: false, ..Options::default() }).unwrap()
+}
+
+impl Fixture {
+    /// The store closed and opened again on the same directory and clock, as
+    /// a restart does.
+    pub(crate) fn reopen(self) -> Fixture {
+        self.store.close().unwrap();
+        let store = open(self.dir.path(), &self.clock);
+        Fixture { store, ..self }
+    }
+
+    pub(crate) fn events(&self, stream: &str) -> Events {
+        self.store.events(stream).open().unwrap()
+    }
+
+    pub(crate) fn now(&self) -> SystemTime {
+        self.store.now()
+    }
+
+    /// Moves the clock ahead.
+    pub(crate) fn pass(&self, span: Duration) {
+        self.clock.set(self.now() + span).unwrap();
+    }
+
+    pub(crate) fn records(&self) -> Arc<Records> {
+        Records::of(&self.store).unwrap()
+    }
+
+    /// Rows of a table of records.db, counted on a reader.
+    pub(crate) fn rows(&self, table: &str) -> i64 {
+        let sql = format!("select count(*) from {table}");
+        self.records().file.read(|connection| Ok(connection.query_row(&sql, [], |row| row.get(0)).unwrap())).unwrap()
+    }
+}
+
+/// The names of events, in their order.
+pub(crate) fn names(events: &[Event]) -> Vec<&str> {
+    events.iter().map(|event| event.name.as_str()).collect()
+}

@@ -149,14 +149,14 @@ module defines.
 - a level in colour counts as one in brackets — `TestAColourMarksALevelAsBracketsDo`
 - a logfmt line keeps its pairs when they spell it — `TestLogfmtLinesKeepTheirPairsWhenTheySpellTheLineAgain`, `TestLinesKeepALogfmtLinesPairs`
 - a record survives the records format exactly — `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`
-- a changed records byte is refused — `TestAChangedOrMissingByteIsRefused`, `TestAChangedHeadRowIsRefused`, fuzzers
+- a changed records byte is refused — `a_changed_or_missing_byte_is_refused` in `records::head`, `a_row_whose_bytes_changed_is_corrupt_and_names_itself` in `records::events`; a segment's, `TestAChangedOrMissingByteIsRefused`, fuzzers
 - a records decode stays bounded — `TestExpandedTextIsBounded`; every copy is charged before it is made
 - a time a line spells comes back as it was spelled — `TestEveryStampLayoutSpellsItsTextBack`, `FuzzStamps`
 - what no calendar shows stays text — `TestATimeNoClockShowsStaysText`
 - a time kept against its record needs that record — `TestStampsWithoutTheirTimesAreRefused`
-- equal times keep their arrival order — `TestEqualTimesKeepTheirArrivalOrder`
+- equal times keep their arrival order — `events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_written` in `records::read`
 - a read merges segments and the head by time — `TestReadMergesSegmentsAndTheHeadInEventTimeOrder`
-- an appended record reads before it is sealed — `TestAppendedRecordsAreReadBeforeTheyAreSealed`
+- an appended record reads before it is sealed — `an_appended_event_is_read_at_once_with_what_it_carries` in `records::events`
 - a reader finds each record once while sealing — `TestReadersSeeEveryRecordOnceWhileSealing`
 - a failed seal leaves the head as it was — `TestAFailedSealLeavesTheHeadAsItWas`
 - an abrupt exit loses no appended record — `TestAnAbruptExitKeepsEveryAppendedRecord`, before, inside and after a seal
@@ -176,22 +176,26 @@ module defines.
 - a batch in time order makes none of its own late — `TestARecordTenSecondsBehindItsStreamsNewestIsLate`
 - a reopened store knows what its heads hold — `TestAReopenedStoreKnowsWhatItsHeadsHold`
 - a producer ahead of the store makes no one late — `TestAProducerAheadOfTheStoreDoesNotMakeItsNeighboursLate`
-- a time outside its engine's window is refused — `TestARecordOutsideItsWindowIsRefused`, `TestASampleAheadOfTheClockIsRefused`
-- a page never splits a timestamp nor loses one — `TestAPageNeverSplitsATimestamp`, `TestPagesContinueWithoutLosingOrRepeating`
-- a budget ends a page rather than failing it — `TestABudgetEndsAPageEarly`
-- a records scan since a span pages on in that range — `TestAScanSinceStartsThatLongBeforeNowAndPagesOn`, the clock moved between pages
-- `All` walks every record a page at a time — `TestAllWalksEveryRecordAPageAtATime`, a walk stopped early reads no further
-- a search finds a record by its text, the case ignored — `TestASearchFindsARecordByItsTextItsCaseIgnored`, sealed and in its head
+- a time outside its engine's window is refused — `an_events_time_is_from_as_long_ago_as_its_stream_keeps_to_ten_minutes_ahead` in `records::events`; `TestASampleAheadOfTheClockIsRefused`
+- a page never splits a timestamp nor loses one — `a_page_never_splits_a_time_and_more_at_one_time_than_it_holds_is_limit`, `pages_go_on_without_losing_or_repeating_an_event_from_either_end` in `records::read`
+- a budget ends a page rather than failing it — `a_page_ends_at_the_rows_it_fetched_and_the_next_goes_on_from_there` in `records::read`
+- a records scan since a span pages on in that range — `a_range_is_a_span_before_now_counted_once_or_a_start_in_it_and_an_end_not` in `records::read`, the clock moved between pages
+- `All` walks every record a page at a time — `all_walks_every_event_a_page_at_a_time` in `records::read`, a walk stopped early reads no further
+- a search finds an event by its text, in its message, its name and the values of its fields, the case ignored — `a_search_finds_its_phrase_in_the_message_the_name_and_the_values_whatever_its_case` in `records::read`
 - a record takes the trace of its context — `TestARecordTakesTheTraceOfItsContext`, the caller's records left unchanged
 - blooms and level masks skip blocks — `TestBloomsAndLevelMasksSkipBlocks`
 - a read walks the time index near its range only — `TestTheTimeIndexIsWalkedWithinEachSpan`, on the plan SQLite chooses
 - a read finds records in blocks of every width — `TestReadsFindRecordsInBlocksOfEveryWidth`
-- retention removes whole segments, clips reads — `TestRetentionRemovesWholeSegmentsAndClipsReads`
-- a stream keeps its own retention, for appends, reads and expiry — `TestAStreamKeepsItsOwnRetention`
+- retention removes whole segments, clips reads — `a_row_goes_once_its_newest_event_is_past_what_its_stream_keeps` in `records::maintain`, of fresh rows; `TestRetentionRemovesWholeSegmentsAndClipsReads`
+- a stream keeps its own retention, for appends, reads and expiry — `a_stream_keeps_what_an_open_gave_it_across_runs_and_an_open_that_gives_none_changes_nothing` in `records::engine`, `an_events_time_is_from_as_long_ago_as_its_stream_keeps_to_ten_minutes_ahead` in `records::events`, `an_event_older_than_its_stream_keeps_is_never_read_and_maintenance_removes_its_row` in `records::maintain`
+- another keep for a stream while its store is open is refused, naming both — `another_keep_while_the_store_is_open_is_invalid_and_names_both` in `records::engine`
+- a list of events is written whole or not at all, and a refused one names its place and its name — `a_list_is_written_whole_or_not_at_all_and_a_refused_event_names_itself` in `records::events`
+- a filter finds a key in an event's fields or its context, by the JSON its value was written as — `a_filter_finds_a_key_in_the_fields_or_the_context_by_the_json_of_its_value` in `records::read`
+- records maintenance with nothing to remove commits nothing — `maintenance_with_nothing_to_remove_commits_nothing` in `records::maintain`
 - records work holds the store's memory — `TestStoreMemoryBoundsAppendReadSealAndFollow`
 - a follower is told what retention removed — `TestFollowCountsWhatRetentionRemovedFirst`
 - records reads and appends wait for their slots — `TestReadsAndAppendsWaitForTheirSlots`
-- one Append carries at most a segment's input — `TestAnAppendOfMoreThanASegmentIsRefused`
+- one Append carries at most a segment's input — `an_event_and_an_append_have_the_bytes_they_carry_at_most` in `records::events`
 - the tool prints a record as a logger's console does — `TestAPrinterWritesARecordAsTheConsoleDoes` in `records`
 
 ## SQL

@@ -20,7 +20,7 @@ its storage was measured.
 |---------------------|------------------------------------------------------------------------------------------------|
 | a logger            | prints a line as it is logged and keeps it, as `store.logger('api')` opens it                  |
 | events              | a named stream of events, as `store.events('audit')` opens it; `store.events()` reads them all |
-| an event            | a time, a name and fields; a log line is an event named `log`, with a level and a message      |
+| an event            | 256 KiB; 128 keys in its fields, and as many in its context                                    |
 | `fields`, `context` | what happened, given with the call; what it happened in, given once with `with`                |
 | `keep`              | how long a stream's events stay: 14 days unless it says                                        |
 | `tail`              | events as they are written, from now                                                           |

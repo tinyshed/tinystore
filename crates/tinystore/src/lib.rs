@@ -21,6 +21,8 @@ mod key;
 pub mod kv;
 mod memory;
 pub mod pipe;
+#[cfg(feature = "records")]
+pub mod records;
 mod schedule;
 #[cfg(feature = "blobs")]
 mod space;

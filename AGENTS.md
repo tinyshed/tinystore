@@ -34,13 +34,14 @@ should be a fact a ten-second grep would answer.
 | jobs           | queues of any serde type by their time, ids that add, set, update and cancel, repeats by interval and by cron on a zone, schedules, concurrency in all and by group, rate, retries, steps, workers on the store's threads, claims, pages, watches, transactions                                                                                                                                                                                                                                                      | [plan/api/jobs.md](plan/api/jobs.md)                |
 | sql            | databases by name, `sql/<name>.db`, with migrations from files checked at every open and run with foreign keys off; reads that send a write with `returning` to the writer, a statement's rows by their columns, numbers packed, writes, batches, transactions bounded at five seconds; values through serde; tables and a query builder, a row holding the rows of a query it includes; buckets and queues kept in its file                                                                                         | [plan/api/sqldb.md](plan/api/sqldb.md)              |
 | blobs          | files by path in named sets, folders, uploads published whole at their commit, `ifMatch` and `create`, copies that share their bytes, expiry, whole reads checked against their SHA-256, the scrub, what a process that died left removed at open, and the disk the store keeps free                                                                                                                                                                                                                                 | [plan/api/blobs.md](plan/api/blobs.md)              |
+| records        | streams of events by name in `records.db`, a stream's own `keep` kept in its file, appends written whole, reads by time and by what an event holds a page at a time, and the expiry of what a stream keeps no longer; its events wait as they were written, and nothing packs them yet                                                                                                                                                                                                                               | [plan/api/records.md](plan/api/records.md)          |
 | wire           | frames, the MessagePack profile, a session apart from its transport; protocol 2, its messages written from `protocol/*.wire`, with kv's every method and jobs', a client's worker its jobs and answers on one stream, a watch its job's changes; sql's queries in parts, by their rows or their columns, writes, batches, and transactions whose calls, kv's and jobs' among them, come on one stream; blobs' every method, reads as S3's on an ETag and a range, a file's bytes in pieces paced by credit both ways | [plan/protocol.md](plan/protocol.md)                |
 | pipe and FFI   | a connection in memory to the store in this process, and four C functions over it                                                                                                                                                                                                                                                                                                                                                                                                                                    | [plan/ffi.md](plan/ffi.md)                          |
 | server         | `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, TCP and TLS with tokens that admit, write or only read, `server.stop`, a private server's clock                                                                                                                                                                                                                                                                                                        | [docs/wire.md](docs/wire.md#finding-a-local-server) |
 | Bun SDK        | kv and jobs as their books have them, sql's with its tables, query builder, `include` and buckets and queues, and files, over protocol 2: embedded through bun:ffi, through a private child, a sidecar or a remote server; its other engines still speak protocol 1                                                                                                                                                                                                                                                  | [plan/api/kv.md](plan/api/kv.md)                    |
 
 Not built: the Python and Go SDKs,
-records, metrics, backup, config and the logger in the core, `tinystore`'s commands but `serve`, the Node, Python and Go
+records' packing, counts, tail, poll, logger and wire, metrics, backup, config and the logger in the core, `tinystore`'s commands but `serve`, the Node, Python and Go
 bindings, protocol 2's codecs for Python and Go. [plan/phases.md](plan/phases.md) has
 their order and what closes each phase. The guides in [docs/](docs/README.md)
 and the SDKs still describe the Go release candidates, and promise nothing for
@@ -55,26 +56,27 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path                           | What it is                                                                                         |
-|--------------------------------|----------------------------------------------------------------------------------------------------|
-| `crates/tinystore/`            | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features   |
-| `crates/tinystore/src/sqlite/` | the SQLite every engine stands on; no engine vocabulary                                            |
-| `crates/tinystore/src/kv/`     | kv: buckets, counters, rate limits, quotas, `once`, transactions                                   |
-| `crates/tinystore/src/jobs/`   | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                     |
-| `crates/tinystore/src/sql/`    | sql: the application's databases, their migrations, reads, writes, batches and transactions        |
-| `crates/tinystore/src/blobs/`  | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory      |
-| `crates/tinystore/src/wire/`   | the protocol's bytes and the session that answers them                                             |
-| `crates/tinystore/src/pipe.rs` | the connection in memory the FFI carries                                                           |
-| `crates/ffi/`                  | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                   |
-| `crates/cli/`                  | `tinystore`: `serve` over stdio, a local socket or a named pipe, TCP and TLS, on tokio             |
-| `crates/protocol/`             | the `.wire` language's parser and layout, and what writes every codec and vector; nothing ships it |
-| `sdk/js/`, `sdk/python/`       | the clients of the protocol for Bun and Node, and Python                                           |
-| `protocol/`                    | the wire protocol's schema, a file an engine, which every codec and vector is written from         |
-| `editors/wire/`                | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover     |
-| `testdata/wire/`               | the protocol's vectors, which Rust and every SDK read                                              |
-| `plan/`                        | the rewrite: decisions, evidence, architecture, the API books, phases                              |
-| `docs/`, `web/`                | the guides and the docs site, built from `main`                                                    |
-| `.agents/skills/`              | how recurring work is done; `.claude/skills/` points to it                                         |
+| Path                            | What it is                                                                                         |
+|---------------------------------|----------------------------------------------------------------------------------------------------|
+| `crates/tinystore/`             | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features   |
+| `crates/tinystore/src/sqlite/`  | the SQLite every engine stands on; no engine vocabulary                                            |
+| `crates/tinystore/src/kv/`      | kv: buckets, counters, rate limits, quotas, `once`, transactions                                   |
+| `crates/tinystore/src/jobs/`    | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                     |
+| `crates/tinystore/src/sql/`     | sql: the application's databases, their migrations, reads, writes, batches and transactions        |
+| `crates/tinystore/src/blobs/`   | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory      |
+| `crates/tinystore/src/records/` | records: streams of events, their rows, reads a page at a time, what a stream keeps                |
+| `crates/tinystore/src/wire/`    | the protocol's bytes and the session that answers them                                             |
+| `crates/tinystore/src/pipe.rs`  | the connection in memory the FFI carries                                                           |
+| `crates/ffi/`                   | the C ABI: `cdylib` for Bun, `staticlib` for cgo                                                   |
+| `crates/cli/`                   | `tinystore`: `serve` over stdio, a local socket or a named pipe, TCP and TLS, on tokio             |
+| `crates/protocol/`              | the `.wire` language's parser and layout, and what writes every codec and vector; nothing ships it |
+| `sdk/js/`, `sdk/python/`        | the clients of the protocol for Bun and Node, and Python                                           |
+| `protocol/`                     | the wire protocol's schema, a file an engine, which every codec and vector is written from         |
+| `editors/wire/`                 | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover     |
+| `testdata/wire/`                | the protocol's vectors, which Rust and every SDK read                                              |
+| `plan/`                         | the rewrite: decisions, evidence, architecture, the API books, phases                              |
+| `docs/`, `web/`                 | the guides and the docs site, built from `main`                                                    |
+| `.agents/skills/`               | how recurring work is done; `.claude/skills/` points to it                                         |
 
 ## Crates
 
@@ -85,7 +87,7 @@ separate artifact: `crates/ffi` and `crates/cli` today, `crates/node` and
 ships in nothing. Only `crates/cli` runs tokio; the library runs no async
 runtime.
 
-- **Each engine is a cargo feature**, `kv`, `jobs`, `sql` and `blobs` the defaults today. A program links
+- **Each engine is a cargo feature**, `kv`, `jobs`, `sql`, `blobs` and `records` the defaults today. A program links
   the engines it opens and nothing else. An engine adds its calls to `Store`
   from its own module (`impl Store { pub fn bucket… }`): the store's own code
   names no engine.
@@ -102,7 +104,8 @@ runtime.
 - **A dependency is a decision**, and every program linking TinyStore pays for
   it: rusqlite pinned to one release with SQLite bundled, serde, serde_json,
   tracing, sha2 for blobs' hashes and a key's id, chacha20poly1305 for the
-  values of encrypted buckets, and libc on Unix for the disk's free space.
+  values of encrypted buckets, zstd for the rows of records, and libc on Unix
+  for the disk's free space.
   Anything a measurement needs belongs in research, not here.
 - **The toolchain is pinned** in `rust-toolchain.toml`; `rust-version` is the
   floor a user needs, raised only for a feature in use.

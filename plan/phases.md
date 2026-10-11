@@ -87,6 +87,7 @@ them.
 
 - [ ] The codecs: huff0 and FSE in safe Rust or a format without them, the word-based reader, the exact accumulator.
 - [ ] records: the head, segments, paged reads, follow, retention, redaction, `durability: 'os'` by default.
+  Built: streams and their `keep`, appends into fresh rows, reads a page at a time, their expiry.
 - [ ] metrics: series, instruments, sealing, exact aggregates, retention, the step rule; the `metrics` crate recorder.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
