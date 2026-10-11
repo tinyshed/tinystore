@@ -199,9 +199,9 @@ module defines.
 - field names are the keys of fields and contexts, sorted, by prefix and limit — `field_names_are_the_keys_of_fields_and_contexts_sorted` in `records::count`
 - a read merges segments and the head by time, and finds each event once — `a_read_finds_each_event_once_in_what_is_packed_and_what_waits` in `records::pack`
 - an appended record reads before it is sealed — `an_appended_event_is_read_at_once_with_what_it_carries` in `records::events`
-- a reader finds each record once while sealing — `TestReadersSeeEveryRecordOnceWhileSealing`
+- a reader finds each record once while sealing — `a_reader_finds_each_event_once_while_heads_pack_and_segments_merge` in `records::maintain`
 - a failed seal leaves the head as it was — `a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_written` in `records::pack`
-- an abrupt exit loses no appended record — `TestAnAbruptExitKeepsEveryAppendedRecord`, before, inside and after a seal
+- an abrupt exit loses no appended record — `an_abrupt_exit_loses_no_appended_event_before_or_after_a_pack` in `records::maintain`, its files copied as a crash leaves them; inside a seal `TestAnAbruptExitKeepsEveryAppendedRecord`
 - any bytes past a row's version and checksum read as its events or fail `corrupt`, never a panic — `a_block_with_any_byte_changed_or_cut_gives_its_events_or_fails_corrupt`, `bytes_of_no_row_fail_corrupt` in `records::fuzzing`; its fuzz target is `records_rows` in `fuzz/`, run by hand with `just fuzz`
 - a damaged head does not stop the others — `a_damaged_head_row_is_left_for_a_drop_and_the_rows_around_it_still_pack` in `records::repair`
 - a damaged row is said once, and the rest of its head packs — `a_damaged_head_row_is_left_for_a_drop_and_the_rows_around_it_still_pack` in `records::repair`, which does not count the lines said; `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals` for that
@@ -211,7 +211,7 @@ module defines.
 - a poll counts the events `keep` removed before its cursor reached them — `a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them` in `records::poll`
 - a tail gives the events appended after it opened, a batch as they come, by a read's conditions, and no range, order or limit — `a_tail_gives_the_events_appended_after_it_opened_a_batch_as_they_come`, `a_tail_takes_a_reads_conditions_and_no_range_order_or_limit` in `records::tail`
 - a tail slower than its writers says how many it missed, and ends when the store closes — `a_tail_slower_than_its_writers_says_how_many_left_before_it_read_them`, `a_tail_ends_when_the_store_closes` in `records::tail`
-- a merge is one write, and readers see a record once — `a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was`, `four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places` in `records::merge`; `TestReadersSeeEveryRecordOnceWhileMerging`
+- a merge is one write, and readers see a record once — `a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was`, `four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places` in `records::merge`; `a_reader_finds_each_event_once_while_heads_pack_and_segments_merge` in `records::maintain`
 - a merged segment goes whole, with its places — `a_merged_segment_expires_whole_with_its_places` in `records::merge`; `TestDropRemovesAMergedSegmentWithItsPlaces`
 - a holder's places are found through an index — `a_holders_places_are_found_through_an_index` in `records::merge`, on the plan SQLite chooses
 - a follower far behind fetches a merged block once — `TestAFollowerFetchesAMergedBlockOnce`, `TestTheFollowCacheKeepsWhatIsUsedWithinItsBytes`

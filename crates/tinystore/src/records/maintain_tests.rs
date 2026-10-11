@@ -50,3 +50,68 @@ fn maintenance_with_nothing_to_remove_commits_nothing() {
     maintain(&fixture.store).unwrap();
     assert_eq!(fixture.records().file.commits(), commits);
 }
+
+/// The records a process killed now would leave: the file and its log
+/// copied while the store is open, as a crash leaves them on disk.
+fn crash_image(fixture: &super::super::fixture::Fixture) -> tempfile::TempDir {
+    let image = tempfile::tempdir().unwrap();
+    for name in ["records.db", "records.db-wal"] {
+        let from = fixture.dir.path().join(name);
+        if from.exists() {
+            std::fs::copy(from, image.path().join(name)).unwrap();
+        }
+    }
+    image
+}
+
+fn names_after_crash(fixture: &super::super::fixture::Fixture, image: &tempfile::TempDir) -> Vec<String> {
+    let options = crate::Options { clock: Some(fixture.clock.clone()), background: false, ..crate::Options::default() };
+    let store = Store::open(image.path(), options).unwrap();
+    let events = store.all_events().unwrap().list().page().unwrap().events;
+    events.into_iter().map(|event| event.name).collect()
+}
+
+#[test]
+fn an_abrupt_exit_loses_no_appended_event_before_or_after_a_pack() {
+    let fixture = fixture();
+    let audit = fixture.events("audit");
+    audit.append_all([NewEvent::new("a"), NewEvent::new("b")]).unwrap();
+    let before = crash_image(&fixture);
+    fixture.pass(Duration::from_secs(3601));
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1);
+    audit.append("c", &()).unwrap();
+    let after = crash_image(&fixture);
+    assert_eq!(names_after_crash(&fixture, &before), ["a", "b"]);
+    assert_eq!(names_after_crash(&fixture, &after), ["a", "b", "c"], "packed and waiting alike");
+}
+
+#[test]
+fn a_reader_finds_each_event_once_while_heads_pack_and_segments_merge() {
+    use std::collections::BTreeSet;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let all = fixture.store.all_events().unwrap();
+    let (done, reads) = (AtomicBool::new(false), AtomicUsize::new(0));
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::Acquire) {
+                let events = all.list().limit(1000).page().unwrap().events;
+                let names: BTreeSet<&str> = events.iter().map(|event| event.name.as_str()).collect();
+                assert_eq!(names.len(), events.len(), "an event read twice");
+                assert_eq!(events.len() % 50, 0, "a round of 50 read in part: {}", events.len());
+                reads.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let mut merged = 0;
+        for round in 0..8 {
+            api.append_all((0..50).map(|n| NewEvent::new(&format!("{round}-{n}")))).unwrap();
+            fixture.pass(Duration::from_secs(3601));
+            merged += maintain(&fixture.store).unwrap().merged;
+        }
+        done.store(true, Ordering::Release);
+        assert!(merged > 0, "segments merged meanwhile");
+    });
+    assert!(reads.load(Ordering::Relaxed) > 0);
+}
