@@ -26,10 +26,14 @@ const opens: { name: string; ready: boolean; options: OpenOptions }[] = [
 
 const PASSWORD = 'hunter2-the-password'
 
-/** Whether a file under `dir` holds `text`. LOCK is the store's alone while it is open. */
+/**
+ * Whether a file under `dir` holds `text`. LOCK is the store's alone while it is open, and a
+ * -shm file SQLite's index of its log, locked in parts while a write runs: neither
+ * holds a value.
+ */
 function shown(dir: string, text: string): boolean {
 	return readdirSync(dir, { withFileTypes: true, recursive: true })
-		.filter(entry => entry.isFile() && entry.name !== 'LOCK')
+		.filter(entry => entry.isFile() && entry.name !== 'LOCK' && !entry.name.endsWith('-shm'))
 		.some(entry => readFileSync(join(entry.parentPath, entry.name)).includes(text))
 }
 
