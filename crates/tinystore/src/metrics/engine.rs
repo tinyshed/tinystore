@@ -9,6 +9,7 @@
 //! read   ◄── heads and blocks from one snapshot, decoded after it
 //! ```
 
+use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -41,6 +42,8 @@ pub(crate) struct Engine {
     pub(super) codecs: Codecs,
     /// Held by a pass of maintenance, so that two never pack the same series.
     pub(super) maintaining: Mutex<()>,
+    /// The last series a pass packed, which the next continues after.
+    pub(super) pack_cursor: AtomicI64,
     /// What runs maintenance sooner, once a series has a block's worth.
     wake: Mutex<Option<Wake>>,
     _claim: Claim,
@@ -70,6 +73,7 @@ impl Engine {
                 clock: store.clock(),
                 codecs: Codecs::default(),
                 maintaining: Mutex::default(),
+                pack_cursor: AtomicI64::new(0),
                 wake: Mutex::default(),
                 _claim: claim,
             });

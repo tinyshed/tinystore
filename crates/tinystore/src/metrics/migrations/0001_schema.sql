@@ -39,10 +39,13 @@ create table label_values (
     unique (name, value)
 ) strict;
 
--- Which series hold a pair, so that nothing scans every series.
+-- Which series hold a pair, so that nothing scans every series. No foreign
+-- key: removing a series would walk every posting for one of its, having no
+-- index by series; the engine writes and removes a series' postings by their
+-- key, from the pairs its row names.
 create table postings (
-    label_id  integer not null references label_values (id),
-    series_id integer not null references series (id),
+    label_id  integer not null,
+    series_id integer not null,
     primary key (label_id, series_id)
 ) strict, without rowid;
 

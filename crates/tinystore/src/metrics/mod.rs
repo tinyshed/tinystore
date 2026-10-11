@@ -17,8 +17,11 @@
 
 mod binary;
 mod budget;
+mod clock;
 mod codec;
+mod directory;
 mod engine;
+mod exact;
 #[cfg(test)]
 mod fixture;
 mod head;
@@ -28,12 +31,17 @@ mod ladder;
 mod maintain;
 mod matching;
 mod names;
+mod pack;
+mod publish;
 mod query;
 mod read;
 mod registry;
+mod residuals;
 mod retention;
 mod series;
+mod summary;
 mod timestamp;
+mod values;
 
 use std::fmt;
 use std::sync::Arc;

@@ -23,10 +23,6 @@ pub(super) const fn advance(start: i64, span: u64) -> i64 {
 /// 0.25    → token 50·4 + 1     two bytes
 /// -0, NaN → token 2, 8 bytes
 /// ```
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a block's directory and values, which packing writes from the next slice")
-)]
 pub(super) fn put_float(out: &mut Vec<u8>, value: f64) {
     for (tag, factor) in [(0, 1.0), (1, 100.0)] {
         let product = (value * factor).round();
@@ -43,10 +39,6 @@ pub(super) fn put_float(out: &mut Vec<u8>, value: f64) {
 }
 
 /// A float as [`put_float`] wrote it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a block's directory and values, which packing writes from the next slice")
-)]
 pub(super) fn read_float(reader: &mut Reader<'_>) -> f64 {
     let token = reader.uvarint();
     if token == u64::from(RAW_FLOAT) {
@@ -65,16 +57,8 @@ pub(super) fn read_float(reader: &mut Reader<'_>) -> f64 {
 
 /// A float token's integer stays under 2⁶⁰, so that folded and shifted it
 /// still fits a word.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a block's directory and values, which packing writes from the next slice")
-)]
 const TOKEN_LIMIT: f64 = (1_u64 << 60) as f64;
 /// The token of a float kept as its eight bytes.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a block's directory and values, which packing writes from the next slice")
-)]
 const RAW_FLOAT: u8 = 2;
 
 #[cfg(test)]

@@ -54,7 +54,7 @@ is one migration, `0001`, until `v0.1.0`.
 | `names`        | a name's id, kind, `keep`, buckets, unit and help                                         | what the book says a name owns, set by instruments, `ingest` and `describe`                 |
 | `series`       | its id, its identity, its name, its label ids gap-coded                                   | the identity is the SHA-256 of the canonical labels as 32 bytes, where Go kept 44 of base64 |
 | `label_values` | a pair's id, name, value and the count of its series                                      | the dictionary: a pair kept once, its count choosing the shortest posting list              |
-| `postings`     | a pair and a series, `WITHOUT ROWID`                                                      | which series hold a pair, so that nothing scans every series                                |
+| `postings`     | a pair and a series, `WITHOUT ROWID`, no foreign key                                      | which series hold a pair, so that nothing scans every series; a removal goes by their key   |
 | `series_state` | the newest time seen, what is sealed, a version, when it is due to expire, ready, failure | fixed in size, with partial indexes for ready, due and failed series                        |
 | `heads`        | a series' packed head                                                                     | its growing and shrinking stays out of the state rows; Go kept it in them                   |
 | `clocks`       | a digest, the groups that use it, the timestamps                                          | shared by digest and bytes: series written at the same ticks share one                      |
@@ -145,7 +145,8 @@ is one migration, `0001`, until `v0.1.0`.
   into a block; its head may expire whole.
 - Blocks are cut where a unit of this ladder begins, in UTC: 1, 5, 10, 15
   and 30 minutes, 1, 2, 3, 4, 6, 8 and 12 hours, a day. Each divides a day.
-  A series takes the largest unit that holds at most 240 of its samples:
+  A series takes the largest unit that holds at most 240 of its samples at
+  the mean step of what it packs, a unit that holds more cut every 240:
   every 15 seconds is a block an hour, 240 samples; every minute, 4 hours;
   every 10 seconds, 30 minutes of 180. A block never crosses its unit, so a
   bucket of whole units holds whole blocks and answers from their summaries.
@@ -156,9 +157,11 @@ is one migration, `0001`, until `v0.1.0`.
   block's value representation, its clock, its directory entry and exact
   summary. Publication then takes the writer for one transaction, and checks
   the series' version: the payloads, the directory, merged into the group
-  before it while that has fewer than 32 blocks and fits 8 KiB, the clock's
-  references, the head trimmed by exactly the samples packed, and what is
-  sealed moved. A transaction carries at most 8 series and 1 MiB, each series
+  before it while that has no more live blocks than it, fits 32 blocks, a
+  clock of 64 KiB and a directory of 8 KiB, so that a group at least doubles
+  each time it is rewritten, the clock's references, the head trimmed by
+  exactly the samples packed, and what is sealed moved past the last of
+  them. A transaction carries at most 8 series and 1 MiB, each series
   in a savepoint of its own, as the Go engine's did.
 - A series whose bytes no longer read is suspended, with what broke, said
   once; the others go on. `damaged()` lists it and `delete` removes it.
@@ -248,7 +251,9 @@ bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
   has expired, and a group once it holds none. A group partly expired keeps
   every payload's address, its live mask telling which still count.
 - A series left with nothing goes with its postings and the dictionary pairs
-  no other series uses, and frees its place among the 100,000.
+  no other series uses, and frees its place among the 100,000. Its postings
+  go by their key, from the pairs its row names: they have no index by
+  series, nor a foreign key that would walk them all to remove one.
 - A name whose `keep` changed between two runs moves the due time of its
   series through the name, never by scanning every series.
 

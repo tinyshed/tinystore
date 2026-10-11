@@ -1,15 +1,21 @@
 //! What names keep no longer: each series is due at its oldest sample plus
 //! its name's `keep`, one indexed value a series, and a pass takes a bounded
-//! batch of what is due. A head's expired samples go at once; a series left
-//! with nothing goes with its postings and the dictionary pairs no other
-//! series uses, and frees its place among the store's series.
+//! batch of what is due. A head's expired samples go at once; a block goes
+//! once its last sample has expired, and a group once it holds none; a group
+//! partly expired keeps every payload's address, its live mask telling which
+//! still count. A series left with nothing goes with its postings and the
+//! dictionary pairs no other series uses, and frees its place among the
+//! store's series.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::clock;
 use super::engine::{Engine, execute, query_one};
 use super::head::{self, Extent};
 use super::ingest::ready;
+use super::labels::decode_ids;
 use super::names::{KEEP, millis};
+use super::publish::{self, group_row, read_group};
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
@@ -45,6 +51,11 @@ const SAVE_STATE: &str = "update series_state set version = version + 1, ready =
     head_count = ?3, head_start = ?4, head_end = ?5 where series_id = ?1";
 const SET_DUE: &str = "update series_state set due = ?2 where series_id = ?1";
 const HAS_GROUPS: &str = "select exists (select 1 from groups where series_id = ?1)";
+const OLDEST: &str = "select id, start_ts, end_ts, clock, directory from groups
+    where series_id = ?1 order by start_ts limit 1";
+const DROP_PAYLOAD: &str = "delete from payloads where id = ?1";
+const DROP_GROUP: &str = "delete from groups where id = ?1";
+const REWRITE_GROUP: &str = "update groups set directory = ?2 where id = ?1";
 
 impl Engine {
     /// The series whose next sample is past what their names keep, a pass's
@@ -113,12 +124,52 @@ fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
         let saved = params![due.id, ready(extent, max_seen), extent.count as i64, first_of(&extent), last_of(&extent)];
         execute(tx, SAVE_STATE, saved, "write a series' state")?;
     }
+    let expired = Expired { samples: expired.samples + expire_blocks(tx, zstd, due)?, ..expired };
     if points.is_empty() && !query_one::<bool>(tx, HAS_GROUPS, params![due.id], "look for a series' groups")? {
         reclaim(tx, due.id)?;
         return Ok(Expired { reclaimed: 1, ..expired });
     }
-    let next = points.first().map(|point| expires(point.at, due.keep));
+    let next = publish::due(tx, zstd, due.id, points.first().map(|point| point.at))?;
+    let next = next.map(|oldest| expires(oldest, due.keep));
     execute(tx, SET_DUE, params![due.id, next], "write when a series is due").map(drop)?;
+    Ok(expired)
+}
+
+/// Retires the blocks whose last sample has expired, the oldest groups'
+/// first: a block goes whole, its payload with it, and a group once it holds
+/// none, its clock let go; a group partly expired is rewritten with its live
+/// mask, every payload keeping its address.
+fn expire_blocks(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<u64> {
+    let mut expired = 0;
+    while let Some((row_id, row)) = group_row(tx, OLDEST, due.id, params![due.id])? {
+        let mut group = read_group(tx, zstd, &row)?;
+        let mut changed = false;
+        for slot in 0..group.blocks.len() {
+            let block = &group.blocks[slot];
+            if !group.is_live(slot) {
+                continue;
+            }
+            if block.times.end >= due.cutoff {
+                break;
+            }
+            if block.external() && execute(tx, DROP_PAYLOAD, params![block.payload], "remove a block's values")? != 1 {
+                return Err(Error::corrupt("a block's payload is missing"));
+            }
+            expired += block.times.count as u64;
+            group.live &= !(1 << slot);
+            changed = true;
+        }
+        if group.live == 0 {
+            execute(tx, DROP_GROUP, params![row_id], "remove a group")?;
+            clock::let_go(tx, group.clock)?;
+            continue;
+        }
+        if changed {
+            let directory = group.encode(zstd)?;
+            execute(tx, REWRITE_GROUP, params![row_id, directory], "rewrite a group's directory")?;
+        }
+        break;
+    }
     Ok(expired)
 }
 
@@ -155,36 +206,39 @@ fn read_head(connection: &Connection, id: i64) -> Result<Option<HeadRow>> {
     row.map_err(|error| sql_error("read a series' head", error))
 }
 
-const POSTED: &str = "select label_id from postings where series_id = ?1";
-const UNCOUNT: &str = "update label_values set posting_count = posting_count - 1
-    where id in (select label_id from postings where series_id = ?1)";
+const LABEL_IDS: &str = "select label_ids from series where id = ?1";
+const UNCOUNT: &str = "update label_values set posting_count = posting_count - 1 where id = ?1";
+const UNPOST: &str = "delete from postings where label_id = ?1 and series_id = ?2";
 /// A name loses its kind with its last series, so that its next may have
 /// another.
 const FREE_KIND: &str = "update names set kind = null where id = (select name from series where id = ?1)
     and coalesce((select posting_count from label_values where name = '__name__' and value = names.name), 0) = 0";
-const UNPOST: &str = "delete from postings where series_id = ?1";
 const UNSTATE: &str = "delete from series_state where series_id = ?1";
 const UNSERIES: &str = "delete from series where id = ?1";
-const UNUSED_PAIRS: &str =
-    "delete from label_values where posting_count = 0 and id in (select value from json_each(?1))";
+const UNUSED_PAIR: &str = "delete from label_values where id = ?1 and posting_count = 0";
 const ONE_SERIES_LESS: &str = "update store_state set series_count = series_count - 1 where id = 1";
 
 /// Removes an empty series: its postings and their counts, the pairs no
 /// other series uses, its state, its row and its place among the store's
 /// series.
 pub(super) fn reclaim(tx: &Tx<'_>, id: i64) -> Result<()> {
-    let failed = |error| sql_error("read a series' postings", error);
-    let pairs: Vec<i64> = tx
-        .prepare_cached(POSTED)
-        .and_then(|mut select| select.query_map(params![id], |row| row.get(0)).and_then(Iterator::collect))
-        .map_err(failed)?;
-    let pairs = serde_json::to_string(&pairs).map_err(|error| Error::internal("a series' pairs").with_source(error))?;
-    execute(tx, UNCOUNT, params![id], "uncount a series' labels")?;
+    // the series' pairs from its row, so that its postings go by their key:
+    // the postings have no index by series, and a walk of them all would
+    // grow with every series of the store
+    let encoded: Vec<u8> = query_one(tx, LABEL_IDS, params![id], "read a series' label ids")?;
+    let pairs = decode_ids(&encoded)?;
+    for pair in &pairs {
+        if execute(tx, UNPOST, params![pair, id], "remove a series' posting")? != 1 {
+            return Err(Error::corrupt("a series' posting is missing"));
+        }
+        execute(tx, UNCOUNT, params![pair], "uncount a series' label")?;
+    }
     execute(tx, FREE_KIND, params![id], "free a name's kind")?;
-    execute(tx, UNPOST, params![id], "remove a series' postings")?;
     execute(tx, DROP_HEAD, params![id], "remove a head")?;
     execute(tx, UNSTATE, params![id], "remove a series' state")?;
     execute(tx, UNSERIES, params![id], "remove a series")?;
-    execute(tx, UNUSED_PAIRS, params![pairs], "remove the pairs no series uses")?;
+    for pair in &pairs {
+        execute(tx, UNUSED_PAIR, params![pair], "remove a pair no series uses")?;
+    }
     execute(tx, ONE_SERIES_LESS, params![], "count a series less").map(drop)
 }

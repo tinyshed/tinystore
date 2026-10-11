@@ -142,6 +142,12 @@ them.
   write rewrites only where it reaches, `read` of heads through postings within the read's bounds, and expiry with
   the series it empties. The codec of a run is the Go engine's, but huff0, which waits for its measurement; what
   records and metrics both pack with is the root's `compress`.
+  Built, slice 2: packing at the UTC ladder, a unit from the prefix's mean step, 240 samples a block at most; clocks
+  shared by digest; values the shortest of the ordinary codec, changes and a decimal grid with residuals; directories
+  of version 5, the clock's id in their checksum alone; exact summaries in a fixed accumulator of 35 words that rounds
+  once; publication of eight series a transaction, a savepoint each, groups taking in the one before while it holds
+  no more live blocks; reads across blocks and the head; blocks expiring whole. A series is reclaimed through the
+  pairs its row names, since postings, which now carry no foreign key, have no index by series.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

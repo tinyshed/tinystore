@@ -218,10 +218,6 @@ pub(super) fn decode(zstd: &mut Zstd, head: &Head, body: &[u8], out: &mut Vec<Po
 /// encode         1 | flags | 0 0 | stream | checksum
 /// encode_values      flags |       stream
 /// ```
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a block's directory and values, which packing writes from the next slice")
-)]
 pub(super) fn encode_values_alone(zstd: &mut Zstd, values: &[f64]) -> Result<Vec<u8>> {
     let points: Vec<Point> = values.iter().zip(0..).map(|(&value, at)| Point { at, value }).collect();
     let (_, body) = encode(zstd, &points)?;
@@ -234,10 +230,6 @@ pub(super) fn encode_values_alone(zstd: &mut Zstd, values: &[f64]) -> Result<Vec
 /// Decodes what [`encode_values_alone`] wrote into the values of `run`, whose
 /// times its caller fills. The stream has no checksum of its own: its caller
 /// checked the bytes it was kept in.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "a block's directory and values, which packing writes from the next slice")
-)]
 pub(super) fn decode_values_alone(zstd: &mut Zstd, first: f64, stream: &[u8], run: &mut [Point]) -> Result<()> {
     if run.is_empty() || run.len() > MOST_SAMPLES {
         return Err(Error::corrupt("a block's count"));

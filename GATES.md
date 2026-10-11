@@ -62,23 +62,29 @@ module defines.
 - a timer's three series go together and have one writer — `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries`
 - a self-report never counts itself, nor rounds a value — `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports`
 - a sample survives the codec exactly — `every_value_representation_keeps_the_bits` in `metrics::codec`, on bits and not on values; `a_sample_comes_back_bit_for_bit` in `metrics::ingest`
-- a sample survives a file and restart — `TestHeadSealingReopenAndPartialRetention`, over the public metrics API
-- publication is one write — `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`
+- a sample survives a file and restart — `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole` in `metrics::pack`, `a_sample_survives_a_restart` in `metrics::ingest`
+- publication is one write — `a_publication_another_write_raced_is_dropped_and_tried_again` in `metrics::pack`: nothing of it written, the next pass packs it
 - a reader sees one consistent state — `TestReadersSeeOneSnapshotWhilePackingAndIngesting`, including retention
-- shared clocks live as long as their owners — `TestClockSharingAndLastOwnerRetention`
+- shared clocks live as long as their owners — `series_written_at_the_same_ticks_share_a_clock_until_the_last_lets_go` in `metrics::pack`
 - production stays independent of research — `TestEngineDoesNotImportExperimentsOrFutureEngines`
 - a counter's increase survives a reset — `TestCounterSummaryIncludesResets`, `TestACounterStepCountsInTheBucketItEndsIn`
 - only the safe prefix is sealed — `TestWatermarkIsStrictAndFollowsTheSeries`, on the strict edge
-- a late sample cannot enter a sealed block — `TestHeadSealingReopenAndPartialRetention`, `ErrTooOld` behind the frontier
+- a late sample cannot enter a sealed block — `a_sample_behind_what_its_series_has_packed_is_too_old` in `metrics::pack`
 - a partial range is not answered from a summary — `TestWholeSummarySkipsPayloadButPartialBlocksCheckIt`: a cut block decodes raw
 - retention clips before it summarises — `TestAggregateClipsRetentionBeforeSummingSealedEdges`
 - a bucket retention cut says so — `TestAggregateMarksOnlyTheBucketRetentionCut`
-- a quiet tail expires without becoming a block — `TestHeadSealingReopenAndPartialRetention`, the one-sample head at its end
-- one expired sample does not delete a block — `TestHeadSealingReopenAndPartialRetention`, the partly expired second block
+- a quiet tail expires without becoming a block — `a_quiet_series_is_not_forced_into_a_block` in `metrics::pack`
+- one expired sample does not delete a block, and a group partly expired keeps its payloads' addresses — `a_block_expires_whole_once_its_last_sample_has_and_a_group_keeps_its_payloads_addresses` in `metrics::pack`
 - one damaged series does not stop its neighbors — `TestCorruptSeriesDoesNotStopOtherMaintenance`
 - a raised limit can resume suspended maintenance — `TestSuspendedLimitCanRecoverAfterReopen`
 - an append need not churn due indexes — `TestExistingSeriesIngestAvoidsUnchangedDueIndexes`
 - untouched head chunks keep their bytes — `untouched_head_chunks_keep_their_bytes` in `metrics::head`
+- a block is cut where a unit of the ladder begins, never across one, and a unit of more than 240 samples every 240 — `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole`, `a_unit_holding_more_than_240_samples_is_cut_every_240` in `metrics::pack`
+- a merge rewrites directories and relocates no payload, a group taking in the one before while it holds no more — `a_group_takes_in_the_one_before_it_while_that_holds_no_more_blocks` in `metrics::pack`
+- a read decodes only the blocks its range touches — `a_range_reads_the_blocks_and_the_head_it_touches_and_no_more` in `metrics::pack`
+- an exact sum is rounded once, as a float addition and a float division are — `a_sum_of_two_rounds_as_their_float_sum_does`, `a_quotient_rounds_as_a_float_division_does` in `metrics::exact`
+- a block's values keep their bits in every way they are kept, and read as no other block's — `every_way_keeps_the_bits_and_the_shortest_wins`, `the_extremes_keep_their_bits_in_every_way`, `a_body_read_as_another_blocks_is_refused` in `metrics::values`
+- a directory and a clock read only as their own group's — `a_directory_reads_only_as_its_own_groups` in `metrics::directory`, `a_clock_reads_back_its_blocks_and_refuses_what_changed` in `metrics::clock`
 - a posting above the old cap still ranks exactly — `TestPostingCountsRankAboveTheOldProbeCap`
 - ready waits for a safe prefix — `TestReadyWaitsForASealableWatermarkPrefix`
 - one bad publication does not count its neighbors — `TestPublicationBatchRollsBackOneConflictingSeries` and `TestPublicationBatchDoesNotCountRolledBackTransaction`
@@ -116,7 +122,7 @@ module defines.
 - an invalid description keeps no good instrument out of a flush — `an invalid description cannot prevent good instruments from flushing` in Bun, `test_an_invalid_description_keeps_no_good_instrument_out` in Python
 - a group joins its series exactly and rounds once — `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined`
 - a whole-block summary spends no decoded-sample budget — `TestWholeExactBlocksNeedNoDecodedSampleBudget`
-- a malformed exact summary is refused — `TestExactSummaryEncodingRefusesNoncanonicalOrUnboundedFields`, `FuzzExactSummary`
+- a malformed exact summary is refused — `another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused` in `metrics::exact`; `FuzzExactSummary` at `e81a050` until the fuzz target lands
 - exact summaries keep a directory within its bound — `TestLargeExactSummariesStayWithinDirectoryBounds`
 - a directory written once still reads — `TestDirectoriesWrittenBeforeStillRead`, inline and external
 
