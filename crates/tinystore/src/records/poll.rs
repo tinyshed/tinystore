@@ -23,6 +23,8 @@ use super::engine::Records;
 use super::event::Event;
 use super::events::AllEvents;
 use super::head::Codec;
+use super::pack::PATIENCE;
+use super::read::EVENT_HELD;
 use super::repair::Part;
 use super::segment::Schema;
 use crate::sqlite::sql_error;
@@ -100,6 +102,10 @@ impl Records {
         let Some(fetched) = self.fetch_batch((segment, offset), from.is_some(), limit)? else {
             return Ok(PollBatch { events: Vec::new(), cursor: given, expired: 0 });
         };
+        // the bodies fetched and the events built of them hold the store's memory, as a read's do
+        let fetched_bytes = fetched.row.len() + fetched.blocks.iter().map(|(_, body)| body.len()).sum::<usize>();
+        let events = (fetched.to - fetched.from).max(0) as u64;
+        let _held = self.memory.reserve(fetched_bytes as u64 + events * EVENT_HELD, "records: a poll", PATIENCE)?;
         let name = self.name_of(fetched.stream);
         let mut codec = Codec::default();
         let within = |error: Error| self.met((Part::Segment, fetched.segment), &name, error);

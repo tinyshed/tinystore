@@ -241,9 +241,9 @@ module defines.
 - a list of events is written whole or not at all, and a refused one names its place and its name — `a_list_is_written_whole_or_not_at_all_and_a_refused_event_names_itself` in `records::events`
 - a filter finds a key in an event's fields or its context, by the JSON its value was written as — `a_filter_finds_a_key_in_the_fields_or_the_context_by_the_json_of_its_value` in `records::read`
 - records maintenance with nothing to remove commits nothing — `maintenance_with_nothing_to_remove_commits_nothing` in `records::maintain`
-- records work holds the store's memory — `TestStoreMemoryBoundsAppendReadSealAndFollow`
+- records work holds the store's memory: an append, a read, a packing and a poll wait for it, and one past the whole budget is `limit` — `records_work_holds_the_stores_memory_waits_for_it_and_one_past_it_is_limit` in `records::events`
 - a follower is told what retention removed, and a cursor given before any segment nothing — `a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them` in `records::poll`, `only_what_no_longer_reads_is_dropped_a_segment_whole_and_a_poll_behind_it_told` in `records::repair`
-- records reads and appends wait for their slots — `TestReadsAndAppendsWaitForTheirSlots`
+- records reads and appends wait for the store's memory, which Rust has for Go's slots — `records_work_holds_the_stores_memory_waits_for_it_and_one_past_it_is_limit` in `records::events`
 - one Append carries at most a segment's input — `an_event_and_an_append_have_the_bytes_they_carry_at_most` in `records::events`
 - the tool prints a record as a logger's console does — `TestAPrinterWritesARecordAsTheConsoleDoes` in `records`
 

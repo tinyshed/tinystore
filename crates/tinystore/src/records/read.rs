@@ -42,7 +42,7 @@ const MOST_EVENTS: usize = 10_000;
 const FETCH_ROWS: usize = 1024;
 const FETCH_BYTES: usize = 16 << 20;
 /// What a read reserves for each event its rows hold, beside their bytes.
-const EVENT_HELD: u64 = 1 << 10;
+pub(super) const EVENT_HELD: u64 = 1 << 10;
 /// How long a read waits for the store's memory.
 const PATIENCE: Duration = Duration::from_secs(10);
 

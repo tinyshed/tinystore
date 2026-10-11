@@ -252,3 +252,44 @@ fn a_head_packed_empty_forgets_the_newest_event_it_held() {
     web.append_all([NewEvent::new("behind").at(behind)]).unwrap();
     assert_eq!(heads(&fixture), [(false, 1)]);
 }
+
+#[test]
+fn records_work_holds_the_stores_memory_waits_for_it_and_one_past_it_is_limit() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant, UNIX_EPOCH};
+
+    use serde_json::value::RawValue;
+
+    use crate::records::maintain;
+    use crate::{Options, TestClock};
+
+    let dir = tempfile::tempdir().unwrap();
+    let budget = 1 << 20;
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_800_000_000)));
+    let options = Options { clock: Some(clock.clone()), memory: Some(budget), background: false, ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let audit = store.events("audit").open().unwrap();
+
+    let pad = RawValue::from_string(format!(r#"{{"pad":"{}"}}"#, "x".repeat(200_000))).unwrap();
+    let past = audit.append_all((0..8).map(|_| NewEvent::new("big").fields(&pad))).unwrap_err();
+    assert_eq!(past.kind(), ErrorKind::Limit, "{past}");
+
+    // the test holds all but ten bytes for a fifth of a second: each kind of work waits for them
+    let waits = |what: &str, work: &dyn Fn()| {
+        let held = store.memory().try_reserve(budget - 10, "the test").unwrap();
+        let started = Instant::now();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                drop(held);
+            });
+            work();
+        });
+        assert!(started.elapsed() >= Duration::from_millis(150), "{what} waited for the store's memory");
+    };
+    waits("an append", &|| audit.append("signup", &()).unwrap());
+    waits("a read", &|| assert_eq!(audit.list().page().unwrap().events.len(), 1));
+    clock.set(store.now() + Duration::from_secs(3601)).unwrap();
+    waits("a packing", &|| assert_eq!(maintain(&store).unwrap().segments, 1));
+    waits("a poll", &|| assert_eq!(store.all_events().unwrap().poll(None).unwrap().events.len(), 1));
+}
