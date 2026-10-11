@@ -33,6 +33,10 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 /// How long a server waits for its first client before idling counts: as long
 /// as a client waits for the sidecar it started.
 const FIRST_CLIENT: Duration = Duration::from_secs(15);
+/// How long a server waits before it takes clients again after one failed
+/// to connect, so that a lack of handles does not spin it.
+#[cfg(unix)]
+const AGAIN: Duration = Duration::from_millis(10);
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     let started = Instant::now();
@@ -302,7 +306,15 @@ impl Listener {
         clients: &Arc<watch::Sender<usize>>,
     ) -> io::Result<()> {
         loop {
-            let (stream, _) = self.listener.accept().await?;
+            // a client that fails its connection fails it alone, and the clients served go on
+            let stream = match self.listener.accept().await {
+                Ok((stream, _)) => stream,
+                Err(error) => {
+                    tracing::debug!(target: "tinystore", %error, "a client did not connect");
+                    tokio::time::sleep(AGAIN).await;
+                    continue;
+                }
+            };
             let (store, connect, closed, counted) = (store.clone(), connect.clone(), closed.clone(), served(clients));
             tokio::spawn(async move {
                 let (reader, writer) = stream.into_split();
@@ -348,14 +360,19 @@ impl Listener {
         closed: &watch::Receiver<bool>,
         clients: &Arc<watch::Sender<usize>>,
     ) -> io::Result<()> {
-        let taken = self.first.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        let mut waiting = match taken {
-            Some(first) => first,
-            None => Self::instance(&self.name, false)?,
-        };
+        let mut waiting = self.first.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         loop {
-            waiting.connect().await?;
-            let pipe = std::mem::replace(&mut waiting, Self::instance(&self.name, false)?);
+            let pipe = match waiting.take() {
+                Some(pipe) => pipe,
+                None => self.next_instance().await?,
+            };
+            // a client that came and went before it was taken fails alone, and the clients served go on
+            if let Err(error) = pipe.connect().await {
+                tracing::debug!(target: "tinystore", %error, "a client did not connect");
+                continue;
+            }
+            // the next instance is made before this one is served, so that a client never finds none listening
+            waiting = Some(self.next_instance().await?);
             let (store, connect, closed, counted) = (store.clone(), connect.clone(), closed.clone(), served(clients));
             tokio::spawn(async move {
                 let (reader, writer) = tokio::io::split(pipe);
@@ -363,6 +380,21 @@ impl Listener {
                 drop(counted);
             });
         }
+    }
+
+    /// Another instance of the pipe, tried again six times, one to thirty-two
+    /// milliseconds apart, before the server gives up its name.
+    async fn next_instance(&self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+        for pause in [1, 2, 4, 8, 16, 32] {
+            match Self::instance(&self.name, false) {
+                Err(error) => {
+                    tracing::debug!(target: "tinystore", %error, "a pipe instance was not made");
+                    tokio::time::sleep(Duration::from_millis(pause)).await;
+                }
+                made => return made,
+            }
+        }
+        Self::instance(&self.name, false)
     }
 
     fn remove(&self) {}

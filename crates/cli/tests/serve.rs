@@ -55,13 +55,25 @@ fn holds(body: &[u8], text: &str) -> bool {
 
 /// The next frame: its kind, flags, stream and body.
 fn read_frame(reader: &mut impl Read) -> (u8, u8, u32, Vec<u8>) {
+    try_frame(reader).unwrap()
+}
+
+/// The next frame, or what ended the stream before it.
+fn try_frame(reader: &mut impl Read) -> std::io::Result<(u8, u8, u32, Vec<u8>)> {
     let mut header = [0; 12];
-    reader.read_exact(&mut header).unwrap();
+    reader.read_exact(&mut header)?;
     let length = u32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
     let stream = u32::from_le_bytes(header[8..12].try_into().unwrap());
     let mut body = vec![0; length];
-    reader.read_exact(&mut body).unwrap();
-    (header[4], header[5], stream, body)
+    reader.read_exact(&mut body)?;
+    Ok((header[4], header[5], stream, body))
+}
+
+/// The next frame, a failure to read it showing what the server logged.
+fn logged_frame(reader: &mut impl Read, log: &Path) -> (u8, u8, u32, Vec<u8>) {
+    try_frame(reader).unwrap_or_else(|error| {
+        panic!("{error}; the server logged: {}", std::fs::read_to_string(log).unwrap_or_default())
+    })
 }
 
 fn wait(child: &mut Child) -> i32 {
@@ -120,11 +132,13 @@ fn a_private_child_answers_hello_and_leaves_when_its_stdin_ends() {
 
 #[test]
 fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_meanwhile() {
-    let dir = tempfile::tempdir().unwrap();
+    let (dir, logs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let log = logs.path().join("serve.log");
     let mut server = Command::new(BINARY)
         .args(["serve", "--dir"])
         .arg(dir.path())
-        .args(["--local", "--idle", "0ms"])
+        .args(["--local", "--idle", "0ms", "--log"])
+        .arg(&log)
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
@@ -139,7 +153,7 @@ fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_me
     let mut client = connect(serve["endpoints"][0].as_str().unwrap());
     let challenge = *b"0123456789abcdef";
     client.write_all(&hello(Some(&challenge))).unwrap();
-    let (kind, _, _, welcome) = read_frame(&mut client);
+    let (kind, _, _, welcome) = logged_frame(&mut client, &log);
     assert_eq!(kind, WELCOME);
     let secret = base64url(serve["secret"].as_str().unwrap());
     let mut mac = Hmac::<Sha256>::new_from_slice(&secret).unwrap();
@@ -149,7 +163,7 @@ fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_me
     assert_eq!(&proof[3..], &mac.finalize().into_bytes()[..]);
 
     client.write_all(&frame(REQUEST, END, SERVER_STOP, 1, &[0x80])).unwrap();
-    let (kind, flags, stream, _) = read_frame(&mut client);
+    let (kind, flags, stream, _) = logged_frame(&mut client, &log);
     assert_eq!((kind, flags & END, stream), (RESPONSE, END, 1));
     assert_eq!(wait(&mut server), 0);
     assert!(!dir.path().join("server").join("SERVE").exists(), "SERVE goes before the directory is let go");

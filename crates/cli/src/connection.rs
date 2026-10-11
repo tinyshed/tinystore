@@ -90,12 +90,15 @@ async fn write_frames<W: AsyncWrite + Unpin>(
 ) {
     loop {
         ready.notified().await;
+        // read before the frames are taken: every frame owed before the end
+        // was said is taken by this pass, and none is left behind it
+        let last = done.load(Ordering::Acquire) || pipe.finished();
         let owed = pipe.recv(Duration::ZERO);
         // stdout holds what it is given until a newline, which frames lack
         if !owed.is_empty() && (writer.write_all(&owed).await.is_err() || writer.flush().await.is_err()) {
             break;
         }
-        if done.load(Ordering::Acquire) || pipe.finished() {
+        if last {
             break;
         }
     }
