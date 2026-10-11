@@ -7,10 +7,8 @@
 //! event   = at | name | presence | level | message | trace | span | context | fields
 //! ```
 
-use std::time::{Duration, UNIX_EPOCH};
-
 use super::bytes::{Reader, crc32, put_count, put_int, put_text};
-use super::event::{Event, Fields, Level, MAX_EVENT, MAX_KEYS, NewEvent, SpanId, TraceId};
+use super::event::{Fields, Kept, Level, MAX_EVENT, MAX_KEYS, SpanId, TraceId};
 use crate::{Error, Result};
 
 const VERSION: u8 = 1;
@@ -59,7 +57,7 @@ impl Codec {
                 Some(made.map_err(|error| Error::internal("records: zstd could not start").with_source(error))?);
         }
         let Some(decompressor) = self.decompressor.as_mut() else { return Ok(Vec::new()) };
-        decompressor.decompress(frame, most).map_err(|_| Error::corrupt("a head row's frame"))
+        decompressor.decompress(frame, most).map_err(|_| Error::corrupt("a row's frame"))
     }
 
     /// Lets the contexts go, as maintenance does for a store that stopped
@@ -69,40 +67,37 @@ impl Codec {
     }
 }
 
-/// An event past its checks, with its time.
-pub(super) struct Checked {
-    pub(super) at: i64,
-    pub(super) event: NewEvent,
-}
-
 /// A row as its table keeps it.
 pub(super) struct Row {
     pub(super) first: i64,
     pub(super) last: i64,
     pub(super) levels: i64,
     pub(super) count: usize,
+    /// What its events weigh against a segment's bounds.
+    pub(super) weight: usize,
     pub(super) body: Vec<u8>,
 }
 
 /// The row of `events`, which are one row's worth and not none.
-pub(super) fn encode(events: &[Checked], codec: &mut Codec) -> Result<Row> {
-    let (mut first, mut last, mut levels) = (i64::MAX, i64::MIN, 0);
+pub(super) fn encode(events: &[Kept], codec: &mut Codec) -> Result<Row> {
+    let (mut first, mut last, mut levels, mut weight) = (i64::MAX, i64::MIN, 0, 0);
     let mut plain = Vec::new();
-    for Checked { at, event } in events {
-        (first, last) = (first.min(*at), last.max(*at));
+    for event in events {
+        (first, last) = (first.min(event.at), last.max(event.at));
         levels |= event.level.map_or(0, Level::bit);
-        put_event(&mut plain, *at, event);
+        weight += event.weight();
+        put_event(&mut plain, event);
     }
     let mut body = vec![VERSION];
     put_count(&mut body, events.len() as u64);
     body.extend_from_slice(&codec.squeeze(&plain)?);
     let sum = crc32(&body);
     body.extend_from_slice(&sum.to_le_bytes());
-    Ok(Row { first, last, levels, count: events.len(), body })
+    Ok(Row { first, last, levels, count: events.len(), weight, body })
 }
 
-fn put_event(out: &mut Vec<u8>, at: i64, event: &NewEvent) {
-    put_int(out, at);
+fn put_event(out: &mut Vec<u8>, event: &Kept) {
+    put_int(out, event.at);
     put_text(out, &event.name);
     let presence = [
         (event.level.is_some(), HAS_LEVEL),
@@ -135,32 +130,32 @@ fn put_fields(out: &mut Vec<u8>, fields: &Fields) {
     }
 }
 
-/// The events of a row with their times, in the order they were written:
-/// the one parser of a head row.
-pub(super) fn parse(stream: &str, body: &[u8], codec: &mut Codec) -> Result<Vec<(i64, Event)>> {
+/// The events of a row in the order they were written: the one parser of a
+/// head row.
+pub(super) fn parse(body: &[u8], codec: &mut Codec) -> Result<Vec<Kept>> {
     let Some((framed, sum)) = body.split_last_chunk::<4>() else {
-        return Err(Error::corrupt("a head row shorter than its checksum"));
+        return Err(Error::corrupt("a row shorter than its checksum"));
     };
     if framed.first() != Some(&VERSION) {
-        return Err(Error::corrupt("a head row's version"));
+        return Err(Error::corrupt("a row's version"));
     }
     if crc32(framed) != u32::from_le_bytes(*sum) {
-        return Err(Error::corrupt("a head row's checksum"));
+        return Err(Error::corrupt("a row's checksum"));
     }
     let mut head = Reader::new(&framed[1..]);
     let count = head.count(ROW_EVENTS);
     let frame = head.rest();
     head.finish()?;
     if count == 0 {
-        return Err(Error::corrupt("a head row of no event"));
+        return Err(Error::corrupt("a row of no event"));
     }
     let plain = codec.expand(frame, ROW_PLAIN)?;
     let mut reader = Reader::new(&plain);
-    let events = (0..count).map(|_| read_event(&mut reader, stream)).collect();
+    let events = (0..count).map(|_| read_event(&mut reader)).collect();
     reader.finish().map(|()| events)
 }
 
-fn read_event(reader: &mut Reader<'_>, stream: &str) -> (i64, Event) {
+fn read_event(reader: &mut Reader<'_>) -> Kept {
     let at = reader.int();
     let name = reader.text(MAX_EVENT).to_owned();
     let presence = reader.byte();
@@ -183,18 +178,7 @@ fn read_event(reader: &mut Reader<'_>, stream: &str) -> (i64, Event) {
     if at < 0 {
         reader.fail("an event's time before 1970");
     }
-    let event = Event {
-        at: UNIX_EPOCH + Duration::from_nanos(at.max(0) as u64),
-        stream: stream.to_owned(),
-        name,
-        level,
-        message,
-        fields,
-        context,
-        trace_id,
-        span_id,
-    };
-    (at, event)
+    Kept { at, name, level, message, fields, context, trace_id, span_id }
 }
 
 fn taken<const N: usize>(reader: &mut Reader<'_>) -> [u8; N] {
@@ -209,32 +193,59 @@ fn read_fields(reader: &mut Reader<'_>) -> Fields {
 
 #[cfg(test)]
 mod tests {
+    use super::super::event::NewEvent;
     use super::*;
     use crate::ErrorKind;
 
-    fn events() -> Vec<Checked> {
-        let plain = NewEvent::new("click").fields(&serde_json::json!({ "x": 812 }));
+    fn events() -> Vec<Kept> {
+        let click = NewEvent::new("click").fields(&serde_json::json!({ "x": 812 }));
         let line = NewEvent::new("log")
             .level(Level::WARN)
             .message("slow request")
             .context(&serde_json::json!({ "request": "9f86d0" }))
             .trace(TraceId([7; 16]), SpanId([9; 8]));
-        vec![Checked { at: 2_000, event: plain }, Checked { at: 1_000, event: line }]
+        vec![click.kept(2_000), line.kept(1_000)]
     }
 
     #[test]
     fn a_row_gives_back_its_events_in_the_order_they_were_written() {
         let mut codec = Codec::default();
-        let row = encode(&events(), &mut codec).unwrap();
+        let written = events();
+        let row = encode(&written, &mut codec).unwrap();
         assert_eq!((row.first, row.last, row.count, row.levels), (1_000, 2_000, 2, Level::WARN.bit()));
-        let read = parse("web", &row.body, &mut codec).unwrap();
-        assert_eq!(read.iter().map(|(at, _)| *at).collect::<Vec<_>>(), [2_000, 1_000]);
-        let (click, line) = (&read[0].1, &read[1].1);
-        assert_eq!((click.stream.as_str(), click.name.as_str(), click.level), ("web", "click", None));
-        assert_eq!(click.fields.json("x"), Some("812"));
-        assert_eq!((line.level, line.message.as_deref()), (Some(Level::WARN), Some("slow request")));
-        assert_eq!(line.context.json("request"), Some(r#""9f86d0""#));
-        assert_eq!((line.trace_id, line.span_id), (Some(TraceId([7; 16])), Some(SpanId([9; 8]))));
+        assert_eq!(row.weight, written.iter().map(Kept::weight).sum::<usize>());
+        assert_eq!(parse(&row.body, &mut codec).unwrap(), written);
+    }
+
+    /// What zstd costs a row of one small event, a logger's line, against
+    /// the same events left as they are: run by hand with
+    /// `--release -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn one_small_event_under_zstd() {
+        let line = |n: u32| {
+            let fields = serde_json::json!({ "route": "/notes", "ms": 1200 + n, "user": 42 });
+            let event = NewEvent::new("log").level(Level::INFO).message("request served").fields(&fields);
+            event.kept(1_800_000_000_000_000_000 + i64::from(n))
+        };
+        let mut codec = Codec::default();
+        for count in [1_u32, 8, 64, 1024] {
+            let events: Vec<Kept> = (0..count).map(line).collect();
+            let mut plain = Vec::new();
+            events.iter().for_each(|event| put_event(&mut plain, event));
+            let rounds = 200_000 / count;
+            let started = std::time::Instant::now();
+            let mut bytes = 0;
+            for _ in 0..rounds {
+                bytes = encode(&events, &mut codec).unwrap().body.len();
+            }
+            let each = started.elapsed().as_nanos() / u128::from(rounds) / u128::from(count);
+            println!(
+                "{count:>5} events a row: {:>5.1} B/event plain, {:>5.1} B/event in its row, {each} ns/event",
+                plain.len() as f64 / f64::from(count),
+                bytes as f64 / f64::from(count)
+            );
+        }
     }
 
     #[test]
@@ -244,9 +255,8 @@ mod tests {
         for at in 0..row.body.len() {
             let mut changed = row.body.clone();
             changed[at] ^= 0x40;
-            assert_eq!(parse("web", &changed, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt, "byte {at}");
-            let cut = &row.body[..at];
-            assert_eq!(parse("web", cut, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt, "cut at {at}");
+            assert_eq!(parse(&changed, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt, "byte {at}");
+            assert_eq!(parse(&row.body[..at], &mut codec).unwrap_err().kind(), ErrorKind::Corrupt, "cut at {at}");
         }
     }
 }

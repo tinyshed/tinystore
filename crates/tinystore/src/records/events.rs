@@ -9,8 +9,9 @@ use rusqlite::params;
 use serde::Serialize;
 
 use super::engine::{AHEAD, Records, Stream, execute, nanos};
+use super::event::Kept;
 use super::event::{Level, MAX_EVENT, MAX_KEYS, NewEvent, SpanId, TraceId};
-use super::head::{self, Checked, ROW_EVENTS, ROW_WEIGHT, Row};
+use super::head::{self, ROW_EVENTS, ROW_WEIGHT, Row};
 use super::read::List;
 use crate::{Error, ErrorKind, Result, Store, unix_nanos};
 
@@ -159,8 +160,8 @@ impl AllEvents {
     }
 }
 
-const INSERT_HEAD: &str = "insert into heads (stream, first_at, last_at, levels, count, size, written_at, body)
-    values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+const INSERT_HEAD: &str = "insert into heads (stream, first_at, last_at, levels, count, weight, size, written_at, body)
+    values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 
 impl Records {
     /// Appends `events` to a stream: check → reserve → cut into rows → write
@@ -172,8 +173,9 @@ impl Records {
         let mut weight = 0;
         for (place, event) in events.into_iter().enumerate() {
             let named = format!("event {place} {:?}", event.name);
+            let event = check(event, now, window).map_err(|error| error.within(named))?;
             weight += event.weight();
-            checked.push(check(event, now, window).map_err(|error| error.within(named))?);
+            checked.push(event);
         }
         if checked.is_empty() {
             return Ok(());
@@ -187,8 +189,8 @@ impl Records {
         let stream = stream.id;
         self.file.write(bytes, move |tx| {
             rows.iter().try_for_each(|row| {
-                let (count, size) = (row.count as i64, row.body.len() as i64);
-                let head = params![stream, row.first, row.last, row.levels, count, size, now, row.body];
+                let (count, weight, size) = (row.count as i64, row.weight as i64, row.body.len() as i64);
+                let head = params![stream, row.first, row.last, row.levels, count, weight, size, now, row.body];
                 execute(tx, INSERT_HEAD, head, "write a head row").map(drop)
             })
         })
@@ -196,11 +198,11 @@ impl Records {
 
     /// The rows of `events` in their order: a row is cut at the events it
     /// holds at most, or at what they weigh.
-    fn rows_of(&self, events: &[Checked]) -> Result<Vec<Row>> {
+    fn rows_of(&self, events: &[Kept]) -> Result<Vec<Row>> {
         let mut codec = self.codec.lock().unwrap_or_else(PoisonError::into_inner);
         let (mut rows, mut from, mut weight) = (Vec::new(), 0, 0);
         for (index, event) in events.iter().enumerate() {
-            let added = event.event.weight();
+            let added = event.weight();
             if index > from && (index - from == ROW_EVENTS || weight + added > ROW_WEIGHT) {
                 rows.push(head::encode(&events[from..index], &mut codec)?);
                 (from, weight) = (index, 0);
@@ -214,7 +216,7 @@ impl Records {
 
 /// An event with its time, once it is one the file keeps: a name, fields
 /// within their bounds, a time within its stream's window.
-fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Checked> {
+fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept> {
     if let Some(refused) = &event.refused {
         return Err(Error::invalid(refused.clone()));
     }
@@ -226,17 +228,18 @@ fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Chec
             return Err(Error::invalid(format!("{} keys in its {what}, past {MAX_KEYS}", fields.len())));
         }
     }
+    let at = event.at.map_or(now, unix_nanos);
+    let event = event.kept(at);
     if event.weight() > MAX_EVENT {
         return Err(Error::limit(format!("{} bytes, past the {MAX_EVENT} an event weighs", event.weight())));
     }
-    let at = event.at.map_or(now, unix_nanos);
     if at < oldest {
         return Err(Error::new(ErrorKind::TooOld, "older than its stream keeps"));
     }
     if at > newest {
         return Err(Error::new(ErrorKind::TooNew, "more than ten minutes ahead of the store's clock"));
     }
-    Ok(Checked { at, event })
+    Ok(event)
 }
 
 #[cfg(test)]

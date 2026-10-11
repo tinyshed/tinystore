@@ -139,7 +139,7 @@ fn a_row_whose_bytes_changed_is_corrupt_and_names_itself() {
     changed.unwrap();
     let refused = fixture.events("api").list().page().unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::Corrupt);
-    assert_eq!(refused.to_string(), "events api: head row 1 of api: a head row's checksum: corrupt");
+    assert_eq!(refused.to_string(), "events api: head row 1 of api: a row's checksum: corrupt");
 }
 
 #[test]

@@ -18,8 +18,10 @@ fn an_event_older_than_its_stream_keeps_is_never_read_and_maintenance_removes_it
     assert_eq!(names(&all.list().page().unwrap().events), ["role.changed", "fresh"]);
     assert_eq!(fixture.rows("heads"), 3);
 
-    assert_eq!(maintain(&fixture.store).unwrap(), Maintenance { expired: 1 });
-    assert_eq!(fixture.rows("heads"), 2);
+    // the same pass packs audit's event, which has waited its hour
+    assert_eq!(maintain(&fixture.store).unwrap(), Maintenance { expired: 1, packed: 1, segments: 1 });
+    assert_eq!((fixture.rows("heads"), fixture.rows("segments")), (1, 1));
+    assert_eq!(names(&all.list().page().unwrap().events), ["role.changed", "fresh"]);
     assert_eq!(maintain(&fixture.store).unwrap(), Maintenance::default());
 }
 
@@ -33,7 +35,7 @@ fn a_row_goes_once_its_newest_event_is_past_what_its_stream_keeps() {
     assert_eq!(maintain(&fixture.store).unwrap(), Maintenance::default());
     assert_eq!(names(&api.list().page().unwrap().events), ["late"]);
     fixture.pass(DAY);
-    assert_eq!(maintain(&fixture.store).unwrap(), Maintenance { expired: 2 });
+    assert_eq!(maintain(&fixture.store).unwrap(), Maintenance { expired: 2, ..Maintenance::default() });
     assert_eq!(fixture.rows("heads"), 0);
 }
 

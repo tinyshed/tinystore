@@ -1,7 +1,7 @@
 //! An event as a program writes it and as a read gives it back.
 
 use std::fmt;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde::de::{DeserializeOwned, Deserializer, MapAccess, Visitor};
@@ -212,6 +212,43 @@ pub struct Event {
     pub span_id: Option<SpanId>,
 }
 
+/// An event as the file keeps it: its time in nanoseconds since 1970, and no
+/// stream, which is its row's.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Kept {
+    pub(super) at: i64,
+    pub(super) name: String,
+    pub(super) level: Option<Level>,
+    pub(super) message: Option<String>,
+    pub(super) fields: Fields,
+    pub(super) context: Fields,
+    pub(super) trace_id: Option<TraceId>,
+    pub(super) span_id: Option<SpanId>,
+}
+
+impl Kept {
+    /// What the event weighs against the bounds of an append, a row and a
+    /// segment: more than its bytes in any of them.
+    pub(super) fn weight(&self) -> usize {
+        let message = self.message.as_ref().map_or(0, String::len);
+        64 + self.name.len() + message + self.fields.weight() + self.context.weight()
+    }
+
+    pub(super) fn into_event(self, stream: &str) -> Event {
+        Event {
+            at: UNIX_EPOCH + Duration::from_nanos(self.at.max(0) as u64),
+            stream: stream.to_owned(),
+            name: self.name,
+            level: self.level,
+            message: self.message,
+            fields: self.fields,
+            context: self.context,
+            trace_id: self.trace_id,
+            span_id: self.span_id,
+        }
+    }
+}
+
 /// An event to write: its name, and what it carries beside its fields.
 #[derive(Clone, Debug)]
 pub struct NewEvent {
@@ -282,10 +319,18 @@ impl NewEvent {
         self
     }
 
-    /// What the event weighs against an append's bounds and a row's.
-    pub(super) fn weight(&self) -> usize {
-        let message = self.message.as_ref().map_or(0, String::len);
-        64 + self.name.len() + message + self.fields.weight() + self.context.weight()
+    /// The event as the file keeps it, at `at`.
+    pub(super) fn kept(self, at: i64) -> Kept {
+        Kept {
+            at,
+            name: self.name,
+            level: self.level,
+            message: self.message,
+            fields: self.fields,
+            context: self.context,
+            trace_id: self.trace_id,
+            span_id: self.span_id,
+        }
     }
 }
 

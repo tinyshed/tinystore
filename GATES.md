@@ -154,11 +154,14 @@ module defines.
 - a time a line spells comes back as it was spelled — `TestEveryStampLayoutSpellsItsTextBack`, `FuzzStamps`
 - what no calendar shows stays text — `TestATimeNoClockShowsStaysText`
 - a time kept against its record needs that record — `TestStampsWithoutTheirTimesAreRefused`
-- equal times keep their arrival order — `events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_written` in `records::read`
-- a read merges segments and the head by time — `TestReadMergesSegmentsAndTheHeadInEventTimeOrder`
+- equal times keep their arrival order — `events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_written` in `records::read`, `a_segment_holds_its_events_in_the_order_of_their_times_those_of_one_time_as_they_were_written` in `records::pack`
+- a stream's events are packed once they are a segment's worth or their oldest row has waited an hour, each stream by itself — `a_streams_events_are_packed_once_its_oldest_row_has_waited_an_hour`, `a_segments_worth_is_packed_at_once_and_what_is_left_waits`, `each_stream_is_packed_by_itself` in `records::pack`
+- a segment is cut into blocks of the events and the bytes a block holds — `a_segment_is_cut_into_blocks_of_the_events_and_the_bytes_a_block_holds` in `records::pack`
+- what a read looks for is found in a block as in a head — `what_a_read_looks_for_is_found_in_a_block_as_in_a_head` in `records::pack`
+- a read merges segments and the head by time, and finds each event once — `a_read_finds_each_event_once_in_what_is_packed_and_what_waits` in `records::pack`
 - an appended record reads before it is sealed — `an_appended_event_is_read_at_once_with_what_it_carries` in `records::events`
 - a reader finds each record once while sealing — `TestReadersSeeEveryRecordOnceWhileSealing`
-- a failed seal leaves the head as it was — `TestAFailedSealLeavesTheHeadAsItWas`
+- a failed seal leaves the head as it was — `a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_written` in `records::pack`
 - an abrupt exit loses no appended record — `TestAnAbruptExitKeepsEveryAppendedRecord`, before, inside and after a seal
 - a damaged head does not stop the others — `TestADamagedHeadDoesNotStopTheOthers`
 - a damaged row is logged once, its head still seals — `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals`
@@ -186,7 +189,7 @@ module defines.
 - blooms and level masks skip blocks — `TestBloomsAndLevelMasksSkipBlocks`
 - a read walks the time index near its range only — `TestTheTimeIndexIsWalkedWithinEachSpan`, on the plan SQLite chooses
 - a read finds records in blocks of every width — `TestReadsFindRecordsInBlocksOfEveryWidth`
-- retention removes whole segments, clips reads — `a_row_goes_once_its_newest_event_is_past_what_its_stream_keeps` in `records::maintain`, of fresh rows; `TestRetentionRemovesWholeSegmentsAndClipsReads`
+- retention removes whole segments, clips reads — `a_segment_goes_whole_once_its_newest_event_is_past_what_its_stream_keeps` in `records::pack`, `a_row_goes_once_its_newest_event_is_past_what_its_stream_keeps` in `records::maintain`
 - a stream keeps its own retention, for appends, reads and expiry — `a_stream_keeps_what_an_open_gave_it_across_runs_and_an_open_that_gives_none_changes_nothing` in `records::engine`, `an_events_time_is_from_as_long_ago_as_its_stream_keeps_to_ten_minutes_ahead` in `records::events`, `an_event_older_than_its_stream_keeps_is_never_read_and_maintenance_removes_its_row` in `records::maintain`
 - another keep for a stream while its store is open is refused, naming both — `another_keep_while_the_store_is_open_is_invalid_and_names_both` in `records::engine`
 - a list of events is written whole or not at all, and a refused one names its place and its name — `a_list_is_written_whole_or_not_at_all_and_a_refused_event_names_itself` in `records::events`

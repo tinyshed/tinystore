@@ -1,5 +1,5 @@
 //! What the engine does on its own schedule: the events their streams keep
-//! no longer are removed.
+//! no longer are removed, and the heads that are ready are packed.
 
 use std::sync::PoisonError;
 
@@ -14,6 +14,9 @@ use crate::{Result, Store};
 pub struct Maintenance {
     /// The events removed, which their streams keep no longer.
     pub expired: u64,
+    /// The events packed, and the segments they made.
+    pub packed: u64,
+    pub segments: u64,
 }
 
 /// Runs the store's records maintenance now, as a store opened without
@@ -22,39 +25,59 @@ pub fn maintain(store: &Store) -> Result<Maintenance> {
     Records::of(store)?.maintain()
 }
 
-const COUNT_EXPIRED: &str = "select coalesce(sum(count), 0) from heads where stream = ?1 and last_at < ?2";
-const DROP_EXPIRED: &str = "delete from heads where stream = ?1 and last_at < ?2";
+/// What a stream keeps no longer: the events of its head rows and of its
+/// segments whose newest event is before `?2`.
+const COUNT_EXPIRED: &str = "select
+    (select coalesce(sum(count), 0) from heads where stream = ?1 and last_at < ?2),
+    (select coalesce(sum(count), 0) from segments where stream = ?1 and last_at < ?2)";
+const DROP_HEADS: &str = "delete from heads where stream = ?1 and last_at < ?2";
+const DROP_BLOCKS: &str = "delete from blocks where segment in
+    (select id from segments where stream = ?1 and last_at < ?2)";
+const DROP_SEGMENTS: &str = "delete from segments where stream = ?1 and last_at < ?2";
 
 impl Records {
-    /// One pass: expire, and let the appends' zstd context go, which the next
-    /// append makes again.
+    /// One pass, and one at a time: expire, pack what is ready, and let the
+    /// appends' zstd context go, which the next append makes again.
     pub(crate) fn maintain(&self) -> Result<Maintenance> {
+        let _one = self.maintaining.lock().unwrap_or_else(PoisonError::into_inner);
         let now = self.now();
+        let expired = self.expire(now)?;
+        let (segments, packed) = self.pack(now)?;
+        self.codec.lock().unwrap_or_else(PoisonError::into_inner).rest();
+        Ok(Maintenance { expired, packed, segments })
+    }
+
+    /// Removes what each stream keeps no longer: a head row or a segment
+    /// goes whole, once its newest event is past what its stream keeps.
+    fn expire(&self, now: i64) -> Result<u64> {
         let failed = |error| sql_error("count what streams keep no longer", error);
         // read first: a store with nothing to remove commits nothing
-        let past: Vec<(i64, i64, i64)> = self.file.read(|connection| {
+        let past: Vec<(i64, i64, u64)> = self.file.read(|connection| {
             let mut count = connection.prepare_cached(COUNT_EXPIRED).map_err(failed)?;
             let mut past = Vec::new();
             for stream in self.every_stream() {
                 let cutoff = now.saturating_sub(nanos(stream.keeps()));
-                let expired: i64 = count.query_row(params![stream.id, cutoff], |row| row.get(0)).map_err(failed)?;
-                if expired > 0 {
-                    past.push((stream.id, cutoff, expired));
+                let counted = count.query_row(params![stream.id, cutoff], |row| Ok((row.get(0)?, row.get(1)?)));
+                let (fresh, packed): (i64, i64) = counted.map_err(failed)?;
+                if fresh + packed > 0 {
+                    past.push((stream.id, cutoff, (fresh + packed).unsigned_abs()));
                 }
             }
             Ok(past)
         })?;
-        self.codec.lock().unwrap_or_else(PoisonError::into_inner).rest();
         if past.is_empty() {
-            return Ok(Maintenance::default());
+            return Ok(0);
         }
-        let expired = past.iter().map(|(_, _, events)| events.max(&0).unsigned_abs()).sum();
+        let expired = past.iter().map(|(_, _, events)| events).sum();
         self.file.write(0, move |tx| {
             past.iter().try_for_each(|(stream, cutoff, _)| {
-                execute(tx, DROP_EXPIRED, params![stream, cutoff], "remove what a stream keeps no longer").map(drop)
+                for (sql, what) in [(DROP_HEADS, "head rows"), (DROP_BLOCKS, "blocks"), (DROP_SEGMENTS, "segments")] {
+                    execute(tx, sql, params![stream, cutoff], &format!("remove the {what} a stream keeps no longer"))?;
+                }
+                Ok(())
             })
         })?;
-        Ok(Maintenance { expired })
+        Ok(expired)
     }
 }
 

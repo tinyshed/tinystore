@@ -5,18 +5,22 @@
 //! pick rows by their times ─► fetch their bodies ─► parse ─► keep what matches ─► order ─► cut a page
 //! └────────── one read of the file ──────────┘   └───────────────── after it ─────────────────┘
 //! ```
+//!
+//! An event is in a head row until its stream is packed and in a block after
+//! it, and a read picks among both by the same rule.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use rusqlite::params;
+use rusqlite::{Connection, Rows, ToSql};
 use serde::Serialize;
 
 use super::engine::{Records, Stream, nanos};
-use super::event::{Event, Fields, Level, TraceId};
+use super::event::{Event, Fields, Kept, Level, TraceId};
 use super::head::{self, Codec};
+use super::pack;
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
 
@@ -63,16 +67,13 @@ struct Query {
 
 impl Query {
     /// Whether an event meets every condition but the range.
-    fn keeps(&self, event: &Event) -> bool {
+    fn keeps(&self, event: &Kept) -> bool {
         let named = self.names.is_empty() || self.names.contains(&event.name);
         let grave = self.min_level.is_none_or(|least| event.level.is_some_and(|level| level >= least));
         let traced = self.trace_id.is_none_or(|trace| event.trace_id == Some(trace));
         let holds = |(key, json): &(String, String)| has(&event.fields, key, json) || has(&event.context, key, json);
-        named
-            && grave
-            && traced
-            && self.filters.iter().all(holds)
-            && self.search.as_ref().is_none_or(|text| says(event, text))
+        let said = self.search.as_ref().is_none_or(|text| says(event, text));
+        named && grave && traced && self.filters.iter().all(holds) && said
     }
 }
 
@@ -83,7 +84,7 @@ fn has(fields: &Fields, key: &str, json: &str) -> bool {
 
 /// Whether an event holds `text`, which is in lower case: in its message, in
 /// its name, or in a value of its fields or its context.
-fn says(event: &Event, text: &str) -> bool {
+fn says(event: &Kept, text: &str) -> bool {
     let within = |words: &str| words.to_lowercase().contains(text);
     let values = |fields: &Fields| fields.iter().any(|(_, json)| value_says(json, text));
     event.message.as_deref().is_some_and(within)
@@ -261,6 +262,7 @@ struct Asked {
     first: i64,
     last: i64,
     limit: usize,
+    newest: bool,
     /// The streams read, by id: each one's name, and the time before which
     /// it keeps nothing.
     streams: HashMap<i64, (Arc<str>, i64)>,
@@ -268,40 +270,82 @@ struct Asked {
     only: Option<String>,
 }
 
-/// A head row as a read fetched it.
-struct Fetched {
+impl Asked {
+    /// The end of a row a read walks by: where it begins, oldest first, and
+    /// where it ends, newest first.
+    fn edge(&self, row: &Picked) -> i64 {
+        if self.newest { row.last_at } else { row.first_at }
+    }
+
+    /// Whether a row reaches over the end of the range a read begins at, and
+    /// so may hold the first event of the page.
+    fn reaches_over(&self, row: &Picked) -> bool {
+        if self.newest { row.last_at >= self.last } else { row.first_at <= self.first }
+    }
+}
+
+/// Where a row of events is. A stream's blocks were written before what
+/// waits in its head, so of two events of one time the block's comes first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    Block,
+    Head,
+}
+
+/// A row a read picked by what its index says, its body not read yet.
+struct Picked {
+    kind: Kind,
     id: i64,
     stream: i64,
-    body: Vec<u8>,
+    first_at: i64,
+    last_at: i64,
+    events: u64,
+    size: usize,
 }
 
-/// An event a read found, with where it stood: its row, and its place in it.
+/// The rows a read fetched, each with its body.
+type Fetched = Vec<(Picked, Vec<u8>)>;
+
+/// An event a read found, with where it stood.
 struct Found {
     at: i64,
-    row: i64,
-    place: usize,
-    event: Event,
+    place: (Kind, i64, usize),
+    stream: Arc<str>,
+    event: Kept,
 }
 
-const OLDEST_ROWS: &str = "select id, stream, first_at, last_at, count, body from heads
-    where last_at >= ?1 and first_at <= ?2 and (?3 = 0 or levels & ?3 != 0)
-      and (?4 is null or stream in (select value from json_each(?4)))
-    order by first_at, id";
-const NEWEST_ROWS: &str = "select id, stream, first_at, last_at, count, body from heads
-    where last_at >= ?1 and first_at <= ?2 and (?3 = 0 or levels & ?3 != 0)
-      and (?4 is null or stream in (select value from json_each(?4)))
-    order by last_at desc, id desc";
+/// The rows of a range that may hold what a read asks, from the range's
+/// older end: the same statement over the heads and over the blocks.
+macro_rules! rows_of {
+    ($table:literal, $order:literal) => {
+        concat!(
+            "select id, stream, first_at, last_at, count, size from ",
+            $table,
+            " where last_at >= ?1 and first_at <= ?2 and (?3 = 0 or levels & ?3 != 0)
+               and (?4 is null or stream in (select value from json_each(?4))) order by ",
+            $order
+        )
+    };
+}
+
+const HEADS_OLDEST: &str = rows_of!("heads", "first_at, id");
+const HEADS_NEWEST: &str = rows_of!("heads", "last_at desc, id desc");
+const BLOCKS_OLDEST: &str = rows_of!("blocks", "first_at, id");
+const BLOCKS_NEWEST: &str = rows_of!("blocks", "last_at desc, id desc");
+const HEAD_BODY: &str = "select body from heads where id = ?1";
+const BLOCK_BODY: &str = "select body from blocks where id = ?1";
 
 impl Records {
-    /// One page: work out the range → fetch its rows → parse and keep what
-    /// matches → cut the page.
+    /// One page: work out the range → pick and fetch its rows → parse and
+    /// keep what matches → cut the page.
     fn page(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
         let Some(asked) = self.asked(stream, query)? else { return Ok(Page { events: Vec::new(), next: None }) };
-        let (rows, horizon, events) = self.fetch(&asked, query)?;
-        let bytes: usize = rows.iter().map(|row| row.body.len()).sum();
+        let (rows, horizon) = self.fetch(&asked, query)?;
+        let bytes: usize = rows.iter().map(|(picked, _)| picked.size).sum();
+        let events: u64 = rows.iter().map(|(picked, _)| picked.events).sum();
         let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
         let found = found(&asked, query, rows, horizon)?;
-        cut(found, &asked, query.newest, horizon)
+        cut(found, &asked, horizon)
     }
 
     /// The range and the streams of a read; `None` when they hold nothing.
@@ -329,42 +373,86 @@ impl Records {
         let (first, last) = range(query, now)?;
         let first = first.max(oldest);
         let streams = read.iter().map(|stream| (stream.id, (Arc::clone(&stream.name), kept(stream)))).collect();
-        Ok((first <= last).then_some(Asked { first, last, limit, streams, only }))
+        Ok((first <= last).then_some(Asked { first, last, limit, newest: query.newest, streams, only }))
     }
 
-    /// The rows of a range from its near end, their bodies fetched in one
-    /// read of the file, with the edge of the rows left behind and how many
-    /// events the fetched ones hold.
+    /// The rows of a range from the end a read begins at, picked by their
+    /// index and then fetched, in one read of the file, with the edge of the
+    /// rows left behind.
     ///
     /// A page is whole up to that edge and no further: a row left behind
     /// begins at it, oldest first, or ends at it, newest first, so every
     /// event on the near side of it is in a row fetched. A row that reaches
-    /// over the range's near end is fetched whatever the page holds already,
+    /// over the range's own end is fetched whatever the page holds already,
     /// so that the edge lies inside the range and the next page begins past
     /// this one.
-    fn fetch(&self, asked: &Asked, query: &Query) -> Result<(Vec<Fetched>, Option<i64>, u64)> {
+    fn fetch(&self, asked: &Asked, query: &Query) -> Result<(Fetched, Option<i64>)> {
         let mask = query.min_level.map_or(0, Level::bits_from);
-        let failed = |error| sql_error("read the head rows", error);
+        let failed = |error| sql_error("pick the rows of a read", error);
         self.file.read(|connection| {
-            let sql = if query.newest { NEWEST_ROWS } else { OLDEST_ROWS };
-            let mut select = connection.prepare_cached(sql).map_err(failed)?;
-            let mut rows = select.query(params![asked.first, asked.last, mask, asked.only]).map_err(failed)?;
-            let (mut fetched, mut events, mut bytes) = (Vec::new(), 0_u64, 0);
-            while let Some(row) = rows.next().map_err(failed)? {
-                let (first_at, last_at): (i64, i64) = (row.get(2).map_err(failed)?, row.get(3).map_err(failed)?);
-                let over_the_end = if query.newest { last_at >= asked.last } else { first_at <= asked.first };
-                let full = events >= asked.limit as u64 || fetched.len() >= FETCH_ROWS || bytes >= FETCH_BYTES;
-                if full && !over_the_end {
-                    return Ok((fetched, Some(if query.newest { last_at } else { first_at }), events));
+            let (heads, blocks) =
+                if asked.newest { (HEADS_NEWEST, BLOCKS_NEWEST) } else { (HEADS_OLDEST, BLOCKS_OLDEST) };
+            let (mut heads, mut blocks) =
+                (connection.prepare_cached(heads).map_err(failed)?, connection.prepare_cached(blocks).map_err(failed)?);
+            let range: [&dyn ToSql; 4] = [&asked.first, &asked.last, &mask, &asked.only];
+            let mut heads = heads.query(range).map_err(failed)?;
+            let mut blocks = blocks.query(range).map_err(failed)?;
+            let mut waiting = [picked(&mut blocks, Kind::Block)?, picked(&mut heads, Kind::Head)?];
+            let (mut taken, mut events, mut bytes) = (Vec::new(), 0, 0);
+            let mut horizon = None;
+            loop {
+                // of the two rows that wait, the one a read walking its way meets first
+                let nearer = match (&waiting[0], &waiting[1]) {
+                    (None, None) => break,
+                    (Some(_), None) => 0,
+                    (None, Some(_)) => 1,
+                    (Some(block), Some(head)) if asked.newest => usize::from(asked.edge(head) > asked.edge(block)),
+                    (Some(block), Some(head)) => usize::from(asked.edge(head) < asked.edge(block)),
+                };
+                let Some(row) = waiting[nearer].take() else { break };
+                let full = events >= asked.limit as u64 || taken.len() >= FETCH_ROWS || bytes >= FETCH_BYTES;
+                if full && !asked.reaches_over(&row) {
+                    horizon = Some(asked.edge(&row));
+                    break;
                 }
-                let body: Vec<u8> = row.get(5).map_err(failed)?;
-                events += row.get::<_, i64>(4).map_err(failed)?.max(0) as u64;
-                bytes += body.len();
-                fetched.push(Fetched { id: row.get(0).map_err(failed)?, stream: row.get(1).map_err(failed)?, body });
+                (events, bytes) = (events + row.events, bytes + row.size);
+                waiting[nearer] = if row.kind == Kind::Block {
+                    picked(&mut blocks, Kind::Block)?
+                } else {
+                    picked(&mut heads, Kind::Head)?
+                };
+                taken.push(row);
             }
-            Ok((fetched, None, events))
+            let fetched = taken.into_iter().map(|row| body_of(connection, &row).map(|body| (row, body)));
+            Ok((fetched.collect::<Result<_>>()?, horizon))
         })
     }
+}
+
+/// The next row a statement picked, if it has one.
+fn picked(rows: &mut Rows<'_>, kind: Kind) -> Result<Option<Picked>> {
+    let failed = |error| sql_error("pick the rows of a read", error);
+    let Some(row) = rows.next().map_err(failed)? else { return Ok(None) };
+    let read: rusqlite::Result<Picked> = (|| {
+        let (events, size): (i64, i64) = (row.get(4)?, row.get(5)?);
+        let (events, size) = (events.max(0) as u64, size.max(0) as usize);
+        Ok(Picked {
+            kind,
+            id: row.get(0)?,
+            stream: row.get(1)?,
+            first_at: row.get(2)?,
+            last_at: row.get(3)?,
+            events,
+            size,
+        })
+    })();
+    read.map(Some).map_err(failed)
+}
+
+fn body_of(connection: &Connection, row: &Picked) -> Result<Vec<u8>> {
+    let sql = if row.kind == Kind::Block { BLOCK_BODY } else { HEAD_BODY };
+    let body = connection.prepare_cached(sql).and_then(|mut select| select.query_row([row.id], |found| found.get(0)));
+    body.map_err(|error| sql_error("fetch a row of a read", error))
 }
 
 /// The range a read asks for, both ends in it: a page's `next`, or the
@@ -388,23 +476,29 @@ fn range(query: &Query, now: i64) -> Result<(i64, i64)> {
 /// The events of the fetched rows that the read keeps, in its order: by
 /// their times, those of one time as they were written, or all of it
 /// backwards.
-fn found(asked: &Asked, query: &Query, rows: Vec<Fetched>, horizon: Option<i64>) -> Result<Vec<Found>> {
+fn found(asked: &Asked, query: &Query, rows: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
     let mut codec = Codec::default();
     let mut found = Vec::new();
-    for row in rows {
+    for (row, body) in rows {
         let Some((stream, kept)) = asked.streams.get(&row.stream) else { continue };
-        let parsed = head::parse(stream, &row.body, &mut codec);
-        let events = parsed.map_err(|error| error.within(format!("head row {} of {stream}", row.id)))?;
-        for (place, (at, event)) in events.into_iter().enumerate() {
+        let parsed = match row.kind {
+            Kind::Block => pack::events_of(&body, &mut codec)
+                .map_err(|error| error.within(format!("block {} of {stream}", row.id))),
+            Kind::Head => {
+                head::parse(&body, &mut codec).map_err(|error| error.within(format!("head row {} of {stream}", row.id)))
+            }
+        };
+        for (place, event) in parsed?.into_iter().enumerate() {
+            let at = event.at;
             let in_range = at >= asked.first.max(*kept) && at <= asked.last;
-            let whole = horizon.is_none_or(|edge| if query.newest { at > edge } else { at < edge });
+            let whole = horizon.is_none_or(|edge| if asked.newest { at > edge } else { at < edge });
             if in_range && whole && query.keeps(&event) {
-                found.push(Found { at, row: row.id, place, event });
+                found.push(Found { at, place: (row.kind, row.id, place), stream: Arc::clone(stream), event });
             }
         }
     }
-    found.sort_by_key(|found| (found.at, found.row, found.place));
-    if query.newest {
+    found.sort_by_key(|found| (found.at, found.place));
+    if asked.newest {
         found.reverse();
     }
     Ok(found)
@@ -412,8 +506,8 @@ fn found(asked: &Asked, query: &Query, rows: Vec<Fetched>, horizon: Option<i64>)
 
 /// A page of what was found: the limit's worth, less the events of a time
 /// the limit would split, and where the next page begins.
-fn cut(mut found: Vec<Found>, asked: &Asked, newest: bool, horizon: Option<i64>) -> Result<Page> {
-    let mut next = horizon.map(|edge| if newest { (asked.first, edge) } else { (edge, asked.last) });
+fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Page> {
+    let mut next = horizon.map(|edge| if asked.newest { (asked.first, edge) } else { (edge, asked.last) });
     if found.len() > asked.limit {
         let mut whole = asked.limit;
         while whole > 0 && found[whole].at == found[whole - 1].at {
@@ -424,11 +518,11 @@ fn cut(mut found: Vec<Found>, asked: &Asked, newest: bool, horizon: Option<i64>)
             return Err(Error::limit(format!("more events at one time than a page of {limit} holds")));
         }
         let edge = found[whole - 1].at;
-        next = Some(if newest { (asked.first, edge - 1) } else { (edge + 1, asked.last) });
+        next = Some(if asked.newest { (asked.first, edge - 1) } else { (edge + 1, asked.last) });
         found.truncate(whole);
     }
     let next = next.map(|(first, last)| format!("{first}~{last}"));
-    Ok(Page { events: found.into_iter().map(|found| found.event).collect(), next })
+    Ok(Page { events: found.into_iter().map(|found| found.event.into_event(&found.stream)).collect(), next })
 }
 
 #[cfg(test)]

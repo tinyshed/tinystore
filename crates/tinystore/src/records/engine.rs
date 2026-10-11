@@ -34,6 +34,8 @@ pub(crate) struct Records {
     streams: Mutex<HashMap<String, Stream>>,
     /// The zstd context every append writes its rows with.
     pub(super) codec: Mutex<Codec>,
+    /// Held by a pass of maintenance, so that two never pack the same rows.
+    pub(super) maintaining: Mutex<()>,
     _claim: Claim,
 }
 
@@ -82,6 +84,7 @@ impl Records {
                 memory: Arc::clone(store.memory()),
                 clock: store.clock(),
                 codec: Mutex::default(),
+                maintaining: Mutex::default(),
                 _claim: claim,
             });
             let weak = Arc::downgrade(&records);

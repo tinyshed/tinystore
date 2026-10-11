@@ -20,6 +20,7 @@ mod events;
 mod fixture;
 mod head;
 mod maintain;
+mod pack;
 mod read;
 
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
