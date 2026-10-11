@@ -13,6 +13,7 @@ use std::time::Duration;
 use rusqlite::{Connection, Params, params};
 
 use super::head::Codec;
+use super::tail::Recent;
 use crate::engine::{Claim, Engine, Host};
 use crate::sqlite::{Config, File, Migration, sql_error};
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_nanos};
@@ -44,6 +45,8 @@ pub(crate) struct Records {
     /// which tells whether the next event is late: read from the heads at
     /// open, and forgotten once the head is packed empty.
     pub(super) waiting: Mutex<HashMap<i64, i64>>,
+    /// The events appended lately, held for the tails open.
+    pub(super) recent: Recent,
     _claim: Claim,
 }
 
@@ -67,6 +70,7 @@ impl Stream {
 
 impl Engine for Records {
     fn close(&self) -> Result<()> {
+        self.recent.close();
         self.file.close()
     }
 }
@@ -95,6 +99,7 @@ impl Records {
                 clock: store.clock(),
                 codec: Mutex::default(),
                 maintaining: Mutex::default(),
+                recent: Recent::default(),
                 _claim: claim,
             });
             let weak = Arc::downgrade(&records);

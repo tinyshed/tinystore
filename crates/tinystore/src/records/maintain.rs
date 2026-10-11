@@ -3,6 +3,7 @@
 //! segments of the streams packed are merged.
 
 use std::sync::PoisonError;
+use std::time::Duration;
 
 use rusqlite::{Connection, params};
 
@@ -37,6 +38,14 @@ const COUNT_EXPIRED: &str = "select
 const EXPIRED_HEADS: &str =
     "select late, sum(count), sum(weight) from heads where stream = ?1 and last_at < ?2 group by late";
 const DROP_HEADS: &str = "delete from heads where stream = ?1 and last_at < ?2";
+/// What each segment a stream keeps no longer held, its places' among them.
+const NOTE_EXPIRED: &str = "insert or replace into expired (segment, events, at)
+    select id, count, ?3 from segments where stream = ?1 and (holder is null and last_at < ?2
+    or holder in (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
+/// How long the file keeps what a segment it removed held, for the polls
+/// behind it.
+const EXPIRED_KEPT: Duration = Duration::from_hours(30 * 24);
+const FORGET_EXPIRED: &str = "delete from expired where at < ?1";
 const DROP_TRACES: &str = "delete from block_traces where block in (select id from blocks where segment in
     (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
 const DROP_FILTERS: &str = "delete from block_filters where block in (select id from blocks where segment in
@@ -86,8 +95,14 @@ impl Records {
             return Ok(0);
         }
         let expired = past.iter().map(|(_, _, events)| events).sum();
-        self.file
-            .write(0, move |tx| past.iter().try_for_each(|(stream, cutoff, _)| drop_past(tx, *stream, *cutoff)))?;
+        let forgotten = now.saturating_sub(nanos(EXPIRED_KEPT));
+        self.file.write(0, move |tx| {
+            past.iter().try_for_each(|(stream, cutoff, _)| {
+                execute(tx, NOTE_EXPIRED, params![stream, cutoff, now], "note what a stream keeps no longer")?;
+                drop_past(tx, *stream, *cutoff)
+            })?;
+            execute(tx, FORGET_EXPIRED, [forgotten], "forget what was removed long ago").map(drop)
+        })?;
         Ok(expired)
     }
 }

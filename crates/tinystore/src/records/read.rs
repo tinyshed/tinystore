@@ -29,6 +29,7 @@ use super::event::{Event, Fields, Kept, Level, TraceId};
 use super::head::{self, Codec};
 use super::pack::{CONTEXT_KEY, FIELD_KEY, NAME_KEY};
 use super::segment::Schema;
+use super::tail::Tail;
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
 
@@ -264,6 +265,26 @@ impl List {
             Some(stream) => error.within(format!("events {}", stream.name)),
             None => error.within("events"),
         }
+    }
+
+    /// The events appended from now on that meet the read's conditions, a
+    /// batch as they come: a tail takes no range, order, limit or after.
+    pub fn tail(&self) -> Result<Tail> {
+        let query = &self.query;
+        let ranged = query.since.is_some() || query.from.is_some() || query.to.is_some();
+        if ranged || query.newest || query.limit.is_some() || query.after.is_some() {
+            return Err(self.within(Error::invalid("a tail takes no range, order, limit or after")));
+        }
+        if let Some(refused) = &query.refused {
+            return Err(self.within(Error::invalid(refused.clone())));
+        }
+        let streams = match &self.stream {
+            Some(stream) => Some(vec![stream.name.to_string()]),
+            None if query.streams.is_empty() => None,
+            None => Some(query.streams.clone()),
+        };
+        let query = query.clone();
+        Ok(Tail::open(&self.records, streams, Box::new(move |event: &Kept| query.keeps(event))))
     }
 
     /// Every event of the answer, a page at a time.

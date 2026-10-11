@@ -27,9 +27,11 @@ mod ints;
 mod maintain;
 mod merge;
 mod pack;
+mod poll;
 mod read;
 mod segment;
 mod stamp;
+mod tail;
 mod text;
 mod values;
 
@@ -37,7 +39,9 @@ pub use count::{Aggregate, Number, Row, Stats, StreamInfo, Top};
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};
 pub use maintain::{Maintenance, maintain};
+pub use poll::PollBatch;
 pub use read::{All, List, PAGE_EVENTS, Page};
+pub use tail::{Tail, TailBatch};
 
 use crate::{Result, Store};
 

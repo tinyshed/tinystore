@@ -74,6 +74,14 @@ create index segments_by_size on segments (stream, held) where holder is null;
 -- a holder's places, found when it merges again or expires
 create index segments_by_holder on segments (holder) where holder is not null;
 
+-- the events each segment held that its stream's keep removed, so that a poll
+-- that comes after says how many it never read; kept thirty days from at
+create table expired (
+    segment integer primary key,
+    events  integer not null,
+    at      integer not null
+) strict;
+
 -- what a segment holds, so that a read passes one that cannot hold what it
 -- asks: kind 0 an event's name, 1 a field's key, 2 a context's key
 create table segment_keys (

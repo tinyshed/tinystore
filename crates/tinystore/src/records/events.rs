@@ -195,6 +195,7 @@ impl Records {
             rows.extend(self.rows_of(events)?.into_iter().map(|row| (late, row)));
         }
         let bytes = rows.iter().map(|(_, row)| row.body.len()).sum();
+        let name = Arc::clone(&stream.name);
         let stream = stream.id;
         self.file.write(bytes, move |tx| {
             rows.iter().try_for_each(|(late, row)| {
@@ -204,6 +205,7 @@ impl Records {
                 execute(tx, ADD_TO_HEAD, params![stream, late, count, weight, now], "count what a head holds").map(drop)
             })
         })?;
+        self.recent.add(&name, on_time.iter().chain(&late));
         if let Some(newest) = on_time.iter().map(|event| event.at).max() {
             let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
             waiting.entry(stream).and_modify(|waits| *waits = newest.max(*waits)).or_insert(newest);

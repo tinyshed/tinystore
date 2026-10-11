@@ -193,7 +193,11 @@ module defines.
 - a damaged head does not stop the others — `TestADamagedHeadDoesNotStopTheOthers`
 - a damaged row is logged once, its head still seals — `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals`
 - a damaged segment is dropped whole, followed past — `TestDropRemovesADamagedSegmentAndFollowPassesIt`
-- a follower keeps its place across merges — `TestAFollowerKeepsItsPlaceAcrossMerges`, the middle of a merged place included; the places it keeps it by — `a_merged_segment_merges_again_and_each_place_still_names_its_own_events`, `places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earliest` in `records::merge`
+- a follower keeps its place across merges, the middle of a merged segment included — `a_cursor_keeps_its_place_across_merges_the_middle_of_a_merged_segment_included` in `records::poll`; the places it keeps it by — `a_merged_segment_merges_again_and_each_place_still_names_its_own_events`, `places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earliest` in `records::merge`
+- a poll gives every packed event once, a segment of one stream at a time, and an empty batch with the cursor given past the last — `a_poll_gives_every_packed_event_once_a_segment_of_one_stream_at_a_time` in `records::poll`
+- a poll counts the events `keep` removed before its cursor reached them — `a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them` in `records::poll`
+- a tail gives the events appended after it opened, a batch as they come, by a read's conditions, and no range, order or limit — `a_tail_gives_the_events_appended_after_it_opened_a_batch_as_they_come`, `a_tail_takes_a_reads_conditions_and_no_range_order_or_limit` in `records::tail`
+- a tail slower than its writers says how many it missed, and ends when the store closes — `a_tail_slower_than_its_writers_says_how_many_left_before_it_read_them`, `a_tail_ends_when_the_store_closes` in `records::tail`
 - a merge is one write, and readers see a record once — `a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was`, `four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places` in `records::merge`; `TestReadersSeeEveryRecordOnceWhileMerging`
 - a merged segment goes whole, with its places — `a_merged_segment_expires_whole_with_its_places` in `records::merge`; `TestDropRemovesAMergedSegmentWithItsPlaces`
 - a holder's places are found through an index — `a_holders_places_are_found_through_an_index` in `records::merge`, on the plan SQLite chooses

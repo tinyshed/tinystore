@@ -327,7 +327,9 @@ for (;;) {
   stream. `poll` is for a copy that must be whole; `tail` is for what must be
   now.
 - `expired` counts the events their streams' `keep` removed before the
-  cursor reached them: more than none means the copy has a hole.
+  cursor reached them: more than none means the copy has a hole. The file
+  keeps how many each segment it removed held for thirty days; a segment
+  removed longer ago counts one.
 - `limit` is 1000 events unless given. Only `store.events()` polls.
 
 ## Count
@@ -542,8 +544,6 @@ first stopped at `stream`; `expired`, which one reader would have called
   and costs a second word.
 - A reader who logs with `store.logger('api')` looks for the lines on the
   logger first; the guides show `store.events('api')` beside it.
-- `expired` as events asks the engine to keep how many each group it removed
-  held.
 - The hour `poll` may run behind is how long a quiet stream's events wait to
   be packed, as the Go engine measured its batches. A shorter wait makes
   smaller batches, which cost bytes until they merge: the engine's to measure
