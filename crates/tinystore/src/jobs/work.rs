@@ -1,8 +1,8 @@
 //! Workers: a loop that claims a queue's jobs as they fall due and settles
 //! them, and handler threads that run each one.
 //!
-//! The loop holds up to two jobs a handler, the one it runs and its next, and
-//! claims what it lacks in the same grouped write that settles the jobs its
+//! The loop holds up to two jobs a handler, the one it runs and its next, or
+//! one where the queue bounds what runs, and claims what it lacks in the same grouped write that settles the jobs its
 //! handlers finished, so that a queue under load commits once for many jobs and
 //! a handler never waits for a commit to start its next.
 

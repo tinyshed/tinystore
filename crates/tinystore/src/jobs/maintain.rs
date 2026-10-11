@@ -20,10 +20,11 @@ const EXPIRE_FAILED: &str = "delete from _tinystore_jobs_failed where (queue, id
 const FORGET_DONE: &str = "delete from _tinystore_jobs_done where (queue, key) in (
         select queue, key from _tinystore_jobs_done where until <= ?1 order by until limit cast(?2 as integer))
     returning spill";
-/// A slice of a queue's ids in their order after a place, and those of it
-/// whose job has left the queue.
+/// How many ids a slice of a queue's holds, in their order after a place,
+/// and the last of them.
 const KEYS_SLICE: &str = "select count(*), coalesce(max(key), '') from (
     select key from _tinystore_jobs_keys where queue = ?1 and key > ?2 order by key limit cast(?3 as integer))";
+/// Removes the ids of a slice whose job has left the queue.
 const DROP_KEYS_LEFT: &str = "delete from _tinystore_jobs_keys where queue = ?1 and key > ?2 and key <= ?3
     and not exists (select 1 from _tinystore_jobs j where j.queue = _tinystore_jobs_keys.queue
         and j.next = _tinystore_jobs_keys.next and j.id = _tinystore_jobs_keys.id)";

@@ -90,7 +90,8 @@ impl Alarm {
         state.at = next.unwrap_or(i64::MAX).min(lowered);
     }
 
-    /// Ends a read that found no next time: the alarm keeps ringing.
+    /// Ends a read that learned no next time, its claim full or failed: the
+    /// alarm keeps ringing.
     pub(crate) fn forget(&self, read: Read) {
         self.lock().reads.remove(&read.0);
     }
@@ -109,7 +110,8 @@ impl Alarm {
         self.lock().waiters.push(waiter);
     }
 
-    /// Wakes every worker waiting, to read the clock again: a test moved it.
+    /// Wakes every worker waiting: a job came due sooner than they wait for,
+    /// or a test moved the clock.
     pub(crate) fn wake(&self) {
         let mut state = self.lock();
         state.waiters.retain(|waiter| waiter.strong_count() > 0);

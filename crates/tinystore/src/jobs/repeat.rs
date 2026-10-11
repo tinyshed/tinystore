@@ -119,13 +119,15 @@ impl Repeat {
 /// An id's place within an interval: its FNV-1a hash modulo the interval, so
 /// that the jobs of many ids repeating together do not all run in one instant.
 fn phase_of(id: &str, every: i64) -> i64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in id.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
     let every = u64::try_from(every).unwrap_or(1).max(1);
-    i64::try_from(hash % every).unwrap_or(0)
+    i64::try_from(fnv1a(id.bytes()) % every).unwrap_or(0)
+}
+
+/// FNV-1a 64 of `bytes`: a hash every build and every language computes the
+/// same, for a phase kept in text and a jitter that must come out the same.
+pub(super) fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    let mix = |hash: u64, byte: u8| (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, mix)
 }
 
 /// Milliseconds in their largest whole unit, as every language reads them

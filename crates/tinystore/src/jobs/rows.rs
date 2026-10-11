@@ -219,11 +219,7 @@ pub(crate) fn insert(c: &Connection, job: &NewJob<'_>) -> Result<()> {
 /// Makes the job a set names new: its value, time, repeat and group, its
 /// attempts from one, its steps gone with the run they belonged to.
 pub(crate) fn renew(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
-    drop_spill(c, there.spill)?;
-    let spill = spill(c, there.id, change.value)?;
-    let params =
-        params![queue, there.next, there.id, change.next, change.value.inline(), spill, change.repeat, change.group];
-    execute(c, RENEW_JOB, params, "a set's job")?;
+    rewrite(c, queue, there, change, (RENEW_JOB, "a set's job"))?;
     execute(c, DROP_STEPS, [there.id], "a set's job: the steps of its last run")?;
     follow(c, queue, key, there.next, change.next)
 }
@@ -231,12 +227,24 @@ pub(crate) fn renew(c: &Connection, queue: i64, key: &str, there: &Row, change: 
 /// Gives a job that has not started what an update names; a repeat or a group
 /// left out stays as it was.
 pub(crate) fn update(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
+    rewrite(c, queue, there, change, (UPDATE_JOB, "an update's job"))?;
+    follow(c, queue, key, there.next, change.next)
+}
+
+/// Writes what a change names over the job that is there with `statement`,
+/// its value spilled anew; `what` names the write in an error.
+fn rewrite(
+    c: &Connection,
+    queue: i64,
+    there: &Row,
+    change: &Change<'_>,
+    (statement, what): (&str, &str),
+) -> Result<()> {
     drop_spill(c, there.spill)?;
     let spill = spill(c, there.id, change.value)?;
     let params =
         params![queue, there.next, there.id, change.next, change.value.inline(), spill, change.repeat, change.group];
-    execute(c, UPDATE_JOB, params, "an update's job")?;
-    follow(c, queue, key, there.next, change.next)
+    execute(c, statement, params, what)
 }
 
 /// Asks one run more of a job that runs: its next run takes the new value and

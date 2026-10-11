@@ -346,55 +346,50 @@ where
     }
 
     pub(crate) fn add_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<bool> {
-        let id = asked.id().map(str::to_owned);
-        let fail = |error| self.fail(id.as_deref(), error);
-        let call = asked.prepare(value, self.jobs.now()).map_err(fail)?;
-        let (queue, at) = (Arc::clone(&self.state), call.at);
-        let added = match tx {
-            None => self.jobs.file().write(call.value.len(), move |c| write::add(c, &queue, &call)),
-            Some(tx) => self.run_in(tx, |c| write::add(c, &queue, &call)),
-        }
-        .map_err(fail)?;
-        if added {
-            self.wake(at, tx);
-        }
-        Ok(added)
+        Ok(self.write_now(Change::Add, asked, value, tx)?.is_some())
     }
 
     pub(crate) fn set_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<()> {
-        let id = asked.id().map(str::to_owned);
-        let Some(key) = id.as_deref() else {
-            return Err(self.fail(None, Error::invalid("a set needs an id, which names the job it sets")));
-        };
-        let fail = |error| self.fail(Some(key), error);
-        let call = asked.prepare(value, self.jobs.now()).map_err(fail)?;
-        let queue = Arc::clone(&self.state);
-        let set = match tx {
-            None => self.jobs.file().write(call.value.len(), move |c| write::set(c, &queue, &call)),
-            Some(tx) => self.run_in(tx, |c| write::set(c, &queue, &call)),
-        }
-        .map_err(fail)?;
-        self.wake(set.due, tx);
-        Ok(())
+        self.write_now(Change::Set, asked, value, tx).map(|_| ())
     }
 
     pub(crate) fn update_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<bool> {
-        let id = asked.id().map(str::to_owned);
-        let Some(key) = id.as_deref() else {
-            return Err(self.fail(None, Error::invalid("an update needs an id, which names the job it changes")));
+        Ok(self.write_now(Change::Update, asked, value, tx)?.is_some())
+    }
+
+    /// An add, a set or an update in `tx`, or in a commit of its own that it
+    /// waits for. It gives the time the job is due at when the write changed
+    /// it, and wakes the queue's workers for that time.
+    fn write_now(&self, change: Change, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<Option<i64>> {
+        let named = self.named(asked.id());
+        let written = || {
+            let call = self.prepared(change, asked, value)?;
+            let bytes = call.value.len();
+            match tx {
+                None => self.jobs.file().write(bytes, self.change_of(change, call)),
+                Some(tx) => self.run_in(tx, self.change_of(change, call)),
+            }
         };
-        let fail = |error| self.fail(Some(key), error);
-        let call = asked.prepare(value, self.jobs.now()).map_err(fail)?;
-        let queue = Arc::clone(&self.state);
-        let due = match tx {
-            None => self.jobs.file().write(call.value.len(), move |c| write::update(c, &queue, &call)),
-            Some(tx) => self.run_in(tx, |c| write::update(c, &queue, &call)),
-        }
-        .map_err(fail)?;
+        let due = written().map_err(|error| error.within(named))?;
         if let Some(due) = due {
             self.wake(due, tx);
         }
-        Ok(due.is_some())
+        Ok(due)
+    }
+
+    /// The write of a change, which gives the time the job is due at when it
+    /// changed that.
+    fn change_of(
+        &self,
+        change: Change,
+        call: Prepared,
+    ) -> impl FnOnce(&SqlTx<'_>) -> Result<Option<i64>> + Send + 'static + use<V> {
+        let queue = Arc::clone(&self.state);
+        move |c| match change {
+            Change::Add => Ok(write::add(c, &queue, &call)?.then_some(call.at)),
+            Change::Set => write::set(c, &queue, &call).map(|set| Some(set.due)),
+            Change::Update => write::update(c, &queue, &call),
+        }
     }
 
     /// An add, a set or an update without waiting: the write is queued, and
@@ -413,14 +408,8 @@ where
             Ok(call) => call,
             Err(error) => return done(Err(error.within(named))),
         };
-        let (queue, state, bytes) = (Arc::clone(&self.state), Arc::clone(&self.state), call.value.len());
-        // the time the job is due at, when the write changed it
-        let write = move |c: &SqlTx<'_>| match change {
-            Change::Add => Ok(write::add(c, &queue, &call)?.then_some(call.at)),
-            Change::Set => write::set(c, &queue, &call).map(|set| Some(set.due)),
-            Change::Update => write::update(c, &queue, &call),
-        };
-        self.jobs.file().submit(bytes, write, move |due| {
+        let (state, bytes) = (Arc::clone(&self.state), call.value.len());
+        self.jobs.file().submit(bytes, self.change_of(change, call), move |due| {
             if let Ok(Some(at)) = due {
                 state.alarm.lower(at);
                 state.watchers.changed();

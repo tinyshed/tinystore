@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::policy::Policy;
-use super::repeat::Repeat;
+use super::repeat::{Repeat, fnv1a};
 use super::rows::{self, PARKED_BY, execute};
 use super::state::QueueState;
 use crate::sqlite::sql_error;
@@ -282,9 +282,9 @@ fn by_group(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
     let mut parked = 0;
     while claimed.leases.len() < claiming.limit {
         let asked = claiming.limit - claimed.leases.len();
-        let rows = due(c, &claiming, asked)?;
-        let found = rows.len();
-        for row in rows {
+        let due_now = due(c, &claiming, asked)?;
+        let found = due_now.len();
+        for row in due_now {
             let full = row.group.as_ref().is_some_and(|group| running.get(group).copied().unwrap_or(0) >= bound);
             if full {
                 if parked == PARK_AT_MOST {
@@ -560,10 +560,7 @@ fn held(c: &Connection, queue: &QueueState, lease: &Lease) -> Result<HeldRow> {
 /// value and last run behind with the id.
 fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: i64) -> Result<Settled> {
     if let Some(next) = next_run(lease, held, now) {
-        rows::drop_steps(c, lease.id)?;
-        let to = Moved { next, at: next, attempt: 0, error: None, ran: lease.last_run(now) };
-        move_job(c, queue, lease, &to)?;
-        return Ok(Settled { due: Some(next), ..Settled::default() });
+        return run_again(c, queue, lease, (next, None), now);
     }
     if let (Some(dedupe), Some(key)) = (queue.policy.dedupe, &lease.key) {
         let forgotten: Option<Option<i64>> = c
@@ -618,10 +615,7 @@ fn retry(
 fn fail(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, cause: &str, now: i64) -> Result<Settled> {
     let cause = bounded(cause);
     if let Some(next) = next_run(lease, held, now) {
-        rows::drop_steps(c, lease.id)?;
-        let to = Moved { next, at: next, attempt: 0, error: Some(cause), ran: lease.last_run(now) };
-        move_job(c, queue, lease, &to)?;
-        return Ok(Settled { due: Some(next), ..Settled::default() });
+        return run_again(c, queue, lease, (next, Some(cause)), now);
     }
     let (ran, took) = lease.last_run(now);
     let failed = params![queue.id, lease.next, lease.id, lease.attempt, now, cause, ran, took];
@@ -693,16 +687,28 @@ pub(crate) fn backoff(policy: &Policy, attempt: i64, id: i64) -> i64 {
     (wait + jitter).max(1)
 }
 
-/// A number that varies with the job and its attempt, for the jitter.
-fn mix(id: i64, attempt: i64) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in id.to_le_bytes().into_iter().chain(attempt.to_le_bytes()) {
-        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+/// Moves a job that repeats to its next run: its steps gone, its attempts
+/// from none, and the error its last run ended with, when it failed.
+fn run_again(
+    c: &Connection,
+    queue: &QueueState,
+    lease: &Lease,
+    (next, error): (i64, Option<String>),
+    now: i64,
+) -> Result<Settled> {
+    rows::drop_steps(c, lease.id)?;
+    let to = Moved { next, at: next, attempt: 0, error, ran: lease.last_run(now) };
+    move_job(c, queue, lease, &to)?;
+    Ok(Settled { due: Some(next), ..Settled::default() })
 }
 
-/// A failure as a job keeps it: at most `MAX_ERROR` bytes.
+/// A number that varies with the job and its attempt, for the jitter.
+fn mix(id: i64, attempt: i64) -> u64 {
+    fnv1a(id.to_le_bytes().into_iter().chain(attempt.to_le_bytes()))
+}
+
+/// A failure as a job keeps it: its first `MAX_ERROR` bytes, cut on a
+/// character, and `…` where more followed.
 fn bounded(cause: &str) -> String {
     if cause.len() <= MAX_ERROR {
         return cause.to_owned();
