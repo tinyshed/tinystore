@@ -101,7 +101,7 @@ impl fmt::Debug for SpanId {
 /// An event's fields, or its context: keys in the order they were written,
 /// each value the JSON it was written as, so that `1.2300`, an integer past
 /// 2⁵³ and a key written twice come back as they went in.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Fields(Vec<(String, String)>);
 
 impl Fields {

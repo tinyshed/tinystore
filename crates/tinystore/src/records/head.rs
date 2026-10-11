@@ -30,27 +30,32 @@ const ROW_PLAIN: usize = ROW_WEIGHT + MAX_EVENT;
 /// How hard a head row is squeezed: zstd's default, which the Go engine
 /// measured for rows that live an hour.
 const LEVEL: i32 = 3;
+/// How hard the text of a segment is squeezed, which is written once and
+/// read for as long as its stream keeps it.
+const PACKED_LEVEL: i32 = 7;
 
 /// The zstd contexts of whoever encodes or parses rows, made at their first
 /// use and kept for the next.
 #[derive(Default)]
 pub(super) struct Codec {
     compressor: Option<zstd::bulk::Compressor<'static>>,
+    packer: Option<zstd::bulk::Compressor<'static>>,
     decompressor: Option<zstd::bulk::Decompressor<'static>>,
 }
 
 impl Codec {
     fn squeeze(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
-        let failed = |error| Error::internal("records: zstd could not write a row").with_source(error);
-        if self.compressor.is_none() {
-            self.compressor = Some(zstd::bulk::Compressor::new(LEVEL).map_err(failed)?);
-        }
-        self.compressor.as_mut().map_or_else(|| Ok(Vec::new()), |compressor| compressor.compress(plain).map_err(failed))
+        squeezed(&mut self.compressor, LEVEL, plain)
+    }
+
+    /// Squeezes text of a segment, harder than a head row's.
+    pub(super) fn squeeze_packed(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
+        squeezed(&mut self.packer, PACKED_LEVEL, plain)
     }
 
     /// Expands a frame into `most` bytes at most: a frame that says more is
     /// refused before anything is allocated for it.
-    fn expand(&mut self, frame: &[u8], most: usize) -> Result<Vec<u8>> {
+    pub(super) fn expand(&mut self, frame: &[u8], most: usize) -> Result<Vec<u8>> {
         if self.decompressor.is_none() {
             let made = zstd::bulk::Decompressor::new();
             self.decompressor =
@@ -65,6 +70,15 @@ impl Codec {
     pub(super) fn rest(&mut self) {
         *self = Codec::default();
     }
+}
+
+/// Squeezes `plain` with the context of `level`, made at its first use.
+fn squeezed(context: &mut Option<zstd::bulk::Compressor<'static>>, level: i32, plain: &[u8]) -> Result<Vec<u8>> {
+    let failed = |error| Error::internal("records: zstd could not write a row").with_source(error);
+    if context.is_none() {
+        *context = Some(zstd::bulk::Compressor::new(level).map_err(failed)?);
+    }
+    context.as_mut().map_or_else(|| Ok(Vec::new()), |compressor| compressor.compress(plain).map_err(failed))
 }
 
 /// A row as its table keeps it.

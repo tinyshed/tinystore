@@ -10,6 +10,7 @@
 //! it, and a read picks among both by the same rule.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -17,10 +18,11 @@ use std::time::{Duration, SystemTime};
 use rusqlite::{Connection, Rows, ToSql};
 use serde::Serialize;
 
+use super::block;
 use super::engine::{Records, Stream, nanos};
 use super::event::{Event, Fields, Kept, Level, TraceId};
 use super::head::{self, Codec};
-use super::pack;
+use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
 
@@ -296,6 +298,8 @@ enum Kind {
 struct Picked {
     kind: Kind,
     id: i64,
+    /// A block's segment, whose row says how to read it; none of a head row.
+    segment: i64,
     stream: i64,
     first_at: i64,
     last_at: i64,
@@ -303,8 +307,12 @@ struct Picked {
     size: usize,
 }
 
-/// The rows a read fetched, each with its body.
-type Fetched = Vec<(Picked, Vec<u8>)>;
+/// What a read fetched: its rows, each with its body, and the rows of the
+/// segments its blocks are of, by their ids.
+struct Fetched {
+    rows: Vec<(Picked, Vec<u8>)>,
+    segments: HashMap<i64, Vec<u8>>,
+}
 
 /// An event a read found, with where it stood.
 struct Found {
@@ -317,9 +325,11 @@ struct Found {
 /// The rows of a range that may hold what a read asks, from the range's
 /// older end: the same statement over the heads and over the blocks.
 macro_rules! rows_of {
-    ($table:literal, $order:literal) => {
+    ($table:literal, $segment:literal, $order:literal) => {
         concat!(
-            "select id, stream, first_at, last_at, count, size from ",
+            "select id, stream, first_at, last_at, count, size, ",
+            $segment,
+            " from ",
             $table,
             " where last_at >= ?1 and first_at <= ?2 and (?3 = 0 or levels & ?3 != 0)
                and (?4 is null or stream in (select value from json_each(?4))) order by ",
@@ -328,23 +338,24 @@ macro_rules! rows_of {
     };
 }
 
-const HEADS_OLDEST: &str = rows_of!("heads", "first_at, id");
-const HEADS_NEWEST: &str = rows_of!("heads", "last_at desc, id desc");
-const BLOCKS_OLDEST: &str = rows_of!("blocks", "first_at, id");
-const BLOCKS_NEWEST: &str = rows_of!("blocks", "last_at desc, id desc");
+const HEADS_OLDEST: &str = rows_of!("heads", "0", "first_at, id");
+const HEADS_NEWEST: &str = rows_of!("heads", "0", "last_at desc, id desc");
+const BLOCKS_OLDEST: &str = rows_of!("blocks", "segment", "first_at, id");
+const BLOCKS_NEWEST: &str = rows_of!("blocks", "segment", "last_at desc, id desc");
 const HEAD_BODY: &str = "select body from heads where id = ?1";
 const BLOCK_BODY: &str = "select body from blocks where id = ?1";
+const SEGMENT_BODY: &str = "select body from segments where id = ?1";
 
 impl Records {
     /// One page: work out the range → pick and fetch its rows → parse and
     /// keep what matches → cut the page.
     fn page(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
         let Some(asked) = self.asked(stream, query)? else { return Ok(Page { events: Vec::new(), next: None }) };
-        let (rows, horizon) = self.fetch(&asked, query)?;
-        let bytes: usize = rows.iter().map(|(picked, _)| picked.size).sum();
-        let events: u64 = rows.iter().map(|(picked, _)| picked.events).sum();
+        let (fetched, horizon) = self.fetch(&asked, query)?;
+        let bytes: usize = fetched.rows.iter().map(|(picked, _)| picked.size).sum();
+        let events: u64 = fetched.rows.iter().map(|(picked, _)| picked.events).sum();
         let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
-        let found = found(&asked, query, rows, horizon)?;
+        let found = found(&asked, query, fetched, horizon)?;
         cut(found, &asked, horizon)
     }
 
@@ -423,8 +434,17 @@ impl Records {
                 };
                 taken.push(row);
             }
-            let fetched = taken.into_iter().map(|row| body_of(connection, &row).map(|body| (row, body)));
-            Ok((fetched.collect::<Result<_>>()?, horizon))
+            let mut segments = HashMap::new();
+            for row in taken.iter().filter(|row| row.kind == Kind::Block) {
+                if let Entry::Vacant(unread) = segments.entry(row.segment) {
+                    unread.insert(body_by(connection, SEGMENT_BODY, row.segment)?);
+                }
+            }
+            let rows = taken.into_iter().map(|row| {
+                let sql = if row.kind == Kind::Block { BLOCK_BODY } else { HEAD_BODY };
+                body_by(connection, sql, row.id).map(|body| (row, body))
+            });
+            Ok((Fetched { rows: rows.collect::<Result<_>>()?, segments }, horizon))
         })
     }
 }
@@ -439,6 +459,7 @@ fn picked(rows: &mut Rows<'_>, kind: Kind) -> Result<Option<Picked>> {
         Ok(Picked {
             kind,
             id: row.get(0)?,
+            segment: row.get(6)?,
             stream: row.get(1)?,
             first_at: row.get(2)?,
             last_at: row.get(3)?,
@@ -449,9 +470,9 @@ fn picked(rows: &mut Rows<'_>, kind: Kind) -> Result<Option<Picked>> {
     read.map(Some).map_err(failed)
 }
 
-fn body_of(connection: &Connection, row: &Picked) -> Result<Vec<u8>> {
-    let sql = if row.kind == Kind::Block { BLOCK_BODY } else { HEAD_BODY };
-    let body = connection.prepare_cached(sql).and_then(|mut select| select.query_row([row.id], |found| found.get(0)));
+/// The body of the row `id`, by the statement that reads its table's.
+fn body_by(connection: &Connection, sql: &str, id: i64) -> Result<Vec<u8>> {
+    let body = connection.prepare_cached(sql).and_then(|mut select| select.query_row([id], |found| found.get(0)));
     body.map_err(|error| sql_error("fetch a row of a read", error))
 }
 
@@ -476,17 +497,23 @@ fn range(query: &Query, now: i64) -> Result<(i64, i64)> {
 /// The events of the fetched rows that the read keeps, in its order: by
 /// their times, those of one time as they were written, or all of it
 /// backwards.
-fn found(asked: &Asked, query: &Query, rows: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
+fn found(asked: &Asked, query: &Query, fetched: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
     let mut codec = Codec::default();
+    let mut schemas: HashMap<i64, Schema> = HashMap::new();
+    for (id, row) in &fetched.segments {
+        let schema = Schema::parse(row, &mut codec).map_err(|error| error.within(format!("segment {id}")))?;
+        schemas.insert(*id, schema);
+    }
     let mut found = Vec::new();
-    for (row, body) in rows {
+    for (row, body) in fetched.rows {
         let Some((stream, kept)) = asked.streams.get(&row.stream) else { continue };
-        let parsed = match row.kind {
-            Kind::Block => pack::events_of(&body, &mut codec)
-                .map_err(|error| error.within(format!("block {} of {stream}", row.id))),
-            Kind::Head => {
+        let parsed = match (row.kind, schemas.get(&row.segment)) {
+            (Kind::Head, _) => {
                 head::parse(&body, &mut codec).map_err(|error| error.within(format!("head row {} of {stream}", row.id)))
             }
+            (Kind::Block, Some(schema)) => block::parse(schema, &body, &mut codec)
+                .map_err(|error| error.within(format!("block {} of {stream}", row.id))),
+            (Kind::Block, None) => Err(Error::internal(format!("records: block {} has no segment", row.id))),
         };
         for (place, event) in parsed?.into_iter().enumerate() {
             let at = event.at;

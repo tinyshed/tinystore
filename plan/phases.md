@@ -88,7 +88,10 @@ them.
 - [ ] The codecs: huff0 and FSE in safe Rust or a format without them, the word-based reader, the exact accumulator.
 - [ ] records: the head, segments, paged reads, follow, retention, redaction, `durability: 'os'` by default.
   Built: streams and their `keep`, appends into fresh rows, their packing into segments and blocks, reads a page
-  at a time over both, expiry. A block's bytes are a head row's until the Go engine's columns are ported.
+  at a time over both, expiry. A block keeps its events by columns: integers by their steps, text by a
+  dictionary or through zstd. Owed before the columns are done: the Go engine and this one on one corpus, by
+  column, and then what the Go engine's research measured, in the order of its gain: times in text (20.77 to
+  16.55 B a record), typed values, the packers of integers, FSE.
 - [ ] metrics: series, instruments, sealing, exact aggregates, retention, the step rule; the `metrics` crate recorder.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 

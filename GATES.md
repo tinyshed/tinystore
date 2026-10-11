@@ -149,8 +149,14 @@ module defines.
 - a level in colour counts as one in brackets — `TestAColourMarksALevelAsBracketsDo`
 - a logfmt line keeps its pairs when they spell it — `TestLogfmtLinesKeepTheirPairsWhenTheySpellTheLineAgain`, `TestLinesKeepALogfmtLinesPairs`
 - a record survives the records format exactly — `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`
-- a changed records byte is refused — `a_changed_or_missing_byte_is_refused` in `records::head`, `a_row_whose_bytes_changed_is_corrupt_and_names_itself` in `records::events`; a segment's, `TestAChangedOrMissingByteIsRefused`, fuzzers
-- a records decode stays bounded — `TestExpandedTextIsBounded`; every copy is charged before it is made
+- a changed records byte is refused — `a_changed_or_missing_byte_is_refused` in `records::head` and in `records::block`, `a_segment_row_gives_back_its_schema_and_a_changed_or_missing_byte_is_refused` in `records::segment`, `a_row_whose_bytes_changed_is_corrupt_and_names_itself` in `records::events`; fuzzers to come
+- a records decode stays bounded — `text_past_what_a_decoder_may_expand_is_refused_before_it_is_expanded`, `what_a_decoder_expands_is_counted_across_its_columns` in `records::text`; every count and length is bounded before anything is taken for it
+- a block gives back its events, each value as it was spelled, a key written twice in both its places — `a_block_gives_back_its_events_each_value_as_it_was_spelled` in `records::block`, `a_key_written_twice_has_a_column_each_time_which_another_shape_shares_by_its_place` in `records::segment`
+- a segment gives columns to its first shapes and keeps the fields of the rest whole — `a_segment_gives_columns_to_its_first_shapes_and_keeps_the_fields_of_the_rest_whole` in `records::segment`, `the_fields_of_a_shape_past_the_segments_columns_come_back_whole` in `records::block`
+- a block read with another segment's row is refused — `a_block_read_with_another_segments_row_is_refused_and_never_more` in `records::block`
+- integers are kept as integers, and a value no integer spells as its text — `integers_are_kept_as_integers_and_every_value_as_it_was_spelled` in `records::values`
+- the times of a millisecond's clock take a few bits each, and a column of one value none — `times_of_a_millisecond_clock_take_a_few_bits_each`, `a_column_of_one_value_takes_no_bit_a_value` in `records::ints`
+- text that repeats is written once — `values_that_repeat_are_written_once` in `records::text`
 - a time a line spells comes back as it was spelled — `TestEveryStampLayoutSpellsItsTextBack`, `FuzzStamps`
 - what no calendar shows stays text — `TestATimeNoClockShowsStaysText`
 - a time kept against its record needs that record — `TestStampsWithoutTheirTimesAreRefused`

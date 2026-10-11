@@ -9,17 +9,18 @@
 //! The segment and its blocks are written and the head rows removed in one
 //! commit, so a read finds each event once, before, during and after.
 //!
-//! A block's body is its events as a head row keeps them. The columns the Go
-//! engine measured replace it behind `block_of` and `events_of`, and nothing
-//! else of the engine knows which it is.
+//! A segment's row holds what its blocks share, and a block its events by
+//! columns: see `segment` and `block`.
 
 use std::time::Duration;
 
 use rusqlite::params;
 
+use super::block;
 use super::engine::{Records, execute, nanos};
 use super::event::Kept;
 use super::head::{self, Codec, ROW_EVENTS, ROW_WEIGHT, Row};
+use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
@@ -57,13 +58,15 @@ struct Packed {
     last: i64,
     events: usize,
     weight: usize,
+    /// The segment's row.
+    shared: Vec<u8>,
     blocks: Vec<Row>,
 }
 
 const HEADS: &str = "select stream, sum(count), sum(weight), min(written_at) from heads group by stream";
 const HEAD_ROWS: &str = "select id, count, weight, body from heads where stream = ?1 order by id";
-const INSERT_SEGMENT: &str = "insert into segments (stream, first_at, last_at, count, weight)
-    values (?1, ?2, ?3, ?4, ?5) returning id";
+const INSERT_SEGMENT: &str = "insert into segments (stream, first_at, last_at, count, weight, body)
+    values (?1, ?2, ?3, ?4, ?5, ?6) returning id";
 const INSERT_BLOCK: &str = "insert into blocks (segment, stream, first_at, last_at, levels, count, size, body)
     values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 const DROP_HEAD: &str = "delete from heads where id = ?1";
@@ -126,10 +129,17 @@ impl Records {
             last: last.at,
             events: events.len(),
             weight,
+            shared: Vec::new(),
             blocks: Vec::new(),
         };
-        for block in cut(&events) {
-            packed.blocks.push(block_of(block, &mut codec)?);
+        let (schema, ids) = Schema::of(&events);
+        packed.shared = schema.encode(&mut codec)?;
+        let mut from = 0;
+        for events in cut(&events) {
+            let to = from + events.len();
+            let ids = [&ids.names[from..to], &ids.shapes[from..to], &ids.contexts[from..to]];
+            packed.blocks.push(block::encode(&schema, events, ids, &mut codec)?);
+            from = to;
         }
         self.publish(stream, &packed)?;
         Ok(packed)
@@ -161,7 +171,7 @@ impl Records {
     fn publish(&self, stream: i64, packed: &Packed) -> Result<()> {
         let bytes = packed.blocks.iter().map(|block| block.body.len()).sum();
         let (first, last, events, weight) = (packed.first, packed.last, packed.events as i64, packed.weight as i64);
-        let rows = packed.rows.clone();
+        let (rows, shared) = (packed.rows.clone(), packed.shared.clone());
         let blocks: Vec<(i64, i64, i64, i64, Vec<u8>)> = packed
             .blocks
             .iter()
@@ -170,7 +180,7 @@ impl Records {
         self.file.write(bytes, move |tx| {
             let made = tx.prepare_cached(INSERT_SEGMENT);
             let made = made.and_then(|mut insert| {
-                insert.query_row(params![stream, first, last, events, weight], |row| row.get(0))
+                insert.query_row(params![stream, first, last, events, weight, shared], |row| row.get(0))
             });
             let segment: i64 = made.map_err(|error| sql_error("write a segment", error))?;
             for (first, last, levels, count, body) in &blocks {
@@ -207,16 +217,6 @@ fn cut(events: &[Kept]) -> Vec<&[Kept]> {
     }
     blocks.push(&events[from..]);
     blocks
-}
-
-/// The block of `events`, which are in the order of their times.
-fn block_of(events: &[Kept], codec: &mut Codec) -> Result<Row> {
-    head::encode(events, codec)
-}
-
-/// A block's events, in the order of their times.
-pub(super) fn events_of(body: &[u8], codec: &mut Codec) -> Result<Vec<Kept>> {
-    head::parse(body, codec)
 }
 
 #[cfg(test)]

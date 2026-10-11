@@ -33,14 +33,16 @@ create index heads_by_stream on heads (stream, id);
 
 -- a segment is what one packing made of a stream's head rows: its events in
 -- the order of their times, in blocks. Its id is its place in the order
--- segments were packed, and only grows
+-- segments were packed, and only grows. body: what its blocks share, their
+-- events' names, contexts and shapes, each once
 create table segments (
     id       integer primary key autoincrement,
     stream   integer not null,
     first_at integer not null,
     last_at  integer not null,
     count    integer not null,
-    weight   integer not null
+    weight   integer not null,
+    body     blob    not null
 ) strict;
 
 create index segments_by_stream on segments (stream, last_at);

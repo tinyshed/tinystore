@@ -12,6 +12,8 @@
 //! # }
 //! ```
 
+mod bits;
+mod block;
 mod bytes;
 mod engine;
 mod event;
@@ -19,9 +21,13 @@ mod events;
 #[cfg(test)]
 mod fixture;
 mod head;
+mod ints;
 mod maintain;
 mod pack;
 mod read;
+mod segment;
+mod text;
+mod values;
 
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};

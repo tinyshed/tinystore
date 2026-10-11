@@ -175,7 +175,8 @@ fn a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_w
     fixture.events("api").append("request", &()).unwrap();
     let records = fixture.records();
     let stream = records.stream("api").unwrap().id;
-    let packed = Packed { rows: vec![1, 99], first: 0, last: 0, events: 1, weight: 1, blocks: Vec::new() };
+    let packed =
+        Packed { rows: vec![1, 99], first: 0, last: 0, events: 1, weight: 1, shared: Vec::new(), blocks: Vec::new() };
     assert_eq!(records.publish(stream, &packed).unwrap_err().kind(), crate::ErrorKind::Internal);
     assert_eq!(lie(&fixture), (1, 0, 0));
 }
