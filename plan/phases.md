@@ -87,6 +87,7 @@ them.
 ## 3. records and metrics
 
 - [ ] The codecs: huff0 and FSE in safe Rust or a format without them, the word-based reader, the exact accumulator.
+  records: a format without FSE, which saved 0.15 B an event on the corpus, left out by the owner's choice on 11 October.
 - [ ] records: the head, segments, paged reads, follow, retention, redaction, `durability: 'os'` by default.
   Built: streams and their `keep`, appends into fresh rows, their packing into segments and blocks, reads a page
   at a time over both, expiry. An event more than ten seconds behind the newest its stream showed on time waits in
