@@ -12,11 +12,9 @@
 //! # }
 //! ```
 
-mod bits;
 mod block;
 mod bloom;
 mod buffer;
-mod bytes;
 mod count;
 mod engine;
 mod event;

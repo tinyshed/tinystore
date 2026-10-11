@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::value::RawValue;
 
 use super::block;
-use super::bytes::crc32;
 use super::engine::Records;
 use super::event::{Event, Kept, MAX_EVENT, NewEvent, weight};
 use super::head::{self, Codec};
 use super::lines::{LOGFMT, TEXT};
 use super::logfmt::spell;
 use super::segment::{self, Schema};
+use crate::compress::checksum::crc32;
 use crate::console::quoted;
 use crate::{ErrorKind, Result, Store};
 

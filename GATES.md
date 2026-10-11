@@ -42,15 +42,15 @@ module defines.
 
 ## Codec
 
-- the extremes survive too — `TestExactBitsAndTimestampExtremes`, on `-0`, NaN payloads and the ends of time
-- a corrupt payload is refused — `TestPayloadCorruptionIsRefused` and `FuzzDecode`
+- the extremes survive too — `the_extremes_survive_too` in `metrics::codec`, on `-0`, NaN payloads, subnormals and the ends of time
+- a corrupt payload is refused — `a_corrupt_body_is_refused` in `metrics::codec`, every byte and every cut; `FuzzDecode` at `e81a050` until the fuzz target lands
 - bytes written once still read — `TestPayloadsWrittenBeforeStillRead`, one vector per representation
-- a head that does not fit its body is refused — the four moved heads in `TestPayloadCorruptionIsRefused`
-- a decimal travels as the integer it was written as — `TestDecimalsTravelAsTheIntegersTheyWereWrittenAs`
-- a value no scale reproduces is refused, not rounded — `TestAValueNoScaleReproducesIsRefusedRatherThanRounded`
+- a head that does not fit its body is refused — `a_head_that_does_not_fit_its_body_is_refused` in `metrics::codec`
+- a decimal travels as the integer it was written as — `a_decimal_travels_as_the_integer_it_was_written_as` in `metrics::codec`
+- a value no scale reproduces is refused, not rounded — `a_value_no_scale_reproduces_is_refused_rather_than_rounded` in `metrics::codec`
 - a decode stays bounded — `TestADecodeStaysWithinTheBodysCeiling`, against the 8 KiB ceiling
 - an iterator outlives its codec — `TestIteratorOwnsItsBytesAndOutlivesTheCodec`
-- unordered or oversized input is refused — `TestRejectsUnorderedAndOversizedInput`
+- unordered or oversized input is refused — `unordered_or_oversized_input_is_refused` in `metrics::codec`
 
 ## Metrics
 
@@ -61,7 +61,7 @@ module defines.
 - a timer writes its count, sum and longest at each flush — `TestATimerWritesItsCountSumAndLongestAtEachFlush`, `TestAFailedFlushKeepsATimersLongestForTheNext`
 - a timer's three series go together and have one writer — `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries`
 - a self-report never counts itself, nor rounds a value — `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports`
-- a sample survives the codec exactly — `TestEveryValueRepresentationPreservesBits`, on bits and not on values
+- a sample survives the codec exactly — `every_value_representation_keeps_the_bits` in `metrics::codec`, on bits and not on values; `a_sample_comes_back_bit_for_bit` in `metrics::ingest`
 - a sample survives a file and restart — `TestHeadSealingReopenAndPartialRetention`, over the public metrics API
 - publication is one write — `TestFailedPublicationRollsBackPayloadsHeadAndIdentifiers`
 - a reader sees one consistent state — `TestReadersSeeOneSnapshotWhilePackingAndIngesting`, including retention
@@ -78,21 +78,22 @@ module defines.
 - one damaged series does not stop its neighbors — `TestCorruptSeriesDoesNotStopOtherMaintenance`
 - a raised limit can resume suspended maintenance — `TestSuspendedLimitCanRecoverAfterReopen`
 - an append need not churn due indexes — `TestExistingSeriesIngestAvoidsUnchangedDueIndexes`
-- untouched head chunks keep their bytes — `TestUnchangedHeadChunksKeepTheirEncodedBytes`
+- untouched head chunks keep their bytes — `untouched_head_chunks_keep_their_bytes` in `metrics::head`
 - a posting above the old cap still ranks exactly — `TestPostingCountsRankAboveTheOldProbeCap`
 - ready waits for a safe prefix — `TestReadyWaitsForASealableWatermarkPrefix`
 - one bad publication does not count its neighbors — `TestPublicationBatchRollsBackOneConflictingSeries` and `TestPublicationBatchDoesNotCountRolledBackTransaction`
 - cancelled callers do not bypass active-work slots — `TestActiveReadAndIngestAdmissionHonorsCancellation`, `TestSlotsHonourCancellation`
-- expired series return a cardinality slot — `TestExpiredSeriesReclaimsCardinalityAndAllowsNewLifecycle`
-- live siblings keep shared dictionary pairs — `TestReclaimKeepsLabelsUsedByAnotherSeries`
+- expired series return a cardinality slot, and their name its kind — `a_series_left_with_nothing_goes_with_its_pairs_and_frees_its_place_and_its_names_kind` in `metrics::maintain`
+- live siblings keep shared dictionary pairs — `a_series_left_with_nothing_goes_with_its_pairs_and_frees_its_place_and_its_names_kind` in `metrics::maintain`
 - narrow reads pay only for selected packed chunks — `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks`
 - an engine's work honors the store's memory — `TestStoreMemoryBoundsReadsIngestAndMaintenance`
 - streaming owns each result and exposes partial failure — `TestStreamOwnsResultsAndReportsPartialFailure`
-- an error about one series carries its labels — `TestIngestRefusalNamesItsSeries` and `TestIngestValidationNamesItsSeries`
+- an error about one series carries its labels — `a_refused_series_names_itself_and_its_sample` in `metrics::ingest`
 - a metrics plan is what the call then spends — `TestAPlanSaysWhatTheCallThenSpends`, no payload fetched
-- a series is its name and its labels, `__` the store's — `TestASeriesIsItsNameAndItsLabels`, `TestIngestIsAtomicAndLastMutableValueWins`
-- a range over the last Since starts that long before now — `TestARangeSinceStartsThatLongBeforeNow`, a To of zero the open end
-- a condition finds series beyond equality, NoneOf alone refused — `TestConditionsFindSeriesBeyondEquality`, `TestAConditionThatFindsNothingOrCannotBeTakenIsRefused`, `TestConditionsOverTheWire`
+- a read or an ingest past a bound is a `limit` naming it, never a smaller answer — `a_read_past_a_bound_is_a_limit_naming_it` in `metrics::query`, `an_ingest_past_its_bound_is_a_limit`, `a_series_past_the_stores_bound_is_a_limit` in `metrics::ingest`, `a_limit_names_its_bound_what_was_wanted_and_the_bound` in `metrics::budget`
+- a series is its name and its labels, `__` the store's — `a_series_is_its_name_and_its_labels_in_any_order` in `metrics::labels` and `metrics::ingest`, `an_ingest_is_atomic_and_a_time_given_twice_keeps_the_last_value`
+- a range over the last `since` starts that long before now, and without `to` takes a sample of now — `a_range_is_its_start_to_its_end_excluded_or_now_included` in `metrics::query`
+- a condition finds series beyond equality, `Not` alone refused — `a_condition_finds_series_beyond_equality`, `a_condition_that_finds_nothing_or_cannot_be_taken_is_refused` in `metrics::query`; `TestConditionsOverTheWire` at `e81a050` until the wire
 - a series that cannot be repaired can still be dropped — `TestDropSeriesRemovesAnUnreadableSuspendedSeries` and `TestDropSeriesKeepsItsNeighbours`
 - long-head append preserves bits and frontier — `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`
 - exact aggregates cross blocks, resets and retention — `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestACounterStepCountsInTheBucketItEndsIn` and `TestAggregateClipsRetentionBeforeSummingSealedEdges`
@@ -108,8 +109,8 @@ module defines.
 - expired heads and blocks spend no sample or payload budget — `TestBatchedReadsSpendNothingOnExpiredSeries`
 - expiry selects bounded prefixes from both retention indexes — `TestExpirySelectsABoundedPrefixOfEachIndex`
 - a retention prefix reads no unrelated later names — `TestARetentionPrefixReadsOnlyItsNames`
-- a series keeps the retention of the longest prefix of its name, for ingest, reads, aggregates and expiry — `TestASeriesKeepsItsOwnRetention`, `TestASampleOlderThanItsSeriesRetentionIsRefused`
-- changed retention rules rewrite only the series of the prefixes that changed, and a changed Retention none — `TestAChangedRuleReachesTheSeriesOfItsPrefix`
+- a name's `keep` is its own, for ingest, reads and expiry, and another while the store is open is refused — `a_names_keep_is_its_own_and_another_while_the_store_is_open_is_refused` in `metrics::ingest`, `samples_past_what_their_name_keeps_go_and_the_rest_stay` in `metrics::maintain`
+- a `keep` changed between runs moves when the name's series are due through its postings, and no other series — `a_keep_changed_between_runs_moves_when_its_series_are_due` in `metrics::maintain`
 - a description is kept by name, replaced by the next and removed by an empty one — `TestADescriptionIsKeptByName`, `TestADescriptionOverTheWire` in `server`; `a description is kept by name, and an instrument's is written at its flush` in `sdk/js/test/metrics.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
 - an instrument describes the names it writes at its flush, a timer's sum and longest in milliseconds, and a failed flush keeps them — `TestAnInstrumentDescribesItsSeries`, `TestAFailedFlushKeepsItsDescriptionsForTheNext`
 - an invalid description keeps no good instrument out of a flush — `an invalid description cannot prevent good instruments from flushing` in Bun, `test_an_invalid_description_keeps_no_good_instrument_out` in Python

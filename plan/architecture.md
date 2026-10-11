@@ -56,15 +56,15 @@ only where a separate artifact does.
 | `crates/node/`      | `tinystore-node`   | napi-rs over the same four functions                                           |
 | `crates/python/`    | `tinystore-python` | PyO3 over the same four functions                                              |
 
-| Module in `tinystore`                                        | What it holds                                                                                 |
-|--------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
-| the root                                                     | Store, LOCK, clock, memory budget, background work, errors                                    |
-| `engine`                                                     | what an engine uses of its store; applications never import it                                |
-| `sqlite`                                                     | the SQLite build, writer and group commit, readers, statements, migrations, memory · `unsafe` |
-| `codec`                                                      | the metrics block codec and its entropy coders, in safe Rust                                  |
-| `kv`, `jobs`, `sql`, `blobs`, `records`, `metrics`, `backup` | the engines, each a feature; none imports another, which a test checks                        |
-| `wire`                                                       | the message schema, the MessagePack profile, the sans-IO session, dispatch                    |
-| `server`                                                     | tokio: sockets, named pipes, stdio, TCP and TLS, SERVE, tokens; a feature                     |
+| Module in `tinystore`                                        | What it holds                                                                                  |
+|--------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| the root                                                     | Store, LOCK, clock, memory budget, background work, errors                                     |
+| `engine`                                                     | what an engine uses of its store; applications never import it                                 |
+| `sqlite`                                                     | the SQLite build, writer and group commit, readers, statements, migrations, memory · `unsafe`  |
+| `compress`                                                   | what records and metrics both pack with: varints, bits, rice codes, zstd, CRC-32, in safe Rust |
+| `kv`, `jobs`, `sql`, `blobs`, `records`, `metrics`, `backup` | the engines, each a feature; none imports another, which a test checks                         |
+| `wire`                                                       | the message schema, the MessagePack profile, the sans-IO session, dispatch                     |
+| `server`                                                     | tokio: sockets, named pipes, stdio, TCP and TLS, SERVE, tokens; a feature                      |
 
 `unsafe_code` is denied for the whole workspace; `sqlite::memory` and the FFI
 crates allow it, each block with a SAFETY comment.

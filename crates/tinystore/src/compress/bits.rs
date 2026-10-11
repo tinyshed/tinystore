@@ -1,15 +1,17 @@
-//! Bits: integers of one width packed one after another, the lowest bit
-//! first, and rice codes, which give a small integer few bits and any integer
-//! some.
+//! Bits: fields packed one after another, the lowest bit first, integers of
+//! one width, and rice codes, which give a small integer few bits and any
+//! integer some.
 
 /// The bytes `count` values of `width` bits take.
-pub(super) fn packed_len(count: usize, width: u32) -> usize {
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+pub(crate) fn packed_len(count: usize, width: u32) -> usize {
     (count * width as usize).div_ceil(8)
 }
 
 /// Appends `values`, each in `width` bits; a value wider than that loses its
 /// high bits, which a caller's width never lets happen.
-pub(super) fn pack(out: &mut Vec<u8>, values: impl Iterator<Item = u64>, width: u32) {
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+pub(crate) fn pack(out: &mut Vec<u8>, values: impl Iterator<Item = u64>, width: u32) {
     let mut writer = BitWriter::onto(std::mem::take(out));
     values.for_each(|value| writer.write(value, width));
     *out = writer.finish();
@@ -17,25 +19,26 @@ pub(super) fn pack(out: &mut Vec<u8>, values: impl Iterator<Item = u64>, width: 
 
 /// `count` values of `width` bits, 64 at most, from `data`, which holds the
 /// `packed_len` of them.
-pub(super) fn unpack(data: &[u8], count: usize, width: u32) -> Vec<u64> {
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+pub(crate) fn unpack(data: &[u8], count: usize, width: u32) -> Vec<u64> {
     let mut reader = BitReader::of(data);
     (0..count).map(|_| reader.read(width)).collect()
 }
 
 /// A writer of bits onto bytes, the lowest bit of a byte first.
-pub(super) struct BitWriter {
+pub(crate) struct BitWriter {
     out: Vec<u8>,
     held: u128,
     bits: u32,
 }
 
 impl BitWriter {
-    pub(super) fn onto(out: Vec<u8>) -> BitWriter {
+    pub(crate) fn onto(out: Vec<u8>) -> BitWriter {
         BitWriter { out, held: 0, bits: 0 }
     }
 
     /// Appends the low `width` bits of `value`, 64 at most.
-    pub(super) fn write(&mut self, value: u64, width: u32) {
+    pub(crate) fn write(&mut self, value: u64, width: u32) {
         let low = if width >= 64 { value } else { value & ((1_u64 << width) - 1) };
         self.held |= u128::from(low) << self.bits;
         self.bits += width;
@@ -47,7 +50,7 @@ impl BitWriter {
     }
 
     /// The bytes written, the last one's unused bits zero.
-    pub(super) fn finish(mut self) -> Vec<u8> {
+    pub(crate) fn finish(mut self) -> Vec<u8> {
         if self.bits > 0 {
             self.out.push(self.held as u8);
         }
@@ -55,39 +58,70 @@ impl BitWriter {
     }
 }
 
-/// A reader of the bits a writer wrote. Past the end it reads zeros and
-/// says so in `short`.
-pub(super) struct BitReader<'a> {
-    bytes: std::slice::Iter<'a, u8>,
+/// A reader of the bits a writer wrote, a word at a time: research's 239
+/// residuals of 13 bits went from 4.01 µs read a bit at a time to 0.32 µs
+/// read so. Past the end it reads zeros and says so in `short`.
+pub(crate) struct BitReader<'a> {
+    data: &'a [u8],
     held: u128,
     bits: u32,
-    pub(super) short: bool,
+    short: bool,
 }
 
 impl<'a> BitReader<'a> {
-    pub(super) fn of(data: &'a [u8]) -> BitReader<'a> {
-        BitReader { bytes: data.iter(), held: 0, bits: 0, short: false }
+    pub(crate) fn of(data: &'a [u8]) -> BitReader<'a> {
+        BitReader { data, held: 0, bits: 0, short: false }
     }
 
     /// The next `width` bits, 64 at most.
-    pub(super) fn read(&mut self, width: u32) -> u64 {
-        while self.bits < width {
-            let Some(byte) = self.bytes.next() else {
+    #[inline]
+    pub(crate) fn read(&mut self, width: u32) -> u64 {
+        if self.bits < width {
+            self.refill();
+            if self.bits < width {
                 self.short = true;
                 self.bits = width;
-                break;
-            };
-            self.held |= u128::from(*byte) << self.bits;
-            self.bits += 8;
+            }
         }
         let value = if width >= 64 { self.held as u64 } else { self.held as u64 & ((1_u64 << width) - 1) };
         self.held >>= width;
         self.bits -= width;
         value
     }
+
+    /// Loads whole bytes until a word or more waits.
+    fn refill(&mut self) {
+        while self.bits <= 64 {
+            if let Some((word, rest)) = self.data.split_first_chunk::<8>() {
+                self.held |= u128::from(u64::from_le_bytes(*word)) << self.bits;
+                self.bits += 64;
+                self.data = rest;
+            } else if let Some((&byte, rest)) = self.data.split_first() {
+                self.held |= u128::from(byte) << self.bits;
+                self.bits += 8;
+                self.data = rest;
+            } else {
+                return;
+            }
+        }
+    }
+
+    /// Whether a read went past the end.
+    #[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+    pub(crate) fn short(&self) -> bool {
+        self.short
+    }
+
+    /// Every field was there, and what is left is the last byte's padding,
+    /// zero.
+    #[cfg_attr(all(not(test), not(feature = "metrics")), expect(dead_code, reason = "only metrics uses it"))]
+    pub(crate) fn finished(&self) -> bool {
+        !self.short && self.data.is_empty() && self.bits < 8 && self.held == 0
+    }
 }
 
 /// A quotient this large or larger is written as the escape and 64 raw bits.
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
 const RICE_ESCAPE: u32 = 32;
 
 /// Appends the rice code of `value` at parameter `k`, 63 at most: `value >>
@@ -96,7 +130,8 @@ const RICE_ESCAPE: u32 = 32;
 /// ```text
 /// k=2   5 → 1 0 01     0 → 0 00     13 → 111 0 01
 /// ```
-pub(super) fn write_rice(writer: &mut BitWriter, value: u64, k: u32) {
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+pub(crate) fn write_rice(writer: &mut BitWriter, value: u64, k: u32) {
     let quotient = value >> k;
     if quotient < u64::from(RICE_ESCAPE) {
         writer.write((1_u64 << quotient) - 1, quotient as u32);
@@ -108,7 +143,8 @@ pub(super) fn write_rice(writer: &mut BitWriter, value: u64, k: u32) {
     }
 }
 
-pub(super) fn read_rice(reader: &mut BitReader<'_>, k: u32) -> u64 {
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+pub(crate) fn read_rice(reader: &mut BitReader<'_>, k: u32) -> u64 {
     let mut quotient = 0;
     while quotient < RICE_ESCAPE && reader.read(1) == 1 {
         quotient += 1;
@@ -118,7 +154,8 @@ pub(super) fn read_rice(reader: &mut BitReader<'_>, k: u32) -> u64 {
 
 /// Integers counted by their length in bits, with the sums that price a
 /// rice code at every parameter exactly, in one pass over them.
-pub(super) struct RiceCost {
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+pub(crate) struct RiceCost {
     counts: [u64; 65],
     /// By a length and how many bits above a parameter it stands, one to
     /// five: the sum of the values of that length shifted down to that many
@@ -127,8 +164,9 @@ pub(super) struct RiceCost {
     longest: usize,
 }
 
+#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
 impl RiceCost {
-    pub(super) fn of(values: &[u64]) -> RiceCost {
+    pub(crate) fn of(values: &[u64]) -> RiceCost {
         let mut cost = RiceCost { counts: [0; 65], quotients: [[0; 6]; 65], longest: 0 };
         for value in values {
             let length = (64 - value.leading_zeros()) as usize;
@@ -159,7 +197,7 @@ impl RiceCost {
     /// 14 zeros and 1000000 twice   k 0: 14×1 + 2×96 = 206 bits
     ///                              k 16, near log2 of the mean: 14×17 + 2×(15+17) = 302 bits
     /// ```
-    pub(super) fn cheapest(&self) -> (u32, u64) {
+    pub(crate) fn cheapest(&self) -> (u32, u64) {
         // a parameter past the longest value only adds bits
         let tried = (0..=self.longest.min(63)).map(|k| (k as u32, self.bits(k)));
         tried.min_by_key(|(_, bits)| *bits).unwrap_or((0, 0))
@@ -196,7 +234,7 @@ mod tests {
             assert_eq!(coded.len() as u64, cost.bits(k as usize).div_ceil(8), "k {k}");
             let mut reader = BitReader::of(&coded);
             let read: Vec<u64> = (0..values.len()).map(|_| read_rice(&mut reader, k)).collect();
-            assert!(!reader.short && read == values, "k {k}");
+            assert!(!reader.short() && read == values, "k {k}");
         }
     }
 
@@ -214,10 +252,47 @@ mod tests {
     #[test]
     fn bits_read_past_their_end_are_zeros_and_said() {
         let mut reader = BitReader::of(&[0xff]);
-        assert_eq!((reader.read(8), reader.short), (0xff, false));
-        assert_eq!((reader.read(3), reader.short), (0, true));
+        assert_eq!((reader.read(8), reader.short()), (0xff, false));
+        assert_eq!((reader.read(3), reader.short()), (0, true));
         let mut reader = BitReader::of(&[0xff; 3]);
         read_rice(&mut reader, 0);
-        assert!(reader.short);
+        assert!(reader.short());
+    }
+
+    #[test]
+    fn fields_of_every_width_read_back_and_end_on_zero_padding() {
+        let fields: Vec<(u64, u32)> = (0..=64_u32)
+            .flat_map(|width| {
+                let most = if width == 64 { u64::MAX } else { (1_u64 << width) - 1 };
+                [(most, width), (most / 3, width), (0, width)]
+            })
+            .collect();
+        let mut writer = BitWriter::onto(Vec::new());
+        fields.iter().for_each(|&(value, width)| writer.write(value, width));
+        let bytes = writer.finish();
+        let mut reader = BitReader::of(&bytes);
+        for &(value, width) in &fields {
+            assert_eq!(reader.read(width), value, "{width}");
+        }
+        assert!(reader.finished());
+    }
+
+    #[test]
+    fn a_reader_that_left_a_field_or_found_padding_not_zero_has_not_finished() {
+        let mut packed = Vec::new();
+        pack(&mut packed, [5, 6, 7].into_iter(), 3);
+        let mut early = BitReader::of(&packed);
+        early.read(3);
+        assert!(!early.finished(), "two fields are left");
+        let mut padded = BitReader::of(&[0b1000_0000]);
+        padded.read(3);
+        assert!(!padded.finished(), "padding that is not zero");
+        // a field read inside the last byte's padding reads its zeros; one
+        // past the last byte is short
+        let mut past = BitReader::of(&packed);
+        for _ in 0..6 {
+            past.read(3);
+        }
+        assert!(past.short() && !past.finished(), "a sixth field ends past the bytes");
     }
 }

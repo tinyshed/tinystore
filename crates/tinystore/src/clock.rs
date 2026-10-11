@@ -79,7 +79,7 @@ pub fn unix_nanos(time: SystemTime) -> i64 {
 }
 
 /// The time `millis` milliseconds after the Unix epoch; before it when negative.
-#[cfg(any(feature = "kv", feature = "jobs"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "metrics"))]
 pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
     match u64::try_from(millis) {
         Ok(after) => UNIX_EPOCH + Duration::from_millis(after),

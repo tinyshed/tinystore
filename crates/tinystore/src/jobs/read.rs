@@ -9,7 +9,7 @@ use super::rows::due_of;
 use super::state::QueueState;
 use super::values;
 use crate::clock::from_unix_millis;
-use crate::sqlite::sql_error;
+use crate::sqlite::{TextBytes, prefix_end, sql_error};
 use crate::{Error, Result};
 
 /// `ahead` counts this far: a job further back reads it.
@@ -267,16 +267,6 @@ fn rows(c: &Connection, queue: &QueueState, filter: &Filter, limit: usize, now: 
     all(c, PAGE_BY_KEY, params![queue.id, after, filter.prefix, end, tables, limit, None::<i64>, None::<i64>, now])
 }
 
-/// Bytes bound as text, which SQLite compares with ids byte by byte. A blob
-/// would not do: every text is less than every blob.
-struct TextBytes<'a>(&'a [u8]);
-
-impl rusqlite::ToSql for TextBytes<'_> {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Text(self.0)))
-    }
-}
-
 /// Where the next page starts after a job: its id, or for failed jobs listed
 /// by time, when it failed and its job's number.
 fn cursor_of(filter: &Filter, found: &Found) -> String {
@@ -292,20 +282,6 @@ fn failed_cursor(after: Option<&str>) -> Result<(i64, i64)> {
     };
     let parsed = after.split_once('.').and_then(|(failed, id)| Some((failed.parse().ok()?, id.parse().ok()?)));
     parsed.ok_or_else(|| Error::invalid(format!("a cursor of {after:?}")))
-}
-
-/// The first text after every text starting with `prefix`, in the byte order
-/// SQLite compares ids by; none when the prefix is empty or only bytes that
-/// cannot grow.
-fn prefix_end(prefix: &str) -> Option<Vec<u8>> {
-    let mut end = prefix.as_bytes().to_vec();
-    while let Some(last) = end.pop() {
-        if last < 0xff {
-            end.push(last + 1);
-            return Some(end);
-        }
-    }
-    None
 }
 
 fn one(c: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Option<Found>> {
@@ -407,16 +383,4 @@ fn ahead(c: &Connection, queue: &QueueState, found: &Found, now: i64) -> Result<
         .map_err(|error| sql_error("the jobs ahead of a job", error))?;
     let ahead = usize::try_from(rows).unwrap_or(0).saturating_sub(running).min(MAX_AHEAD);
     Ok(u32::try_from(ahead).unwrap_or(u32::MAX))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::prefix_end;
-
-    #[test]
-    fn a_prefixs_end_is_the_first_text_past_every_text_it_starts() {
-        assert_eq!(prefix_end("chat:42:"), Some(b"chat:42;".to_vec()));
-        assert_eq!(prefix_end("aé"), Some(vec![b'a', 0xc3, 0xaa]));
-        assert_eq!(prefix_end(""), None);
-    }
 }

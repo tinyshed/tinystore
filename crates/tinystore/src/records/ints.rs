@@ -25,8 +25,8 @@
 
 use std::collections::HashMap;
 
-use super::bits::{BitReader, BitWriter, RiceCost, pack, packed_len, read_rice, unpack, write_rice};
-use super::bytes::{Reader, put_count, put_int};
+use crate::compress::bits::{BitReader, BitWriter, RiceCost, pack, packed_len, read_rice, unpack, write_rice};
+use crate::compress::varint::{Reader, put_count, put_int};
 
 // what the integers written are
 const VALUES: u8 = 0;
@@ -88,7 +88,7 @@ fn read_reduced(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
         RICE if parameter < 64 => {
             let mut code = BitReader::of(reader.counted(usize::MAX >> 1));
             let quotients = (0..count).map(|_| read_rice(&mut code, parameter)).collect();
-            if code.short {
+            if code.short() {
                 reader.fail("an integer column's rice code ends inside a value");
             }
             quotients

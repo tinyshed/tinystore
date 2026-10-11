@@ -11,10 +11,10 @@
 
 use std::collections::HashMap;
 
-use super::bytes::{Reader, put_count};
 use super::head::Codec;
 use super::ints::{put_ints, read_ints};
 use crate::Result;
+use crate::compress::varint::{Reader, put_count};
 
 const VALUES: u8 = 0;
 const DICTIONARY: u8 = 1;

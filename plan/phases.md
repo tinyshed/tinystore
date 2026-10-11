@@ -137,6 +137,11 @@ them.
   which wait for v0.1.0, the command's printer of phase 4, and follow's cache, level masks and an
   append's trace, which the owner left as they are; FSE is left out by the owner's choice.
 - [ ] metrics to its accepted book ([api/metrics.md](api/metrics.md)), built as [metrics-engine.md](metrics-engine.md) says, in its eight slices: series, instruments whose totals the store keeps, packing into blocks cut where hours begin, exact aggregates and percentiles, retention, the step rule and gaps; the `metrics` crate recorder.
+  Built, slice 1: `metrics.db` and its schema, series registered with their dictionary pairs and postings within
+  100,000, a name's kind while it has series and its own `keep`, `ingest` whole or not at all into heads that a
+  write rewrites only where it reaches, `read` of heads through postings within the read's bounds, and expiry with
+  the series it empties. The codec of a run is the Go engine's, but huff0, which waits for its measurement; what
+  records and metrics both pack with is the root's `compress`.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

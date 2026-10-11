@@ -9,7 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kv", "jobs", "sql", "blobs", "records", "wire"]
+default = ["kv", "jobs", "sql", "blobs", "records", "metrics", "wire"]
 # Each engine is a feature: a program links the engines it opens. Every engine
 # stands on the store, its directory and SQLite; the console alone does not.
 store = ["dep:rusqlite"]
@@ -20,6 +20,7 @@ blobs = ["store", "dep:sha2", "dep:libc"]
 # a logger's lines printed, which a store's logger keeps too
 console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]
+metrics = ["store", "dep:zstd", "dep:sha2"]
 # the protocol's session and the pipe, which the server, the FFI and every SDK
 # speak, for the engines built beside it; its session answers kv in every call
 wire = ["kv"]

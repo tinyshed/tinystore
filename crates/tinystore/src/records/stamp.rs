@@ -19,11 +19,11 @@
 
 use std::collections::HashMap;
 
-use super::bytes::{Reader, put_count};
 use super::head::Codec;
 use super::ints::{put_ints, read_ints};
 use super::text::{Decoder, Keep, put_texts, read_texts, wants};
 use crate::Result;
+use crate::compress::varint::{Reader, put_count};
 
 const YEAR: u8 = 1; // four digits
 const MONTH: u8 = 2; // two digits

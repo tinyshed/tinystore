@@ -215,7 +215,7 @@ fn a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_no
     let messages = columns_of(&schema, &row.body).unwrap()[MESSAGES].as_ptr() as usize - row.body.as_ptr() as usize;
     broken[messages] = 0x7f;
     let framed = broken.len() - 4;
-    let sum = super::super::bytes::crc32(&broken[..framed]);
+    let sum = crate::compress::checksum::crc32(&broken[..framed]);
     broken[framed..].copy_from_slice(&sum.to_le_bytes());
     assert_eq!(parse(&schema, &broken, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt);
     let nowhere = [pair("tenant", "8")];

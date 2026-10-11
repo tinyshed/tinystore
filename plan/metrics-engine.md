@@ -94,9 +94,16 @@ is one migration, `0001`, until `v0.1.0`.
 - A head is chunks of at most 240 samples behind one header and a checksum
   bound to the series, one parser for the layout. A write decodes and
   re-encodes only the chunks its samples touch; the others keep their bytes.
+  A head holds at most 16,384 samples and 1 MiB, so that the backlog of one
+  call fits; past it is `limit` until packing catches up.
 - The newest time a series has seen moves once, at the end of a call, so
-  that a backlog does not refuse its own samples halfway through. A series
-  with 240 samples behind its watermark is marked ready.
+  that a backlog does not refuse its own samples halfway through. A series is
+  marked ready once the first unit of the ladder its head starts in lies
+  behind that time: a guess from the head's extent, which packing checks
+  against the samples.
+- A series is found by its identity alone, the SHA-256 of its labels each
+  behind its length: where the Go engine confirmed a match by the label ids
+  too, a collision of SHA-256 is not a case this engine handles.
 
 ### Instruments
 
@@ -160,7 +167,9 @@ is one migration, `0001`, until `v0.1.0`.
 
 One byte layout, one parser, each: a head chunk, a clock, a value body, a
 directory, an exact summary. Decoding, reuse and partial reads start from
-what that parser returns.
+what that parser returns. What records packs with too, varints and their
+bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
+`compress`, which both engines stand on.
 
 - **Times** live in clocks: none for evenly spaced samples, else the
   distances between them or their changes. A clock is shared by digest, and
@@ -198,9 +207,11 @@ what that parser returns.
   `read` and `aggregate` carry it out, so that what a plan says is what the
   call spends.
 - **A snapshot** then copies bytes only, directories, clocks, payloads and
-  head chunks, into one buffer the plan sized, inside one read transaction,
-  and ends before anything is decoded. The query's weight is reserved from
-  the store's memory before it starts.
+  head chunks, inside one read transaction, each row's bytes checked against
+  what the read may still copy before it is, and ends before anything is
+  decoded. The query's weight, the bytes it copied and the samples they
+  hold, is then reserved from the store's memory before it decodes, waiting
+  for it as records' reads do.
 - **Decoding** runs on the caller's thread: an evenly spaced clock fills its
   times without reading, values decode straight into columns. Research's
   parallel decode helped some reads and slowed others; it waits for a

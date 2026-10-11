@@ -16,12 +16,12 @@
 //! "2026-09-23 00:47:32,100 GET /notes"      → stamped text: see `stamp`
 //! ```
 
-use super::bytes::{Reader, put_count};
 use super::head::Codec;
 use super::ints::{put_direct, put_ints, read_direct, read_ints};
 use super::stamp::{MOST_DIGITS, behind, put_stamped, read_stamped};
 use super::text::{Decoder, Keep, put_bytes, put_texts, read_bytes, read_texts, texts_equal, wants};
 use crate::Result;
+use crate::compress::varint::{Reader, put_count};
 
 // what a column's values are, in the low bits of its first byte
 const TEXT: u8 = 0;

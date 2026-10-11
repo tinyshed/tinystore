@@ -21,13 +21,14 @@
 
 use std::collections::BTreeSet;
 
-use super::bytes::{Reader, crc32, put_count};
 use super::event::{Fields, Kept, Level, SpanId, TraceId};
 use super::head::{Codec, ROW_EVENTS, Row};
 use super::ints::{put_ints, read_ints};
 use super::segment::{HAS_CONTEXT, HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE, Schema, Shape, WHOLE_FIELDS};
 use super::text::{Decoder, Keep, put_texts, read_texts, wants};
 use super::values::{put_values, read_values, values_equal};
+use crate::compress::checksum::crc32;
+use crate::compress::varint::{Reader, put_count};
 use crate::{Error, Result};
 
 /// A block's first byte, which no head row has.

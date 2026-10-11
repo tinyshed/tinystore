@@ -7,8 +7,10 @@
 //! event   = at | name | presence | level | message | trace | span | context | fields
 //! ```
 
-use super::bytes::{Reader, crc32, put_count, put_int, put_text};
 use super::event::{Fields, Kept, Level, MAX_EVENT, MAX_KEYS, SpanId, TraceId};
+use crate::compress::checksum::crc32;
+use crate::compress::frame::Zstd;
+use crate::compress::varint::{Reader, put_count, put_int, put_text};
 use crate::{Error, Result};
 
 pub(super) const VERSION: u8 = 1;
@@ -36,33 +38,31 @@ const PACKED_LEVEL: i32 = 7;
 
 /// The zstd contexts of whoever encodes or parses rows, made at their first
 /// use and kept for the next.
-#[derive(Default)]
 pub(super) struct Codec {
-    compressor: Option<zstd::bulk::Compressor<'static>>,
-    packer: Option<zstd::bulk::Compressor<'static>>,
-    decompressor: Option<zstd::bulk::Decompressor<'static>>,
+    rows: Zstd,
+    packed: Zstd,
+}
+
+impl Default for Codec {
+    fn default() -> Self {
+        Codec { rows: Zstd::new(LEVEL), packed: Zstd::new(PACKED_LEVEL) }
+    }
 }
 
 impl Codec {
     fn squeeze(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
-        squeezed(&mut self.compressor, LEVEL, plain)
+        self.rows.squeeze(plain).map_err(|error| error.within("records"))
     }
 
     /// Squeezes text of a segment, harder than a head row's.
     pub(super) fn squeeze_packed(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
-        squeezed(&mut self.packer, PACKED_LEVEL, plain)
+        self.packed.squeeze(plain).map_err(|error| error.within("records"))
     }
 
     /// Expands a frame into `most` bytes at most: a frame that says more is
     /// refused before anything is allocated for it.
     pub(super) fn expand(&mut self, frame: &[u8], most: usize) -> Result<Vec<u8>> {
-        if self.decompressor.is_none() {
-            let made = zstd::bulk::Decompressor::new();
-            self.decompressor =
-                Some(made.map_err(|error| Error::internal("records: zstd could not start").with_source(error))?);
-        }
-        let Some(decompressor) = self.decompressor.as_mut() else { return Ok(Vec::new()) };
-        decompressor.decompress(frame, most).map_err(|_| Error::corrupt("a row's frame"))
+        self.rows.expand(frame, most)
     }
 
     /// Lets the contexts go, as maintenance does for a store that stopped
@@ -70,15 +70,6 @@ impl Codec {
     pub(super) fn rest(&mut self) {
         *self = Codec::default();
     }
-}
-
-/// Squeezes `plain` with the context of `level`, made at its first use.
-fn squeezed(context: &mut Option<zstd::bulk::Compressor<'static>>, level: i32, plain: &[u8]) -> Result<Vec<u8>> {
-    let failed = |error| Error::internal("records: zstd could not write a row").with_source(error);
-    if context.is_none() {
-        *context = Some(zstd::bulk::Compressor::new(level).map_err(failed)?);
-    }
-    context.as_mut().map_or_else(|| Ok(Vec::new()), |compressor| compressor.compress(plain).map_err(failed))
 }
 
 /// A row as its table keeps it.

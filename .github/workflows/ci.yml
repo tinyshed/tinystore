@@ -52,7 +52,7 @@ jobs:
       - name: Lint the library's features alone
         shell: bash
         run: |
-          for features in console kv jobs sql blobs records wire kv,jobs,sql,blobs,records; do
+          for features in console kv jobs sql blobs records metrics wire kv,jobs,sql,blobs,records,metrics; do
             cargo clippy -p tinystore --no-default-features --features "$features" --all-targets --locked -- -D warnings
           done
 

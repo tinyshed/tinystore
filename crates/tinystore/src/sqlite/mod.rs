@@ -17,6 +17,7 @@ mod group;
 mod memory;
 mod migrate;
 mod mutex;
+mod prefix;
 mod readers;
 
 use std::fmt;
@@ -33,6 +34,7 @@ pub(crate) use given::given;
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
 pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};
+pub(crate) use prefix::{TextBytes, prefix_end};
 
 /// The writer inside a transaction: a grouped write's savepoint, or a
 /// transaction of its own. It derefs to the connection, so an engine prepares

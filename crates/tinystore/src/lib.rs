@@ -7,6 +7,8 @@
 #[cfg(feature = "blobs")]
 pub mod blobs;
 mod clock;
+#[cfg(any(feature = "records", feature = "metrics"))]
+mod compress;
 #[cfg(feature = "console")]
 pub mod console;
 #[cfg(any(feature = "kv", feature = "blobs"))]
@@ -25,6 +27,8 @@ mod key;
 pub mod kv;
 #[cfg(feature = "store")]
 mod memory;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 #[cfg(feature = "wire")]
 pub mod pipe;
 #[cfg(feature = "records")]

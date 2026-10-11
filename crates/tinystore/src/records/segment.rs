@@ -22,10 +22,11 @@
 
 use std::collections::HashMap;
 
-use super::bytes::{Reader, crc32, put_count, put_text};
 use super::event::{Fields, Kept, MAX_EVENT, MAX_KEYS};
 use super::head::Codec;
 use super::text::{Decoder, put_blob, read_blob};
+use crate::compress::checksum::crc32;
+use crate::compress::varint::{Reader, put_count, put_text};
 use crate::{Error, Result};
 
 pub(super) const VERSION: u8 = 1;
