@@ -58,6 +58,8 @@ pub(super) struct Staged {
     pub(super) group: Group,
     /// The hint of the grid's scale its next block tries.
     pub(super) scale: i64,
+    /// Complete units it holds past what a group takes, for the next pass.
+    left: bool,
 }
 
 impl Staged {
@@ -88,15 +90,18 @@ const UNREADY: &str = "update series_state set ready = 0 where series_id = ?1 an
 const SUSPEND: &str = "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
 
 impl Engine {
-    /// Packs a pass's worth of the ready series, and says whether more wait.
+    /// Packs a pass's worth of the ready series, a group each, and says
+    /// whether more wait: other series, or more complete units of one than a
+    /// group takes.
     pub(super) fn pack(&self, now: i64) -> Result<(Packed, bool)> {
         let ready = self.ready_series()?;
-        let unfinished = ready.len() == PASS_SERIES;
+        let mut unfinished = ready.len() == PASS_SERIES;
         let mut packed = Packed::default();
         let mut staged: Vec<Staged> = Vec::new();
         let mut zstd = self.codecs.take();
         for id in ready {
             let Some(series) = self.stage(&mut zstd, id, now, &mut packed)? else { continue };
+            unfinished |= series.left;
             let full = staged.len() == BATCH_SERIES
                 || staged.iter().map(Staged::bytes).sum::<usize>() + series.bytes() > BATCH_BYTES;
             if full {
@@ -267,6 +272,7 @@ fn encode(zstd: &mut Zstd, mut candidate: Candidate) -> Result<Staged> {
             (clock_bytes + block.times.steps.len() + 32, entry_bytes + entry, taken + run.len(), hint);
         blocks.push(block);
     }
+    let left = taken < candidate.points.len();
     candidate.points.truncate(taken);
     let group = Group {
         series: candidate.id,
@@ -276,7 +282,7 @@ fn encode(zstd: &mut Zstd, mut candidate: Candidate) -> Result<Staged> {
         live: mask(blocks.len()),
         blocks,
     };
-    Ok(Staged { candidate, group, scale })
+    Ok(Staged { candidate, group, scale, left })
 }
 
 /// The runs of a prefix that blocks take: a unit's samples, every 240 when

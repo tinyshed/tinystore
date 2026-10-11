@@ -144,13 +144,34 @@ fn a_group_takes_in_the_one_before_it_while_that_holds_no_more_blocks() {
 #[test]
 fn a_unit_holding_more_than_240_samples_is_cut_every_240() {
     let f = fixture();
-    let written = f.gauge("fast", 1201, Duration::from_millis(100), |index| index as f64);
+    // a sample a day ago, 300 within a second twelve hours ago, and one now: units of eight hours
+    let burst = f.now() - 12 * HOUR;
+    let mut written = Series::gauge("bursty").sample(f.now() - DAY, -1.0);
+    written.extend((0..300_u32).map(|index| (burst + Duration::from_millis(u64::from(index)), f64::from(index))));
+    let written = written.sample(f.now(), -2.0);
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
     maintain(&f.store).unwrap();
     let blocks: Vec<usize> = groups(&f).iter().flat_map(|(_, _, blocks)| blocks.iter().map(|block| block.2)).collect();
-    assert!(blocks.iter().all(|count| *count <= 240), "{blocks:?}");
-    let read = f.metrics().query().name("fast").read().unwrap();
+    assert_eq!(blocks, [1, 240, 60]);
+    let read = f.metrics().query().name("bursty").read().unwrap();
     assert_eq!(bits(&read[0]), bits(&written));
+}
+
+#[test]
+fn a_series_a_sample_a_millisecond_packs_before_its_head_is_full() {
+    let f = fixture();
+    let first = f.now() - Duration::from_secs(40);
+    // four ingests of ten seconds each: a head holds 16,384 samples
+    for batch in 0..4_u32 {
+        let mut series = Series::gauge("fast");
+        let from = first + Duration::from_secs(10) * batch;
+        series.extend((0..10_000_u32).map(|index| (from + Duration::from_millis(u64::from(index)), f64::from(index))));
+        f.metrics().ingest(&[series]).unwrap();
+        maintain(&f.store).unwrap();
+    }
+    let blocks: Vec<usize> = groups(&f).iter().flat_map(|(_, _, blocks)| blocks.iter().map(|block| block.2)).collect();
+    assert!(blocks.iter().all(|count| *count == 200), "units of 200 milliseconds: {blocks:?}");
+    assert_eq!(f.value("select head_count from series_state") + 200 * blocks.len() as i64, 40_000);
 }
 
 #[test]

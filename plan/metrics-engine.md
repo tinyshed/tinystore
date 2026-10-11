@@ -137,14 +137,19 @@ is one migration, `0001`, until `v0.1.0`.
 ## Packing
 
 - Background work through `Host::every`, each minute and when the ready
-  index holds work, a bounded number of series a pass. `background: false`
-  stops it, and a test packs through the engine's maintenance.
+  index holds work, a bounded number of series a pass and a group a series;
+  another pass follows at once while one left series ready or a series more
+  complete units than a group takes. `background: false` stops it, and a
+  test packs through the engine's maintenance.
 - What may be packed is a prefix: the samples before the series' newest
   time less the engine's lateness, zero as the Go engine's until a
   measurement of late arrivals says otherwise. A quiet series is never forced
   into a block; its head may expire whole.
 - Blocks are cut where a unit of this ladder begins, in UTC: 1, 5, 10, 15
-  and 30 minutes, 1, 2, 3, 4, 6, 8 and 12 hours, a day. Each divides a day.
+  and 30 minutes, 1, 2, 3, 4, 6, 8 and 12 hours, a day; and below a minute,
+  for a series faster than four samples a second, 200 and 500 milliseconds,
+  1, 2, 5, 10, 15, 20 and 30 seconds, so that no head waits for a unit to end
+  with more samples than it holds. Each divides a day.
   A series takes the largest unit that holds at most 240 of its samples at
   the mean step of what it packs, a unit that holds more cut every 240:
   every 15 seconds is a block an hour, 240 samples; every minute, 4 hours;

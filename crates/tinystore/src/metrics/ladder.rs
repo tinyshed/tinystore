@@ -7,18 +7,33 @@
 //! A series takes the largest unit that holds at most 240 of its samples:
 //!
 //! ```text
-//! a sample every   15 s    1 min    10 s    5 min    1 s
-//! a block          1 h     4 h      30 min  12 h     1 min, 60 samples
+//! a sample every   15 s    1 min    10 s    5 min    1 s      100 ms   1 ms
+//! a block          1 h     4 h      30 min  12 h     1 min    20 s     200 ms
 //! ```
+//!
+//! The ladder reaches below a minute for a series faster than four samples a
+//! second: were a minute its shortest unit, a head would wait for one to end
+//! with more samples than it may hold.
 
 use super::codec::MOST_SAMPLES;
 
-const MINUTE: i64 = 60_000;
+const SECOND: i64 = 1000;
+const MINUTE: i64 = 60 * SECOND;
 const HOUR: i64 = 60 * MINUTE;
 pub(super) const DAY: i64 = 24 * HOUR;
 
-/// The units, the shortest first.
-const UNITS: [i64; 13] = [
+/// The units, the shortest first. The shortest holds 200 samples a
+/// millisecond apart, the closest a series' times lie.
+const UNITS: [i64; 22] = [
+    200,
+    500,
+    SECOND,
+    2 * SECOND,
+    5 * SECOND,
+    10 * SECOND,
+    15 * SECOND,
+    20 * SECOND,
+    30 * SECOND,
     MINUTE,
     5 * MINUTE,
     10 * MINUTE,
@@ -35,13 +50,14 @@ const UNITS: [i64; 13] = [
 ];
 
 /// The unit of `count` samples from `start` to `end`: the largest whose span
-/// holds at most 240 of them at their mean step. A series faster than four
-/// samples a second takes a minute, which packing cuts every 240 samples.
+/// holds at most 240 of them at their mean step. A unit that holds more all
+/// the same, where a series wrote faster for a while, packing cuts every 240
+/// samples.
 pub(super) fn unit_of(count: usize, start: i64, end: i64) -> i64 {
     let Some(gaps) = count.checked_sub(1).filter(|gaps| *gaps > 0) else { return DAY };
     let step = end.saturating_sub(start) / gaps as i64;
     let holds = step.saturating_mul(MOST_SAMPLES as i64);
-    UNITS.iter().rev().copied().find(|unit| *unit <= holds).unwrap_or(MINUTE)
+    UNITS.iter().rev().copied().find(|unit| *unit <= holds).unwrap_or(UNITS[0])
 }
 
 /// Where the unit holding `at` begins.
@@ -67,10 +83,18 @@ mod tests {
         assert_eq!(unit(5 * MINUTE), 12 * HOUR);
         assert_eq!(unit(HOUR), DAY);
         assert_eq!(unit(1000), MINUTE);
-        assert_eq!(unit(100), MINUTE);
+        assert_eq!(unit(100), 20 * SECOND);
+        assert_eq!(unit(1), 200, "a sample a millisecond, the closest times lie");
         assert_eq!(unit(14_990), 30 * MINUTE, "a step a little short of 15 s holds more than 240 in an hour");
         assert_eq!(unit_of(1, 5, 5), DAY);
-        assert_eq!(unit_of(2, 5, 5), MINUTE);
+        assert_eq!(unit_of(2, 5, 5), 200);
+    }
+
+    #[test]
+    fn every_unit_divides_a_day_and_none_holds_more_than_a_head_at_a_millisecond_a_sample() {
+        assert!(UNITS.iter().all(|unit| DAY % unit == 0), "a bucket of whole units holds whole blocks");
+        assert!(UNITS.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(UNITS[0] <= MOST_SAMPLES as i64);
     }
 
     #[test]

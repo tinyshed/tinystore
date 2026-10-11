@@ -80,6 +80,7 @@ module defines.
 - an append need not churn due indexes — `TestExistingSeriesIngestAvoidsUnchangedDueIndexes`
 - untouched head chunks keep their bytes — `untouched_head_chunks_keep_their_bytes` in `metrics::head`
 - a block is cut where a unit of the ladder begins, never across one, and a unit of more than 240 samples every 240 — `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole`, `a_unit_holding_more_than_240_samples_is_cut_every_240` in `metrics::pack`
+- a series a sample a millisecond packs before its head is full, the ladder's shortest unit holding 200 of them — `a_series_a_sample_a_millisecond_packs_before_its_head_is_full` in `metrics::pack`, `every_unit_divides_a_day_and_none_holds_more_than_a_head_at_a_millisecond_a_sample` in `metrics::ladder`
 - a merge rewrites directories and relocates no payload, a group taking in the one before while it holds no more — `a_group_takes_in_the_one_before_it_while_that_holds_no_more_blocks` in `metrics::pack`
 - a read decodes only the blocks its range touches — `a_range_reads_the_blocks_and_the_head_it_touches_and_no_more` in `metrics::pack`
 - an exact sum is rounded once, as a float addition and a float division are — `a_sum_of_two_rounds_as_their_float_sum_does`, `a_quotient_rounds_as_a_float_division_does` in `metrics::exact`
