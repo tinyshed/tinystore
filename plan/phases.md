@@ -104,7 +104,10 @@ them.
   column as it keeps its values and summed its checksum sixteen bytes at a time, the exact filter took 76.24.
   Counts, a key's most frequent values and aggregates by span and key, with stats and distinct values, walk
   the same reads a page at a time and hold only their answer; `streams` and `fieldNames` say what a store
-  holds, the keys of packed segments from beside them. A block keeps its events by columns: integers by their steps, a steady one, a
+  holds, the keys of packed segments from beside them. Owed once `tail` and `poll` are built: their time and
+  peak memory on the production corpus, and then the fast paths that pay — a count from the counts of the
+  blocks a range covers whole, a stat from its column without the events built, `top` and `distinct` from a
+  column's dictionary. A block keeps its events by columns: integers by their steps, a steady one, a
   dictionary or the value most share; text by a dictionary or through zstd, with the times it spells cut out; a
   value's quotes taken off, uuids and hex as their bytes, integers that count time as how far behind their
   events they lie. On the 1,713,543 records two production hosts' containers wrote, 178,796 of them JSON and

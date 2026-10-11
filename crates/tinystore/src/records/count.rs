@@ -30,9 +30,11 @@ const TOP: usize = 10;
 const MOST_TOP: usize = 1000;
 /// The rows `aggregate` gives at most.
 const MOST_ROWS: usize = 10_000;
-/// The different values a count holds at once at most: of the key `top`
-/// counts, or of every field `distinct` names in every row.
-const MOST_DISTINCT: usize = 1_000_000;
+/// What the different values a count holds may weigh at most: of the key
+/// `top` counts, or of every field `distinct` names in every row, each its
+/// JSON and what its map spends on it.
+const MOST_HELD: usize = 64 << 20;
+const HELD_EACH: usize = 64;
 
 /// A value of a key and how many events hold it.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,8 +64,9 @@ impl Number {
 /// a row has none there.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stats {
-    /// The row's events whose value there is a number.
-    pub count: u64,
+    /// The row's events whose value there is a number, which `avg` divides
+    /// `sum` by.
+    pub samples: u64,
     pub sum: Number,
     pub min: Number,
     pub max: Number,
@@ -157,13 +160,12 @@ impl List {
         if !(1..=MOST_TOP).contains(&limit) {
             return Err(Error::invalid(format!("top {limit} values: it gives 1 to {MOST_TOP}")));
         }
-        let mut counts: HashMap<String, Top> = HashMap::new();
+        let (mut counts, mut held): (HashMap<String, Top>, Held) = (HashMap::new(), Held::default());
         for event in self.walk("top")? {
             let Some(value) = value_of(&event?, key) else { continue };
-            counts.entry(value.to_string()).or_insert(Top { value, count: 0 }).count += 1;
-            if counts.len() > MOST_DISTINCT {
-                return Err(Error::limit(format!("{key}: past the {MOST_DISTINCT} values one count holds")));
-            }
+            let json = value.to_string();
+            held.add(&json, !counts.contains_key(&json)).map_err(|error| error.within(key))?;
+            counts.entry(json).or_insert(Top { value, count: 0 }).count += 1;
         }
         let mut top: Vec<Top> = counts.into_values().collect();
         top.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.to_string().cmp(&b.value.to_string())));
@@ -179,7 +181,7 @@ impl List {
             span => span.map(nanos),
         };
         let (first, _) = self.span()?;
-        let mut rows = Rows { asked: aggregate, rows: HashMap::new(), distinct: 0 };
+        let mut rows = Rows { asked: aggregate, rows: HashMap::new(), held: Held::default() };
         for event in self.walk("aggregate")? {
             let event = event?;
             let at = every.map_or(first, |every| unix_nanos(event.at).div_euclid(every) * every);
@@ -236,6 +238,30 @@ impl Records {
     }
 }
 
+/// What the different values a count holds weigh, and the most they may.
+struct Held {
+    bytes: usize,
+    most: usize,
+}
+
+impl Default for Held {
+    fn default() -> Held {
+        Held { bytes: 0, most: MOST_HELD }
+    }
+}
+
+impl Held {
+    /// Counts a value's JSON in when it is a new one: past the most a count
+    /// may hold, `limit`.
+    fn add(&mut self, json: &str, new: bool) -> Result<()> {
+        self.bytes += if new { json.len() + HELD_EACH } else { 0 };
+        if self.bytes > self.most {
+            return Err(Error::limit(format!("past the {} bytes of different values one count holds", self.most)));
+        }
+        Ok(())
+    }
+}
+
 /// The value of a key an event holds: its stream's name, its name or its
 /// level's, or a field's, else its context's.
 fn value_of(event: &Event, key: &str) -> Option<Value> {
@@ -264,8 +290,7 @@ struct Rows<'a> {
     asked: &'a Aggregate,
     /// By the start of a row's span and its keys' values as JSON.
     rows: HashMap<(i64, String), Filling>,
-    /// The different values the rows hold in all.
-    distinct: usize,
+    held: Held,
 }
 
 /// A row being filled.
@@ -279,7 +304,7 @@ struct Filling {
 /// A field's numbers in a row, summed as they come.
 #[derive(Default)]
 struct Summing {
-    count: u64,
+    samples: u64,
     integers: i128,
     floats: f64,
     float: bool,
@@ -306,16 +331,15 @@ impl Rows<'_> {
         row.count += 1;
         for (summing, key) in row.stats.iter_mut().zip(&asked.stats) {
             if let Some(number) = value_of(event, key).as_ref().and_then(number) {
-                summing.add(number);
+                summing.add(number).map_err(|error| error.within(key.as_str()))?;
             }
         }
         for (values, key) in row.distinct.iter_mut().zip(&asked.distinct) {
             if let Some(value) = value_of(event, key) {
-                self.distinct += usize::from(values.insert(value.to_string()));
+                let json = value.to_string();
+                self.held.add(&json, !values.contains(&json)).map_err(|error| error.within(key.as_str()))?;
+                values.insert(json);
             }
-        }
-        if self.distinct > MOST_DISTINCT {
-            return Err(Error::limit(format!("past the {MOST_DISTINCT} different values an aggregate holds")));
         }
         Ok(())
     }
@@ -347,10 +371,15 @@ impl Rows<'_> {
 }
 
 impl Summing {
-    fn add(&mut self, number: Number) {
-        self.count += 1;
+    /// Adds a number; a sum of integers past what 128 bits hold is `limit`,
+    /// never one less exact.
+    fn add(&mut self, number: Number) -> Result<()> {
+        self.samples += 1;
         match number {
-            Number::Integer(integer) => self.integers = self.integers.saturating_add(integer),
+            Number::Integer(integer) => {
+                let sum = self.integers.checked_add(integer);
+                self.integers = sum.ok_or_else(|| Error::limit("a sum of integers past what 128 bits hold"))?;
+            }
             Number::Float(float) => (self.floats, self.float) = (self.floats + float, true),
         }
         let less = |a: Number, b: Number| match (a, b) {
@@ -363,6 +392,7 @@ impl Summing {
         if self.most.is_none_or(|most| less(most, number)) {
             self.most = Some(number);
         }
+        Ok(())
     }
 
     /// What the numbers add up to; none when there were none.
@@ -370,7 +400,7 @@ impl Summing {
         let (min, max) = (self.least?, self.most?);
         let sum =
             if self.float { Number::Float(self.integers as f64 + self.floats) } else { Number::Integer(self.integers) };
-        Some(Stats { count: self.count, sum, min, max, avg: sum.as_f64() / self.count as f64 })
+        Some(Stats { samples: self.samples, sum, min, max, avg: sum.as_f64() / self.samples as f64 })
     }
 }
 

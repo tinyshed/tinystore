@@ -182,6 +182,7 @@ module defines.
 - an aggregate gives a row a span and a value of its keys, no row to a span without events — `an_aggregate_gives_a_row_a_span_and_a_value_of_its_keys` in `records::count`
 - a sum of integers is exact past 2⁶³, and a fraction makes it a float's — `a_sum_of_integers_is_exact_and_a_fraction_makes_it_a_floats` in `records::count`
 - an aggregate past its rows is `limit`, never a smaller answer — `an_aggregate_past_ten_thousand_rows_is_limit_and_never_a_smaller_answer` in `records::count`
+- what a count holds of different values is bounded in bytes, and a sum past 128 bits is `limit` — `what_a_count_holds_of_different_values_is_bounded_in_bytes_and_a_sum_past_128_bits_is_limit` in `records::count`
 - a store's streams are those with events, with what they keep and their oldest and newest — `streams_are_those_with_events_with_what_they_keep_and_their_oldest_and_newest` in `records::count`
 - field names are the keys of fields and contexts, sorted, by prefix and limit — `field_names_are_the_keys_of_fields_and_contexts_sorted` in `records::count`
 - a read merges segments and the head by time, and finds each event once — `a_read_finds_each_event_once_in_what_is_packed_and_what_waits` in `records::pack`

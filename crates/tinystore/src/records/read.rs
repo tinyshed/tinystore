@@ -221,10 +221,15 @@ impl List {
     }
 
     /// The keys the events of the read's range hold, in their fields and
-    /// their contexts, sorted: those that begin with `prefix`, as many as its
-    /// limit, 1000 unless it says. A packed segment that reaches into the
-    /// range gives every key it holds, which the file keeps beside its events.
-    pub fn field_names(&self, prefix: &str) -> Result<Vec<String>> {
+    /// their contexts, sorted: as many as its limit, 1000 unless it says. A
+    /// packed segment that reaches into the range gives every key it holds,
+    /// which the file keeps beside its events.
+    pub fn field_names(&self) -> Result<Vec<String>> {
+        self.field_names_prefix("")
+    }
+
+    /// The keys `field_names` gives that begin with `prefix`.
+    pub fn field_names_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         let named = self.records.field_names(self.stream.as_ref(), &self.query, prefix);
         named.map_err(|error| self.within(error))
     }

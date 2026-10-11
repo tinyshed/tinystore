@@ -83,8 +83,13 @@ fn an_aggregate_gives_a_row_a_span_and_a_value_of_its_keys() {
     );
     let first = &rows[0];
     assert_eq!(first.by, BTreeMap::from([("level".to_owned(), json!("error"))]));
-    let ms =
-        Stats { count: 2, sum: Number::Integer(280), min: Number::Integer(90), max: Number::Integer(190), avg: 140.0 };
+    let ms = Stats {
+        samples: 2,
+        sum: Number::Integer(280),
+        min: Number::Integer(90),
+        max: Number::Integer(190),
+        avg: 140.0,
+    };
     assert_eq!(first.stats, BTreeMap::from([("ms".to_owned(), ms)]));
     assert_eq!(first.distinct, BTreeMap::from([("route".to_owned(), 2)]));
     // without every the range is one span, and without by a span one row
@@ -105,7 +110,7 @@ fn a_sum_of_integers_is_exact_and_a_fraction_makes_it_a_floats() {
         .unwrap();
     let stats = big.list().aggregate(&Aggregate::new().stats(["n"])).unwrap()[0].stats["n"];
     // the string is no number, and a field called count meets nothing of the row's own
-    assert_eq!((stats.count, stats.min, stats.max), (4, Number::Float(1.5), Number::Integer(i128::from(huge))));
+    assert_eq!((stats.samples, stats.min, stats.max), (4, Number::Float(1.5), Number::Integer(i128::from(huge))));
     assert_eq!(stats.sum, Number::Float(3.0 * huge as f64 + 1.5));
 }
 
@@ -140,11 +145,25 @@ fn field_names_are_the_keys_of_fields_and_contexts_sorted() {
     let (api, _) = api(&fixture);
     api.append_all([NewEvent::new("request").context(&json!({ "host": "web" })).fields(&json!({ "user": 7 }))])
         .unwrap();
-    assert_eq!(api.list().field_names("").unwrap(), ["batch", "host", "ms", "route", "user"]);
-    assert_eq!(api.list().field_names("r").unwrap(), ["route"]);
-    assert_eq!(api.list().limit(2).field_names("").unwrap(), ["batch", "host"]);
+    assert_eq!(api.list().field_names().unwrap(), ["batch", "host", "ms", "route", "user"]);
+    assert_eq!(api.list().field_names_prefix("r").unwrap(), ["route"]);
+    assert_eq!(api.list().limit(2).field_names().unwrap(), ["batch", "host"]);
     // the packed segment lies wholly before the last minute, and gives nothing to it
-    assert_eq!(api.list().since(MINUTE).field_names("").unwrap(), ["host", "ms", "route", "user"]);
+    assert_eq!(api.list().since(MINUTE).field_names().unwrap(), ["host", "ms", "route", "user"]);
     let all = fixture.store.all_events().unwrap();
-    assert_eq!(all.list().field_names("u").unwrap(), ["user"]);
+    assert_eq!(all.list().field_names_prefix("u").unwrap(), ["user"]);
+}
+
+#[test]
+fn what_a_count_holds_of_different_values_is_bounded_in_bytes_and_a_sum_past_128_bits_is_limit() {
+    let mut held = Held { bytes: 0, most: 200 };
+    let value = "\"0123456789012345678901234567890123456789\"";
+    // a value it holds already weighs nothing more; a new one its JSON and its map's
+    held.add(value, true).unwrap();
+    held.add(value, false).unwrap();
+    held.add("\"another\"", true).unwrap();
+    assert_eq!(held.add("\"a third\"", true).unwrap_err().kind(), ErrorKind::Limit);
+    let mut summing = Summing::default();
+    summing.add(Number::Integer(i128::MAX)).unwrap();
+    assert_eq!(summing.add(Number::Integer(1)).unwrap_err().kind(), ErrorKind::Limit);
 }

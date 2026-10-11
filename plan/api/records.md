@@ -342,7 +342,7 @@ const hourly = await store.events().aggregate({ since: '24h', every: '1h', by: [
 // [{ at, count: 3, by: { level: 'error' } }, { at, count: 41, by: { level: 'warn' } }, …]
 
 const latency = await api.aggregate({ since: '24h', names: ['request'], every: '5m', stats: ['duration'] })
-// [{ at, count: 310, stats: { duration: { count: 310, sum: 12772, min: 3, max: 1200, avg: 41.2 } } }, …]
+// [{ at, count: 310, stats: { duration: { samples: 287, sum: 12772, min: 3, max: 1200, avg: 44.5 } } }, …]
 ```
 
 - Each takes a query as `list` does, without `newest`, `limit` and `after`.
@@ -356,8 +356,9 @@ const latency = await api.aggregate({ since: '24h', names: ['request'], every: '
   keys in `by`, with the `count` of its events. Without `every` the range is
   one span; without `by` a span is one row. `at` is where a row's span
   begins, counted from 1970 in UTC. A span without events has no row.
-- `stats` names fields, and a row gives each one's `count`, `sum`, `min`,
-  `max` and `avg` over the events whose value there is a number. `distinct`
+- `stats` names fields, and a row gives each one's `samples`, `sum`, `min`,
+  `max` and `avg` over the events whose value there is a number: `samples`
+  is how many those are, which `avg` divides `sum` by. `distinct`
   names fields, and a row gives how many different values each has. A
   field with no number in a row has no `stats` there.
 - A row keeps what the program named under `by`, `stats` and `distinct`, as
@@ -365,11 +366,13 @@ const latency = await api.aggregate({ since: '24h', names: ['request'], every: '
   of the row's own.
 - A sum of integers is exact, a `bigint` past 2⁵³; a value with a fraction
   makes it a float's.
-- An answer is whole or an error: past 10,000 rows, or past a million
+- An answer is whole or an error: past 10,000 rows, or past 64 MiB of
   different values held for `top` or `distinct`, it is `limit`, never a
-  smaller answer. Ask for a shorter range or a wider `every`.
-- Each reads every event its query finds, a page at a time, and holds only
-  its answer.
+  smaller answer, and so is a sum of integers past what 128 bits hold. Ask
+  for a shorter range or a wider `every`.
+- Each reads every event its query finds, a page at a time, each page from
+  one moment of the file, and holds only its answer: an event appended while
+  it reads may count or not, and none counts twice.
 
 ## What a store holds
 
@@ -460,7 +463,7 @@ not keep is counted in `dropped`.
 | what a store holds for tails | the last 1 MiB of events             |
 | `top`                        | 10 values, 1000 at most              |
 | `aggregate`                  | 10,000 rows                          |
-| what a count holds           | a million different values           |
+| what a count holds           | 64 MiB of different values           |
 | behind which `poll` runs     | an hour at most                      |
 
 ## What the engine chooses
