@@ -21,6 +21,7 @@
 //! plan/api/sqldb.md is the book: the TypeScript, Python and Go spellings, and
 //! why each call is as it is.
 
+#[cfg(feature = "wire")]
 mod columns;
 mod database;
 mod engine;
@@ -41,11 +42,15 @@ pub use query::{Direction, Page, Query, Table, Upsert};
 pub use statement::Sql;
 pub use tx::Tx;
 
-pub(crate) use columns::{Column, Columns};
-pub(crate) use rows::{Answer, Held, Keep, Kept, Rows};
-pub(crate) use run::Wanted;
-pub(crate) use tx::BOUND as TX_BOUND;
-pub(crate) use values::Value;
+// What the wire takes of sql: its answers by rows and by columns, and their values.
+#[cfg(feature = "wire")]
+pub(crate) use {
+    columns::{Column, Columns},
+    rows::{Answer, Held, Keep, Kept, Rows},
+    run::Wanted,
+    tx::BOUND as TX_BOUND,
+    values::Value,
+};
 
 #[cfg(test)]
 #[path = "database_tests.rs"]

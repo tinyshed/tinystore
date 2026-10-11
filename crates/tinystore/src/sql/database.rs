@@ -5,10 +5,13 @@ use serde::de::DeserializeOwned;
 
 use super::engine::{Base, Databases};
 use super::migrations::Migrations;
-use super::rows::{Answer, Held, Rows};
+#[cfg(feature = "wire")]
+use super::rows::Answer;
+use super::rows::{Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
+#[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::engine::SharedFile;
 use crate::{Durability, Error, Result, Store, Transaction};
 
@@ -150,6 +153,7 @@ impl Database {
     }
 
     /// The file the database lends to the buckets and queues opened from it.
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     pub(crate) fn shared(&self) -> &Arc<SharedFile> {
         &self.base.shared
     }
@@ -161,12 +165,14 @@ impl Database {
     }
 
     /// `exec` without waiting: `done` is called on the thread that commits it.
+    #[cfg(feature = "wire")]
     pub(crate) fn exec_then(&self, statement: Sql, done: impl FnOnce(Result<Done>) + Send + 'static) {
         let (weight, fail) = (statement.weight(), self.failed_by(&statement));
         self.base.file().submit(weight, move |tx| run::exec(tx, &statement), move |ran| done(ran.map_err(fail)));
     }
 
     /// `batch` without waiting: `done` is called on the thread that commits it.
+    #[cfg(feature = "wire")]
     pub(crate) fn batch_then(&self, statements: Vec<Sql>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
         let (weight, write) = batch_write(statements);
         let describe = self.base.describe();
@@ -176,6 +182,7 @@ impl Database {
     /// `rows_of` without waiting for a commit: a read's rows come before this
     /// returns, and a write's once its commit ends, on the thread that
     /// commits it.
+    #[cfg(feature = "wire")]
     pub(crate) fn rows_then<A: Answer + Send + 'static>(
         &self,
         statement: Sql,
@@ -200,6 +207,7 @@ impl Database {
     /// write: none when SQLite says the statement writes, or when it is not a
     /// query, since SQLite counts an ATTACH, which opens a file and stays on
     /// the shared reader, and a PRAGMA that changes the reader, as reads.
+    #[cfg(feature = "wire")]
     pub(crate) fn read<A: Answer>(&self, statement: &Sql, wanted: Wanted) -> Result<Option<A>> {
         if !is_query(statement.text()) || self.base.writes(statement.text()) {
             return Ok(None);
@@ -234,6 +242,7 @@ impl Database {
     }
 
     /// What names a failure of `statement`, to say it on another thread.
+    #[cfg(feature = "wire")]
     fn failed_by(&self, statement: &Sql) -> impl FnOnce(Error) -> Error + Send + 'static {
         let (statement, database) = (statement.describe(), self.base.describe());
         move |error| error.within(statement).within(database)
@@ -279,6 +288,7 @@ fn batch_write(
 /// "/* hourly */ with t as (select 1) select * from t"  → a query
 /// "attach database 'other.db' as other"                 → not one
 /// ```
+#[cfg(any(feature = "wire", test))]
 pub(super) fn is_query(text: &str) -> bool {
     let mut rest = text;
     loop {

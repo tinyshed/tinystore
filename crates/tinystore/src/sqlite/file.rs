@@ -273,7 +273,13 @@ impl File {
 }
 
 /// This thread inside a transaction of a file, from before it begins.
-pub(crate) struct Mark(#[expect(dead_code, reason = "held for its drop, which lets the thread go")] Held);
+pub(crate) struct Mark(
+    #[cfg_attr(
+        any(feature = "kv", feature = "jobs"),
+        expect(dead_code, reason = "held for its drop, which lets the thread go")
+    )]
+    Held,
+);
 
 /// A transaction begun on a file by [`File::begin`].
 pub(crate) struct Begun<'f> {

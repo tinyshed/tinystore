@@ -109,6 +109,7 @@ impl Quota {
     }
 
     /// `allow_n` without waiting: `done` gets the allowance once its commit ends.
+    #[cfg(feature = "wire")]
     pub(crate) fn allow_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<Allowance>) + Send + 'static) {
         self.scope.submit_made(key, ROW, self.allow_work(key, n), done);
     }
@@ -151,6 +152,7 @@ impl Quota {
     }
 
     /// `refund_n` without waiting for its commit.
+    #[cfg(feature = "wire")]
     pub(crate) fn refund_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<()>) + Send + 'static) {
         self.scope.submit_made(key, ROW, self.refund_work(key, n), done);
     }
@@ -179,6 +181,7 @@ impl Quota {
     }
 
     /// `reset` without waiting for its commit.
+    #[cfg(feature = "wire")]
     pub(crate) fn reset_then(&self, key: &str, done: impl FnOnce(Result<()>) + Send + 'static) {
         self.scope.submit_made(key, 0, self.reset_work(key), done);
     }

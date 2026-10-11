@@ -15,6 +15,7 @@
 //! ```
 
 mod allowance;
+#[cfg(feature = "wire")]
 mod batch;
 mod bucket;
 mod buffer;
@@ -46,14 +47,17 @@ pub use rate_limit::{RateLimit, RateLimitBuilder};
 pub use tx::{TxBucket, TxCounters};
 pub use value::{Bytes, Value};
 
-pub(crate) use batch::{Batch, Outcome, Place};
-pub(crate) use bucket::{Put, Stamp, WriteOptions};
-pub(crate) use cells::Cell;
-pub(crate) use once::{Hand, Handed, hand, rows as once_rows};
-pub(crate) use path::MAX_PATH as MAX_KEY;
-pub(crate) use value::Raw;
-// The wire's calls of a bucket inside a database's transaction.
-#[cfg(feature = "sql")]
+// What the wire takes of kv, and its calls of a bucket inside a database's transaction.
+#[cfg(feature = "wire")]
+pub(crate) use {
+    batch::{Batch, Outcome, Place},
+    bucket::{Put, Stamp, WriteOptions},
+    cells::Cell,
+    once::{Hand, Handed, hand, rows as once_rows},
+    path::MAX_PATH as MAX_KEY,
+    value::Raw,
+};
+#[cfg(all(feature = "sql", feature = "wire"))]
 pub(crate) use {bucket::clear_work, tx::call_on_branch, tx::call_on_key};
 
 use crate::{Result, Store};

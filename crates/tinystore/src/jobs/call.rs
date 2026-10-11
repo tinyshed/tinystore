@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use super::queue::{Change, Queue};
+#[cfg(feature = "wire")]
+use super::queue::Change;
+use super::queue::Queue;
 use super::repeat::Asked as Repeat;
 use super::values::{self, Kept};
 use super::write::Prepared;
@@ -115,6 +117,7 @@ where
     }
 
     /// The call's write without waiting; see [`Queue::write_then`].
+    #[cfg(feature = "wire")]
     pub(crate) fn write_then(self, change: Change, value: &V, done: impl FnOnce(Result<bool>) + Send + 'static) {
         self.queue.write_then(change, self.asked, value, done);
     }

@@ -5,10 +5,14 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
-use super::bucket::{Bucket, Expiry, Put, WriteOptions};
+use super::bucket::{Bucket, Expiry};
+#[cfg(feature = "wire")]
+use super::bucket::{Put, WriteOptions};
 use super::path::Key;
 use super::scope::{Kind, Scope};
-use super::value::{Raw, Value};
+#[cfg(feature = "wire")]
+use super::value::Raw;
+use super::value::Value;
 use crate::engine::Home;
 use crate::{Error, Result, Store};
 
@@ -48,6 +52,7 @@ impl<V: Value> OnceBuilder<V> {
 
 /// Once's answers as rows, for the wire: a client runs the function, and the
 /// store keeps what it answered under the key for `keep`.
+#[cfg(feature = "wire")]
 pub(crate) fn rows(store: &Store, name: &str, keep: Option<Duration>) -> Result<Bucket<()>> {
     answers(store, name, keep.unwrap_or(KEEP))
 }
@@ -62,6 +67,7 @@ fn answers<T>(store: &Store, name: &str, keep: Duration) -> Result<Bucket<T>> {
 }
 
 /// What a client's run of a key starts with.
+#[cfg(feature = "wire")]
 pub(crate) enum Hand {
     /// The answer kept under the key.
     Kept(Raw),
@@ -74,6 +80,7 @@ pub(crate) enum Hand {
 /// Starts a client's run of `key` on once's rows: the answer kept, or the run
 /// handed over, or, while another run holds the key, a wait that calls `waiter`
 /// once it ends, when the client asks again.
+#[cfg(feature = "wire")]
 pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Hand> {
     if let Some(cell) = answers.read_cell(key)? {
         return Ok(Hand::Kept(cell.raw));
@@ -91,12 +98,14 @@ pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Ha
 
 /// A run of a key a client was handed; dropping it lets the runs waiting for
 /// the key go on, keeping nothing.
+#[cfg(feature = "wire")]
 pub(crate) struct Handed {
     answers: Bucket<()>,
     key: String,
     running: (i64, Vec<u8>),
 }
 
+#[cfg(feature = "wire")]
 impl Handed {
     /// Keeps the client's answer, or nothing when its function failed, and
     /// lets the key go.
@@ -108,12 +117,14 @@ impl Handed {
     }
 }
 
+#[cfg(feature = "wire")]
 impl Drop for Handed {
     fn drop(&mut self) {
         self.answers.scope.kv.runs().release(&self.running);
     }
 }
 
+#[cfg(feature = "wire")]
 impl fmt::Debug for Handed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Handed({})", self.answers.scope.shown_key(&self.key))

@@ -47,9 +47,14 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # the console alone links no store and no SQLite
-      - name: Lint the console alone
-        run: cargo clippy -p tinystore --no-default-features --features console --all-targets --locked -- -D warnings
+      # the library built with each engine alone, the console alone, the wire alone and every engine
+      # without the wire: a program links what it opens and nothing else
+      - name: Lint the library's features alone
+        shell: bash
+        run: |
+          for features in console kv jobs sql blobs records wire kv,jobs,sql,blobs,records; do
+            cargo clippy -p tinystore --no-default-features --features "$features" --all-targets --locked -- -D warnings
+          done
 
       - name: Test
         run: cargo test --workspace --locked

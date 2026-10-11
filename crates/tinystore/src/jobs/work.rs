@@ -654,8 +654,10 @@ where
 /// inbox. The client answers each job it was sent, and a cancel answers one
 /// it took, so that each is answered once.
 #[derive(Clone, Default)]
+#[cfg(feature = "wire")]
 pub(crate) struct Answers(Arc<Inbox>);
 
+#[cfg(feature = "wire")]
 impl Answers {
     /// How the job's run ended; none for one a cancel took, which settles
     /// nothing.
@@ -667,10 +669,12 @@ impl Answers {
 /// A worker whose handlers are a client's: its loop runs on a thread of the
 /// store's and hands its jobs to `hand`, and their answers come back through
 /// its [`Answers`].
+#[cfg(feature = "wire")]
 pub(crate) struct Remote {
     running: Arc<Running>,
 }
 
+#[cfg(feature = "wire")]
 impl Remote {
     /// Takes no job more and returns: the loop gives back the jobs it holds
     /// and has not handed over, and writes the answers that still come.
@@ -686,6 +690,7 @@ impl Remote {
     }
 }
 
+#[cfg(feature = "wire")]
 impl fmt::Debug for Remote {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Remote")
@@ -693,6 +698,7 @@ impl fmt::Debug for Remote {
 }
 
 /// What a client's worker asks of its loop.
+#[cfg(feature = "wire")]
 pub(crate) struct RemoteWork {
     /// The client's handlers.
     pub(crate) local: usize,
@@ -707,6 +713,7 @@ pub(crate) struct RemoteWork {
 /// finished, or why it stopped.
 pub(crate) type Ended = Box<dyn FnOnce(Result<usize>) + Send>;
 
+#[cfg(feature = "wire")]
 pub(crate) fn start_remote(jobs: &Arc<Jobs>, queue: &Arc<QueueState>, work: RemoteWork) -> Result<Remote> {
     if jobs.closed() {
         return Err(Error::closed(queue.describe()));

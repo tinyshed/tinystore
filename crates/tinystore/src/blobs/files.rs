@@ -413,6 +413,7 @@ impl FileCall<'_> {
 
     /// Writes the whole file, or with `create` only where no file is; says
     /// what it wrote, nothing when a create found a file. The wire's put.
+    #[cfg(feature = "wire")]
     pub(crate) fn written(self, bytes: &[u8], create: bool) -> Result<Option<FileInfo>> {
         let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
         let condition = Condition { if_match: self.options.if_match.clone(), when_there };

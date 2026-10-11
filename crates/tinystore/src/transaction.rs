@@ -23,15 +23,21 @@
 
 use std::cell::RefCell;
 use std::fmt;
+#[cfg(any(feature = "kv", feature = "jobs"))]
 use std::sync::Arc;
 
-use crate::sqlite::{Begun, File, Mark, Tx as SqlTx, sql_error};
-use crate::{Error, Result, Store};
+#[cfg(any(feature = "kv", feature = "jobs"))]
+use crate::Store;
+#[cfg(any(feature = "kv", feature = "jobs"))]
+use crate::sqlite::{Begun, Mark};
+use crate::sqlite::{File, Tx as SqlTx, sql_error};
+use crate::{Error, Result};
 
 const SAVEPOINT: &str = "savepoint call";
 const RELEASE: &str = "release call";
 const ROLLBACK_TO: &str = "rollback to call";
 
+#[cfg(any(feature = "kv", feature = "jobs"))]
 impl Store {
     /// Runs `work` in one transaction of one of the store's own files, kv.db
     /// or jobs.db: the file of the first handle `tx.with` takes in, whose
@@ -56,10 +62,12 @@ impl Store {
 }
 
 /// A transaction of the store, given to the function [`Store::tx`] runs.
+#[cfg(any(feature = "kv", feature = "jobs"))]
 pub struct Tx<'a> {
     transaction: &'a Transaction<'a>,
 }
 
+#[cfg(any(feature = "kv", feature = "jobs"))]
 impl Tx<'_> {
     /// The calls of `handle` inside this transaction: what they read sees what
     /// the transaction wrote, and what they write commits with it or not at
@@ -68,13 +76,14 @@ impl Tx<'_> {
         handle.in_tx(self.transaction)
     }
 
-    /// The transaction itself, for the wire's calls in it.
-    #[cfg_attr(not(feature = "jobs"), expect(dead_code, reason = "the wire runs a queue's batch in one"))]
+    /// The transaction itself, for the wire's calls in it: a queue's batch.
+    #[cfg(all(feature = "wire", feature = "jobs"))]
     pub(crate) fn transaction(&self) -> &Transaction<'_> {
         self.transaction
     }
 }
 
+#[cfg(any(feature = "kv", feature = "jobs"))]
 impl fmt::Debug for Tx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Tx")
@@ -118,6 +127,7 @@ impl Transaction<'_> {
     /// first handle is kept in, begun when that handle makes its first call.
     /// The thread is marked for all of them from the start, so that a call
     /// around the transaction is refused whichever it turns out to be of.
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     fn of_store<T, E: From<Error>>(
         files: &[Arc<File>],
         work: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
@@ -150,6 +160,7 @@ impl Transaction<'_> {
 
     /// Refuses a handle kept in another file than the transaction's, `place`:
     /// what it wrote would not commit with the rest.
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     pub(crate) fn takes(&self, file: &File, place: &str) -> Result<()> {
         self.writer.takes(file, place)
     }
@@ -175,6 +186,7 @@ impl fmt::Debug for Transaction<'_> {
 /// What holds a transaction's writer and says which file it is of.
 trait Writer {
     /// Refuses a handle kept in another file than the transaction's.
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     fn takes(&self, file: &File, place: &str) -> Result<()>;
 
     /// Runs `work` on the writer the transaction holds.
@@ -186,13 +198,22 @@ trait Writer {
 #[cfg(feature = "sql")]
 struct OneFile<'t> {
     raw: &'t SqlTx<'t>,
+    #[cfg_attr(
+        not(any(feature = "kv", feature = "jobs")),
+        expect(dead_code, reason = "only kv's and jobs' handles ask whether they are kept in a file")
+    )]
     file: &'t File,
     /// What an error calls the file: `sql app`.
+    #[cfg_attr(
+        not(any(feature = "kv", feature = "jobs")),
+        expect(dead_code, reason = "only kv's and jobs' handles ask whether they are kept in a file")
+    )]
     owner: &'t str,
 }
 
 #[cfg(feature = "sql")]
 impl Writer for OneFile<'_> {
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     fn takes(&self, file: &File, place: &str) -> Result<()> {
         if std::ptr::eq(self.file, file) {
             return Ok(());
@@ -207,6 +228,7 @@ impl Writer for OneFile<'_> {
 
 /// The writer of the store's transaction, which begins on the file of the
 /// first handle it takes in, one of the store's own.
+#[cfg(any(feature = "kv", feature = "jobs"))]
 struct OfStore<'f> {
     files: &'f [Arc<File>],
     /// The transaction once it began, and what an error calls its file.
@@ -215,6 +237,7 @@ struct OfStore<'f> {
     marks: Vec<Mark>,
 }
 
+#[cfg(any(feature = "kv", feature = "jobs"))]
 impl OfStore<'_> {
     fn commit(&self) -> Result<()> {
         match self.begun.borrow_mut().take() {
@@ -224,6 +247,7 @@ impl OfStore<'_> {
     }
 }
 
+#[cfg(any(feature = "kv", feature = "jobs"))]
 impl Writer for OfStore<'_> {
     fn takes(&self, file: &File, place: &str) -> Result<()> {
         let mut begun = self.begun.borrow_mut();

@@ -185,7 +185,7 @@ impl Error {
         self.facts.iter().find(|(named, _)| *named == name).map(|(_, value)| value.as_str())
     }
 
-    #[cfg(feature = "kv")]
+    #[cfg(feature = "wire")]
     pub(crate) fn facts(&self) -> &[(&'static str, String)] {
         &self.facts
     }

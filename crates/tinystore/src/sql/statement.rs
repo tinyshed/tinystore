@@ -59,6 +59,7 @@ impl Sql {
     }
 
     /// A statement whose values arrived as SQLite keeps them, from the wire.
+    #[cfg(feature = "wire")]
     pub(crate) fn with_values(text: String, values: Vec<Value>) -> Sql {
         Sql { text, values, refused: None, bare: false }
     }

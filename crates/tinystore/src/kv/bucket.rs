@@ -1,5 +1,6 @@
 use std::fmt;
 use std::marker::PhantomData;
+#[cfg(any(feature = "sql", feature = "wire"))]
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime};
@@ -15,7 +16,9 @@ use super::renewals::Renewal;
 use super::scope::{Kind, Scope};
 use super::value::{self, Raw, Value};
 use crate::clock::{from_unix_millis, millis};
-use crate::engine::{Home, SharedFile};
+use crate::engine::Home;
+#[cfg(any(feature = "sql", feature = "wire"))]
+use crate::engine::SharedFile;
 use crate::sqlite::Tx;
 use crate::{Error, ErrorKind, Result, Store, unix_millis};
 
@@ -66,6 +69,7 @@ impl<V: Value> BucketBuilder<V> {
     }
 
     /// A bucket kept in a file another engine lends, a database's.
+    #[cfg(any(feature = "sql", feature = "wire"))]
     pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str) -> Self {
         BucketBuilder::new(Home::Shared(shared), name)
     }
@@ -138,10 +142,12 @@ pub struct Entry<V> {
 pub struct Version(i64);
 
 impl Version {
+    #[cfg(feature = "wire")]
     pub(crate) fn new(revision: i64) -> Version {
         Version(revision)
     }
 
+    #[cfg(feature = "wire")]
     pub(crate) fn revision(self) -> i64 {
         self.0
     }
@@ -379,6 +385,7 @@ impl<V> Bucket<V> {
     }
 
     /// `clear` without waiting for its commit.
+    #[cfg(feature = "wire")]
     pub(crate) fn clear_then(&self, done: impl FnOnce(Result<()>) + Send + 'static) {
         let work = match clear_work(&self.scope) {
             Ok(work) => work,
@@ -390,12 +397,14 @@ impl<V> Bucket<V> {
     }
 
     /// Writes a row's value under `key`, as `put` says, and stamps it.
+    #[cfg(feature = "wire")]
     pub(crate) fn put_raw(&self, key: &str, raw: Raw, options: WriteOptions, put: Put) -> Result<Stamp> {
         let (bytes, work) = self.put_work(key, raw, options, put)?;
         self.scope.write(key, bytes, work)
     }
 
     /// `put_raw` without waiting: `done` gets the stamp once the commit ends.
+    #[cfg(feature = "wire")]
     pub(crate) fn put_raw_then(
         &self,
         key: &str,
@@ -457,6 +466,7 @@ impl<V> Bucket<V> {
     }
 
     /// `remove` without waiting: `done` hears once the commit ends.
+    #[cfg(feature = "wire")]
     pub(crate) fn remove_then(
         &self,
         key: &str,
@@ -482,6 +492,7 @@ impl<V> Bucket<V> {
 
     /// `take_cell_work` without waiting: `done` gets the cell once the commit
     /// ends.
+    #[cfg(feature = "wire")]
     pub(crate) fn take_cell_then(
         &self,
         key: &str,
@@ -550,6 +561,7 @@ impl<V> Bucket<V> {
 
     /// One page of this branch's own rows, each with its key, read in one
     /// snapshot; the wire's pages, whose values stay rows.
+    #[cfg(feature = "wire")]
     pub(crate) fn list_rows(&self, limit: usize, after: Option<&str>) -> Result<Vec<(String, Cell)>> {
         let limit = limit.clamp(1, PAGE_KEYS);
         let rows = self
@@ -562,6 +574,7 @@ impl<V> Bucket<V> {
     }
 
     /// Rows of this branch by path, each with its key instead.
+    #[cfg(feature = "wire")]
     pub(crate) fn keyed(&self, rows: Vec<(Vec<u8>, Cell)>) -> Result<Vec<(String, Cell)>> {
         let branch = self.scope.branch()?;
         rows.into_iter().map(|(path, cell)| Ok((branch.key_of(&path)?, cell))).collect()

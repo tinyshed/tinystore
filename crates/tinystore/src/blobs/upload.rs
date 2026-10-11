@@ -114,6 +114,7 @@ impl Upload {
 
     /// Publishes the file, or with `create` only where no file is; says what
     /// it wrote, nothing when a create found a file. The wire's last DATA.
+    #[cfg(feature = "wire")]
     pub(crate) fn publish(mut self, create: bool) -> Result<Option<FileInfo>> {
         let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
         let condition = Condition { if_match: self.options.if_match.clone(), when_there };

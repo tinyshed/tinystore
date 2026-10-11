@@ -106,6 +106,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    #[cfg(feature = "wire")]
     pub(crate) fn queue(&self) -> &Queue<()> {
         &self.queue
     }

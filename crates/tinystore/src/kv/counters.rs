@@ -100,6 +100,7 @@ impl Counters {
     /// `add` without waiting for its commit: `done` gets the sum on the
     /// thread that commits it. Counters kept in memory answer before this
     /// returns.
+    #[cfg(feature = "wire")]
     pub(crate) fn add_then(&self, key: &str, n: i64, done: impl FnOnce(Result<i64>) + Send + 'static) {
         if self.buffer.is_some() {
             return done(self.add(key, n));
@@ -108,6 +109,7 @@ impl Counters {
     }
 
     /// `delete` without waiting for its commit.
+    #[cfg(feature = "wire")]
     pub(crate) fn delete_then(&self, key: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
         if self.buffer.is_some() {
             return done(self.delete(key));

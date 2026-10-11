@@ -56,11 +56,15 @@ pub use tx::TxQueue;
 pub use watch::Watch;
 pub use work::Worker;
 
-pub(crate) use claim::{How, Lease};
-pub(crate) use queue::Change;
-pub(crate) use steps::{keep_encoded, kept};
-pub(crate) use watch::{Hears, Report, Seen, Subscription};
-pub(crate) use work::{Answers, Ended, Hand, Remote, RemoteWork, read_value, start_remote};
+// What the wire takes of jobs: a client's worker, its watches, its steps.
+#[cfg(feature = "wire")]
+pub(crate) use {
+    claim::{How, Lease},
+    queue::Change,
+    steps::{keep_encoded, kept},
+    watch::{Hears, Report, Seen, Subscription},
+    work::{Answers, Ended, Hand, Remote, RemoteWork, read_value, start_remote},
+};
 
 #[cfg(test)]
 #[path = "queue_tests.rs"]

@@ -134,6 +134,7 @@ impl Scope {
 
     /// Queues a write on the file's writer and returns; `done` gets its answer
     /// on the thread that commits it.
+    #[cfg(feature = "wire")]
     pub(crate) fn submit<T: Send + 'static>(
         &self,
         key: &str,
@@ -148,6 +149,7 @@ impl Scope {
     }
 
     /// Submits the work a call made, or gives `done` why it made none.
+    #[cfg(feature = "wire")]
     pub(crate) fn submit_made<T: Send + 'static>(
         &self,
         key: &str,

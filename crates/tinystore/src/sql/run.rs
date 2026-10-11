@@ -21,6 +21,7 @@ pub(crate) enum Wanted {
 
 impl Wanted {
     /// The shape a client asks for by name.
+    #[cfg(feature = "wire")]
     pub(crate) fn named(name: &str) -> Option<Wanted> {
         match name {
             "all" => Some(Wanted::All),

@@ -149,6 +149,7 @@ impl Lease {
     }
 
     /// Calls `hook` when a cancel takes the job, at once when one has.
+    #[cfg(feature = "wire")]
     pub(crate) fn when_cancelled(&self, hook: Box<dyn FnOnce() + Send>) {
         if self.cancelled() {
             return hook();

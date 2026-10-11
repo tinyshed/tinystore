@@ -19,40 +19,9 @@
 
 use rusqlite::Statement;
 
-use super::rows::{Answer, Held, step};
+use super::rows::{Answer, Held, Holds, step};
 use super::values::Value;
 use crate::Result;
-
-/// What a column holds: said by its values, or by its declaration when it
-/// holds none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Holds {
-    Integers,
-    Reals,
-    /// Text, blobs, values of several types, or nothing known.
-    Any,
-}
-
-impl Holds {
-    /// What a column declared as `declaration` holds, by the affinity SQLite
-    /// reads from it (<https://sqlite.org/datatype3.html>, 3.1): `INT`
-    /// anywhere in it is integers, a text or a blob anything, and what is
-    /// left, `real` and `numeric` among it, reals. A strict table's `any`
-    /// holds anything, and so does an expression, which declares nothing.
-    pub(crate) fn declared(declaration: Option<&str>) -> Holds {
-        let Some(declaration) = declaration else {
-            return Holds::Any;
-        };
-        let says = |word: &str| {
-            declaration.as_bytes().windows(word.len()).any(|part| part.eq_ignore_ascii_case(word.as_bytes()))
-        };
-        if says("int") {
-            return Holds::Integers;
-        }
-        let anything = declaration.is_empty() || declaration.eq_ignore_ascii_case("any");
-        if anything || ["char", "clob", "text", "blob"].into_iter().any(says) { Holds::Any } else { Holds::Reals }
-    }
-}
 
 /// A statement's rows by their columns, in the statement's order, each
 /// `rows` long, and the store's memory they hold.

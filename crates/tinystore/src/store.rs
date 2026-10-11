@@ -3,14 +3,17 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records"))]
+use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "kv")]
 use crate::encryption::{self, EncryptionKey};
 use crate::engine::{Claim, Engine, Host, Wake};
 use crate::schedule::Scheduler;
+#[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::sqlite::File as EngineFile;
 use crate::{Clock, Durability, Error, ErrorKind, Memory, Result, SystemClock};
 
@@ -79,9 +82,21 @@ pub struct Store {
 /// A store that its engines reach without keeping it open: an engine holds
 /// this, so that dropping the application's last handle closes the store.
 #[derive(Clone, Debug)]
-pub(crate) struct WeakStore(Weak<Inner>);
+#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records"))]
+pub(crate) struct WeakStore(
+    #[cfg_attr(
+        not(any(feature = "kv", feature = "jobs", feature = "records")),
+        expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
+    )]
+    Weak<Inner>,
+);
 
+#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records"))]
 impl WeakStore {
+    #[cfg_attr(
+        not(any(feature = "kv", feature = "jobs", feature = "records")),
+        expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
+    )]
     pub(crate) fn upgrade(&self) -> Option<Store> {
         self.0.upgrade().map(|inner| Store { inner })
     }
@@ -101,9 +116,11 @@ struct Inner {
     claims: Arc<Mutex<HashSet<String>>>,
     /// The engines' own files, kv.db and jobs.db, which the store's
     /// transaction is a transaction of one of.
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     files: Mutex<Vec<Arc<EngineFile>>>,
     durability: Option<Durability>,
     keep_free: u64,
+    #[cfg(feature = "kv")]
     encryption_key_file: Option<PathBuf>,
     /// The key, once a handle needed it: a store that seals nothing reads no
     /// key and makes none.
@@ -127,9 +144,11 @@ impl Store {
             engines: Mutex::new(Vec::new()),
             open: Mutex::new(HashMap::new()),
             claims: Arc::default(),
+            #[cfg(any(feature = "kv", feature = "jobs"))]
             files: Mutex::new(Vec::new()),
             durability: options.durability,
             keep_free: options.keep_free,
+            #[cfg(feature = "kv")]
             encryption_key_file: options.encryption_key_file,
             #[cfg(feature = "kv")]
             encryption_key: Mutex::new(None),
@@ -150,6 +169,7 @@ impl Store {
     }
 
     /// The file its options named for its encryption key, if they named one.
+    #[cfg(feature = "wire")]
     pub(crate) fn encryption_key_file(&self) -> Option<&Path> {
         self.inner.encryption_key_file.as_deref()
     }
@@ -221,16 +241,19 @@ impl Store {
         Arc::clone(&self.inner.clock)
     }
 
+    #[cfg(any(feature = "kv", feature = "sql", feature = "records"))]
     pub(crate) fn downgrade(&self) -> WeakStore {
         WeakStore(Arc::downgrade(&self.inner))
     }
 
     /// Keeps an engine's own file among those [`Store::tx`] may be a
     /// transaction of.
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     pub(crate) fn keep_file(&self, file: &Arc<EngineFile>) {
         lock(&self.inner.files).push(Arc::clone(file));
     }
 
+    #[cfg(any(feature = "kv", feature = "jobs"))]
     pub(crate) fn engine_files(&self) -> Vec<Arc<EngineFile>> {
         lock(&self.inner.files).clone()
     }
@@ -299,6 +322,7 @@ impl Inner {
             }
         }
         lock(&self.open).clear();
+        #[cfg(any(feature = "kv", feature = "jobs"))]
         lock(&self.files).clear();
         drop(lock(&self.lock).take());
         first_failure.map_or(Ok(()), |error| Err(error.within(self.describe())))

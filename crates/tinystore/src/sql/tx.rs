@@ -74,6 +74,7 @@ impl<'t> Tx<'t> {
     }
 
     /// The transaction itself, for the wire's calls of other engines in it.
+    #[cfg(feature = "wire")]
     pub(crate) fn transaction(&self) -> &'t Transaction<'t> {
         self.transaction
     }

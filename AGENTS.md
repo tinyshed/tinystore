@@ -93,9 +93,13 @@ runtime.
 - **Each engine is a cargo feature**, `kv`, `jobs`, `sql`, `blobs` and `records` the defaults today. A program links
   the engines it opens and nothing else. Each turns on `store`, the store and
   the SQLite under it; `console`, a logger's lines printed, turns on neither,
-  so a program that only logs links no SQLite. An engine adds its calls to
-  `Store` from its own module (`impl Store { pub fn bucket… }`): the store's
-  own code names no engine.
+  so a program that only logs links no SQLite. `wire`, the protocol's session
+  and the pipe that the server, the FFI and every SDK speak, is a default
+  feature that turns on kv, and a Rust program that calls the engines
+  directly leaves it out. `just lint` builds the library with each engine,
+  the console and the wire alone, and every engine without the wire. An
+  engine adds its calls to `Store` from its own module
+  (`impl Store { pub fn bucket… }`): the store's own code names no engine.
 - **Engines never import each other.** They use the root, `engine` and
   `sqlite`, and nothing of another engine. A file one engine lends another,
   a database's to its buckets and queues, goes through `engine::SharedFile`,

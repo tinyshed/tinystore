@@ -17,7 +17,9 @@ use super::state::{Kind, QueueState};
 use super::work::{self, Worker};
 use super::write::{self, Cancelled, Prepared};
 use crate::clock::millis;
-use crate::engine::{Home, SharedFile};
+use crate::engine::Home;
+#[cfg(any(feature = "sql", feature = "wire"))]
+use crate::engine::SharedFile;
 use crate::sqlite::Tx as SqlTx;
 use crate::{Error, ErrorKind, Result, Store, Transaction};
 
@@ -56,6 +58,7 @@ where
     }
 
     /// A queue kept in a file another engine lends, a database's.
+    #[cfg(any(feature = "sql", feature = "wire"))]
     pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str) -> Self {
         QueueBuilder::new(Home::Shared(shared), name)
     }
@@ -144,6 +147,7 @@ where
     V: Serialize + DeserializeOwned + Send + 'static,
 {
     /// The same queue, its values read as another type: the wire's raw JSON.
+    #[cfg(feature = "wire")]
     pub(crate) fn retyped<W>(&self) -> Queue<W> {
         Queue { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData }
     }
@@ -210,6 +214,7 @@ where
 
     /// `cancel` without waiting: the write is queued, and `done` is called
     /// with whether there was a job on the thread that commits it.
+    #[cfg(feature = "wire")]
     pub(crate) fn cancel_then(&self, id: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
         let (queue, key, named) = (Arc::clone(&self.state), id.to_owned(), self.named(Some(id)));
         let work = move |c: &SqlTx<'_>| {
@@ -396,6 +401,7 @@ where
     /// `done` is called with whether it changed anything, on the thread that
     /// commits it. For a host whose threads must not each wait for a commit:
     /// the writes waiting together are the writes one commit carries.
+    #[cfg(feature = "wire")]
     pub(crate) fn write_then(
         &self,
         change: Change,
