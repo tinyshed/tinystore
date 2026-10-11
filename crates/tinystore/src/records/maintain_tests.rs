@@ -115,3 +115,24 @@ fn a_reader_finds_each_event_once_while_heads_pack_and_segments_merge() {
     });
     assert!(reads.load(Ordering::Relaxed) > 0);
 }
+
+#[test]
+fn a_blocks_id_is_never_given_twice_though_its_block_left() {
+    let fixture = fixture();
+    let api = fixture.store.events("api").keep(DAY).open().unwrap();
+    api.append("first", &()).unwrap();
+    fixture.pass(Duration::from_secs(3601));
+    maintain(&fixture.store).unwrap();
+    fixture.pass(DAY);
+    maintain(&fixture.store).unwrap();
+    assert_eq!(fixture.rows("blocks"), 0, "expired");
+    api.append("second", &()).unwrap();
+    fixture.pass(Duration::from_secs(3601));
+    maintain(&fixture.store).unwrap();
+    let ids = fixture.records().file.read(|connection| {
+        Ok(connection
+            .query_row("select min(id), max(id) from blocks", [], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap())
+    });
+    assert_eq!(ids.unwrap(), (2_i64, 2_i64));
+}

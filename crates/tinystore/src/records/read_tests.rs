@@ -314,3 +314,41 @@ fn a_read_passes_a_block_whose_segment_or_filters_say_it_holds_nothing_asked() {
     assert!(may_find(api.list().filter("user", &"from-context")));
     assert!(may_find(api.list().names(["missing", "request"]).filter("request", &"r-031")));
 }
+
+#[test]
+fn a_read_walks_the_time_index_from_the_end_of_its_range_it_begins_at() {
+    let fixture = super::super::fixture::fixture();
+    let plans = [
+        (HEADS_OLDEST, "heads_by_first (first_at<?)"),
+        (HEADS_NEWEST, "heads_by_last (last_at>?)"),
+        (BLOCKS_OLDEST, "blocks_by_first (first_at<?)"),
+        (BLOCKS_NEWEST, "blocks_by_last (last_at>?)"),
+    ];
+    for (sql, walked) in plans {
+        let plan = fixture.records().file.read(|connection| {
+            let mut explain = connection.prepare(&format!("explain query plan {sql}")).unwrap();
+            let params = rusqlite::params![0, 1, 0, None::<String>];
+            let details = explain.query_map(params, |row| row.get::<_, String>(3)).unwrap();
+            Ok(details.map(Result::unwrap).collect::<Vec<_>>().join("; "))
+        });
+        let plan = plan.unwrap();
+        assert!(plan.contains(walked), "{sql}: {plan}");
+    }
+}
+
+#[test]
+fn a_read_finds_the_events_of_blocks_of_every_size() {
+    for count in [1, 2, 1023, 1024, 1025, 2049] {
+        let fixture = super::super::fixture::fixture();
+        let api = fixture.events("api");
+        let first = fixture.now() - std::time::Duration::from_millis(count);
+        let at = |n: u64| first + std::time::Duration::from_millis(n);
+        api.append_all((0..count).map(|n| crate::records::NewEvent::new(&format!("e{n}")).at(at(n)))).unwrap();
+        fixture.pass(std::time::Duration::from_secs(3601));
+        crate::records::maintain(&fixture.store).unwrap();
+        assert_eq!(fixture.rows("heads"), 0, "all {count} packed");
+        let read: Vec<String> = api.list().all().map(|event| event.unwrap().name).collect();
+        let written: Vec<String> = (0..count).map(|n| format!("e{n}")).collect();
+        assert_eq!(read, written, "{count}");
+    }
+}

@@ -83,3 +83,61 @@ fn a_damaged_head_row_is_left_for_a_drop_and_the_rows_around_it_still_pack() {
     assert_eq!(fixture.rows("heads"), 1, "it waits for its drop");
     assert_eq!(maintain(&fixture.store).unwrap(), Maintenance::default(), "and is not read again and again");
 }
+
+#[test]
+fn a_merged_segment_is_dropped_with_its_places_and_a_poll_behind_it_told_of_all() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let all = fixture.store.all_events().unwrap();
+    let cursor = all.poll(None).unwrap().cursor;
+    for round in 0..4 {
+        api.append_all((0..4).map(|n| NewEvent::new(&format!("{round}-{n}")))).unwrap();
+        fixture.pass(HOUR);
+        maintain(&fixture.store).unwrap();
+    }
+    assert_eq!(fixture.rows("segments where holder is not null"), 3, "one holder and three places");
+    zero(&fixture, "blocks");
+    assert!(api.list().page().is_err());
+    let damaged = all.damaged().unwrap();
+    let [damage] = damaged.as_slice() else { panic!("{damaged:?}") };
+    all.drop(damage).unwrap();
+    assert_eq!((fixture.rows("segments"), fixture.rows("blocks")), (0, 0), "the holder with its places");
+    api.append("after", &()).unwrap();
+    fixture.pass(HOUR);
+    maintain(&fixture.store).unwrap();
+    let behind = all.poll(Some(&cursor)).unwrap();
+    assert_eq!((names(&behind.events), behind.expired), (vec!["after"], 16), "the places' events too");
+}
+
+#[test]
+fn what_no_longer_reads_is_said_once_however_often_it_is_met() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tracing_subscriber::layer::SubscriberExt;
+
+    struct Said(Arc<AtomicUsize>);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Said {
+        fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    let fixture = fixture();
+    let audit = fixture.events("audit");
+    audit.append("signup", &()).unwrap();
+    zero(&fixture, "heads");
+    let said = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(Said(Arc::clone(&said)));
+    tracing::subscriber::with_default(subscriber, || {
+        for _ in 0..3 {
+            assert!(audit.list().page().is_err());
+        }
+        fixture.pass(HOUR);
+        maintain(&fixture.store).unwrap();
+        maintain(&fixture.store).unwrap();
+    });
+    assert_eq!(said.load(Ordering::Relaxed), 1, "three reads and two packings met it");
+}
