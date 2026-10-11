@@ -136,7 +136,7 @@ them.
   Closed on 11 October, slices 1 to 8 pushed: what GATES still holds to Go alone is the format's readers,
   which wait for v0.1.0, the command's printer of phase 4, and follow's cache, level masks and an
   append's trace, which the owner left as they are; FSE is left out by the owner's choice.
-- [ ] metrics to its accepted book ([api/metrics.md](api/metrics.md)): series, instruments whose totals the store keeps, sealing, exact aggregates and percentiles, retention, the step rule and gaps; the `metrics` crate recorder.
+- [ ] metrics to its accepted book ([api/metrics.md](api/metrics.md)), built as [metrics-engine.md](metrics-engine.md) says, in its eight slices: series, instruments whose totals the store keeps, packing into blocks cut where hours begin, exact aggregates and percentiles, retention, the step rule and gaps; the `metrics` crate recorder.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and
