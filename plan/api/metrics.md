@@ -579,8 +579,11 @@ metrics::histogram!("http_request_ms").record(started.elapsed().as_secs_f64() * 
   opens two stores, as a test may, records into the first.
 - A program that uses the crate calls the store's handle something else
   than `metrics`, as this book's examples do, so that the two read apart.
-- A timing from `start()` must be kept, and the compiler says so, since
-  `#[must_use]` marks it: `let _ = latency.start()` would record at once.
+- A timing from `start()` records when it drops, so it is kept in a name,
+  `let _timing = latency.start()`. `#[must_use]` makes the compiler warn of
+  `latency.start();` alone; `let _ = latency.start()`, which Rust reads as a
+  value thrown away on purpose, records at once without a word, and clippy's
+  `let_underscore_must_use` is what catches it.
 
 ## Tests
 
@@ -830,7 +833,7 @@ zero, `explain`'s numbers, a group without `by`. Of the rest:
 | `where: { status: 200 }` finding nothing                                         | a number in `where` is its text, as in `with`                                                           |
 | 3585 holds only for a counter that starts with the range                         | both cases are shown                                                                                    |
 | a NaN's payload read out of a `Float64Array`                                     | said: the bytes keep it, a JavaScript number may not                                                    |
-| `let _ = latency.start()` in Rust records at once                                | `#[must_use]`                                                                                           |
+| `let _ = latency.start()` in Rust records at once                                | `#[must_use]` for a timing left alone, and the book says `let _` throws it away at once                 |
 | a counter with labels nobody counted yet shows nothing                           | `add(0)` makes it known with a zero                                                                     |
 
 Kept as they are, against it: the percentile's interpolation, where the
