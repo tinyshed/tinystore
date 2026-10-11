@@ -172,6 +172,7 @@ impl Error {
     }
 
     /// The same error with one fact more, which a program reads by its name.
+    #[cfg(feature = "store")]
     pub(crate) fn naming(mut self, name: &'static str, value: impl Into<String>) -> Self {
         self.facts.push((name, value.into()));
         self
@@ -184,6 +185,7 @@ impl Error {
         self.facts.iter().find(|(named, _)| *named == name).map(|(_, value)| value.as_str())
     }
 
+    #[cfg(feature = "kv")]
     pub(crate) fn facts(&self) -> &[(&'static str, String)] {
         &self.facts
     }

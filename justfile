@@ -23,9 +23,11 @@ default:
 test:
     cargo test --workspace --locked
 
-# run clippy, a warning failing it; CI lints on each platform, since cfg hides one's code from another
+# run clippy, a warning failing it, and on the console alone, which links no SQLite; CI lints on
+# each platform, since cfg hides one's code from another
 lint:
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy -p tinystore --no-default-features --features console --all-targets --locked -- -D warnings
 
 # format the code
 fmt:
@@ -47,11 +49,11 @@ protocol-check:
 build:
     cargo build --release --locked -p tinystore-ffi -p tinystore-cli
 
-# run the Bun SDK's kv, jobs, sql and files over the core in its own process, a private child, a sidecar and a remote server, its test clock, and its codecs against the vectors
+# run the Bun SDK's kv, jobs, sql and files over the core in its own process, a private child, a sidecar and a remote server, its test clock, its codecs against the vectors, and its console lines
 [working-directory: 'sdk/js']
 sdk: build
     bun install --frozen-lockfile
-    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts
+    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts
 
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']
@@ -61,7 +63,7 @@ sdk-check:
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
-    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c "cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked"
+    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c "cargo clippy --workspace --all-targets --locked -- -D warnings && cargo clippy -p tinystore --no-default-features --features console --all-targets --locked -- -D warnings && cargo test --workspace --locked"
 
 # lint the GitHub workflows
 lint-actions:

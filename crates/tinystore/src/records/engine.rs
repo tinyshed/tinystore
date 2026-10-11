@@ -13,6 +13,7 @@ use std::time::Duration;
 use rusqlite::{Connection, Params, params};
 
 use super::head::Codec;
+use super::logger::Loggers;
 use super::tail::Recent;
 use crate::engine::{Claim, Engine, Host};
 use crate::sqlite::{Config, File, Migration, sql_error};
@@ -47,6 +48,8 @@ pub(crate) struct Records {
     pub(super) waiting: Mutex<HashMap<i64, i64>>,
     /// The events appended lately, held for the tails open.
     pub(super) recent: Recent,
+    /// The loggers' buffers, which the store's background work writes.
+    pub(super) loggers: Mutex<Loggers>,
     _claim: Claim,
 }
 
@@ -69,9 +72,12 @@ impl Stream {
 }
 
 impl Engine for Records {
+    /// Writes what the loggers hold first: a line logged before the close is
+    /// kept, and one logged after it is dropped and counted.
     fn close(&self) -> Result<()> {
+        let flushed = self.flush_loggers(true);
         self.recent.close();
-        self.file.close()
+        self.file.close().and(flushed)
     }
 }
 
@@ -100,6 +106,7 @@ impl Records {
                 codec: Mutex::default(),
                 maintaining: Mutex::default(),
                 recent: Recent::default(),
+                loggers: Mutex::default(),
                 _claim: claim,
             });
             let weak = Arc::downgrade(&records);

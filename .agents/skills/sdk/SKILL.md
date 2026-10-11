@@ -101,9 +101,9 @@ under `$XDG_RUNTIME_DIR` when the store's path is long.
   message codecs, whose field names are wire.md's (`if absent` is `ifAbsent`
   in JavaScript and `if_absent` in Python), so the loop needs no table.
 - Every SDK's logger writes the console lines of
-  `records/console/testdata/console.json` byte for byte, as Go's handler does; `go
-  test ./records/console -run TestConsoleLinesAreTheVectors -update` writes them from
-  Go's, and a change to the format changes all three in one commit.
+  `testdata/console/console.json` byte for byte, as the Rust console does, and a
+  change to the format changes the vectors, the console and every SDK in one
+  commit.
 - Integration tests run against a real `tinystore serve` built from
   `cmd/tinystore`, over every transport the platform has.
 - The binary is pure Go (`CGO_ENABLED=0`), so every target builds from one

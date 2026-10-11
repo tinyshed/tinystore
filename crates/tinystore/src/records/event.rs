@@ -4,9 +4,9 @@ use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use serde::de::{DeserializeOwned, Deserializer, MapAccess, Visitor};
-use serde_json::value::RawValue;
+use serde::de::DeserializeOwned;
 
+use crate::console::object_pairs;
 use crate::{Error, Result};
 
 /// The keys an event's fields hold at most, and its context's.
@@ -115,8 +115,7 @@ impl Fields {
 
     /// The fields of a JSON object's text; `null` is none.
     pub fn read(object: &str) -> Result<Fields> {
-        let mut reading = serde_json::Deserializer::from_str(object);
-        let pairs = reading.deserialize_any(InOrder).and_then(|pairs| reading.end().map(|()| pairs));
+        let pairs = object_pairs(object);
         pairs.map(Fields).map_err(|error| Error::invalid("fields that are no JSON object").with_source(error))
     }
 
@@ -168,29 +167,6 @@ impl Fields {
     /// What the fields weigh in an event: more than their row spends on them.
     pub(super) fn weight(&self) -> usize {
         self.0.iter().map(|(key, json)| key.len() + json.len() + 20).sum::<usize>() + 10
-    }
-}
-
-/// Reads an object's entries in their order, each value as it is spelled.
-struct InOrder;
-
-impl<'de> Visitor<'de> for InOrder {
-    type Value = Vec<(String, String)>;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an object")
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(Vec::new())
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut pairs = Vec::new();
-        while let Some((key, value)) = map.next_entry::<String, Box<RawValue>>()? {
-            pairs.push((key, value.get().to_owned()));
-        }
-        Ok(pairs)
     }
 }
 

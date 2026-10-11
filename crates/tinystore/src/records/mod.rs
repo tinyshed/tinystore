@@ -24,6 +24,7 @@ mod events;
 mod fixture;
 mod head;
 mod ints;
+mod logger;
 mod maintain;
 mod merge;
 mod pack;
@@ -38,6 +39,7 @@ mod values;
 pub use count::{Aggregate, Number, Row, Stats, StreamInfo, Top};
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};
+pub use logger::LoggerBuilder;
 pub use maintain::{Maintenance, maintain};
 pub use poll::PollBatch;
 pub use read::{All, List, PAGE_EVENTS, Page};
@@ -46,6 +48,25 @@ pub use tail::{Tail, TailBatch};
 use crate::{Result, Store};
 
 impl Store {
+    /// A logger of the stream `stream`: a `tracing` layer that prints each
+    /// line as it is logged, and keeps it within a second without ever
+    /// making its caller wait.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// use tracing_subscriber::layer::SubscriberExt;
+    /// use tracing_subscriber::util::SubscriberInitExt;
+    ///
+    /// let store = tinystore::Store::open("data", Default::default())?;
+    /// tracing_subscriber::registry().with(store.logger("api").layer()?).init();
+    /// tracing::info!(user = 42, "signed in");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn logger(&self, stream: &str) -> LoggerBuilder<'_> {
+        LoggerBuilder::new(self, stream)
+    }
+
     /// The stream of events `stream`, made the first time it opens: events
     /// appended whole, and read back by time and by what they hold.
     pub fn events(&self, stream: &str) -> EventsBuilder<'_> {

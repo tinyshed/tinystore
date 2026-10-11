@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+pub use crate::schedule::Wake;
 use crate::sqlite::File;
 use crate::store::WeakStore;
 use crate::{Error, Result, Store};
@@ -33,9 +34,10 @@ pub trait Host {
     fn attach(&self, engine: Arc<dyn Engine>) -> Result<()>;
 
     /// Runs `work` every `period` on the store's background thread, one task at
-    /// a time. A failure is logged once and a recovery once. Nothing runs when
-    /// the store was opened without background work.
-    fn every(&self, name: &str, period: Duration, work: impl FnMut() -> Result<()> + Send + 'static) -> Result<()>;
+    /// a time, and sooner when what it gives back wakes it. A failure is logged
+    /// once and a recovery once. Nothing runs when the store was opened without
+    /// background work.
+    fn every(&self, name: &str, period: Duration, work: impl FnMut() -> Result<()> + Send + 'static) -> Result<Wake>;
 
     /// Claims a file name in the store's directory, so that no other engine
     /// opens the same file; the name is free again once the claim is dropped.

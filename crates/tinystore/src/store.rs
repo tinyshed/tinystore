@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "kv")]
 use crate::encryption::{self, EncryptionKey};
-use crate::engine::{Claim, Engine, Host};
+use crate::engine::{Claim, Engine, Host, Wake};
 use crate::schedule::Scheduler;
 use crate::sqlite::File as EngineFile;
 use crate::{Clock, Durability, Error, ErrorKind, Memory, Result, SystemClock};
@@ -267,7 +267,7 @@ impl Host for Store {
         Ok(())
     }
 
-    fn every(&self, name: &str, period: Duration, work: impl FnMut() -> Result<()> + Send + 'static) -> Result<()> {
+    fn every(&self, name: &str, period: Duration, work: impl FnMut() -> Result<()> + Send + 'static) -> Result<Wake> {
         self.refuse_when_closed(name)?;
         self.inner.scheduler.add(name, period, Box::new(work))
     }

@@ -58,8 +58,10 @@ request := log.With("request_id", id)
 ```
 
 ```rust
-tracing_subscriber::registry().with(store.logger("api").layer()?).init();
+let log = store.logger("api").layer()?;
+tracing_subscriber::registry().with(log.clone()).init();   // a clone is the same logger
 tracing::info!(user = 42, "signed in");
+log.event("signup", &Signup { plan: "pro" });
 ```
 
 - A line is printed as it is logged, before anything is written, and kept
@@ -77,7 +79,9 @@ tracing::info!(user = 42, "signed in");
 - The levels are `debug`, `info`, `warn` and `error`.
 - Python's logger is `logging`'s and Go's is `slog`'s, with a handler of the
   store's; in Rust it is a `tracing` layer, whose spans give the `context`,
-  the trace and the span.
+  the trace and the span, and whose clone gives `flush`, `dropped` and
+  `event`. Its level is its own: the subscriber's other layers still see a
+  line under it.
 
 ### What a logger is told
 
@@ -98,6 +102,10 @@ tracing::info!(user = 42, "signed in");
 
 ```ts
 const log = store.logger('api', { level: 'info', console: 'json', redact: secrets, keep: '30d' })
+```
+
+```rust
+let log = store.logger("api").level(Level::INFO).console(Format::Json).redact(SECRETS).keep(30 * DAY).layer()?;
 ```
 
 - The environment wins over the code, so that a deployment changes a format
@@ -126,8 +134,8 @@ const log = logger('app', { redact: secrets })   // printed, and kept nowhere
 A program that wants the logger and no store takes it from the package: the
 same calls, the same options but `buffer` and `keep`, the same lines.
 `store.logger('app')` in its place keeps them too. In TypeScript and Python
-it loads nothing native. In Rust it is the crate's `console` feature, which
-must link no SQLite: see the open questions.
+it loads nothing native. In Rust it is `tinystore::console::logger("app")`,
+which the crate's `console` feature builds alone, without a store or SQLite.
 
 ## Events
 
@@ -554,8 +562,6 @@ first stopped at `stream`; `expired`, which one reader would have called
 - An event's fields typed where its stream opens,
   `store.events<{ 'role.changed': RoleChanged }>('audit')`, and a `schema`
   beside it, as a queue's.
-- The console alone in Rust: `rusqlite` is no option of the crate today, so
-  `features = ["console"]` links SQLite until it is.
 - A `keep` changed while a server runs, which today's rule leaves to its next
   start.
 - An event that lasts, C12.

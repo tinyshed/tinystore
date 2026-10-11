@@ -10,18 +10,24 @@ publish.workspace = true
 
 [features]
 default = ["kv", "jobs", "sql", "blobs", "records"]
-# Each engine is a feature: a program links the engines it opens.
-kv = ["dep:chacha20poly1305", "dep:sha2"]
-jobs = ["dep:jiff"]
-sql = []
-blobs = ["dep:sha2"]
-records = ["dep:zstd"]
+# Each engine is a feature: a program links the engines it opens. Every engine
+# stands on the store, its directory and SQLite; the console alone does not.
+store = ["dep:rusqlite"]
+kv = ["store", "dep:chacha20poly1305", "dep:sha2"]
+jobs = ["store", "dep:jiff"]
+sql = ["store"]
+blobs = ["store", "dep:sha2", "dep:libc"]
+# a logger's lines printed, which a store's logger keeps too
+console = ["dep:jiff", "dep:tracing-subscriber"]
+records = ["store", "dep:zstd", "console"]
 
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the
 # flags in .cargo/config.toml, and nothing loaded at run time.
-rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "column_decltype", "hooks", "limits"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "column_decltype", "hooks", "limits"], optional = true }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# a logger is a layer of the registry every tracing program already has
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"], optional = true }
 serde = { version = "1.0.229", default-features = false, features = ["std"] }
 # raw_value: a job's JSON from another language is checked and kept as it came
 serde_json = { version = "1.0.151", features = ["raw_value"] }
@@ -42,7 +48,7 @@ zstd = { version = "0.14.2", optional = true, default-features = false }
 # the disk's free space, which blobs keep some of: statvfs, and statfs on
 # Apple's systems; Windows asks kernel32, which every program links
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.190", default-features = false }
+libc = { version = "0.2.190", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = "3.27"

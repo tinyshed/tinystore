@@ -169,25 +169,62 @@ const ADD_TO_HEAD: &str = "insert into head_state (stream, late, count, weight, 
     on conflict (stream, late) do update set count = count + excluded.count, weight = weight + excluded.weight";
 
 impl Records {
-    /// Appends `events` to a stream: check → reserve → part the late from
-    /// those on time → cut each into rows → write them in one commit.
+    /// Appends `events` to a stream, all of them or none: check each, then
+    /// write them in one commit.
     fn append(&self, stream: &Stream, events: Vec<NewEvent>) -> Result<()> {
         let now = self.now();
-        let window = (now.saturating_sub(nanos(stream.keeps())), now.saturating_add(nanos(AHEAD)));
+        let window = window(stream, now);
         let mut checked = Vec::with_capacity(events.len());
-        let mut weight = 0;
         for (place, event) in events.into_iter().enumerate() {
             let named = format!("event {place} {:?}", event.name);
-            let event = check(event, now, window).map_err(|error| error.within(named))?;
-            weight += event.weight();
-            checked.push(event);
+            checked.push(check(event, now, window).map_err(|error| error.within(named))?);
         }
-        if checked.is_empty() {
-            return Ok(());
-        }
+        let weight: usize = checked.iter().map(Kept::weight).sum();
         if weight > MAX_APPEND {
             return Err(Error::limit(format!("an append of {weight} bytes, past the {MAX_APPEND} one carries")));
         }
+        self.write_checked(stream, checked, now)
+    }
+
+    /// Appends what a logger held: an event the file cannot keep is left out,
+    /// and the rest written an append's worth at a time. It gives how many
+    /// were lost, those left out and what a failed write and the writes after
+    /// it held, with the failure.
+    pub(super) fn append_held(&self, stream: &Stream, events: Vec<NewEvent>) -> (u64, Result<()>) {
+        let now = self.now();
+        let window = window(stream, now);
+        let (mut lost, mut pieces, mut piece, mut weight) = (0, Vec::new(), Vec::new(), 0);
+        for event in events {
+            let Ok(event) = check(event, now, window) else {
+                lost += 1;
+                continue;
+            };
+            if weight + event.weight() > MAX_APPEND {
+                pieces.push(std::mem::take(&mut piece));
+                weight = 0;
+            }
+            weight += event.weight();
+            piece.push(event);
+        }
+        pieces.push(piece);
+        let mut left: u64 = pieces.iter().map(|piece| piece.len() as u64).sum();
+        for piece in pieces {
+            let count = piece.len() as u64;
+            if let Err(error) = self.write_checked(stream, piece, now) {
+                return (lost + left, Err(error));
+            }
+            left -= count;
+        }
+        (lost, Ok(()))
+    }
+
+    /// Writes events already checked in one commit: reserve → part the late
+    /// from those on time → cut each into rows → write.
+    fn write_checked(&self, stream: &Stream, checked: Vec<Kept>, now: i64) -> Result<()> {
+        if checked.is_empty() {
+            return Ok(());
+        }
+        let weight: usize = checked.iter().map(Kept::weight).sum();
         let _held = self.memory.reserve(weight as u64, "records: an append", PATIENCE)?;
         let (on_time, late) = self.part_late(stream.id, checked, now);
         let mut rows = Vec::new();
@@ -257,6 +294,12 @@ impl Records {
         rows.push(head::encode(&events[from..], &mut codec)?);
         Ok(rows)
     }
+}
+
+/// The times a stream takes an event at: from what it keeps to ten minutes
+/// ahead of `now`.
+fn window(stream: &Stream, now: i64) -> (i64, i64) {
+    (now.saturating_sub(nanos(stream.keeps())), now.saturating_add(nanos(AHEAD)))
 }
 
 /// An event with its time, once it is one the file keeps: a name, fields

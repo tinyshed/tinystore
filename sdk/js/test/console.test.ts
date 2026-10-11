@@ -1,5 +1,5 @@
-// The console lines every logger writes: records/console/testdata/console.json,
-// which Go's records/console and the Python handler are tested against too, and
+// The console lines every logger writes: testdata/console/console.json,
+// which Rust's console and the Python handler are tested against too, and
 // the logger of the console alone.
 
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -57,7 +57,7 @@ interface Vector {
 	pretty: string
 }
 
-const testdata = join(import.meta.dir, '..', '..', '..', 'records', 'console', 'testdata')
+const testdata = join(import.meta.dir, '..', '..', '..', 'testdata', 'console')
 const vectors: { secrets: string[]; lines: Vector[] } = await Bun.file(
 	join(testdata, 'console.json'),
 ).json()

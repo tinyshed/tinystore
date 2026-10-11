@@ -25,7 +25,8 @@ them; the workspace builds and tests on three operating systems.
 - [x] The SQLite adapter: the pinned build, one writer with grouped commits that callers lead or that answer submitted writes through a callback, readers with idle close, the statement cache, checked migrations.
 - [ ] SQLite's memory in the store's budget through `SQLITE_CONFIG_MALLOC`; today only `sqlite3_memory_used` is read.
 - [x] The runtime: Store, LOCK, clock, memory budget, background work, errors, the engine registry.
-- [ ] Config and the logger in the core, with the `tracing` layer.
+- [x] The logger in the core, a `tracing` layer; the console builds alone, without a store or SQLite.
+- [ ] Config in the core.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.
@@ -107,7 +108,10 @@ them.
   holds, the keys of packed segments from beside them. A tail gives the events appended from now on, from
   the last megabyte the store holds while one is open, and says what it missed; a poll gives every packed
   event once from a cursor of a segment and a place in it, a merged segment's where its holder keeps them,
-  and counts the events `keep` removed before it, which the file keeps thirty days. Owed now: their time and
+  and counts the events `keep` removed before it, which the file keeps thirty days. A store's logger is a
+  `tracing` layer: it prints each line as the console's vectors have it, and keeps it through a buffer of 1024
+  lines that the store writes every second, sooner once half of it waits, and when it closes; a line that
+  finds the buffer full is dropped, counted and said once in ten minutes. Owed now: their time and
   peak memory on the production corpus, and then the fast paths that pay — a count from the counts of the
   blocks a range covers whole, a stat from its column without the events built, `top` and `distinct` from a
   column's dictionary. A block keeps its events by columns: integers by their steps, a steady one, a

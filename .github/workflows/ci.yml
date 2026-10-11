@@ -47,6 +47,10 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # the console alone links no store and no SQLite
+      - name: Lint the console alone
+        run: cargo clippy -p tinystore --no-default-features --features console --all-targets --locked -- -D warnings
+
       - name: Test
         run: cargo test --workspace --locked
 
@@ -70,7 +74,7 @@ jobs:
           bun install --frozen-lockfile
           export TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library"
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
-          bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/protocol.test.ts
+          bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/protocol.test.ts test/console.test.ts
 
   quality:
     name: quality

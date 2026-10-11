@@ -1,5 +1,5 @@
-// A logger's console line, as Go's records/console and Python's handler write
-// it, byte for byte the lines of records/console/testdata/console.json: pretty for a
+// A logger's console line, as Rust's console and Python's handler write it,
+// byte for byte the lines of testdata/console/console.json: pretty for a
 // person at a terminal, one JSON object a line for a collector.
 //
 //   11:02:11.123 WARN  api  slow request  requestId=7f3a ms=1200

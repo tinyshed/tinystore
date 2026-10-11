@@ -1,6 +1,6 @@
-"""A logger's console line, as Go's records.Handler and the Bun logger write it.
+"""A logger's console line, as Rust's console and the Bun logger write it.
 
-Byte for byte the lines of records/testdata/console.json: pretty for a person
+Byte for byte the lines of testdata/console/console.json: pretty for a person
 at a terminal, one JSON object a line for a collector.
 
     11:02:11.123 WARN  api  slow request  requestId=7f3a ms=1200

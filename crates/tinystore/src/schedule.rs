@@ -1,5 +1,5 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -23,16 +23,46 @@ struct Shared {
 #[derive(Default)]
 struct State {
     tasks: Vec<Task>,
+    /// The id the next task added takes.
+    next_id: u64,
     stopped: bool,
 }
 
 struct Task {
+    id: u64,
     name: String,
     period: Duration,
     next: Instant,
     /// None while the task runs, outside the lock.
     work: Option<Work>,
     failing: bool,
+    /// Woken while it ran: it runs again at once rather than a period later.
+    woken: bool,
+}
+
+/// What runs a task of the store's background work now, rather than at its
+/// next period: a logger whose buffer fills sooner than its period. A task
+/// woken while it runs runs again once it ends.
+#[derive(Clone, Debug)]
+pub struct Wake {
+    shared: Weak<Shared>,
+    id: u64,
+}
+
+impl Wake {
+    pub fn wake(&self) {
+        let Some(shared) = self.shared.upgrade() else { return };
+        let mut state = shared.lock();
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == self.id) {
+            if task.work.is_some() {
+                task.next = Instant::now();
+            } else {
+                task.woken = true;
+            }
+        }
+        drop(state);
+        shared.changed.notify_all();
+    }
 }
 
 impl Scheduler {
@@ -44,30 +74,35 @@ impl Scheduler {
         }
     }
 
-    /// Runs `work` every `period`. Without background work nothing runs: the
+    /// Runs `work` every `period`, and when what it gives back wakes it.
+    /// Without background work nothing runs, and a wake does nothing: the
     /// application calls each engine's maintenance itself.
-    pub(crate) fn add(&self, name: &str, period: Duration, work: Work) -> Result<()> {
+    pub(crate) fn add(&self, name: &str, period: Duration, work: Work) -> Result<Wake> {
         if period.is_zero() {
             return Err(Error::invalid(format!("background work {name}: a period of zero")));
         }
         if !self.background {
-            return Ok(());
+            return Ok(Wake { shared: Weak::new(), id: 0 });
         }
         let mut state = self.shared.lock();
         if state.stopped {
             return Err(Error::closed(format!("background work {name}")));
         }
+        let id = state.next_id;
+        state.next_id += 1;
         state.tasks.push(Task {
+            id,
             name: name.to_owned(),
             period,
             next: Instant::now() + period,
             work: Some(work),
             failing: false,
+            woken: false,
         });
         drop(state);
         self.start()?;
         self.shared.changed.notify_all();
-        Ok(())
+        Ok(Wake { shared: Arc::downgrade(&self.shared), id })
     }
 
     fn start(&self) -> Result<()> {
@@ -118,7 +153,8 @@ impl Shared {
         let task = &mut state.tasks[due];
         task.report(outcome);
         task.work = Some(work);
-        task.next = Instant::now() + task.period;
+        let wait = if std::mem::take(&mut task.woken) { Duration::ZERO } else { task.period };
+        task.next = Instant::now() + wait;
         state
     }
 
@@ -217,6 +253,36 @@ mod tests {
         scheduler.add("test: flaky", Duration::from_millis(5), work).unwrap();
         assert!(wait_until(|| runs.load(Ordering::SeqCst) >= 2));
         scheduler.stop();
+    }
+
+    #[test]
+    fn a_woken_task_runs_before_its_period_and_again_when_woken_while_it_runs() {
+        let scheduler = Scheduler::new(true);
+        let (started, finished) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (counter, done) = (Arc::clone(&started), Arc::clone(&finished));
+        let work: Work = Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(50));
+            done.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        let wake = scheduler.add("test: woken", Duration::from_secs(3600), work).unwrap();
+        wake.wake();
+        assert!(wait_until(|| started.load(Ordering::SeqCst) == 1), "a wake runs it before its hour");
+        wake.wake();
+        assert!(wait_until(|| finished.load(Ordering::SeqCst) == 2), "woken while it ran, it runs again");
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(started.load(Ordering::SeqCst), 2, "and then waits for its period");
+        scheduler.stop();
+    }
+
+    #[test]
+    fn a_wake_without_background_work_does_nothing() {
+        let scheduler = Scheduler::new(false);
+        let (runs, work) = counting();
+        scheduler.add("test: tick", Duration::from_millis(1), work).unwrap().wake();
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
 
     #[test]
