@@ -433,7 +433,7 @@ just sdk-check   # the Bun SDK's lint and types
 just protocol    # every codec and vector written again from protocol/*.wire
 just test-linux  # clippy and the tests in a Linux container, for a host that is not Linux
 just tables      # every markdown table aligned
-just fuzz        # a fuzz target of fuzz/, by hand, on nightly with cargo-fuzz installed
+just fuzz        # a fuzz target of fuzz/ for a minute, by hand, in a Linux container
 ```
 
 Install just with `cargo install just`. CI runs clippy and the tests on Linux,
