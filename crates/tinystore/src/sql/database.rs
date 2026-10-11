@@ -132,15 +132,8 @@ impl Database {
         I: IntoIterator,
         I::Item: Into<Sql>,
     {
-        let statements: Vec<Sql> = statements.into_iter().map(Into::into).collect();
-        let weight = statements.iter().map(Sql::weight).sum();
-        let ran = self.base.file().write(weight, move |tx| {
-            statements
-                .iter()
-                .map(|statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe())))
-                .collect()
-        });
-        ran.map_err(|error| error.within(self.base.describe()))
+        let (weight, write) = batch_write(statements.into_iter().map(Into::into).collect());
+        self.base.file().write(weight, write).map_err(|error| error.within(self.base.describe()))
     }
 
     /// Runs `work` in a transaction that holds the writer, for writes that
@@ -169,24 +162,14 @@ impl Database {
 
     /// `exec` without waiting: `done` is called on the thread that commits it.
     pub(crate) fn exec_then(&self, statement: Sql, done: impl FnOnce(Result<Done>) + Send + 'static) {
-        let (weight, describe) = (statement.weight(), self.failed_by(&statement));
-        self.base.file().submit(
-            weight,
-            move |tx| run::exec(tx, &statement),
-            move |done_| done(done_.map_err(describe)),
-        );
+        let (weight, fail) = (statement.weight(), self.failed_by(&statement));
+        self.base.file().submit(weight, move |tx| run::exec(tx, &statement), move |ran| done(ran.map_err(fail)));
     }
 
     /// `batch` without waiting: `done` is called on the thread that commits it.
     pub(crate) fn batch_then(&self, statements: Vec<Sql>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
-        let weight = statements.iter().map(Sql::weight).sum();
+        let (weight, write) = batch_write(statements);
         let describe = self.base.describe();
-        let write = move |tx: &crate::sqlite::Tx<'_>| -> Result<Vec<Done>> {
-            statements
-                .iter()
-                .map(|statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe())))
-                .collect()
-        };
         self.base.file().submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));
     }
 
@@ -199,18 +182,18 @@ impl Database {
         wanted: Wanted,
         done: impl FnOnce(Result<A>) + Send + 'static,
     ) {
-        let describe = self.failed_by(&statement);
+        let fail = self.failed_by(&statement);
         if !self.base.writes(statement.text()) {
             let held = Held::of(&self.base.memory);
             match self.base.file().read(|connection| run::read(connection, &statement, wanted, held)) {
                 Ok(Read::Rows(rows)) => return done(Ok(rows)),
                 Ok(Read::Writes) => self.base.remember_write(statement.text()),
-                Err(error) => return done(Err(describe(error))),
+                Err(error) => return done(Err(fail(error))),
             }
         }
         let (weight, held) = (statement.weight(), Held::of(&self.base.memory));
         let write = move |tx: &crate::sqlite::Tx<'_>| run::write(tx, &statement, wanted, held);
-        self.base.file().submit(weight, write, move |rows| done(rows.map_err(describe)));
+        self.base.file().submit(weight, write, move |rows| done(rows.map_err(fail)));
     }
 
     /// A statement's rows from a reader alone, for a connection that may not
@@ -275,8 +258,22 @@ fn check_name(name: &str) -> Result<()> {
     Err(Error::invalid("a database's name is a-z, 0-9, _ and -, at most 64, and starts with a letter or a digit"))
 }
 
-/// Whether a statement is a query: its first word, past spaces and comments,
-/// one of those that only answer rows.
+/// What a batch weighs in its commit, and its write: every statement in
+/// order, a failure naming its own.
+fn batch_write(
+    statements: Vec<Sql>,
+) -> (usize, impl FnOnce(&crate::sqlite::Tx<'_>) -> Result<Vec<Done>> + Send + 'static) {
+    let weight = statements.iter().map(Sql::weight).sum();
+    let write = move |tx: &crate::sqlite::Tx<'_>| {
+        let exec = |statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe()));
+        statements.iter().map(exec).collect()
+    };
+    (weight, write)
+}
+
+/// Whether a statement may be a query: its first word, past spaces and
+/// comments, one a query begins with. A `with` begins a write too, which
+/// SQLite tells when it compiles the statement.
 ///
 /// ```text
 /// "/* hourly */ with t as (select 1) select * from t"  → a query

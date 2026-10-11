@@ -23,7 +23,8 @@ use crate::{Error, Result};
 enum Runner<'r> {
     Database(Database),
     Tx(&'r Tx<'r>),
-    /// A test's runner, which keeps the last statement and answers nothing.
+    /// A test's runner, which keeps the last statement and answers no row, or
+    /// a scalar's zero.
     #[cfg(test)]
     Recorder(std::sync::Arc<std::sync::Mutex<Option<Sql>>>),
 }
@@ -400,7 +401,8 @@ impl<'r, T> Query<'r, T> {
         render(&self.parts)
     }
 
-    /// The rows the conditions match, without the order and the limit.
+    /// How many rows the conditions match, or how many groups with
+    /// `group_by`, without the order and the limit.
     pub fn count(&self) -> Result<u64> {
         let mut counted = self.parts.clone();
         counted.select = Some(Sql::new("count(*)"));
@@ -565,7 +567,8 @@ fn refuse(parts: &mut Parts, why: String) {
     parts.refused.get_or_insert(why);
 }
 
-/// `"orders"` or `"orders as o"`: a name, and an alias after `as`.
+/// `"orders"`, `"orders as o"` or `"orders o"`: a name, and an alias after
+/// it, with `as` or without.
 fn table_ref(text: &str) -> std::result::Result<(String, Option<String>), String> {
     let words: Vec<&str> = text.split_whitespace().collect();
     let (name, alias) = match words.as_slice() {

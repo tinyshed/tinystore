@@ -24,9 +24,9 @@ use crate::{Error, ErrorKind, Store, Transaction};
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
 
 /// How long a transaction holds the writer at most, its client's pauses
-/// included: past it the server rolls it back without the client. The tests
-/// wait out a shorter one.
-const TX_BOUND: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(5) };
+/// included: a database's own bound, past which the server rolls it back
+/// without the client. The tests wait out a shorter one.
+const TX_BOUND: Duration = if cfg!(test) { Duration::from_millis(300) } else { crate::sql::TX_BOUND };
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
@@ -290,20 +290,9 @@ impl Parted for Kept<RowBytes> {
             out
         };
         let names = self.columns.iter().map(|name| name.len() + 5).sum::<usize>() + 16;
-        let (mut parts, mut from, mut size) = (VecDeque::new(), 0, names);
-        for row in 0..self.kept.ends.len() {
-            let weight = self.kept.begins(row + 1) - self.kept.begins(row);
-            if weight + 16 > bound {
-                return Err(past_a_message(weight, bound));
-            }
-            if size + weight > bound && row > from {
-                parts.push_back(part(from..row, parts.is_empty()));
-                (from, size) = (row, 16);
-            }
-            size += weight;
-        }
-        parts.push_back(part(from..self.kept.ends.len(), parts.is_empty()));
-        Ok(parts)
+        let weight = |row: usize| self.kept.begins(row + 1) - self.kept.begins(row);
+        let cuts = cuts(self.kept.ends.len(), weight, (names, 16), bound)?;
+        Ok(cuts.into_iter().enumerate().map(|(index, rows)| part(rows, index == 0)).collect())
     }
 }
 
@@ -361,7 +350,6 @@ fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
     let mut size = part.columns.iter().map(|name| name.len() + 5).sum::<usize>() + 16;
     let mut values = rows.into_values();
     for row in values.chunks_mut(width) {
-        let row: Vec<Cell> = row.iter_mut().map(|value| cell_of(std::mem::replace(value, Value::Null))).collect();
         let weight = row.iter().map(weight_of).sum::<usize>() + 5;
         if weight + 16 > bound {
             return Err(past_a_message(weight, bound));
@@ -371,20 +359,10 @@ fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
             size = 16;
         }
         size += weight;
-        part.rows.push(row);
+        part.rows.push(row.iter_mut().map(|value| cell_of(std::mem::replace(value, Value::Null))).collect());
     }
     parts.push_back(part.encode());
     Ok(parts)
-}
-
-/// What a cell takes of a message, its header with it.
-fn weight_of(cell: &Cell) -> usize {
-    match cell {
-        Cell::Nil => 1,
-        Cell::Int(_) | Cell::Float(_) => 9,
-        Cell::Str(text) => text.len() + 5,
-        Cell::Bin(bytes) => bytes.len() + 5,
-    }
 }
 
 fn past_a_message(weight: usize, bound: usize) -> Failure {
@@ -401,38 +379,45 @@ const PACKED: usize = 9;
 /// part holds every column for the same rows, and a row larger than a part
 /// alone is `limit`.
 fn column_parts(mut columns: Columns, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
-    let cuts = cuts(&columns, bound)?;
-    Ok(cuts.into_iter().map(|cut| column_part(&mut columns, cut).encode()).collect())
-}
-
-/// The rows of each part: as many as `bound` bytes take.
-fn cuts(columns: &Columns, bound: usize) -> Result<Vec<Range<usize>>, Failure> {
     let head = columns.columns.iter().map(|(name, _)| name.len() + 24).sum::<usize>() + 16;
-    let loose = |row: usize| {
+    let row_weight = |row: usize| {
         let of = |(_, column): &(String, Column)| match column {
-            Column::Values(values) => weight_of_value(&values[row]),
+            Column::Values(values) => weight_of(&values[row]),
             Column::Integers { .. } | Column::Reals { .. } => PACKED,
         };
         columns.columns.iter().map(of).sum::<usize>()
     };
-    let (mut cuts, mut from, mut size) = (Vec::new(), 0, head);
-    for row in 0..columns.rows {
-        let weight = loose(row);
-        if head + weight > bound {
+    let cuts = cuts(columns.rows, row_weight, (head, head), bound)?;
+    Ok(cuts.into_iter().map(|cut| column_part(&mut columns, cut).encode()).collect())
+}
+
+/// The rows of each part of an answer of `rows` rows: as many as `bound`
+/// bytes take beside the part's head, the first part's and any later one's,
+/// each row weighing what `weight` says. A row no part takes is `limit`.
+fn cuts(
+    rows: usize,
+    weight: impl Fn(usize) -> usize,
+    (first_head, later_head): (usize, usize),
+    bound: usize,
+) -> Result<Vec<Range<usize>>, Failure> {
+    let (mut cuts, mut from, mut size) = (Vec::new(), 0, first_head);
+    for row in 0..rows {
+        let weight = weight(row);
+        if later_head + weight > bound {
             return Err(past_a_message(weight, bound));
         }
-        if size + weight > bound {
+        if size + weight > bound && row > from {
             cuts.push(from..row);
-            (from, size) = (row, head);
+            (from, size) = (row, later_head);
         }
         size += weight;
     }
-    cuts.push(from..columns.rows);
+    cuts.push(from..rows);
     Ok(cuts)
 }
 
 /// What a value takes of a message as a cell, its header with it.
-fn weight_of_value(value: &Value) -> usize {
+fn weight_of(value: &Value) -> usize {
     match value {
         Value::Null => 1,
         Value::Integer(_) | Value::Real(_) => 9,

@@ -13,10 +13,10 @@ use super::values::Value;
 /// A column as an SQL literal that keeps it whole. `quote()` cuts a text at a
 /// zero byte, so such a text goes as its bytes behind a `T`.
 pub(crate) fn literal_of(column: &str) -> String {
-    let c = format!("\"{}\"", column.replace('"', "\"\""));
+    let quoted = format!("\"{}\"", column.replace('"', "\"\""));
     format!(
-        "case when typeof({c}) = 'text' and instr(cast({c} as blob), x'00') > 0 \
-         then 'T' || quote(cast({c} as blob)) else quote({c}) end"
+        "case when typeof({quoted}) = 'text' and instr(cast({quoted} as blob), x'00') > 0 \
+         then 'T' || quote(cast({quoted} as blob)) else quote({quoted}) end"
     )
 }
 

@@ -168,8 +168,8 @@ impl Taking {
 
     /// The column's values as SQLite gave them, a row after another.
     fn into_values(self) -> Vec<Value> {
-        let null = |nulls: &Nulls, row: usize| nulls.get(row).copied().unwrap_or(false);
-        let value = |(row, value): (usize, Value), nulls: &Nulls| if null(nulls, row) { Value::Null } else { value };
+        let is_null = |nulls: &Nulls, row: usize| nulls.get(row).copied().unwrap_or(false);
+        let value = |(row, value): (usize, Value), nulls: &Nulls| if is_null(nulls, row) { Value::Null } else { value };
         match self {
             Taking::Nulls(count) => vec![Value::Null; count],
             Taking::Integers { values, nulls } => {

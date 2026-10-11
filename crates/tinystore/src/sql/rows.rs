@@ -92,15 +92,12 @@ impl Held {
 
 /// What a statement's rows are read into: the rows, or their columns.
 pub(crate) trait Answer: Sized {
-    /// Steps `statement` to its end, or until it gave `most` rows, keeping
-    /// what each row holds within the store's memory; past `bytes` of values
-    /// it is `limit`.
+    /// Reads `statement`'s rows as [`step`] gives them, within `bounds`: so
+    /// many rows, and so many bytes of values.
     fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), held: Held) -> Result<Self>;
 
-    /// Its rows.
     fn len(&self) -> usize;
 
-    /// Its columns.
     fn width(&self) -> usize;
 }
 

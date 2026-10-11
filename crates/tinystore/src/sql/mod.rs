@@ -44,6 +44,7 @@ pub use tx::Tx;
 pub(crate) use columns::{Column, Columns};
 pub(crate) use rows::{Answer, Held, Keep, Kept, Rows};
 pub(crate) use run::Wanted;
+pub(crate) use tx::BOUND as TX_BOUND;
 pub(crate) use values::Value;
 
 #[cfg(test)]

@@ -181,12 +181,12 @@ pub(crate) fn placeholders(text: &str) -> Counted {
     let chars: Vec<char> = text.chars().collect();
     let mut at = 0;
     while at < chars.len() {
-        let c = chars[at];
-        match c {
-            '\'' | '"' | '`' => at = closing(&chars, at, c),
+        if let Some(end) = quoted_or_comment_end(&chars, at) {
+            at = end + 1;
+            continue;
+        }
+        match chars[at] {
             '[' => at = find(&chars, at + 1, &[']']).unwrap_or(chars.len()),
-            '-' if chars.get(at + 1) == Some(&'-') => at = find(&chars, at, &['\n']).unwrap_or(chars.len()),
-            '/' if chars.get(at + 1) == Some(&'*') => at = find_pair(&chars, at + 2).map_or(chars.len(), |end| end + 1),
             '?' if chars.get(at + 1).is_some_and(char::is_ascii_digit) => counted.numbered = true,
             '?' => counted.positional += 1,
             ':' | '@' | '$' if chars.get(at + 1).is_some_and(|next| next.is_ascii_alphabetic() || *next == '_') => {
@@ -204,6 +204,17 @@ pub(crate) fn placeholders(text: &str) -> Counted {
     counted
 }
 
+/// Where the quoted text or the comment that begins at `at` ends, when one
+/// begins there: what is inside it is no placeholder and no word of SQL.
+fn quoted_or_comment_end(chars: &[char], at: usize) -> Option<usize> {
+    match chars[at] {
+        quote @ ('\'' | '"' | '`') => Some(closing(chars, at, quote)),
+        '-' if chars.get(at + 1) == Some(&'-') => Some(find(chars, at, &['\n']).unwrap_or(chars.len())),
+        '/' if chars.get(at + 1) == Some(&'*') => Some(find_pair(chars, at + 2).map_or(chars.len(), |end| end + 1)),
+        _ => None,
+    }
+}
+
 /// Whether a piece keeps its meaning beside others in an `and` or an `or`:
 /// one group, or text with no `and` or `or` of its own outside quotes,
 /// comments and parentheses, which would bind with its neighbours'.
@@ -215,11 +226,11 @@ pub(crate) fn stands_alone(text: &str) -> bool {
     let mut depth = 0i32;
     let mut at = 0;
     while at < chars.len() {
-        let c = chars[at];
-        match c {
-            '\'' | '"' | '`' => at = closing(&chars, at, c),
-            '-' if chars.get(at + 1) == Some(&'-') => at = find(&chars, at, &['\n']).unwrap_or(chars.len()),
-            '/' if chars.get(at + 1) == Some(&'*') => at = find_pair(&chars, at + 2).map_or(chars.len(), |end| end + 1),
+        if let Some(end) = quoted_or_comment_end(&chars, at) {
+            at = end + 1;
+            continue;
+        }
+        match chars[at] {
             '(' => depth += 1,
             ')' => depth -= 1,
             c if depth == 0

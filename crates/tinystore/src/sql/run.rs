@@ -1,7 +1,7 @@
 //! A statement run on a connection: a read's rows, a write's rows, a write's
 //! counts.
 
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{Connection, Statement, params_from_iter};
 
 use super::database::Done;
 use super::rows::{Answer, Held, MOST_READ, failure};
@@ -57,7 +57,7 @@ impl Wanted {
     }
 }
 
-/// A read's rows, or word that the statement writes, which goes to the writer.
+/// A read's rows, or that its statement writes, which then goes to the writer.
 pub(crate) enum Read<A> {
     Rows(A),
     Writes,
@@ -70,10 +70,7 @@ pub(crate) fn read<A: Answer>(connection: &Connection, statement: &Sql, wanted: 
         if !prepared.readonly() {
             return Ok(Read::Writes);
         }
-        statement.check(prepared.parameter_count())?;
-        let rows = A::read(&mut prepared, statement.values(), (wanted.most(false), MOST_READ), held)?;
-        wanted.check(&rows)?;
-        Ok(Read::Rows(rows))
+        answered(&mut prepared, statement, (wanted, false), held).map(Read::Rows)
     })
 }
 
@@ -82,12 +79,23 @@ pub(crate) fn read<A: Answer>(connection: &Connection, statement: &Sql, wanted: 
 pub(crate) fn write<A: Answer>(connection: &Connection, statement: &Sql, wanted: Wanted, held: Held) -> Result<A> {
     given(statement.text(), || {
         let mut prepared = connection.prepare_cached(statement.text()).map_err(|error| failure("its text", error))?;
-        statement.check(prepared.parameter_count())?;
         let writes = !prepared.readonly();
-        let rows = A::read(&mut prepared, statement.values(), (wanted.most(writes), MOST_READ), held)?;
-        wanted.check(&rows)?;
-        Ok(rows)
+        answered(&mut prepared, statement, (wanted, writes), held)
     })
+}
+
+/// The rows a compiled statement gives with its values, as `wanted` shapes
+/// them; `writes` says it is a write, which is stepped to its end.
+fn answered<A: Answer>(
+    prepared: &mut Statement<'_>,
+    statement: &Sql,
+    (wanted, writes): (Wanted, bool),
+    held: Held,
+) -> Result<A> {
+    statement.check(prepared.parameter_count())?;
+    let rows = A::read(prepared, statement.values(), (wanted.most(writes), MOST_READ), held)?;
+    wanted.check(&rows)?;
+    Ok(rows)
 }
 
 /// Runs `statement` on the writer to its end and says what it changed.
