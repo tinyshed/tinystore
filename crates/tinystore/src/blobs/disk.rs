@@ -130,24 +130,12 @@ impl Disk {
     /// Removes a content's file, which no file names any more; one already
     /// gone counts as removed.
     pub(crate) fn remove_object(&self, id: i64) -> Result<()> {
-        let path = self.object_path(id);
-        match std::fs::remove_file(&path) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => {
-                Err(Error::io(format!("blobs: remove {}", path.display()), error))
-            }
-            _ => Ok(()),
-        }
+        remove(&self.object_path(id))
     }
 
     /// Removes an upload's file wherever it was left.
     pub(crate) fn remove_upload(&self, id: i64) -> Result<()> {
-        let path = self.upload_path(id);
-        match std::fs::remove_file(&path) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => {
-                Err(Error::io(format!("blobs: remove {}", path.display()), error))
-            }
-            _ => Ok(()),
-        }
+        remove(&self.upload_path(id))
     }
 
     /// Removes the files of `uploads/` that no upload of this process holds:
@@ -188,6 +176,16 @@ impl Disk {
             names.push((name, id));
         }
         Ok(names)
+    }
+}
+
+/// Removes a file; one already gone counts as removed.
+fn remove(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+            Err(Error::io(format!("blobs: remove {}", path.display()), error))
+        }
+        _ => Ok(()),
     }
 }
 

@@ -5,7 +5,7 @@
 
 use rusqlite::{OptionalExtension, Params, params};
 
-use super::engine::Blobs;
+use super::engine::{Blobs, rows_of};
 use super::info::{FileInfo, matches, meta_of};
 use super::paths::Folder;
 use crate::sqlite::{Tx, sql_error};
@@ -274,11 +274,7 @@ impl<'t, 'c> Change<'t, 'c> {
 
     /// Runs a delete that returns the content of each file it deleted.
     pub(crate) fn deleted(&self, sql: &str, parameters: impl Params) -> Result<Vec<i64>> {
-        let mut statement = self.tx.prepare_cached(sql).map_err(|error| sql_error("blobs: delete files", error))?;
-        let rows = statement
-            .query_map(parameters, |row| row.get(0))
-            .map_err(|error| sql_error("blobs: delete files", error))?;
-        rows.collect::<rusqlite::Result<Vec<i64>>>().map_err(|error| sql_error("blobs: delete files", error))
+        rows_of(self.tx, (sql, "blobs: delete files"), parameters, |row| row.get(0))
     }
 
     pub(crate) fn execute(&self, sql: &str, parameters: impl Params) -> Result<()> {

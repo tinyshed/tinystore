@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 
 use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
@@ -141,15 +141,9 @@ impl Blobs {
         }
         let (low, high) = Disk::span(fan);
         let (low, high) = (low.max(settled + 1), high.min(reserved));
-        let named: Vec<i64> = self.file.read(|connection| {
-            let mut statement = connection
-                .prepare_cached("select id from contents where id >= ?1 and id <= ?2")
-                .map_err(|error| sql_error("blobs: the contents named", error))?;
-            let rows = statement
-                .query_map(params![low, high], |row| row.get(0))
-                .map_err(|error| sql_error("blobs: the contents named", error))?;
-            rows.collect::<rusqlite::Result<Vec<i64>>>().map_err(|error| sql_error("blobs: the contents named", error))
-        })?;
+        let named = ("select id from contents where id >= ?1 and id <= ?2", "blobs: the contents named");
+        let named: Vec<i64> =
+            self.file.read(|connection| rows_of(connection, named, params![low, high], |row| row.get(0)))?;
         for id in ids.into_iter().filter(|id| (low..=high).contains(id) && !named.contains(id)) {
             self.disk.remove_object(id)?;
         }
@@ -243,4 +237,17 @@ impl Blobs {
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The rows a statement gives, each read by `row`; `what` names the read in
+/// an error.
+pub(super) fn rows_of<T>(
+    connection: &Connection,
+    (sql, what): (&str, &str),
+    params: impl Params,
+    row: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
+) -> Result<Vec<T>> {
+    let mut statement = connection.prepare_cached(sql).map_err(|error| sql_error(what, error))?;
+    let rows = statement.query_map(params, row).map_err(|error| sql_error(what, error))?;
+    rows.collect::<rusqlite::Result<Vec<T>>>().map_err(|error| sql_error(what, error))
 }

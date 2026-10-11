@@ -7,7 +7,7 @@ use std::sync::Arc;
 use rusqlite::params;
 
 use super::change::Change;
-use super::engine::Blobs;
+use super::engine::{Blobs, rows_of};
 use super::list::PAST_EVERY;
 use super::paths::past;
 use crate::sqlite::sql_error;
@@ -84,15 +84,10 @@ impl Blobs {
     /// Deletes the files marked clears hid, a batch a transaction, and each
     /// mark with the last of its files.
     fn drop_cleared(self: &Arc<Self>) -> Result<usize> {
-        let marks: Vec<(i64, String, i64)> = self.file.read(|connection| {
-            let mut statement = connection
-                .prepare_cached(SELECT_CLEARED)
-                .map_err(|error| sql_error("blobs: the marked clears", error))?;
-            let rows = statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-                .map_err(|error| sql_error("blobs: the marked clears", error))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| sql_error("blobs: the marked clears", error))
-        })?;
+        let cleared = (SELECT_CLEARED, "blobs: the marked clears");
+        let marks: Vec<(i64, String, i64)> = self
+            .file
+            .read(|connection| rows_of(connection, cleared, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))?;
         let mut total = 0;
         for (set, prefix, revision) in marks {
             let to = past(&prefix).unwrap_or_else(|| PAST_EVERY.clone());
@@ -140,16 +135,9 @@ impl Blobs {
     fn remove_unnamed(&self) -> Result<usize> {
         let mut removed = 0;
         for _ in 0..BATCHES {
-            let unnamed: Vec<i64> = self.file.read(|connection| {
-                let mut statement = connection
-                    .prepare_cached(SELECT_UNNAMED)
-                    .map_err(|error| sql_error("blobs: the contents no file names", error))?;
-                let rows = statement
-                    .query_map([BATCH], |row| row.get(0))
-                    .map_err(|error| sql_error("blobs: the contents no file names", error))?;
-                rows.collect::<rusqlite::Result<Vec<i64>>>()
-                    .map_err(|error| sql_error("blobs: the contents no file names", error))
-            })?;
+            let unnamed = (SELECT_UNNAMED, "blobs: the contents no file names");
+            let unnamed: Vec<i64> =
+                self.file.read(|connection| rows_of(connection, unnamed, [BATCH], |row| row.get(0)))?;
             let gone: Vec<i64> = unnamed.iter().copied().filter(|&id| self.disk.remove_object(id).is_ok()).collect();
             if !gone.is_empty() {
                 let forgotten = gone.clone();

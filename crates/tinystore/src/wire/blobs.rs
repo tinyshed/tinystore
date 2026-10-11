@@ -117,97 +117,104 @@ impl Handles {
 /// Answers a call of one message: everything but a read and an upload.
 pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], max_body: usize) -> Answered {
     match called {
-        method::BLOBS_OPEN => {
-            let asked = BlobsOpen::decode(body)?;
-            let mut files = store.files(&asked.name);
-            if let Some(ttl) = asked.ttl {
-                files = files.ttl(Duration::from_millis(ttl));
-            }
-            if let Some(most) = asked.max_file_size {
-                files = files.max_file_size(most);
-            }
-            let files = files.open()?;
-            let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
-            lock(&handles.open).insert(handle, files);
-            Ok(Handle { handle }.encode())
-        }
-        method::BLOBS_PUT => {
-            let mut asked = BlobsWrite::decode(body)?;
-            let files = handles.at(asked.handle, &asked.folder)?;
-            let bytes = std::mem::take(&mut asked.bytes);
-            let info = options(files.key(&asked.path), &asked).written(&bytes, asked.create)?;
-            Ok(BlobsWritten { info: info.map(info_of) }.encode())
-        }
-        method::BLOBS_GET => {
-            let asked = BlobsAt::decode(body)?;
-            let Some(mut file) = handles.at(asked.handle, &asked.folder)?.get(&asked.path)? else {
-                return Ok(BlobsGot::default().encode());
-            };
-            let info = file.info().clone();
-            // half a body, the rest room for what it carries; a larger file waits for its read
-            let bytes = if info.size <= (max_body / 2) as u64 { file.read_all()? } else { Vec::new() };
-            Ok(BlobsGot { info: Some(info_of(info)), bytes }.encode())
-        }
-        method::BLOBS_HEAD => {
-            let asked = BlobsAt::decode(body)?;
-            let info = handles.at(asked.handle, &asked.folder)?.head(&asked.path)?;
-            Ok(BlobsHead { info: info.map(info_of) }.encode())
-        }
-        method::BLOBS_DELETE => {
-            let asked = BlobsDelete::decode(body)?;
-            let files = handles.at(asked.handle, &asked.folder)?;
-            let mut call = files.key(&asked.path);
-            if let Some(etag) = asked.if_match {
-                call = call.if_match(etag);
-            }
-            call.delete()?;
-            Ok(Empty {}.encode())
-        }
-        method::BLOBS_COPY | method::BLOBS_RENAME => {
-            let asked = BlobsMove::decode(body)?;
-            let files = handles.at(asked.handle, &asked.folder)?;
-            let mut call = files.key(&asked.to);
-            if let Some(etag) = asked.if_match {
-                call = call.if_match(etag);
-            }
-            let info = if called == method::BLOBS_COPY {
-                call.copy_from(&asked.from)?
-            } else {
-                call.rename_from(&asked.from)?
-            };
-            Ok(info_of(info).encode())
-        }
-        method::BLOBS_EXPIRE => {
-            let asked = BlobsExpire::decode(body)?;
-            let files = handles.at(asked.handle, &asked.folder)?;
-            let found = files.expire(&asked.path, Duration::from_millis(asked.after))?;
-            Ok(BlobsFound { found }.encode())
-        }
-        method::BLOBS_LIST => {
-            let asked = BlobsList::decode(body)?;
-            let files = handles.at(asked.handle, &asked.folder)?;
-            let mut list = files.list().prefix(asked.prefix);
-            if let Some(after) = asked.after {
-                list = list.after(after);
-            }
-            if let Some(limit) = asked.limit {
-                list = list.limit(usize::try_from(limit).unwrap_or(usize::MAX));
-            }
-            let page = list.page()?;
-            Ok(BlobsPage { files: page.files.into_iter().map(info_of).collect(), next: page.next }.encode())
-        }
-        method::BLOBS_USAGE => {
-            let asked = BlobsFolder::decode(body)?;
-            let usage = handles.at(asked.handle, &asked.folder)?.usage()?;
-            Ok(BlobsUsage { count: usage.count, size: usage.size }.encode())
-        }
-        method::BLOBS_CLEAR => {
-            let asked = BlobsFolder::decode(body)?;
-            handles.at(asked.handle, &asked.folder)?.clear()?;
-            Ok(Empty {}.encode())
-        }
+        method::BLOBS_OPEN => open(store, handles, BlobsOpen::decode(body)?),
+        method::BLOBS_PUT => put(handles, BlobsWrite::decode(body)?),
+        method::BLOBS_GET => get(handles, &BlobsAt::decode(body)?, max_body),
+        method::BLOBS_HEAD => head(handles, &BlobsAt::decode(body)?),
+        method::BLOBS_DELETE => delete(handles, BlobsDelete::decode(body)?),
+        method::BLOBS_COPY | method::BLOBS_RENAME => moved(handles, called, BlobsMove::decode(body)?),
+        method::BLOBS_EXPIRE => expire(handles, &BlobsExpire::decode(body)?),
+        method::BLOBS_LIST => list(handles, BlobsList::decode(body)?),
+        method::BLOBS_USAGE => usage(handles, &BlobsFolder::decode(body)?),
+        method::BLOBS_CLEAR => clear(handles, &BlobsFolder::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
+}
+
+fn open(store: &Store, handles: &Handles, asked: BlobsOpen) -> Answered {
+    let mut files = store.files(&asked.name);
+    if let Some(ttl) = asked.ttl {
+        files = files.ttl(Duration::from_millis(ttl));
+    }
+    if let Some(most) = asked.max_file_size {
+        files = files.max_file_size(most);
+    }
+    let files = files.open()?;
+    let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
+    lock(&handles.open).insert(handle, files);
+    Ok(Handle { handle }.encode())
+}
+
+fn put(handles: &Handles, mut asked: BlobsWrite) -> Answered {
+    let files = handles.at(asked.handle, &asked.folder)?;
+    let bytes = std::mem::take(&mut asked.bytes);
+    let info = options(files.key(&asked.path), &asked).written(&bytes, asked.create)?;
+    Ok(BlobsWritten { info: info.map(info_of) }.encode())
+}
+
+fn get(handles: &Handles, asked: &BlobsAt, max_body: usize) -> Answered {
+    let Some(mut file) = handles.at(asked.handle, &asked.folder)?.get(&asked.path)? else {
+        return Ok(BlobsGot::default().encode());
+    };
+    let info = file.info().clone();
+    // half a body, the rest room for what it carries; a larger file waits for its read
+    let bytes = if info.size <= (max_body / 2) as u64 { file.read_all()? } else { Vec::new() };
+    Ok(BlobsGot { info: Some(info_of(info)), bytes }.encode())
+}
+
+fn head(handles: &Handles, asked: &BlobsAt) -> Answered {
+    let info = handles.at(asked.handle, &asked.folder)?.head(&asked.path)?;
+    Ok(BlobsHead { info: info.map(info_of) }.encode())
+}
+
+fn delete(handles: &Handles, asked: BlobsDelete) -> Answered {
+    let files = handles.at(asked.handle, &asked.folder)?;
+    let mut call = files.key(&asked.path);
+    if let Some(etag) = asked.if_match {
+        call = call.if_match(etag);
+    }
+    call.delete()?;
+    Ok(Empty {}.encode())
+}
+
+/// A copy or a rename, as `called` says: the file at `from`, at `to`.
+fn moved(handles: &Handles, called: u16, asked: BlobsMove) -> Answered {
+    let files = handles.at(asked.handle, &asked.folder)?;
+    let mut call = files.key(&asked.to);
+    if let Some(etag) = asked.if_match {
+        call = call.if_match(etag);
+    }
+    let info = if called == method::BLOBS_COPY { call.copy_from(&asked.from)? } else { call.rename_from(&asked.from)? };
+    Ok(info_of(info).encode())
+}
+
+fn expire(handles: &Handles, asked: &BlobsExpire) -> Answered {
+    let files = handles.at(asked.handle, &asked.folder)?;
+    let found = files.expire(&asked.path, Duration::from_millis(asked.after))?;
+    Ok(BlobsFound { found }.encode())
+}
+
+fn list(handles: &Handles, asked: BlobsList) -> Answered {
+    let files = handles.at(asked.handle, &asked.folder)?;
+    let mut list = files.list().prefix(asked.prefix);
+    if let Some(after) = asked.after {
+        list = list.after(after);
+    }
+    if let Some(limit) = asked.limit {
+        list = list.limit(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    let page = list.page()?;
+    Ok(BlobsPage { files: page.files.into_iter().map(info_of).collect(), next: page.next }.encode())
+}
+
+fn usage(handles: &Handles, asked: &BlobsFolder) -> Answered {
+    let usage = handles.at(asked.handle, &asked.folder)?.usage()?;
+    Ok(BlobsUsage { count: usage.count, size: usage.size }.encode())
+}
+
+fn clear(handles: &Handles, asked: &BlobsFolder) -> Answered {
+    handles.at(asked.handle, &asked.folder)?.clear()?;
+    Ok(Empty {}.encode())
 }
 
 /// A write's options from its message.

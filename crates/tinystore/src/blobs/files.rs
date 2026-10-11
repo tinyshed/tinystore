@@ -143,7 +143,8 @@ impl Files {
 
     /// Writes the file at `from` at `to` too, sharing its bytes: no byte is
     /// copied, and the two are two files from then on. A file at `to` is a
-    /// conflict, unless `if_match` names the version to replace.
+    /// conflict: `key(to).if_match(etag).copy_from(from)` replaces the version
+    /// it names.
     pub fn copy(&self, from: &str, to: &str) -> Result<FileInfo> {
         self.key(to).copy_from(from)
     }

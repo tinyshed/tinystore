@@ -136,8 +136,8 @@ impl Blobs {
         })
     }
 
-    /// Reads on through one content, at most `left` bytes, into its hash;
-    /// says how many it read.
+    /// Reads on through one content into its hash, at most `left` bytes of a
+    /// file's and an inline body whole; says how many it read.
     fn read_on(&self, next: &Next, scrubbing: &mut Scrubbing, buffer: &mut [u8], left: u64) -> io::Result<u64> {
         if next.inline {
             let body: Option<Vec<u8>> = self

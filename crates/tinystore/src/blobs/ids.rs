@@ -30,7 +30,8 @@ struct State {
 }
 
 impl Ids {
-    /// Starts from what the file reserved: every id up to it may be taken.
+    /// Starts from what the file reserved: every id up to it may have been
+    /// taken.
     pub(crate) fn start(&self, reserved: i64) {
         let mut state = lock(&self.state);
         state.last = reserved;

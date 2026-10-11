@@ -45,8 +45,9 @@ pub struct Upload {
     hash: Sha256,
     written: u64,
     synced: u64,
-    /// The bytes its file holds, and `written` when the disk was last asked.
+    /// The bytes its file holds.
     on_disk: u64,
+    /// `written` when the disk was last asked for room.
     roomed: u64,
     ended: bool,
     _reserved: Reservation,
