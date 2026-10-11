@@ -408,6 +408,11 @@ child.stdout.on('data', chunk => out.write(chunk))
 child.on('close', () => out.end())
 ```
 
+```rust
+let mut out = store.events("worker").open()?.lines()?;
+std::io::copy(child.stdout.as_mut().unwrap(), &mut out)?;   // dropped, it hands over what it holds
+```
+
 - Each line becomes an event at the time it arrived, and a writer never
   waits, as a logger never does: what does not fit its buffer is dropped and
   counted.
@@ -420,6 +425,8 @@ child.on('close', () => out.end())
 - The level is found where pino, logfmt, glog, Redis, log4j, zerolog and
   Postgres write it, in colour or not.
 - A line longer than one event holds is dropped whole and counted.
+- An event's message is text: a line that is no UTF-8 keeps U+FFFD for each
+  byte that spells nothing.
 
 ## Traces
 

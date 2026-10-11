@@ -237,6 +237,17 @@ fn next_stamp(text: &[u8], from: usize, at: i64) -> Option<Stamp> {
     None
 }
 
+/// Where the time Redis writes after its process and role ends when `text`
+/// has one at `start`, its fraction included:
+///
+/// ```text
+/// 1:M 26 Sep 2026 12:00:01.500 * Ready   → the end of 26 Sep 2026 12:00:01.500
+/// ```
+pub(super) fn redis_stamp_end(text: &[u8], start: usize) -> Option<usize> {
+    const REDIS: usize = 5;
+    read_stamp(text, start, REDIS, PATTERNS[REDIS], 0).map(|stamp| stamp.end)
+}
+
 /// Reads a stamp in one pattern at `text[start..]`, and the fraction after
 /// it, and keeps it only when it is a time a calendar and a clock can show.
 fn read_stamp(text: &[u8], start: usize, pattern: usize, layout: &[u8], at: i64) -> Option<Stamp> {

@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt;
 
+use super::super::event::Level;
 use super::super::fixture::{DAY, Fixture, fixture, names};
 use super::*;
 use crate::console::Format;
@@ -162,4 +163,18 @@ fn a_secret_is_hidden_where_it_prints_and_where_it_is_kept() {
     assert_eq!(events[0].fields.json("user"), Some("42"));
     let printed = printed.untimed();
     assert!(printed[0].contains(r#""api_key":"[redacted]""#) && printed[0].contains(r#""password":"[redacted]""#));
+}
+
+#[test]
+fn a_logger_dropped_with_lines_waiting_loses_none_of_them() {
+    let (f, printed) = (fixture(), Printed::default());
+    let log = logger(&f, &printed).console(Format::Off).layer().unwrap();
+    logged(&log, || tracing::info!("held when its logger went"));
+    drop(log);
+    f.records().flush_held(false).unwrap();
+    let events = f.events("api").list().page().unwrap().events;
+    assert_eq!(
+        events.iter().map(|event| event.message.as_deref()).collect::<Vec<_>>(),
+        [Some("held when its logger went")]
+    );
 }

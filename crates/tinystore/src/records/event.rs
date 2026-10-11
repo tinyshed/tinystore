@@ -163,11 +163,6 @@ impl Fields {
         object.push('}');
         serde_json::from_str(&object).map_err(|error| Error::invalid("fields do not read so").with_source(error))
     }
-
-    /// What the fields weigh in an event: more than their row spends on them.
-    pub(super) fn weight(&self) -> usize {
-        self.0.iter().map(|(key, json)| key.len() + json.len() + 20).sum::<usize>() + 10
-    }
 }
 
 /// An event as a read gives it.
@@ -206,8 +201,7 @@ impl Kept {
     /// What the event weighs against the bounds of an append, a row and a
     /// segment: more than its bytes in any of them.
     pub(super) fn weight(&self) -> usize {
-        let message = self.message.as_ref().map_or(0, String::len);
-        64 + self.name.len() + message + self.fields.weight() + self.context.weight()
+        weight(&self.name, self.message.as_deref(), &self.fields.0, &self.context.0)
     }
 
     pub(super) fn into_event(self, stream: &str) -> Event {
@@ -223,6 +217,20 @@ impl Kept {
             span_id: self.span_id,
         }
     }
+}
+
+/// What an event weighs against the bounds of an append, a row and a
+/// segment: more than its bytes in any of them, a field more than what its
+/// row spends on it.
+pub(super) fn weight(
+    name: &str,
+    message: Option<&str>,
+    fields: &[(String, String)],
+    context: &[(String, String)],
+) -> usize {
+    let pairs =
+        |pairs: &[(String, String)]| pairs.iter().map(|(key, json)| key.len() + json.len() + 20).sum::<usize>() + 10;
+    64 + name.len() + message.map_or(0, str::len) + pairs(fields) + pairs(context)
 }
 
 /// An event to write: its name, and what it carries beside its fields.

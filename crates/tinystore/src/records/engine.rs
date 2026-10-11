@@ -12,11 +12,12 @@ use std::time::Duration;
 
 use rusqlite::{Connection, Params, params};
 
+use super::buffer::Held;
 use super::head::Codec;
-use super::logger::Loggers;
 use super::tail::Recent;
 use crate::engine::{Claim, Engine, Host};
 use crate::sqlite::{Config, File, Migration, sql_error};
+use crate::store::WeakStore;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_nanos};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
@@ -34,6 +35,7 @@ const MAINTENANCE: Duration = Duration::from_mins(1);
 pub(super) const LATENESS: Duration = Duration::from_secs(10);
 
 pub(crate) struct Records {
+    store: WeakStore,
     pub(crate) file: File,
     pub(crate) memory: Arc<Memory>,
     clock: Arc<dyn Clock>,
@@ -48,8 +50,9 @@ pub(crate) struct Records {
     pub(super) waiting: Mutex<HashMap<i64, i64>>,
     /// The events appended lately, held for the tails open.
     pub(super) recent: Recent,
-    /// The loggers' buffers, which the store's background work writes.
-    pub(super) loggers: Mutex<Loggers>,
+    /// What loggers and writers of lines hold, which the store's background
+    /// work writes.
+    pub(super) held: Mutex<Held>,
     _claim: Claim,
 }
 
@@ -72,10 +75,10 @@ impl Stream {
 }
 
 impl Engine for Records {
-    /// Writes what the loggers hold first: a line logged before the close is
-    /// kept, and one logged after it is dropped and counted.
+    /// Writes what loggers and writers of lines hold first: a line given
+    /// before the close is kept, and one given after it is dropped and counted.
     fn close(&self) -> Result<()> {
-        let flushed = self.flush_loggers(true);
+        let flushed = self.flush_held(true);
         self.recent.close();
         self.file.close().and(flushed)
     }
@@ -98,6 +101,7 @@ impl Records {
             let file = File::open(claim.path(), config)?;
             file.migrate("records", MIGRATIONS)?;
             let records = Arc::new(Records {
+                store: store.downgrade(),
                 streams: Mutex::new(read_streams(&file)?),
                 waiting: Mutex::new(read_waiting(&file)?),
                 file,
@@ -106,7 +110,7 @@ impl Records {
                 codec: Mutex::default(),
                 maintaining: Mutex::default(),
                 recent: Recent::default(),
-                loggers: Mutex::default(),
+                held: Mutex::default(),
                 _claim: claim,
             });
             let weak = Arc::downgrade(&records);
@@ -120,6 +124,15 @@ impl Records {
     /// The store's clock, in nanoseconds since 1970.
     pub(crate) fn now(&self) -> i64 {
         unix_nanos(self.clock.now())
+    }
+
+    pub(super) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+
+    /// The store, while it is open.
+    pub(super) fn store(&self) -> Option<Store> {
+        self.store.upgrade()
     }
 
     fn streams(&self) -> MutexGuard<'_, HashMap<String, Stream>> {

@@ -148,12 +148,16 @@ module defines.
 - a logger without a store writes the console alone, and links no store nor SQLite — `console`'s tests built with `--no-default-features --features console`, which `just lint` and CI lint
 - colours need a terminal, and not NO_COLOR — `colours_need_a_terminal_without_no_color_and_force_color_colours_a_pipe` in `console::env`
 - FORCE_COLOR colours a pipe, and NO_COLOR still wins — `colours_need_a_terminal_without_no_color_and_force_color_colours_a_pipe` in `console::env`, `a_logger_told_where_to_print_prints_json_there_and_force_color_makes_it_pretty` in `console::layer`; `makes a pipe pretty and coloured, unless NO_COLOR` in `sdk/js/test/logger.test.ts`, `test_force_color_makes_a_pipe_pretty_and_coloured_unless_no_color` in Python's
-- a line one record holds loses no byte; a longer one is dropped and counted — `FuzzLinesLoseNoByte`, `TestLinesKeepEveryByte`, `TestALargeLineWriteKeepsOnlyOneBoundedPartial`
-- a writer of lines never waits, and closes with the store — `TestLinesNeverWaitAndCloseWithTheStore`
-- a stack trace's lines make one record — `TestLinesJoinWhatBelongsTogether`, `TestAStackTraceGoesOn`
-- a line's level is found where its program writes it — `TestLinesFindTheLevelWhereProgramsWriteIt`
-- a level in colour counts as one in brackets — `TestAColourMarksALevelAsBracketsDo`
-- a logfmt line keeps its pairs when they spell it — `TestLogfmtLinesKeepTheirPairsWhenTheySpellTheLineAgain`, `TestLinesKeepALogfmtLinesPairs`
+- a line one event holds loses no byte however it was cut, and a longer one is dropped whole and counted — `however_a_text_is_cut_its_lines_come_back_but_those_longer_than_an_event_holds`, `a_lines_text_comes_back_however_it_was_cut_into_writes`, `a_line_longer_than_an_event_holds_is_dropped_whole_and_counted` in `records::lines`; its fuzz target is `FuzzLinesLoseNoByte` at `e81a050` until Rust's lands
+- a writer of lines never waits, drops what its buffer has no room for, and closes with the store — `a_writer_never_waits_drops_what_its_buffer_has_no_room_for_and_closes_with_its_store` in `records::lines`
+- a stack trace's, a traceback's or a JSON value's lines make one event — `the_lines_of_a_stack_trace_a_traceback_or_a_json_value_make_one_event`, `a_stack_trace_goes_on_with_a_cause_a_traceback_and_an_exceptions_name` in `records::lines`
+- a line's level is found where its program writes it — `a_lines_level_is_found_where_its_program_writes_it` in `records::level`
+- a level in colour counts as one in brackets — `a_colour_marks_a_level_as_brackets_do` in `records::level`
+- a logfmt line keeps its pairs and a JSON line its fields when they spell it, and a read finds them — `a_logfmt_line_keeps_its_pairs_when_they_spell_it_again` in `records::logfmt`, `a_logfmt_line_becomes_its_pairs_and_a_json_line_its_fields_which_a_read_finds` in `records::lines`
+- a JSON line whose fields weigh past an event is kept as its text — `a_json_line_whose_fields_weigh_past_an_event_is_kept_as_its_text` in `records::lines`
+- an event that may still grow waits for a flush it did not grow through, and a flush writes every line ended — `an_event_that_may_still_grow_waits_for_a_flush_it_did_not_grow_through`, `a_flush_writes_every_line_ended_and_keeps_one_without_its_newline` in `records::lines`
+- a line that is no UTF-8 keeps a replacement for each byte that spells nothing — `a_line_that_is_no_utf8_keeps_a_replacement_for_each_byte_that_spells_nothing` in `records::lines`
+- a logger or a writer dropped with lines waiting loses none of them — `a_logger_dropped_with_lines_waiting_loses_none_of_them` in `records::logger`, and every test of `records::lines`, which drops its writer before the flush
 - a record survives the records format exactly — `TestSegmentsWrittenBeforeStillRead`, `TestHeadRowsWrittenBeforeStillRead`
 - a changed records byte is refused — `a_changed_or_missing_byte_is_refused` in `records::head` and in `records::block`, `a_segment_row_gives_back_its_schema_and_a_changed_or_missing_byte_is_refused` in `records::segment`, `a_row_whose_bytes_changed_is_corrupt_and_names_itself` in `records::events`; fuzzers to come
 - a records decode stays bounded — `text_past_what_a_decoder_may_expand_is_refused_before_it_is_expanded`, `what_a_decoder_expands_is_counted_across_its_columns` in `records::text`; every count and length is bounded before anything is taken for it

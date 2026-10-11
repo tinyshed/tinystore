@@ -111,7 +111,10 @@ them.
   and counts the events `keep` removed before it, which the file keeps thirty days. A store's logger is a
   `tracing` layer: it prints each line as the console's vectors have it, and keeps it through a buffer of 1024
   lines that the store writes every second, sooner once half of it waits, and when it closes; a line that
-  finds the buffer full is dropped, counted and said once in ten minutes. Owed now: their time and
+  finds the buffer full is dropped, counted and said once in ten minutes. A writer of another program's
+  lines joins a stack trace's, a traceback's or a JSON value's lines into one event, keeps a JSON or logfmt
+  line as its fields when they spell it again, and finds its level where pino, glog, Redis, log4j and their
+  kin write it, through a buffer of its own. Owed now: their time and
   peak memory on the production corpus, and then the fast paths that pay — a count from the counts of the
   blocks a range covers whole, a stat from its column without the events built, `top` and `distinct` from a
   column's dictionary. A block keeps its events by columns: integers by their steps, a steady one, a
