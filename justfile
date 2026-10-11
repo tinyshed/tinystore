@@ -86,6 +86,10 @@ tables:
     bun run tables
 
 # everything CI gates on
+# a fuzz target of fuzz/, by hand: it needs nightly and cargo-fuzz
+fuzz target="records_rows":
+    cd fuzz && cargo +nightly fuzz run {{target}}
+
 check: fmt-check lint test protocol-check sdk sdk-check lint-actions
 
 # remove build output

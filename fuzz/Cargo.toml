@@ -1,0 +1,24 @@
+[package]
+name = "tinystore-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tinystore = { path = "../crates/tinystore", default-features = false, features = ["fuzzing"] }
+
+# A workspace of its own: the targets build on nightly through cargo-fuzz,
+# never with the pinned toolchain the library's workspace builds on.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "records_rows"
+path = "fuzz_targets/records_rows.rs"
+test = false
+doc = false
+bench = false

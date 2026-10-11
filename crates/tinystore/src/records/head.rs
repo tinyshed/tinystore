@@ -11,7 +11,7 @@ use super::bytes::{Reader, crc32, put_count, put_int, put_text};
 use super::event::{Fields, Kept, Level, MAX_EVENT, MAX_KEYS, SpanId, TraceId};
 use crate::{Error, Result};
 
-const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 1;
 
 const HAS_LEVEL: u8 = 1;
 const HAS_MESSAGE: u8 = 1 << 1;

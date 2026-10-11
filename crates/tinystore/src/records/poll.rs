@@ -23,6 +23,7 @@ use super::engine::Records;
 use super::event::Event;
 use super::events::AllEvents;
 use super::head::Codec;
+use super::repair::Part;
 use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
@@ -99,10 +100,9 @@ impl Records {
         let Some(fetched) = self.fetch_batch((segment, offset), from.is_some(), limit)? else {
             return Ok(PollBatch { events: Vec::new(), cursor: given, expired: 0 });
         };
-        let stream = self.every_stream().into_iter().find(|stream| stream.id == fetched.stream);
-        let name = stream.map_or_else(|| fetched.stream.to_string(), |stream| stream.name.to_string());
+        let name = self.name_of(fetched.stream);
         let mut codec = Codec::default();
-        let within = |error: Error| error.within(format!("segment {} of {name}", fetched.segment));
+        let within = |error: Error| self.met((Part::Segment, fetched.segment), &name, error);
         let schema = Schema::parse(&fetched.row, &mut codec).map_err(within)?;
         let mut events = Vec::with_capacity((fetched.to - fetched.from) as usize);
         for (begins, body) in &fetched.blocks {
@@ -174,7 +174,11 @@ fn expired_between(connection: &rusqlite::Connection, (segment, offset): (i64, i
     let mut select = connection.prepare_cached(EXPIRED).map_err(failed)?;
     let rows = select.query_map(params![segment, found], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)));
     let held: HashMap<i64, i64> = rows.and_then(Iterator::collect).map_err(failed)?;
-    let own = held.get(&segment).map_or(1, |events| (events - offset).max(1));
+    // no segment is 0: a cursor given before any was packed passed none of it
+    let own = match segment {
+        0 => 0,
+        _ => held.get(&segment).map_or(1, |events| (events - offset).max(1)),
+    };
     let others: i64 = held.iter().filter(|(id, _)| **id != segment).map(|(_, events)| *events).sum();
     let unknown = (found - segment - 1) - held.keys().filter(|id| **id != segment).count() as i64;
     Ok((own + others + unknown).max(0) as u64)

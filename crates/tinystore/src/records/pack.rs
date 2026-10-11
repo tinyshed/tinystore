@@ -24,6 +24,7 @@ use super::bloom::{bloom_of, id_like};
 use super::engine::{Records, execute, nanos};
 use super::event::Kept;
 use super::head::{self, Codec, ROW_EVENTS, ROW_WEIGHT, Row};
+use super::repair::Part;
 use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
@@ -45,7 +46,7 @@ pub(super) const PATIENCE: Duration = Duration::from_secs(10);
 const SWEEPS: usize = 64;
 
 /// Head rows as packing reads them: each one's id and its body.
-type HeadRows = Vec<(i64, Vec<u8>)>;
+type HeadRows = Vec<(i64, Vec<u8>, usize)>;
 
 /// A head, a stream's events on time or its late ones: what waits in it.
 struct Head {
@@ -122,13 +123,21 @@ impl Records {
     /// Packs every head that is ready, a segment at a time.
     pub(super) fn pack(&self, now: i64) -> Result<Packing> {
         let mut packing = Packing::default();
+        // a head whose rows left to pack no longer read waits for their drop
+        let mut stuck = BTreeSet::new();
         for _ in 0..SWEEPS {
-            let ready: Vec<Head> = self.heads()?.into_iter().filter(|head| ready(head, now)).collect();
+            let heads = self.heads()?.into_iter();
+            let ready: Vec<Head> =
+                heads.filter(|head| ready(head, now) && !stuck.contains(&(head.stream, head.late))).collect();
             if ready.is_empty() {
                 break;
             }
             for head in ready {
                 let events = self.pack_one(head.stream, head.late)?;
+                if events == 0 {
+                    stuck.insert((head.stream, head.late));
+                    continue;
+                }
                 (packing.segments, packing.events) = (packing.segments + 1, packing.events + events as u64);
                 packing.streams.insert(head.stream);
             }
@@ -156,29 +165,38 @@ impl Records {
 
     /// Makes one segment of a head's oldest rows: read a segment's worth →
     /// parse → order by time → make the segment → write it and remove the
-    /// rows, in one commit. Says how many events it packed.
+    /// rows, in one commit. A row that no longer reads is said once and left
+    /// for a drop. Says how many events it packed.
     fn pack_one(&self, stream: i64, late: bool) -> Result<usize> {
         let (rows, weight) = self.oldest_rows(stream, late)?;
         let _held = self.memory.reserve(weight as u64 * HELD, "records: packing a segment", PATIENCE)?;
         let mut codec = Codec::default();
-        let mut events = Vec::new();
-        for (id, body) in &rows {
-            let parsed = head::parse(body, &mut codec).map_err(|error| error.within(format!("head row {id}")))?;
-            events.extend(parsed);
+        let (mut events, mut packed, mut packed_weight) = (Vec::new(), Vec::new(), 0);
+        for (id, body, heavy) in rows {
+            match head::parse(&body, &mut codec) {
+                Ok(parsed) => {
+                    events.extend(parsed);
+                    packed.push(id);
+                    packed_weight += heavy;
+                }
+                Err(error) => drop(self.met((Part::HeadRow, id), &self.name_of(stream), error)),
+            }
+        }
+        if packed.is_empty() {
+            return Ok(0);
         }
         // stable: events of one time stay in the order they were written
         events.sort_by_key(|event| event.at);
         let made = made_of(&events, &mut codec)?;
-        let rows: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
-        let emptied = self.publish((stream, late), (rows, weight), &made)?;
+        let emptied = self.publish((stream, late), (packed, packed_weight), &made)?;
         if emptied && !late {
             self.waiting.lock().unwrap_or_else(PoisonError::into_inner).remove(&stream);
         }
         Ok(made.events)
     }
 
-    /// A head's oldest rows, a segment's worth and one row at least, with
-    /// what they weigh.
+    /// A head's oldest rows that read, a segment's worth and one row at
+    /// least, with what each weighs and they all do.
     fn oldest_rows(&self, stream: i64, late: bool) -> Result<(HeadRows, usize)> {
         let failed = |error| sql_error("read the head rows to pack", error);
         self.file.read(|connection| {
@@ -186,13 +204,17 @@ impl Records {
             let mut rows = select.query(params![stream, late]).map_err(failed)?;
             let (mut taken, mut events, mut weight) = (Vec::new(), 0, 0);
             while let Some(row) = rows.next().map_err(failed)? {
+                let id: i64 = row.get(0).map_err(failed)?;
+                if self.is_damaged(Part::HeadRow, id) {
+                    continue;
+                }
                 let (count, heavy): (i64, i64) = (row.get(1).map_err(failed)?, row.get(2).map_err(failed)?);
                 let (count, heavy) = (count.max(0) as usize, heavy.max(0) as usize);
                 if !taken.is_empty() && (events + count > SEGMENT_EVENTS || weight + heavy > SEGMENT_WEIGHT) {
                     break;
                 }
                 (events, weight) = (events + count, weight + heavy);
-                taken.push((row.get(0).map_err(failed)?, row.get(3).map_err(failed)?));
+                taken.push((id, row.get(3).map_err(failed)?, heavy));
             }
             Ok((taken, weight))
         })

@@ -31,7 +31,7 @@ use super::values::{put_values, read_values, values_equal};
 use crate::{Error, Result};
 
 /// A block's first byte, which no head row has.
-const VERSION: u8 = 2;
+pub(super) const VERSION: u8 = 2;
 
 const TIMES: usize = 0;
 const NAMES: usize = 1;

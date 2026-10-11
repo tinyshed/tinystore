@@ -164,6 +164,21 @@ message records.Dropped {
   1 dropped: uint
 }
 
+# A head row or a segment that no longer reads, as damaged lists it and drop
+# takes it: a head row holds events not packed yet, a segment packed ones.
+message records.Damage {
+  1 part: str         # head row or segment
+  2 id: uint
+  3 stream: str
+  4 first: nanos      # its events' oldest time
+  5 last: nanos
+  6 error: str        # what broke
+}
+
+message records.Damages {
+  1 damages: [records.Damage]
+}
+
 read  0x0501 records.open(records.Open)                  -> Handle
 write 0x0502 records.append(records.Append)              -> Empty
 read  0x0503 records.list(records.Query)                 -> records.Page
@@ -175,3 +190,5 @@ read  0x0508 records.fieldNames(records.FieldNamesAsked) -> records.Names
 read  0x0509 records.poll(records.PollAsked)             -> records.Batch
 read  0x050a records.tail(records.Query)                 -> download records.TailBatch until Empty
 write 0x050b records.lines(Handle)                       -> exchange records.Dropped for records.Piece
+read  0x050c records.damaged(Empty)                      -> records.Damages
+write 0x050d records.drop(records.Damage)                -> Empty

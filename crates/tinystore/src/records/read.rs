@@ -28,6 +28,7 @@ use super::engine::{Records, Stream, nanos};
 use super::event::{Event, Fields, Kept, Level, TraceId};
 use super::head::{self, Codec};
 use super::pack::{CONTEXT_KEY, FIELD_KEY, NAME_KEY};
+use super::repair::Part;
 use super::segment::Schema;
 use super::tail::Tail;
 use crate::sqlite::sql_error;
@@ -434,7 +435,7 @@ impl Records {
         let bytes: usize = fetched.rows.iter().map(|(picked, _)| picked.size).sum();
         let events: u64 = fetched.rows.iter().map(|(picked, _)| picked.events).sum();
         let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
-        let found = found(&asked, query, fetched, horizon)?;
+        let found = self.found(&asked, query, fetched, horizon)?;
         cut(found, &asked, horizon)
     }
 
@@ -681,49 +682,58 @@ fn range(query: &Query, now: i64) -> Result<(i64, i64)> {
     Ok((first, query.to.map_or(i64::MAX, |to| unix_nanos(to).saturating_sub(1))))
 }
 
-/// The events of the fetched rows that the read keeps, in its order: by
-/// their times, those of one time as they were written, or all of it
-/// backwards.
-fn found(asked: &Asked, query: &Query, fetched: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
-    let mut codec = Codec::default();
-    let mut schemas: HashMap<i64, Schema> = HashMap::new();
-    for (id, row) in &fetched.segments {
-        let schema = Schema::parse(row, &mut codec).map_err(|error| error.within(format!("segment {id}")))?;
-        schemas.insert(*id, schema);
-    }
-    let wanted = Wanted {
-        first: asked.first,
-        last: asked.last,
-        names: &query.names,
-        min_level: query.min_level,
-        trace: query.trace_id,
-        filters: &query.filters,
-    };
-    let mut found = Vec::new();
-    for (row, body) in fetched.rows {
-        let Some((stream, kept)) = asked.streams.get(&row.stream) else { continue };
-        let parsed = match (row.kind, schemas.get(&row.segment)) {
-            (Kind::Head, _) => head::parse(&body, &mut codec)
-                .map(|events| events.into_iter().enumerate().collect())
-                .map_err(|error| error.within(format!("head row {} of {stream}", row.id))),
-            (Kind::Block, Some(schema)) => block::parse_wanted(schema, &body, &mut codec, &wanted)
-                .map_err(|error| error.within(format!("block {} of {stream}", row.id))),
-            (Kind::Block, None) => Err(Error::internal(format!("records: block {} has no segment", row.id))),
+impl Records {
+    /// The events of the fetched rows that the read keeps, in its order: by
+    /// their times, those of one time as they were written, or all of it
+    /// backwards. A row that no longer reads fails the read, named as a drop
+    /// names it.
+    fn found(&self, asked: &Asked, query: &Query, fetched: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
+        let mut codec = Codec::default();
+        let mut schemas: HashMap<i64, Schema> = HashMap::new();
+        let owners: HashMap<i64, i64> = fetched.rows.iter().map(|(row, _)| (row.segment, row.stream)).collect();
+        for (id, row) in &fetched.segments {
+            let stream = owners.get(id).and_then(|stream| asked.streams.get(stream)).map_or("", |(name, _)| &**name);
+            let schema =
+                Schema::parse(row, &mut codec).map_err(|error| self.met((Part::Segment, *id), stream, error))?;
+            schemas.insert(*id, schema);
+        }
+        let wanted = Wanted {
+            first: asked.first,
+            last: asked.last,
+            names: &query.names,
+            min_level: query.min_level,
+            trace: query.trace_id,
+            filters: &query.filters,
         };
-        for (place, event) in parsed? {
-            let at = event.at;
-            let in_range = at >= asked.first.max(*kept) && at <= asked.last;
-            let whole = horizon.is_none_or(|edge| if asked.newest { at > edge } else { at < edge });
-            if in_range && whole && query.keeps(&event) {
-                found.push(Found { at, place: (row.kind, row.id, place), stream: Arc::clone(stream), event });
+        let mut found = Vec::new();
+        for (row, body) in fetched.rows {
+            let Some((stream, kept)) = asked.streams.get(&row.stream) else { continue };
+            let parsed = match (row.kind, schemas.get(&row.segment)) {
+                (Kind::Head, _) => head::parse(&body, &mut codec)
+                    .map(|events| events.into_iter().enumerate().collect())
+                    .map_err(|error| self.met((Part::HeadRow, row.id), stream, error)),
+                (Kind::Block, Some(schema)) => {
+                    block::parse_wanted(schema, &body, &mut codec, &wanted).map_err(|error| {
+                        self.met((Part::Segment, row.segment), stream, error.within(format!("block {}", row.id)))
+                    })
+                }
+                (Kind::Block, None) => Err(Error::internal(format!("records: block {} has no segment", row.id))),
+            };
+            for (place, event) in parsed? {
+                let at = event.at;
+                let in_range = at >= asked.first.max(*kept) && at <= asked.last;
+                let whole = horizon.is_none_or(|edge| if asked.newest { at > edge } else { at < edge });
+                if in_range && whole && query.keeps(&event) {
+                    found.push(Found { at, place: (row.kind, row.id, place), stream: Arc::clone(stream), event });
+                }
             }
         }
+        found.sort_by_key(|found| (found.at, found.place));
+        if asked.newest {
+            found.reverse();
+        }
+        Ok(found)
     }
-    found.sort_by_key(|found| (found.at, found.place));
-    if asked.newest {
-        found.reverse();
-    }
-    Ok(found)
 }
 
 /// A page of what was found: the limit's worth, less the events of a time

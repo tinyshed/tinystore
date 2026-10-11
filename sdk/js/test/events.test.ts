@@ -184,6 +184,21 @@ for (const way of ways) {
 			expect(() => out.write('late\n')).toThrow(ClosedError)
 		})
 
+		test('nothing damaged is listed, and what still reads is never dropped', async () => {
+			const all = store.events()
+			expect(await all.damaged()).toEqual([])
+			const now = new Date()
+			const reads = {
+				part: 'head row',
+				id: 1,
+				stream: 'audit',
+				first: now,
+				last: now,
+				error: '',
+			} as const
+			expect(await caught(all.drop(reads))).toBeInstanceOf(InvalidError)
+		})
+
 		test("a store's logger never waits: a full buffer drops and counts", async () => {
 			const log = store.logger('busy', { console: 'off', buffer: 2 })
 			for (let n = 0; n < 6; n++) {

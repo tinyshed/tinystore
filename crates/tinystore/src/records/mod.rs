@@ -23,6 +23,9 @@ mod event;
 mod events;
 #[cfg(test)]
 mod fixture;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzzing;
 mod head;
 mod ints;
 mod level;
@@ -34,6 +37,7 @@ mod merge;
 mod pack;
 mod poll;
 mod read;
+mod repair;
 mod segment;
 mod stamp;
 mod tail;
@@ -48,6 +52,7 @@ pub use logger::LoggerBuilder;
 pub use maintain::{Maintenance, maintain};
 pub use poll::PollBatch;
 pub use read::{All, List, PAGE_EVENTS, Page};
+pub use repair::{Damage, Part};
 pub use tail::{Tail, TailBatch};
 
 use crate::{Result, Store};

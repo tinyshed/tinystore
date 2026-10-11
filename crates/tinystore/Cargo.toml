@@ -23,6 +23,9 @@ records = ["store", "dep:zstd", "console"]
 # the protocol's session and the pipe, which the server, the FFI and every SDK
 # speak, for the engines built beside it; its session answers kv in every call
 wire = ["kv"]
+# the bodies of the fuzz targets in fuzz/, which reach decoders the library
+# keeps to itself
+fuzzing = ["records"]
 
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the

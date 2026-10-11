@@ -202,9 +202,10 @@ module defines.
 - a reader finds each record once while sealing — `TestReadersSeeEveryRecordOnceWhileSealing`
 - a failed seal leaves the head as it was — `a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_written` in `records::pack`
 - an abrupt exit loses no appended record — `TestAnAbruptExitKeepsEveryAppendedRecord`, before, inside and after a seal
-- a damaged head does not stop the others — `TestADamagedHeadDoesNotStopTheOthers`
-- a damaged row is logged once, its head still seals — `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals`
-- a damaged segment is dropped whole, followed past — `TestDropRemovesADamagedSegmentAndFollowPassesIt`
+- any bytes past a row's version and checksum read as its events or fail `corrupt`, never a panic — `a_block_with_any_byte_changed_or_cut_gives_its_events_or_fails_corrupt`, `bytes_of_no_row_fail_corrupt` in `records::fuzzing`; its fuzz target is `records_rows` in `fuzz/`, run by hand with `just fuzz`
+- a damaged head does not stop the others — `a_damaged_head_row_is_left_for_a_drop_and_the_rows_around_it_still_pack` in `records::repair`
+- a damaged row is said once, and the rest of its head packs — `a_damaged_head_row_is_left_for_a_drop_and_the_rows_around_it_still_pack` in `records::repair`, which does not count the lines said; `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals` for that
+- a damaged segment is dropped whole, and a poll behind it is told what it held — `only_what_no_longer_reads_is_dropped_a_segment_whole_and_a_poll_behind_it_told` in `records::repair`
 - a follower keeps its place across merges, the middle of a merged segment included — `a_cursor_keeps_its_place_across_merges_the_middle_of_a_merged_segment_included` in `records::poll`; the places it keeps it by — `a_merged_segment_merges_again_and_each_place_still_names_its_own_events`, `places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earliest` in `records::merge`
 - a poll gives every packed event once, a segment of one stream at a time, and an empty batch with the cursor given past the last — `a_poll_gives_every_packed_event_once_a_segment_of_one_stream_at_a_time` in `records::poll`
 - a poll counts the events `keep` removed before its cursor reached them — `a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them` in `records::poll`
@@ -216,8 +217,8 @@ module defines.
 - a follower far behind fetches a merged block once — `TestAFollowerFetchesAMergedBlockOnce`, `TestTheFollowCacheKeepsWhatIsUsedWithinItsBytes`
 - a block's id is never given twice — `TestABlockIDIsNeverGivenTwice`
 - a merge joins four of a size, in time order — `small_segments_merge_four_of_a_size_in_the_order_of_their_times`, `a_merge_leaves_overlapping_segments_out` in `records::merge`
-- a stream whose merge fails is left, and the others merge — `a_stream_whose_merge_fails_is_left_and_the_others_merge` in `records::merge`
-- only what no longer reads can be dropped — `TestDropRefusesWhatStillReads`
+- a merge goes past a segment that no longer reads, and the other streams merge — `a_merge_goes_past_a_segment_that_no_longer_reads_and_the_other_streams_merge` in `records::merge`
+- only what no longer reads can be dropped — `only_what_no_longer_reads_is_dropped_a_segment_whole_and_a_poll_behind_it_told` in `records::repair`, `what_no_longer_reads_is_listed_and_dropped_and_what_still_reads_is_refused` in `wire::records`, and `nothing damaged is listed, and what still reads is never dropped` in `sdk/js/test/events.test.ts`
 - a late record seals from its own head — `late_events_are_packed_from_their_own_head` in `records::events`
 - a record appended alone can be late — `an_event_appended_alone_can_be_late_and_a_producer_ahead_of_the_clock_makes_no_one_late` in `records::events`
 - a head packed empty forgets the newest event it held — `a_head_packed_empty_forgets_the_newest_event_it_held` in `records::events`
@@ -231,7 +232,7 @@ module defines.
 - `All` walks every record a page at a time — `all_walks_every_event_a_page_at_a_time` in `records::read`, a walk stopped early reads no further
 - a search finds an event by its text, in its message, its name and the values of its fields, the case ignored — `a_search_finds_its_phrase_in_the_message_the_name_and_the_values_whatever_its_case` in `records::read`
 - a record takes the trace of its context — `TestARecordTakesTheTraceOfItsContext`, the caller's records left unchanged
-- blooms and level masks skip blocks — `TestBloomsAndLevelMasksSkipBlocks`
+- blooms and level masks skip blocks — `a_read_passes_a_block_whose_segment_or_filters_say_it_holds_nothing_asked` in `records::read` for blooms; `TestBloomsAndLevelMasksSkipBlocks` for level masks
 - a read walks the time index near its range only — `TestTheTimeIndexIsWalkedWithinEachSpan`, on the plan SQLite chooses
 - a read finds records in blocks of every width — `TestReadsFindRecordsInBlocksOfEveryWidth`
 - retention removes whole segments, clips reads — `a_segment_goes_whole_once_its_newest_event_is_past_what_its_stream_keeps` in `records::pack`, `a_row_goes_once_its_newest_event_is_past_what_its_stream_keeps` in `records::maintain`
@@ -241,7 +242,7 @@ module defines.
 - a filter finds a key in an event's fields or its context, by the JSON its value was written as — `a_filter_finds_a_key_in_the_fields_or_the_context_by_the_json_of_its_value` in `records::read`
 - records maintenance with nothing to remove commits nothing — `maintenance_with_nothing_to_remove_commits_nothing` in `records::maintain`
 - records work holds the store's memory — `TestStoreMemoryBoundsAppendReadSealAndFollow`
-- a follower is told what retention removed — `TestFollowCountsWhatRetentionRemovedFirst`
+- a follower is told what retention removed, and a cursor given before any segment nothing — `a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them` in `records::poll`, `only_what_no_longer_reads_is_dropped_a_segment_whole_and_a_poll_behind_it_told` in `records::repair`
 - records reads and appends wait for their slots — `TestReadsAndAppendsWaitForTheirSlots`
 - one Append carries at most a segment's input — `an_event_and_an_append_have_the_bytes_they_carry_at_most` in `records::events`
 - the tool prints a record as a logger's console does — `TestAPrinterWritesARecordAsTheConsoleDoes` in `records`
@@ -610,7 +611,7 @@ module defines.
 - an append over the wire names the record it refused — `TestARefusedRecordNamesItsPlace`, all or none
 - a follower over the wire comes back where it stopped — `TestFollowOverTheWire`
 - another program's lines over the wire become events however they were cut, a last one without its newline handed over at the end — `a_writers_pieces_become_events_however_its_lines_were_cut` in `wire::records`, and `another program’s output becomes events, however it was cut` in `sdk/js/test/events.test.ts`
-- a records drop is an admin's repair — `TestADropIsAnAdminsRepair`, `TestADamagedRowIsNamedAsADropNamesIt`
+- a records drop is a writer's repair, named in the error that met the damage — `what_no_longer_reads_is_listed_and_dropped_and_what_still_reads_is_refused`, `a_read_connection_reads_and_gives_no_stream_a_keep_nor_appends` in `wire::records`, `a_changed_head_row_is_named_as_a_drop_names_it_and_once_dropped_reads_go_past_it` in `records::repair`
 - a sample over the wire comes back bit for bit — `TestMetricsOverTheWire`, -0 and a NaN's payload included
 - a metrics ingest over the wire is all or none — `TestAMetricsIngestIsAllOrNone`, the refused series named by its labels
 - an aggregate over the wire counts resets in its bucket — `TestAggregateOverTheWire`

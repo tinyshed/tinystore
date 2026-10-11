@@ -94,6 +94,7 @@ export type {
 	AllEvents,
 	AppendOptions,
 	Counted,
+	Damage,
 	Event,
 	EventLevel,
 	Events,

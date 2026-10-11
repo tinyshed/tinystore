@@ -28,7 +28,7 @@ use super::head::Codec;
 use super::text::{Decoder, put_blob, read_blob};
 use crate::{Error, Result};
 
-const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 1;
 
 /// What an event carries beside its time and its name.
 pub(super) const HAS_LEVEL: u8 = 1;

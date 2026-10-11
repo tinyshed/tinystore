@@ -14,6 +14,7 @@ use rusqlite::{Connection, Params, params};
 
 use super::buffer::Held;
 use super::head::Codec;
+use super::repair::Damaged;
 use super::tail::Recent;
 use crate::engine::{Claim, Engine, Host};
 use crate::sqlite::{Config, File, Migration, sql_error};
@@ -53,6 +54,9 @@ pub(crate) struct Records {
     /// What loggers and writers of lines hold, which the store's background
     /// work writes.
     pub(super) held: Mutex<Held>,
+    /// What reads, packing, merges and polls met that no longer reads, kept
+    /// while the store runs for a drop to remove.
+    pub(super) damaged: Mutex<Damaged>,
     _claim: Claim,
 }
 
@@ -111,6 +115,7 @@ impl Records {
                 maintaining: Mutex::default(),
                 recent: Recent::default(),
                 held: Mutex::default(),
+                damaged: Mutex::default(),
                 _claim: claim,
             });
             let weak = Arc::downgrade(&records);

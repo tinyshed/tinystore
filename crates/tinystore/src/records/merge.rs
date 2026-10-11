@@ -25,6 +25,7 @@ use super::head::Codec;
 use super::pack::{
     HELD, Made, PATIENCE, SEGMENT_EVENTS, SEGMENT_WEIGHT, insert_blocks, insert_keys, made_of, rows_of_blocks,
 };
+use super::repair::Part;
 use super::segment::Schema;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
@@ -87,14 +88,18 @@ impl Records {
     fn merge_stream(&self, stream: i64) -> Result<u64> {
         let mut merged = 0;
         while let Some(run) = pick(self.small(stream)?) {
-            self.merge_run(stream, &run)?;
-            merged += run.len() as u64 - 1;
+            match self.merge_run(stream, &run) {
+                Ok(()) => merged += run.len() as u64 - 1,
+                // a member met that no longer reads is left out of the next pick
+                Err(_) if run.iter().any(|member| self.is_damaged(Part::Segment, member.id)) => {}
+                Err(error) => return Err(error),
+            }
         }
         Ok(merged)
     }
 
     /// A stream's segments that hold their own events, under a quarter of
-    /// what a segment holds.
+    /// what a segment holds, and read.
     fn small(&self, stream: i64) -> Result<Vec<Small>> {
         let failed = |error| sql_error("find the segments to merge", error);
         self.file.read(|connection| {
@@ -104,7 +109,8 @@ impl Records {
                 let (held, weight) = (held.max(0) as usize, weight.max(0) as usize);
                 Ok(Small { id: row.get(0)?, first: row.get(1)?, last: row.get(2)?, held, weight })
             });
-            found.and_then(Iterator::collect).map_err(failed)
+            let found: Vec<Small> = found.and_then(Iterator::collect).map_err(failed)?;
+            Ok(found.into_iter().filter(|small| !self.is_damaged(Part::Segment, small.id)).collect())
         })
     }
 
@@ -117,8 +123,9 @@ impl Records {
         let members = self.members(run)?;
         let mut codec = Codec::default();
         let mut events: Vec<Kept> = Vec::new();
+        let name = self.name_of(stream);
         for (member, (row, blocks)) in run.iter().zip(&members) {
-            let within = |error: Error| error.within(format!("segment {}", member.id));
+            let within = |error: Error| self.met((Part::Segment, member.id), &name, error);
             let schema = Schema::parse(row, &mut codec).map_err(within)?;
             for body in blocks {
                 events.extend(block::parse(&schema, body, &mut codec).map_err(within)?);

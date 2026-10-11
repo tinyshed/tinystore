@@ -3,9 +3,10 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDropped,
-    RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked,
-    RecordsQuery, RecordsRows, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops, method,
+    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDamage, RecordsDamages,
+    RecordsDropped, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece,
+    RecordsPollAsked, RecordsQuery, RecordsRows, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops,
+    method,
 };
 use crate::{Options, Store};
 
@@ -141,6 +142,8 @@ fn a_read_connection_reads_and_gives_no_stream_a_keep_nor_appends() {
     assert_eq!(client.call::<Empty>(method::RECORDS_APPEND, &append).unwrap_err().code, "permission");
     let lines = client.call::<RecordsDropped>(method::RECORDS_LINES, &Handle { handle: audit });
     assert_eq!(lines.unwrap_err().code, "permission");
+    let damage = RecordsDamage { part: "head row".to_owned(), id: 1, ..RecordsDamage::default() };
+    assert_eq!(client.call::<Empty>(method::RECORDS_DROP, &damage).unwrap_err().code, "permission");
 }
 
 /// Opens a tail of what `asked` finds, the stream open once its RESPONSE came.
@@ -213,4 +216,26 @@ fn a_writers_pieces_become_events_however_its_lines_were_cut() {
     let names: Vec<(&str, Option<i64>)> = page.events.iter().map(|event| (event.name.as_str(), event.level)).collect();
     assert_eq!(names, [("logfmt", Some(4)), ("json", Some(0)), ("log", None)]);
     assert_eq!(page.events[2].message.as_deref(), Some("the last line"), "handed over without its newline");
+}
+
+#[test]
+fn what_no_longer_reads_is_listed_and_dropped_and_what_still_reads_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let audit = open(&mut client, "audit");
+    append(&mut client, audit, vec![event("signup", "{}")]);
+    let reads =
+        RecordsDamage { part: "head row".to_owned(), id: 1, stream: "audit".to_owned(), ..RecordsDamage::default() };
+    assert_eq!(client.call::<Empty>(method::RECORDS_DROP, &reads).unwrap_err().code, "invalid", "it still reads");
+
+    let file = rusqlite::Connection::open(dir.path().join("records.db")).unwrap();
+    file.execute("update heads set body = zeroblob(length(body))", []).unwrap();
+    let failed = client.call::<RecordsPage>(method::RECORDS_LIST, &RecordsQuery::default()).unwrap_err();
+    assert_eq!(failed.code, "corrupt");
+    let damaged: RecordsDamages = client.call(method::RECORDS_DAMAGED, &Empty {}).unwrap();
+    let [damage] = damaged.damages.as_slice() else { panic!("{damaged:?}") };
+    assert!(failed.message.contains(&format!("head row {} of audit", damage.id)), "{}", failed.message);
+    client.call::<Empty>(method::RECORDS_DROP, damage).unwrap();
+    let page: RecordsPage = client.call(method::RECORDS_LIST, &RecordsQuery::default()).unwrap();
+    assert!(page.events.is_empty());
 }

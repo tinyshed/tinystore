@@ -22,6 +22,8 @@ import {
 	RecordsAppend,
 	RecordsBatch,
 	RecordsCount,
+	RecordsDamage,
+	RecordsDamages,
 	RecordsDropped,
 	type RecordsEvent,
 	RecordsFieldNamesAsked,
@@ -183,6 +185,19 @@ export interface TailBatch {
 	events: Event[]
 	/** the events that left the store's hold before the tail read them */
 	missed: number
+}
+
+/** A head row or a segment that no longer reads, as `damaged` lists it and `drop` takes it. */
+export interface Damage {
+	/** a head row holds events not packed yet, a segment packed ones */
+	part: 'head row' | 'segment'
+	id: number
+	stream: string
+	/** its events' oldest and newest times */
+	first: Date
+	last: Date
+	/** what broke */
+	error: string
 }
 
 type Method = keyof typeof methods
@@ -483,6 +498,40 @@ export class AllEvents extends Reads {
 	): Promise<Uint8Array> {
 		return this.#link.run('read', connection =>
 			connection.session.call(methods[method], body(undefined)),
+		)
+	}
+
+	/**
+	 * What reads met that no longer reads, which `drop` removes: each head
+	 * row and segment with its stream and its events' times. What the store
+	 * has not met since it opened is not listed.
+	 */
+	async damaged(): Promise<Damage[]> {
+		const answer = await this.ask('records.damaged', () => Empty.encode({}))
+		return (RecordsDamages.decode(answer).damages ?? []).map(damage => ({
+			part: damage.part === 'segment' ? 'segment' : 'head row',
+			id: damage.id ?? 0,
+			stream: damage.stream ?? '',
+			first: dateOf(damage.first ?? 0n),
+			last: dateOf(damage.last ?? 0n),
+			error: damage.error ?? '',
+		}))
+	}
+
+	/**
+	 * Removes a head row or a segment that `damaged` listed, so that the
+	 * reads over it work again; what still reads is refused.
+	 *
+	 *     for (const damage of await store.events().damaged()) await store.events().drop(damage)
+	 */
+	async drop(damage: Damage): Promise<void> {
+		const body = RecordsDamage.encode({
+			...damage,
+			first: nanosOf(damage.first),
+			last: nanosOf(damage.last),
+		})
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['records.drop'], body),
 		)
 	}
 

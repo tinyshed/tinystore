@@ -2998,6 +2998,76 @@
     },
     {
       "fields": {
+        "error": {
+          "str": "error"
+        },
+        "first": {
+          "int": "1790000000000123456"
+        },
+        "id": {
+          "uint": "207"
+        },
+        "last": {
+          "int": "1790000000000123456"
+        },
+        "part": {
+          "str": "part"
+        },
+        "stream": {
+          "str": "stream"
+        }
+      },
+      "hex": "8601a47061727402cccf03a673747265616d04cf18d75b8423f4e24005cf18d75b8423f4e24006a56572726f72",
+      "message": "records.Damage",
+      "name": "records.Damage with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Damage",
+      "name": "records.Damage with no field"
+    },
+    {
+      "fields": {
+        "damages": {
+          "list": [
+            {
+              "fields": {
+                "error": {
+                  "str": "error"
+                },
+                "first": {
+                  "int": "1790000000000123456"
+                },
+                "id": {
+                  "uint": "207"
+                },
+                "last": {
+                  "int": "1790000000000123456"
+                },
+                "part": {
+                  "str": "part"
+                },
+                "stream": {
+                  "str": "stream"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918601a47061727402cccf03a673747265616d04cf18d75b8423f4e24005cf18d75b8423f4e24006a56572726f72",
+      "message": "records.Damages",
+      "name": "records.Damages with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Damages",
+      "name": "records.Damages with no field"
+    },
+    {
+      "fields": {
         "advance": {
           "uint": "1500"
         },
@@ -3507,6 +3577,8 @@
     "records.aggregate": 1286,
     "records.append": 1282,
     "records.count": 1284,
+    "records.damaged": 1292,
+    "records.drop": 1293,
     "records.fieldNames": 1288,
     "records.lines": 1291,
     "records.list": 1283,

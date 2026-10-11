@@ -17,14 +17,15 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDropped,
-    RecordsEvent, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece,
-    RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream, RecordsStreams,
-    RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
+    Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDamage,
+    RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen,
+    RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream,
+    RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
 };
 use super::{Link, Route};
 use crate::records::{
-    Aggregate, Event, Events, Fields, Level, Lines, List, NewEvent, Number, SpanId, Stats, Tail, TailBatch, TraceId,
+    Aggregate, Damage, Event, Events, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId, Stats, Tail,
+    TailBatch, TraceId,
 };
 use crate::{ErrorKind, Store, unix_nanos};
 
@@ -145,6 +146,8 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], r
         method::RECORDS_STREAMS => streams(store),
         method::RECORDS_FIELD_NAMES => field_names(store, handles, &RecordsFieldNamesAsked::decode(body)?),
         method::RECORDS_POLL => poll(store, &RecordsPollAsked::decode(body)?),
+        method::RECORDS_DAMAGED => damaged(store),
+        method::RECORDS_DROP => drop_damage(store, RecordsDamage::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -253,6 +256,34 @@ fn poll(store: &Store, asked: &RecordsPollAsked) -> Answered {
     };
     let events = batch.events.into_iter().map(event_of).collect();
     Ok(RecordsBatch { events, cursor: batch.cursor, expired: batch.expired }.encode())
+}
+
+fn damaged(store: &Store) -> Answered {
+    let damages = store.all_events()?.damaged()?.into_iter().map(|damage| RecordsDamage {
+        part: damage.part.to_string(),
+        id: damage.id.unsigned_abs(),
+        stream: damage.stream,
+        first: unix_nanos(damage.first),
+        last: unix_nanos(damage.last),
+        error: damage.error,
+    });
+    Ok(RecordsDamages { damages: damages.collect() }.encode())
+}
+
+/// Drops what `damaged` listed: its part and id say what goes.
+fn drop_damage(store: &Store, asked: RecordsDamage) -> Answered {
+    let part = match asked.part.as_str() {
+        "head row" => Part::HeadRow,
+        "segment" => Part::Segment,
+        other => {
+            return Err(Failure::invalid(format!("a damage of part {other:?}, where it is a head row or a segment")));
+        }
+    };
+    let id = i64::try_from(asked.id).map_err(|_| Failure::invalid(format!("a damage of id {}", asked.id)))?;
+    let (first, last) = (time_of(asked.first), time_of(asked.last));
+    let damage = Damage { part, id, stream: asked.stream, first, last, error: asked.error };
+    store.all_events()?.drop(&damage)?;
+    Ok(Empty {}.encode())
 }
 
 /// The read a query asks for: of the stream its handle names, or of every

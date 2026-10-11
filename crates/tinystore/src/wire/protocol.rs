@@ -5635,6 +5635,134 @@ impl Message for RecordsDropped {
     }
 }
 
+/// A head row or a segment that no longer reads, as damaged lists it and drop
+/// takes it: a head row holds events not packed yet, a segment packed ones.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsDamage {
+    /// Head row or segment.
+    pub(crate) part: String,
+    pub(crate) id: u64,
+    pub(crate) stream: String,
+    /// Its events' oldest time. Unix nanoseconds.
+    pub(crate) first: i64,
+    /// Unix nanoseconds.
+    pub(crate) last: i64,
+    /// What broke.
+    pub(crate) error: String,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsDamage {
+    const NAME: &'static str = "records.Damage";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.part = codec::str(r, "part")?,
+                2 => message.id = codec::uint(r, "id")?,
+                3 => message.stream = codec::str(r, "stream")?,
+                4 => message.first = codec::int(r, "first")?,
+                5 => message.last = codec::int(r, "last")?,
+                6 => message.error = codec::str(r, "error")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.part.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.part);
+        }
+        if self.id != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.id);
+        }
+        if !self.stream.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.stream);
+        }
+        if self.first != 0 {
+            map.field(out, 4);
+            codec::write_int(out, &self.first);
+        }
+        if self.last != 0 {
+            map.field(out, 5);
+            codec::write_int(out, &self.last);
+        }
+        if !self.error.is_empty() {
+            map.field(out, 6);
+            codec::write_str(out, &self.error);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.part.len()
+            + 10
+            + 1 + 5 + self.stream.len()
+            + 10
+            + 10
+            + 1 + 5 + self.error.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.part.is_empty()
+            && self.id == 0
+            && self.stream.is_empty()
+            && self.first == 0
+            && self.last == 0
+            && self.error.is_empty()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsDamages {
+    pub(crate) damages: Vec<RecordsDamage>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsDamages {
+    const NAME: &'static str = "records.Damages";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.damages = codec::list(r, "damages", codec::message::<RecordsDamage>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.damages.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.damages, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.damages, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.damages.is_empty()
+    }
+}
+
 /// A private server's clock: a time to set it to, a span to move it forward by,
 /// or neither to read it. The answer is the time it reads once moved.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -6638,6 +6766,10 @@ pub(crate) mod method {
     pub(crate) const RECORDS_TAIL: u16 = 0x050a;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_LINES: u16 = 0x050b;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_DAMAGED: u16 = 0x050c;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_DROP: u16 = 0x050d;
     /// Stops the server as its closing does: the streams running finish, every
     /// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     pub(crate) const SERVER_STOP: u16 = 0x0001;
@@ -6792,6 +6924,10 @@ pub(crate) mod method {
             RECORDS_TAIL => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_LINES => Some(Access::Write),
+            #[cfg(feature = "records")]
+            RECORDS_DAMAGED => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_DROP => Some(Access::Write),
             SERVER_STOP => Some(Access::Admin),
             SERVER_CLOCK => Some(Access::Admin),
             #[cfg(feature = "sql")]
@@ -6941,6 +7077,10 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.tail", 0x050a, "download"),
     #[cfg(feature = "records")]
     ("records.lines", 0x050b, "exchange"),
+    #[cfg(feature = "records")]
+    ("records.damaged", 0x050c, "call"),
+    #[cfg(feature = "records")]
+    ("records.drop", 0x050d, "call"),
     ("server.stop", 0x0001, "call"),
     ("server.clock", 0x0002, "call"),
     #[cfg(feature = "sql")]
@@ -7132,6 +7272,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Piece" => RecordsPiece::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Dropped" => RecordsDropped::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Damage" => RecordsDamage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Damages" => RecordsDamages::decode(body).map(|message| (message.encode(), message.size())),
         "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),

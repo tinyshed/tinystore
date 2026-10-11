@@ -85,6 +85,8 @@ export const methods = {
 	'records.poll': 0x0509,
 	'records.tail': 0x050a,
 	'records.lines': 0x050b,
+	'records.damaged': 0x050c,
+	'records.drop': 0x050d,
 	/**
 	 * Stops the server as its closing does: the streams running finish, every
 	 * connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
@@ -6059,6 +6061,138 @@ export const RecordsDropped = message(
 			}
 			r.leave()
 			return { dropped: $dropped }
+		},
+	},
+)
+
+/**
+ * A head row or a segment that no longer reads, as damaged lists it and drop
+ * takes it: a head row holds events not packed yet, a segment packed ones.
+ */
+export const RecordsDamage = message(
+	'records.Damage',
+	{
+		/** head row or segment */
+		part: [1, str],
+		id: [2, uint],
+		stream: [3, str],
+		/** its events' oldest time */
+		first: [4, int64],
+		last: [5, int64],
+		/** what broke */
+		error: [6, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.part !== undefined) {
+				w.field(1)
+				w.str(v.part)
+				n++
+			}
+			if (v.id !== undefined) {
+				w.field(2)
+				w.uint(v.id)
+				n++
+			}
+			if (v.stream !== undefined) {
+				w.field(3)
+				w.str(v.stream)
+				n++
+			}
+			if (v.first !== undefined) {
+				w.field(4)
+				w.int(v.first)
+				n++
+			}
+			if (v.last !== undefined) {
+				w.field(5)
+				w.int(v.last)
+				n++
+			}
+			if (v.error !== undefined) {
+				w.field(6)
+				w.str(v.error)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $part: string | undefined
+			let $id: number | undefined
+			let $stream: string | undefined
+			let $first: bigint | undefined
+			let $last: bigint | undefined
+			let $error: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$part = r.str()
+						break
+					case 2:
+						$id = r.uint()
+						break
+					case 3:
+						$stream = r.str()
+						break
+					case 4:
+						$first = r.int64()
+						break
+					case 5:
+						$last = r.int64()
+						break
+					case 6:
+						$error = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { part: $part, id: $id, stream: $stream, first: $first, last: $last, error: $error }
+		},
+	},
+)
+
+export const RecordsDamages = message(
+	'records.Damages',
+	{
+		damages: [1, list(RecordsDamage)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.damages !== undefined) {
+				w.field(1)
+				w.array(v.damages.length)
+				for (const item0 of v.damages) {
+					RecordsDamage.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $damages: Read<typeof RecordsDamage.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsDamage.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsDamage.read(r))
+						}
+						r.leave()
+						$damages = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { damages: $damages }
 		},
 	},
 )

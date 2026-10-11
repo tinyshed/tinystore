@@ -189,7 +189,7 @@ fn places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earl
 }
 
 #[test]
-fn a_stream_whose_merge_fails_is_left_and_the_others_merge() {
+fn a_merge_goes_past_a_segment_that_no_longer_reads_and_the_other_streams_merge() {
     let fixture = fixture();
     let (api, web) = (fixture.events("api"), fixture.events("web"));
     let round = |round: usize| {
@@ -204,9 +204,12 @@ fn a_stream_whose_merge_fails_is_left_and_the_others_merge() {
     let broken = |tx: &rusqlite::Connection| execute(tx, "update segments set body = x'00' where id = 1", [], "break");
     fixture.records().file.write(0, move |tx| broken(tx).map(drop)).unwrap();
     round(3);
-    assert!(maintain(&fixture.store).is_err());
+    maintain(&fixture.store).unwrap();
+    let damaged = fixture.store.all_events().unwrap().damaged().unwrap();
+    assert_eq!(damaged.iter().map(ToString::to_string).collect::<Vec<_>>(), ["segment 1 of api"]);
     let rows = rows(&fixture);
-    // api's segments 1, 3, 5 and 7 stay as they were; web's 2, 4, 6 and 8 merged into 2
+    // api's segments 1, 3, 5 and 7 stay as they were, three that read too few
+    // to merge; web's 2, 4, 6 and 8 merged into 2
     assert_eq!(
         rows.iter().filter(|(_, holder, ..)| holder.is_none()).map(|(id, ..)| *id).collect::<Vec<_>>(),
         [1, 2, 3, 5, 7]
