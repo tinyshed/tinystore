@@ -404,6 +404,7 @@ module defines.
 - a retry waits longer each time, then fails for good — `a_retry_waits_longer_each_time_then_fails_for_good` in `jobs::work_tests`, `a_retry_waits_longer_each_time_within_a_tenth_either_way` in `jobs::claim`
 - a snooze counts no attempt — `a_handler_settles_its_job_by_what_it_returns` in `jobs::work_tests`
 - a repeating job neither overlaps nor piles up — `a_repeating_job_neither_overlaps_nor_piles_up` in `jobs::queue_tests`
+- a cron expression that runs at all finds its next time, a 29th of February across 2100, which is no leap year, among them — `a_cron_runs_at_the_next_minute_its_fields_accept` in `jobs::cron`
 - a cron keeps its zone across daylight saving — `a_time_daylight_saving_skips_runs_when_the_skip_ends`, `a_time_daylight_saving_repeats_runs_once` in `jobs::cron`, `a_cron_runs_on_its_zones_wall_clock` in `jobs::queue_tests`
 - a cron needs a time zone, one given as undefined refused rather than read as UTC — `a_repeat_is_refused_for_what_it_lacks` in `jobs::repeat`; `a schedule keeps its one job, and a cron needs a time zone` in `sdk/js/test/jobs.test.ts`
 - a schedule keeps the code's repeat each time it opens — `a_schedule_keeps_the_codes_repeat_each_time_it_opens` in `jobs::queue_tests`

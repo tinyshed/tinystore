@@ -5,8 +5,9 @@ use jiff::civil::{Date, DateTime};
 use jiff::tz::{AmbiguousOffset, TimeZone};
 
 /// How far ahead a search for the next time looks: an expression that runs at
-/// all runs within it, the 29th of February among them.
-const YEARS: i16 = 5;
+/// all runs within it. A 29th of February is eight years from the last where
+/// a century's year is no leap year, as 2100.
+const YEARS: i16 = 8;
 
 /// A parsed expression: a bit for each value a field accepts, and whether the
 /// days of the month and of the week were each left as `*`.
@@ -243,6 +244,8 @@ mod tests {
         assert_eq!(next("0 9 * * mon", "UTC", "2026-10-09T12:00:00Z"), "2026-10-12T09:00:00Z");
         assert_eq!(next("@hourly", "UTC", "2026-10-09T12:00:00Z"), "2026-10-09T13:00:00Z");
         assert_eq!(next("0 0 29 2 *", "UTC", "2026-10-09T12:00:00Z"), "2028-02-29T00:00:00Z");
+        // 2100 is no leap year
+        assert_eq!(next("0 0 29 2 *", "UTC", "2096-03-01T00:00:00Z"), "2104-02-29T00:00:00Z");
     }
 
     #[test]
