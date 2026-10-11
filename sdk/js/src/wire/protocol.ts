@@ -83,6 +83,8 @@ export const methods = {
 	'records.streams': 0x0507,
 	'records.fieldNames': 0x0508,
 	'records.poll': 0x0509,
+	'records.tail': 0x050a,
+	'records.lines': 0x050b,
 	/**
 	 * Stops the server as its closing does: the streams running finish, every
 	 * connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
@@ -5928,6 +5930,135 @@ export const RecordsBatch = message(
 			}
 			r.leave()
 			return { events: $events, cursor: $cursor, expired: $expired }
+		},
+	},
+)
+
+/**
+ * A tail's batch: the events appended since the last that its query finds,
+ * and how many left the store's hold before the tail read them.
+ */
+export const RecordsTailBatch = message(
+	'records.TailBatch',
+	{
+		events: [1, list(RecordsEvent)],
+		missed: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.events !== undefined) {
+				w.field(1)
+				w.array(v.events.length)
+				for (const item0 of v.events) {
+					RecordsEvent.write(w, item0)
+				}
+				n++
+			}
+			if (v.missed !== undefined) {
+				w.field(2)
+				w.uint(v.missed)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $events: Read<typeof RecordsEvent.fields>[] | undefined
+			let $missed: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsEvent.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsEvent.read(r))
+						}
+						r.leave()
+						$events = items0
+						break
+					}
+					case 2:
+						$missed = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { events: $events, missed: $missed }
+		},
+	},
+)
+
+/**
+ * A piece of another program's output, cut anywhere.
+ */
+export const RecordsPiece = message(
+	'records.Piece',
+	{
+		bytes: [1, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.bytes !== undefined) {
+				w.field(1)
+				w.bin(v.bytes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $bytes: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$bytes = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { bytes: $bytes }
+		},
+	},
+)
+
+/**
+ * What a writer of lines dropped: lines past its buffer, longer than an
+ * event holds, or refused by the file.
+ */
+export const RecordsDropped = message(
+	'records.Dropped',
+	{
+		dropped: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.dropped !== undefined) {
+				w.field(1)
+				w.uint(v.dropped)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $dropped: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$dropped = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { dropped: $dropped }
 		},
 	},
 )

@@ -646,3 +646,14 @@ export async function download(
 }
 
 export type { Stream }
+
+/**
+ * The bytes a piece carries: half what the server takes on a stream before
+ * it grants more, so that one piece goes while the last is written, less a
+ * piece's own few bytes.
+ */
+export function pieceOf(connection: Connection): number {
+	const agreed = connection.session.agreed
+	const most = Math.min(agreed?.maxBody ?? 1 << 20, agreed?.streamCredit ?? 1 << 20)
+	return Math.max(1, Math.floor(most / 2) - 16)
+}

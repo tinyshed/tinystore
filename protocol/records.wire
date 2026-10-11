@@ -146,6 +146,24 @@ message records.Batch {
   3 expired: uint     # the events keep removed before the cursor reached them
 }
 
+# A tail's batch: the events appended since the last that its query finds,
+# and how many left the store's hold before the tail read them.
+message records.TailBatch {
+  1 events: [records.Event]
+  2 missed: uint
+}
+
+# A piece of another program's output, cut anywhere.
+message records.Piece {
+  1 bytes: bin
+}
+
+# What a writer of lines dropped: lines past its buffer, longer than an
+# event holds, or refused by the file.
+message records.Dropped {
+  1 dropped: uint
+}
+
 read  0x0501 records.open(records.Open)                  -> Handle
 write 0x0502 records.append(records.Append)              -> Empty
 read  0x0503 records.list(records.Query)                 -> records.Page
@@ -155,3 +173,5 @@ read  0x0506 records.aggregate(records.AggregateAsked)   -> records.Rows
 read  0x0507 records.streams(Empty)                      -> records.Streams
 read  0x0508 records.fieldNames(records.FieldNamesAsked) -> records.Names
 read  0x0509 records.poll(records.PollAsked)             -> records.Batch
+read  0x050a records.tail(records.Query)                 -> download records.TailBatch until Empty
+write 0x050b records.lines(Handle)                       -> exchange records.Dropped for records.Piece

@@ -21,6 +21,11 @@ const HELD: usize = 1 << 20;
 /// How long a tail walked as an iterator waits at a time for its next batch.
 const PATIENCE: Duration = Duration::from_secs(60);
 
+/// Wakes a tail read without a thread of its own: events arrived, or the
+/// store closed. It runs on the thread that appended, under no lock of the
+/// hold's, and must not wait.
+pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
+
 /// The events appended lately, held while a tail is open.
 #[derive(Default)]
 pub(crate) struct Recent {
@@ -38,6 +43,16 @@ struct Held {
     next: u64,
     tails: usize,
     closed: bool,
+    /// What wakes each tail read without a thread, by its number.
+    wakers: Vec<(u64, Waker)>,
+    /// The number of the last tail opened.
+    opened: u64,
+}
+
+impl Held {
+    fn wakers(&self) -> Vec<Waker> {
+        self.wakers.iter().map(|(_, wake)| Arc::clone(wake)).collect()
+    }
 }
 
 impl Recent {
@@ -62,14 +77,20 @@ impl Recent {
             let Some((_, _, gone)) = held.events.pop_front() else { break };
             held.weight -= gone.weight();
         }
+        let wakers = held.wakers();
         drop(held);
         self.arrived.notify_all();
+        wakers.iter().for_each(|wake| wake());
     }
 
     /// Ends every tail: the store closes.
     pub(super) fn close(&self) {
-        self.held().closed = true;
+        let mut held = self.held();
+        held.closed = true;
+        let wakers = held.wakers();
+        drop(held);
         self.arrived.notify_all();
+        wakers.iter().for_each(|wake| wake());
     }
 }
 
@@ -82,6 +103,7 @@ pub struct Tail {
     keeps: Box<dyn Fn(&Kept) -> bool + Send + Sync>,
     /// The place of the next event it has not seen.
     next: u64,
+    number: u64,
 }
 
 impl std::fmt::Debug for Tail {
@@ -106,9 +128,18 @@ impl Tail {
     ) -> Tail {
         let mut held = records.recent.held();
         held.tails += 1;
-        let next = held.next;
+        held.opened += 1;
+        let (next, number) = (held.next, held.opened);
         drop(held);
-        Tail { records: Arc::clone(records), streams, keeps, next }
+        Tail { records: Arc::clone(records), streams, keeps, next, number }
+    }
+
+    /// Calls `wake` each time events arrive and when the store closes, for a
+    /// reader that waits on no thread of its own: it reads with
+    /// `next_within` of no time.
+    #[cfg(feature = "wire")]
+    pub(crate) fn wake_with(&self, wake: Waker) {
+        self.records.recent.held().wakers.push((self.number, wake));
     }
 
     /// The next batch, waiting up to `wait` for it: none when none came in
@@ -173,6 +204,7 @@ impl Drop for Tail {
     fn drop(&mut self) {
         let mut held = self.records.recent.held();
         held.tails -= 1;
+        held.wakers.retain(|(number, _)| *number != self.number);
         // with no tail open nothing is held, and appends hold nothing
         if held.tails == 0 {
             held.events.clear();

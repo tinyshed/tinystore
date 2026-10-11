@@ -272,6 +272,8 @@ impl Session {
                 watch.close(Err(Failure::unavailable("the server is closing; watch again on another connection")));
             }
         }
+        #[cfg(feature = "records")]
+        self.shared.records.go_away();
     }
 
     pub(crate) fn streams(&self) -> usize {
@@ -316,6 +318,8 @@ impl Session {
         self.shared.sql.end();
         #[cfg(feature = "blobs")]
         self.shared.blobs.end();
+        #[cfg(feature = "records")]
+        self.shared.records.end();
     }
 }
 
@@ -465,6 +469,10 @@ impl Shared {
             Route::Read => self.read(input, stream, body),
             #[cfg(feature = "blobs")]
             Route::Upload => self.upload(input, stream, &body),
+            #[cfg(feature = "records")]
+            Route::Tail => self.tail(input, stream, &body),
+            #[cfg(feature = "records")]
+            Route::Lines => self.lines(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -586,7 +594,7 @@ impl Shared {
     /// RESPONSE, and the rest as pieces within the client's credit.
     #[cfg(feature = "blobs")]
     fn read(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
-        let link = self.blobs_link(input, stream);
+        let link = self.stream_link(input, stream);
         let shared = Arc::clone(self);
         self.workers.run(Box::new(move || match guarded(|| blobs::read(&shared.blobs, stream, &body, &link)) {
             Ok(blobs::Reading::Whole(response)) => shared.answer(stream, Ok(response)),
@@ -602,19 +610,45 @@ impl Shared {
     /// DATA, its last publishing the file.
     #[cfg(feature = "blobs")]
     fn upload(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
-        let link = self.blobs_link(input, stream);
+        let link = self.stream_link(input, stream);
         match guarded(|| blobs::upload(&self.blobs, stream, body, &link)) {
             Ok(()) => self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]),
             Err(failure) => self.answer(stream, Err(failure)),
         }
     }
 
-    /// What a stream of a file's bytes needs of the session.
-    #[cfg(feature = "blobs")]
-    fn blobs_link(self: &Arc<Self>, input: &Input, stream: u32) -> blobs::Link {
+    /// Starts a client's tail: the stream's RESPONSE, then a DATA each time
+    /// events arrive that its query finds.
+    #[cfg(feature = "records")]
+    fn tail(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.stream_link(input, stream);
+        match guarded(|| records::tail(&self.store, &self.records, stream, body, link)) {
+            Ok(tailing) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                tailing.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
+    /// Begins a client's writer of lines: the stream's RESPONSE, then its
+    /// pieces as DATA, the last answered with what the writer dropped.
+    #[cfg(feature = "records")]
+    fn lines(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.stream_link(input, stream);
+        match guarded(|| records::lines(&self.records, stream, body, link)) {
+            Ok(()) => self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]),
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
+    /// What a stream of a file's bytes, a tail's batches or a writer's lines
+    /// needs of the session.
+    #[cfg(any(feature = "blobs", feature = "records"))]
+    fn stream_link(self: &Arc<Self>, input: &Input, stream: u32) -> super::Link {
         let (sending, finishing, granting, spawning) =
             (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
-        blobs::Link {
+        super::Link {
             send: Arc::new(move |body| {
                 if let Some(shared) = sending.upgrade() {
                     shared.send(&[Frame::new(Kind::Data, stream, body)]);
@@ -711,6 +745,10 @@ impl Shared {
             let last = frame.flags & frame::END != 0;
             return uploading.piece(frame.body, last);
         }
+        #[cfg(feature = "records")]
+        if self.records.piece(frame.stream, &frame.body, frame.flags & frame::END != 0) {
+            return;
+        }
         #[cfg(feature = "sql")]
         if let Some(tx) = self.sql.tx(frame.stream) {
             // a call is read once it is queued: its credit goes back at once
@@ -779,8 +817,8 @@ impl Shared {
     /// what waited for it. No other stream sends DATA a client grants credit
     /// for: a call answers in one message, within the body agreed.
     #[cfg_attr(
-        not(any(feature = "jobs", feature = "sql", feature = "blobs")),
-        expect(unused_variables, reason = "only jobs', sql's and blobs' streams take credit")
+        not(any(feature = "jobs", feature = "sql", feature = "blobs", feature = "records")),
+        expect(unused_variables, reason = "only jobs', sql's, blobs' and records' streams take credit")
     )]
     fn credit(&self, frame: &Frame) {
         let Ok(granted) = <[u8; 4]>::try_from(frame.body.as_slice()) else {
@@ -793,6 +831,8 @@ impl Shared {
         self.sql.grant(frame.stream, granted);
         #[cfg(feature = "blobs")]
         self.blobs.grant(frame.stream, granted);
+        #[cfg(feature = "records")]
+        self.records.grant(frame.stream, granted);
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
@@ -806,6 +846,10 @@ impl Shared {
         }
         #[cfg(feature = "blobs")]
         if self.blobs.cancel(stream) {
+            return;
+        }
+        #[cfg(feature = "records")]
+        if self.records.cancel(stream) {
             return;
         }
         #[cfg(feature = "jobs")]
@@ -1019,6 +1063,8 @@ fn route(method: u16) -> Route {
         0x03 => sql::route(method),
         #[cfg(feature = "blobs")]
         0x04 => blobs::route(method),
+        #[cfg(feature = "records")]
+        0x05 => records::route(method),
         _ => Route::Worker,
     }
 }

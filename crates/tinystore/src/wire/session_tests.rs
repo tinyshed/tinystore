@@ -88,6 +88,10 @@ fn every_method_runs_as_the_shape_its_schema_line_says() {
             Route::Read => "download",
             #[cfg(feature = "blobs")]
             Route::Upload => "exchange",
+            #[cfg(feature = "records")]
+            Route::Tail => "download",
+            #[cfg(feature = "records")]
+            Route::Lines => "exchange",
         };
         assert_eq!(runs, shape, "{name}");
     }

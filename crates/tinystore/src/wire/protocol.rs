@@ -5499,6 +5499,142 @@ impl Message for RecordsBatch {
     }
 }
 
+/// A tail's batch: the events appended since the last that its query finds,
+/// and how many left the store's hold before the tail read them.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsTailBatch {
+    pub(crate) events: Vec<RecordsEvent>,
+    pub(crate) missed: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsTailBatch {
+    const NAME: &'static str = "records.TailBatch";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.events = codec::list(r, "events", codec::message::<RecordsEvent>)?,
+                2 => message.missed = codec::uint(r, "missed")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.events.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.events, codec::write_message);
+        }
+        if self.missed != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.missed);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.events, codec::message_size)
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.events.is_empty()
+            && self.missed == 0
+    }
+}
+
+/// A piece of another program's output, cut anywhere.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsPiece {
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsPiece {
+    const NAME: &'static str = "records.Piece";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.bytes = codec::bin(r, "bytes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.bytes.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.bytes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.bytes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+/// What a writer of lines dropped: lines past its buffer, longer than an
+/// event holds, or refused by the file.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsDropped {
+    pub(crate) dropped: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsDropped {
+    const NAME: &'static str = "records.Dropped";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.dropped = codec::uint(r, "dropped")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.dropped != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.dropped);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.dropped == 0
+    }
+}
+
 /// A private server's clock: a time to set it to, a span to move it forward by,
 /// or neither to read it. The answer is the time it reads once moved.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -6498,6 +6634,10 @@ pub(crate) mod method {
     pub(crate) const RECORDS_FIELD_NAMES: u16 = 0x0508;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_POLL: u16 = 0x0509;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_TAIL: u16 = 0x050a;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_LINES: u16 = 0x050b;
     /// Stops the server as its closing does: the streams running finish, every
     /// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     pub(crate) const SERVER_STOP: u16 = 0x0001;
@@ -6648,6 +6788,10 @@ pub(crate) mod method {
             RECORDS_FIELD_NAMES => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_POLL => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_TAIL => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_LINES => Some(Access::Write),
             SERVER_STOP => Some(Access::Admin),
             SERVER_CLOCK => Some(Access::Admin),
             #[cfg(feature = "sql")]
@@ -6793,6 +6937,10 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.fieldNames", 0x0508, "call"),
     #[cfg(feature = "records")]
     ("records.poll", 0x0509, "call"),
+    #[cfg(feature = "records")]
+    ("records.tail", 0x050a, "download"),
+    #[cfg(feature = "records")]
+    ("records.lines", 0x050b, "exchange"),
     ("server.stop", 0x0001, "call"),
     ("server.clock", 0x0002, "call"),
     #[cfg(feature = "sql")]
@@ -6978,6 +7126,12 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.PollAsked" => RecordsPollAsked::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Batch" => RecordsBatch::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.TailBatch" => RecordsTailBatch::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Piece" => RecordsPiece::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Dropped" => RecordsDropped::decode(body).map(|message| (message.encode(), message.size())),
         "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),

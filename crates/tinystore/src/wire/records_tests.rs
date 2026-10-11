@@ -1,9 +1,11 @@
 use crate::pipe::Capability;
-use crate::pipe::fixture::Client;
+use crate::pipe::fixture::{Client, answered};
+use crate::wire::codec::Message;
+use crate::wire::frame::{Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsFieldNamesAsked,
-    RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPollAsked, RecordsQuery, RecordsRows,
-    RecordsStreams, RecordsTopAsked, RecordsTops, method,
+    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDropped,
+    RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked,
+    RecordsQuery, RecordsRows, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops, method,
 };
 use crate::{Options, Store};
 
@@ -137,4 +139,78 @@ fn a_read_connection_reads_and_gives_no_stream_a_keep_nor_appends() {
     assert_eq!(client.call::<Handle>(method::RECORDS_OPEN, &keep).unwrap_err().code, "permission");
     let append = RecordsAppend { handle: audit, events: vec![event("signup", "{}")] };
     assert_eq!(client.call::<Empty>(method::RECORDS_APPEND, &append).unwrap_err().code, "permission");
+    let lines = client.call::<RecordsDropped>(method::RECORDS_LINES, &Handle { handle: audit });
+    assert_eq!(lines.unwrap_err().code, "permission");
+}
+
+/// Opens a tail of what `asked` finds, the stream open once its RESPONSE came.
+fn tail(client: &mut Client, asked: &RecordsQuery) -> u32 {
+    let stream = client.start(method::RECORDS_TAIL, asked);
+    let begun = client.next_on(stream);
+    assert_eq!((begun.kind, begun.flags), (Kind::Response, 0), "the tail stays open: {:?}", answered::<Empty>(&begun));
+    stream
+}
+
+fn batch(client: &mut Client, stream: u32) -> RecordsTailBatch {
+    let frame = client.next_on(stream);
+    assert_eq!((frame.kind, frame.flags), (Kind::Data, 0), "a batch, the tail open");
+    RecordsTailBatch::decode(&frame.body).unwrap()
+}
+
+#[test]
+fn a_tail_sends_the_events_appended_after_it_that_its_query_finds_until_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let audit = open(&mut client, "audit");
+    append(&mut client, audit, vec![event("signup", r#"{"user":1}"#)]);
+    let stream = tail(&mut client, &RecordsQuery { names: vec!["signup".to_owned()], ..RecordsQuery::default() });
+    append(&mut client, audit, vec![event("view", "{}"), event("signup", r#"{"user":42}"#)]);
+    let first = batch(&mut client, stream);
+    let fields: Vec<Option<&str>> = first.events.iter().map(|event| event.fields.as_deref()).collect();
+    assert_eq!((fields, first.missed), (vec![Some(r#"{"user":42}"#)], 0), "what came after that the query finds");
+    client.write(Frame::new(Kind::Cancel, stream, Vec::new()));
+    assert_eq!(answered::<Empty>(&client.next_on(stream)).unwrap_err().code, "cancelled");
+    let limited = RecordsQuery { limit: Some(1), ..RecordsQuery::default() };
+    assert_eq!(client.call::<Empty>(method::RECORDS_TAIL, &limited).unwrap_err().code, "invalid", "no limit");
+}
+
+#[test]
+fn a_tail_slower_than_the_writers_says_how_many_left_the_hold_before_it_read_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let audit = open(&mut client, "audit");
+    let stream = tail(&mut client, &RecordsQuery::default());
+    // one write past the megabyte held: its oldest leave before the tail reads
+    let padding = "x".repeat(1000);
+    let big = (0..1500).map(|n| event("big", &format!(r#"{{"n":{n},"pad":"{padding}"}}"#)));
+    append(&mut client, audit, big.collect());
+    let (mut missed, mut seen) = (0, Vec::new());
+    while missed + seen.len() < 1500 {
+        let read = batch(&mut client, stream);
+        missed += usize::try_from(read.missed).unwrap();
+        seen.extend(read.events);
+    }
+    assert!(missed > 0, "a megabyte is held");
+    let first = seen[0].fields.as_deref().unwrap();
+    assert!(first.starts_with(&format!(r#"{{"n":{missed},"#)), "the first read follows those missed: {first}");
+}
+
+#[test]
+fn a_writers_pieces_become_events_however_its_lines_were_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let worker = open(&mut client, "worker");
+    let stream = client.open_stream(method::RECORDS_LINES, &Handle { handle: worker });
+    let begun = client.next_on(stream);
+    assert_eq!((begun.kind, begun.flags), (Kind::Response, 0), "a writer begins: {:?}", answered::<Empty>(&begun));
+    for piece in ["level=warn msg=\"slow request\" ms=12", "00\n{\"level\":30,\"msg\":\"ok\"}\nthe last line"] {
+        let bytes = piece.as_bytes().to_vec();
+        client.write(Frame::new(Kind::Data, stream, RecordsPiece { bytes }.encode()));
+    }
+    client.write(Frame::new(Kind::Data, stream, Vec::new()).ending());
+    assert_eq!(answered::<RecordsDropped>(&client.next_on(stream)).unwrap().dropped, 0);
+    let page: RecordsPage = client.call(method::RECORDS_LIST, &RecordsQuery::default()).unwrap();
+    let names: Vec<(&str, Option<i64>)> = page.events.iter().map(|event| (event.name.as_str(), event.level)).collect();
+    assert_eq!(names, [("logfmt", Some(4)), ("json", Some(0)), ("log", None)]);
+    assert_eq!(page.events[2].message.as_deref(), Some("the last line"), "handed over without its newline");
 }

@@ -3,7 +3,7 @@
 // bytes go in pieces within the credit of the side that takes them, and a
 // whole read ends CorruptError before its last piece when its bytes changed.
 
-import type { Connection, Idempotence, Link } from './connection.ts'
+import { type Connection, type Idempotence, type Link, pieceOf } from './connection.ts'
 import { ClosedError, InvalidError, OutcomeUnknownError } from './errors.ts'
 import { checkName, handleOn, type Via, viaLink } from './handles.ts'
 import { LostError, type Stream, watch } from './session.ts'
@@ -767,17 +767,6 @@ function lostAs(err: unknown, ending: boolean): unknown {
 	return new ClosedError(
 		`the connection was lost during the upload, which left nothing: ${err.message}`,
 	)
-}
-
-/**
- * The bytes a piece carries: half what the server takes on a stream before
- * it grants more, so that one piece goes while the last is written, less a
- * piece's own few bytes.
- */
-function pieceOf(connection: Connection): number {
-	const agreed = connection.session.agreed
-	const most = Math.min(agreed?.maxBody ?? 1 << 20, agreed?.streamCredit ?? 1 << 20)
-	return Math.max(1, Math.floor(most / 2) - 16)
 }
 
 function writtenOf(body: Uint8Array): FileInfo | undefined {

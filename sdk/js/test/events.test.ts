@@ -8,7 +8,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { InvalidError, type Store, withTrace } from '../src/index.ts'
+import { ClosedError, InvalidError, type Store, withTrace } from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
 
 const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
@@ -142,6 +142,46 @@ for (const way of ways) {
 			expect(await caught(store.events().poll(batch.cursor, { limit: 0 }))).toBeInstanceOf(
 				InvalidError,
 			)
+		})
+
+		test('a tail gives the events written after it that its query finds, a batch as they come', async () => {
+			const live = store.events('live')
+			const tail = live.tail({ names: ['tick'] })[Symbol.asyncIterator]()
+			const first = tail.next()
+			let n = 0
+			const ticking = setInterval(() => {
+				live.append('tick', { n: n++ }).catch(() => {})
+			}, 20)
+			try {
+				const read = await first
+				if (read.done) {
+					throw new Error('the tail ended')
+				}
+				expect(read.value.missed).toBe(0)
+				expect(read.value.events.map(event => [event.stream, event.name])).toContainEqual([
+					'live',
+					'tick',
+				])
+			} finally {
+				clearInterval(ticking)
+				await tail.return(undefined)
+			}
+		})
+
+		test('another program’s output becomes events, however it was cut', async () => {
+			const out = store.events('child').lines()
+			out.write('level=warn msg="slow request" ms=12')
+			out.write(new TextEncoder().encode('00\n{"level":30,"msg":"ok"}\nthe last line'))
+			await out.end()
+			expect(out.dropped).toBe(0)
+			const { events } = await store.events('child').list()
+			expect(events.map(event => [event.name, event.level])).toEqual([
+				['logfmt', 'warn'],
+				['json', 'info'],
+				['log', undefined],
+			])
+			expect(events[2]?.message).toBe('the last line')
+			expect(() => out.write('late\n')).toThrow(ClosedError)
 		})
 
 		test("a store's logger never waits: a full buffer drops and counts", async () => {

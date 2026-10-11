@@ -30,7 +30,8 @@ pub(crate) type Lent<'a> = &'a dyn Fn(u64) -> Result<std::sync::Arc<crate::engin
 /// How a session runs a method: a point read at once on the caller's thread,
 /// a write queued for its group commit with no thread waiting on it, a run of
 /// once handed over, a worker whose jobs and answers are the stream's items, a
-/// watch whose reports are, anything else on a worker.
+/// watch whose reports are, a tail whose batches are, a writer whose lines
+/// are, anything else on a worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     Inline,
@@ -48,5 +49,31 @@ pub(crate) enum Route {
     Read,
     #[cfg(feature = "blobs")]
     Upload,
+    #[cfg(feature = "records")]
+    Tail,
+    #[cfg(feature = "records")]
+    Lines,
     Worker,
+}
+
+/// Work on a session's workers, off the thread that asked.
+#[cfg(any(feature = "blobs", feature = "records"))]
+pub(crate) type Spawn = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
+
+/// What a stream whose DATA goes either way needs of its session: a file's
+/// bytes, a tail's batches, a writer's lines.
+#[cfg(any(feature = "blobs", feature = "records"))]
+#[derive(Clone)]
+pub(crate) struct Link {
+    /// A DATA on the stream.
+    pub(crate) send: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+    /// The stream's last frame.
+    pub(crate) finish: std::sync::Arc<dyn Fn(Result<Vec<u8>, protocol::Failure>) + Send + Sync>,
+    /// Credit given back to the client for DATA it sent on the stream.
+    pub(crate) grant: std::sync::Arc<dyn Fn(u32) + Send + Sync>,
+    /// Work on the session's workers, where a file is read or written.
+    pub(crate) spawn: Spawn,
+    /// The DATA bytes the client takes before it grants more.
+    pub(crate) credit: u64,
+    pub(crate) max_body: usize,
 }

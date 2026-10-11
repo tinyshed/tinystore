@@ -126,6 +126,7 @@ module defines.
 - a half-full log buffer is written before its interval — `half_a_buffer_wakes_the_flush_before_its_second` in `records::logger`, `a_woken_task_runs_before_its_period_and_again_when_woken_while_it_runs` in `schedule`; `test_a_half_full_buffer_is_written_before_its_interval` in Python's
 - what a logger holds is kept when its store closes, and a line after is dropped and counted — `a_store_that_closes_keeps_what_its_loggers_held_and_drops_a_line_after` in `records::logger`
 - a line the file refuses is dropped and counted, and the rest are kept — `a_line_the_file_refuses_is_dropped_and_counted_and_the_rest_are_kept` in `records::logger`
+- a tail over the wire sends what is appended after it that its query finds, a batch within the client's credit, and one slower than the writers says how many it missed — `a_tail_sends_the_events_appended_after_it_that_its_query_finds_until_cancelled`, `a_tail_slower_than_the_writers_says_how_many_left_the_hold_before_it_read_them` in `wire::records`, and `a tail gives the events written after it that its query finds, a batch as they come` in `sdk/js/test/events.test.ts`
 - records' calls over the wire answer as the core's: an event whole, its fields as they were spelled, a list whole or not at all, reads, counts, streams, keys and a poll, and a read connection appends nothing and gives no stream a keep — the tests of `wire::records`, and `sdk/js/test/events.test.ts` through each way a store is reached
 - writing a log does not log again — `the_stores_own_lines_are_printed_and_never_kept` in `records::logger`
 - a logger's console line is the same bytes in Rust, Bun and Python, its time and stream as it is told — `every_line_is_the_vectors_bytes_pretty_and_as_json` in `console`, over `testdata/console/console.json`, which `sdk/js/test/console.test.ts` reads too
@@ -608,7 +609,7 @@ module defines.
 - a record over the wire comes back as it went in — `TestRecordsOverTheWire`, times to the nanosecond, bytes that are not UTF-8
 - an append over the wire names the record it refused — `TestARefusedRecordNamesItsPlace`, all or none
 - a follower over the wire comes back where it stopped — `TestFollowOverTheWire`
-- another program's lines over the wire become records — `TestLinesOverTheWire`, `TestLinesHandOverWhatTheyHoldWhenTheUploadEnds`
+- another program's lines over the wire become events however they were cut, a last one without its newline handed over at the end — `a_writers_pieces_become_events_however_its_lines_were_cut` in `wire::records`, and `another program’s output becomes events, however it was cut` in `sdk/js/test/events.test.ts`
 - a records drop is an admin's repair — `TestADropIsAnAdminsRepair`, `TestADamagedRowIsNamedAsADropNamesIt`
 - a sample over the wire comes back bit for bit — `TestMetricsOverTheWire`, -0 and a NaN's payload included
 - a metrics ingest over the wire is all or none — `TestAMetricsIngestIsAllOrNone`, the refused series named by its labels

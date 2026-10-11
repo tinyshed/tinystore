@@ -1,33 +1,40 @@
 // Streams of events, as plan/api/records.md has them, over protocol 2: a
 // stream opened by name, its events appended whole and read back by time and
 // by what they hold, a page at a time, and every stream read together. A
-// store's logger keeps its lines in a stream through the same append.
+// store's logger keeps its lines in a stream through the same append; a tail
+// follows what is written from now on, and a writer of lines turns another
+// program's output into events.
 
-import type { Link } from './connection.ts'
+import { type Connection, type Link, pieceOf } from './connection.ts'
 import { type ConsoleLine, jsonOf } from './console.ts'
-import { InvalidError } from './errors.ts'
-import { checkName, type Via, viaLink } from './handles.ts'
+import { ClosedError, InvalidError } from './errors.ts'
+import { checkName, handleOn, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import { encodeFields, type Logger, type LoggerOptions, newLogger } from './logger.ts'
+import type { Stream } from './session.ts'
 import { type Duration, type DurationText, ms } from './time.ts'
 import { currentTrace, type Trace } from './trace.ts'
 import {
 	Empty,
+	Handle,
 	methods,
 	RecordsAggregateAsked,
 	RecordsAppend,
 	RecordsBatch,
 	RecordsCount,
+	RecordsDropped,
 	type RecordsEvent,
 	RecordsFieldNamesAsked,
 	RecordsNames,
 	type RecordsNewEvent,
 	RecordsOpen,
 	RecordsPage,
+	RecordsPiece,
 	RecordsPollAsked,
 	RecordsQuery,
 	RecordsRows,
 	RecordsStreams,
+	RecordsTailBatch,
 	RecordsTopAsked,
 	RecordsTops,
 } from './wire/protocol.ts'
@@ -165,7 +172,27 @@ export interface PollBatch {
 	expired: number
 }
 
+/** What a tail finds: a query's conditions, and no range, order or limit. */
+export type TailQuery = Pick<
+	Query,
+	'streams' | 'names' | 'minLevel' | 'traceId' | 'where' | 'search'
+>
+
+/** A tail's batch: the events written since the last, and how many it missed. */
+export interface TailBatch {
+	events: Event[]
+	/** the events that left the store's hold before the tail read them */
+	missed: number
+}
+
 type Method = keyof typeof methods
+
+const newline = 0x0a
+/** What a writer of lines holds for the server at most: past it, lines are dropped and counted. */
+const linesHeld = 1 << 20
+/** The bytes one event holds: a longer line is dropped whole, as the store drops one. */
+const eventRoom = 256 << 10
+const encoder = new TextEncoder()
 
 const levelNumbers: Record<EventLevel, number> = {
 	trace: -8,
@@ -183,6 +210,11 @@ abstract class Reads {
 		method: Method,
 		body: (handle: number | undefined) => Uint8Array,
 	): Promise<Uint8Array>
+
+	protected abstract opened(
+		method: Method,
+		body: (handle: number | undefined) => Uint8Array,
+	): Promise<Stream>
 
 	/** One page, from one moment of the file: `{ events, next }`. */
 	async list(query?: Query): Promise<Page> {
@@ -272,6 +304,32 @@ abstract class Reads {
 		)
 		return RecordsNames.decode(answer).names ?? []
 	}
+
+	/**
+	 * The events written from now on that the query finds, a batch as they
+	 * are written: `{ events, missed }`. A reader slower than the writers
+	 * skips what left the store's hold, and the batch after says how many.
+	 * It ends when its loop is left, and when the server's store closes.
+	 */
+	async *tail(query?: TailQuery): AsyncGenerator<TailBatch> {
+		const asked = queryOf(query)
+		const stream = await this.opened('records.tail', handle =>
+			RecordsQuery.encode({ ...asked, handle }),
+		)
+		try {
+			for (;;) {
+				const event = await stream.next()
+				stream.consumed(event.body.length)
+				if (event.end) {
+					return
+				}
+				const batch = RecordsTailBatch.decode(event.body)
+				yield { events: (batch.events ?? []).map(eventOf), missed: batch.missed ?? 0 }
+			}
+		} finally {
+			stream.cancel()
+		}
+	}
 }
 
 /** Opens a stream of events: lazily, at its first call on a connection. */
@@ -284,6 +342,7 @@ export function openEvents(link: Link, stream: string, options?: EventsOptions):
 /** A stream of events: written with `append`, which waits for the file, and read back. */
 export class Events extends Reads {
 	readonly stream: string
+	readonly #link: Link
 	readonly #via: Via
 	readonly #open: Uint8Array
 
@@ -291,6 +350,7 @@ export class Events extends Reads {
 	constructor(link: Link, stream: string, open: Uint8Array) {
 		super()
 		this.stream = stream
+		this.#link = link
 		this.#via = viaLink(link)
 		this.#open = open
 	}
@@ -334,11 +394,40 @@ export class Events extends Reads {
 		).then(() => {})
 	}
 
+	/**
+	 * A writer of another program's output into this stream: each line it is
+	 * given becomes an event at the time it arrived, a stack trace's or a JSON
+	 * value's lines one, and a write never waits.
+	 *
+	 *     const out = store.events('worker').lines()
+	 *     child.stdout.on('data', chunk => out.write(chunk))
+	 *     child.on('close', () => out.end())
+	 */
+	lines(): Lines {
+		return new Lines(async () => {
+			const connection = await this.#link.connection()
+			const handle = await handleOn(connection, methods['records.open'], this.#open)
+			const body = Handle.encode({ handle })
+			const stream = await streamOf(connection, methods['records.lines'], body, false)
+			return { stream, piece: pieceOf(connection) }
+		})
+	}
+
 	protected ask(
 		method: Method,
 		body: (handle: number | undefined) => Uint8Array,
 	): Promise<Uint8Array> {
 		return this.#call(method, body, 'read')
+	}
+
+	protected opened(
+		method: Method,
+		body: (handle: number | undefined) => Uint8Array,
+	): Promise<Stream> {
+		return this.#link.run('read', async connection => {
+			const handle = await handleOn(connection, methods['records.open'], this.#open)
+			return streamOf(connection, methods[method], body(handle), true)
+		})
 	}
 
 	#call(
@@ -396,6 +485,176 @@ export class AllEvents extends Reads {
 			connection.session.call(methods[method], body(undefined)),
 		)
 	}
+
+	protected opened(
+		method: Method,
+		body: (handle: number | undefined) => Uint8Array,
+	): Promise<Stream> {
+		return this.#link.run('read', connection =>
+			streamOf(connection, methods[method], body(undefined), true),
+		)
+	}
+}
+
+/** A writer's stream, and the bytes a piece of it carries. */
+interface Opened {
+	stream: Stream
+	piece: number
+}
+
+/**
+ * A writer of another program's output into a stream, as `events.lines()`
+ * begins it: each line becomes an event, and a write never waits. It sends
+ * whole lines, so that what it has no room for, `dropped` counts as lines.
+ */
+export class Lines {
+	/** whole lines not sent yet */
+	readonly #queued: Uint8Array[] = []
+	#queuedBytes = 0
+	/** a line not ended yet */
+	#partial = new Uint8Array(0)
+	/** the line being written is longer than an event holds: the rest of it goes too */
+	#discarding = false
+	#dropped = 0
+	#ended = false
+	#failure: Error | undefined
+	#wake: (() => void) | undefined
+	readonly #sent: Promise<void>
+
+	/** Lines come from `events.lines()`. */
+	constructor(open: () => Promise<Opened>) {
+		this.#sent = this.#send(open).catch((err: unknown) => {
+			this.#failure = err instanceof Error ? err : new Error(String(err))
+			for (const bytes of this.#queued.splice(0)) {
+				this.#dropped += linesIn(bytes)
+			}
+			this.#queuedBytes = 0
+		})
+	}
+
+	/** The lines dropped: past what the writer holds, and, once it ended, by the store. */
+	get dropped(): number {
+		return this.#dropped
+	}
+
+	/** Takes a piece of output, cut anywhere; it never waits. */
+	write(chunk: Uint8Array | string): void {
+		if (this.#ended) {
+			throw new ClosedError('lines written after their end')
+		}
+		let bytes = typeof chunk === 'string' ? encoder.encode(chunk) : chunk
+		if (this.#discarding) {
+			const end = bytes.indexOf(newline)
+			if (end < 0) {
+				return
+			}
+			this.#discarding = false
+			bytes = bytes.subarray(end + 1)
+		}
+		const joined = concat(this.#partial, bytes)
+		const cut = joined.lastIndexOf(newline) + 1
+		this.#partial = joined.slice(cut)
+		if (this.#partial.length > eventRoom) {
+			this.#partial = new Uint8Array(0)
+			this.#discarding = true
+			this.#dropped++
+		}
+		this.#queue(joined.subarray(0, cut))
+	}
+
+	/**
+	 * Ends the writer: what it holds goes, a last line without its newline
+	 * too, and it returns once the store wrote them.
+	 */
+	async end(): Promise<void> {
+		if (!this.#ended) {
+			this.#ended = true
+			this.#queue(this.#partial)
+			this.#partial = new Uint8Array(0)
+			this.#wake?.()
+		}
+		await this.#sent
+		if (this.#failure !== undefined) {
+			throw this.#failure
+		}
+	}
+
+	/** Holds bytes for the server, or drops and counts their lines when it holds no room. */
+	#queue(bytes: Uint8Array): void {
+		if (bytes.length === 0) {
+			return
+		}
+		if (this.#failure !== undefined || this.#queuedBytes + bytes.length > linesHeld) {
+			this.#dropped += linesIn(bytes)
+			return
+		}
+		this.#queued.push(bytes)
+		this.#queuedBytes += bytes.length
+		this.#wake?.()
+	}
+
+	/** Sends what is held as it comes, in pieces within the stream's credit, then the end. */
+	async #send(open: () => Promise<Opened>): Promise<void> {
+		const { stream, piece } = await open()
+		for (;;) {
+			const bytes = this.#queued.shift()
+			if (bytes === undefined) {
+				if (this.#ended) {
+					break
+				}
+				await new Promise<void>(resolve => {
+					this.#wake = resolve
+				})
+				this.#wake = undefined
+				continue
+			}
+			this.#queuedBytes -= bytes.length
+			for (let at = 0; at < bytes.length; at += piece) {
+				await stream.send(RecordsPiece.encode({ bytes: bytes.subarray(at, at + piece) }), false)
+			}
+		}
+		await stream.send(new Uint8Array(0), true)
+		for (;;) {
+			const event = await stream.next()
+			if (event.end) {
+				this.#dropped += RecordsDropped.decode(event.body).dropped ?? 0
+				return
+			}
+		}
+	}
+}
+
+/** A stream of the method, open once its RESPONSE came; `end` leaves the client nothing to send. */
+async function streamOf(
+	connection: Connection,
+	method: number,
+	body: Uint8Array,
+	end: boolean,
+): Promise<Stream> {
+	const stream = await connection.session.open(method, body, end)
+	await stream.next()
+	return stream
+}
+
+function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
+	if (a.length === 0) {
+		return b
+	}
+	const joined = new Uint8Array(a.length + b.length)
+	joined.set(a)
+	joined.set(b, a.length)
+	return joined
+}
+
+/** The lines bytes hold: one a newline ends, and one more past the last. */
+function linesIn(bytes: Uint8Array): number {
+	let lines = bytes[bytes.length - 1] === newline ? 0 : 1
+	for (const byte of bytes) {
+		if (byte === newline) {
+			lines++
+		}
+	}
+	return lines
 }
 
 /** What a store's logger is told: a logger's options, and how long its stream keeps. */

@@ -2915,6 +2915,89 @@
     },
     {
       "fields": {
+        "events": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000123456"
+                },
+                "context": {
+                  "str": "{\"a\":1}"
+                },
+                "fields": {
+                  "str": "{\"a\":1}"
+                },
+                "level": {
+                  "int": "-7"
+                },
+                "message": {
+                  "str": "message"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "spanId": {
+                  "bin": "01ff"
+                },
+                "stream": {
+                  "str": "stream"
+                },
+                "traceId": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "missed": {
+          "uint": "207"
+        }
+      },
+      "hex": "8201918901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff02cccf",
+      "message": "records.TailBatch",
+      "name": "records.TailBatch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.TailBatch",
+      "name": "records.TailBatch with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8101c40201ff",
+      "message": "records.Piece",
+      "name": "records.Piece with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Piece",
+      "name": "records.Piece with no field"
+    },
+    {
+      "fields": {
+        "dropped": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "records.Dropped",
+      "name": "records.Dropped with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Dropped",
+      "name": "records.Dropped with no field"
+    },
+    {
+      "fields": {
         "advance": {
           "uint": "1500"
         },
@@ -3425,10 +3508,12 @@
     "records.append": 1282,
     "records.count": 1284,
     "records.fieldNames": 1288,
+    "records.lines": 1291,
     "records.list": 1283,
     "records.open": 1281,
     "records.poll": 1289,
     "records.streams": 1287,
+    "records.tail": 1290,
     "records.top": 1285,
     "server.clock": 2,
     "server.stop": 1,

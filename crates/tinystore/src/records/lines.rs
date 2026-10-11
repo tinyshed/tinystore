@@ -85,6 +85,21 @@ impl Lines {
     pub fn dropped(&self) -> u64 {
         self.writer.buffer.dropped()
     }
+
+    /// Takes a piece of output as a write does, for a client's writer.
+    #[cfg(feature = "wire")]
+    pub(crate) fn take(&self, bytes: &[u8]) -> Result<()> {
+        self.writer.write(bytes)
+    }
+
+    /// Hands over every line, a last one without its newline too, writes
+    /// them and waits, and says how many lines the writer dropped.
+    #[cfg(feature = "wire")]
+    pub(crate) fn end(self) -> Result<u64> {
+        self.writer.close();
+        self.writer.buffer.write_waiting(false)?;
+        Ok(self.dropped())
+    }
 }
 
 impl io::Write for Lines {

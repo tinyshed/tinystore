@@ -12,20 +12,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use super::Route;
 use super::codec::Message;
 use super::protocol::{
     BlobsAt, BlobsDelete, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot, BlobsHead, BlobsInfo, BlobsList, BlobsMove,
     BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
 };
+use super::{Link, Route};
 use crate::blobs::{FileCall, FileInfo, Files, StoredFile, Upload};
 use crate::{Error, ErrorKind, Store, unix_millis};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
-pub(crate) type Sender = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
-pub(crate) type Finisher = Arc<dyn Fn(Answered) + Send + Sync>;
-pub(crate) type Granter = Arc<dyn Fn(u32) + Send + Sync>;
-pub(crate) type Spawn = Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
@@ -33,22 +29,6 @@ pub(crate) fn route(called: u16) -> Route {
         method::BLOBS_UPLOAD => Route::Upload,
         _ => Route::Worker,
     }
-}
-
-/// What a stream of a file's bytes needs of its session.
-#[derive(Clone)]
-pub(crate) struct Link {
-    /// A DATA on the stream.
-    pub(crate) send: Sender,
-    /// The stream's last frame.
-    pub(crate) finish: Finisher,
-    /// Credit given back to the client for DATA it sent on the stream.
-    pub(crate) grant: Granter,
-    /// Work on the session's workers, where a file is read or written.
-    pub(crate) spawn: Spawn,
-    /// The DATA bytes the client takes before it grants more.
-    pub(crate) credit: u64,
-    pub(crate) max_body: usize,
 }
 
 /// What a connection opened, by handle, and its streams of a file's bytes.
