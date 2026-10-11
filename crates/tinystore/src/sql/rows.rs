@@ -12,6 +12,7 @@ use rusqlite::{Statement, params_from_iter};
 use serde::de::value::{SeqDeserializer, StrDeserializer};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, IntoDeserializer, Visitor};
 
+use super::columns::Holds;
 use super::included::literal_rows;
 use super::values::Value;
 use crate::{Error, Memory, Reservation, Result};
@@ -88,40 +89,80 @@ impl Held {
     }
 }
 
-impl Rows {
+/// What a statement's rows are read into: the rows, or their columns.
+pub(crate) trait Answer: Sized {
     /// Steps `statement` to its end, or until it gave `most` rows, keeping
     /// what each row holds within the store's memory; past `bytes` of values
     /// it is `limit`.
-    pub(crate) fn read(
-        statement: &mut Statement<'_>,
-        values: &[Value],
-        (most, bytes): (usize, usize),
-        mut held: Held,
-    ) -> Result<Rows> {
-        let columns: Arc<[String]> = statement.column_names().into_iter().map(str::to_owned).collect();
-        let width = columns.len();
-        let mut rows = statement.query(params_from_iter(values)).map_err(|error| failure("its rows", error))?;
-        let (mut kept, mut size) = (Vec::new(), 0usize);
-        let mut count = 0;
-        while count < most {
-            let Some(row) = rows.next().map_err(|error| failure("its rows", error))? else {
-                break;
-            };
-            for index in 0..width {
-                let value = Value::of(row.get_ref(index).map_err(|error| failure("its rows", error))?);
-                size += value.size();
-                kept.push(value);
-            }
-            if size > bytes {
-                return Err(past_bound(size, bytes));
-            }
-            held.reach(size as u64)?;
-            count += 1;
+    fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), held: Held) -> Result<Self>;
+
+    /// Its rows.
+    fn len(&self) -> usize;
+
+    /// Its columns.
+    fn width(&self) -> usize;
+}
+
+/// What a statement gave as it was stepped: its columns' names, what each is
+/// declared to hold, and its rows.
+pub(crate) struct Stepped {
+    pub(crate) columns: Vec<String>,
+    pub(crate) declared: Vec<Holds>,
+    pub(crate) rows: usize,
+}
+
+/// Steps `statement` to its end, or until it gave `most` rows, giving `keep`
+/// each value with its column, a row after another, within the store's
+/// memory; past `bytes` of values it is `limit`.
+pub(crate) fn step(
+    statement: &mut Statement<'_>,
+    values: &[Value],
+    (most, bytes): (usize, usize),
+    held: &mut Held,
+    mut keep: impl FnMut(usize, Value),
+) -> Result<Stepped> {
+    let named = statement.columns();
+    let columns: Vec<String> = named.iter().map(|column| column.name().to_owned()).collect();
+    let declared = named.iter().map(|column| Holds::declared(column.decl_type())).collect();
+    drop(named);
+    let mut rows = statement.query(params_from_iter(values)).map_err(|error| failure("its rows", error))?;
+    let (mut count, mut size) = (0, 0usize);
+    while count < most {
+        let Some(row) = rows.next().map_err(|error| failure("its rows", error))? else {
+            break;
+        };
+        for index in 0..columns.len() {
+            let value = Value::of(row.get_ref(index).map_err(|error| failure("its rows", error))?);
+            size += value.size();
+            keep(index, value);
         }
-        held.settle();
-        Ok(Rows { columns, values: kept, held, nested: Vec::new() })
+        if size > bytes {
+            return Err(past_bound(size, bytes));
+        }
+        held.reach(size as u64)?;
+        count += 1;
+    }
+    held.settle();
+    Ok(Stepped { columns, declared, rows: count })
+}
+
+impl Answer for Rows {
+    fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), mut held: Held) -> Result<Rows> {
+        let mut kept = Vec::new();
+        let stepped = step(statement, values, bounds, &mut held, |_, value| kept.push(value))?;
+        Ok(Rows { columns: stepped.columns.into(), values: kept, held, nested: Vec::new() })
     }
 
+    fn len(&self) -> usize {
+        Rows::len(self)
+    }
+
+    fn width(&self) -> usize {
+        Rows::width(self)
+    }
+}
+
+impl Rows {
     /// The same rows, `nested` of their columns read as the rows of the
     /// queries they include.
     pub(crate) fn nesting(mut self, nested: Vec<Nested>) -> Rows {

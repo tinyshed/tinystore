@@ -85,6 +85,7 @@ export const methods = {
 	'sql.exec': 0x0303,
 	'sql.batch': 0x0304,
 	'sql.tx': 0x0305,
+	'sql.columns': 0x0306,
 } as const
 
 export type Method = keyof typeof methods
@@ -4778,7 +4779,7 @@ export const SqlText = message(
 )
 
 /**
- * A write on a database.
+ * A statement on a database: a write, or a read answered by its columns.
  */
 export const SqlStatement = message(
 	'sql.Statement',
@@ -4988,6 +4989,168 @@ export const SqlRows = message(
 			}
 			r.leave()
 			return { columns: $columns, rows: $rows }
+		},
+	},
+)
+
+/**
+ * A column of a statement's rows, a part of it a message, as one of three. A
+ * column of INTEGERs alone goes as integers and one of REALs alone as reals,
+ * 8 bytes a row, little end first; where a row holds NULL its bit of nulls is
+ * set, and its value is 0 among integers and a NaN among reals, which SQLite
+ * keeps none of. Any other column goes as values: text, blobs, and INTEGERs
+ * beside REALs, neither read as the other.
+ */
+export const SqlColumn = message(
+	'sql.Column',
+	{
+		name: [1, str],
+		/** an int64 a row */
+		integers: [2, bin],
+		/** a float64 a row */
+		reals: [3, bin],
+		/** a bit a row, a byte's lowest first, set where the row holds NULL; absent when none does */
+		nulls: [4, bin],
+		values: [5, list(sqlValue)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.integers !== undefined) {
+				w.field(2)
+				w.bin(v.integers)
+				n++
+			}
+			if (v.reals !== undefined) {
+				w.field(3)
+				w.bin(v.reals)
+				n++
+			}
+			if (v.nulls !== undefined) {
+				w.field(4)
+				w.bin(v.nulls)
+				n++
+			}
+			if (v.values !== undefined) {
+				w.field(5)
+				w.array(v.values.length)
+				for (const item0 of v.values) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $integers: Uint8Array | undefined
+			let $reals: Uint8Array | undefined
+			let $nulls: Uint8Array | undefined
+			let $values: (SqlValue | boolean)[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$integers = r.bytes()
+						break
+					case 3:
+						$reals = r.bytes()
+						break
+					case 4:
+						$nulls = r.bytes()
+						break
+					case 5: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$values = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, integers: $integers, reals: $reals, nulls: $nulls, values: $values }
+		},
+	},
+)
+
+/**
+ * Rows a statement gave, by their columns, a part of them a message: every
+ * part holds every column, in the statement's order and as the same one of
+ * three, for the same rows.
+ */
+export const SqlColumns = message(
+	'sql.Columns',
+	{
+		/** the rows of this part */
+		rows: [1, uint],
+		/** the rows of every part */
+		total: [2, uint],
+		columns: [3, list(SqlColumn)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.rows !== undefined) {
+				w.field(1)
+				w.uint(v.rows)
+				n++
+			}
+			if (v.total !== undefined) {
+				w.field(2)
+				w.uint(v.total)
+				n++
+			}
+			if (v.columns !== undefined) {
+				w.field(3)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					SqlColumn.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $rows: number | undefined
+			let $total: number | undefined
+			let $columns: Read<typeof SqlColumn.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$rows = r.uint()
+						break
+					case 2:
+						$total = r.uint()
+						break
+					case 3: {
+						const items0: Read<typeof SqlColumn.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SqlColumn.read(r))
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { rows: $rows, total: $total, columns: $columns }
 		},
 	},
 )

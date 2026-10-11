@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 
 use super::engine::{Base, Databases};
 use super::migrations::Migrations;
-use super::rows::{Held, Rows};
+use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
@@ -193,7 +193,12 @@ impl Database {
     /// `rows_of` without waiting for a commit: a read's rows come before this
     /// returns, and a write's once its commit ends, on the thread that
     /// commits it.
-    pub(crate) fn rows_then(&self, statement: Sql, wanted: Wanted, done: impl FnOnce(Result<Rows>) + Send + 'static) {
+    pub(crate) fn rows_then<A: Answer + Send + 'static>(
+        &self,
+        statement: Sql,
+        wanted: Wanted,
+        done: impl FnOnce(Result<A>) + Send + 'static,
+    ) {
         let describe = self.failed_by(&statement);
         if !self.base.writes(statement.text()) {
             let held = Held::of(&self.base.memory);
@@ -212,7 +217,7 @@ impl Database {
     /// write: none when SQLite says the statement writes, or when it is not a
     /// query, since SQLite counts an ATTACH, which opens a file and stays on
     /// the shared reader, and a PRAGMA that changes the reader, as reads.
-    pub(crate) fn read(&self, statement: &Sql, wanted: Wanted) -> Result<Option<Rows>> {
+    pub(crate) fn read<A: Answer>(&self, statement: &Sql, wanted: Wanted) -> Result<Option<A>> {
         if !is_query(statement.text()) || self.base.writes(statement.text()) {
             return Ok(None);
         }

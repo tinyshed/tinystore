@@ -24,7 +24,7 @@ message sql.Text {
   2 values: [cell]
 }
 
-# A write on a database.
+# A statement on a database: a write, or a read answered by its columns.
 message sql.Statement {
   1 handle: uint
   2 text: str
@@ -45,6 +45,29 @@ message sql.Query {
 message sql.Rows {
   1 columns: [str]
   2 rows: [[cell]]
+}
+
+# A column of a statement's rows, a part of it a message, as one of three. A
+# column of INTEGERs alone goes as integers and one of REALs alone as reals,
+# 8 bytes a row, little end first; where a row holds NULL its bit of nulls is
+# set, and its value is 0 among integers and a NaN among reals, which SQLite
+# keeps none of. Any other column goes as values: text, blobs, and INTEGERs
+# beside REALs, neither read as the other.
+message sql.Column {
+  1 name: str
+  2 integers: bin?    # an int64 a row
+  3 reals: bin?       # a float64 a row
+  4 nulls: bin?       # a bit a row, a byte's lowest first, set where the row holds NULL; absent when none does
+  5 values: [cell]?
+}
+
+# Rows a statement gave, by their columns, a part of them a message: every
+# part holds every column, in the statement's order and as the same one of
+# three, for the same rows.
+message sql.Columns {
+  1 rows: uint        # the rows of this part
+  2 total: uint       # the rows of every part
+  3 columns: [sql.Column]
 }
 
 # What a write changed: the rows, and SQLite's rowid of the row it inserted,
@@ -92,8 +115,9 @@ message sql.TxAnswer {
   4 body: bin?        # what a method answered, as its own answer
 }
 
-read  0x0301 sql.open(sql.Open)      -> Handle
-read  0x0302 sql.query(sql.Query)    -> download sql.Rows until sql.Rows
-write 0x0303 sql.exec(sql.Statement) -> sql.Done
-write 0x0304 sql.batch(sql.Batch)    -> sql.Batched
-write 0x0305 sql.tx(sql.TxOpen)      -> exchange sql.TxAnswer for sql.TxCall
+read  0x0301 sql.open(sql.Open)         -> Handle
+read  0x0302 sql.query(sql.Query)       -> download sql.Rows until sql.Rows
+write 0x0303 sql.exec(sql.Statement)    -> sql.Done
+write 0x0304 sql.batch(sql.Batch)       -> sql.Batched
+write 0x0305 sql.tx(sql.TxOpen)         -> exchange sql.TxAnswer for sql.TxCall
+read  0x0306 sql.columns(sql.Statement) -> download sql.Columns until sql.Columns

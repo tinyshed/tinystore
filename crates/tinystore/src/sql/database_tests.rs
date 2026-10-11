@@ -474,7 +474,12 @@ fn reading_past_the_bound_is_a_limit() {
     crate::sqlite::give_mutexes();
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     let mut statement = connection.prepare("select zeroblob(600) from (select 1 union all select 2)").unwrap();
-    let read = super::rows::Rows::read(&mut statement, &[], (usize::MAX, 1000), super::rows::Held::default());
+    let read = <super::rows::Rows as super::rows::Answer>::read(
+        &mut statement,
+        &[],
+        (usize::MAX, 1000),
+        super::rows::Held::default(),
+    );
     let error = read.map(drop).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
     assert_eq!((error.fact("limit"), error.fact("bound")), (Some("bytes of a call's rows"), Some("1000")));

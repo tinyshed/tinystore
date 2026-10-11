@@ -191,13 +191,14 @@ no job ends the stream at once, and the server's `GOAWAY` ends it
 
 ## sql
 
-| Method      | Request                                                                  | Answer                                                                                                               |
-|-------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| `sql.open`  | name, migrations: each file's name and SQL; none opens the file as it is | a handle                                                                                                             |
-| `sql.query` | handle, text, the values of its `?`s, want: all, one or scalar           | a download: the rows in the RESPONSE when they fit one message, else their parts as DATA, the last ending the stream |
-| `sql.exec`  | handle, text, values                                                     | changes, and the rowid of the row it inserted                                                                        |
-| `sql.batch` | handle, statements                                                       | what each one changed                                                                                                |
-| `sql.tx`    | handle                                                                   | both ways: calls in, answers out                                                                                     |
+| Method        | Request                                                                  | Answer                                                                                                               |
+|---------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `sql.open`    | name, migrations: each file's name and SQL; none opens the file as it is | a handle                                                                                                             |
+| `sql.query`   | handle, text, the values of its `?`s, want: all, one or scalar           | a download: the rows in the RESPONSE when they fit one message, else their parts as DATA, the last ending the stream |
+| `sql.exec`    | handle, text, values                                                     | changes, and the rowid of the row it inserted                                                                        |
+| `sql.columns` | handle, text, values                                                     | a download as `sql.query`'s: the rows by their columns, every part every column for the same rows                    |
+| `sql.batch`   | handle, statements                                                       | what each one changed                                                                                                |
+| `sql.tx`      | handle                                                                   | both ways: calls in, answers out                                                                                     |
 
 A statement travels as text and the values of its `?`s, each as SQLite keeps
 it: nil, an integer, a float, a str or bin. An SDK builds its queries into
@@ -206,6 +207,17 @@ text and values before they leave, so the server sees SQL alone.
 once its commit is durable; a part of the rows is at most half the client's
 stream credit, the first naming the columns. `sql.exec` and `sql.batch` are
 answered from the shared commit's completion, as kv's writes are.
+
+`sql.columns` answers a statement's rows by their columns, read straight into
+them. A column of `INTEGER`s alone goes as int64s and one of `REAL`s alone as
+float64s, eight bytes a row, little end first, in one bin; a row that holds
+`NULL` has its bit of the column's nulls set, and is 0 among integers and a
+NaN among reals, which SQLite keeps none of. Any other column goes as cells,
+text and blobs and `INTEGER`s beside `REAL`s, neither read as the other. A
+column that holds no value, of no rows or of `NULL`s alone, is what its
+declaration says by SQLite's affinity, and cells for an expression, which
+declares nothing. Every part says the rows of them all, so a client sizes
+its arrays at the first.
 
 `sql.tx` holds the database's writer. The client's calls come as DATA, each
 answered as a DATA: its rows, what it changed, or why it failed, which leaves

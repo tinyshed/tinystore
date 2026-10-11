@@ -2241,6 +2241,84 @@
     },
     {
       "fields": {
+        "integers": {
+          "bin": "01ff"
+        },
+        "name": {
+          "str": "name"
+        },
+        "nulls": {
+          "bin": "01ff"
+        },
+        "reals": {
+          "bin": "01ff"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        }
+      },
+      "hex": "8501a46e616d6502c40201ff03c40201ff04c40201ff0591a676616c756573",
+      "message": "sql.Column",
+      "name": "sql.Column with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Column",
+      "name": "sql.Column with no field"
+    },
+    {
+      "fields": {
+        "columns": {
+          "list": [
+            {
+              "fields": {
+                "integers": {
+                  "bin": "01ff"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "nulls": {
+                  "bin": "01ff"
+                },
+                "reals": {
+                  "bin": "01ff"
+                },
+                "values": {
+                  "list": [
+                    {
+                      "str": "values"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "rows": {
+          "uint": "107"
+        },
+        "total": {
+          "uint": "207"
+        }
+      },
+      "hex": "83016b02cccf03918501a46e616d6502c40201ff03c40201ff04c40201ff0591a676616c756573",
+      "message": "sql.Columns",
+      "name": "sql.Columns with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "sql.Columns",
+      "name": "sql.Columns with no field"
+    },
+    {
+      "fields": {
         "changes": {
           "uint": "107"
         },
@@ -2492,6 +2570,7 @@
     "server.clock": 2,
     "server.stop": 1,
     "sql.batch": 772,
+    "sql.columns": 774,
     "sql.exec": 771,
     "sql.open": 769,
     "sql.query": 770,

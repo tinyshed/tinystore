@@ -103,6 +103,7 @@ export {
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
 export {
+	type Columns,
 	type Database,
 	type DatabaseOptions,
 	type Done,

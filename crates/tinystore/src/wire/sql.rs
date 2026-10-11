@@ -5,6 +5,7 @@
 //! client stalls or leaves.
 
 use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -13,11 +14,11 @@ use std::time::{Duration, Instant};
 use super::Route;
 use super::codec::{Cell, Message};
 use super::protocol::{
-    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlDone, SqlOpen, SqlQuery, SqlRows, SqlStatement, SqlTxAnswer,
-    SqlTxCall, SqlTxOpen, method,
+    Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlOpen, SqlQuery, SqlRows,
+    SqlStatement, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 use crate::engine::SharedFile;
-use crate::sql::{Database, Done, Held, Migrations, Rows, Sql, Tx, Value, Wanted};
+use crate::sql::{Answer, Column, Columns, Database, Done, Held, Migrations, Rows, Sql, Tx, Value, Wanted};
 use crate::{Error, ErrorKind, Store, Transaction};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -30,7 +31,7 @@ const TX_BOUND: Duration = if cfg!(test) { Duration::from_millis(300) } else { D
 pub(crate) fn route(called: u16) -> Route {
     match called {
         method::SQL_EXEC | method::SQL_BATCH => Route::Submit,
-        method::SQL_QUERY => Route::Download,
+        method::SQL_QUERY | method::SQL_COLUMNS => Route::Download,
         method::SQL_TX => Route::Transaction,
         _ => Route::Worker,
     }
@@ -169,48 +170,93 @@ pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnO
     }
 }
 
-/// Runs a query and says how its rows go: in the RESPONSE when they fit one
-/// part, or a part a DATA within the client's credit, the last ending the
-/// stream, through [`download`] once the RESPONSE went out.
+/// Runs a query, `sql.query` or `sql.columns`, and says how its rows go: in
+/// the RESPONSE when they fit one part, or a part a DATA within the client's
+/// credit, the last ending the stream, through [`download`] once the RESPONSE
+/// went out.
 ///
 /// It does not wait for a commit: a read is given to `done` before this
 /// returns, and a statement that writes once its commit ends, on the thread
 /// that commits it, so that writes in flight hold no thread of the session.
 pub(crate) fn query(
     handles: &Handles,
-    body: &[u8],
+    (called, body): (u16, &[u8]),
     link: &Link,
     read_only: bool,
     done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
 ) {
-    let prepared = || -> Result<_, Failure> {
-        let asked = SqlQuery::decode(body)?;
-        let database = handles.database(asked.handle)?;
+    if called == method::SQL_COLUMNS {
+        let asked = SqlStatement::decode(body)
+            .and_then(|asked| Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, Wanted::All)));
+        return read_into::<Columns>(asked, link, read_only, done);
+    }
+    let asked = SqlQuery::decode(body).and_then(|asked| {
         let wanted = Wanted::named(&asked.want)
             .ok_or_else(|| Failure::invalid(format!("want {:?}: a query wants all, one or scalar", asked.want)))?;
-        Ok((database, statement(asked.text, asked.values)?, wanted))
-    };
-    let (database, statement, wanted) = match prepared() {
-        Ok(prepared) => prepared,
+        Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, wanted))
+    });
+    read_into::<Rows>(asked, link, read_only, done);
+}
+
+/// Reads what a query asked into an `A`, its rows or their columns, and
+/// gives `done` how they go.
+fn read_into<A: Parted>(
+    asked: Result<(Database, Sql, Wanted), Failure>,
+    link: &Link,
+    read_only: bool,
+    done: impl FnOnce(Result<Queried, Failure>) + Send + 'static,
+) {
+    let (database, statement, wanted) = match asked {
+        Ok(asked) => asked,
         Err(failure) => return done(Err(failure)),
     };
     let bound = part_bound(link);
     if read_only {
         let rows = database
-            .read(&statement, wanted)
+            .read::<A>(&statement, wanted)
             .map_err(Failure::from)
             .and_then(|rows| rows.ok_or_else(|| Failure::permission("a read connection's SQL writes nothing")));
         return done(rows.and_then(|rows| queried(rows, bound)));
     }
-    database.rows_then(statement, wanted, move |rows| {
+    database.rows_then(statement, wanted, move |rows: crate::Result<A>| {
         done(rows.map_err(Failure::from).and_then(|rows| queried(rows, bound)));
     });
 }
 
+/// A query's answer that goes in parts: its rows, or their columns.
+trait Parted: Answer + Send + 'static {
+    /// The store's memory it holds, for the download that sends it.
+    fn held(&mut self) -> Held;
+
+    /// Its parts, each of at most `bound` bytes; a row larger than a part
+    /// alone is `limit`.
+    fn parts(self, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure>;
+}
+
+impl Parted for Rows {
+    fn held(&mut self) -> Held {
+        Rows::held(self)
+    }
+
+    fn parts(self, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
+        row_parts(self, bound)
+    }
+}
+
+impl Parted for Columns {
+    fn held(&mut self) -> Held {
+        Columns::held(self)
+    }
+
+    fn parts(self, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
+        column_parts(self, bound)
+    }
+}
+
 /// How a query's rows go: whole, or in parts with the memory they hold.
-fn queried(mut rows: Rows, bound: usize) -> Result<Queried, Failure> {
+fn queried(mut rows: impl Parted, bound: usize) -> Result<Queried, Failure> {
     let held = rows.held();
-    let mut parts = parts(rows, bound)?;
+    let mut parts = rows.parts(bound)?;
     if parts.len() == 1 {
         return Ok(Queried::Whole(parts.pop_front().unwrap_or_default()));
     }
@@ -243,20 +289,18 @@ fn part_bound(link: &Link) -> usize {
 
 /// A query's rows in parts of at most `bound` bytes, the first naming the
 /// columns; a row larger than a part alone is `limit`.
-fn parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
+fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
     let columns: Vec<String> = rows.columns().to_vec();
     let width = rows.width().max(1);
     let mut parts = VecDeque::new();
     let mut part = SqlRows { columns, rows: Vec::new() };
     let mut size = part.columns.iter().map(|name| name.len() + 5).sum::<usize>() + 16;
-    let values = rows.into_values();
-    for row in values.chunks(width) {
-        let row: Vec<Cell> = row.iter().cloned().map(cell_of).collect();
+    let mut values = rows.into_values();
+    for row in values.chunks_mut(width) {
+        let row: Vec<Cell> = row.iter_mut().map(|value| cell_of(std::mem::replace(value, Value::Null))).collect();
         let weight = row.iter().map(weight_of).sum::<usize>() + 5;
         if weight + 16 > bound {
-            return Err(Failure::from(Error::limit(format!(
-                "a row of {weight} bytes, past the {bound} one message of this connection carries"
-            ))));
+            return Err(past_a_message(weight, bound));
         }
         if size + weight > bound && !part.rows.is_empty() {
             parts.push_back(std::mem::take(&mut part).encode());
@@ -277,6 +321,105 @@ fn weight_of(cell: &Cell) -> usize {
         Cell::Str(text) => text.len() + 5,
         Cell::Bin(bytes) => bytes.len() + 5,
     }
+}
+
+fn past_a_message(weight: usize, bound: usize) -> Failure {
+    Failure::from(Error::limit(format!(
+        "a row of {weight} bytes, past the {bound} one message of this connection carries"
+    )))
+}
+
+/// What a row of a packed column takes of a message: its eight bytes, and
+/// its bit of nulls.
+const PACKED: usize = 9;
+
+/// A query's rows by their columns, in parts of at most `bound` bytes: every
+/// part holds every column for the same rows, and a row larger than a part
+/// alone is `limit`.
+fn column_parts(mut columns: Columns, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
+    let cuts = cuts(&columns, bound)?;
+    Ok(cuts.into_iter().map(|cut| column_part(&mut columns, cut).encode()).collect())
+}
+
+/// The rows of each part: as many as `bound` bytes take.
+fn cuts(columns: &Columns, bound: usize) -> Result<Vec<Range<usize>>, Failure> {
+    let head = columns.columns.iter().map(|(name, _)| name.len() + 24).sum::<usize>() + 16;
+    let loose = |row: usize| {
+        let of = |(_, column): &(String, Column)| match column {
+            Column::Values(values) => weight_of_value(&values[row]),
+            Column::Integers { .. } | Column::Reals { .. } => PACKED,
+        };
+        columns.columns.iter().map(of).sum::<usize>()
+    };
+    let (mut cuts, mut from, mut size) = (Vec::new(), 0, head);
+    for row in 0..columns.rows {
+        let weight = loose(row);
+        if head + weight > bound {
+            return Err(past_a_message(weight, bound));
+        }
+        if size + weight > bound {
+            cuts.push(from..row);
+            (from, size) = (row, head);
+        }
+        size += weight;
+    }
+    cuts.push(from..columns.rows);
+    Ok(cuts)
+}
+
+/// What a value takes of a message as a cell, its header with it.
+fn weight_of_value(value: &Value) -> usize {
+    match value {
+        Value::Null => 1,
+        Value::Integer(_) | Value::Real(_) => 9,
+        Value::Text(text) => text.len() + 5,
+        Value::Blob(bytes) => bytes.len() + 5,
+    }
+}
+
+/// The rows `cut` of every column, as one part. It takes the values of a
+/// column that is not packed, which go once.
+fn column_part(columns: &mut Columns, cut: Range<usize>) -> SqlColumns {
+    let part = |(name, column): &mut (String, Column)| {
+        let mut part = SqlColumn { name: name.clone(), integers: None, reals: None, nulls: None, values: None };
+        match column {
+            Column::Integers { values, nulls } => {
+                part.integers = Some(packed(&values[cut.clone()], |integer| integer.to_le_bytes()));
+                part.nulls = null_bits(nulls, &cut);
+            }
+            Column::Reals { values, nulls } => {
+                part.reals = Some(packed(&values[cut.clone()], |real| real.to_le_bytes()));
+                part.nulls = null_bits(nulls, &cut);
+            }
+            Column::Values(values) => {
+                let cells = values[cut.clone()].iter_mut().map(|value| cell_of(std::mem::replace(value, Value::Null)));
+                part.values = Some(cells.collect());
+            }
+        }
+        part
+    };
+    let (rows, total) = (cut.len() as u64, columns.rows as u64);
+    SqlColumns { rows, total, columns: columns.columns.iter_mut().map(part).collect() }
+}
+
+/// A packed column's rows, eight bytes each, little end first.
+fn packed<T: Copy>(values: &[T], bytes: impl Fn(T) -> [u8; 8]) -> Vec<u8> {
+    let mut packed = Vec::with_capacity(values.len() * 8);
+    for value in values {
+        packed.extend_from_slice(&bytes(*value));
+    }
+    packed
+}
+
+/// A bit a row of `cut`, a byte's lowest first, set where the row holds
+/// NULL; nothing when none of them does.
+fn null_bits(nulls: &[bool], cut: &Range<usize>) -> Option<Vec<u8>> {
+    let nulls = nulls.get(cut.clone()).filter(|nulls| nulls.contains(&true))?;
+    let mut bits = vec![0u8; nulls.len().div_ceil(8)];
+    for (row, _) in nulls.iter().enumerate().filter(|(_, null)| **null) {
+        bits[row / 8] |= 1 << (row % 8);
+    }
+    Some(bits)
 }
 
 /// A query's parts going out within the client's credit.
@@ -481,7 +624,7 @@ fn answer(tx: &Tx<'_>, call: SqlTxCall, max_body: usize, nested: Nested<'_>) -> 
             Failure::invalid(format!("want {:?}: a call wants all, one, scalar, exec or call", call.want))
         })?;
         let rows = tx.rows_of(&statement, wanted)?;
-        let mut parts = parts(rows, max_body / 2)?;
+        let mut parts = row_parts(rows, max_body / 2)?;
         if parts.len() > 1 {
             return Err(Failure::from(Error::limit(
                 "rows past what one answer carries: read them outside the transaction, or fewer at a time",

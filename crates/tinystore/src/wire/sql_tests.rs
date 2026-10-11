@@ -4,8 +4,8 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::{Cell, Message};
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlDone, SqlMigration, SqlOpen, SqlQuery, SqlRows, SqlStatement,
-    SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
+    Empty, Handle, Hello, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlMigration, SqlOpen, SqlQuery,
+    SqlRows, SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 
 const NOTES: &str =
@@ -36,6 +36,36 @@ fn query(client: &mut Client, handle: u64, sql: &str, want: &str) -> SqlRows {
 
 fn insert(client: &mut Client, handle: u64, id: &str, title: &str) -> SqlDone {
     exec(client, handle, "insert into notes (id, title) values (?, ?)", vec![text(id), text(title)])
+}
+
+/// The rows a part's columns hold, as `sql.query` gives them: a packed
+/// column's eight bytes a row, and nothing where its bit of nulls is set.
+fn rows_of(part: &SqlColumns) -> Vec<Vec<Cell>> {
+    let rows = usize::try_from(part.rows).unwrap();
+    let cell = |column: &SqlColumn, row: usize| {
+        let eight = |packed: &Vec<u8>| {
+            assert_eq!(packed.len(), rows * 8, "{}: eight bytes a row", column.name);
+            <[u8; 8]>::try_from(&packed[row * 8..row * 8 + 8]).unwrap()
+        };
+        let null = column.nulls.as_ref().is_some_and(|bits| bits[row / 8] >> (row % 8) & 1 == 1);
+        match (&column.integers, &column.reals, &column.values) {
+            (Some(integers), None, None) if null => Cell::from_null(i64::from_le_bytes(eight(integers)) == 0),
+            (Some(integers), None, None) => Cell::Int(i64::from_le_bytes(eight(integers))),
+            (None, Some(reals), None) if null => Cell::from_null(f64::from_le_bytes(eight(reals)).is_nan()),
+            (None, Some(reals), None) => Cell::Float(f64::from_le_bytes(eight(reals))),
+            (None, None, Some(values)) => values[row].clone(),
+            _ => panic!("{}: a column is one of three", column.name),
+        }
+    };
+    (0..rows).map(|row| part.columns.iter().map(|column| cell(column, row)).collect()).collect()
+}
+
+impl Cell {
+    /// A NULL of a packed column, whose value is the one the schema says.
+    fn from_null(as_the_schema_says: bool) -> Cell {
+        assert!(as_the_schema_says, "a NULL is 0 among integers and a NaN among reals");
+        Cell::Nil
+    }
 }
 
 #[test]
@@ -392,6 +422,8 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
     let read = open(&mut reader);
     let rows = query(&mut reader, read, "select title from notes", "all");
     assert_eq!(rows.rows.len(), 1);
+    let by_columns = SqlStatement { handle: read, text: "select title from notes".to_owned(), values: Vec::new() };
+    assert_eq!(reader.call::<SqlColumns>(method::SQL_COLUMNS, &by_columns).unwrap().total, 1);
     let copy = dir.path().join("copy.db");
     let other = dir.path().join("other.db");
     let writes = [
@@ -404,6 +436,9 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
         let asked = SqlQuery { handle: read, text: text.clone(), values: Vec::new(), want: "all".to_owned() };
         let refused = reader.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err();
         assert_eq!(refused.code, "permission", "{text}: {}", refused.message);
+        let by_columns = SqlStatement { handle: read, text: text.clone(), values: Vec::new() };
+        let refused = reader.call::<SqlColumns>(method::SQL_COLUMNS, &by_columns).unwrap_err();
+        assert_eq!(refused.code, "permission", "by columns, {text}: {}", refused.message);
     }
     let statement = SqlStatement { handle: read, text: "delete from notes".to_owned(), values: Vec::new() };
     assert_eq!(reader.call::<SqlDone>(method::SQL_EXEC, &statement).unwrap_err().code, "permission");
@@ -428,4 +463,122 @@ fn a_connection_that_writes_attaches_no_file_and_ends_no_transaction() {
         assert_eq!(refused.code, "invalid", "a write of {text}: {}", refused.message);
     }
     assert_eq!(query(&mut client, handle, "select title from notes", "all").rows.len(), 1);
+}
+
+#[test]
+fn a_statements_columns_hold_what_its_rows_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client);
+    for (id, title) in [("n1", "Buy milk"), ("n2", "Call mom"), ("n3", "Write")] {
+        insert(&mut client, handle, id, title);
+    }
+    exec(&mut client, handle, "update notes set done = 1 where id = ?", vec![text("n2")]);
+
+    let read = "select id, done, done * 1.5 as load, nullif(done, 0) as only_done, nullif(done * 1.5, 0) as only_load, \
+                iif(done, 1, 0.5) as either, null as empty, rowid * 9007199254740993 as past_a_float \
+                from notes order by id";
+    let asked = SqlStatement { handle, text: read.to_owned(), values: Vec::new() };
+    let columns: SqlColumns = client.call(method::SQL_COLUMNS, &asked).unwrap();
+    assert_eq!((columns.rows, columns.total), (3, 3));
+    let packed: Vec<(&str, &str)> = columns
+        .columns
+        .iter()
+        .map(|column| match (&column.integers, &column.reals, &column.values) {
+            (Some(_), None, None) => (column.name.as_str(), "integers"),
+            (None, Some(_), None) => (column.name.as_str(), "reals"),
+            (None, None, Some(_)) => (column.name.as_str(), "values"),
+            _ => panic!("{}: a column is one of three", column.name),
+        })
+        .collect();
+    assert_eq!(
+        packed,
+        [
+            ("id", "values"),
+            ("done", "integers"),
+            ("load", "reals"),
+            ("only_done", "integers"),
+            ("only_load", "reals"),
+            ("either", "values"),
+            ("empty", "values"),
+            ("past_a_float", "integers"),
+        ]
+    );
+    let nulls: Vec<Option<&[u8]>> = columns.columns.iter().map(|column| column.nulls.as_deref()).collect();
+    let none: Option<&[u8]> = None;
+    // n1 and n3 are not done: the lowest bit is the first row's
+    assert_eq!(nulls, [none, none, none, Some(&[0b101][..]), Some(&[0b101][..]), none, none, none]);
+
+    assert_eq!(rows_of(&columns), query(&mut client, handle, read, "all").rows, "an INTEGER goes whole, past 2^53 too");
+}
+
+#[test]
+fn columns_past_one_message_come_in_parts_of_the_same_rows_within_the_clients_credit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::connect(dir.path());
+    let credit = 64 << 10;
+    client.greet(Hello { protocol: 2, stream_credit: Some(credit), ..Hello::default() }).unwrap();
+    let handle = open(&mut client);
+    let title = "x".repeat(1000);
+    for n in 0..200 {
+        insert(&mut client, handle, &format!("n{n:03}"), &title);
+    }
+
+    let read = "select id, title, nullif(rowid % 3, 0) as third, rowid / 4.0 as quarter from notes order by id";
+    let asked = SqlStatement { handle, text: read.to_owned(), values: Vec::new() };
+    let stream = client.start(method::SQL_COLUMNS, &asked);
+    let head = client.next_on(stream);
+    assert_eq!((head.kind, head.flags), (Kind::Response, 0), "the columns do not fit one message");
+    let (mut rows, mut parts, mut taken) = (Vec::new(), 0, 0u64);
+    loop {
+        while client.silent_on(stream, Duration::from_millis(50)) {
+            assert!(taken > 0, "the first part goes without a grant");
+            client.write(Frame::new(Kind::Credit, stream, u32::try_from(taken).unwrap().to_le_bytes().to_vec()));
+            taken = 0;
+        }
+        let part = client.next_on(stream);
+        assert!(part.body.len() as u64 <= credit, "a part within the credit");
+        taken += part.body.len() as u64;
+        let decoded = SqlColumns::decode(&part.body).unwrap();
+        assert_eq!(decoded.total, 200, "every part says the rows of them all");
+        let names: Vec<&str> = decoded.columns.iter().map(|column| column.name.as_str()).collect();
+        assert_eq!(names, ["id", "title", "third", "quarter"], "every part holds every column");
+        rows.extend(rows_of(&decoded));
+        parts += 1;
+        if part.flags & frame::END != 0 {
+            break;
+        }
+    }
+    assert!(parts > 3, "{parts} parts");
+    let asked = SqlQuery { handle, text: read.to_owned(), values: Vec::new(), want: "all".to_owned() };
+    let stream = client.start(method::SQL_QUERY, &asked);
+    client.next_on(stream);
+    let mut whole = Vec::new();
+    loop {
+        let part = client.next_on(stream);
+        client.write(Frame::new(Kind::Credit, stream, u32::try_from(part.body.len()).unwrap().to_le_bytes().to_vec()));
+        whole.extend(SqlRows::decode(&part.body).unwrap().rows);
+        if part.flags & frame::END != 0 {
+            break;
+        }
+    }
+    assert_eq!(rows.len(), 200);
+    assert_eq!(rows, whole, "the parts' columns hold what the rows hold");
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+#[test]
+fn a_row_larger_than_a_message_is_limit_by_columns_as_by_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::connect(dir.path());
+    client.greet(Hello { protocol: 2, stream_credit: Some(64 << 10), ..Hello::default() }).unwrap();
+    let handle = open(&mut client);
+    exec(&mut client, handle, "insert into notes (id, title) values ('n1', printf('%.*c', 100000, 'x'))", Vec::new());
+
+    let asked = SqlStatement { handle, text: "select id, title from notes".to_owned(), values: Vec::new() };
+    let refused = client.call::<SqlColumns>(method::SQL_COLUMNS, &asked).unwrap_err();
+    assert_eq!(refused.code, "limit", "{}", refused.message);
+    assert!(refused.message.contains("past the 32768 one message of this connection carries"), "{}", refused.message);
+    let asked = SqlQuery { handle, text: asked.text, values: Vec::new(), want: "all".to_owned() };
+    assert_eq!(client.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err().code, "limit");
 }

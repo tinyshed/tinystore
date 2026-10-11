@@ -64,9 +64,6 @@ start on sqldb, kv and jobs.
 Decided or built for the Go engines, and in no book or phase of this plan
 yet; each is decided again, in its order, once blobs are on the wire:
 
-- C8: an SQL answer as typed columns rather than rows, `db.columns`, once a
-  round measures it against `db.all`: a null mask beside the values, and
-  integers as numbers or bigints as the call says.
 - B2: histograms and exact quantiles; B5: aggregates over records; B6: the
   names a store holds, for a query builder; B11: a live tail of records — for
   the records and metrics books, before phase 3.
@@ -75,7 +72,12 @@ Closed: C2, the `read` token; B10, a memo, which `once` with a short `keep`
 is, across processes too; C9, values kept encrypted, which an encrypted
 bucket keeps ([api/kv.md](api/kv.md#encrypted-buckets)): the Rust core,
 protocol 2 and the Bun SDK, one key a store, keys by name and a change of
-key left for when someone needs them.
+key left for when someone needs them; C8, an SQL answer by its columns,
+`db.columns` ([api/sqldb.md](api/sqldb.md#by-columns)), once a smoke measured
+it against `db.all`: the core reads rows straight into columns, protocol 2
+carries int64s and float64s with a bit a `NULL`, and the Bun SDK gives
+arrays of what `all` gives; typed arrays are left for when someone needs
+them.
 
 ## 3. records and metrics
 

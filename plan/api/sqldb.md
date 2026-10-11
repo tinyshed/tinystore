@@ -28,6 +28,7 @@ as every other handle does.
 | database                       | an SQLite file of the application's own, `sql/<name>.db`, opened with its migrations      |
 | migrations                     | `.sql` files, each applied once in the order of their names, checked at every open        |
 | `all`, `one`, `scalar`, `each` | the rows, one row or none, one value, the rows one at a time: what a statement gives back |
+| `columns`                      | what `all` gives, as an array a column: a chart's points                                  |
 | `exec`                         | a write, durable when it returns; writes from many callers share a commit                 |
 | table                          | a typed handle on one table: insert a row, and query it without writing SQL text          |
 | `where`, `sql.or`              | a query's conditions: equal values, or a piece of SQL with its values                     |
@@ -151,13 +152,70 @@ let open: i64 = db.scalar(sql!("select count(*) from notes where done = 0"))?;
   the value as SQL answers it, `null` for `max` over no rows, and is `invalid`
   for a query that answers no row.
 - `all` holds its rows in memory, at most 64 MiB of them, past which it is
-  `limit` saying to use `each`. `each` reads a row at a time from one snapshot,
+  `limit` saying to use `each`; so does [`columns`](#by-columns). `each` reads a row at a time from one snapshot,
   held at most five seconds; an export longer than that pages by key.
 - TypeScript gives a row's values as SQLite keeps them: `done` is `0` or `1`,
   `tags` the JSON's text. A [table](#tables) turns them into what the program
   means.
 - In Rust every call blocks its thread, as file access does; async code runs it
   through `spawn_blocking`. The SDKs' calls never block their event loop.
+
+### By columns
+
+```ts
+type Sample = { ts: number; cpu: number | null }
+
+const rows = await db.all<Sample>`select ts, cpu from samples where host = ${host} order by ts`
+// [{ ts: 1000, cpu: 0.5 }, { ts: 2000, cpu: null }, …]
+
+const { ts, cpu } = await db.columns<Sample>`select ts, cpu from samples where host = ${host} order by ts`
+// ts: [1000, 2000, …]   cpu: [0.5, null, …]
+plot.setData([ts, cpu])                       // a chart takes them as they are
+```
+
+`columns` gives what `all` gives, turned: an array a column, by the column's
+name, where `all` gives an object a row. It is for rows by the thousand, a
+chart's points or a report's measures: they come about twice as fast, and
+nobody turns rows into columns after.
+
+- **Every value is what `all` gives**: a number, a `bigint` for an integer
+  past 2^53, a string, a `Uint8Array`, and `null` for a `NULL`. A column is
+  an array whatever it holds and however many rows came: no row gives `[]`
+  for each column.
+- **The type is the row's**, the one `all` takes: `columns<Sample>` is
+  `{ ts: number[]; cpu: (number | null)[] }`.
+- **A column's name is its key.** Name an expression, `avg(cpu) as cpu`, or
+  its key is `avg(cpu)`. Two columns of one name are `invalid`, as one object
+  cannot hold both.
+- The statement, its values, a write with `returning` and the 64 MiB of
+  values are `all`'s. `columns` is a database's call: a transaction and a
+  table's query give rows.
+
+Smoke, not a research round, 11 October: a Ryzen 7 7700, Windows 11, Bun
+1.4.2, release build, medians of 15 calls after 3, run twice, `select ts, a,
+b, c` of a table `(ts integer, a real, b real, c real)`:
+
+| Rows    | The store       | `all`     | `columns` |
+|---------|-----------------|-----------|-----------|
+| 20,000  | in the process  | 8.7 ms    | 3.4 ms    |
+| 200,000 | in the process  | 79–83 ms  | 43–46 ms  |
+| 20,000  | a private child | 11 ms     | 4.8 ms    |
+| 200,000 | a private child | 98–101 ms | 49–50 ms  |
+
+With two columns of text among four, 200,000 rows took 123 to 130 ms and 84
+to 92 ms in the process: text costs `columns` what it costs `all`. SQLite
+alone steps the 200,000 rows in 22 ms. What `columns` saves is the keeping of
+each row's values in the core, which reads a number straight into its
+column's eight bytes, a cell a value in the message, and an object a row in
+JavaScript.
+
+The protocol carries a column of `INTEGER`s alone as int64s and one of
+`REAL`s alone as float64s, a bit a `NULL`, and any other as its values
+([protocol.md](../protocol.md#sql)); the Bun SDK reads them into arrays.
+Python and Go get `columns` with their SDKs, each as its own arrays. Rust has
+none: `db.all::<(i64, f64)>` reads rows into the program's types with no
+object and no MessagePack between, which is most of what `columns` saves the
+others.
 
 ## Write
 
@@ -684,7 +742,7 @@ was applied`.
 | What                                 | Bound                                                          |
 |--------------------------------------|----------------------------------------------------------------|
 | a database's name                    | `[a-z0-9][a-z0-9_-]{0,63}`                                     |
-| rows `all` holds                     | 64 MiB of values, or the store's memory                        |
+| rows `all` or `columns` holds        | 64 MiB of values, or the store's memory                        |
 | an `each` snapshot                   | 5 seconds                                                      |
 | a transaction                        | 5 seconds                                                      |
 | writes in one shared commit          | 1,024, or 8 MiB                                                |
@@ -784,6 +842,30 @@ another constraint is `invalid`. The newcomer read eleven of the fourteen
 sites at four of five or better; the three below that were the bare call
 inside a transaction, how many statements an `include` runs, and the Rust
 `include`, whose list is found by its field's name.
+
+## Fourth check, 11 October
+
+Three reviewers with no context read `db.columns` as it was first built, a
+`Float64Array` for a column of numbers with `NaN` for a `NULL`, and an array
+for any other: a free review, a newcomer's reading of three call sites, and a
+blind choice among spellings.
+
+| It found                                                                                                                                        | Change                                                                   |
+|-------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
+| a column's container changed with its data: a text among numbers, an integer past 2^53, an expression over no rows; two of three named it first | every column is an array of what `all` gives; measured, it costs no time |
+| a `NULL` was `NaN` in one column and `null` in the next, and `null * 100` is 0                                                                  | a `NULL` is `null`, as `all` gives it                                    |
+| `JSON.stringify` writes a `Float64Array` as an object                                                                                           | gone with the typed array                                                |
+| the type named containers, `{ ts: Float64Array }`, which the data could belie                                                                   | the type is the row's, as `all` takes it                                 |
+| an expression without `as` has a key nobody guesses                                                                                             | said in the book                                                         |
+| a number beside a `bigint` in one column, as `all` gives an integer past 2^53                                                                   | kept: it is `all`'s value, and rounding it would change an id unseen     |
+
+Read right and kept, in the blind choice: `db.columns` (over `arrays`,
+`byColumn`, `all.columns` and `series`), and an object by the columns' names
+(over a list in the statement's order, names beside a list, and a `Map`). The
+blind choice also put `NaN` in a `Float64Array` first for a `NULL` among
+numbers, since a `NaN` shows in a sum where `null` reads as 0: a
+`Float64Array` on request, which the protocol already carries, is the
+owner's to ask for.
 
 ## Open
 

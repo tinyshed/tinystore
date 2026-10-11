@@ -228,6 +228,87 @@ for (const way of ways) {
 			expect((await app.all`select id from notes where author_id = 3`).length).toBe(3000)
 		})
 
+		test('a statement gives by its columns what it gives by its rows', async () => {
+			await app.exec`create table samples (ts integer not null, cpu real, hits integer, host text, raw blob) strict`
+			await app.batch([
+				sql`insert into samples values (${1000}, ${0.5}, ${7}, ${'a'}, ${new Uint8Array([1])})`,
+				sql`insert into samples values (${2000}, ${null}, ${null}, ${null}, ${null})`,
+				sql`insert into samples values (${3000}, ${2.5}, ${9}, ${'c'}, ${null})`,
+			])
+			interface Sample {
+				ts: number
+				cpu: number | null
+				hits: number | null
+				host: string | null
+				raw: Uint8Array | null
+				either: number
+			}
+
+			const read = sql`select ts, cpu, hits, host, raw, coalesce(cpu, 0) as either from samples order by ts`
+			const columns = await app.columns<Sample>(read)
+			expect<unknown>(columns).toEqual({
+				ts: [1000, 2000, 3000],
+				cpu: [0.5, null, 2.5],
+				hits: [7, null, 9],
+				host: ['a', null, 'c'],
+				raw: [new Uint8Array([1]), null, null],
+				// an INTEGER beside REALs
+				either: [0.5, 0, 2.5],
+			})
+			const rows = await app.all<Sample>(read)
+			for (const [name, column] of Object.entries(columns)) {
+				expect(Array.isArray(column)).toBe(true)
+				expect<unknown>(column).toEqual(rows.map(row => row[name as keyof Sample]))
+			}
+
+			const written =
+				await app.columns`insert into samples (ts, cpu) values (${4000}, ${4.5}) returning ts, cpu`
+			expect<unknown>(written).toEqual({ ts: [4000], cpu: [4.5] })
+			const twice = await caught(app.columns`select ts, ts from samples`)
+			expect(twice).toBeInstanceOf(InvalidError)
+			expect((twice as Error).message).toContain('two columns named ts')
+		})
+
+		test('a column of no value is an array as any other, and an integer past 2^53 a bigint', async () => {
+			const none = await app.columns`select ts, cpu, host, cpu + 1 as more from samples where 0`
+			expect<unknown>(none).toEqual({ ts: [], cpu: [], host: [], more: [] })
+			const nulls =
+				await app.columns`select cpu, hits, host, cpu + 1 as more from samples where ts = 2000`
+			expect<unknown>(nulls).toEqual({ cpu: [null], hits: [null], host: [null], more: [null] })
+
+			const edges = await app.columns`
+				select 9007199254740991 as most, -9007199254740991 as least, -9007199254740992 as below`
+			expect<unknown>(edges).toEqual({
+				most: [Number.MAX_SAFE_INTEGER],
+				least: [Number.MIN_SAFE_INTEGER],
+				below: [-9007199254740992n],
+			})
+			const late = sql`select case ts when 1000 then null when 3000 then 9007199254740993 else ts end as late
+				from samples where ts <= 3000 order by ts`
+			expect<unknown>(await app.columns(late)).toEqual({ late: [null, 2000, 9007199254740993n] })
+			expect((await app.all(late)).map(row => row.late)).toEqual([null, 2000, 9007199254740993n])
+		})
+
+		test('columns past one message come in parts, and are whole', async () => {
+			const rows = 150_000
+			const columns = await app.columns<{
+				i: number
+				half: number
+				even: number | null
+				name: string
+			}>`with recursive n(i) as (select 1 union all select i + 1 from n where i < ${rows})
+				select i, i / 2.0 as half, iif(i % 2, null, i) as even, 'r' || i as name from n`
+			expect(Object.values(columns).map(column => column.length)).toEqual([rows, rows, rows, rows])
+			for (const row of [0, 1, 77, 65_535, 65_536, 149_998, 149_999]) {
+				expect(columns.i[row]).toBe(row + 1)
+				expect(columns.half[row]).toBe((row + 1) / 2)
+				expect(columns.even[row]).toBe(row % 2 === 0 ? null : row + 1)
+				expect(columns.name[row]).toBe(`r${row + 1}`)
+			}
+			// no row was left unfilled between two parts
+			expect(columns.half.findIndex(half => half === undefined)).toBe(-1)
+		})
+
 		test('a query past its bound is a limit, which names the bound', async () => {
 			const error = await caught(app.all`select zeroblob(70 * 1024 * 1024)`)
 			expect(error).toBeInstanceOf(LimitError)

@@ -4446,7 +4446,7 @@ impl Message for SqlText {
     }
 }
 
-/// A write on a database.
+/// A statement on a database: a write, or a read answered by its columns.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlStatement {
@@ -4620,6 +4620,150 @@ impl Message for SqlRows {
     fn is_zero(&self) -> bool {
         self.columns.is_empty()
             && self.rows.is_empty()
+    }
+}
+
+/// A column of a statement's rows, a part of it a message, as one of three. A
+/// column of INTEGERs alone goes as integers and one of REALs alone as reals,
+/// 8 bytes a row, little end first; where a row holds NULL its bit of nulls is
+/// set, and its value is 0 among integers and a NaN among reals, which SQLite
+/// keeps none of. Any other column goes as values: text, blobs, and INTEGERs
+/// beside REALs, neither read as the other.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlColumn {
+    pub(crate) name: String,
+    /// An int64 a row.
+    pub(crate) integers: Option<Vec<u8>>,
+    /// A float64 a row.
+    pub(crate) reals: Option<Vec<u8>>,
+    /// A bit a row, a byte's lowest first, set where the row holds NULL; absent when none does.
+    pub(crate) nulls: Option<Vec<u8>>,
+    pub(crate) values: Option<Vec<Cell>>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlColumn {
+    const NAME: &'static str = "sql.Column";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.integers = Some(codec::bin(r, "integers")?),
+                3 => message.reals = Some(codec::bin(r, "reals")?),
+                4 => message.nulls = Some(codec::bin(r, "nulls")?),
+                5 => message.values = Some(codec::list(r, "values", codec::cell)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(integers) = &self.integers {
+            map.field(out, 2);
+            codec::write_bin(out, integers);
+        }
+        if let Some(reals) = &self.reals {
+            map.field(out, 3);
+            codec::write_bin(out, reals);
+        }
+        if let Some(nulls) = &self.nulls {
+            map.field(out, 4);
+            codec::write_bin(out, nulls);
+        }
+        if let Some(values) = &self.values {
+            map.field(out, 5);
+            codec::write_list(out, values, codec::write_cell);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.integers.as_ref().map_or(0, |integers| 1 + 5 + integers.len())
+            + self.reals.as_ref().map_or(0, |reals| 1 + 5 + reals.len())
+            + self.nulls.as_ref().map_or(0, |nulls| 1 + 5 + nulls.len())
+            + self.values.as_ref().map_or(0, |values| 1 + codec::list_size(values, codec::cell_size))
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.integers.is_none()
+            && self.reals.is_none()
+            && self.nulls.is_none()
+            && self.values.is_none()
+    }
+}
+
+/// Rows a statement gave, by their columns, a part of them a message: every
+/// part holds every column, in the statement's order and as the same one of
+/// three, for the same rows.
+#[cfg(feature = "sql")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SqlColumns {
+    /// The rows of this part.
+    pub(crate) rows: u64,
+    /// The rows of every part.
+    pub(crate) total: u64,
+    pub(crate) columns: Vec<SqlColumn>,
+}
+
+#[cfg(feature = "sql")]
+impl Message for SqlColumns {
+    const NAME: &'static str = "sql.Columns";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.rows = codec::uint(r, "rows")?,
+                2 => message.total = codec::uint(r, "total")?,
+                3 => message.columns = codec::list(r, "columns", codec::message::<SqlColumn>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.rows != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.rows);
+        }
+        if self.total != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.total);
+        }
+        if !self.columns.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.columns, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 1 + codec::list_size(&self.columns, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.rows == 0
+            && self.total == 0
+            && self.columns.is_empty()
     }
 }
 
@@ -5084,6 +5228,8 @@ pub(crate) mod method {
     pub(crate) const SQL_BATCH: u16 = 0x0304;
     #[cfg(feature = "sql")]
     pub(crate) const SQL_TX: u16 = 0x0305;
+    #[cfg(feature = "sql")]
+    pub(crate) const SQL_COLUMNS: u16 = 0x0306;
 
     /// Who may call a method: the word its schema line starts with.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5212,6 +5358,8 @@ pub(crate) mod method {
             SQL_BATCH => Some(Access::Write),
             #[cfg(feature = "sql")]
             SQL_TX => Some(Access::Write),
+            #[cfg(feature = "sql")]
+            SQL_COLUMNS => Some(Access::Read),
             _ => None,
         }
     }
@@ -5337,6 +5485,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("sql.batch", 0x0304, "call"),
     #[cfg(feature = "sql")]
     ("sql.tx", 0x0305, "exchange"),
+    #[cfg(feature = "sql")]
+    ("sql.columns", 0x0306, "download"),
 ];
 
 /// A body of the message `name` read and written again, and the size the message
@@ -5481,6 +5631,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "sql.Query" => SqlQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Rows" => SqlRows::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Column" => SqlColumn::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "sql")]
+        "sql.Columns" => SqlColumns::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Done" => SqlDone::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]

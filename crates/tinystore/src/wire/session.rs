@@ -452,7 +452,7 @@ impl Shared {
             #[cfg(feature = "jobs")]
             Route::Watch => self.watch(input, stream, &body),
             #[cfg(feature = "sql")]
-            Route::Download => self.download(input, stream, body),
+            Route::Download => self.download(input, stream, method, body),
             #[cfg(feature = "sql")]
             Route::Transaction => self.transaction(input, stream, &body),
             #[cfg(feature = "blobs")]
@@ -532,7 +532,7 @@ impl Shared {
     /// one message, else a RESPONSE and their parts as DATA within the
     /// client's credit.
     #[cfg(feature = "sql")]
-    fn download(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
+    fn download(self: &Arc<Self>, input: &Input, stream: u32, called: u16, body: Vec<u8>) {
         let link = self.sql_link(input, stream);
         let shared = Arc::clone(self);
         self.workers.run(Box::new(move || {
@@ -546,7 +546,8 @@ impl Shared {
                 Err(failure) => answering.answer(stream, Err(failure)),
             };
             let queued = guarded(|| {
-                sql::query(&shared.sql, &body, &link, shared.read_only.load(Ordering::Relaxed), done);
+                let read_only = shared.read_only.load(Ordering::Relaxed);
+                sql::query(&shared.sql, (called, &body), &link, read_only, done);
                 Ok(())
             });
             if let Err(failure) = queued {

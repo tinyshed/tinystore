@@ -38,6 +38,7 @@ import {
 	methods,
 	SqlBatch,
 	SqlBatched,
+	SqlColumns,
 	SqlDone,
 	SqlOpen,
 	SqlQuery,
@@ -49,6 +50,9 @@ import {
 } from './wire/protocol.ts'
 
 export type { SqlArg, SqlValue }
+
+/** A row type's columns: an array of each of its fields. */
+export type Columns<T> = { [K in keyof T]: T[K][] }
 
 /** A row as SQLite gave it, by its columns' names. */
 export type Row = Record<string, SqlValue>
@@ -534,6 +538,92 @@ function joined(parts: Uint8Array[]): Answered {
 	return answered
 }
 
+/** The integers a number holds exactly reach 2^53 - 1: 21 bits above an int64's low 32. */
+const HIGH_MOST = 0x1fffff
+
+/**
+ * A statement's rows by their columns, from the parts of its answer: each
+ * column the values `all` gives, in an array sized at the first part. A part
+ * packs a column of numbers eight bytes a row, little-endian, as a typed
+ * array of every machine Bun and Node run on is.
+ */
+function columnsOf(parts: readonly Uint8Array[]): Record<string, SqlValue[]> {
+	const names: string[] = []
+	const columns: SqlValue[][] = []
+	let at = 0
+	for (const body of parts) {
+		const part = SqlColumns.decode(body)
+		for (const [index, held] of (part.columns ?? []).entries()) {
+			if (columns.length <= index) {
+				names.push(held.name ?? '')
+				columns.push(new Array(part.total ?? 0))
+			}
+			const into = columns[index] as SqlValue[]
+			if (held.reals !== undefined) {
+				takeReals(into, at, held.reals)
+			} else if (held.integers !== undefined) {
+				takeIntegers(into, at, held.integers, held.nulls)
+			} else {
+				const values = held.values ?? []
+				for (let row = 0; row < values.length; row++) {
+					into[at + row] = values[row] as SqlValue
+				}
+			}
+		}
+		at += part.rows ?? 0
+	}
+	if (new Set(names).size !== names.length) {
+		const twice = names.find((name, index) => names.indexOf(name) !== index)
+		throw new InvalidError(`two columns named ${twice}: name them apart with as`)
+	}
+	return Object.fromEntries(names.map((name, index) => [name, columns[index] as SqlValue[]]))
+}
+
+/**
+ * A copy of packed bytes that starts at 0 of its own buffer, as a view of
+ * wider elements needs; a Buffer's slice copies nothing.
+ */
+function aligned(packed: Uint8Array): ArrayBuffer {
+	return new Uint8Array(packed).buffer
+}
+
+/**
+ * Takes a part's float64s into a column, from its row `at`. A NaN among them
+ * is a NULL: SQLite keeps no NaN, and the server writes one where a row
+ * holds NULL.
+ */
+function takeReals(into: SqlValue[], at: number, reals: Uint8Array) {
+	const floats = new Float64Array(aligned(reals))
+	for (let row = 0; row < floats.length; row++) {
+		const real = floats[row] as number
+		into[at + row] = Number.isNaN(real) ? null : real
+	}
+}
+
+/**
+ * Takes a part's int64s into a column, from its row `at`, each as `all`
+ * gives an integer: a number, or a bigint past what a number holds exactly.
+ */
+function takeIntegers(
+	into: SqlValue[],
+	at: number,
+	integers: Uint8Array,
+	nulls: Uint8Array | undefined,
+) {
+	const words = new Int32Array(aligned(integers))
+	for (let row = 0; row < words.length / 2; row++) {
+		const low = (words[2 * row] as number) >>> 0
+		const high = words[2 * row + 1] as number
+		const exact =
+			high <= HIGH_MOST && (high > -HIGH_MOST - 1 || (high === -HIGH_MOST - 1 && low !== 0))
+		if (nulls !== undefined && (((nulls[row >> 3] as number) >> (row & 7)) & 1) === 1) {
+			into[at + row] = null
+		} else {
+			into[at + row] = exact ? high * 0x1_0000_0000 + low : (BigInt(high) << 32n) | BigInt(low)
+		}
+	}
+}
+
 function doneOf(done: {
 	changes?: number | undefined
 	lastInsertRowid?: bigint | undefined
@@ -696,6 +786,21 @@ export class Database implements Runner, Home {
 	}
 
 	/**
+	 * What `all` gives, by its columns: an array a column where `all` gives
+	 * an object a row, for rows by the thousand, a chart's points. It comes
+	 * faster, and a chart takes it as it is.
+	 *
+	 *     const { ts, cpu } = await db.columns<Sample>`select ts, cpu from samples where host = ${host} order by ts`
+	 */
+	async columns<T = Row>(...statement: Statement): Promise<Columns<T>> {
+		const piece = statementOf(statement)
+		const parts = await this.#answered(piece, methods['sql.columns'], handle =>
+			SqlStatement.encode({ handle, text: piece.text, values: [...piece.values] }),
+		)
+		return columnsOf(parts) as Columns<T>
+	}
+
+	/**
 	 * The rows a statement gives, one at a time as their parts arrive: an
 	 * export that holds one part, not every row. The server reads them from
 	 * one snapshot, at most 64 MiB.
@@ -832,18 +937,24 @@ export class Database implements Runner, Home {
 	}
 
 	async rows(statement: Sql, want: Want): Promise<Answered> {
+		const parts = await this.#answered(statement, methods['sql.query'], handle =>
+			SqlQuery.encode({ handle, text: statement.text, values: [...statement.values], want }),
+		)
+		return joined(parts)
+	}
+
+	/** The parts of a statement's answer, all of them: a read may be asked again of another connection, a write not. */
+	async #answered(
+		statement: Sql,
+		method: number,
+		asked: (handle: number) => Uint8Array,
+	): Promise<Uint8Array[]> {
 		this.#refuseAround('a statement')
 		const idempotence: Idempotence = mayWrite(statement.text) ? 'write' : 'read'
 		return this.#link.run(idempotence, async connection => {
-			const handle = await this.handle(connection)
-			const body = SqlQuery.encode({
-				handle,
-				text: statement.text,
-				values: [...statement.values],
-				want,
-			})
-			const { items, trailer } = await download(connection, methods['sql.query'], body)
-			return joined([...items, trailer])
+			const body = asked(await this.handle(connection))
+			const { items, trailer } = await download(connection, method, body)
+			return [...items, trailer]
 		})
 	}
 
