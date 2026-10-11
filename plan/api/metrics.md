@@ -13,7 +13,8 @@ The Go engine at `e81a050`, its guides in `docs/metrics/` and research's
 ports: its promises are GATES.md's, its storage was measured. Dashbin's asks
 for metrics are in it: B1, B2, B3, B4, B6, B7, B12 and B14 with the engine,
 A10 with the store's own metrics, and C4, C5 and C6 as the shapes they take
-later.
+later. How the engine keeps these promises is
+[metrics-engine.md](../metrics-engine.md).
 
 [design]: https://github.com/tinyshed/research/blob/main/tinystore/design/metrics.md
 [contract]: https://github.com/tinyshed/research/blob/main/tinystore/design/aggregate-contract.md
@@ -79,17 +80,22 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   more labels; each set of labels is a series of its own, and the same
   labels in any order are one series. A label's value is text: a number or a
   boolean is kept as its text, `200` as `"200"`.
-- A call never waits and never writes: it changes a number in memory. Every
-  15 seconds, at `flush()` and when the store closes, the instruments send
-  what changed since they last sent, and the store adds it to the totals it
-  keeps and writes them. A crash of the program loses what it had not sent,
-  15 seconds at most.
+- A call never waits and never writes: it changes a number in memory. The
+  instruments send what changed to the store, which adds it to the totals it
+  keeps and writes them every 15 seconds, at `flush()` and when it closes; a
+  crash loses at most the last 15 seconds.
+- A value an instrument is given is a finite number: `NaN` or an infinity
+  throws `invalid` at once, where the program made it, rather than failing
+  every average of its bucket for as long as the name keeps it. `ingest`
+  keeps them, bit for bit.
 - A counter's `inc()` adds one and `add(n)` adds `n`; a negative `n` throws
   `invalid` at once. The store keeps a counter's total, and a timer's count,
   sum and buckets, so that processes sharing a store, through a sidecar or a
   server, count into one series: four workers counting
   `http_requests_total{route="/notes"}` count every request once. A program
-  that restarts loses only what it had not sent.
+  that restarts loses only what it had not sent. `add(0)` makes a set of
+  labels known with a total of zero, so that a chart shows 0 rather than
+  nothing before the first count.
 - Each run of a total starts with a zero written at the moment it began, the
   store's start or a series sent again after an hour unused, so that a reset
   is seen even when the new count already passed the old: `2` at 11:00, `0`
@@ -106,8 +112,9 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   own, `instance`, and an aggregate adds or ranks them as it asks.
 - A timer keeps how many durations it measured and their sum, in
   milliseconds, and the longest of those measured since its last write.
-  `measure` runs a function, returns or throws what it does, and records how
-  long it took either way; `record` takes a duration measured elsewhere, a
+  `measure` runs a function, awaits what it returns, returns or throws what it
+  does, and records how long it took either way; `record` takes a duration
+  measured elsewhere, a
   number of milliseconds as `performance.now()` counts them, where Python,
   Go and Rust take their language's durations; `start()` gives a timing that
   records when it stops, for a span that is no one function.
@@ -127,6 +134,9 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   gives 1, 2, 4 … 8192: the start, the factor and how many.
 - The store adds the bound `+Inf`, so a duration past the last bound is
   counted above it rather than lost.
+- A bound is written as the shortest text that reads back as the same
+  number: `5` whether a program wrote `5` or `5.0`, so that two languages
+  write one series, and `+Inf`.
 - With buckets a timer also writes `http_request_ms_bucket`, one series a
   bound with the label `le`, each counting the durations at most that bound,
   as Prometheus writes a histogram's.
@@ -298,12 +308,15 @@ let failing = stats.query().name("http_requests_total").since(Duration::from_hou
 
 - A query is data: the same object is kept in a dashboard's settings, sent
   over the wire, and read the same way in every language.
+- A number or a boolean in `where` is its text, as in `with`: `{ status: 200
+  }` finds `"200"`.
 - A series comes back with its name, its labels and its samples as two
   columns: `times`, unix milliseconds in a `Float64Array`, which a chart and
-  `new Date` take, and `values`, a `Float64Array` that keeps every value's
-  bits. Python gives the same two arrays; Go and Rust a slice of samples, one
-  allocation a series. A NaN in `values` is a value that was stored, never a
-  missing one.
+  `new Date` take, and `values`, a `Float64Array` whose bytes keep every
+  value's bits. Python gives the same two arrays; Go and Rust a slice of
+  samples, one allocation a series. A NaN in `values` is a value that was
+  stored, never a missing one; read out as a JavaScript number it may lose
+  its payload, as the language allows, while the array's bytes keep it.
 - Every condition holds. A query needs a `name`, or a label's value, a list
   or a prefix in `where`, to find its series: `not` alone is `invalid`, since
   it would read every series. There are no regular expressions.
@@ -379,10 +392,14 @@ let traffic = stats.query().name("http_requests_total").since(Duration::from_hou
 ### Buckets add up to the range
 
 ```text
-a counter that grows by 1 a second, sampled every 15 s for an hour
+a counter that starts at 10:00 and grows by 1 a second, sampled every 15 s, read 10:00 to 11:00
 1h buckets   3585
 5m buckets   285 + 300 + 300 + … + 300 = 3585
 1m buckets    45 +  60 +  60 + … +  60 = 3585
+
+one already running, with a sample at 09:59:45: the first bucket takes its step from it
+1h buckets   3600
+5m buckets   300 + 300 + 300 + … + 300 = 3600
 ```
 
 - An increase, a rate and a delta count each step between two samples in
@@ -483,7 +500,7 @@ const cpu = await store.metrics.latest({ name: 'cpu', since: '5m' })   // [{ nam
 ```ts
 const plan = await store.metrics.explain({ name: 'cpu', since: '30d', every: '1h', op: 'avg' })
 // { series: 40, bytes: 1_310_720, decoded: 960, exceeds: undefined }
-// whole hours the store has packed answer from their summaries and decode nothing
+// blocks cut at whole hours answer from their summaries; only samples not packed yet are decoded
 
 const heavy = await store.metrics.explain({ name: 'cpu', since: '30d', every: '1h', op: 'p95' })
 // { series: 40, bytes: 14_680_064, decoded: 6_912_000, exceeds: { limit: 'samples decoded', wanted: 6_912_000, bound: 1_048_576 } }
@@ -494,6 +511,12 @@ const heavy = await store.metrics.explain({ name: 'cpu', since: '30d', every: '1
   samples it decodes; and in `exceeds`, the bound it would stop at, as the
   `limit` error would name it. It reads what the file keeps about each
   series and decodes no sample.
+- The store cuts a series' packed samples into blocks where whole hours
+  begin, or the longer spans that divide a day for a series that writes less
+  often, and each block keeps an exact summary. A bucket that holds whole
+  blocks answers from their summaries, so the hours and days a dashboard
+  draws over a month decode almost nothing; a bucket finer than a block, and
+  a percentile always, decode its samples.
 
 ## What a store holds
 
@@ -552,9 +575,12 @@ metrics::histogram!("http_request_ms").record(started.elapsed().as_secs_f64() * 
   logger's layer does `tracing`'s: a counter is a counter, a gauge a gauge,
   and a histogram a histogram of its own unit, which `describe_histogram!`
   gives, with the buckets the recorder was given for its name. A process has
-  one global recorder, which the crate sets once.
+  one global recorder, which the crate lets be set once: a program that
+  opens two stores, as a test may, records into the first.
 - A program that uses the crate calls the store's handle something else
   than `metrics`, as this book's examples do, so that the two read apart.
+- A timing from `start()` must be kept, and the compiler says so, since
+  `#[must_use]` marks it: `let _ = latency.start()` would record at once.
 
 ## Tests
 
@@ -572,7 +598,7 @@ A store opened with `background: false` writes instruments only at
 
 ```ts
 const text = await (await fetch('http://db-1:9100/metrics')).text()
-await store.metrics.ingest(text, { format: 'prometheus', labels: { instance: 'db-1' }, keep: '7d' })
+const { samples, skipped } = await store.metrics.ingest(text, { format: 'prometheus', labels: { instance: 'db-1' }, keep: '7d' })
 ```
 
 - The text Prometheus' exporters serve, and OpenMetrics': a counter is a
@@ -583,8 +609,11 @@ await store.metrics.ingest(text, { format: 'prometheus', labels: { instance: 'db
   `labels` are added to every series, and one the text gives as well is
   `invalid`; a sample without a time is taken at `at`, now unless given; and
   `keep` is every name's in it.
-- A summary's quantiles and a native histogram are `invalid`: the first is
-  another program's estimate, the second needs a format of its own.
+- A summary's quantiles are another program's estimates and a native
+  histogram needs a format of its own: both are left out and counted in
+  `skipped`, rather than refusing the scrape, since every Go program's
+  `go_gc_duration_seconds` is a summary. A summary's `_sum` and `_count` are
+  kept as counters.
 - After the engine: the parser, then Prometheus' remote write in
   `tinystore serve`.
 
@@ -619,14 +648,14 @@ const batch = await store.metrics.poll(cursor)   // { series, cursor, expired }
 
 ## Errors
 
-| Error                | When                                                                                                                                                                                                                                                      | What to do                                                   |
-|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
-| `invalid`            | a bad name, label or option; a name given two kinds, two `keep`s or two sets of buckets; a negative `add` to a counter; an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket with a NaN or an infinity; a counter below zero | fix the call, or ask another `op`                            |
-| `too old`, `too new` | a sample older than its name keeps or behind what its series has packed, or more than ten minutes ahead                                                                                                                                                   | send the time it was taken, within the window                |
-| `limit`              | a series past 100,000; an ingest past its bound; a query past a bound, which it names                                                                                                                                                                     | ask for less: a shorter range, a wider `every`, fewer series |
-| `corrupt`            | a read over a series whose bytes changed                                                                                                                                                                                                                  | `damaged`, then `delete`                                     |
-| `suspended`          | an ingest into a damaged series                                                                                                                                                                                                                           | `delete` it                                                  |
-| `closed`             | the store closed                                                                                                                                                                                                                                          | open it again                                                |
+| Error                | When                                                                                                                                                                                                                                                                                              | What to do                                                   |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
+| `invalid`            | a bad name, label or option; a name given two kinds, two `keep`s or two sets of buckets; a negative `add` to a counter, a NaN or an infinity to any instrument; an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket with a NaN or an infinity; a counter below zero | fix the call, or ask another `op`                            |
+| `too old`, `too new` | a sample older than its name keeps or behind what its series has packed, or more than ten minutes ahead                                                                                                                                                                                           | send the time it was taken, within the window                |
+| `limit`              | a series past 100,000; an ingest past its bound; a query past a bound, which it names                                                                                                                                                                                                             | ask for less: a shorter range, a wider `every`, fewer series |
+| `corrupt`            | a read over a series whose bytes changed                                                                                                                                                                                                                                                          | `damaged`, then `delete`                                     |
+| `suspended`          | an ingest into a damaged series                                                                                                                                                                                                                                                                   | `delete` it                                                  |
+| `closed`             | the store closed                                                                                                                                                                                                                                                                                  | open it again                                                |
 
 Every error names the series as Prometheus prints it, and the sample:
 `metrics cpu{host="web-1"}: sample at 2026-10-11T09:00:00Z: too old`. An
@@ -785,6 +814,36 @@ timer's totals are the store's, which every process adds to, since several
 workers through one sidecar are how a TinyStore program commonly runs, and
 their totals written over each other would be wrong without a word.
 
+## Free review, 11 October
+
+A third Haiku agent reviewed the first draft as a developer choosing a store
+for a service with dashboards. Half of what it found the rounds above had
+already changed: a timer's percentile as `lower` and `upper`, `gap`, a run's
+zero, `explain`'s numbers, a group without `by`. Of the rest:
+
+| It found                                                                         | What the book does                                                                                      |
+|----------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| an hourly panel over a day decodes every sample, since a block straddles hours   | the store cuts blocks where whole hours begin, so a bucket of whole blocks answers from their summaries |
+| `gauge.set(NaN)` after a division by zero fails every average of its bucket      | an instrument refuses a NaN or an infinity where it is given; `ingest` keeps them                       |
+| `go_gc_duration_seconds` is a summary, so a Go program's scrape would be refused | a summary's quantiles and a native histogram are left out and counted, a summary's sums kept            |
+| `5` from TypeScript and `5.0` from Python as two `le`                            | a bound is written as the shortest text of its number                                                   |
+| `where: { status: 200 }` finding nothing                                         | a number in `where` is its text, as in `with`                                                           |
+| 3585 holds only for a counter that starts with the range                         | both cases are shown                                                                                    |
+| a NaN's payload read out of a `Float64Array`                                     | said: the bytes keep it, a JavaScript number may not                                                    |
+| `let _ = latency.start()` in Rust records at once                                | `#[must_use]`                                                                                           |
+| a counter with labels nobody counted yet shows nothing                           | `add(0)` makes it known with a zero                                                                     |
+
+Kept as they are, against it: the percentile's interpolation, where the
+comparison and the owner's reviewer chose bounds; `every`, records' word,
+where it chose `step`; `ingest` whole or not at all, as records' `append`
+is, where it asked for a partial success; rollups after `v0.1.0`, since
+blocks cut at whole hours answer a month of hours or days from summaries;
+`timer` beside `histogram`, the word a newcomer looks for when measuring
+time. Its asks for a second step of a group, a bucket still filling, a
+heatmap with its own bounds, retries that count as written, declared label
+names, NaN by IEEE's rules and a read past a damaged series are in the open
+list below.
+
 ## Open
 
 - Whether a timer has buckets unless told otherwise: a percentile then works
@@ -813,6 +872,23 @@ their totals written over each other would be wrong without a word.
 - An aggregate's buckets as columns, as `read`'s samples are.
 - A read past 100,000 samples as an iterator, a series at a time.
 - Prometheus' native histograms.
+- A second step for a group, `across`: the sum of each host's average, the
+  greatest of each series' rate, where a group now joins by the rule of its
+  `op`.
+- A newest bucket the store has not finished writing, `open: true`, whose
+  rate a chart would otherwise draw as a drop.
+- `op: 'bins'`, a heatmap with each bound's own count and numeric bounds,
+  where the book gives the cumulative counters by `le`.
+- An `ingest` sent again after a lost answer: a sample of the same time and
+  bits as one the store holds counted as written, rather than `too old`.
+- Label names an instrument declares, `labels: ['route', 'status']`, so that
+  a misspelt key is `invalid` where it is written.
+- A gauge's bucket holding a NaN or an infinity answered by IEEE's rules
+  and marked, rather than failing the whole answer.
+- A read that leaves a damaged series out and says so, rather than failing.
+- A step across a gap given as an amount of its own beside the bucket's
+  value, which a free review asked for, where the bucket now counts it and
+  says `gap`.
 
 ## Was, in Go
 
