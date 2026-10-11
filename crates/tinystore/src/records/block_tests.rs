@@ -101,3 +101,60 @@ fn a_thousand_lines_in_a_block_and_in_a_head_row() {
         each(head.body.len())
     );
 }
+
+/// What this engine's columns take of a corpus the Go engine dumped, a file
+/// a container of `{"at", "body"}` lines, cut into segments and blocks as
+/// packing cuts them: run by hand with `TINYSTORE_DUMP=<dir>` and
+/// `--release -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn a_corpus_by_its_columns() {
+    #[derive(serde::Deserialize)]
+    struct Line {
+        at: i64,
+        body: String,
+    }
+    let Ok(dir) = std::env::var("TINYSTORE_DUMP") else { return };
+    let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().map(|entry| entry.unwrap().path()).collect();
+    files.sort();
+    let mut codec = Codec::default();
+    let (mut records, mut plain, mut rows, mut blocks) = (0, 0, 0, 0);
+    let (mut times, mut bodies) = (0, 0);
+    let started = std::time::Instant::now();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let line = |line: &str| {
+            let line: Line = serde_json::from_str(line).unwrap();
+            NewEvent::new("log").message(&line.body).kept(line.at)
+        };
+        let events: Vec<Kept> = text.lines().map(line).collect();
+        for segment in events.chunks(16_384) {
+            let mut segment = segment.to_vec();
+            segment.sort_by_key(|event| event.at);
+            let (schema, ids) = Schema::of(&segment);
+            rows += schema.encode(&mut codec).unwrap().len();
+            let mut from = 0;
+            for events in super::super::pack::cut(&segment) {
+                let to = from + events.len();
+                let ids = [&ids.names[from..to], &ids.shapes[from..to], &ids.contexts[from..to]];
+                let row = encode(&schema, events, ids, &mut codec).unwrap();
+                let lengths = column_lengths(&schema, &row.body).unwrap();
+                (times, bodies, blocks) = (times + lengths[TIMES], bodies + lengths[MESSAGES], blocks + row.body.len());
+                from = to;
+            }
+            records += segment.len();
+            plain += segment.iter().map(|event| event.message.as_ref().map_or(0, String::len)).sum::<usize>();
+        }
+    }
+    let per = |bytes: usize| bytes as f64 / records as f64;
+    println!(
+        "rust records={records} plain={:.2} times={:.3} bodies={:.3} blocks={:.3} segment_rows={:.3} whole={:.3} took={:?}",
+        per(plain),
+        per(times),
+        per(bodies),
+        per(blocks),
+        per(rows),
+        per(blocks + rows),
+        started.elapsed()
+    );
+}

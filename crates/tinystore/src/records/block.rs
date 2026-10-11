@@ -214,6 +214,12 @@ pub(super) fn parse(schema: &Schema, body: &[u8], codec: &mut Codec) -> Result<V
     Ok(events)
 }
 
+/// The bytes of each column of a block, for a measurement.
+#[cfg(test)]
+fn column_lengths(schema: &Schema, body: &[u8]) -> Result<Vec<usize>> {
+    Ok(Opened::of(schema, body)?.columns.iter().map(|column| column.len()).collect())
+}
+
 /// The shape of each event, by its id in the segment.
 fn shapes_of<'s>(schema: &'s Schema, ids: &[i64]) -> Result<Vec<&'s Shape>> {
     let shape = |id: &i64| usize::try_from(*id).ok().and_then(|id| schema.shapes.get(id));

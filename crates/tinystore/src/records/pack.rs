@@ -205,7 +205,7 @@ fn ready(head: &Head, now: i64) -> bool {
 
 /// A segment's events cut into its blocks: each a block's events at most, or
 /// what they weigh; one event past the weight still makes a block.
-fn cut(events: &[Kept]) -> Vec<&[Kept]> {
+pub(super) fn cut(events: &[Kept]) -> Vec<&[Kept]> {
     let (mut blocks, mut from, mut weight) = (Vec::new(), 0, 0);
     for (index, event) in events.iter().enumerate() {
         let added = event.weight();
