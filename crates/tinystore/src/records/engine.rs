@@ -26,6 +26,10 @@ pub(crate) const KEEP: Duration = Duration::from_hours(14 * 24);
 pub(crate) const AHEAD: Duration = Duration::from_mins(10);
 /// How often maintenance runs: what streams no longer keep is removed.
 const MAINTENANCE: Duration = Duration::from_mins(1);
+/// How far behind its stream's newest event one may come and still be on
+/// time: a later one waits in the stream's late head, so that the segments
+/// of those on time stay narrow in time.
+pub(super) const LATENESS: Duration = Duration::from_secs(10);
 
 pub(crate) struct Records {
     pub(crate) file: File,
@@ -36,6 +40,10 @@ pub(crate) struct Records {
     pub(super) codec: Mutex<Codec>,
     /// Held by a pass of maintenance, so that two never pack the same rows.
     pub(super) maintaining: Mutex<()>,
+    /// The newest event waiting on time in each stream's head, by its id,
+    /// which tells whether the next event is late: read from the heads at
+    /// open, and forgotten once the head is packed empty.
+    pub(super) waiting: Mutex<HashMap<i64, i64>>,
     _claim: Claim,
 }
 
@@ -64,6 +72,7 @@ impl Engine for Records {
 }
 
 const SELECT_STREAMS: &str = "select id, name, keep from streams";
+const SELECT_WAITING: &str = "select stream, max(last_at) from heads where late = 0 group by stream";
 const INSERT_STREAM: &str = "insert into streams (name, keep) values (?1, ?2) returning id";
 const SET_KEEP: &str = "update streams set keep = ?2 where id = ?1";
 
@@ -80,6 +89,7 @@ impl Records {
             file.migrate("records", MIGRATIONS)?;
             let records = Arc::new(Records {
                 streams: Mutex::new(read_streams(&file)?),
+                waiting: Mutex::new(read_waiting(&file)?),
                 file,
                 memory: Arc::clone(store.memory()),
                 clock: store.clock(),
@@ -161,6 +171,16 @@ fn read_streams(file: &File) -> Result<HashMap<String, Stream>> {
         });
         let streams = streams.and_then(Iterator::collect);
         streams.map_err(|error| sql_error("read the streams", error))
+    })
+}
+
+/// The newest event waiting on time in each stream's head.
+fn read_waiting(file: &File) -> Result<HashMap<i64, i64>> {
+    let failed = |error| sql_error("read what the heads hold", error);
+    file.read(|connection| {
+        let mut select = connection.prepare(SELECT_WAITING).map_err(failed)?;
+        let waiting = select.query_map([], |row| Ok((row.get(0)?, row.get(1)?)));
+        waiting.and_then(Iterator::collect).map_err(failed)
     })
 }
 

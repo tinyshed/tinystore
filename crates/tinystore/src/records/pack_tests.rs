@@ -175,8 +175,63 @@ fn a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_w
     fixture.events("api").append("request", &()).unwrap();
     let records = fixture.records();
     let stream = records.stream("api").unwrap().id;
-    let packed =
-        Packed { rows: vec![1, 99], first: 0, last: 0, events: 1, weight: 1, shared: Vec::new(), blocks: Vec::new() };
-    assert_eq!(records.publish(stream, &packed).unwrap_err().kind(), crate::ErrorKind::Internal);
+    let made = Made { first: 0, last: 0, events: 1, weight: 1, shared: Vec::new(), blocks: Vec::new() };
+    let failed = records.publish((stream, false), (vec![1, 99], 1), &made).unwrap_err();
+    assert_eq!(failed.kind(), crate::ErrorKind::Internal);
     assert_eq!(lie(&fixture), (1, 0, 0));
+}
+
+/// Each head as head_state says it, and as its rows add up: its stream, late
+/// or on time, its events, their weight, and since when it waits.
+type Held = Vec<(i64, bool, i64, i64, i64)>;
+
+fn held(fixture: &Fixture) -> (Held, Held) {
+    let read = |sql: &str| {
+        let sql = sql.to_owned();
+        let read = move |connection: &rusqlite::Connection| {
+            let mut select = connection.prepare(&sql).unwrap();
+            let rows =
+                select.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)));
+            Ok(rows.unwrap().map(Result::unwrap).collect())
+        };
+        fixture.records().file.read(read).unwrap()
+    };
+    let state = read("select stream, late, count, weight, since from head_state order by stream, late");
+    let rows = read(
+        "select stream, late, sum(count), sum(weight), min(written_at) from heads group by stream, late order by stream, late",
+    );
+    (state, rows)
+}
+
+#[test]
+fn what_each_head_holds_is_kept_beside_it_as_its_rows_come_are_packed_and_expire() {
+    const MINUTE: Duration = Duration::from_secs(60);
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let audit = fixture.store.events("audit").keep(DAY).open().unwrap();
+    let now = fixture.now();
+    audit.append_all([NewEvent::new("old").at(now - DAY + 15 * MINUTE)]).unwrap();
+    audit.append("fresh", &()).unwrap();
+    audit.append_all([NewEvent::new("behind").at(now - DAY + 10 * MINUTE)]).unwrap();
+    for batch in 0..17 {
+        api.append_all((0..1000).map(|n| NewEvent::new(&format!("{batch}-{n}")))).unwrap();
+        fixture.pass(Duration::from_millis(1));
+    }
+    let (state, rows) = held(&fixture);
+    assert_eq!(state, rows);
+    assert_eq!(
+        state.iter().map(|(stream, late, events, ..)| (*stream, *late, *events)).collect::<Vec<_>>(),
+        [(1, false, 17_000), (2, false, 2), (2, true, 1)]
+    );
+
+    // audit's old rows expire, its late head with them, and a segment's worth of api's is packed
+    fixture.pass(30 * MINUTE);
+    let done = maintain(&fixture.store).unwrap();
+    assert_eq!(done, Maintenance { expired: 2, packed: 16_000, segments: 1, ..Maintenance::default() });
+    let (state, rows) = held(&fixture);
+    assert_eq!(state, rows);
+    assert_eq!(
+        state.iter().map(|(stream, late, events, ..)| (*stream, *late, *events)).collect::<Vec<_>>(),
+        [(1, false, 1000), (2, false, 1)]
+    );
 }

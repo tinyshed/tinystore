@@ -23,6 +23,7 @@ mod fixture;
 mod head;
 mod ints;
 mod maintain;
+mod merge;
 mod pack;
 mod read;
 mod segment;

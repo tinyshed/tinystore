@@ -182,19 +182,21 @@ module defines.
 - a damaged head does not stop the others — `TestADamagedHeadDoesNotStopTheOthers`
 - a damaged row is logged once, its head still seals — `TestADamagedHeadRowIsReportedOnceAndTheRestOfItsHeadSeals`
 - a damaged segment is dropped whole, followed past — `TestDropRemovesADamagedSegmentAndFollowPassesIt`
-- a follower keeps its place across merges — `TestAFollowerKeepsItsPlaceAcrossMerges`, the middle of a merged place included
-- a merge is one write, and readers see a record once — `TestAFailedMergeLeavesTheSegmentsAsTheyWere`, `TestReadersSeeEveryRecordOnceWhileMerging`
-- a merged segment goes whole, with its places — `TestAMergedSegmentExpiresWithItsPlaces`, `TestDropRemovesAMergedSegmentWithItsPlaces`
-- a holder's places are found through an index — `TestPlacesAreFoundThroughTheirHolder`, on the plan SQLite chooses
+- a follower keeps its place across merges — `TestAFollowerKeepsItsPlaceAcrossMerges`, the middle of a merged place included; the places it keeps it by — `a_merged_segment_merges_again_and_each_place_still_names_its_own_events`, `places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earliest` in `records::merge`
+- a merge is one write, and readers see a record once — `a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was`, `four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places` in `records::merge`; `TestReadersSeeEveryRecordOnceWhileMerging`
+- a merged segment goes whole, with its places — `a_merged_segment_expires_whole_with_its_places` in `records::merge`; `TestDropRemovesAMergedSegmentWithItsPlaces`
+- a holder's places are found through an index — `a_holders_places_are_found_through_an_index` in `records::merge`, on the plan SQLite chooses
 - a follower far behind fetches a merged block once — `TestAFollowerFetchesAMergedBlockOnce`, `TestTheFollowCacheKeepsWhatIsUsedWithinItsBytes`
 - a block's id is never given twice — `TestABlockIDIsNeverGivenTwice`
-- a merge joins four of a size, in time order — `TestSmallSegmentsMergeFourOfASize`, `TestAMergeLeavesOverlappingSegmentsOut`
+- a merge joins four of a size, in time order — `small_segments_merge_four_of_a_size_in_the_order_of_their_times`, `a_merge_leaves_overlapping_segments_out` in `records::merge`
+- a stream whose merge fails is left, and the others merge — `a_stream_whose_merge_fails_is_left_and_the_others_merge` in `records::merge`
 - only what no longer reads can be dropped — `TestDropRefusesWhatStillReads`
-- a late record seals from its own head — `TestLateRecordsSealFromTheirOwnHead`
-- a record appended alone can be late — `TestARecordAppendedAloneCanBeLate`
-- a batch in time order makes none of its own late — `TestARecordTenSecondsBehindItsStreamsNewestIsLate`
-- a reopened store knows what its heads hold — `TestAReopenedStoreKnowsWhatItsHeadsHold`
-- a producer ahead of the store makes no one late — `TestAProducerAheadOfTheStoreDoesNotMakeItsNeighboursLate`
+- a late record seals from its own head — `late_events_are_packed_from_their_own_head` in `records::events`
+- a record appended alone can be late — `an_event_appended_alone_can_be_late_and_a_producer_ahead_of_the_clock_makes_no_one_late` in `records::events`
+- a head packed empty forgets the newest event it held — `a_head_packed_empty_forgets_the_newest_event_it_held` in `records::events`
+- a batch in time order makes none of its own late — `an_event_more_than_ten_seconds_behind_its_streams_newest_is_late` in `records::events`
+- a reopened store knows what its heads hold — `a_reopened_store_knows_what_its_heads_hold` in `records::events`, `what_each_head_holds_is_kept_beside_it_as_its_rows_come_are_packed_and_expire` in `records::pack`
+- a producer ahead of the store makes no one late — `an_event_appended_alone_can_be_late_and_a_producer_ahead_of_the_clock_makes_no_one_late` in `records::events`
 - a time outside its engine's window is refused — `an_events_time_is_from_as_long_ago_as_its_stream_keeps_to_ten_minutes_ahead` in `records::events`; `TestASampleAheadOfTheClockIsRefused`
 - a page never splits a timestamp nor loses one — `a_page_never_splits_a_time_and_more_at_one_time_than_it_holds_is_limit`, `pages_go_on_without_losing_or_repeating_an_event_from_either_end` in `records::read`
 - a budget ends a page rather than failing it — `a_page_ends_at_the_rows_it_fetched_and_the_next_goes_on_from_there` in `records::read`

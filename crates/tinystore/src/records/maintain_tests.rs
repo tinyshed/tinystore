@@ -19,7 +19,10 @@ fn an_event_older_than_its_stream_keeps_is_never_read_and_maintenance_removes_it
     assert_eq!(fixture.rows("heads"), 3);
 
     // the same pass packs audit's event, which has waited its hour
-    assert_eq!(maintain(&fixture.store).unwrap(), Maintenance { expired: 1, packed: 1, segments: 1 });
+    assert_eq!(
+        maintain(&fixture.store).unwrap(),
+        Maintenance { expired: 1, packed: 1, segments: 1, ..Maintenance::default() }
+    );
     assert_eq!((fixture.rows("heads"), fixture.rows("segments")), (1, 1));
     assert_eq!(names(&all.list().page().unwrap().events), ["role.changed", "fresh"]);
     assert_eq!(maintain(&fixture.store).unwrap(), Maintenance::default());

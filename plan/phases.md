@@ -88,7 +88,11 @@ them.
 - [ ] The codecs: huff0 and FSE in safe Rust or a format without them, the word-based reader, the exact accumulator.
 - [ ] records: the head, segments, paged reads, follow, retention, redaction, `durability: 'os'` by default.
   Built: streams and their `keep`, appends into fresh rows, their packing into segments and blocks, reads a page
-  at a time over both, expiry. A block keeps its events by columns: integers by their steps, a steady one, a
+  at a time over both, expiry. An event more than ten seconds behind the newest its stream showed on time waits in
+  a late head of its own, packed apart, so that the segments of those on time stay narrow in time; what each head
+  holds is a row beside it, so that finding what is ready reads a row a head. A stream's small segments merge
+  four of a size in the order of their times, into the one of lowest id, and the others stay as places that say
+  where their events begin among its, which `poll` will follow. A block keeps its events by columns: integers by their steps, a steady one, a
   dictionary or the value most share; text by a dictionary or through zstd, with the times it spells cut out; a
   value's quotes taken off, uuids and hex as their bytes, integers that count time as how far behind their
   events they lie. On the 1,713,543 records two production hosts' containers wrote, 178,796 of them JSON and

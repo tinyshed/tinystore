@@ -2,8 +2,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::super::fixture::{DAY, SECOND, fixture, names};
+use super::super::fixture::{DAY, Fixture, SECOND, fixture, names};
+use super::super::maintain::{Maintenance, maintain};
 use super::*;
+
+const HOUR: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct RoleChanged {
@@ -160,4 +163,92 @@ fn every_stream_is_read_together_and_a_stream_reads_its_own() {
     assert_eq!(names(&fixture.events("audit").list().page().unwrap().events), ["role.changed"]);
     let refused = fixture.events("audit").list().streams(["api"]).page().unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::Invalid);
+}
+
+/// An event `seconds` from the store's clock, behind it when negative.
+fn at(fixture: &Fixture, name: &str, seconds: i32) -> NewEvent {
+    let span = SECOND * seconds.unsigned_abs();
+    NewEvent::new(name).at(if seconds < 0 { fixture.now() - span } else { fixture.now() + span })
+}
+
+/// Each head row's head, late or on time, and its events, in the order the
+/// rows were written.
+fn heads(fixture: &Fixture) -> Vec<(bool, i64)> {
+    let read = |connection: &rusqlite::Connection| {
+        let mut select = connection.prepare("select late, count from heads order by id").unwrap();
+        Ok(select.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().map(Result::unwrap).collect())
+    };
+    fixture.records().file.read(read).unwrap()
+}
+
+#[test]
+fn an_event_more_than_ten_seconds_behind_its_streams_newest_is_late() {
+    let fixture = fixture();
+    let web = fixture.events("web");
+    // the clock at 12:01, web waiting until 12:00:40
+    web.append_all([at(&fixture, "12:00:40", -20)]).unwrap();
+    let batch = [at(&fixture, "12:00:35", -25), at(&fixture, "12:00:41", -19), at(&fixture, "11:50:02", -658)];
+    web.append_all(batch.into_iter().chain([at(&fixture, "12:00:45", -15)])).unwrap();
+    assert_eq!(heads(&fixture), [(false, 1), (false, 3), (true, 1)]);
+    // a batch in the order of its times makes none of its own late, however long it spans
+    let api = fixture.events("api");
+    api.append_all([at(&fixture, "11:58:30", -150), at(&fixture, "11:59:10", -110), at(&fixture, "12:00:45", -15)])
+        .unwrap();
+    assert_eq!(heads(&fixture)[3..], [(false, 3)]);
+    // and one that comes fifteen seconds behind the one before it in the batch is
+    let db = fixture.events("db");
+    db.append_all([at(&fixture, "12:00:50", -10), at(&fixture, "12:00:35", -25)]).unwrap();
+    assert_eq!(heads(&fixture)[4..], [(false, 1), (true, 1)]);
+}
+
+#[test]
+fn an_event_appended_alone_can_be_late_and_a_producer_ahead_of_the_clock_makes_no_one_late() {
+    let fixture = fixture();
+    let web = fixture.events("web");
+    web.append_all([at(&fixture, "12:00:40", -20)]).unwrap();
+    web.append_all([at(&fixture, "12:00:20", -40)]).unwrap();
+    // five minutes ahead of the clock: an event five seconds behind the clock is on time
+    let ahead = fixture.events("ahead");
+    ahead.append_all([at(&fixture, "12:06:00", 300)]).unwrap();
+    ahead.append_all([at(&fixture, "12:00:55", -5)]).unwrap();
+    assert_eq!(heads(&fixture), [(false, 1), (true, 1), (false, 1), (false, 1)]);
+}
+
+#[test]
+fn late_events_are_packed_from_their_own_head() {
+    let fixture = fixture();
+    let web = fixture.events("web");
+    web.append_all([at(&fixture, "waiting", -20)]).unwrap();
+    web.append_all([at(&fixture, "on time", -15), at(&fixture, "late", -658)]).unwrap();
+    fixture.pass(HOUR);
+    assert_eq!(maintain(&fixture.store).unwrap(), Maintenance { packed: 3, segments: 2, ..Maintenance::default() });
+    // the segment of those on time spans five seconds, and not eleven minutes
+    let spans = |connection: &rusqlite::Connection| {
+        let mut select = connection.prepare("select last_at - first_at from segments order by id").unwrap();
+        Ok(select.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect::<Vec<i64>>())
+    };
+    assert_eq!(fixture.records().file.read(spans).unwrap(), [5_000_000_000, 0]);
+    assert_eq!(names(&web.list().page().unwrap().events), ["late", "waiting", "on time"]);
+}
+
+#[test]
+fn a_reopened_store_knows_what_its_heads_hold() {
+    let fixture = fixture();
+    fixture.events("web").append_all([at(&fixture, "waiting", 0)]).unwrap();
+    let fixture = fixture.reopen();
+    fixture.events("web").append_all([at(&fixture, "behind", -30)]).unwrap();
+    assert_eq!(heads(&fixture), [(false, 1), (true, 1)]);
+}
+
+#[test]
+fn a_head_packed_empty_forgets_the_newest_event_it_held() {
+    let fixture = fixture();
+    let web = fixture.events("web");
+    web.append("waiting", &()).unwrap();
+    fixture.pass(HOUR);
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1);
+    // an hour behind the clock, and thirty seconds behind what was packed: nothing waits to be behind
+    let behind = fixture.now() - HOUR - SECOND * 30;
+    web.append_all([NewEvent::new("behind").at(behind)]).unwrap();
+    assert_eq!(heads(&fixture), [(false, 1)]);
 }
