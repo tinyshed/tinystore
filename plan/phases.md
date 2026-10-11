@@ -88,7 +88,7 @@ them.
 
 - [ ] The codecs: huff0 and FSE in safe Rust or a format without them, the word-based reader, the exact accumulator.
   records: a format without FSE, which saved 0.15 B an event on the corpus, left out by the owner's choice on 11 October.
-- [ ] records: the head, segments, paged reads, follow, retention, redaction, `durability: 'os'` by default.
+- [x] records: the head, segments, paged reads, follow, retention, redaction, `durability: 'os'` by default.
   Built: streams and their `keep`, appends into fresh rows, their packing into segments and blocks, reads a page
   at a time over both, expiry. An event more than ten seconds behind the newest its stream showed on time waits in
   a late head of its own, packed apart, so that the segments of those on time stay narrow in time; what each head
@@ -134,6 +134,9 @@ them.
   0.001, integers with values apart nothing. Radix words are not ported. FSE is left for the entropy coder
   metrics brings, one more packer then. This engine weighs an event more than the Go engine's input size and
   so cuts more blocks, 2,525 against 2,323 here, which costs 0.02 B a record.
+  Closed on 11 October, slices 1 to 8 pushed: what GATES still holds to Go alone is the format's readers,
+  which wait for v0.1.0, the command's printer of phase 4, and follow's cache, level masks and an
+  append's trace, which the owner left as they are; FSE is left out by the owner's choice.
 - [ ] metrics: series, instruments, sealing, exact aggregates, retention, the step rule; the `metrics` crate recorder.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
