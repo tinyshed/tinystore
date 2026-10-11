@@ -42,18 +42,18 @@ impl<V: Value> OnceBuilder<V> {
     }
 
     pub fn open(self) -> Result<Once<V>> {
-        if self.keep.is_zero() {
-            return Err(Error::invalid("a keep of zero").within(format!("kv once {}", self.name)));
-        }
-        let scope = Scope::open(&Home::Store(self.store.clone()), &self.name, Kind::Once)?;
-        Ok(Once { answers: Bucket::new(scope, Expiry::Ttl(self.keep)) })
+        Ok(Once { answers: answers(&self.store, &self.name, self.keep)? })
     }
 }
 
 /// Once's answers as rows, for the wire: a client runs the function, and the
 /// store keeps what it answered under the key for `keep`.
 pub(crate) fn rows(store: &Store, name: &str, keep: Option<Duration>) -> Result<Bucket<()>> {
-    let keep = keep.unwrap_or(KEEP);
+    answers(store, name, keep.unwrap_or(KEEP))
+}
+
+/// The bucket that keeps once's answers of a name, each for `keep`.
+fn answers<T>(store: &Store, name: &str, keep: Duration) -> Result<Bucket<T>> {
     if keep.is_zero() {
         return Err(Error::invalid("a keep of zero").within(format!("kv once {name}")));
     }

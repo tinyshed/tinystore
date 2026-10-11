@@ -51,8 +51,8 @@ pub(crate) use bucket::{Put, Stamp, WriteOptions};
 pub(crate) use cells::Cell;
 pub(crate) use once::{Hand, Handed, hand, rows as once_rows};
 pub(crate) use path::MAX_PATH as MAX_KEY;
-// The wire's calls of a bucket inside a database's transaction.
 pub(crate) use value::Raw;
+// The wire's calls of a bucket inside a database's transaction.
 #[cfg(feature = "sql")]
 pub(crate) use {bucket::clear_work, tx::call_on_branch, tx::call_on_key};
 

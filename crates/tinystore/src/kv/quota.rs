@@ -110,10 +110,7 @@ impl Quota {
 
     /// `allow_n` without waiting: `done` gets the allowance once its commit ends.
     pub(crate) fn allow_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<Allowance>) + Send + 'static) {
-        match self.allow_work(key, n) {
-            Ok(work) => self.scope.submit(key, ROW, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, ROW, self.allow_work(key, n), done);
     }
 
     fn allow_work(&self, key: &str, n: u64) -> Result<impl Work<Allowance> + use<>> {
@@ -155,10 +152,7 @@ impl Quota {
 
     /// `refund_n` without waiting for its commit.
     pub(crate) fn refund_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<()>) + Send + 'static) {
-        match self.refund_work(key, n) {
-            Ok(work) => self.scope.submit(key, ROW, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, ROW, self.refund_work(key, n), done);
     }
 
     fn refund_work(&self, key: &str, n: u64) -> Result<impl Work<()> + use<>> {
@@ -186,10 +180,7 @@ impl Quota {
 
     /// `reset` without waiting for its commit.
     pub(crate) fn reset_then(&self, key: &str, done: impl FnOnce(Result<()>) + Send + 'static) {
-        match self.reset_work(key) {
-            Ok(work) => self.scope.submit(key, 0, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, 0, self.reset_work(key), done);
     }
 
     fn reset_work(&self, key: &str) -> Result<impl Work<()> + use<>> {

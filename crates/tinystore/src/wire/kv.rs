@@ -151,7 +151,8 @@ fn key_call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, call: &KvCa
 }
 
 /// Queues a write and returns; `done` gets its answer on the thread that
-/// commits it.
+/// commits it. A call that waits for no commit, a counter kept in memory or
+/// a rate limit, is answered before this returns.
 pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
     match called {
         method::KV_CLEAR => clear(handles, body, done),

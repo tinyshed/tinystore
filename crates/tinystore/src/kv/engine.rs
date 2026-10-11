@@ -114,7 +114,6 @@ impl Kv {
         &self.file
     }
 
-    /// The engine whose file kv is kept in, when it is not kv.db.
     pub(crate) fn lent_by(&self) -> Option<&str> {
         self.lent_by.as_deref()
     }

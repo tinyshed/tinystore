@@ -168,8 +168,10 @@ impl TxCounters<'_> {
         if self.counters.buffer.is_none() {
             return Ok(());
         }
-        Err(Error::invalid("counters kept in memory join no transaction; open them without flush_every to")
-            .within(self.counters.scope.shown()))
+        Err(Error::invalid(
+            "counters kept in memory join no transaction; open them without flush_every to write them in one",
+        )
+        .within(self.counters.scope.shown()))
     }
 }
 

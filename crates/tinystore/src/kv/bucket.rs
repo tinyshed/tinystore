@@ -113,7 +113,7 @@ impl<V: Value> BucketBuilder<V> {
     }
 }
 
-/// Values of one type by key. A handle is cheap to clone and to keep; `of`
+/// Values of one type by key. A handle is cheap to clone and to keep; `under`
 /// gives the same bucket seen from a branch.
 pub struct Bucket<V> {
     pub(crate) scope: Scope,
@@ -463,10 +463,7 @@ impl<V> Bucket<V> {
         options: WriteOptions,
         done: impl FnOnce(Result<bool>) + Send + 'static,
     ) {
-        match self.remove_work(key, options) {
-            Ok(work) => self.scope.submit(key, 0, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, 0, self.remove_work(key, options), done);
     }
 
     /// The delete of a key. It reads no value, so a key whose value no longer
@@ -491,10 +488,7 @@ impl<V> Bucket<V> {
         options: WriteOptions,
         done: impl FnOnce(Result<Option<Cell>>) + Send + 'static,
     ) {
-        match self.take_cell_work(key, options) {
-            Ok(work) => self.scope.submit(key, 0, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, 0, self.take_cell_work(key, options), done);
     }
 
     /// The take of a key: its delete, which hands back the cell it removed. A

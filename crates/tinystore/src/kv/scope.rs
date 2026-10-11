@@ -57,7 +57,7 @@ pub(crate) struct Scope {
     pub(crate) id: i64,
     name: Arc<str>,
     kind: Kind,
-    /// An invalid owner given to `of` fails the branch's calls, not `of`.
+    /// An invalid owner given to `under` fails the branch's calls, not `under`.
     branch: std::result::Result<Branch, String>,
 }
 
@@ -145,6 +145,20 @@ impl Scope {
         let shown = self.shown_key(key);
         let answered = move |answer: Result<T>| done(answer.map_err(|error| error.within(shown)));
         self.kv.file().submit(bytes, move |tx| work(tx, &revision), answered);
+    }
+
+    /// Submits the work a call made, or gives `done` why it made none.
+    pub(crate) fn submit_made<T: Send + 'static>(
+        &self,
+        key: &str,
+        bytes: usize,
+        work: Result<impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static>,
+        done: impl FnOnce(Result<T>) + Send + 'static,
+    ) {
+        match work {
+            Ok(work) => self.submit(key, bytes, work, done),
+            Err(error) => done(Err(error)),
+        }
     }
 
     /// Runs a read on a reader, in one snapshot, naming the key in its errors.

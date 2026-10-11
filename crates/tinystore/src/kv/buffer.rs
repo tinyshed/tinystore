@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use super::cells;
 use super::engine::{Kv, next_version};
 use super::path::is_under;
 use super::value::Raw;
-use crate::{Error, ErrorKind, Result};
+use super::{cells, counters};
+use crate::{ErrorKind, Result};
 
 /// Counters a buffer holds, changed or not: about a second of flushing. A
 /// change of a key past them flushes first.
@@ -173,14 +173,11 @@ impl Buffer {
 
     fn load(&self, kv: &Kv, path: &[u8], now: i64) -> Result<Counter> {
         let bucket = self.bucket;
-        let found = kv.file().read(|connection| cells::live(connection, bucket, path, now))?;
-        let Some(cell) = found else {
-            return Ok(Counter { value: 0, expires: None, absent: true, dirty: false });
-        };
-        let Raw::Int(value) = cell.raw else {
-            return Err(Error::corrupt("a counter's row holds no integer"));
-        };
-        Ok(Counter { value, expires: cell.expires, absent: false, dirty: false })
+        let found = kv.file().read(|connection| counters::live(connection, bucket, path, now))?;
+        Ok(match found {
+            Some(live) => Counter { value: live.value, expires: live.expires, absent: false, dirty: false },
+            None => Counter { value: 0, expires: None, absent: true, dirty: false },
+        })
     }
 
     /// Takes a batch of changed counters, marking them written: a change after

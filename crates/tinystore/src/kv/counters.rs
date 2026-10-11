@@ -104,10 +104,7 @@ impl Counters {
         if self.buffer.is_some() {
             return done(self.add(key, n));
         }
-        match self.add_work(key, n) {
-            Ok(work) => self.scope.submit(key, 0, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, 0, self.add_work(key, n), done);
     }
 
     /// `delete` without waiting for its commit.
@@ -115,10 +112,7 @@ impl Counters {
         if self.buffer.is_some() {
             return done(self.delete(key));
         }
-        match self.delete_work(key) {
-            Ok(work) => self.scope.submit(key, 0, work, done),
-            Err(error) => done(Err(error)),
-        }
+        self.scope.submit_made(key, 0, self.delete_work(key), done);
     }
 
     /// What the counter under `key` holds; 0 when it is not there.

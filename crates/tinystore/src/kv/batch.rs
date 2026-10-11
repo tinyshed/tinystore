@@ -86,15 +86,23 @@ impl Batch {
     pub(crate) fn remove(&mut self, bucket: &Bucket<()>, key: &str, options: WriteOptions) -> Result<()> {
         self.join(&bucket.scope)?;
         let work = bucket.remove_work(key, options)?;
-        self.write(&bucket.scope, key, move |tx, revision| {
-            work(tx, revision).map(|found| Outcome { found, ..Outcome::default() })
-        })
+        self.found(&bucket.scope, key, work)
     }
 
     pub(crate) fn expire(&mut self, bucket: &Bucket<()>, key: &str, options: WriteOptions) -> Result<()> {
         self.join(&bucket.scope)?;
         let work = bucket.expire_work(key, options)?;
-        self.write(&bucket.scope, key, move |tx, revision| {
+        self.found(&bucket.scope, key, work)
+    }
+
+    /// Joins a write that answers whether its key was there.
+    fn found(
+        &mut self,
+        scope: &Scope,
+        key: &str,
+        work: impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<bool> + Send + 'static,
+    ) -> Result<()> {
+        self.write(scope, key, move |tx, revision| {
             work(tx, revision).map(|found| Outcome { found, ..Outcome::default() })
         })
     }
