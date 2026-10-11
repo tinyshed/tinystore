@@ -177,6 +177,13 @@ module defines.
 - a read passes a block whose segment lacks a name or a key it asks for, or whose filters say it holds no trace or id it asks for — `a_read_passes_a_block_whose_segment_or_filters_say_it_holds_nothing_asked` in `records::read`, `a_filter_holds_every_value_it_was_made_of_and_few_others`, `only_short_strings_nearly_all_distinct_look_like_ids` in `records::bloom`
 - a read rebuilds only the events a block's columns leave it, and reads no other column when they leave none — `a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_none_is_left` in `records::block`, `a_column_read_for_a_few_values_leaves_the_others_empty`, `a_column_is_compared_as_it_keeps_its_values_and_none_is_spelled` in `records::values`
 - an exact filter, a single trace and an absent context value read no slower than the Go engine's — `three_reads_of_a_packed_corpus` in `records::read`, by hand against the Go engine's same fixture
+- a count finds what a list finds, packed and waiting, and takes no newest, limit or after — `a_count_finds_what_a_list_finds_packed_and_waiting` in `records::count`
+- top gives a key's most frequent values first, its ties in the order of their JSON — `top_gives_a_keys_most_frequent_values_first` in `records::count`
+- an aggregate gives a row a span and a value of its keys, no row to a span without events — `an_aggregate_gives_a_row_a_span_and_a_value_of_its_keys` in `records::count`
+- a sum of integers is exact past 2⁶³, and a fraction makes it a float's — `a_sum_of_integers_is_exact_and_a_fraction_makes_it_a_floats` in `records::count`
+- an aggregate past its rows is `limit`, never a smaller answer — `an_aggregate_past_ten_thousand_rows_is_limit_and_never_a_smaller_answer` in `records::count`
+- a store's streams are those with events, with what they keep and their oldest and newest — `streams_are_those_with_events_with_what_they_keep_and_their_oldest_and_newest` in `records::count`
+- field names are the keys of fields and contexts, sorted, by prefix and limit — `field_names_are_the_keys_of_fields_and_contexts_sorted` in `records::count`
 - a read merges segments and the head by time, and finds each event once — `a_read_finds_each_event_once_in_what_is_packed_and_what_waits` in `records::pack`
 - an appended record reads before it is sealed — `an_appended_event_is_read_at_once_with_what_it_carries` in `records::events`
 - a reader finds each record once while sealing — `TestReadersSeeEveryRecordOnceWhileSealing`

@@ -13,8 +13,8 @@
 //! block fetched has the columns the read asks about read first, and its
 //! others only when an event in it may be kept.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -217,11 +217,48 @@ impl List {
     /// may hold fewer events than its limit, or none, and still have a
     /// `next`: a read ends at what it may fetch rather than failing.
     pub fn page(&self) -> Result<Page> {
-        let read = self.records.page(self.stream.as_ref(), &self.query);
-        read.map_err(|error| match &self.stream {
+        self.records.page(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))
+    }
+
+    /// The keys the events of the read's range hold, in their fields and
+    /// their contexts, sorted: those that begin with `prefix`, as many as its
+    /// limit, 1000 unless it says. A packed segment that reaches into the
+    /// range gives every key it holds, which the file keeps beside its events.
+    pub fn field_names(&self, prefix: &str) -> Result<Vec<String>> {
+        let named = self.records.field_names(self.stream.as_ref(), &self.query, prefix);
+        named.map_err(|error| self.within(error))
+    }
+
+    /// Every event the read finds, ten thousand a page, for `what` to count:
+    /// a count takes no newest first and no page after another, and only
+    /// `top` takes a limit.
+    pub(super) fn walk(&self, what: &str) -> Result<All> {
+        let limited = what != "top" && self.query.limit.is_some();
+        if self.query.newest || self.query.after.is_some() || limited {
+            let refused = if what == "top" { "newest or after" } else { "newest, limit or after" };
+            return Err(self.within(Error::invalid(format!("{what} takes no {refused}"))));
+        }
+        let mut walk = self.clone();
+        walk.query.limit = Some(MOST_EVENTS);
+        Ok(walk.all())
+    }
+
+    /// The range the read asks for, both ends in it, in nanoseconds.
+    pub(super) fn span(&self) -> Result<(i64, i64)> {
+        range(&self.query, self.records.now()).map_err(|error| self.within(error))
+    }
+
+    /// The limit the read was given.
+    pub(super) fn given_limit(&self) -> Option<usize> {
+        self.query.limit
+    }
+
+    /// An error of this read, named by what it reads.
+    fn within(&self, error: Error) -> Error {
+        match &self.stream {
             Some(stream) => error.within(format!("events {}", stream.name)),
             None => error.within("events"),
-        })
+        }
     }
 
     /// Every event of the answer, a page at a time.
@@ -351,6 +388,13 @@ const BLOCKS_NEWEST: &str = rows_of!("blocks", "segment", "last_at desc, id desc
 const HEAD_BODY: &str = "select body from heads where id = ?1";
 const BLOCK_BODY: &str = "select body from blocks where id = ?1";
 const SEGMENT_BODY: &str = "select body from segments where id = ?1";
+/// The keys of fields and of contexts, kinds 1 and 2, of the segments that
+/// reach into a range.
+const SEGMENT_KEYS: &str = "select distinct key from segment_keys where kind in (1, 2) and key >= ?3
+    and segment in (select id from segments where holder is null and last_at >= ?1 and first_at <= ?2
+    and (?4 is null or stream in (select value from json_each(?4))))";
+const HEAD_BODIES: &str = "select body from heads where last_at >= ?1 and first_at <= ?2
+    and (?3 is null or stream in (select value from json_each(?3)))";
 const HAS_KEY: &str = "select exists (select 1 from segment_keys where segment = ?1 and kind = ?2 and key = ?3)";
 const TRACES_BLOOM: &str = "select bloom from block_traces where block = ?1";
 const FIELD_BLOOM: &str = "select bloom from block_filters where block = ?1 and key = ?2";
@@ -366,6 +410,32 @@ impl Records {
         let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
         let found = found(&asked, query, fetched, horizon)?;
         cut(found, &asked, horizon)
+    }
+
+    /// The keys a read's range holds: its packed segments' beside them, and
+    /// those of the events that wait, read from their rows after the file is.
+    fn field_names(&self, stream: Option<&Stream>, query: &Query, prefix: &str) -> Result<Vec<String>> {
+        let Some(asked) = self.asked(stream, query)? else { return Ok(Vec::new()) };
+        let failed = |error| sql_error("read the keys events hold", error);
+        let (mut keys, heads) = self.file.read(|connection| {
+            let mut segments = connection.prepare_cached(SEGMENT_KEYS).map_err(failed)?;
+            let keys = segments.query_map(params![asked.first, asked.last, prefix, asked.only], |row| row.get(0));
+            let keys: BTreeSet<String> = keys.and_then(Iterator::collect).map_err(failed)?;
+            let mut heads = connection.prepare_cached(HEAD_BODIES).map_err(failed)?;
+            let bodies = heads.query_map(params![asked.first, asked.last, asked.only], |row| row.get(0));
+            let bodies: Vec<Vec<u8>> = bodies.and_then(Iterator::collect).map_err(failed)?;
+            Ok((keys, bodies))
+        })?;
+        let mut codec = Codec::default();
+        for body in heads {
+            let events = head::parse(&body, &mut codec)?
+                .into_iter()
+                .filter(|event| (asked.first..=asked.last).contains(&event.at));
+            keys.extend(events.flat_map(|event| {
+                event.fields.iter().chain(event.context.iter()).map(|(key, _)| key.to_owned()).collect::<Vec<_>>()
+            }));
+        }
+        Ok(keys.into_iter().filter(|key| key.starts_with(prefix)).take(asked.limit).collect())
     }
 
     /// The range and the streams of a read; `None` when they hold nothing.

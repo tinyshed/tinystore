@@ -16,6 +16,7 @@ mod bits;
 mod block;
 mod bloom;
 mod bytes;
+mod count;
 mod engine;
 mod event;
 mod events;
@@ -32,6 +33,7 @@ mod stamp;
 mod text;
 mod values;
 
+pub use count::{Aggregate, Number, Row, Stats, StreamInfo, Top};
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};
 pub use maintain::{Maintenance, maintain};

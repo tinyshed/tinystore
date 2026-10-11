@@ -348,23 +348,28 @@ const latency = await api.aggregate({ since: '24h', names: ['request'], every: '
 - Each takes a query as `list` does, without `newest`, `limit` and `after`.
 - `count` is how many events the query finds.
 - `top` gives a key's most frequent values and how many events hold each,
-  the ten most frequent unless `limit` asks for more, at most 1000. The key
-  is a field's, or `stream`, `name` or `level`.
+  the ten most frequent unless `limit` asks for more, at most 1000; values as
+  frequent as each other come in the order of their JSON. The key is a
+  field's or a context's, or `stream`, `name` or `level`, which are the
+  event's own before a field of that name.
 - `aggregate` gives a row for each span of `every` and each value of the
   keys in `by`, with the `count` of its events. Without `every` the range is
   one span; without `by` a span is one row. `at` is where a row's span
   begins, counted from 1970 in UTC. A span without events has no row.
 - `stats` names fields, and a row gives each one's `count`, `sum`, `min`,
   `max` and `avg` over the events whose value there is a number. `distinct`
-  names fields, and a row gives how many different values each has.
+  names fields, and a row gives how many different values each has. A
+  field with no number in a row has no `stats` there.
 - A row keeps what the program named under `by`, `stats` and `distinct`, as
   the call wrote them, so that a field called `count` or `at` meets nothing
   of the row's own.
 - A sum of integers is exact, a `bigint` past 2⁵³; a value with a fraction
   makes it a float's.
-- An answer is whole or an error: past what one read may fetch, or past
-  10,000 rows, it is `limit`, never a smaller answer. Ask for a shorter range
-  or a wider `every`.
+- An answer is whole or an error: past 10,000 rows, or past a million
+  different values held for `top` or `distinct`, it is `limit`, never a
+  smaller answer. Ask for a shorter range or a wider `every`.
+- Each reads every event its query finds, a page at a time, and holds only
+  its answer.
 
 ## What a store holds
 
@@ -377,7 +382,9 @@ const names = await api.fieldNames({ since: '1h' })   // ['ms', 'requestId', 'ro
   the times of its oldest and newest event.
 - `fieldNames` gives the keys events hold, in `fields` and in `context`,
   sorted; `prefix` narrows them and `limit` bounds them, 1000 unless given.
-  It reads no event: the file keeps the keys beside them.
+  It reads no packed event, whose keys the file keeps beside them, and reads
+  the events not packed yet, an hour's at most. A packed segment that reaches
+  into the range gives every key it holds.
 - A key's values are `top`'s, and a stream's names are `top('name')`'s.
 
 ## Another program's output
@@ -453,6 +460,7 @@ not keep is counted in `dropped`.
 | what a store holds for tails | the last 1 MiB of events             |
 | `top`                        | 10 values, 1000 at most              |
 | `aggregate`                  | 10,000 rows                          |
+| what a count holds           | a million different values           |
 | behind which `poll` runs     | an hour at most                      |
 
 ## What the engine chooses

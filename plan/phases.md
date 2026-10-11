@@ -102,7 +102,9 @@ them.
   absent context value 1.89 against 2.95 (`TINYSTORE_READS=<the lines> cargo test --release -p tinystore --lib
   three_reads_of_a_packed_corpus -- --ignored --nocapture`). Before it built only what it keeps, compared a
   column as it keeps its values and summed its checksum sixteen bytes at a time, the exact filter took 76.24.
-  A block keeps its events by columns: integers by their steps, a steady one, a
+  Counts, a key's most frequent values and aggregates by span and key, with stats and distinct values, walk
+  the same reads a page at a time and hold only their answer; `streams` and `fieldNames` say what a store
+  holds, the keys of packed segments from beside them. A block keeps its events by columns: integers by their steps, a steady one, a
   dictionary or the value most share; text by a dictionary or through zstd, with the times it spells cut out; a
   value's quotes taken off, uuids and hex as their bytes, integers that count time as how far behind their
   events they lie. On the 1,713,543 records two production hosts' containers wrote, 178,796 of them JSON and
