@@ -17,6 +17,13 @@ tinystore = { path = "../crates/tinystore", default-features = false, features =
 members = ["."]
 
 [[bin]]
+name = "records_lines"
+path = "fuzz_targets/records_lines.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "records_rows"
 path = "fuzz_targets/records_rows.rs"
 test = false

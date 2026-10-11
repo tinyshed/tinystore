@@ -1,16 +1,66 @@
 //! The bodies of records' fuzz targets, which `fuzz/` runs by hand on
-//! nightly through cargo-fuzz, and a test runs on every platform CI runs on:
-//! what a decoder does with any bytes past the version and the checksum that
-//! guard them.
+//! nightly through cargo-fuzz, and tests run on seeds on every platform CI
+//! runs on: what a decoder does with any bytes past the version and the
+//! checksum that guard them, and what a writer of lines does with any text.
+
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::value::RawValue;
 
 use super::block;
 use super::bytes::crc32;
-use super::event::{Kept, NewEvent};
+use super::engine::Records;
+use super::event::{Event, Kept, MAX_EVENT, NewEvent, weight};
 use super::head::{self, Codec};
+use super::lines::{LOGFMT, TEXT};
+use super::logfmt::spell;
 use super::segment::{self, Schema};
-use crate::{ErrorKind, Result};
+use crate::console::quoted;
+use crate::{ErrorKind, Result, Store};
+
+/// The streams `lines` writes, one an input.
+static WRITTEN: AtomicU64 = AtomicU64::new(0);
+
+/// Writes any text through a writer of lines, in pieces of as many bytes as
+/// its first byte says, and reads its stream back: every line one event
+/// holds comes back as it was written, and a longer one is dropped and
+/// counted.
+pub fn lines(store: &Store, bytes: &[u8]) {
+    let Some((&piece, text)) = bytes.split_first() else { return };
+    let text = String::from_utf8_lossy(text);
+    let stream = format!("fuzz-{}", WRITTEN.fetch_add(1, Ordering::Relaxed));
+    let events = store.events(&stream).open().expect("a stream to write");
+    let mut out = events.lines().expect("a writer of lines");
+    for bytes in text.as_bytes().chunks(usize::from(piece).max(1)) {
+        out.write_all(bytes).expect("a write of lines takes every byte");
+    }
+    let dropped = out.dropped();
+    drop(out);
+    Records::of(store).and_then(|records| records.flush_held(false)).expect("the lines written");
+    let found = events.list().limit(10_000).page().expect("the lines read").events;
+    let spelled: Vec<String> = found.iter().map(line_of).collect();
+    let room = MAX_EVENT - weight(TEXT, None, &[], &[]);
+    let lines = text.strip_suffix('\n').unwrap_or(&text);
+    let kept: Vec<&str> = lines.split('\n').filter(|line| line.len() <= room).collect();
+    let longer = lines.split('\n').count() - kept.len();
+    assert_eq!((spelled.join("\n"), dropped), (kept.join("\n"), longer as u64), "{stream}");
+}
+
+/// The line an event of a writer of lines was made of, spelled again: its
+/// message, a logfmt line's pairs, or a JSON line's fields.
+pub(super) fn line_of(event: &Event) -> String {
+    let fields: Vec<(String, String)> =
+        event.fields.iter().map(|(key, json)| (key.to_owned(), json.to_owned())).collect();
+    match event.name.as_str() {
+        TEXT => event.message.clone().unwrap_or_default(),
+        LOGFMT => spell(&fields),
+        _ => format!(
+            "{{{}}}",
+            fields.iter().map(|(key, json)| format!("{}:{json}", quoted(key))).collect::<Vec<_>>().join(",")
+        ),
+    }
+}
 
 /// Reads any bytes as a head row, a segment's row and a block of a segment
 /// of fields: each gives its events or fails `corrupt`, and none panics.
@@ -74,6 +124,24 @@ mod tests {
         let (schema, _) = Schema::of(&seeds());
         let read = block::parse(&schema, &sealed(block::VERSION, inner), &mut Codec::default()).unwrap();
         assert_eq!(read, seeds(), "sealed again, the block reads as it was made");
+    }
+
+    #[test]
+    fn any_text_cut_anywhere_comes_back_line_by_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = crate::Options { background: false, ..crate::Options::default() };
+        let store = Store::open(dir.path(), options).unwrap();
+        let seeds: [&[u8]; 6] = [
+            b"\x01a\nb",
+            b"\x03{\n\"a\": [1,\n2]}\nplain\r\n\n",
+            b"\x02level=info msg=\"slow \\\"request\\\"\" ms=1200 ok=true\nlevel=warn  msg=x\na= b=\n",
+            b"\x07Traceback (most recent call last):\n  File \"app.py\"\nValueError: bad input\nnext",
+            b"\x05\xff\xfe no utf-8 \xc3\n\n\n",
+            b"\x00",
+        ];
+        for seed in seeds {
+            lines(&store, seed);
+        }
     }
 
     #[test]

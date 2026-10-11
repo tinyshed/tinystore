@@ -2,7 +2,7 @@ use std::io::Write;
 
 use super::super::event::{Event, Level};
 use super::super::fixture::{Fixture, SECOND, fixture};
-use super::super::logfmt::spell;
+use super::super::fuzzing::line_of;
 use super::*;
 use crate::ErrorKind;
 
@@ -24,20 +24,6 @@ fn written_in_pieces(f: &Fixture, stream: &str, text: &[u8], piece: usize) -> Ve
 
 fn messages(events: &[Event]) -> Vec<&str> {
     events.iter().filter_map(|event| event.message.as_deref()).collect()
-}
-
-/// An event as the line it came from.
-fn line_of(event: &Event) -> String {
-    let fields: Vec<(String, String)> =
-        event.fields.iter().map(|(key, json)| (key.to_owned(), json.to_owned())).collect();
-    match event.name.as_str() {
-        TEXT => event.message.clone().unwrap(),
-        LOGFMT => spell(&fields),
-        _ => format!(
-            "{{{}}}",
-            fields.iter().map(|(key, json)| format!("{}:{json}", quoted(key))).collect::<Vec<_>>().join(",")
-        ),
-    }
 }
 
 #[test]

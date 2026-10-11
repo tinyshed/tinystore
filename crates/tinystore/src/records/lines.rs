@@ -26,9 +26,9 @@ use crate::{Clock, Error, Result, unix_nanos};
 
 /// The names of the events lines become, which say how each spells its line
 /// again: by its message, by a JSON object's fields, by logfmt's pairs.
-const TEXT: &str = "log";
+pub(super) const TEXT: &str = "log";
 const JSON: &str = "json";
-const LOGFMT: &str = "logfmt";
+pub(super) const LOGFMT: &str = "logfmt";
 /// The lines one event joins at most.
 const MOST_JOINED: usize = 1000;
 
