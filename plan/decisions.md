@@ -130,6 +130,22 @@ second path through the core for a store in the process would be one more to
 differ. The console's vectors keep a line the same bytes in every language,
 and a secret is hidden before its event leaves the program.
 
+**19. The metrics book is accepted** ([api/metrics.md](api/metrics.md)),
+on 11 October, after a newcomer check, a blind comparison and four readings
+by the owner's reviewer. A program meets the engine as `store.metrics`:
+counters, gauges and timers it keeps, `ingest` for samples from elsewhere,
+and `read`, `latest` and `aggregate`, whose `every` and `by` are records'.
+The Go engine's eighteen options become a name's own `keep` and `buckets`,
+and the engine's choices. Instruments send what changed and the store keeps
+each total, so that processes sharing a store count into one series; each
+run of a total starts with a zero written at its start, so that a reset is
+seen whatever the new count. `lookback` is gone: the first bucket steps from
+the newest sample before the range, and a bucket after a gap says so.
+Dashbin's B2 is a timer's `buckets`, whose percentile is an interval, `lower`
+to `upper`, beside a gauge's exact percentile by rank; B6 is `names`,
+`labelNames` and `labelValues`. Rollups, Prometheus' text and `poll` (C4, C5,
+C6) are shapes for later.
+
 ## Open
 
 - The order of config layers: the draft in

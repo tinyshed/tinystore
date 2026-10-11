@@ -60,18 +60,17 @@ taken against Go `e81a050` and written up as a research round.
 **Gate:** their GATES.md lines pass in Rust and through every SDK; Dashbin can
 start on sqldb, kv and jobs.
 
-### Dashbin's asks the rewrite has not carried yet
+### Dashbin's asks the plan had lost
 
-Decided or built for the Go engines, and in no book or phase of this plan
-yet; each is decided again, in its order, once blobs are on the wire:
-
-- B2: histograms and exact quantiles, for the metrics book, before its
-  engine.
+Each is now in a book or closed.
 
 In a book, and built with its engine: B5, aggregates over records, B6, the
 names a store holds, and B11, a live tail, which the records book has as
 `count`, `top` and `aggregate`, `streams` and `fieldNames`, and `tail`
-([api/records.md](api/records.md)).
+([api/records.md](api/records.md)); B2, histograms and exact quantiles, and
+B6 for metrics, which the metrics book has as a timer's `buckets` and its
+percentile, a gauge's percentile by rank, and `names`, `labelNames` and
+`labelValues` ([api/metrics.md](api/metrics.md)).
 
 Closed: C2, the `read` token; B10, a memo, which `once` with a short `keep`
 is, across processes too; C9, values kept encrypted, which an encrypted
@@ -137,7 +136,7 @@ them.
   Closed on 11 October, slices 1 to 8 pushed: what GATES still holds to Go alone is the format's readers,
   which wait for v0.1.0, the command's printer of phase 4, and follow's cache, level masks and an
   append's trace, which the owner left as they are; FSE is left out by the owner's choice.
-- [ ] metrics: series, instruments, sealing, exact aggregates, retention, the step rule; the `metrics` crate recorder.
+- [ ] metrics to its accepted book ([api/metrics.md](api/metrics.md)): series, instruments whose totals the store keeps, sealing, exact aggregates and percentiles, retention, the step rule and gaps; the `metrics` crate recorder.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

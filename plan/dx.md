@@ -110,6 +110,8 @@ Decided words are settled; draft words wait for their engine's book.
 | `logger`, `events`                 | what prints and keeps a program's lines; a named stream of events, every stream without a name | records                | `store.records`, `Handler`, `Append`                | draft   |
 | `fields`, `context`                | what an event's call gave; what its logger's `with` gave                                       | records                | `Attrs`, `Context`                                  | draft   |
 | `tail`, `poll`                     | events as they are written, from now; every event once, from a cursor the program keeps        | records                | `Tail`, `Follow`                                    | draft   |
+| `ingest`, `latest`                 | samples sent from elsewhere; each series' newest sample in a range                             | metrics                | `Ingest`, `Latest`                                  | draft   |
+| `by`, `op`                         | the labels or keys that make an aggregate's groups; what each of its buckets answers           | records, metrics       | `By`, `Op`, `Width` for `every`                     | draft   |
 
 ## jobs, today and the draft
 
