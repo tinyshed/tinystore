@@ -158,7 +158,14 @@ module defines.
 - the times of a millisecond's clock take a few bits each, and a column of one value none — `times_of_a_millisecond_clock_take_a_few_bits_each`, `a_column_of_one_value_takes_no_bit_a_value` in `records::ints`
 - small integers among a few wide ones take a rice code, at the parameter that is priced cheapest and not guessed from their mean — `small_values_among_a_few_wide_ones_take_a_rice_code` in `records::ints`, `the_cheapest_parameter_is_priced_and_not_guessed_from_the_mean`, `a_rice_code_gives_back_any_value_at_any_parameter_in_the_bits_its_cost_says` in `records::bits`
 - integers near a steady step are kept as how far off it they lie — `values_near_a_steady_step_are_kept_as_how_far_off_it_they_lie` in `records::ints`
-- text that repeats is written once — `values_that_repeat_are_written_once` in `records::text`
+- text that repeats is written once, and byte strings come back whatever bytes they hold — `values_that_repeat_are_written_once`, `byte_strings_come_back_whatever_bytes_they_hold`, `lines_short_of_their_count_or_their_last_break_are_refused` in `records::text`
+- a few distinct integers take a dictionary, and the value seven in eight share is kept once with the others apart — `a_few_distinct_values_take_a_dictionary`, `the_value_seven_in_eight_share_is_kept_once_and_the_others_apart` in `records::ints`
+- a column nested in another is written directly, and a dictionary or a dominant value read otherwise than written is refused — `a_dictionary_or_a_dominant_value_read_otherwise_than_written_is_refused` in `records::ints`
+- quoted values are typed by what is inside, uuids and hex kept as their bytes, and come back quoted — `quoted_values_are_typed_by_what_is_inside_and_come_back_quoted` in `records::values`
+- integers that count time are kept as how far behind their events they lie — `integers_that_count_time_are_kept_as_how_far_behind_their_events_they_lie` in `records::values`
+- integers but for one value in eight at most keep those apart — `integers_but_for_a_few_keep_those_apart` in `records::values`
+- a value column of a kind nobody wrote, cut short, or spelling more than its block may expand to is refused — `a_column_of_a_kind_nobody_wrote_or_cut_short_is_refused` in `records::values`
+- a segment of one name and one shape writes no column of them — `a_segment_of_one_name_and_one_shape_writes_no_column_of_them` in `records::block`
 - a time a line spells comes back as it was spelled — `every_layout_spells_its_text_back`, `a_fraction_is_one_to_nine_digits_and_more_stay_text`, `a_value_keeps_up_to_four_stamps_each_within_reach_of_the_one_before` in `records::stamp`; its fuzzer to come
 - what no calendar shows stays text — `a_time_no_calendar_or_clock_shows_stays_text` in `records::stamp`
 - a time kept against its record needs that record — `stamps_read_with_other_times_or_from_changed_bytes_are_other_text_or_refused_and_never_more` in `records::stamp`

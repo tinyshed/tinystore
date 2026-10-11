@@ -43,7 +43,7 @@ const REACH: usize = 64;
 const MOST_LAYOUTS: usize = 64;
 const MOST_LAYOUT: usize = 64;
 /// A fraction's digits at most: nanoseconds.
-const MOST_DIGITS: u8 = 9;
+pub(super) const MOST_DIGITS: u8 = 9;
 const SECONDS_IN_DAY: i64 = 86_400;
 const NANOS_IN_DAY: i64 = SECONDS_IN_DAY * 1_000_000_000;
 /// The fewest bytes a pattern spells: "0923 00:47:32".
@@ -204,7 +204,7 @@ fn pow10(digits: u8) -> i64 {
 /// ```text
 /// at 1727300000123456789 ns, a stamp of 1727300000121 in milliseconds → 2 behind
 /// ```
-fn behind(at: i64, wall: i64, digits: u8) -> Option<i64> {
+pub(super) fn behind(at: i64, wall: i64, digits: u8) -> Option<i64> {
     at.div_euclid(pow10(MOST_DIGITS - digits)).checked_sub(wall)
 }
 

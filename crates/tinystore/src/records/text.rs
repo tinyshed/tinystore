@@ -1,6 +1,7 @@
 //! A text column: its distinct values once and an id a value when at most
 //! half of them are distinct, its values one after another otherwise; either
-//! way one zstd pass over the text, and none where zstd would add bytes.
+//! way one zstd pass over the text, and none where zstd would add bytes. A
+//! column of byte strings, a uuid's sixteen each, is written the same way.
 //!
 //! ```text
 //! "GET /notes" "GET /notes" "POST /buy" "GET /notes"   → dictionary: 2 values, ids 0 0 1 0
@@ -39,6 +40,11 @@ pub(super) struct Decoder<'c> {
 
 /// Appends a column of text; of none, nothing.
 pub(super) fn put_texts(out: &mut Vec<u8>, values: &[&str], codec: &mut Codec) -> Result<()> {
+    put_bytes(out, &values.iter().map(|value| value.as_bytes()).collect::<Vec<_>>(), codec)
+}
+
+/// Appends a column of byte strings; of none, nothing.
+pub(super) fn put_bytes(out: &mut Vec<u8>, values: &[&[u8]], codec: &mut Codec) -> Result<()> {
     if values.is_empty() {
         return Ok(());
     }
@@ -63,19 +69,19 @@ pub(super) fn put_texts(out: &mut Vec<u8>, values: &[&str], codec: &mut Codec) -
 
 /// Values one after another: a line each when none holds a line break, their
 /// lengths and then their bytes otherwise.
-fn put_whole(out: &mut Vec<u8>, values: &[&str], codec: &mut Codec) -> Result<()> {
-    if values.iter().all(|value| !value.contains('\n')) {
+fn put_whole(out: &mut Vec<u8>, values: &[&[u8]], codec: &mut Codec) -> Result<()> {
+    if values.iter().all(|value| !value.contains(&b'\n')) {
         out.push(LINES);
-        let mut blob = String::new();
+        let mut blob = Vec::with_capacity(values.iter().map(|value| value.len() + 1).sum());
         values.iter().for_each(|value| {
-            blob.push_str(value);
-            blob.push('\n');
+            blob.extend_from_slice(value);
+            blob.push(b'\n');
         });
-        return put_blob(out, blob.as_bytes(), codec);
+        return put_blob(out, &blob, codec);
     }
     out.push(LENGTHS);
     put_ints(out, &values.iter().map(|value| value.len() as i64).collect::<Vec<_>>());
-    put_blob(out, values.concat().as_bytes(), codec)
+    put_blob(out, &values.concat(), codec)
 }
 
 /// Bytes through zstd, or as they are where that is no shorter.
@@ -122,17 +128,33 @@ pub(super) fn read_blob(reader: &mut Reader<'_>, decoder: &mut Decoder<'_>) -> V
 
 /// A column of `count` texts; of none, without reading anything.
 pub(super) fn read_texts(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<String> {
+    read_column(reader, count, decoder, |value| String::from_utf8(value).ok())
+}
+
+/// A column of `count` byte strings; of none, without reading anything.
+pub(super) fn read_bytes(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<Vec<u8>> {
+    read_column(reader, count, decoder, Some)
+}
+
+/// A column's values, each made what `make` makes of its bytes, which a
+/// dictionary's values are made once.
+fn read_column<T: Clone>(
+    reader: &mut Reader<'_>,
+    count: usize,
+    decoder: &mut Decoder<'_>,
+    make: fn(Vec<u8>) -> Option<T>,
+) -> Vec<T> {
     if count == 0 {
         return Vec::new();
     }
     match reader.byte() {
-        VALUES => read_whole(reader, count, decoder),
+        VALUES => read_whole(reader, count, decoder, make),
         DICTIONARY => {
             let distinct = reader.count(count);
-            let values = read_whole(reader, distinct, decoder);
+            let values = read_whole(reader, distinct, decoder, make);
             let ids = read_ints(reader, count);
             let named = ids.iter().map(|id| usize::try_from(*id).ok().and_then(|id| values.get(id)).cloned());
-            named.collect::<Option<Vec<String>>>().unwrap_or_else(|| {
+            named.collect::<Option<Vec<T>>>().unwrap_or_else(|| {
                 reader.fail("a text column's id past its dictionary");
                 Vec::new()
             })
@@ -144,35 +166,41 @@ pub(super) fn read_texts(reader: &mut Reader<'_>, count: usize, decoder: &mut De
     }
 }
 
-fn read_whole(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<String> {
+fn read_whole<T>(
+    reader: &mut Reader<'_>,
+    count: usize,
+    decoder: &mut Decoder<'_>,
+    make: fn(Vec<u8>) -> Option<T>,
+) -> Vec<T> {
     let layout = reader.byte();
     let lengths = if layout == LENGTHS { read_ints(reader, count) } else { Vec::new() };
-    let Ok(blob) = String::from_utf8(read_blob(reader, decoder)) else {
-        reader.fail("text that is not UTF-8");
-        return Vec::new();
-    };
-    let values: Option<Vec<String>> = match layout {
+    let blob = read_blob(reader, decoder);
+    let values: Option<Vec<Vec<u8>>> = match layout {
         LINES => {
-            let lines: Vec<&str> = blob.split_terminator('\n').collect();
-            let whole = blob.ends_with('\n') || (count == 0 && blob.is_empty());
-            (whole && lines.len() == count && blob.matches('\n').count() == count)
-                .then(|| lines.into_iter().map(str::to_owned).collect())
+            // whole lines end with a break, past which a split finds nothing
+            let mut lines: Vec<&[u8]> = blob.split(|byte| *byte == b'\n').collect();
+            (lines.pop() == Some(&[][..]) && lines.len() == count)
+                .then(|| lines.into_iter().map(<[u8]>::to_vec).collect())
         }
         LENGTHS => {
-            let mut from = 0;
+            let mut from = 0_usize;
             let cut = |length: &i64| {
-                let to = from + usize::try_from(*length).ok()?;
-                let value = blob.get(from..to)?.to_owned();
+                let to = from.checked_add(usize::try_from(*length).ok()?)?;
+                let value = blob.get(from..to)?.to_vec();
                 from = to;
                 Some(value)
             };
-            let values: Option<Vec<String>> = lengths.iter().map(cut).collect();
+            let values: Option<Vec<Vec<u8>>> = lengths.iter().map(cut).collect();
             values.filter(|values| values.len() == count && from == blob.len())
         }
         _ => None,
     };
-    values.unwrap_or_else(|| {
+    let Some(values) = values else {
         reader.fail("a text column whose values are not its count");
+        return Vec::new();
+    };
+    values.into_iter().map(make).collect::<Option<Vec<T>>>().unwrap_or_else(|| {
+        reader.fail("text that is not UTF-8");
         Vec::new()
     })
 }
@@ -201,6 +229,36 @@ mod tests {
         written(&["GET /notes", "GET /notes", "POST /buy", "GET /notes"]);
         let distinct: Vec<String> = (0..200).map(|n| format!("request {n} of a long enough line to squeeze")).collect();
         written(&distinct.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn byte_strings_come_back_whatever_bytes_they_hold() {
+        let mut codec = Codec::default();
+        let values: Vec<Vec<u8>> = (0..64_u8).map(|n| vec![n, b'\n', 0xff, n.wrapping_mul(37)]).collect();
+        let values: Vec<&[u8]> = values.iter().map(Vec::as_slice).chain([&[][..], &[0xc3]]).collect();
+        let mut out = Vec::new();
+        put_bytes(&mut out, &values, &mut codec).unwrap();
+        let mut reader = Reader::new(&out);
+        let read = read_bytes(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        reader.finish().unwrap();
+        assert_eq!(read, values);
+        // the same bytes read as text are refused, a byte that starts a letter and ends nothing among them
+        let mut reader = Reader::new(&out);
+        read_texts(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        assert_eq!(reader.finish().unwrap_err().to_string(), "text that is not UTF-8: corrupt");
+    }
+
+    #[test]
+    fn lines_short_of_their_count_or_their_last_break_are_refused() {
+        let mut codec = Codec::default();
+        for (blob, count) in [(&b"a\nb"[..], 1), (b"a\nb", 2), (b"a\nb\n", 3), (b"", 1)] {
+            let mut column = vec![VALUES, LINES, STORED];
+            put_count(&mut column, blob.len() as u64);
+            column.extend_from_slice(blob);
+            let mut reader = Reader::new(&column);
+            read_texts(&mut reader, count, &mut Decoder { codec: &mut codec, left: 1 << 20 });
+            assert!(reader.finish().is_err(), "{blob:?}");
+        }
     }
 
     #[test]

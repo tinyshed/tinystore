@@ -1,8 +1,9 @@
-//! An integer column, written the cheapest exact way of those priced: its
-//! values, the steps from each to the next, or how far each lies off a
-//! steady step; either way less the smallest, divided by what divides them
-//! all, and then each in the bits the largest needs or as a rice code,
-//! whichever takes fewer bytes.
+//! An integer column, written the cheapest exact way of those priced.
+//!
+//! Directly: its values, the steps from each to the next, or how far each
+//! lies off a steady step; either way less the smallest, divided by what
+//! divides them all, and then each in the bits the largest needs or as a rice
+//! code, whichever takes fewer bytes.
 //!
 //! ```text
 //! times, a millisecond's clock in ns    1000000000   1002000000   1005000000
@@ -11,8 +12,18 @@
 //! divided by 1000000                                 0            1          a bit each
 //! ```
 //!
+//! Or, of eight values or more, as a dictionary of the few distinct ones, or
+//! as the value seven in eight share with the others apart:
+//!
+//! ```text
+//! 200 404 200 500 200 200 200 404        → dictionary 200 404 500, ids 0 1 0 2 0 0 0 1
+//! 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1000000  → 0, and 1000000 at place 15
+//! ```
+//!
 //! Every step and every difference wraps around as its inverse does, so any
 //! sixty-four bits come back.
+
+use std::collections::HashMap;
 
 use super::bits::{BitReader, BitWriter, RiceCost, pack, packed_len, read_rice, unpack, write_rice};
 use super::bytes::{Reader, put_count, put_int};
@@ -21,6 +32,8 @@ use super::bytes::{Reader, put_count, put_int};
 const VALUES: u8 = 0;
 const STEPS: u8 = 1;
 const TREND: u8 = 2;
+const DICTIONARY: u8 = 3;
+const DOMINANT: u8 = 4;
 
 // how they are packed
 const WIDTH: u8 = 0;
@@ -28,6 +41,10 @@ const RICE: u8 = 1;
 
 /// The values a column needs before a steady step is looked for in it.
 const TREND_VALUES: usize = 16;
+/// The values a column needs before a dictionary or a dominant value is.
+const COUNTED_VALUES: usize = 8;
+/// The distinct values a dictionary holds at most.
+const MOST_DISTINCT: usize = 256;
 
 /// Appends integers less their smallest and divided by what divides them
 /// all, in one width or as rice codes.
@@ -117,6 +134,20 @@ fn trend_step(values: &[i64]) -> Option<i64> {
 
 /// Appends a column of integers; of none, nothing.
 pub(super) fn put_ints(out: &mut Vec<u8>, values: &[i64]) {
+    let start = out.len();
+    put_direct(out, values);
+    let Some(counts) = (values.len() >= COUNTED_VALUES).then(|| counted(values)).flatten() else { return };
+    for other in [dictionary(values, &counts), dominant(values, &counts)].into_iter().flatten() {
+        if other.len() < out.len() - start {
+            out.truncate(start);
+            out.extend_from_slice(&other);
+        }
+    }
+}
+
+/// Appends a column of integers written directly, the one way a column
+/// nested in another is; of none, nothing.
+pub(super) fn put_direct(out: &mut Vec<u8>, values: &[i64]) {
     let Some(first) = values.first().copied() else { return };
     let mut smallest = vec![VALUES];
     put_reduced(&mut smallest, values.iter().copied());
@@ -142,12 +173,78 @@ pub(super) fn put_ints(out: &mut Vec<u8>, values: &[i64]) {
     out.extend_from_slice(&smallest);
 }
 
+/// How many times each value stands, while they are few enough for a
+/// dictionary.
+fn counted(values: &[i64]) -> Option<HashMap<i64, usize>> {
+    let mut counts = HashMap::new();
+    for value in values {
+        *counts.entry(*value).or_insert(0) += 1;
+        if counts.len() > MOST_DISTINCT {
+            return None;
+        }
+    }
+    Some(counts)
+}
+
+/// The distinct values once, sorted, and which of them each value is, when
+/// a quarter of the values or fewer are distinct.
+fn dictionary(values: &[i64], counts: &HashMap<i64, usize>) -> Option<Vec<u8>> {
+    if counts.len() * 4 > values.len() {
+        return None;
+    }
+    let mut words: Vec<i64> = counts.keys().copied().collect();
+    words.sort_unstable();
+    let ids: Vec<i64> = values.iter().map(|value| words.binary_search(value).unwrap_or(0) as i64).collect();
+    let mut out = vec![DICTIONARY];
+    put_count(&mut out, words.len() as u64);
+    put_direct(&mut out, &words);
+    put_direct(&mut out, &ids);
+    Some(out)
+}
+
+/// The value seven in eight share, the smallest of a tie, once, and where
+/// the others stand with what they are.
+fn dominant(values: &[i64], counts: &HashMap<i64, usize>) -> Option<Vec<u8>> {
+    let most = |(value, count): (&i64, &usize)| (*count, std::cmp::Reverse(*value));
+    let (frequency, std::cmp::Reverse(dominant)) = counts.iter().map(most).max()?;
+    if frequency * 8 < values.len() * 7 || frequency == values.len() {
+        return None;
+    }
+    let others = values.iter().enumerate().filter(|(_, value)| **value != dominant);
+    let (places, others): (Vec<i64>, Vec<i64>) = others.map(|(place, value)| (place as i64, *value)).unzip();
+    let mut out = vec![DOMINANT];
+    put_int(&mut out, dominant);
+    put_count(&mut out, places.len() as u64);
+    put_direct(&mut out, &places);
+    put_direct(&mut out, &others);
+    Some(out)
+}
+
 /// A column of `count` integers; of none, without reading anything.
 pub(super) fn read_ints(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
     if count == 0 {
         return Vec::new();
     }
     match reader.byte() {
+        DICTIONARY => read_dictionary(reader, count),
+        DOMINANT => read_dominant(reader, count),
+        kind => read_written(reader, kind, count),
+    }
+}
+
+/// A column of `count` integers `put_direct` wrote; of none, without reading
+/// anything.
+pub(super) fn read_direct(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let kind = reader.byte();
+    read_written(reader, kind, count)
+}
+
+/// The integers of a column written directly, past its first byte.
+fn read_written(reader: &mut Reader<'_>, kind: u8, count: usize) -> Vec<i64> {
+    match kind {
         VALUES => read_reduced(reader, count),
         STEPS => {
             let mut value = reader.int();
@@ -172,6 +269,34 @@ pub(super) fn read_ints(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
     }
 }
 
+fn read_dictionary(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
+    let distinct = reader.count(MOST_DISTINCT.min(count));
+    let words = read_direct(reader, distinct);
+    let ids = read_direct(reader, count);
+    let named = ids.iter().map(|id| usize::try_from(*id).ok().and_then(|id| words.get(id)).copied());
+    named.collect::<Option<Vec<i64>>>().unwrap_or_else(|| {
+        reader.fail("an integer column's id past its dictionary");
+        Vec::new()
+    })
+}
+
+fn read_dominant(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
+    let dominant = reader.int();
+    let apart = reader.count(count);
+    let (places, others) = (read_direct(reader, apart), read_direct(reader, apart));
+    let mut values = vec![dominant; count];
+    // each place past the one before and inside the column, so none is set twice
+    let mut free = 0;
+    for (place, other) in places.iter().zip(others) {
+        let Some(place) = usize::try_from(*place).ok().filter(|place| (free..count).contains(place)) else {
+            reader.fail("an integer column's other value out of its place");
+            return Vec::new();
+        };
+        (values[place], free) = (other, place + 1);
+    }
+    values
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +306,15 @@ mod tests {
         put_ints(&mut out, values);
         let mut reader = Reader::new(&out);
         assert_eq!(read_ints(&mut reader, values.len()), values);
+        reader.finish().unwrap();
+        out
+    }
+
+    fn written_directly(values: &[i64]) -> Vec<u8> {
+        let mut out = Vec::new();
+        put_direct(&mut out, values);
+        let mut reader = Reader::new(&out);
+        assert_eq!(read_direct(&mut reader, values.len()), values);
         reader.finish().unwrap();
         out
     }
@@ -213,6 +347,8 @@ mod tests {
         }
         let extremes: Vec<i64> = (0..40).map(|n| if n % 2 == 0 { i64::MIN + n } else { i64::MAX - n }).collect();
         written(&extremes);
+        let mostly: Vec<i64> = (0..64).map(|n| if n % 9 == 4 { i64::MIN } else { i64::MAX }).collect();
+        written(&mostly);
     }
 
     #[test]
@@ -238,7 +374,7 @@ mod tests {
             gaps[place] = wide;
         }
         // a bit a zero and an escape a wide one, where one width for all is twenty-six bits each
-        let column = written(&gaps);
+        let column = written_directly(&gaps);
         assert!(column.len() < 1000 / 8 + 4 * 12 + 16, "{}", column.len());
         assert_eq!(column[..4], [VALUES, 0, 1, RICE]);
     }
@@ -256,11 +392,40 @@ mod tests {
     }
 
     #[test]
+    fn a_few_distinct_values_take_a_dictionary() {
+        let statuses = [200, 404, 500, 302, 201, 301, 403, 503];
+        let column: Vec<i64> = scattered(1024, 3).iter().map(|pick| statuses[*pick as usize]).collect();
+        // three bits an id, where 200 to 503 less 200 take nine
+        let dictionary = written(&column);
+        assert_eq!(dictionary[0], DICTIONARY);
+        assert!(dictionary.len() <= 1024 * 3 / 8 + 32, "{}", dictionary.len());
+        let distinct: Vec<i64> = (0..64).map(|n| n * n * 1000).collect();
+        assert_ne!(written(&distinct)[0], DICTIONARY);
+    }
+
+    #[test]
+    fn the_value_seven_in_eight_share_is_kept_once_and_the_others_apart() {
+        let mut column = vec![200_i64; 1024];
+        for (place, other) in scattered(40, 10).iter().enumerate() {
+            column[place * 25 + 3] = 1000 + other;
+        }
+        let dominant = written(&column);
+        assert_eq!(dominant[0], DOMINANT);
+        // forty places and forty values, where a dictionary's ids alone take six bits each
+        assert!(dominant.len() <= 40 * 3 + 24, "{}", dominant.len());
+        // one in eight apart is too many
+        let mut fewer = vec![200_i64; 64];
+        fewer[..9].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_ne!(written(&fewer)[0], DOMINANT);
+    }
+
+    #[test]
     fn a_column_cut_short_or_of_a_kind_nobody_wrote_is_said() {
         let mut gaps = vec![0_i64; 64];
         gaps[9] = 1_000_001;
         gaps[40] = 999_999;
-        for values in [vec![1, 2, 4, 8, 16, 32, 64, 128, 256], gaps, scattered(40, 30)] {
+        let statuses: Vec<i64> = (0..64).map(|n| [200, 404, 500][n % 3]).collect();
+        for values in [vec![1, 2, 4, 8, 16, 32, 64, 128, 256], gaps, scattered(40, 30), statuses] {
             let column = written(&values);
             for cut in 0..column.len() {
                 let mut reader = Reader::new(&column[..cut]);
@@ -274,6 +439,33 @@ mod tests {
             let mut reader = Reader::new(unknown);
             read_ints(&mut reader, 1);
             assert!(reader.finish().is_err(), "{unknown:?}");
+        }
+    }
+
+    #[test]
+    fn a_dictionary_or_a_dominant_value_read_otherwise_than_written_is_refused() {
+        let refused = |column: &[u8], count: usize| {
+            let mut reader = Reader::new(column);
+            read_ints(&mut reader, count);
+            assert!(reader.finish().is_err(), "{column:?}");
+        };
+        let mut nested = vec![DICTIONARY, 1];
+        put_direct(&mut nested, &[7]);
+        put_direct(&mut nested, &[0; 8]);
+        // a dictionary inside a dictionary: a nested column is always direct
+        let mut twice = vec![DICTIONARY, 1];
+        twice.extend_from_slice(&nested);
+        put_direct(&mut twice, &[0; 8]);
+        refused(&twice, 8);
+        let mut past = vec![DICTIONARY, 1];
+        put_direct(&mut past, &[7]);
+        put_direct(&mut past, &[0, 0, 1, 0, 0, 0, 0, 0]);
+        refused(&past, 8);
+        for places in [[5, 3], [5, 8], [2, 2], [-1, 4]] {
+            let mut placed = vec![DOMINANT, 0, 2];
+            put_direct(&mut placed, &places);
+            put_direct(&mut placed, &[1, 2]);
+            refused(&placed, 8);
         }
     }
 }

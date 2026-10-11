@@ -5,8 +5,8 @@
 //! version | count | columns | each column's length | the columns | crc-32
 //!
 //! times      every event's
-//! names      every event's, as its segment numbers them
-//! shapes     every event's
+//! names      every event's, as its segment numbers them; none of a segment of one name
+//! shapes     every event's; none of a segment of one shape
 //! contexts   of the events that have one, as their segment numbers them
 //! levels     of the events that have one
 //! messages   of the events that have one
@@ -52,8 +52,12 @@ pub(super) fn encode(schema: &Schema, events: &[Kept], ids: [&[i64]; 3], codec: 
     let [names, shapes, contexts] = ids;
     let mut columns = vec![Vec::new(); FIXED + schema.columns];
     put_ints(&mut columns[TIMES], &events.iter().map(|event| event.at).collect::<Vec<_>>());
-    put_ints(&mut columns[NAMES], names);
-    put_ints(&mut columns[SHAPES], shapes);
+    if schema.names.len() > 1 {
+        put_ints(&mut columns[NAMES], names);
+    }
+    if schema.shapes.len() > 1 {
+        put_ints(&mut columns[SHAPES], shapes);
+    }
     let shape_of = |place: usize| &schema.shapes[shapes[place] as usize];
     let with = |part: u8| (0..events.len()).filter(move |place| shape_of(*place).has(part));
     put_ints(&mut columns[CONTEXTS], &with(HAS_CONTEXT).map(|place| contexts[place]).collect::<Vec<_>>());
@@ -170,8 +174,12 @@ pub(super) fn parse(schema: &Schema, body: &[u8], codec: &mut Codec) -> Result<V
     let count = opened.count;
     let mut decoder = Decoder { codec, left: BLOCK_TEXT };
     let times = opened.ints(TIMES, count, "a block's times")?;
-    let names = opened.ints(NAMES, count, "a block's names")?;
-    let shapes = shapes_of(schema, &opened.ints(SHAPES, count, "a block's shapes")?)?;
+    let ids = |column: usize, of: usize, what: &'static str| match of {
+        1 => opened.ints(column, 0, what).map(|_| vec![0; count]),
+        _ => opened.ints(column, count, what),
+    };
+    let names = ids(NAMES, schema.names.len(), "a block's names")?;
+    let shapes = shapes_of(schema, &ids(SHAPES, schema.shapes.len(), "a block's shapes")?)?;
     let with = |part: u8| shapes.iter().filter(|shape| shape.has(part)).count();
 
     let mut contexts = opened.ints(CONTEXTS, with(HAS_CONTEXT), "a block's contexts")?.into_iter();
@@ -230,10 +238,10 @@ pub(super) fn parse(schema: &Schema, body: &[u8], codec: &mut Codec) -> Result<V
     Ok(events)
 }
 
-/// The bytes of each column of a block, for a measurement.
+/// Each column of a block, for a measurement.
 #[cfg(test)]
-fn column_lengths(schema: &Schema, body: &[u8]) -> Result<Vec<usize>> {
-    Ok(Opened::of(schema, body)?.columns.iter().map(|column| column.len()).collect())
+fn columns_of<'b>(schema: &Schema, body: &'b [u8]) -> Result<Vec<&'b [u8]>> {
+    Ok(Opened::of(schema, body)?.columns)
 }
 
 /// The shape of each event, by its id in the segment.
