@@ -183,20 +183,22 @@ code  →  files  →  changes at run time  →  environment      (the last wins
 
 ## Logger
 
-The records engine, the console format and the redaction of secrets live in
-the core, once.
+The records engine lives in the core, once. The console format and the
+redaction of secrets live where a line is printed: in the core for a Rust
+program and the command, in each SDK for its language
+([decisions.md](decisions.md), entry 18).
 
 - **Rust:** a `tracing` layer. `tracing::info!(user = 42, "signed in")` reaches
   the console and records; spans give the trace and span. A recorder for the
   `metrics` crate sends `counter!("http.requests")` to the metrics engine.
-- **Other languages:** a thin logger in the SDK (an `slog.Handler` in Go, a
-  logger in Bun and Python) hands each record to the core. Embedded, the core
-  redacts and formats the line and returns it from `send`, and the SDK prints
-  it to its own stderr, so it keeps its place among the application's other
-  output.
-- **Through a sidecar:** a round trip of 40–200 µs a line is too slow, so the
-  SDK prints with a small formatter of its own, checked against the same
-  console vectors. It is the only duplicate left.
+- **Other languages:** a logger in the SDK (an `slog.Handler` in Go, a
+  logger in Bun and Python) hides a line's secrets, prints it to its own
+  stderr as it is logged, and hands its events to the core in a batch a
+  second. It does so however the store is reached: through a sidecar a round
+  trip of 40–200 µs a line is too slow, so the SDK needs its formatter
+  anyway.
+- **The same bytes:** every formatter, the core's and each SDK's, is checked
+  against the same console vectors.
 - `LOG_*` and the logger's options come through the config layers.
 
 ## Later modules

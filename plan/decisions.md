@@ -113,6 +113,23 @@ write with `returning`, routed by what SQLite says of the statement; `include`
 waits for a prototype. Whether kv's `store.tx` over the wire stops running its
 function again is a decision of its own.
 
+**18. The records book is accepted** ([api/records.md](api/records.md)),
+after two newcomer checks, a blind comparison and the owner's review. A
+program meets the engine as `store.logger` and `store.events`: one word for
+what is written and what is read, and `store.events()` without a name reads
+every stream. `keep` is a stream's own, kept in its file; `tail` gives events
+live and `poll` every event once from a cursor; `count`, `top` and
+`aggregate`, `streams` and `fieldNames` carry Dashbin's B5 and B6; `search`
+reads the values of fields too. The storage is the Go engine's, measured
+there, and changes only by a measurement; zstd comes with the feature.
+
+Against entry 3, an SDK's logger prints its own lines however its store is
+reached, and the core prints a Rust program's and the command's. A sidecar's
+round trip a line is too slow, so an SDK has its formatter either way, and a
+second path through the core for a store in the process would be one more to
+differ. The console's vectors keep a line the same bytes in every language,
+and a secret is hidden before its event leaves the program.
+
 ## Open
 
 - The order of config layers: the draft in

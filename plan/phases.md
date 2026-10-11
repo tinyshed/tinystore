@@ -64,9 +64,13 @@ start on sqldb, kv and jobs.
 Decided or built for the Go engines, and in no book or phase of this plan
 yet; each is decided again, in its order, once blobs are on the wire:
 
-- B2: histograms and exact quantiles; B5: aggregates over records; B6: the
-  names a store holds, for a query builder; B11: a live tail of records — for
-  the records and metrics books, before phase 3.
+- B2: histograms and exact quantiles, for the metrics book, before its
+  engine.
+
+In a book, and built with its engine: B5, aggregates over records, B6, the
+names a store holds, and B11, a live tail, which the records book has as
+`count`, `top` and `aggregate`, `streams` and `fieldNames`, and `tail`
+([api/records.md](api/records.md)).
 
 Closed: C2, the `read` token; B10, a memo, which `once` with a short `keep`
 is, across processes too; C9, values kept encrypted, which an encrypted
