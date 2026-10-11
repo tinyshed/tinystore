@@ -52,6 +52,19 @@ const eight = new DataView(new ArrayBuffer(8))
 const eightBytes = new Uint8Array(eight.buffer)
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER)
+
+/** The integers a number holds exactly reach 2^53 - 1: 21 bits above an int64's low 32. */
+const HIGH_MOST = 0x1fffff
+
+/**
+ * An int64 of its high 32 bits, signed, and its low 32, unsigned: a number
+ * when a number holds it exactly, else a bigint.
+ */
+export function int64Of(high: number, low: number): number | bigint {
+	const exact =
+		high <= HIGH_MOST && (high > -HIGH_MOST - 1 || (high === -HIGH_MOST - 1 && low !== 0))
+	return exact ? high * 0x1_0000_0000 + low : (BigInt(high) << 32n) | BigInt(low)
+}
 const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER)
 
 /** Writes one message, its buffer growing as it must. */
@@ -581,6 +594,52 @@ export class Reader {
 			throw fail(`${v} where an int64 belongs`)
 		}
 		return v
+	}
+
+	/**
+	 * Reads an integer in any encoding of its value: a number when a number
+	 * holds it exactly, and a bigint only past that, so that the integers a
+	 * program reads by the thousand make none.
+	 */
+	integer(): number | bigint {
+		const b = this.#peek()
+		if (b !== undefined && (b <= 0x7f || b >= NEGFIX)) {
+			this.#at++
+			return b <= 0x7f ? b : b - 0x100
+		}
+		switch (b) {
+			case UINT8:
+				this.#at++
+				return this.#bytes[this.#take(1)] as number
+			case UINT16:
+				this.#at++
+				return this.#two()
+			case UINT32:
+				this.#at++
+				return this.#four()
+			case INT8:
+				this.#at++
+				return ((this.#bytes[this.#take(1)] as number) << 24) >> 24
+			case INT16:
+				this.#at++
+				return (this.#two() << 16) >> 16
+			case INT32:
+				this.#at++
+				return this.#four() | 0
+			case INT64:
+				this.#at++
+				return int64Of(this.#four() | 0, this.#four())
+			case UINT64: {
+				this.#at++
+				const high = this.#four()
+				if (high > 0x7fff_ffff) {
+					this.#at -= 5
+					return this.int64()
+				}
+				return int64Of(high, this.#four())
+			}
+		}
+		return this.int64()
 	}
 
 	/** Reads an unsigned integer a number holds exactly. */

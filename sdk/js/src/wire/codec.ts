@@ -165,10 +165,8 @@ export const sqlValue: Codec<SqlValue | boolean, SqlArg> = {
 				return null
 			case 'bool':
 				return r.bool()
-			case 'int': {
-				const n = r.int64()
-				return n >= Number.MIN_SAFE_INTEGER && n <= Number.MAX_SAFE_INTEGER ? Number(n) : n
-			}
+			case 'int':
+				return r.integer()
 			case 'float':
 				return r.float()
 			case 'bin':

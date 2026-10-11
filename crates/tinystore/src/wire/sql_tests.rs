@@ -582,3 +582,26 @@ fn a_row_larger_than_a_message_is_limit_by_columns_as_by_rows() {
     let asked = SqlQuery { handle, text: asked.text, values: Vec::new(), want: "all".to_owned() };
     assert_eq!(client.call::<SqlRows>(method::SQL_QUERY, &asked).unwrap_err().code, "limit");
 }
+
+#[test]
+fn rows_written_as_they_are_read_are_the_message_its_codec_writes() {
+    use super::{Parted, RowBytes, row_parts};
+    use crate::sql::{Kept, Rows, Sql, Wanted};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let db = store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+    db.exec(Sql::new("insert into notes (id, title, done) values ('n1', 'Buy milk', 0), ('n2', 'Call mom', 1)"))
+        .unwrap();
+    let statements = [
+        "select id, title, done, done * 1.5 as load, null as empty, x'00ff' as raw, -9007199254740993 as far from notes",
+        "select id from notes where 0",
+        "select 1 where 0",
+    ];
+    for text in statements {
+        let read = Sql::new(text);
+        let written: Kept<RowBytes> = db.read(&read, Wanted::All).unwrap().expect("a query");
+        let kept: Rows = db.read(&read, Wanted::All).unwrap().expect("a query");
+        assert_eq!(written.parts(1 << 20).unwrap(), row_parts(kept, 1 << 20).unwrap(), "{text}");
+    }
+}

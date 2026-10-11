@@ -175,8 +175,8 @@ plot.setData([ts, cpu])                       // a chart takes them as they are
 
 `columns` gives what `all` gives, turned: an array a column, by the column's
 name, where `all` gives an object a row. It is for rows by the thousand, a
-chart's points or a report's measures: they come about twice as fast, and
-nobody turns rows into columns after.
+chart's points or a report's measures: they come a fifth to a half faster,
+and nobody turns rows into columns after.
 
 - **Every value is what `all` gives**: a number, a `bigint` for an integer
   past 2^53, a string, a `Uint8Array`, and `null` for a `NULL`. A column is
@@ -195,19 +195,20 @@ Smoke, not a research round, 11 October: a Ryzen 7 7700, Windows 11, Bun
 1.4.2, release build, medians of 15 calls after 3, run twice, `select ts, a,
 b, c` of a table `(ts integer, a real, b real, c real)`:
 
-| Rows    | The store       | `all`     | `columns` |
-|---------|-----------------|-----------|-----------|
-| 20,000  | in the process  | 8.7 ms    | 3.4 ms    |
-| 200,000 | in the process  | 79–83 ms  | 43–46 ms  |
-| 20,000  | a private child | 11 ms     | 4.8 ms    |
-| 200,000 | a private child | 98–101 ms | 49–50 ms  |
+| Rows    | The store       | `all`      | `columns`  |
+|---------|-----------------|------------|------------|
+| 20,000  | in the process  | 5.4–5.7 ms | 3.7–3.8 ms |
+| 200,000 | in the process  | 60–61 ms   | 48–50 ms   |
+| 20,000  | a private child | 8.1–8.2 ms | 4.6–4.8 ms |
+| 200,000 | a private child | 73–75 ms   | 51 ms      |
 
-With two columns of text among four, 200,000 rows took 123 to 130 ms and 84
-to 92 ms in the process: text costs `columns` what it costs `all`. SQLite
-alone steps the 200,000 rows in 22 ms. What `columns` saves is the keeping of
-each row's values in the core, which reads a number straight into its
-column's eight bytes, a cell a value in the message, and an object a row in
-JavaScript.
+With two columns of text among four, 200,000 rows took about 109 ms and 99 ms
+in the process: text costs `columns` what it costs `all`. SQLite alone steps
+the 200,000 rows in 22 ms. What `columns` saves is a cell a value in the
+message, where a number is its eight bytes, and an object a row in
+JavaScript. `all` took 79 to 83 ms for the 200,000 rows before the core wrote
+a row into its message as it read it, where it had kept each as values first,
+and before the Bun SDK read an integer without a `bigint`.
 
 The protocol carries a column of `INTEGER`s alone as int64s and one of
 `REAL`s alone as float64s, a bit a `NULL`, and any other as its values

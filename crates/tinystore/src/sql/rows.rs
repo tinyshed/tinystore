@@ -33,6 +33,7 @@ const FIRST_HELD: u64 = 64 << 10;
 pub(crate) struct Rows {
     columns: Arc<[String]>,
     values: Vec<Value>,
+    #[expect(dead_code, reason = "held while the rows are: its drop gives the store's memory back")]
     held: Held,
     /// The columns that hold an included query's rows.
     nested: Vec<Nested>,
@@ -146,6 +147,45 @@ pub(crate) fn step(
     Ok(Stepped { columns, declared, rows: count })
 }
 
+/// Where a statement's values go as its rows are read, for a caller that
+/// keeps them in a form of its own: the wire, as the bytes of its message.
+pub(crate) trait Keep: Default {
+    /// Takes the value of the row's column `column`, of `width` columns.
+    fn value(&mut self, column: usize, width: usize, value: Value);
+}
+
+/// A statement's rows as a `K` kept them, and the store's memory they hold.
+pub(crate) struct Kept<K> {
+    pub(crate) columns: Vec<String>,
+    pub(crate) rows: usize,
+    pub(crate) kept: K,
+    held: Held,
+}
+
+impl<K> Kept<K> {
+    /// The store's memory the rows hold, for whoever keeps them after the
+    /// call: a download until its last part is sent.
+    pub(crate) fn held(&mut self) -> Held {
+        std::mem::take(&mut self.held)
+    }
+}
+
+impl<K: Keep> Answer for Kept<K> {
+    fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), mut held: Held) -> Result<Self> {
+        let (mut kept, width) = (K::default(), statement.column_count());
+        let stepped = step(statement, values, bounds, &mut held, |column, value| kept.value(column, width, value))?;
+        Ok(Kept { columns: stepped.columns, rows: stepped.rows, kept, held })
+    }
+
+    fn len(&self) -> usize {
+        self.rows
+    }
+
+    fn width(&self) -> usize {
+        self.columns.len()
+    }
+}
+
 impl Answer for Rows {
     fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), mut held: Held) -> Result<Rows> {
         let mut kept = Vec::new();
@@ -172,12 +212,6 @@ impl Rows {
 
     pub(crate) fn columns(&self) -> &[String] {
         &self.columns
-    }
-
-    /// The store's memory the rows hold, for whoever keeps them after the
-    /// call: a download until its last part is sent.
-    pub(crate) fn held(&mut self) -> Held {
-        std::mem::take(&mut self.held)
     }
 
     /// The values, a row after another, each `width()` long.

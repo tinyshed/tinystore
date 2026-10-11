@@ -42,7 +42,7 @@ pub use statement::Sql;
 pub use tx::Tx;
 
 pub(crate) use columns::{Column, Columns};
-pub(crate) use rows::{Answer, Held, Rows};
+pub(crate) use rows::{Answer, Held, Keep, Kept, Rows};
 pub(crate) use run::Wanted;
 pub(crate) use values::Value;
 

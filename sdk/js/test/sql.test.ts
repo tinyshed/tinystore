@@ -283,6 +283,27 @@ for (const way of ways) {
 				least: [Number.MIN_SAFE_INTEGER],
 				below: [-9007199254740992n],
 			})
+			// a row's integer is a number as far as a number holds it, in every size it travels in
+			const sizes = [0, 127, 128, 65_535, 65_536, 4_294_967_295, 4_294_967_296, 1_700_000_000_000]
+			const signed = [
+				...sizes,
+				...sizes.map(size => -size),
+				-32,
+				-33,
+				-129,
+				-32_769,
+				-2_147_483_649,
+			]
+			const exact = [...signed, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]
+			const past = [
+				9007199254740992n,
+				-9007199254740992n,
+				9223372036854775807n,
+				-9223372036854775808n,
+			]
+			for (const integer of [...exact, ...past]) {
+				expect<unknown>(await app.scalar`select ${integer}`).toBe(integer)
+			}
 			const late = sql`select case ts when 1000 then null when 3000 then 9007199254740993 else ts end as late
 				from samples where ts <= 3000 order by ts`
 			expect<unknown>(await app.columns(late)).toEqual({ late: [null, 2000, 9007199254740993n] })

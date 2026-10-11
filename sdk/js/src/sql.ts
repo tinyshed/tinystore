@@ -34,6 +34,7 @@ import { Table, type TableOptions } from './query.ts'
 import type { StandardSchemaV1 } from './schema.ts'
 import type { Stream } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
+import { int64Of } from './wire/msgpack.ts'
 import {
 	methods,
 	SqlBatch,
@@ -538,9 +539,6 @@ function joined(parts: Uint8Array[]): Answered {
 	return answered
 }
 
-/** The integers a number holds exactly reach 2^53 - 1: 21 bits above an int64's low 32. */
-const HIGH_MOST = 0x1fffff
-
 /**
  * A statement's rows by their columns, from the parts of its answer: each
  * column the values `all` gives, in an array sized at the first part. A part
@@ -612,15 +610,10 @@ function takeIntegers(
 ) {
 	const words = new Int32Array(aligned(integers))
 	for (let row = 0; row < words.length / 2; row++) {
-		const low = (words[2 * row] as number) >>> 0
-		const high = words[2 * row + 1] as number
-		const exact =
-			high <= HIGH_MOST && (high > -HIGH_MOST - 1 || (high === -HIGH_MOST - 1 && low !== 0))
-		if (nulls !== undefined && (((nulls[row >> 3] as number) >> (row & 7)) & 1) === 1) {
-			into[at + row] = null
-		} else {
-			into[at + row] = exact ? high * 0x1_0000_0000 + low : (BigInt(high) << 32n) | BigInt(low)
-		}
+		const isNull = nulls !== undefined && (((nulls[row >> 3] as number) >> (row & 7)) & 1) === 1
+		into[at + row] = isNull
+			? null
+			: int64Of(words[2 * row + 1] as number, (words[2 * row] as number) >>> 0)
 	}
 }
 

@@ -11,14 +11,14 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use super::Route;
-use super::codec::{Cell, Message};
+use super::codec::{Cell, Map, Message};
 use super::protocol::{
     Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlOpen, SqlQuery, SqlRows,
     SqlStatement, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
+use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
-use crate::sql::{Answer, Column, Columns, Database, Done, Held, Migrations, Rows, Sql, Tx, Value, Wanted};
+use crate::sql::{Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, Tx, Value, Wanted};
 use crate::{Error, ErrorKind, Store, Transaction};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -195,7 +195,7 @@ pub(crate) fn query(
             .ok_or_else(|| Failure::invalid(format!("want {:?}: a query wants all, one or scalar", asked.want)))?;
         Ok((handles.database(asked.handle)?, statement(asked.text, asked.values)?, wanted))
     });
-    read_into::<Rows>(asked, link, read_only, done);
+    read_into::<Kept<RowBytes>>(asked, link, read_only, done);
 }
 
 /// Reads what a query asked into an `A`, its rows or their columns, and
@@ -233,13 +233,77 @@ trait Parted: Answer + Send + 'static {
     fn parts(self, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure>;
 }
 
-impl Parted for Rows {
+/// A query's rows as they are read: each already the bytes it takes of its
+/// message, an array of its cells. No row is kept as values first, which
+/// took four times a number's bytes and a second pass to write them.
+#[derive(Default)]
+struct RowBytes {
+    /// Every row's cells, a row after another.
+    rows: Vec<u8>,
+    /// Where each row ends in `rows`.
+    ends: Vec<usize>,
+}
+
+impl Keep for RowBytes {
+    fn value(&mut self, column: usize, width: usize, value: Value) {
+        if column == 0 {
+            msgpack::write_array_head(&mut self.rows, width);
+        }
+        codec::write_cell(&mut self.rows, &cell_of(value));
+        if column + 1 == width {
+            self.ends.push(self.rows.len());
+        }
+    }
+}
+
+impl RowBytes {
+    /// Where the row `row` begins in `rows`, and the last ends for the one
+    /// after it.
+    fn begins(&self, row: usize) -> usize {
+        row.checked_sub(1).map_or(0, |before| self.ends[before])
+    }
+}
+
+impl Parted for Kept<RowBytes> {
     fn held(&mut self) -> Held {
-        Rows::held(self)
+        Kept::held(self)
     }
 
+    /// Its rows in parts of at most `bound` bytes, the first naming the
+    /// columns, each a `sql.Rows` as [`row_parts`] writes one: the same
+    /// fields around rows that are bytes already.
     fn parts(self, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
-        row_parts(self, bound)
+        let part = |rows: Range<usize>, first: bool| {
+            let cells = &self.kept.rows[self.kept.begins(rows.start)..self.kept.begins(rows.end)];
+            let mut out = Vec::with_capacity(cells.len() + 64);
+            let mut map = Map::open(&mut out);
+            if first && !self.columns.is_empty() {
+                map.field(&mut out, 1);
+                codec::write_list(&mut out, &self.columns, codec::write_str);
+            }
+            if !rows.is_empty() {
+                map.field(&mut out, 2);
+                msgpack::write_array_head(&mut out, rows.len());
+                out.extend_from_slice(cells);
+            }
+            map.close(&mut out);
+            out
+        };
+        let names = self.columns.iter().map(|name| name.len() + 5).sum::<usize>() + 16;
+        let (mut parts, mut from, mut size) = (VecDeque::new(), 0, names);
+        for row in 0..self.kept.ends.len() {
+            let weight = self.kept.begins(row + 1) - self.kept.begins(row);
+            if weight + 16 > bound {
+                return Err(past_a_message(weight, bound));
+            }
+            if size + weight > bound && row > from {
+                parts.push_back(part(from..row, parts.is_empty()));
+                (from, size) = (row, 16);
+            }
+            size += weight;
+        }
+        parts.push_back(part(from..self.kept.ends.len(), parts.is_empty()));
+        Ok(parts)
     }
 }
 
