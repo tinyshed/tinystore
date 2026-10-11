@@ -381,6 +381,13 @@ let traffic = stats.query().name("http_requests_total").since(Duration::from_hou
 - `value` is a bucket's answer, but a timer's percentile's, which is two
   bounds. `samples` is how many samples it comes from: a gauge's or a
   counter's samples, a timer's durations. `resets` counts a counter's resets.
+- `partial: true` says a bucket's value comes from less than its span of
+  `every`: the range cut it, the store's clock has not reached its end, or
+  retention cut it. A chart shows such a bucket apart, or leaves the
+  unfinished edge out. Its `rate` is a second of what is left of it, and no
+  speed the counter ran at: `since: '1h'` asked exactly on the hour ends with
+  a bucket of the one millisecond that holds the sample taken now, and the
+  step it counts began fifteen seconds before.
 - Every value is exact and rounded once: a sum is the exact sum of its
   samples, rounded to the nearest float, whatever order or blocks they were
   kept in. A sum past what a float holds is `Infinity`.
@@ -829,6 +836,13 @@ timer's totals are the store's, which every process adds to, since several
 workers through one sidecar are how a TinyStore program commonly runs, and
 their totals written over each other would be wrong without a word.
 
+## While building, 12 October
+
+| The owner asked                                                           | What the book does                                                                            |
+|---------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| a rate over the millisecond a range leaves of a bucket, read as an hour's | the rate still divides by what is left; the bucket says `partial`, as one retention cut does  |
+| an hour with ten minutes of data, shown as a whole hour's                 | a bucket the clock has not finished is `partial` too, which was `open: true` in the open list |
+
 ## Free review, 11 October
 
 A third Haiku agent reviewed the first draft as a developer choosing a store
@@ -890,8 +904,8 @@ list below.
 - A second step for a group, `across`: the sum of each host's average, the
   greatest of each series' rate, where a group now joins by the rule of its
   `op`.
-- A newest bucket the store has not finished writing, `open: true`, whose
-  rate a chart would otherwise draw as a drop.
+- What a `partial` bucket does cover, `covers`, for a chart that says "ten
+  minutes of this hour" where it now only shows the bucket apart.
 - `op: 'bins'`, a heatmap with each bound's own count and numeric bounds,
   where the book gives the cumulative counters by `le`.
 - An `ingest` sent again after a lost answer: a sample of the same time and

@@ -137,8 +137,9 @@ fn a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took() {
             let query = f.metrics().query().name(name).from(start - DAY).to(f.now() + MINUTE).every(6 * HOUR);
             query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (bucket.value, bucket.partial)).collect()
         };
-        // six-hour buckets begin at 12:00 and 18:00; the name keeps from 08:00 the day before, and cuts none
-        assert_eq!(ask("jobs", Op::Increase), [(5.0, false), (6.0, false), (6.0, false), (3.0, false)]);
+        // six-hour buckets begin at 12:00 and 18:00; the name keeps from 08:00 the day before, and cuts none:
+        // the last is the one the clock has not finished
+        assert_eq!(ask("jobs", Op::Increase), [(5.0, false), (6.0, false), (6.0, false), (3.0, true)]);
         f.pass(5 * HOUR);
         // it keeps from 13:00 now: the bucket at 12:00 is cut, and 12:00 read no longer though still in the file
         assert_eq!(ask("jobs", Op::Increase)[..2], [(4.0, true), (6.0, false)], "packed: {packed}");
@@ -153,6 +154,35 @@ fn a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took() {
         f.metrics().ingest(&[fresh]).unwrap();
         assert_eq!(ask("fresh", Op::Increase), [(5.0, false)]);
     }
+}
+
+#[test]
+fn a_bucket_the_range_cut_or_the_clock_has_not_finished_is_partial() {
+    let f = fixture();
+    let (seven, eight) = (f.now() - HOUR, f.now());
+    // 15 more every 15 seconds from seven, the last at the clock, eight
+    let counted = run(Series::counter("requests"), seven, 15 * SECOND, (0..241).map(|n| f64::from(n * 15)));
+    f.metrics().ingest(&[counted]).unwrap();
+    let query = || f.metrics().query().name("requests");
+    let buckets = |query: crate::metrics::Query, op: Op| -> Vec<(f64, bool)> {
+        query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (bucket.value, bucket.partial)).collect()
+    };
+    // the hour before the clock, whole, and the millisecond of the next that holds the sample taken now
+    let hour = buckets(query().since(HOUR).every(5 * MINUTE), Op::Rate);
+    assert_eq!(hour[..12], [(0.95, false), (1.0, false)].iter().copied().chain([(1.0, false); 10]).collect::<Vec<_>>());
+    assert_eq!(hour[12], (15_000.0, true), "15 counted over a millisecond: no speed it ran at, and said so");
+    // a range that cuts its first and its last bucket
+    let cut = buckets(query().from(seven + 2 * MINUTE).to(eight - 2 * MINUTE).every(5 * MINUTE), Op::Count);
+    assert_eq!((cut[0], cut[1], cut[10], cut[11]), ((12.0, true), (20.0, false), (20.0, false), (12.0, true)));
+    // one that runs ahead of the clock: the hour at eight has only begun
+    let ahead = buckets(query().from(seven).to(eight + HOUR).every(HOUR), Op::Increase);
+    assert_eq!(ahead, [(3585.0, false), (15.0, true)]);
+    // a range that is one bucket is whole, unless it runs ahead of the clock
+    assert_eq!(buckets(query().since(HOUR), Op::Count), [(241.0, false)]);
+    assert_eq!(buckets(query().from(seven).to(eight + HOUR), Op::Count), [(241.0, true)]);
+    // at a bucket's last millisecond the clock has finished it
+    f.pass(5 * MINUTE - Duration::from_millis(1));
+    assert_eq!(buckets(query().since(5 * MINUTE).every(5 * MINUTE), Op::Count), [(1.0, false)]);
 }
 
 #[test]

@@ -126,6 +126,7 @@ module defines.
 - a malformed exact summary is refused — `another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused` in `metrics::exact`; `FuzzExactSummary` at `e81a050` until the fuzz target lands
 - exact summaries keep a directory within its bound — `TestLargeExactSummariesStayWithinDirectoryBounds`
 - a directory written once still reads — `TestDirectoriesWrittenBeforeStillRead`, inline and external
+- a bucket the range cut or the store's clock has not finished is `partial`, its rate a second of what is left of it, and a whole one is not — `a_bucket_the_range_cut_or_the_clock_has_not_finished_is_partial` in `metrics::aggregate`
 - a step across a whole empty bucket of the query's `every` says `gap`, and none else does — `only_a_step_across_an_empty_bucket_is_a_gap` in `metrics::aggregate`
 - an `op` a kind has not is `invalid`, and so is a bucket over a NaN, an infinity or a counter below zero, naming the series and the sample — `an_op_a_kind_has_not_and_a_value_no_aggregate_takes_are_invalid` in `metrics::aggregate`
 - a rate is a second of what the range leaves of a bucket, and a bucket begins on the grid from 1970 — `a_rate_is_a_second_of_what_the_range_leaves_of_a_bucket_and_a_bucket_begins_on_the_grid` in `metrics::aggregate`

@@ -147,8 +147,13 @@ pub struct Bucket {
     /// between had no samples, and what the series moved over it is counted
     /// here, since when it moved is not known.
     pub gap: bool,
-    /// Retention cut it: it begins before the oldest time its name keeps, or
-    /// the step into its first sample began at one retention took.
+    /// Its value comes from less than its span: the range cut it, the
+    /// store's clock has not reached its end, it begins before the oldest
+    /// time its name keeps, or the step into its first sample began at one
+    /// retention took. A chart shows such a bucket apart, or leaves an
+    /// unfinished edge out: a `rate` there is a second of what is left of
+    /// the bucket, and no speed the series ran at, since the step it counts
+    /// may have begun before that.
     pub partial: bool,
 }
 
@@ -254,6 +259,18 @@ impl Shape {
             Some(every) => (at.max(range_from), at.saturating_add(every).min(to)),
             None => (range_from, to),
         }
+    }
+
+    /// Whether a bucket's value comes from less than its span: the range cut
+    /// it, the store's clock at `now` has not reached its end, or it begins
+    /// before `cutoff`, the oldest time its name keeps.
+    ///
+    /// ```text
+    /// every 1h, since 1h at 12:10    11:00 → cut at 11:10    12:00 → ten minutes of it so far
+    /// ```
+    fn cuts(&self, at: i64, span: (i64, i64), cutoff: i64, now: i64) -> bool {
+        let by_range = self.every.is_some_and(|every| span.0 > at || span.1 < at.saturating_add(every));
+        by_range || span.1 > now.saturating_add(1) || span.0 < cutoff
     }
 
     /// Whether a step from a sample at `before` into the bucket at `at`
@@ -383,6 +400,8 @@ struct Fold<'a> {
     range_from: i64,
     /// Retention has taken samples of the series, or hides some.
     trimmed: bool,
+    /// The store's clock, as the query read it.
+    now: i64,
     open: Option<Open>,
     /// Its last sample so far, which the next bucket's first step begins at.
     carried: Option<Point>,
@@ -402,6 +421,7 @@ impl<'a> Fold<'a> {
             window,
             range_from: if asked.from == i64::MIN { window.cutoff } else { asked.from },
             trimmed: series.trimmed,
+            now: asked.now,
             open: None,
             carried: None,
             entered: false,
@@ -490,11 +510,11 @@ impl<'a> Fold<'a> {
             self.close();
         }
         let (shape, window, range_from) = (self.shape, self.window, self.range_from);
-        let (trimmed, before) = (self.trimmed, self.carried);
+        let (trimmed, before, now) = (self.trimmed, self.carried, self.now);
         self.open.get_or_insert_with(|| {
             let span = shape.span(key, range_from, window.to);
             let mut open = Open::new(key, span);
-            open.partial = span.0 < window.cutoff;
+            open.partial = shape.cuts(key, span, window.cutoff, now);
             match before {
                 Some(before) if shape.steps() => {
                     open.step_from(before.value);

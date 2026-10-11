@@ -246,12 +246,15 @@ bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
   `gap`. A histogram's `_bucket` series is a counter to every `op`.
 - `gap` is a first step that began before the bucket before its own; without
   `every` the yardstick is the range's own width.
-- `partial` is a bucket that begins before the oldest time its name keeps;
-  and, for an `op` that counts steps, the bucket of a series' oldest sample
-  when retention took samples of the series, since the step into it began at
-  one. `series_state.trimmed` says it took some, set in the transaction that
-  expires a sample, and so does a sample the file still holds though its
-  name keeps it no longer. A series that begins in the range lost none.
+- `partial` is a bucket whose value comes from less than its span: one the
+  range cut, one whose end the store's clock has not reached, one that begins
+  before the oldest time its name keeps; and, for an `op` that counts steps,
+  the bucket of a series' oldest sample when retention took samples of the
+  series, since the step into it began at one. `series_state.trimmed` says
+  it took some, set in the transaction that expires a sample, and so does a
+  sample the file still holds though its name keeps it no longer. A series
+  that begins in the range lost none. A rate still divides by what the range
+  leaves of a bucket: the flag, not the divisor, says it is no whole one's.
 - Of the samples before the range only the newest is taken, and checked: an
   older NaN there refuses nothing.
 - A block wholly inside one bucket and the clipped range answers from its
