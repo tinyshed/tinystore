@@ -55,6 +55,12 @@ impl<'a> Reader<'a> {
         taken
     }
 
+    /// Bytes behind their count, `most` at most.
+    pub(super) fn counted(&mut self, most: usize) -> &'a [u8] {
+        let length = self.count(most);
+        self.take(length)
+    }
+
     /// Everything not read yet.
     pub(super) fn rest(&mut self) -> &'a [u8] {
         std::mem::take(&mut self.data)

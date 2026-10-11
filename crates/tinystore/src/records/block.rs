@@ -59,21 +59,23 @@ pub(super) fn encode(schema: &Schema, events: &[Kept], ids: [&[i64]; 3], codec: 
     put_ints(&mut columns[CONTEXTS], &with(HAS_CONTEXT).map(|place| contexts[place]).collect::<Vec<_>>());
     let levels = events.iter().filter_map(|event| event.level).map(|level| i64::from(level.number()));
     put_ints(&mut columns[LEVELS], &levels.collect::<Vec<_>>());
-    let messages: Vec<&str> = events.iter().filter_map(|event| event.message.as_deref()).collect();
-    put_texts(&mut columns[MESSAGES], &messages, codec)?;
+    let said = events.iter().filter_map(|event| Some((event.message.as_deref()?, event.at)));
+    let (messages, said_at): (Vec<&str>, Vec<i64>) = said.unzip();
+    put_values(&mut columns[MESSAGES], &messages, &said_at, codec)?;
     events.iter().filter_map(|event| event.trace_id).for_each(|trace| columns[TRACES].extend_from_slice(&trace.0));
     events.iter().filter_map(|event| event.span_id).for_each(|span| columns[SPANS].extend_from_slice(&span.0));
     let whole: Vec<String> = with(WHOLE_FIELDS).map(|place| object_of(&events[place].fields)).collect();
     put_texts(&mut columns[WHOLE], &whole.iter().map(String::as_str).collect::<Vec<_>>(), codec)?;
 
-    let mut values: Vec<Vec<&str>> = vec![Vec::new(); schema.columns];
+    let mut values: Vec<(Vec<&str>, Vec<i64>)> = vec![Default::default(); schema.columns];
     for (place, event) in events.iter().enumerate() {
         for (column, (_, json)) in shape_of(place).columns.iter().zip(event.fields.iter()) {
-            values[*column].push(json);
+            values[*column].0.push(json);
+            values[*column].1.push(event.at);
         }
     }
-    for (column, values) in values.iter().enumerate() {
-        put_values(&mut columns[FIXED + column], values, codec)?;
+    for (column, (values, times)) in values.iter().enumerate() {
+        put_values(&mut columns[FIXED + column], values, times, codec)?;
     }
 
     let mut body = vec![VERSION];
@@ -136,13 +138,23 @@ impl<'b> Opened<'b> {
 
     fn texts(&self, column: usize, count: usize, decoder: &mut Decoder<'_>, what: &'static str) -> Result<Vec<String>> {
         let mut reader = Reader::new(self.columns[column]);
-        let read = if column >= FIXED {
-            read_values(&mut reader, count, decoder)
-        } else {
-            read_texts(&mut reader, count, decoder)
-        };
+        let read = read_texts(&mut reader, count, decoder);
         reader.finish()?;
         if read.len() == count { Ok(read) } else { Err(Error::corrupt(what)) }
+    }
+
+    /// A column of values, one a time of `times`, their events'.
+    fn values(
+        &self,
+        column: usize,
+        times: &[i64],
+        decoder: &mut Decoder<'_>,
+        what: &'static str,
+    ) -> Result<Vec<String>> {
+        let mut reader = Reader::new(self.columns[column]);
+        let read = read_values(&mut reader, times, decoder);
+        reader.finish()?;
+        if read.len() == times.len() { Ok(read) } else { Err(Error::corrupt(what)) }
     }
 
     /// `count` ids of `N` bytes each.
@@ -164,15 +176,19 @@ pub(super) fn parse(schema: &Schema, body: &[u8], codec: &mut Codec) -> Result<V
 
     let mut contexts = opened.ints(CONTEXTS, with(HAS_CONTEXT), "a block's contexts")?.into_iter();
     let mut levels = opened.ints(LEVELS, with(HAS_LEVEL), "a block's levels")?.into_iter();
-    let mut messages = opened.texts(MESSAGES, with(HAS_MESSAGE), &mut decoder, "a block's messages")?.into_iter();
+    let said_at: Vec<i64> =
+        shapes.iter().zip(&times).filter(|(shape, _)| shape.has(HAS_MESSAGE)).map(|(_, at)| *at).collect();
+    let mut messages = opened.values(MESSAGES, &said_at, &mut decoder, "a block's messages")?.into_iter();
     let mut traces = opened.ids::<16>(TRACES, with(HAS_TRACE), "a block's traces")?.into_iter();
     let mut spans = opened.ids::<8>(SPANS, with(HAS_SPAN), "a block's spans")?.into_iter();
     let mut whole = opened.texts(WHOLE, with(WHOLE_FIELDS), &mut decoder, "a block's whole fields")?.into_iter();
-    let mut held = vec![0; schema.columns];
-    shapes.iter().flat_map(|shape| &shape.columns).for_each(|column| held[*column] += 1);
+    let mut held: Vec<Vec<i64>> = vec![Vec::new(); schema.columns];
+    for (shape, at) in shapes.iter().zip(&times) {
+        shape.columns.iter().for_each(|column| held[*column].push(*at));
+    }
     let mut values = Vec::with_capacity(schema.columns);
-    for (column, held) in held.into_iter().enumerate() {
-        values.push(opened.texts(FIXED + column, held, &mut decoder, "a block's values")?.into_iter());
+    for (column, times) in held.iter().enumerate() {
+        values.push(opened.values(FIXED + column, times, &mut decoder, "a block's values")?.into_iter());
     }
 
     let broken = || Error::corrupt("a block whose columns do not hold its events");

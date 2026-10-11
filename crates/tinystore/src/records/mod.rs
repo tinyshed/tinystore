@@ -26,6 +26,7 @@ mod maintain;
 mod pack;
 mod read;
 mod segment;
+mod stamp;
 mod text;
 mod values;
 

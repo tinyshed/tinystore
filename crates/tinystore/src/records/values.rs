@@ -1,28 +1,33 @@
-//! A column of one field's values, each the JSON it was written as: integers
-//! when every value is one written the one way an integer is, text otherwise.
-//! Either way each value comes back byte for byte.
+//! A column of values, each kept as it was written: a field's values, the
+//! JSON of each, or the messages of a block. Integers when every value is one
+//! written the one way an integer is; text with the times it spells cut out,
+//! when those pay; text otherwise. Either way each value comes back byte for
+//! byte.
 //!
 //! ```text
-//! 1920 1366 390 1920       → integers
-//! 1920 "1366" 1.0 01 -0    → text: a string, a fraction, and two spellings no integer has
+//! 1920 1366 390 1920                     → integers
+//! 1920 "1366" 1.0 01 -0                  → text: a string, a fraction, two spellings no integer has
+//! "2026-09-23 00:47:32,100 GET /notes"   → stamped text: see `stamp`
 //! ```
 
 use super::bytes::Reader;
 use super::head::Codec;
 use super::ints::{put_ints, read_ints};
+use super::stamp::{put_stamped, read_stamped};
 use super::text::{Decoder, put_texts, read_texts};
 use crate::Result;
 
 const TEXT: u8 = 0;
 const INTEGERS: u8 = 1;
+const STAMPED: u8 = 2;
 
 /// The integer a value is, when writing it again spells the same value.
 fn integer(json: &str) -> Option<i64> {
     json.parse::<i64>().ok().filter(|number| number.to_string() == json)
 }
 
-/// Appends a column of values; of none, nothing.
-pub(super) fn put_values(out: &mut Vec<u8>, values: &[&str], codec: &mut Codec) -> Result<()> {
+/// Appends a column of values, `times` their events'; of none, nothing.
+pub(super) fn put_values(out: &mut Vec<u8>, values: &[&str], times: &[i64], codec: &mut Codec) -> Result<()> {
     if values.is_empty() {
         return Ok(());
     }
@@ -31,18 +36,25 @@ pub(super) fn put_values(out: &mut Vec<u8>, values: &[&str], codec: &mut Codec) 
         put_ints(out, &integers);
         return Ok(());
     }
+    out.push(STAMPED);
+    if put_stamped(out, values, times, codec)? {
+        return Ok(());
+    }
+    out.pop();
     out.push(TEXT);
     put_texts(out, values, codec)
 }
 
-/// A column of `count` values; of none, without reading anything.
-pub(super) fn read_values(reader: &mut Reader<'_>, count: usize, decoder: &mut Decoder<'_>) -> Vec<String> {
-    if count == 0 {
+/// A column of values, one a time of `times`, their events'; of none,
+/// without reading anything.
+pub(super) fn read_values(reader: &mut Reader<'_>, times: &[i64], decoder: &mut Decoder<'_>) -> Vec<String> {
+    if times.is_empty() {
         return Vec::new();
     }
     match reader.byte() {
-        TEXT => read_texts(reader, count, decoder),
-        INTEGERS => read_ints(reader, count).iter().map(i64::to_string).collect(),
+        TEXT => read_texts(reader, times.len(), decoder),
+        INTEGERS => read_ints(reader, times.len()).iter().map(i64::to_string).collect(),
+        STAMPED => read_stamped(reader, times, decoder),
         _ => {
             reader.fail("a value column's kind");
             Vec::new()
@@ -57,9 +69,10 @@ mod tests {
     fn written(values: &[&str]) -> Vec<u8> {
         let mut codec = Codec::default();
         let mut out = Vec::new();
-        put_values(&mut out, values, &mut codec).unwrap();
+        let times = vec![1_800_000_000_000_000_000; values.len()];
+        put_values(&mut out, values, &times, &mut codec).unwrap();
         let mut reader = Reader::new(&out);
-        let read = read_values(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 });
+        let read = read_values(&mut reader, &times, &mut Decoder { codec: &mut codec, left: 1 << 20 });
         reader.finish().unwrap();
         assert_eq!(read, values);
         out
@@ -73,6 +86,14 @@ mod tests {
         }
         written(&[]);
         written(&[r#"{"x": [1, "y"]}"#, "true", "null", r#""text""#]);
+    }
+
+    #[test]
+    fn text_that_spells_times_is_kept_with_them_cut_out() {
+        let lines: Vec<String> = (0..16).map(|n| format!("2027-01-15 08:00:00,{n:03} GET /notes/{n}")).collect();
+        let column = written(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(column[0], STAMPED);
+        assert_eq!(written(&["2027-01-15 08:00:00 once", "and text"])[0], TEXT);
     }
 
     #[test]

@@ -157,9 +157,10 @@ module defines.
 - integers are kept as integers, and a value no integer spells as its text — `integers_are_kept_as_integers_and_every_value_as_it_was_spelled` in `records::values`
 - the times of a millisecond's clock take a few bits each, and a column of one value none — `times_of_a_millisecond_clock_take_a_few_bits_each`, `a_column_of_one_value_takes_no_bit_a_value` in `records::ints`
 - text that repeats is written once — `values_that_repeat_are_written_once` in `records::text`
-- a time a line spells comes back as it was spelled — `TestEveryStampLayoutSpellsItsTextBack`, `FuzzStamps`
-- what no calendar shows stays text — `TestATimeNoClockShowsStaysText`
-- a time kept against its record needs that record — `TestStampsWithoutTheirTimesAreRefused`
+- a time a line spells comes back as it was spelled — `every_layout_spells_its_text_back`, `a_fraction_is_one_to_nine_digits_and_more_stay_text`, `a_value_keeps_up_to_four_stamps_each_within_reach_of_the_one_before` in `records::stamp`; its fuzzer to come
+- what no calendar shows stays text — `a_time_no_calendar_or_clock_shows_stays_text` in `records::stamp`
+- a time kept against its record needs that record — `stamps_read_with_other_times_or_from_changed_bytes_are_other_text_or_refused_and_never_more` in `records::stamp`
+- the times a text spells are cut out only where they pay for their columns, and a stamp is how far behind its event it lies whatever its zone — `stamps_are_cut_only_where_they_pay_for_their_columns`, `a_stamp_is_how_far_behind_its_event_it_lies_whatever_its_zone` in `records::stamp`, `text_that_spells_times_is_kept_with_them_cut_out` in `records::values`
 - equal times keep their arrival order — `events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_written` in `records::read`, `a_segment_holds_its_events_in_the_order_of_their_times_those_of_one_time_as_they_were_written` in `records::pack`
 - a stream's events are packed once they are a segment's worth or their oldest row has waited an hour, each stream by itself — `a_streams_events_are_packed_once_its_oldest_row_has_waited_an_hour`, `a_segments_worth_is_packed_at_once_and_what_is_left_waits`, `each_stream_is_packed_by_itself` in `records::pack`
 - a segment is cut into blocks of the events and the bytes a block holds — `a_segment_is_cut_into_blocks_of_the_events_and_the_bytes_a_block_holds` in `records::pack`
