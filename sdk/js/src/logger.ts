@@ -94,7 +94,7 @@ interface Shared {
 /**
  * A logger of the console alone, for a program that wants the logger and not
  * the records: its lines are written as a store's logger writes them, and
- * `store.records.logger(stream)` in its place keeps them too.
+ * `store.logger(stream)` in its place keeps them too.
  *
  * ```ts
  * const log = logger('app', { redact: ['password'] })
@@ -270,7 +270,7 @@ function printer(options: LoggerOptions, out?: ConsoleOut & { utc?: boolean }): 
  * its context, who is speaking.
  *
  * ```ts
- * const log = store.records.logger('api')
+ * const log = store.logger('api')
  * log.info('server started', { port: 3000 })
  * log.with({ requestId }).warn('slow request', { ms: 1200 })
  * log.event('user.created', { userId: 42 })   // a record named for the event
@@ -281,7 +281,7 @@ export class Logger {
 	/** key, JSON, key, JSON…, hidden as the logger's redact says */
 	readonly #context: string[]
 
-	/** Loggers come from `logger(stream)`, `store.records.logger(stream)` and their `with`. */
+	/** Loggers come from `logger(stream)`, `store.logger(stream)` and their `with`. */
 	constructor(shared: Shared, context: string[]) {
 		this.#shared = shared
 		this.#context = context

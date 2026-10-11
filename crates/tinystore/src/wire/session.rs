@@ -15,6 +15,8 @@ use super::jobs;
 use super::kv::{self, Run};
 use super::protocol::method::{self, Access};
 use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome};
+#[cfg(feature = "records")]
+use super::records;
 #[cfg(feature = "sql")]
 use super::sql;
 use super::workers::Workers;
@@ -72,6 +74,8 @@ struct Shared {
     sql: sql::Handles,
     #[cfg(feature = "blobs")]
     blobs: blobs::Handles,
+    #[cfg(feature = "records")]
+    records: records::Handles,
     input: Mutex<Input>,
     output: Mutex<Output>,
     /// Clients' runs of once, by stream, from the REQUEST to the last frame.
@@ -173,6 +177,8 @@ impl Session {
             sql: sql::Handles::default(),
             #[cfg(feature = "blobs")]
             blobs: blobs::Handles::default(),
+            #[cfg(feature = "records")]
+            records: records::Handles::default(),
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
@@ -892,6 +898,8 @@ impl Shared {
             0x03 => sql::call(&self.store, &self.sql, method, body, self.read_only.load(Ordering::Relaxed)),
             #[cfg(feature = "blobs")]
             0x04 => blobs::call(&self.store, &self.blobs, method, body, max_body),
+            #[cfg(feature = "records")]
+            0x05 => records::call(&self.store, &self.records, method, body, self.read_only.load(Ordering::Relaxed)),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -1020,7 +1028,8 @@ fn engines() -> Vec<String> {
     let jobs = cfg!(feature = "jobs").then_some("jobs");
     let sql = cfg!(feature = "sql").then_some("sql");
     let blobs = cfg!(feature = "blobs").then_some("blobs");
-    [Some("kv"), jobs, sql, blobs].into_iter().flatten().map(str::to_owned).collect()
+    let records = cfg!(feature = "records").then_some("records");
+    [Some("kv"), jobs, sql, blobs, records].into_iter().flatten().map(str::to_owned).collect()
 }
 
 /// A call that panics answers `internal` rather than leaving its stream open.

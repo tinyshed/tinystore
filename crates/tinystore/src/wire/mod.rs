@@ -13,6 +13,8 @@ mod message;
 pub(crate) mod msgpack;
 #[rustfmt::skip]
 pub(crate) mod protocol;
+#[cfg(feature = "records")]
+mod records;
 mod session;
 #[cfg(feature = "sql")]
 mod sql;

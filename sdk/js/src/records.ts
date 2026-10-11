@@ -1,537 +1,592 @@
-// The application's logs and events in records.db, as Go's records package
-// keeps them: one log of the store's whose calls name their streams, read by
-// time and by what records hold, followed in the order they were sealed.
+// Streams of events, as plan/api/records.md has them, over protocol 2: a
+// stream opened by name, its events appended whole and read back by time and
+// by what they hold, a page at a time, and every stream read together. A
+// store's logger keeps its lines in a stream through the same append.
 
-import { type Connection, download, type Link } from './connection.ts'
-import type { ConsoleLine } from './console.ts'
+import type { Link } from './connection.ts'
+import { type ConsoleLine, jsonOf } from './console.ts'
 import { InvalidError } from './errors.ts'
-import type { Page } from './handles.ts'
-import { type Logger, type LoggerOptions, newLogger } from './logger.ts'
-import type { Stream } from './session.ts'
-import { type Duration, ms } from './time.ts'
-import { currentTrace } from './trace.ts'
+import { checkName, type Via, viaLink } from './handles.ts'
+import { parseJson } from './json.ts'
+import { encodeFields, type Logger, type LoggerOptions, newLogger } from './logger.ts'
+import { type Duration, type DurationText, ms } from './time.ts'
+import { currentTrace, type Trace } from './trace.ts'
 import {
 	Empty,
 	methods,
-	RecordsQuery as QueryMessage,
+	RecordsAggregateAsked,
+	RecordsAppend,
 	RecordsBatch,
-	RecordsCursor,
-	RecordsDamage,
-	RecordsDamages,
+	RecordsCount,
+	type RecordsEvent,
+	RecordsFieldNamesAsked,
+	RecordsNames,
+	type RecordsNewEvent,
+	RecordsOpen,
 	RecordsPage,
-	RecordsRecord,
-	RecordsStream,
-} from './wire/messages.ts'
+	RecordsPollAsked,
+	RecordsQuery,
+	RecordsRows,
+	RecordsStreams,
+	RecordsTopAsked,
+	RecordsTops,
+} from './wire/protocol.ts'
 
-/** slog's levels: -4 debug, 0 info, 4 warn, 8 error, or any other it may name. */
+/** A level a logger logs at: one of its four names, or slog's number between them. */
 export type Level = 'debug' | 'info' | 'warn' | 'error' | number
 
-const levels = { debug: -4, info: 0, warn: 4, error: 8 } as const
+/** An event's level: what loggers and the programs whose lines are kept write. */
+export type EventLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal'
 
-function levelOf(level: Level): number {
-	return typeof level === 'number' ? level : levels[level]
-}
-
-/**
- * Fields: keys and values, each value written as JSON. An object's keys keep
- * their order; an array of pairs may repeat a key.
- */
+/** What happened, or what it happened in: an object, or its pairs in their order. */
 export type Fields = Record<string, unknown> | readonly (readonly [string, unknown])[]
 
-/** A record to append: when, where, what, and its fields. */
-export interface RecordInput {
-	/** its time: a Date, or unix nanoseconds as a bigint; now when absent */
-	at?: Date | bigint
-	/** the namespace the application names: 'web', 'billing' */
+/** An event as a read gives it. */
+export interface Event {
+	/** its time, which the file keeps to the nanosecond */
+	at: Date
 	stream: string
-	/** the event: 'log' for a log line */
+	/** what happened; `log` for a logger's line */
 	name: string
-	level?: Level
-	/** absent is none, which an empty body is not */
-	body?: string | Uint8Array
-	/** sixteen bytes, or their 32 hex digits */
-	traceId?: Uint8Array | string | undefined
-	/** eight bytes, or their 16 hex digits */
-	spanId?: Uint8Array | string | undefined
-	/** who produced it */
+	level?: EventLevel
+	message?: string
+	/** each value as JSON.parse reads it, an integer past 2^53 a bigint */
+	fields: Record<string, unknown>
+	context: Record<string, unknown>
+	/** 32 hex digits */
+	traceId?: string
+	/** 16 hex digits */
+	spanId?: string
+}
+
+/** An event to append: its name, what happened, and what it carries beside. */
+export interface NewEvent {
+	name: string
+	fields?: Fields
+	/** its time: now unless given, from what the stream keeps to ten minutes ahead */
+	at?: Date
 	context?: Fields
-	/** what happened */
-	attrs?: Fields
+	level?: EventLevel | number
+	message?: string
+	/** a trace's 32 hex digits, with its span's 16: the current trace's unless given */
+	traceId?: string
+	spanId?: string
 }
 
-/** A record as it was kept: a field's value is the JSON it was written as, spelled as it was given. */
-export interface LogRecord {
-	/** unix nanoseconds */
-	at: bigint
-	stream: string
-	name: string
-	level: number | undefined
-	body: string | Uint8Array | undefined
-	traceId: Uint8Array | undefined
-	spanId: Uint8Array | undefined
-	context: [key: string, json: string | Uint8Array][]
-	attrs: [key: string, json: string | Uint8Array][]
+export type AppendOptions = Omit<NewEvent, 'name' | 'fields'>
+
+export interface EventsOptions {
+	/** how long the stream keeps its events: its own, kept in the file; 14 days until one says */
+	keep?: Duration
 }
 
-/**
- * A record's fields, its attrs or its context, as an object, each value read
- * as JSON.parse reads the JSON it was kept as; the last of a repeated key is
- * kept. The pairs keep what JSON.parse may not: 1.2300 as written, an integer
- * past 2^53 whole.
- *
- * ```ts
- * for await (const record of store.records.all({ since: '1h', streams: ['readers'] })) {
- *   const { page, from } = fields(record.attrs)
- * }
- * ```
- */
-export function fields(pairs: LogRecord['attrs']): Record<string, unknown> {
-	// fromEntries, since an assignment to __proto__ would set the prototype
-	return Object.fromEntries(pairs.map(([key, json]) => [key, JSON.parse(textOf(json))]))
-}
-
-/**
- * The records in a range that meet every condition given.
- *
- * ```ts
- * { since: '1h', minLevel: 'warn' }                 // the last hour's warnings
- * { since: '1h', search: 'connection reset' }       // whose text holds it, case ignored
- * { from: start, to: end, streams: ['api'] }
- * ```
- */
-export interface RecordsQuery {
-	/** the span before now the range covers: '1h', '15m', or milliseconds; or from and to */
+/** What a read finds: every condition given holds; one given as undefined is InvalidError. */
+export interface Query {
+	/** the span before now, '1h'; or from and to */
 	since?: Duration
-	/** the range's start, included; open when absent */
-	from?: Date | bigint
-	/** the range's end, excluded; open when absent */
-	to?: Date | bigint
-	/** none or empty is every stream */
-	streams?: string[]
-	names?: string[]
-	/** a record without a level does not match */
-	minLevel?: Level
-	traceId?: Uint8Array | string
-	/** each a record must hold, by key and exact JSON spelling */
-	attrs?: Fields
-	context?: Fields
-	/**
-	 * text a record's body or name holds, its case ignored: every record the
-	 * rest of the query leaves is read for it, so a search over much text ends
-	 * pages early at the budget, and next goes on
-	 */
+	/** the range's start, included */
+	from?: Date
+	/** the range's end, excluded */
+	to?: Date
+	/** any of these streams, for every stream's read */
+	streams?: readonly string[]
+	/** any of these names: ['log'] is the lines */
+	names?: readonly string[]
+	/** this level and worse; an event without a level is not found */
+	minLevel?: EventLevel
+	traceId?: string
+	/** each key with this value, by the JSON it was written as, in fields or in context */
+	where?: Record<string, unknown>
+	/** this text in the message, the name or a value, its case ignored */
 	search?: string
-	/** newest first; oldest first when absent */
+	/** newest first; oldest first without it */
 	newest?: boolean
-	/** the records a page holds: 1000, and 10000 at most */
+	/** the events of a page: 1000, and 10,000 at most */
 	limit?: number
-	/** what one read may open, fetch and decode; each narrows the server's */
-	budget?: { blocks?: number; bytes?: number; records?: number }
-	/** a page's next, which this page continues from; the rest of the query as it was */
-	after?: string | undefined
+	/** a page's next, with the rest of the query as it was */
+	after?: string
 }
 
-/** Where a follower stands in the sealed segments: kept by the caller between follows. */
-export interface Cursor {
-	segment: number
-	row: number
+/** A query of every event it finds, for what counts them. */
+export type Counted = Omit<Query, 'newest' | 'limit' | 'after'>
+
+export interface Page {
+	events: Event[]
+	/** the page after it; the last page has none */
+	next?: string
 }
 
-/** A row that no longer reads, which a drop removes. */
-export interface Damage {
-	stream: string
-	/** a sealed segment, dropped whole; or a head row */
-	segment: number | undefined
-	headRow: number | undefined
-	/** the times it held, unix nanoseconds */
-	from: bigint
-	to: bigint
-	/** the invariant its bytes broke */
-	reason: string
+export interface Top {
+	value: unknown
+	count: number
 }
 
-const nsPerMs = 1_000_000n
-
-function nanos(t: Date | bigint): bigint {
-	return typeof t === 'bigint' ? t : BigInt(t.getTime()) * nsPerMs
+/** A field's numbers in a row: a sum of integers exact, a bigint past 2^53. */
+export interface Stats {
+	samples: number
+	sum: number | bigint
+	min: number | bigint
+	max: number | bigint
+	avg: number
 }
 
-function idOf(
-	id: Uint8Array | string | undefined,
-	bytes: number,
-	what: string,
-): Uint8Array | undefined {
-	if (id === undefined) {
-		return undefined
-	}
-	const raw = typeof id === 'string' ? new Uint8Array(Buffer.from(id, 'hex')) : id
-	if (raw.length !== bytes) {
-		throw new InvalidError(`a ${what} id of ${raw.length} bytes, not ${bytes}`)
-	}
-	return raw
+export interface Row {
+	/** where the row's span begins, counted from 1970 in UTC */
+	at: Date
+	count: number
+	by: Record<string, unknown>
+	stats: Record<string, Stats>
+	distinct: Record<string, number>
 }
 
-/** Fields as the wire carries them: one array of keys and JSON texts. */
-function fieldsOf(fields: Fields | undefined): string[] | undefined {
-	if (fields === undefined) {
-		return undefined
-	}
-	const pairs = Array.isArray(fields) ? fields : Object.entries(fields)
-	const flat: string[] = []
-	for (const [key, value] of pairs) {
-		const json = JSON.stringify(value)
-		if (json === undefined) {
-			throw new InvalidError(`the field ${key} holds a value JSON cannot write`)
-		}
-		flat.push(key, json)
-	}
-	return flat.length === 0 ? undefined : flat
+export interface Aggregate extends Counted {
+	/** the span of a row: the range is one without it */
+	every?: Duration
+	/** keys whose every value has rows of its own */
+	by?: readonly string[]
+	/** fields whose numbers a row sums */
+	stats?: readonly string[]
+	/** fields whose different values a row counts */
+	distinct?: readonly string[]
 }
 
-const lossy = new TextDecoder()
-
-function textOf(text: string | Uint8Array | undefined): string {
-	return text === undefined ? '' : typeof text === 'string' ? text : lossy.decode(text)
+export interface StreamInfo {
+	name: string
+	keep: DurationText
+	oldest: Date
+	newest: Date
 }
 
-function pairs(flat: (string | Uint8Array)[] | undefined): [string, string | Uint8Array][] {
-	const out: [string, string | Uint8Array][] = []
-	for (let i = 0; flat !== undefined && i + 1 < flat.length; i += 2) {
-		out.push([textOf(flat[i]), flat[i + 1]!])
-	}
-	return out
+export interface PollBatch {
+	events: Event[]
+	/** where the next poll begins, kept once these events are safe */
+	cursor: string
+	/** the events keep removed before the cursor reached them */
+	expired: number
 }
 
-function recordOf(r: ReturnType<typeof RecordsRecord.decode>): LogRecord {
-	return {
-		at: r.at ?? 0n,
-		stream: textOf(r.stream),
-		name: textOf(r.name),
-		level: r.level,
-		body: r.body,
-		traceId: r.traceId,
-		spanId: r.spanId,
-		context: pairs(r.context),
-		attrs: pairs(r.attrs),
-	}
+type Method = keyof typeof methods
+
+const levelNumbers: Record<EventLevel, number> = {
+	trace: -8,
+	debug: -4,
+	info: 0,
+	warn: 4,
+	error: 8,
+	fatal: 12,
 }
+const levelNames: readonly EventLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal']
 
-/**
- * A page's next: where the range moved, both ends as nanoseconds, so that a
- * query over the last `since` continues the range it started with.
- *
- *     from 1700000000000000000, open end   →   '1700000000000000000:'
- */
-function cursorOf(from: bigint | undefined, to: bigint | undefined): string {
-	return `${from ?? ''}:${to ?? ''}`
-}
+/** What every read takes: a stream's handle, or every stream without one. */
+abstract class Reads {
+	protected abstract ask(
+		method: Method,
+		body: (handle: number | undefined) => Uint8Array,
+	): Promise<Uint8Array>
 
-function rangeOf(q: RecordsQuery | undefined): {
-	from: bigint | undefined
-	to: bigint | undefined
-} {
-	if (q?.after !== undefined) {
-		const ends = /^(-?\d*):(-?\d*)$/.exec(q.after)
-		if (ends === null) {
-			throw new InvalidError(`${JSON.stringify(q.after)} is no page's next`)
-		}
-		return {
-			from: ends[1] === '' ? undefined : BigInt(ends[1]!),
-			to: ends[2] === '' ? undefined : BigInt(ends[2]!),
-		}
-	}
-	if (q?.since !== undefined && q.from !== undefined) {
-		throw new InvalidError('a range starts since a span before now or from a time, not both')
-	}
-	const from =
-		q?.since !== undefined
-			? nanos(new Date(Date.now() - ms(q.since)))
-			: q?.from === undefined
-				? undefined
-				: nanos(q.from)
-	return { from, to: q?.to === undefined ? undefined : nanos(q.to) }
-}
-
-function queryOf(q: RecordsQuery | undefined): Parameters<typeof QueryMessage.encode>[0] {
-	return {
-		...rangeOf(q),
-		streams: q?.streams !== undefined && q.streams.length > 0 ? q.streams : undefined,
-		names: q?.names !== undefined && q.names.length > 0 ? q.names : undefined,
-		minLevel: q?.minLevel === undefined ? undefined : levelOf(q.minLevel),
-		traceId: idOf(q?.traceId, 16, 'trace'),
-		attrs: fieldsOf(q?.attrs),
-		context: fieldsOf(q?.context),
-		newest: q?.newest === true ? true : undefined,
-		limit: q?.limit,
-		budgetBlocks: q?.budget?.blocks,
-		budgetBytes: q?.budget?.bytes,
-		budgetRecords: q?.budget?.records,
-		search: q?.search === '' ? undefined : q?.search,
-	}
-}
-
-export class Records {
-	readonly #link: Link
-	readonly #loggers: Logger[] = []
-
-	constructor(link: Link) {
-		this.#link = link
-	}
-
-	/**
-	 * A logger of a stream: its calls return at once, and its lines reach the
-	 * server every second, as Go's slog handler's and Python's logging.Handler's do.
-	 */
-	logger(stream: string, options?: LoggerOptions): Logger {
-		const logger = newLogger(lines => this.#writeLines(lines), stream, options)
-		this.#loggers.push(logger)
-		return logger
-	}
-
-	/** Hands over what every logger holds, as the store does when it closes. */
-	async stop(): Promise<void> {
-		await Promise.all(this.#loggers.map(logger => logger.stop()))
-	}
-
-	/**
-	 * Appends records in one transaction, all or none; a refused one names
-	 * itself as `call`, with its stream and name. A read sees them at once. A
-	 * record of no trace of its own takes the one withTrace runs the call in.
-	 */
-	async append(records: RecordInput | readonly RecordInput[]): Promise<void> {
-		const carried = currentTrace()
-		const list = Array.isArray(records) ? records : [records as RecordInput]
-		return this.#write(
-			carried === undefined
-				? list
-				: list.map(r =>
-						r.traceId === undefined
-							? { ...r, traceId: carried.traceId, spanId: carried.spanId }
-							: r,
-					),
-		)
-	}
-
-	async #write(records: readonly RecordInput[]): Promise<void> {
-		const now = BigInt(Date.now()) * nsPerMs
-		await this.#send(
-			records.map(r => ({
-				at: r.at === undefined ? now : nanos(r.at),
-				stream: r.stream,
-				name: r.name,
-				level: r.level === undefined ? undefined : levelOf(r.level),
-				body: r.body,
-				traceId: idOf(r.traceId, 16, 'trace'),
-				spanId: idOf(r.spanId, 8, 'span'),
-				context: fieldsOf(r.context),
-				attrs: fieldsOf(r.attrs),
-			})),
-		)
-	}
-
-	/** Appends a logger's lines, their fields already JSON and their traces taken as each was logged. */
-	async #writeLines(lines: readonly ConsoleLine[]): Promise<void> {
-		await this.#send(
-			lines.map(line => ({
-				at: nanos(line.at),
-				stream: line.stream,
-				name: line.event ?? 'log',
-				level: line.level,
-				body: line.msg,
-				traceId: idOf(line.traceId, 16, 'trace'),
-				spanId: idOf(line.spanId, 8, 'span'),
-				context: line.context.length === 0 ? undefined : [...line.context],
-				attrs: line.attrs.length === 0 ? undefined : [...line.attrs],
-			})),
-		)
-	}
-
-	async #send(records: Parameters<typeof RecordsBatch.encode>[0]['records']): Promise<void> {
-		await this.#link.run('write', connection =>
-			connection.session.call(methods['records.append'], RecordsBatch.encode({ records })),
-		)
-	}
-
-	/**
-	 * One page of the records a query matches, from one snapshot, in event-time
-	 * order; next, while a limit or a budget ended the page early, is passed back
-	 * as `after` with the same query. A page never splits a timestamp.
-	 */
-	async scan(query?: RecordsQuery): Promise<Page<LogRecord, string>> {
+	/** One page, from one moment of the file: `{ events, next }`. */
+	async list(query?: Query): Promise<Page> {
 		const asked = queryOf(query)
-		const got = await this.#link.run('read', connection =>
-			download(connection, methods['records.read'], QueryMessage.encode(asked)),
+		const answer = await this.ask('records.list', handle =>
+			RecordsQuery.encode({ ...asked, handle }),
 		)
-		const page = RecordsPage.decode(got.trailer)
-		const items = got.items.map(item => recordOf(RecordsRecord.decode(item)))
-		if (page.more !== true) {
-			return { items, next: undefined }
-		}
-		const moved = (end: number | bigint | undefined, sent: number | bigint | undefined) =>
-			end !== undefined ? BigInt(end) : sent !== undefined ? BigInt(sent) : undefined
-		return { items, next: cursorOf(moved(page.from, asked.from), moved(page.to, asked.to)) }
+		const page = RecordsPage.decode(answer)
+		const events = (page.events ?? []).map(eventOf)
+		return page.next === undefined ? { events } : { events, next: page.next }
 	}
 
-	/** Every record a query matches, a page at a time. */
-	async *all(query?: Omit<RecordsQuery, 'after'>): AsyncGenerator<LogRecord> {
-		let page = await this.scan(query)
-		yield* page.items
-		while (page.next !== undefined) {
-			page = await this.scan({ ...query, after: page.next })
-			yield* page.items
+	/** Every event the query finds, a page after another. */
+	async *all(query?: Query): AsyncGenerator<Event> {
+		let after = query?.after
+		for (;;) {
+			const page = await this.list(after === undefined ? query : { ...query, after })
+			yield* page.events
+			if (page.next === undefined) {
+				return
+			}
+			after = page.next
 		}
+	}
+
+	/** How many events the query finds. */
+	async count(query?: Counted): Promise<number> {
+		const asked = queryOf(query)
+		const answer = await this.ask('records.count', handle =>
+			RecordsQuery.encode({ ...asked, handle }),
+		)
+		return RecordsCount.decode(answer).count ?? 0
 	}
 
 	/**
-	 * The sealed records after a cursor, in the order they were sealed; the
-	 * cursor to follow from next, and the segments retention removed before
-	 * the cursor reached them. A record reaches a follower once it is sealed.
+	 * A key's most frequent values and how many events hold each: ten unless
+	 * `limit` asks for more, at most 1000. The key is a field's or a
+	 * context's, or `stream`, `name` or `level`.
 	 */
-	async follow(
-		cursor?: Cursor,
-		limit?: number,
-	): Promise<{ records: LogRecord[]; cursor: Cursor; expired: number }> {
-		const got = await this.#link.run('read', connection =>
-			download(
-				connection,
-				methods['records.follow'],
-				RecordsCursor.encode({ segment: cursor?.segment, row: cursor?.row, limit }),
-			),
+	async top(key: string, query?: Counted & { limit?: number }): Promise<Top[]> {
+		const asked = queryOf(query)
+		const answer = await this.ask('records.top', handle =>
+			RecordsTopAsked.encode({ query: { ...asked, handle }, key }),
 		)
-		const trailer = RecordsCursor.decode(got.trailer)
-		return {
-			records: got.items.map(item => recordOf(RecordsRecord.decode(item))),
-			cursor: { segment: trailer.segment ?? 0, row: trailer.row ?? 0 },
-			expired: trailer.expired ?? 0,
-		}
-	}
-
-	/**
-	 * A writer of another program's output, pino's lines or a child's stdout,
-	 * that never waits: each line becomes a record of the stream as the server's
-	 * Lines makes it, a stack trace's lines joined and a JSON or logfmt line's
-	 * fields kept. What does not fit its buffer is dropped and counted.
-	 */
-	lines(stream: string, options?: { buffer?: number }): LinesWriter {
-		if (stream === '') {
-			throw new InvalidError('lines of no stream')
-		}
-		return new LinesWriter(this.#link, stream, options?.buffer ?? 1 << 20)
-	}
-
-	/** The rows the server's records have met that no longer read. */
-	async damaged(): Promise<Damage[]> {
-		const body = await this.#link.run('read', connection =>
-			connection.session.call(methods['records.damaged'], Empty.encode({})),
-		)
-		return (RecordsDamages.decode(body).damages ?? []).map(d => ({
-			stream: textOf(d.stream),
-			segment: d.segment,
-			headRow: d.headRow,
-			from: d.from ?? 0n,
-			to: d.to ?? 0n,
-			reason: d.reason ?? '',
+		return (RecordsTops.decode(answer).values ?? []).map(top => ({
+			value: parseJson(top.value ?? 'null'),
+			count: top.count ?? 0,
 		}))
 	}
 
-	/** Removes a damaged row, a repair an admin connection alone may make. */
-	async drop(damage: Damage): Promise<void> {
-		await this.#link.run('write', connection =>
-			connection.session.call(methods['records.drop'], RecordsDamage.encode(damage)),
+	/** A row for each span of `every` and each value of the keys of `by`, with its count. */
+	async aggregate(query: Aggregate = {}): Promise<Row[]> {
+		const { every, by, stats, distinct, ...counted } = query
+		const asked = queryOf(counted)
+		const answer = await this.ask('records.aggregate', handle =>
+			RecordsAggregateAsked.encode({
+				query: { ...asked, handle },
+				every: every === undefined ? undefined : ms(every),
+				by: by === undefined ? undefined : [...by],
+				stats: stats === undefined ? undefined : [...stats],
+				distinct: distinct === undefined ? undefined : [...distinct],
+			}),
+		)
+		return (RecordsRows.decode(answer).rows ?? []).map(row => ({
+			at: dateOf(row.at ?? 0n),
+			count: row.count ?? 0,
+			by: mapValues(row.by, json => parseJson(json)),
+			stats: mapValues(row.stats, kept => ({
+				samples: kept.samples ?? 0,
+				sum: parseJson(kept.sum ?? '0') as number | bigint,
+				min: parseJson(kept.min ?? '0') as number | bigint,
+				max: parseJson(kept.max ?? '0') as number | bigint,
+				avg: kept.avg ?? 0,
+			})),
+			distinct: mapValues(row.distinct, count => count),
+		}))
+	}
+
+	/** The keys the events hold, in fields and in context, sorted; `prefix` narrows them. */
+	async fieldNames(
+		query?: Omit<Query, 'newest' | 'after'> & { prefix?: string },
+	): Promise<string[]> {
+		const { prefix, ...rest } = query ?? {}
+		const asked = queryOf(rest)
+		const answer = await this.ask('records.fieldNames', handle =>
+			RecordsFieldNamesAsked.encode({ query: { ...asked, handle }, prefix }),
+		)
+		return RecordsNames.decode(answer).names ?? []
+	}
+}
+
+/** Opens a stream of events: lazily, at its first call on a connection. */
+export function openEvents(link: Link, stream: string, options?: EventsOptions): Events {
+	checkName(stream, 'stream')
+	const keep = options?.keep === undefined ? undefined : ms(options.keep)
+	return new Events(link, stream, RecordsOpen.encode({ stream, keep }))
+}
+
+/** A stream of events: written with `append`, which waits for the file, and read back. */
+export class Events extends Reads {
+	readonly stream: string
+	readonly #via: Via
+	readonly #open: Uint8Array
+
+	/** Events come from `store.events(stream)`. */
+	constructor(link: Link, stream: string, open: Uint8Array) {
+		super()
+		this.stream = stream
+		this.#via = viaLink(link)
+		this.#open = open
+	}
+
+	/**
+	 * Writes an event, or a list of them whole or not at all: it returns once
+	 * they are written, and a read finds them at once. A refused event names
+	 * its place in the list and its name.
+	 */
+	append(name: string, fields?: Fields, options?: AppendOptions): Promise<void>
+	append(events: readonly NewEvent[]): Promise<void>
+	async append(
+		first: string | readonly NewEvent[],
+		fields?: Fields,
+		options?: AppendOptions,
+	): Promise<void> {
+		const events = typeof first === 'string' ? [oneEvent(first, fields, options)] : first
+		const encoded = events.map(newEventOf)
+		await this.#call(
+			'records.append',
+			handle => RecordsAppend.encode({ handle, events: encoded }),
+			'write',
+		)
+	}
+
+	/** A logger's lines, each an event of this stream. */
+	appendLines(lines: readonly ConsoleLine[]): Promise<void> {
+		const events = lines.map(line => ({
+			name: line.event ?? 'log',
+			at: nanosOf(line.at),
+			level: line.level,
+			message: line.msg,
+			fields: objectOf(line.attrs),
+			context: objectOf(line.context),
+			...wireTrace(line.traceId, line.spanId),
+		}))
+		return this.#call(
+			'records.append',
+			handle => RecordsAppend.encode({ handle, events }),
+			'write',
+		).then(() => {})
+	}
+
+	protected ask(
+		method: Method,
+		body: (handle: number | undefined) => Uint8Array,
+	): Promise<Uint8Array> {
+		return this.#call(method, body, 'read')
+	}
+
+	#call(
+		method: Method,
+		body: (handle: number) => Uint8Array,
+		idempotence: 'read' | 'write',
+	): Promise<Uint8Array> {
+		return this.#via.call(methods['records.open'], this.#open, methods[method], body, idempotence)
+	}
+}
+
+/** Every stream's events, to read: `store.events()`. */
+export class AllEvents extends Reads {
+	readonly #link: Link
+
+	/** AllEvents come from `store.events()`. */
+	constructor(link: Link) {
+		super()
+		this.#link = link
+	}
+
+	/** Every stream with events, by name, with what it keeps and its oldest and newest event's time. */
+	async streams(): Promise<StreamInfo[]> {
+		const answer = await this.ask('records.streams', () => Empty.encode({}))
+		return (RecordsStreams.decode(answer).streams ?? []).map(stream => ({
+			name: stream.name ?? '',
+			keep: spelled(stream.keep ?? 0),
+			oldest: dateOf(stream.oldest ?? 0n),
+			newest: dateOf(stream.newest ?? 0n),
+		}))
+	}
+
+	/**
+	 * Every event once, a batch a call, from a cursor the program keeps, the
+	 * oldest event kept without one: `{ events, cursor, expired }`. With no
+	 * event past the cursor, the batch is empty and its cursor the one given.
+	 */
+	async poll(cursor?: string, options?: { limit?: number }): Promise<PollBatch> {
+		const answer = await this.ask('records.poll', () =>
+			RecordsPollAsked.encode({ cursor, limit: options?.limit }),
+		)
+		const batch = RecordsBatch.decode(answer)
+		return {
+			events: (batch.events ?? []).map(eventOf),
+			cursor: batch.cursor ?? '',
+			expired: batch.expired ?? 0,
+		}
+	}
+
+	protected ask(
+		method: Method,
+		body: (handle: number | undefined) => Uint8Array,
+	): Promise<Uint8Array> {
+		return this.#link.run('read', connection =>
+			connection.session.call(methods[method], body(undefined)),
 		)
 	}
 }
 
-/** The most one DATA of lines carries. */
-const linesChunk = 64 << 10
+/** What a store's logger is told: a logger's options, and how long its stream keeps. */
+export interface StoreLoggerOptions extends LoggerOptions {
+	/** how long the stream keeps its events, as store.events takes it */
+	keep?: Duration
+}
 
-/**
- * An upload of lines that stays open while it is written: write never waits,
- * holding what the stream's credit does not let go yet up to its buffer and
- * dropping past it. A connection lost drops what it held and the next write
- * uploads on the next connection.
- */
-export class LinesWriter {
-	readonly #link: Link
-	readonly #stream: string
-	readonly #most: number
-	#waiting: Uint8Array[] = []
-	#held = 0
-	#pumping: Promise<void> | undefined
-	#upload: Stream | undefined
-	#ended = false
-	/** bytes dropped since the writer began: a full buffer, or a lost connection */
-	dropped = 0
+/** A logger of `stream` that keeps its lines there through an append of their own. */
+export function storeLogger(link: Link, stream: string, options: StoreLoggerOptions = {}): Logger {
+	const { keep, ...told } = options
+	const events = openEvents(link, stream, keep === undefined ? undefined : { keep })
+	return newLogger(lines => events.appendLines(lines), stream, told)
+}
 
-	constructor(link: Link, stream: string, most: number) {
-		this.#link = link
-		this.#stream = stream
-		this.#most = most
+/** The event an append of a name, its fields and its options writes. */
+function oneEvent(
+	name: string,
+	fields: Fields | undefined,
+	options: AppendOptions | undefined,
+): NewEvent {
+	return fields === undefined ? { ...options, name } : { ...options, name, fields }
+}
+
+/** An event as the wire carries it, the current trace's ids when it gives none. */
+function newEventOf(event: NewEvent, place: number): Parameters<typeof RecordsNewEvent.encode>[0] {
+	const named = `event ${place} ${JSON.stringify(event.name)}`
+	if (typeof event.name !== 'string' || event.name === '') {
+		throw new InvalidError(`${named}: an event has a name`)
 	}
-
-	/** Takes a piece of output, cut anywhere. It returns at once. */
-	write(chunk: string | Uint8Array): boolean {
-		if (this.#ended) {
-			throw new InvalidError('a write after the lines ended')
-		}
-		const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk
-		if (bytes.length === 0) {
-			return true
-		}
-		if (this.#held + bytes.length > this.#most) {
-			this.dropped += bytes.length
-			return false
-		}
-		for (let at = 0; at < bytes.length; at += linesChunk) {
-			this.#waiting.push(bytes.subarray(at, at + linesChunk))
-		}
-		this.#held += bytes.length
-		this.#pumping ??= this.#pump().finally(() => {
-			this.#pumping = undefined
-		})
-		return true
+	if (event.at !== undefined && Number.isNaN(event.at.getTime())) {
+		throw new InvalidError(`${named}: a time that is no date`)
 	}
+	const given =
+		event.traceId === undefined
+			? traceOf(currentTrace())
+			: { traceId: event.traceId, spanId: event.spanId }
+	return {
+		name: event.name,
+		at: event.at === undefined ? undefined : nanosOf(event.at),
+		level: event.level === undefined ? undefined : levelNumber(event.level, named),
+		message: event.message,
+		fields:
+			event.fields === undefined ? undefined : objectOf(encodeFields(event.fields, undefined)),
+		context:
+			event.context === undefined ? undefined : objectOf(encodeFields(event.context, undefined)),
+		...wireTrace(given.traceId, given.spanId),
+	}
+}
 
-	async #pump(): Promise<void> {
-		while (this.#waiting.length > 0) {
-			const piece = this.#waiting[0]!
-			try {
-				const upload = await this.#open()
-				await upload.send(piece, false)
-			} catch {
-				this.#upload = undefined
-				this.dropped += this.#held
-				this.#waiting = []
-				this.#held = 0
-				return
-			}
-			this.#waiting.shift()
-			this.#held -= piece.length
+/** A query as the wire carries it; a condition given as undefined reads nothing it was not asked. */
+function queryOf(query: Query | undefined): Parameters<typeof RecordsQuery.encode>[0] {
+	const q = query ?? {}
+	for (const [key, value] of Object.entries(q)) {
+		if (value === undefined) {
+			throw new InvalidError(`a query's ${key} given as undefined: leave it out to read without it`)
 		}
 	}
-
-	async #open(): Promise<Stream> {
-		if (this.#upload !== undefined && !this.#upload.finished) {
-			return this.#upload
+	const where = q.where === undefined ? undefined : Object.entries(q.where)
+	for (const [key, value] of where ?? []) {
+		if (value === undefined) {
+			throw new InvalidError(`a query's where ${JSON.stringify(key)} given as undefined`)
 		}
-		const connection: Connection = await this.#link.connection()
-		this.#upload = await connection.session.open(
-			methods['records.lines'],
-			RecordsStream.encode({ stream: this.#stream }),
-			false,
+	}
+	return {
+		since: q.since === undefined ? undefined : ms(q.since),
+		from: q.from === undefined ? undefined : nanosOf(q.from),
+		to: q.to === undefined ? undefined : nanosOf(q.to),
+		streams: q.streams === undefined ? undefined : [...q.streams],
+		names: q.names === undefined ? undefined : [...q.names],
+		minLevel: q.minLevel === undefined ? undefined : levelNumber(q.minLevel, 'minLevel'),
+		traceId: q.traceId === undefined ? undefined : idBytes(q.traceId, 16, 'traceId'),
+		where:
+			where === undefined
+				? undefined
+				: Object.fromEntries(where.map(([key, value]) => [key, jsonOf(value)])),
+		search: q.search,
+		newest: q.newest,
+		limit: q.limit,
+		after: q.after,
+	}
+}
+
+function eventOf(read: ReturnType<typeof RecordsEvent.decode>): Event {
+	const event: Event = {
+		at: dateOf(read.at ?? 0n),
+		stream: read.stream ?? '',
+		name: read.name ?? '',
+		fields: read.fields === undefined ? {} : (parseJson(read.fields) as Record<string, unknown>),
+		context: read.context === undefined ? {} : (parseJson(read.context) as Record<string, unknown>),
+	}
+	if (read.level !== undefined) {
+		event.level = levelNames[Math.min(5, Math.max(0, Math.floor(read.level / 4) + 2))] as EventLevel
+	}
+	if (read.message !== undefined) {
+		event.message = read.message
+	}
+	if (read.traceId !== undefined) {
+		event.traceId = Buffer.from(read.traceId).toString('hex')
+	}
+	if (read.spanId !== undefined) {
+		event.spanId = Buffer.from(read.spanId).toString('hex')
+	}
+	return event
+}
+
+/** Key, JSON, key, JSON… as the JSON object they spell; none for no field. */
+function objectOf(flat: readonly string[]): string | undefined {
+	if (flat.length === 0) {
+		return undefined
+	}
+	const pairs: string[] = []
+	for (let at = 0; at < flat.length; at += 2) {
+		pairs.push(`${JSON.stringify(flat[at])}:${flat[at + 1]}`)
+	}
+	return `{${pairs.join(',')}}`
+}
+
+function levelNumber(level: EventLevel | number, what: string): number {
+	if (typeof level === 'number') {
+		if (!Number.isInteger(level)) {
+			throw new InvalidError(`${what}: the level ${level}, where slog counts whole numbers`)
+		}
+		return level
+	}
+	const number = levelNumbers[level]
+	if (number === undefined) {
+		throw new InvalidError(
+			`${what}: the level ${JSON.stringify(level)}, not one of ${levelNames.join(', ')}`,
 		)
-		return this.#upload
 	}
+	return number
+}
 
-	/** Hands over what the writer holds, a line cut short included, and ends the upload. */
-	async end(): Promise<void> {
-		this.#ended = true
-		await this.#pumping
-		const upload = this.#upload
-		if (upload === undefined || upload.finished) {
-			return
-		}
-		await upload.send(new Uint8Array(0), true)
-		await upload.next()
+/** A trace's ids as hex, when the trace has both. */
+function traceOf(trace: Trace | undefined): {
+	traceId?: string | undefined
+	spanId?: string | undefined
+} {
+	if (trace === undefined) {
+		return {}
 	}
+	const hex = (id: Uint8Array | string | undefined) =>
+		typeof id === 'string' || id === undefined ? id : Buffer.from(id).toString('hex')
+	return { traceId: hex(trace.traceId), spanId: hex(trace.spanId) }
+}
+
+/** A trace and its span as the wire carries them: both, or neither, since the store keeps a span with its trace. */
+function wireTrace(
+	traceId: string | undefined,
+	spanId: string | undefined,
+): { traceId?: Uint8Array; spanId?: Uint8Array } {
+	if (traceId === undefined || spanId === undefined) {
+		return {}
+	}
+	return { traceId: idBytes(traceId, 16, 'traceId'), spanId: idBytes(spanId, 8, 'spanId') }
+}
+
+function idBytes(hex: string, size: number, what: string): Uint8Array {
+	if (!new RegExp(`^[0-9a-fA-F]{${2 * size}}$`).test(hex)) {
+		throw new InvalidError(`${what} ${JSON.stringify(hex)}: ${2 * size} hex digits`)
+	}
+	return Uint8Array.from(Buffer.from(hex, 'hex'))
+}
+
+function nanosOf(date: Date): bigint {
+	return BigInt(date.getTime()) * 1_000_000n
+}
+
+function dateOf(nanos: bigint): Date {
+	return new Date(Number(nanos / 1_000_000n))
+}
+
+function mapValues<T, U>(
+	map: Record<string, T> | undefined,
+	read: (value: T) => U,
+): Record<string, U> {
+	return Object.fromEntries(Object.entries(map ?? {}).map(([key, value]) => [key, read(value)]))
+}
+
+/** Milliseconds as a span is written: '30d', '12h', '90s', '250ms'. */
+function spelled(millis: number): DurationText {
+	for (const [unit, size] of [
+		['d', 86_400_000],
+		['h', 3_600_000],
+		['m', 60_000],
+		['s', 1000],
+	] as const) {
+		if (millis >= size && millis % size === 0) {
+			return `${millis / size}${unit}` as DurationText
+		}
+	}
+	return `${millis}ms` as DurationText
 }

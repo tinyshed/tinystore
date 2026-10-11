@@ -44,9 +44,17 @@ import {
 	type RateLimitOptions,
 	rateLimitOpen,
 } from './limits.ts'
+import type { Logger } from './logger.ts'
 import { Metrics } from './metrics.ts'
 import { Once, type OnceOptions, onceOpen } from './once.ts'
-import { Records } from './records.ts'
+import {
+	AllEvents,
+	type Events,
+	type EventsOptions,
+	openEvents,
+	type StoreLoggerOptions,
+	storeLogger,
+} from './records.ts'
 import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
@@ -131,19 +139,49 @@ export interface ConnectOptions {
  * a Go program closes its tinystore.Store: `await using store = await open(dir)`.
  */
 export class Store implements AsyncDisposable {
-	readonly records: Records
 	readonly metrics: Metrics
 	/** The test's clock of a private store opened with `clock`; on any other, its calls are InvalidError. */
 	readonly clock: Clock
 	readonly #link: Link
 	readonly #configs = new Set<Config<object>>()
 	readonly #workers = new Set<Worker>()
+	readonly #loggers = new Set<Logger>()
 
 	constructor(link: Link) {
 		this.#link = link
 		this.clock = new Clock(link)
-		this.records = new Records(link)
 		this.metrics = new Metrics(link)
+	}
+
+	/**
+	 * A stream of events by name, made with its first event: events appended
+	 * whole and read back by time and by what they hold. Without a name, every
+	 * stream, to read.
+	 *
+	 *     const audit = store.events('audit', { keep: '365d' })
+	 *     await audit.append('role.changed', { user: 42, role: 'admin' })
+	 *     const page = await store.events().list({ since: '1h', minLevel: 'warn' })
+	 */
+	events(): AllEvents
+	events(stream: string, options?: EventsOptions): Events
+	events(stream?: string, options?: EventsOptions): Events | AllEvents {
+		return stream === undefined
+			? new AllEvents(this.#link)
+			: openEvents(this.#link, stream, options)
+	}
+
+	/**
+	 * A logger of the stream: each line printed as it is logged and kept
+	 * within a second, and a call never waits; what its buffer has no room
+	 * for is dropped and counted. The store's close hands over what it holds.
+	 *
+	 *     const log = store.logger('api', { redact: secrets })
+	 *     log.info('signed in', { user: 42 })
+	 */
+	logger(stream: string, options?: StoreLoggerOptions): Logger {
+		const logger = storeLogger(this.#link, stream, options)
+		this.#loggers.add(logger)
+		return logger
 	}
 
 	/**
@@ -347,7 +385,7 @@ export class Store implements AsyncDisposable {
 	async close(): Promise<void> {
 		await Promise.all([...this.#workers].map(worker => worker.stop()))
 		await this.metrics.stop()
-		await this.records.stop()
+		await Promise.all([...this.#loggers].map(logger => logger.stop()))
 		for (const config of this.#configs) {
 			config.stop()
 		}

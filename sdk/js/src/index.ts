@@ -89,17 +89,26 @@ export {
 } from './metrics.ts'
 export type { Once, OnceOptions } from './once.ts'
 export type { ColumnType, Query, RowPage, Table, TableOptions, UpsertOptions } from './query.ts'
-export {
-	type Cursor,
-	type Damage,
-	type Fields,
-	fields,
-	type Level,
-	type LinesWriter,
-	type LogRecord,
-	type RecordInput,
-	type Records,
-	type RecordsQuery,
+export type {
+	Aggregate as EventsAggregate,
+	AllEvents,
+	AppendOptions,
+	Counted,
+	Event,
+	EventLevel,
+	Events,
+	EventsOptions,
+	Fields,
+	Level,
+	NewEvent,
+	Page as EventsPage,
+	PollBatch,
+	Query as EventsQuery,
+	Row as EventsRow,
+	Stats,
+	StoreLoggerOptions,
+	StreamInfo,
+	Top,
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
 export {

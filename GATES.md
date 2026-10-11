@@ -56,7 +56,7 @@ module defines.
 
 - an engine's errors are the store's kinds — `TestMetricsErrorsAreTheStoresKinds`
 - a failed engine open gives its file back — `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`
-- one refused instrument does not keep the others out — `TestARefusedInstrumentDoesNotKeepTheOthersOut`; `a refused instrument keeps no other out, and says so once` in `sdk/js/test/records.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's
+- one refused instrument does not keep the others out — `TestARefusedInstrumentDoesNotKeepTheOthersOut`; `a refused instrument keeps no other out, and says so once` in `sdk/js/test/metrics.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's
 - an instrument's last value survives Close — `TestClosingTheStoreFlushesTheLastValues`
 - a timer writes its count, sum and longest at each flush — `TestATimerWritesItsCountSumAndLongestAtEachFlush`, `TestAFailedFlushKeepsATimersLongestForTheNext`
 - a timer's three series go together and have one writer — `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries`
@@ -98,11 +98,11 @@ module defines.
 - exact aggregates cross blocks, resets and retention — `TestAggregateRoundsExactSumAcrossSealedBlocks`, `TestACounterStepCountsInTheBucketItEndsIn` and `TestAggregateClipsRetentionBeforeSummingSealedEdges`
 - the schema admits a histogram series before the engine ingests one, so the kind needs no rebuilt table — `TestTheSchemaAdmitsAHistogramTheEngineDoesNotIngestYet`
 - a whole block's summary answers as its samples do — `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`, every operation, kind and boundary
-- an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range — `TestAnHourOfACounterIncreasesBy3585AtEveryWidth`, `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange`, `TestAggregateOverTheWire` in `server`; `an increase counts the step into each bucket, the first from before the range` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
+- an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range — `TestAnHourOfACounterIncreasesBy3585AtEveryWidth`, `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange`, `TestAggregateOverTheWire` in `server`; `an increase counts the step into each bucket, the first from before the range` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - the first bucket steps from the newest sample a lookback before the range, which a block's summary answers undecoded — `TestTheFirstBucketTakesItsStepFromBeforeTheRange`
 - a step from a sample retention expired is not counted, and its bucket is partial — `TestAStepFromAnExpiredSampleIsNotCounted`
 - first and last are a bucket's first and last samples bit for bit, from a summary as from raw, and a group adds them up — `TestTheLastOfABucketIsItsNewestSample`, `TestSummaryAndRawAggregatesAgreeAtEveryBoundary`
-- latest is each series' newest sample in its range, which bounds its staleness — `TestLatestLeavesOutASeriesOlderThanItsRange`, `TestLatestIsTheLastSampleOfARead`, `TestLatestOverTheWire` in `server`; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/records.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
+- latest is each series' newest sample in its range, which bounds its staleness — `TestLatestLeavesOutASeriesOlderThanItsRange`, `TestLatestIsTheLastSampleOfARead`, `TestLatestOverTheWire` in `server`; `latest is each series' newest sample, and first and last a bucket's ends` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `TestLatestDecodesAtMostOneChunkASeries`
 - latest pays no sample budget for blocks older than its selected head — `TestLatestSpendsNoBudgetOnBlocksOlderThanItsHead`
 - expired heads and blocks spend no sample or payload budget — `TestBatchedReadsSpendNothingOnExpiredSeries`
@@ -110,7 +110,7 @@ module defines.
 - a retention prefix reads no unrelated later names — `TestARetentionPrefixReadsOnlyItsNames`
 - a series keeps the retention of the longest prefix of its name, for ingest, reads, aggregates and expiry — `TestASeriesKeepsItsOwnRetention`, `TestASampleOlderThanItsSeriesRetentionIsRefused`
 - changed retention rules rewrite only the series of the prefixes that changed, and a changed Retention none — `TestAChangedRuleReachesTheSeriesOfItsPrefix`
-- a description is kept by name, replaced by the next and removed by an empty one — `TestADescriptionIsKeptByName`, `TestADescriptionOverTheWire` in `server`; `a description is kept by name, and an instrument's is written at its flush` in `sdk/js/test/records.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
+- a description is kept by name, replaced by the next and removed by an empty one — `TestADescriptionIsKeptByName`, `TestADescriptionOverTheWire` in `server`; `a description is kept by name, and an instrument's is written at its flush` in `sdk/js/test/metrics.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
 - an instrument describes the names it writes at its flush, a timer's sum and longest in milliseconds, and a failed flush keeps them — `TestAnInstrumentDescribesItsSeries`, `TestAFailedFlushKeepsItsDescriptionsForTheNext`
 - an invalid description keeps no good instrument out of a flush — `an invalid description cannot prevent good instruments from flushing` in Bun, `test_an_invalid_description_keeps_no_good_instrument_out` in Python
 - a group joins its series exactly and rounds once — `TestAGroupJoinsItsSeriesExactlyAndRoundsOnce`, `TestRateAndDeltaAreExactPerSeriesThenJoined`
@@ -126,6 +126,7 @@ module defines.
 - a half-full log buffer is written before its interval — `half_a_buffer_wakes_the_flush_before_its_second` in `records::logger`, `a_woken_task_runs_before_its_period_and_again_when_woken_while_it_runs` in `schedule`; `test_a_half_full_buffer_is_written_before_its_interval` in Python's
 - what a logger holds is kept when its store closes, and a line after is dropped and counted — `a_store_that_closes_keeps_what_its_loggers_held_and_drops_a_line_after` in `records::logger`
 - a line the file refuses is dropped and counted, and the rest are kept — `a_line_the_file_refuses_is_dropped_and_counted_and_the_rest_are_kept` in `records::logger`
+- records' calls over the wire answer as the core's: an event whole, its fields as they were spelled, a list whole or not at all, reads, counts, streams, keys and a poll, and a read connection appends nothing and gives no stream a keep — the tests of `wire::records`, and `sdk/js/test/events.test.ts` through each way a store is reached
 - writing a log does not log again — `the_stores_own_lines_are_printed_and_never_kept` in `records::logger`
 - a logger's console line is the same bytes in Rust, Bun and Python, its time and stream as it is told — `every_line_is_the_vectors_bytes_pretty_and_as_json` in `console`, over `testdata/console/console.json`, which `sdk/js/test/console.test.ts` reads too
 - LOG_LEVEL, LOG_FORMAT and LOG_TIME win over a logger's code, and never turn a console on — `the_environment_wins_over_the_code_and_never_turns_a_console_on` in `console::layer`; `win over the options, and never turn on a console turned off` in `sdk/js/test/logger.test.ts`, `test_the_environment_wins_over_the_arguments_and_never_turns_a_console_on` in Python's
@@ -645,12 +646,12 @@ module defines.
 
 ## The SDKs
 
-- a timer's measure answers, rethrows, and records either way — `a timer writes its count, sum and longest at each flush; measure answers and rethrows` in `sdk/js/test/records.test.ts`, `test_a_timer_writes_its_count_sum_and_longest_at_each_flush` in Python's
+- a timer's measure answers, rethrows, and records either way — `a timer writes its count, sum and longest at each flush; measure answers and rethrows` in `sdk/js/test/metrics.test.ts`, `test_a_timer_writes_its_count_sum_and_longest_at_each_flush` in Python's
 - a Bun batch or view gives back what its function returns, answered — `a view and a batch give back what their function returns, its promises answered` in `sdk/js/test/kv.test.ts`, `a batch and a view give back what their function returns, its promises answered` in `sdk/js/test/sql.test.ts`
 - SQL batches reject buckets and queues of another store even when the database names match — `a batch rejects buckets and queues from another store with the same database name` in Bun, `test_a_batch_refuses_buckets_and_queues_of_another_store` in Python
-- a Bun logger's line never waits for the server — `a full logger drops and counts rather than wait` in `sdk/js/test/records.test.ts`
+- a Bun logger's line never waits for the server — `a store's logger never waits: a full buffer drops and counts` in `sdk/js/test/events.test.ts`
 - a Bun logger writes what filled its buffer during a write as that write ends — `what filled the buffer while a write ran goes as the write ends, not at the next second` in `sdk/js/test/logger.test.ts`
-- a Bun call under an aborted signal is refused — `every call under an aborted signal is refused` in `sdk/js/test/records.test.ts`
+- a Bun call under an aborted signal is refused — owed: its test went with protocol 1's records, and protocol 2's is not written
 - a Bun duration or rate misspelled does not compile — `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `refuses a rate it cannot read, its type before its call` in `sdk/js/test/config.test.ts`
 - a Bun store's close frees its directory — `close returns once the child has exited` in `sdk/js/test/kv.test.ts`
 - the Bun SDK's files answer alike through the core in its process, a private child, a sidecar and a remote server, in one call and in pieces within each side's credit — `sdk/js/test/blobs.test.ts`, every test through each

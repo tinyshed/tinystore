@@ -74,6 +74,15 @@ export const methods = {
 	'kv.once.get': 0x0132,
 	'kv.once.delete': 0x0133,
 	'kv.tx': 0x0140,
+	'records.open': 0x0501,
+	'records.append': 0x0502,
+	'records.list': 0x0503,
+	'records.count': 0x0504,
+	'records.top': 0x0505,
+	'records.aggregate': 0x0506,
+	'records.streams': 0x0507,
+	'records.fieldNames': 0x0508,
+	'records.poll': 0x0509,
 	/**
 	 * Stops the server as its closing does: the streams running finish, every
 	 * connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
@@ -4557,6 +4566,1368 @@ export const KvTxResults = message(
 			}
 			r.leave()
 			return { outcomes: $outcomes }
+		},
+	},
+)
+
+/**
+ * Opens a stream of events by name, made with its first event.
+ */
+export const RecordsOpen = message(
+	'records.Open',
+	{
+		/** [a-z0-9][a-z0-9_-]{0,63} */
+		stream: [1, str],
+		/** how long it keeps its events: its own, kept in the file */
+		keep: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.stream !== undefined) {
+				w.field(1)
+				w.str(v.stream)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(2)
+				w.uint(v.keep)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $stream: string | undefined
+			let $keep: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$stream = r.str()
+						break
+					case 2:
+						$keep = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { stream: $stream, keep: $keep }
+		},
+	},
+)
+
+/**
+ * An event to write.
+ */
+export const RecordsNewEvent = message(
+	'records.NewEvent',
+	{
+		name: [1, str],
+		/** the store's clock's now unless given */
+		at: [2, int64],
+		/** -4 debug, 0 info, 4 warn, 8 error, between them as slog counts */
+		level: [3, int],
+		message: [4, str],
+		/** an object */
+		fields: [5, str],
+		/** an object */
+		context: [6, str],
+		/** 16 bytes */
+		traceId: [7, bin],
+		/** 8 bytes */
+		spanId: [8, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.at !== undefined) {
+				w.field(2)
+				w.int(v.at)
+				n++
+			}
+			if (v.level !== undefined) {
+				w.field(3)
+				w.int(v.level)
+				n++
+			}
+			if (v.message !== undefined) {
+				w.field(4)
+				w.str(v.message)
+				n++
+			}
+			if (v.fields !== undefined) {
+				w.field(5)
+				w.str(v.fields)
+				n++
+			}
+			if (v.context !== undefined) {
+				w.field(6)
+				w.str(v.context)
+				n++
+			}
+			if (v.traceId !== undefined) {
+				w.field(7)
+				w.bin(v.traceId)
+				n++
+			}
+			if (v.spanId !== undefined) {
+				w.field(8)
+				w.bin(v.spanId)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $at: bigint | undefined
+			let $level: number | undefined
+			let $message: string | undefined
+			let $fields: string | undefined
+			let $context: string | undefined
+			let $traceId: Uint8Array | undefined
+			let $spanId: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$at = r.int64()
+						break
+					case 3:
+						$level = r.int()
+						break
+					case 4:
+						$message = r.str()
+						break
+					case 5:
+						$fields = r.str()
+						break
+					case 6:
+						$context = r.str()
+						break
+					case 7:
+						$traceId = r.bytes()
+						break
+					case 8:
+						$spanId = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				at: $at,
+				level: $level,
+				message: $message,
+				fields: $fields,
+				context: $context,
+				traceId: $traceId,
+				spanId: $spanId,
+			}
+		},
+	},
+)
+
+/**
+ * Events to write to a stream, all of them or none.
+ */
+export const RecordsAppend = message(
+	'records.Append',
+	{
+		handle: [1, uint],
+		events: [2, list(RecordsNewEvent)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.events !== undefined) {
+				w.field(2)
+				w.array(v.events.length)
+				for (const item0 of v.events) {
+					RecordsNewEvent.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $events: Read<typeof RecordsNewEvent.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: Read<typeof RecordsNewEvent.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsNewEvent.read(r))
+						}
+						r.leave()
+						$events = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, events: $events }
+		},
+	},
+)
+
+/**
+ * An event as a read gives it.
+ */
+export const RecordsEvent = message(
+	'records.Event',
+	{
+		at: [1, int64],
+		stream: [2, str],
+		name: [3, str],
+		level: [4, int],
+		message: [5, str],
+		/** an object; none when it has no field */
+		fields: [6, str],
+		context: [7, str],
+		traceId: [8, bin],
+		spanId: [9, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.at !== undefined) {
+				w.field(1)
+				w.int(v.at)
+				n++
+			}
+			if (v.stream !== undefined) {
+				w.field(2)
+				w.str(v.stream)
+				n++
+			}
+			if (v.name !== undefined) {
+				w.field(3)
+				w.str(v.name)
+				n++
+			}
+			if (v.level !== undefined) {
+				w.field(4)
+				w.int(v.level)
+				n++
+			}
+			if (v.message !== undefined) {
+				w.field(5)
+				w.str(v.message)
+				n++
+			}
+			if (v.fields !== undefined) {
+				w.field(6)
+				w.str(v.fields)
+				n++
+			}
+			if (v.context !== undefined) {
+				w.field(7)
+				w.str(v.context)
+				n++
+			}
+			if (v.traceId !== undefined) {
+				w.field(8)
+				w.bin(v.traceId)
+				n++
+			}
+			if (v.spanId !== undefined) {
+				w.field(9)
+				w.bin(v.spanId)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $at: bigint | undefined
+			let $stream: string | undefined
+			let $name: string | undefined
+			let $level: number | undefined
+			let $message: string | undefined
+			let $fields: string | undefined
+			let $context: string | undefined
+			let $traceId: Uint8Array | undefined
+			let $spanId: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$at = r.int64()
+						break
+					case 2:
+						$stream = r.str()
+						break
+					case 3:
+						$name = r.str()
+						break
+					case 4:
+						$level = r.int()
+						break
+					case 5:
+						$message = r.str()
+						break
+					case 6:
+						$fields = r.str()
+						break
+					case 7:
+						$context = r.str()
+						break
+					case 8:
+						$traceId = r.bytes()
+						break
+					case 9:
+						$spanId = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				at: $at,
+				stream: $stream,
+				name: $name,
+				level: $level,
+				message: $message,
+				fields: $fields,
+				context: $context,
+				traceId: $traceId,
+				spanId: $spanId,
+			}
+		},
+	},
+)
+
+/**
+ * What a read finds: each condition given holds.
+ */
+export const RecordsQuery = message(
+	'records.Query',
+	{
+		/** the stream opened as it; every stream without one */
+		handle: [1, uint],
+		/** the span before now; or from and to */
+		since: [2, uint],
+		from: [3, int64],
+		to: [4, int64],
+		streams: [5, list(str)],
+		names: [6, list(str)],
+		minLevel: [7, int],
+		traceId: [8, bin],
+		/** each key with this value, in fields or in context */
+		where: [9, names(str)],
+		search: [10, str],
+		newest: [11, bool],
+		/** a page's events, top's values, fieldNames' keys */
+		limit: [12, uint],
+		/** a page's next */
+		after: [13, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.since !== undefined) {
+				w.field(2)
+				w.uint(v.since)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(3)
+				w.int(v.from)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(4)
+				w.int(v.to)
+				n++
+			}
+			if (v.streams !== undefined) {
+				w.field(5)
+				w.array(v.streams.length)
+				for (const item0 of v.streams) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.names !== undefined) {
+				w.field(6)
+				w.array(v.names.length)
+				for (const item0 of v.names) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.minLevel !== undefined) {
+				w.field(7)
+				w.int(v.minLevel)
+				n++
+			}
+			if (v.traceId !== undefined) {
+				w.field(8)
+				w.bin(v.traceId)
+				n++
+			}
+			if (v.where !== undefined) {
+				w.field(9)
+				writeNames(w, v.where, str.write)
+				n++
+			}
+			if (v.search !== undefined) {
+				w.field(10)
+				w.str(v.search)
+				n++
+			}
+			if (v.newest !== undefined) {
+				w.field(11)
+				w.bool(v.newest)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(12)
+				w.uint(v.limit)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(13)
+				w.str(v.after)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $since: number | undefined
+			let $from: bigint | undefined
+			let $to: bigint | undefined
+			let $streams: string[] | undefined
+			let $names: string[] | undefined
+			let $minLevel: number | undefined
+			let $traceId: Uint8Array | undefined
+			let $where: Record<string, string> | undefined
+			let $search: string | undefined
+			let $newest: boolean | undefined
+			let $limit: number | undefined
+			let $after: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$since = r.uint()
+						break
+					case 3:
+						$from = r.int64()
+						break
+					case 4:
+						$to = r.int64()
+						break
+					case 5: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$streams = items0
+						break
+					}
+					case 6: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$names = items0
+						break
+					}
+					case 7:
+						$minLevel = r.int()
+						break
+					case 8:
+						$traceId = r.bytes()
+						break
+					case 9:
+						$where = readNames(r, str.read)
+						break
+					case 10:
+						$search = r.str()
+						break
+					case 11:
+						$newest = r.bool()
+						break
+					case 12:
+						$limit = r.uint()
+						break
+					case 13:
+						$after = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				since: $since,
+				from: $from,
+				to: $to,
+				streams: $streams,
+				names: $names,
+				minLevel: $minLevel,
+				traceId: $traceId,
+				where: $where,
+				search: $search,
+				newest: $newest,
+				limit: $limit,
+				after: $after,
+			}
+		},
+	},
+)
+
+export const RecordsPage = message(
+	'records.Page',
+	{
+		events: [1, list(RecordsEvent)],
+		/** the page after it; the last page has none */
+		next: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.events !== undefined) {
+				w.field(1)
+				w.array(v.events.length)
+				for (const item0 of v.events) {
+					RecordsEvent.write(w, item0)
+				}
+				n++
+			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $events: Read<typeof RecordsEvent.fields>[] | undefined
+			let $next: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsEvent.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsEvent.read(r))
+						}
+						r.leave()
+						$events = items0
+						break
+					}
+					case 2:
+						$next = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { events: $events, next: $next }
+		},
+	},
+)
+
+export const RecordsCount = message(
+	'records.Count',
+	{
+		count: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.count !== undefined) {
+				w.field(1)
+				w.uint(v.count)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $count: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$count = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { count: $count }
+		},
+	},
+)
+
+/**
+ * A key's most frequent values among what a query finds.
+ */
+export const RecordsTopAsked = message(
+	'records.TopAsked',
+	{
+		query: [1, RecordsQuery],
+		/** a field's or a context's, or stream, name or level */
+		key: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				RecordsQuery.write(w, v.query)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(2)
+				w.str(v.key)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof RecordsQuery.fields> | undefined
+			let $key: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = RecordsQuery.read(r)
+						break
+					case 2:
+						$key = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { query: $query, key: $key }
+		},
+	},
+)
+
+export const RecordsTop = message(
+	'records.Top',
+	{
+		value: [1, str],
+		count: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.value !== undefined) {
+				w.field(1)
+				w.str(v.value)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(2)
+				w.uint(v.count)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $value: string | undefined
+			let $count: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$value = r.str()
+						break
+					case 2:
+						$count = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { value: $value, count: $count }
+		},
+	},
+)
+
+export const RecordsTops = message(
+	'records.Tops',
+	{
+		values: [1, list(RecordsTop)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.values !== undefined) {
+				w.field(1)
+				w.array(v.values.length)
+				for (const item0 of v.values) {
+					RecordsTop.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $values: Read<typeof RecordsTop.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsTop.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsTop.read(r))
+						}
+						r.leave()
+						$values = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { values: $values }
+		},
+	},
+)
+
+/**
+ * A row for each span of every and each value of the keys of by.
+ */
+export const RecordsAggregateAsked = message(
+	'records.AggregateAsked',
+	{
+		query: [1, RecordsQuery],
+		every: [2, uint],
+		by: [3, list(str)],
+		stats: [4, list(str)],
+		distinct: [5, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				RecordsQuery.write(w, v.query)
+				n++
+			}
+			if (v.every !== undefined) {
+				w.field(2)
+				w.uint(v.every)
+				n++
+			}
+			if (v.by !== undefined) {
+				w.field(3)
+				w.array(v.by.length)
+				for (const item0 of v.by) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.stats !== undefined) {
+				w.field(4)
+				w.array(v.stats.length)
+				for (const item0 of v.stats) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.distinct !== undefined) {
+				w.field(5)
+				w.array(v.distinct.length)
+				for (const item0 of v.distinct) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof RecordsQuery.fields> | undefined
+			let $every: number | undefined
+			let $by: string[] | undefined
+			let $stats: string[] | undefined
+			let $distinct: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = RecordsQuery.read(r)
+						break
+					case 2:
+						$every = r.uint()
+						break
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$by = items0
+						break
+					}
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$stats = items0
+						break
+					}
+					case 5: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$distinct = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { query: $query, every: $every, by: $by, stats: $stats, distinct: $distinct }
+		},
+	},
+)
+
+/**
+ * A field's numbers in a row: a sum, a min and a max are JSON numbers, an
+ * integer's exact.
+ */
+export const RecordsStats = message(
+	'records.Stats',
+	{
+		samples: [1, uint],
+		sum: [2, str],
+		min: [3, str],
+		max: [4, str],
+		avg: [5, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.samples !== undefined) {
+				w.field(1)
+				w.uint(v.samples)
+				n++
+			}
+			if (v.sum !== undefined) {
+				w.field(2)
+				w.str(v.sum)
+				n++
+			}
+			if (v.min !== undefined) {
+				w.field(3)
+				w.str(v.min)
+				n++
+			}
+			if (v.max !== undefined) {
+				w.field(4)
+				w.str(v.max)
+				n++
+			}
+			if (v.avg !== undefined) {
+				w.field(5)
+				w.float(v.avg)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $samples: number | undefined
+			let $sum: string | undefined
+			let $min: string | undefined
+			let $max: string | undefined
+			let $avg: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$samples = r.uint()
+						break
+					case 2:
+						$sum = r.str()
+						break
+					case 3:
+						$min = r.str()
+						break
+					case 4:
+						$max = r.str()
+						break
+					case 5:
+						$avg = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { samples: $samples, sum: $sum, min: $min, max: $max, avg: $avg }
+		},
+	},
+)
+
+export const RecordsRow = message(
+	'records.Row',
+	{
+		/** where the row's span begins, counted from 1970 */
+		at: [1, int64],
+		count: [2, uint],
+		by: [3, names(str)],
+		stats: [4, names(RecordsStats)],
+		distinct: [5, names(uint)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.at !== undefined) {
+				w.field(1)
+				w.int(v.at)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(2)
+				w.uint(v.count)
+				n++
+			}
+			if (v.by !== undefined) {
+				w.field(3)
+				writeNames(w, v.by, str.write)
+				n++
+			}
+			if (v.stats !== undefined) {
+				w.field(4)
+				writeNames(w, v.stats, RecordsStats.write)
+				n++
+			}
+			if (v.distinct !== undefined) {
+				w.field(5)
+				writeNames(w, v.distinct, uint.write)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $at: bigint | undefined
+			let $count: number | undefined
+			let $by: Record<string, string> | undefined
+			let $stats: Record<string, Read<typeof RecordsStats.fields>> | undefined
+			let $distinct: Record<string, number> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$at = r.int64()
+						break
+					case 2:
+						$count = r.uint()
+						break
+					case 3:
+						$by = readNames(r, str.read)
+						break
+					case 4:
+						$stats = readNames(r, RecordsStats.read)
+						break
+					case 5:
+						$distinct = readNames(r, uint.read)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { at: $at, count: $count, by: $by, stats: $stats, distinct: $distinct }
+		},
+	},
+)
+
+export const RecordsRows = message(
+	'records.Rows',
+	{
+		rows: [1, list(RecordsRow)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.rows !== undefined) {
+				w.field(1)
+				w.array(v.rows.length)
+				for (const item0 of v.rows) {
+					RecordsRow.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $rows: Read<typeof RecordsRow.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsRow.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsRow.read(r))
+						}
+						r.leave()
+						$rows = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { rows: $rows }
+		},
+	},
+)
+
+export const RecordsStream = message(
+	'records.Stream',
+	{
+		name: [1, str],
+		keep: [2, uint],
+		oldest: [3, int64],
+		newest: [4, int64],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(2)
+				w.uint(v.keep)
+				n++
+			}
+			if (v.oldest !== undefined) {
+				w.field(3)
+				w.int(v.oldest)
+				n++
+			}
+			if (v.newest !== undefined) {
+				w.field(4)
+				w.int(v.newest)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $keep: number | undefined
+			let $oldest: bigint | undefined
+			let $newest: bigint | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$keep = r.uint()
+						break
+					case 3:
+						$oldest = r.int64()
+						break
+					case 4:
+						$newest = r.int64()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, keep: $keep, oldest: $oldest, newest: $newest }
+		},
+	},
+)
+
+export const RecordsStreams = message(
+	'records.Streams',
+	{
+		streams: [1, list(RecordsStream)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.streams !== undefined) {
+				w.field(1)
+				w.array(v.streams.length)
+				for (const item0 of v.streams) {
+					RecordsStream.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $streams: Read<typeof RecordsStream.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsStream.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsStream.read(r))
+						}
+						r.leave()
+						$streams = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { streams: $streams }
+		},
+	},
+)
+
+/**
+ * The keys the events a query finds hold, sorted.
+ */
+export const RecordsFieldNamesAsked = message(
+	'records.FieldNamesAsked',
+	{
+		query: [1, RecordsQuery],
+		prefix: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				RecordsQuery.write(w, v.query)
+				n++
+			}
+			if (v.prefix !== undefined) {
+				w.field(2)
+				w.str(v.prefix)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof RecordsQuery.fields> | undefined
+			let $prefix: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = RecordsQuery.read(r)
+						break
+					case 2:
+						$prefix = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { query: $query, prefix: $prefix }
+		},
+	},
+)
+
+export const RecordsNames = message(
+	'records.Names',
+	{
+		names: [1, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.names !== undefined) {
+				w.field(1)
+				w.array(v.names.length)
+				for (const item0 of v.names) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $names: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$names = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { names: $names }
+		},
+	},
+)
+
+/**
+ * Every packed event once, a batch a call, from a cursor the program keeps.
+ */
+export const RecordsPollAsked = message(
+	'records.PollAsked',
+	{
+		/** the oldest event kept without one */
+		cursor: [1, str],
+		/** 1000 unless given */
+		limit: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.cursor !== undefined) {
+				w.field(1)
+				w.str(v.cursor)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(2)
+				w.uint(v.limit)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $cursor: string | undefined
+			let $limit: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$cursor = r.str()
+						break
+					case 2:
+						$limit = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { cursor: $cursor, limit: $limit }
+		},
+	},
+)
+
+export const RecordsBatch = message(
+	'records.Batch',
+	{
+		events: [1, list(RecordsEvent)],
+		cursor: [2, str],
+		/** the events keep removed before the cursor reached them */
+		expired: [3, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.events !== undefined) {
+				w.field(1)
+				w.array(v.events.length)
+				for (const item0 of v.events) {
+					RecordsEvent.write(w, item0)
+				}
+				n++
+			}
+			if (v.cursor !== undefined) {
+				w.field(2)
+				w.str(v.cursor)
+				n++
+			}
+			if (v.expired !== undefined) {
+				w.field(3)
+				w.uint(v.expired)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $events: Read<typeof RecordsEvent.fields>[] | undefined
+			let $cursor: string | undefined
+			let $expired: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsEvent.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsEvent.read(r))
+						}
+						r.leave()
+						$events = items0
+						break
+					}
+					case 2:
+						$cursor = r.str()
+						break
+					case 3:
+						$expired = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { events: $events, cursor: $cursor, expired: $expired }
 		},
 	},
 )

@@ -2061,6 +2061,860 @@
     },
     {
       "fields": {
+        "keep": {
+          "uint": "1500"
+        },
+        "stream": {
+          "str": "stream"
+        }
+      },
+      "hex": "8201a673747265616d02cd05dc",
+      "message": "records.Open",
+      "name": "records.Open with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Open",
+      "name": "records.Open with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000123456"
+        },
+        "context": {
+          "str": "{\"a\":1}"
+        },
+        "fields": {
+          "str": "{\"a\":1}"
+        },
+        "level": {
+          "int": "-7"
+        },
+        "message": {
+          "str": "message"
+        },
+        "name": {
+          "str": "name"
+        },
+        "spanId": {
+          "bin": "01ff"
+        },
+        "traceId": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8801a46e616d6502cf18d75b8423f4e24003f904a76d65737361676505a77b2261223a317d06a77b2261223a317d07c40201ff08c40201ff",
+      "message": "records.NewEvent",
+      "name": "records.NewEvent with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.NewEvent",
+      "name": "records.NewEvent with no field"
+    },
+    {
+      "fields": {
+        "events": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000123456"
+                },
+                "context": {
+                  "str": "{\"a\":1}"
+                },
+                "fields": {
+                  "str": "{\"a\":1}"
+                },
+                "level": {
+                  "int": "-7"
+                },
+                "message": {
+                  "str": "message"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "spanId": {
+                  "bin": "01ff"
+                },
+                "traceId": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02918801a46e616d6502cf18d75b8423f4e24003f904a76d65737361676505a77b2261223a317d06a77b2261223a317d07c40201ff08c40201ff",
+      "message": "records.Append",
+      "name": "records.Append with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Append",
+      "name": "records.Append with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000123456"
+        },
+        "context": {
+          "str": "{\"a\":1}"
+        },
+        "fields": {
+          "str": "{\"a\":1}"
+        },
+        "level": {
+          "int": "-7"
+        },
+        "message": {
+          "str": "message"
+        },
+        "name": {
+          "str": "name"
+        },
+        "spanId": {
+          "bin": "01ff"
+        },
+        "stream": {
+          "str": "stream"
+        },
+        "traceId": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff",
+      "message": "records.Event",
+      "name": "records.Event with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Event",
+      "name": "records.Event with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "str": "after"
+        },
+        "from": {
+          "int": "1790000000000123456"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "limit": {
+          "uint": "1207"
+        },
+        "minLevel": {
+          "int": "-7"
+        },
+        "names": {
+          "list": [
+            {
+              "str": "names"
+            }
+          ]
+        },
+        "newest": {
+          "bool": true
+        },
+        "search": {
+          "str": "search"
+        },
+        "since": {
+          "uint": "1500"
+        },
+        "streams": {
+          "list": [
+            {
+              "str": "streams"
+            }
+          ]
+        },
+        "to": {
+          "int": "1790000000000123456"
+        },
+        "traceId": {
+          "bin": "01ff"
+        },
+        "where": {
+          "names": {
+            "a": {
+              "str": "{\"a\":1}"
+            }
+          }
+        }
+      },
+      "hex": "8d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da56166746572",
+      "message": "records.Query",
+      "name": "records.Query with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Query",
+      "name": "records.Query with no field"
+    },
+    {
+      "fields": {
+        "events": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000123456"
+                },
+                "context": {
+                  "str": "{\"a\":1}"
+                },
+                "fields": {
+                  "str": "{\"a\":1}"
+                },
+                "level": {
+                  "int": "-7"
+                },
+                "message": {
+                  "str": "message"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "spanId": {
+                  "bin": "01ff"
+                },
+                "stream": {
+                  "str": "stream"
+                },
+                "traceId": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "next": {
+          "str": "next"
+        }
+      },
+      "hex": "8201918901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff02a46e657874",
+      "message": "records.Page",
+      "name": "records.Page with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Page",
+      "name": "records.Page with no field"
+    },
+    {
+      "fields": {
+        "count": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "records.Count",
+      "name": "records.Count with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Count",
+      "name": "records.Count with no field"
+    },
+    {
+      "fields": {
+        "key": {
+          "str": "key"
+        },
+        "query": {
+          "fields": {
+            "after": {
+              "str": "after"
+            },
+            "from": {
+              "int": "1790000000000123456"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "limit": {
+              "uint": "1207"
+            },
+            "minLevel": {
+              "int": "-7"
+            },
+            "names": {
+              "list": [
+                {
+                  "str": "names"
+                }
+              ]
+            },
+            "newest": {
+              "bool": true
+            },
+            "search": {
+              "str": "search"
+            },
+            "since": {
+              "uint": "1500"
+            },
+            "streams": {
+              "list": [
+                {
+                  "str": "streams"
+                }
+              ]
+            },
+            "to": {
+              "int": "1790000000000123456"
+            },
+            "traceId": {
+              "bin": "01ff"
+            },
+            "where": {
+              "names": {
+                "a": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          }
+        }
+      },
+      "hex": "82018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202a36b6579",
+      "message": "records.TopAsked",
+      "name": "records.TopAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.TopAsked",
+      "name": "records.TopAsked with no field"
+    },
+    {
+      "fields": {
+        "count": {
+          "uint": "207"
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "8201a77b2261223a317d02cccf",
+      "message": "records.Top",
+      "name": "records.Top with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Top",
+      "name": "records.Top with no field"
+    },
+    {
+      "fields": {
+        "values": {
+          "list": [
+            {
+              "fields": {
+                "count": {
+                  "uint": "207"
+                },
+                "value": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918201a77b2261223a317d02cccf",
+      "message": "records.Tops",
+      "name": "records.Tops with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Tops",
+      "name": "records.Tops with no field"
+    },
+    {
+      "fields": {
+        "by": {
+          "list": [
+            {
+              "str": "by"
+            }
+          ]
+        },
+        "distinct": {
+          "list": [
+            {
+              "str": "distinct"
+            }
+          ]
+        },
+        "every": {
+          "uint": "1500"
+        },
+        "query": {
+          "fields": {
+            "after": {
+              "str": "after"
+            },
+            "from": {
+              "int": "1790000000000123456"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "limit": {
+              "uint": "1207"
+            },
+            "minLevel": {
+              "int": "-7"
+            },
+            "names": {
+              "list": [
+                {
+                  "str": "names"
+                }
+              ]
+            },
+            "newest": {
+              "bool": true
+            },
+            "search": {
+              "str": "search"
+            },
+            "since": {
+              "uint": "1500"
+            },
+            "streams": {
+              "list": [
+                {
+                  "str": "streams"
+                }
+              ]
+            },
+            "to": {
+              "int": "1790000000000123456"
+            },
+            "traceId": {
+              "bin": "01ff"
+            },
+            "where": {
+              "names": {
+                "a": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          }
+        },
+        "stats": {
+          "list": [
+            {
+              "str": "stats"
+            }
+          ]
+        }
+      },
+      "hex": "85018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202cd05dc0391a262790491a573746174730591a864697374696e6374",
+      "message": "records.AggregateAsked",
+      "name": "records.AggregateAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.AggregateAsked",
+      "name": "records.AggregateAsked with no field"
+    },
+    {
+      "fields": {
+        "avg": {
+          "float": "3ff8000000000000"
+        },
+        "max": {
+          "str": "{\"a\":1}"
+        },
+        "min": {
+          "str": "{\"a\":1}"
+        },
+        "samples": {
+          "uint": "107"
+        },
+        "sum": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "85016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff8000000000000",
+      "message": "records.Stats",
+      "name": "records.Stats with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Stats",
+      "name": "records.Stats with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000123456"
+        },
+        "by": {
+          "names": {
+            "a": {
+              "str": "{\"a\":1}"
+            }
+          }
+        },
+        "count": {
+          "uint": "207"
+        },
+        "distinct": {
+          "names": {
+            "a": {
+              "uint": "507"
+            }
+          }
+        },
+        "stats": {
+          "names": {
+            "a": {
+              "fields": {
+                "avg": {
+                  "float": "3ff8000000000000"
+                },
+                "max": {
+                  "str": "{\"a\":1}"
+                },
+                "min": {
+                  "str": "{\"a\":1}"
+                },
+                "samples": {
+                  "uint": "107"
+                },
+                "sum": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          }
+        }
+      },
+      "hex": "8501cf18d75b8423f4e24002cccf0381a161a77b2261223a317d0481a16185016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff80000000000000581a161cd01fb",
+      "message": "records.Row",
+      "name": "records.Row with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Row",
+      "name": "records.Row with no field"
+    },
+    {
+      "fields": {
+        "rows": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000123456"
+                },
+                "by": {
+                  "names": {
+                    "a": {
+                      "str": "{\"a\":1}"
+                    }
+                  }
+                },
+                "count": {
+                  "uint": "207"
+                },
+                "distinct": {
+                  "names": {
+                    "a": {
+                      "uint": "507"
+                    }
+                  }
+                },
+                "stats": {
+                  "names": {
+                    "a": {
+                      "fields": {
+                        "avg": {
+                          "float": "3ff8000000000000"
+                        },
+                        "max": {
+                          "str": "{\"a\":1}"
+                        },
+                        "min": {
+                          "str": "{\"a\":1}"
+                        },
+                        "samples": {
+                          "uint": "107"
+                        },
+                        "sum": {
+                          "str": "{\"a\":1}"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918501cf18d75b8423f4e24002cccf0381a161a77b2261223a317d0481a16185016b02a77b2261223a317d03a77b2261223a317d04a77b2261223a317d05cb3ff80000000000000581a161cd01fb",
+      "message": "records.Rows",
+      "name": "records.Rows with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Rows",
+      "name": "records.Rows with no field"
+    },
+    {
+      "fields": {
+        "keep": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        },
+        "newest": {
+          "int": "1790000000000123456"
+        },
+        "oldest": {
+          "int": "1790000000000123456"
+        }
+      },
+      "hex": "8401a46e616d6502cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e240",
+      "message": "records.Stream",
+      "name": "records.Stream with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Stream",
+      "name": "records.Stream with no field"
+    },
+    {
+      "fields": {
+        "streams": {
+          "list": [
+            {
+              "fields": {
+                "keep": {
+                  "uint": "1500"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "newest": {
+                  "int": "1790000000000123456"
+                },
+                "oldest": {
+                  "int": "1790000000000123456"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918401a46e616d6502cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e240",
+      "message": "records.Streams",
+      "name": "records.Streams with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Streams",
+      "name": "records.Streams with no field"
+    },
+    {
+      "fields": {
+        "prefix": {
+          "str": "prefix"
+        },
+        "query": {
+          "fields": {
+            "after": {
+              "str": "after"
+            },
+            "from": {
+              "int": "1790000000000123456"
+            },
+            "handle": {
+              "uint": "107"
+            },
+            "limit": {
+              "uint": "1207"
+            },
+            "minLevel": {
+              "int": "-7"
+            },
+            "names": {
+              "list": [
+                {
+                  "str": "names"
+                }
+              ]
+            },
+            "newest": {
+              "bool": true
+            },
+            "search": {
+              "str": "search"
+            },
+            "since": {
+              "uint": "1500"
+            },
+            "streams": {
+              "list": [
+                {
+                  "str": "streams"
+                }
+              ]
+            },
+            "to": {
+              "int": "1790000000000123456"
+            },
+            "traceId": {
+              "bin": "01ff"
+            },
+            "where": {
+              "names": {
+                "a": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          }
+        }
+      },
+      "hex": "82018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202a6707265666978",
+      "message": "records.FieldNamesAsked",
+      "name": "records.FieldNamesAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.FieldNamesAsked",
+      "name": "records.FieldNamesAsked with no field"
+    },
+    {
+      "fields": {
+        "names": {
+          "list": [
+            {
+              "str": "names"
+            }
+          ]
+        }
+      },
+      "hex": "810191a56e616d6573",
+      "message": "records.Names",
+      "name": "records.Names with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Names",
+      "name": "records.Names with no field"
+    },
+    {
+      "fields": {
+        "cursor": {
+          "str": "cursor"
+        },
+        "limit": {
+          "uint": "207"
+        }
+      },
+      "hex": "8201a6637572736f7202cccf",
+      "message": "records.PollAsked",
+      "name": "records.PollAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.PollAsked",
+      "name": "records.PollAsked with no field"
+    },
+    {
+      "fields": {
+        "cursor": {
+          "str": "cursor"
+        },
+        "events": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000123456"
+                },
+                "context": {
+                  "str": "{\"a\":1}"
+                },
+                "fields": {
+                  "str": "{\"a\":1}"
+                },
+                "level": {
+                  "int": "-7"
+                },
+                "message": {
+                  "str": "message"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "spanId": {
+                  "bin": "01ff"
+                },
+                "stream": {
+                  "str": "stream"
+                },
+                "traceId": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "expired": {
+          "uint": "307"
+        }
+      },
+      "hex": "8301918901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff02a6637572736f7203cd0133",
+      "message": "records.Batch",
+      "name": "records.Batch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Batch",
+      "name": "records.Batch with no field"
+    },
+    {
+      "fields": {
         "advance": {
           "uint": "1500"
         },
@@ -2567,6 +3421,15 @@
     "kv.set": 260,
     "kv.take": 262,
     "kv.tx": 320,
+    "records.aggregate": 1286,
+    "records.append": 1282,
+    "records.count": 1284,
+    "records.fieldNames": 1288,
+    "records.list": 1283,
+    "records.open": 1281,
+    "records.poll": 1289,
+    "records.streams": 1287,
+    "records.top": 1285,
     "server.clock": 2,
     "server.stop": 1,
     "sql.batch": 772,

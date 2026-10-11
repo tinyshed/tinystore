@@ -159,7 +159,10 @@ fn item_size(kind: &Kind) -> String {
         Kind::Value => "codec::row_size".to_owned(),
         Kind::Cell => "codec::cell_size".to_owned(),
         Kind::Message(_) => "codec::message_size".to_owned(),
-        _ => format!("|item| {}", size(kind, "item", true)),
+        _ => match fixed(kind) {
+            Some(bytes) => format!("|_| {bytes}"),
+            None => format!("|item| {}", size(kind, "item", true)),
+        },
     }
 }
 

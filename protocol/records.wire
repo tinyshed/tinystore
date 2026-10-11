@@ -1,0 +1,157 @@
+# records, as plan/api/records.md has it: streams of events by name, written
+# whole and read back by time and by what they hold, a page at a time. A
+# stream's calls name it by a handle; a read without one reads every stream.
+# Times are nanoseconds since 1970, a level is slog's number, and fields and
+# a context are a JSON object each, every value spelled as it was written.
+
+# Opens a stream of events by name, made with its first event.
+message records.Open {
+  1 stream: str       # [a-z0-9][a-z0-9_-]{0,63}
+  2 keep: duration?   # how long it keeps its events: its own, kept in the file
+}
+
+# An event to write.
+message records.NewEvent {
+  1 name: str
+  2 at: nanos?        # the store's clock's now unless given
+  3 level: int?       # -4 debug, 0 info, 4 warn, 8 error, between them as slog counts
+  4 message: str?
+  5 fields: json?     # an object
+  6 context: json?    # an object
+  7 traceId: bin?     # 16 bytes
+  8 spanId: bin?      # 8 bytes
+}
+
+# Events to write to a stream, all of them or none.
+message records.Append {
+  1 handle: uint
+  2 events: [records.NewEvent]
+}
+
+# An event as a read gives it.
+message records.Event {
+  1 at: nanos
+  2 stream: str
+  3 name: str
+  4 level: int?
+  5 message: str?
+  6 fields: json?     # an object; none when it has no field
+  7 context: json?
+  8 traceId: bin?
+  9 spanId: bin?
+}
+
+# What a read finds: each condition given holds.
+message records.Query {
+  1 handle: uint?     # the stream opened as it; every stream without one
+  2 since: duration?  # the span before now; or from and to
+  3 from: nanos?
+  4 to: nanos?
+  5 streams: [str]
+  6 names: [str]
+  7 minLevel: int?
+  8 traceId: bin?
+  9 where: {json}     # each key with this value, in fields or in context
+  10 search: str?
+  11 newest: bool
+  12 limit: uint?     # a page's events, top's values, fieldNames' keys
+  13 after: str?      # a page's next
+}
+
+message records.Page {
+  1 events: [records.Event]
+  2 next: str?        # the page after it; the last page has none
+}
+
+message records.Count {
+  1 count: uint
+}
+
+# A key's most frequent values among what a query finds.
+message records.TopAsked {
+  1 query: records.Query
+  2 key: str          # a field's or a context's, or stream, name or level
+}
+
+message records.Top {
+  1 value: json
+  2 count: uint
+}
+
+message records.Tops {
+  1 values: [records.Top]
+}
+
+# A row for each span of every and each value of the keys of by.
+message records.AggregateAsked {
+  1 query: records.Query
+  2 every: duration?
+  3 by: [str]
+  4 stats: [str]
+  5 distinct: [str]
+}
+
+# A field's numbers in a row: a sum, a min and a max are JSON numbers, an
+# integer's exact.
+message records.Stats {
+  1 samples: uint
+  2 sum: json
+  3 min: json
+  4 max: json
+  5 avg: float
+}
+
+message records.Row {
+  1 at: nanos         # where the row's span begins, counted from 1970
+  2 count: uint
+  3 by: {json}
+  4 stats: {records.Stats}
+  5 distinct: {uint}
+}
+
+message records.Rows {
+  1 rows: [records.Row]
+}
+
+message records.Stream {
+  1 name: str
+  2 keep: duration
+  3 oldest: nanos
+  4 newest: nanos
+}
+
+message records.Streams {
+  1 streams: [records.Stream]
+}
+
+# The keys the events a query finds hold, sorted.
+message records.FieldNamesAsked {
+  1 query: records.Query
+  2 prefix: str?
+}
+
+message records.Names {
+  1 names: [str]
+}
+
+# Every packed event once, a batch a call, from a cursor the program keeps.
+message records.PollAsked {
+  1 cursor: str?      # the oldest event kept without one
+  2 limit: uint?      # 1000 unless given
+}
+
+message records.Batch {
+  1 events: [records.Event]
+  2 cursor: str
+  3 expired: uint     # the events keep removed before the cursor reached them
+}
+
+read  0x0501 records.open(records.Open)                  -> Handle
+write 0x0502 records.append(records.Append)              -> Empty
+read  0x0503 records.list(records.Query)                 -> records.Page
+read  0x0504 records.count(records.Query)                -> records.Count
+read  0x0505 records.top(records.TopAsked)               -> records.Tops
+read  0x0506 records.aggregate(records.AggregateAsked)   -> records.Rows
+read  0x0507 records.streams(Empty)                      -> records.Streams
+read  0x0508 records.fieldNames(records.FieldNamesAsked) -> records.Names
+read  0x0509 records.poll(records.PollAsked)             -> records.Batch

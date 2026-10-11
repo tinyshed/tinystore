@@ -60,7 +60,7 @@ function given(codec: Codec<unknown, never>, typed: Typed): unknown {
 	if ('list' in typed) return typed.list.map(item => given(codec.item!, item))
 	if ('names' in typed) {
 		return Object.fromEntries(
-			Object.entries(typed.names).map(([name, v]) => [name, given(codec, v)]),
+			Object.entries(typed.names).map(([name, v]) => [name, given(codec.item!, v)]),
 		)
 	}
 	return fieldsOf(codec as AnyMessage, typed.fields)
@@ -142,16 +142,9 @@ function anyOf(codec: Codec<unknown, never>, next: () => number): unknown {
 		case 'sql value':
 			return pick([null, 0, -0, 1.5, -2n, 'text', '', Uint8Array.of(3), true, false])
 		case 'names':
+			// names in any order, each a value of the map's own item
 			return Object.fromEntries(
-				pick([
-					[],
-					[['b', 'x']],
-					[
-						['b', 'x'],
-						['a', ''],
-						['é', 'z'],
-					],
-				]),
+				pick([[], ['b'], ['b', 'a', 'é']]).map(name => [name, anyOf(codec.item!, next)]),
 			)
 		case 'message':
 			return valuesOf(codec as AnyMessage, next)

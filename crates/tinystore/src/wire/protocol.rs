@@ -4233,6 +4233,1272 @@ impl Message for KvTxResults {
     }
 }
 
+/// Opens a stream of events by name, made with its first event.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsOpen {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) stream: String,
+    /// How long it keeps its events: its own, kept in the file. Milliseconds.
+    pub(crate) keep: Option<u64>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsOpen {
+    const NAME: &'static str = "records.Open";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.stream = codec::str(r, "stream")?,
+                2 => message.keep = Some(codec::uint(r, "keep")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.stream.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.stream);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 2);
+            codec::write_uint(out, keep);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.stream.len()
+            + self.keep.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.stream.is_empty()
+            && self.keep.is_none()
+    }
+}
+
+/// An event to write.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsNewEvent {
+    pub(crate) name: String,
+    /// The store's clock's now unless given. Unix nanoseconds.
+    pub(crate) at: Option<i64>,
+    /// -4 debug, 0 info, 4 warn, 8 error, between them as slog counts.
+    pub(crate) level: Option<i64>,
+    pub(crate) message: Option<String>,
+    /// An object.
+    pub(crate) fields: Option<String>,
+    /// An object.
+    pub(crate) context: Option<String>,
+    /// 16 bytes.
+    pub(crate) trace_id: Option<Vec<u8>>,
+    /// 8 bytes.
+    pub(crate) span_id: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsNewEvent {
+    const NAME: &'static str = "records.NewEvent";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.at = Some(codec::int(r, "at")?),
+                3 => message.level = Some(codec::int(r, "level")?),
+                4 => message.message = Some(codec::str(r, "message")?),
+                5 => message.fields = Some(codec::str(r, "fields")?),
+                6 => message.context = Some(codec::str(r, "context")?),
+                7 => message.trace_id = Some(codec::bin(r, "traceId")?),
+                8 => message.span_id = Some(codec::bin(r, "spanId")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(at) = &self.at {
+            map.field(out, 2);
+            codec::write_int(out, at);
+        }
+        if let Some(level) = &self.level {
+            map.field(out, 3);
+            codec::write_int(out, level);
+        }
+        if let Some(message) = &self.message {
+            map.field(out, 4);
+            codec::write_str(out, message);
+        }
+        if let Some(fields) = &self.fields {
+            map.field(out, 5);
+            codec::write_str(out, fields);
+        }
+        if let Some(context) = &self.context {
+            map.field(out, 6);
+            codec::write_str(out, context);
+        }
+        if let Some(trace_id) = &self.trace_id {
+            map.field(out, 7);
+            codec::write_bin(out, trace_id);
+        }
+        if let Some(span_id) = &self.span_id {
+            map.field(out, 8);
+            codec::write_bin(out, span_id);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + self.at.map_or(0, |_| 10)
+            + self.level.map_or(0, |_| 10)
+            + self.message.as_ref().map_or(0, |message| 1 + 5 + message.len())
+            + self.fields.as_ref().map_or(0, |fields| 1 + 5 + fields.len())
+            + self.context.as_ref().map_or(0, |context| 1 + 5 + context.len())
+            + self.trace_id.as_ref().map_or(0, |trace_id| 1 + 5 + trace_id.len())
+            + self.span_id.as_ref().map_or(0, |span_id| 1 + 5 + span_id.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.at.is_none()
+            && self.level.is_none()
+            && self.message.is_none()
+            && self.fields.is_none()
+            && self.context.is_none()
+            && self.trace_id.is_none()
+            && self.span_id.is_none()
+    }
+}
+
+/// Events to write to a stream, all of them or none.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsAppend {
+    pub(crate) handle: u64,
+    pub(crate) events: Vec<RecordsNewEvent>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsAppend {
+    const NAME: &'static str = "records.Append";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.events = codec::list(r, "events", codec::message::<RecordsNewEvent>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.events.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.events, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.events, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.events.is_empty()
+    }
+}
+
+/// An event as a read gives it.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsEvent {
+    /// Unix nanoseconds.
+    pub(crate) at: i64,
+    pub(crate) stream: String,
+    pub(crate) name: String,
+    pub(crate) level: Option<i64>,
+    pub(crate) message: Option<String>,
+    /// An object; none when it has no field.
+    pub(crate) fields: Option<String>,
+    pub(crate) context: Option<String>,
+    pub(crate) trace_id: Option<Vec<u8>>,
+    pub(crate) span_id: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsEvent {
+    const NAME: &'static str = "records.Event";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.at = codec::int(r, "at")?,
+                2 => message.stream = codec::str(r, "stream")?,
+                3 => message.name = codec::str(r, "name")?,
+                4 => message.level = Some(codec::int(r, "level")?),
+                5 => message.message = Some(codec::str(r, "message")?),
+                6 => message.fields = Some(codec::str(r, "fields")?),
+                7 => message.context = Some(codec::str(r, "context")?),
+                8 => message.trace_id = Some(codec::bin(r, "traceId")?),
+                9 => message.span_id = Some(codec::bin(r, "spanId")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.at != 0 {
+            map.field(out, 1);
+            codec::write_int(out, &self.at);
+        }
+        if !self.stream.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.stream);
+        }
+        if !self.name.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.name);
+        }
+        if let Some(level) = &self.level {
+            map.field(out, 4);
+            codec::write_int(out, level);
+        }
+        if let Some(message) = &self.message {
+            map.field(out, 5);
+            codec::write_str(out, message);
+        }
+        if let Some(fields) = &self.fields {
+            map.field(out, 6);
+            codec::write_str(out, fields);
+        }
+        if let Some(context) = &self.context {
+            map.field(out, 7);
+            codec::write_str(out, context);
+        }
+        if let Some(trace_id) = &self.trace_id {
+            map.field(out, 8);
+            codec::write_bin(out, trace_id);
+        }
+        if let Some(span_id) = &self.span_id {
+            map.field(out, 9);
+            codec::write_bin(out, span_id);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.stream.len()
+            + 1 + 5 + self.name.len()
+            + self.level.map_or(0, |_| 10)
+            + self.message.as_ref().map_or(0, |message| 1 + 5 + message.len())
+            + self.fields.as_ref().map_or(0, |fields| 1 + 5 + fields.len())
+            + self.context.as_ref().map_or(0, |context| 1 + 5 + context.len())
+            + self.trace_id.as_ref().map_or(0, |trace_id| 1 + 5 + trace_id.len())
+            + self.span_id.as_ref().map_or(0, |span_id| 1 + 5 + span_id.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.at == 0
+            && self.stream.is_empty()
+            && self.name.is_empty()
+            && self.level.is_none()
+            && self.message.is_none()
+            && self.fields.is_none()
+            && self.context.is_none()
+            && self.trace_id.is_none()
+            && self.span_id.is_none()
+    }
+}
+
+/// What a read finds: each condition given holds.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsQuery {
+    /// The stream opened as it; every stream without one.
+    pub(crate) handle: Option<u64>,
+    /// The span before now; or from and to. Milliseconds.
+    pub(crate) since: Option<u64>,
+    /// Unix nanoseconds.
+    pub(crate) from: Option<i64>,
+    /// Unix nanoseconds.
+    pub(crate) to: Option<i64>,
+    pub(crate) streams: Vec<String>,
+    pub(crate) names: Vec<String>,
+    pub(crate) min_level: Option<i64>,
+    pub(crate) trace_id: Option<Vec<u8>>,
+    /// Each key with this value, in fields or in context.
+    pub(crate) r#where: BTreeMap<String, String>,
+    pub(crate) search: Option<String>,
+    pub(crate) newest: bool,
+    /// A page's events, top's values, fieldNames' keys.
+    pub(crate) limit: Option<u64>,
+    /// A page's next.
+    pub(crate) after: Option<String>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsQuery {
+    const NAME: &'static str = "records.Query";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = Some(codec::uint(r, "handle")?),
+                2 => message.since = Some(codec::uint(r, "since")?),
+                3 => message.from = Some(codec::int(r, "from")?),
+                4 => message.to = Some(codec::int(r, "to")?),
+                5 => message.streams = codec::list(r, "streams", codec::str)?,
+                6 => message.names = codec::list(r, "names", codec::str)?,
+                7 => message.min_level = Some(codec::int(r, "minLevel")?),
+                8 => message.trace_id = Some(codec::bin(r, "traceId")?),
+                9 => message.r#where = codec::names(r, "where", codec::str)?,
+                10 => message.search = Some(codec::str(r, "search")?),
+                11 => message.newest = codec::bool(r, "newest")?,
+                12 => message.limit = Some(codec::uint(r, "limit")?),
+                13 => message.after = Some(codec::str(r, "after")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(handle) = &self.handle {
+            map.field(out, 1);
+            codec::write_uint(out, handle);
+        }
+        if let Some(since) = &self.since {
+            map.field(out, 2);
+            codec::write_uint(out, since);
+        }
+        if let Some(from) = &self.from {
+            map.field(out, 3);
+            codec::write_int(out, from);
+        }
+        if let Some(to) = &self.to {
+            map.field(out, 4);
+            codec::write_int(out, to);
+        }
+        if !self.streams.is_empty() {
+            map.field(out, 5);
+            codec::write_list(out, &self.streams, codec::write_str);
+        }
+        if !self.names.is_empty() {
+            map.field(out, 6);
+            codec::write_list(out, &self.names, codec::write_str);
+        }
+        if let Some(min_level) = &self.min_level {
+            map.field(out, 7);
+            codec::write_int(out, min_level);
+        }
+        if let Some(trace_id) = &self.trace_id {
+            map.field(out, 8);
+            codec::write_bin(out, trace_id);
+        }
+        if !self.r#where.is_empty() {
+            map.field(out, 9);
+            codec::write_names(out, &self.r#where, codec::write_str);
+        }
+        if let Some(search) = &self.search {
+            map.field(out, 10);
+            codec::write_str(out, search);
+        }
+        if self.newest {
+            map.field(out, 11);
+            codec::write_bool(out, &self.newest);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 12);
+            codec::write_uint(out, limit);
+        }
+        if let Some(after) = &self.after {
+            map.field(out, 13);
+            codec::write_str(out, after);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.handle.map_or(0, |_| 10)
+            + self.since.map_or(0, |_| 10)
+            + self.from.map_or(0, |_| 10)
+            + self.to.map_or(0, |_| 10)
+            + 1 + codec::list_size(&self.streams, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.names, |item| 5 + item.len())
+            + self.min_level.map_or(0, |_| 10)
+            + self.trace_id.as_ref().map_or(0, |trace_id| 1 + 5 + trace_id.len())
+            + 1 + codec::names_size(&self.r#where, |item| 5 + item.len())
+            + self.search.as_ref().map_or(0, |search| 1 + 5 + search.len())
+            + 2
+            + self.limit.map_or(0, |_| 10)
+            + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle.is_none()
+            && self.since.is_none()
+            && self.from.is_none()
+            && self.to.is_none()
+            && self.streams.is_empty()
+            && self.names.is_empty()
+            && self.min_level.is_none()
+            && self.trace_id.is_none()
+            && self.r#where.is_empty()
+            && self.search.is_none()
+            && !self.newest
+            && self.limit.is_none()
+            && self.after.is_none()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsPage {
+    pub(crate) events: Vec<RecordsEvent>,
+    /// The page after it; the last page has none.
+    pub(crate) next: Option<String>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsPage {
+    const NAME: &'static str = "records.Page";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.events = codec::list(r, "events", codec::message::<RecordsEvent>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.events.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.events, codec::write_message);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.events, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.events.is_empty()
+            && self.next.is_none()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsCount {
+    pub(crate) count: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsCount {
+    const NAME: &'static str = "records.Count";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.count = codec::uint(r, "count")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.count != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.count);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.count == 0
+    }
+}
+
+/// A key's most frequent values among what a query finds.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsTopAsked {
+    pub(crate) query: RecordsQuery,
+    /// A field's or a context's, or stream, name or level.
+    pub(crate) key: String,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsTopAsked {
+    const NAME: &'static str = "records.TopAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = RecordsQuery::read(r)?,
+                2 => message.key = codec::str(r, "key")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.key);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + 1 + 5 + self.key.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.key.is_empty()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsTop {
+    pub(crate) value: String,
+    pub(crate) count: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsTop {
+    const NAME: &'static str = "records.Top";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.value = codec::str(r, "value")?,
+                2 => message.count = codec::uint(r, "count")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.value.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.value);
+        }
+        if self.count != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.count);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.value.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.value.is_empty()
+            && self.count == 0
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsTops {
+    pub(crate) values: Vec<RecordsTop>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsTops {
+    const NAME: &'static str = "records.Tops";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.values = codec::list(r, "values", codec::message::<RecordsTop>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.values.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.values, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.values, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+/// A row for each span of every and each value of the keys of by.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsAggregateAsked {
+    pub(crate) query: RecordsQuery,
+    /// Milliseconds.
+    pub(crate) every: Option<u64>,
+    pub(crate) by: Vec<String>,
+    pub(crate) stats: Vec<String>,
+    pub(crate) distinct: Vec<String>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsAggregateAsked {
+    const NAME: &'static str = "records.AggregateAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = RecordsQuery::read(r)?,
+                2 => message.every = Some(codec::uint(r, "every")?),
+                3 => message.by = codec::list(r, "by", codec::str)?,
+                4 => message.stats = codec::list(r, "stats", codec::str)?,
+                5 => message.distinct = codec::list(r, "distinct", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if let Some(every) = &self.every {
+            map.field(out, 2);
+            codec::write_uint(out, every);
+        }
+        if !self.by.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.by, codec::write_str);
+        }
+        if !self.stats.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.stats, codec::write_str);
+        }
+        if !self.distinct.is_empty() {
+            map.field(out, 5);
+            codec::write_list(out, &self.distinct, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + self.every.map_or(0, |_| 10)
+            + 1 + codec::list_size(&self.by, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.stats, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.distinct, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.every.is_none()
+            && self.by.is_empty()
+            && self.stats.is_empty()
+            && self.distinct.is_empty()
+    }
+}
+
+/// A field's numbers in a row: a sum, a min and a max are JSON numbers, an
+/// integer's exact.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsStats {
+    pub(crate) samples: u64,
+    pub(crate) sum: String,
+    pub(crate) min: String,
+    pub(crate) max: String,
+    pub(crate) avg: f64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsStats {
+    const NAME: &'static str = "records.Stats";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.samples = codec::uint(r, "samples")?,
+                2 => message.sum = codec::str(r, "sum")?,
+                3 => message.min = codec::str(r, "min")?,
+                4 => message.max = codec::str(r, "max")?,
+                5 => message.avg = codec::float(r, "avg")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.samples != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.samples);
+        }
+        if !self.sum.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.sum);
+        }
+        if !self.min.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.min);
+        }
+        if !self.max.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.max);
+        }
+        if self.avg.to_bits() != 0 {
+            map.field(out, 5);
+            codec::write_float(out, &self.avg);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.sum.len()
+            + 1 + 5 + self.min.len()
+            + 1 + 5 + self.max.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.samples == 0
+            && self.sum.is_empty()
+            && self.min.is_empty()
+            && self.max.is_empty()
+            && self.avg.to_bits() == 0
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsRow {
+    /// Where the row's span begins, counted from 1970. Unix nanoseconds.
+    pub(crate) at: i64,
+    pub(crate) count: u64,
+    pub(crate) by: BTreeMap<String, String>,
+    pub(crate) stats: BTreeMap<String, RecordsStats>,
+    pub(crate) distinct: BTreeMap<String, u64>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsRow {
+    const NAME: &'static str = "records.Row";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.at = codec::int(r, "at")?,
+                2 => message.count = codec::uint(r, "count")?,
+                3 => message.by = codec::names(r, "by", codec::str)?,
+                4 => message.stats = codec::names(r, "stats", codec::message::<RecordsStats>)?,
+                5 => message.distinct = codec::names(r, "distinct", codec::uint)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.at != 0 {
+            map.field(out, 1);
+            codec::write_int(out, &self.at);
+        }
+        if self.count != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.count);
+        }
+        if !self.by.is_empty() {
+            map.field(out, 3);
+            codec::write_names(out, &self.by, codec::write_str);
+        }
+        if !self.stats.is_empty() {
+            map.field(out, 4);
+            codec::write_names(out, &self.stats, codec::write_message);
+        }
+        if !self.distinct.is_empty() {
+            map.field(out, 5);
+            codec::write_names(out, &self.distinct, codec::write_uint);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 1 + codec::names_size(&self.by, |item| 5 + item.len())
+            + 1 + codec::names_size(&self.stats, codec::message_size)
+            + 1 + codec::names_size(&self.distinct, |_| 9)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.at == 0
+            && self.count == 0
+            && self.by.is_empty()
+            && self.stats.is_empty()
+            && self.distinct.is_empty()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsRows {
+    pub(crate) rows: Vec<RecordsRow>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsRows {
+    const NAME: &'static str = "records.Rows";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.rows = codec::list(r, "rows", codec::message::<RecordsRow>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.rows.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.rows, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.rows, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsStream {
+    pub(crate) name: String,
+    /// Milliseconds.
+    pub(crate) keep: u64,
+    /// Unix nanoseconds.
+    pub(crate) oldest: i64,
+    /// Unix nanoseconds.
+    pub(crate) newest: i64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsStream {
+    const NAME: &'static str = "records.Stream";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.keep = codec::uint(r, "keep")?,
+                3 => message.oldest = codec::int(r, "oldest")?,
+                4 => message.newest = codec::int(r, "newest")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if self.keep != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.keep);
+        }
+        if self.oldest != 0 {
+            map.field(out, 3);
+            codec::write_int(out, &self.oldest);
+        }
+        if self.newest != 0 {
+            map.field(out, 4);
+            codec::write_int(out, &self.newest);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 10
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.keep == 0
+            && self.oldest == 0
+            && self.newest == 0
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsStreams {
+    pub(crate) streams: Vec<RecordsStream>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsStreams {
+    const NAME: &'static str = "records.Streams";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.streams = codec::list(r, "streams", codec::message::<RecordsStream>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.streams.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.streams, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.streams, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.streams.is_empty()
+    }
+}
+
+/// The keys the events a query finds hold, sorted.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsFieldNamesAsked {
+    pub(crate) query: RecordsQuery,
+    pub(crate) prefix: Option<String>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsFieldNamesAsked {
+    const NAME: &'static str = "records.FieldNamesAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = RecordsQuery::read(r)?,
+                2 => message.prefix = Some(codec::str(r, "prefix")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if let Some(prefix) = &self.prefix {
+            map.field(out, 2);
+            codec::write_str(out, prefix);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + self.prefix.as_ref().map_or(0, |prefix| 1 + 5 + prefix.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.prefix.is_none()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsNames {
+    pub(crate) names: Vec<String>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsNames {
+    const NAME: &'static str = "records.Names";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.names = codec::list(r, "names", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.names.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.names, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.names, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.names.is_empty()
+    }
+}
+
+/// Every packed event once, a batch a call, from a cursor the program keeps.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsPollAsked {
+    /// The oldest event kept without one.
+    pub(crate) cursor: Option<String>,
+    /// 1000 unless given.
+    pub(crate) limit: Option<u64>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsPollAsked {
+    const NAME: &'static str = "records.PollAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.cursor = Some(codec::str(r, "cursor")?),
+                2 => message.limit = Some(codec::uint(r, "limit")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(cursor) = &self.cursor {
+            map.field(out, 1);
+            codec::write_str(out, cursor);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 2);
+            codec::write_uint(out, limit);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.cursor.as_ref().map_or(0, |cursor| 1 + 5 + cursor.len())
+            + self.limit.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.cursor.is_none()
+            && self.limit.is_none()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsBatch {
+    pub(crate) events: Vec<RecordsEvent>,
+    pub(crate) cursor: String,
+    /// The events keep removed before the cursor reached them.
+    pub(crate) expired: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsBatch {
+    const NAME: &'static str = "records.Batch";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.events = codec::list(r, "events", codec::message::<RecordsEvent>)?,
+                2 => message.cursor = codec::str(r, "cursor")?,
+                3 => message.expired = codec::uint(r, "expired")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.events.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.events, codec::write_message);
+        }
+        if !self.cursor.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.cursor);
+        }
+        if self.expired != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.expired);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.events, codec::message_size)
+            + 1 + 5 + self.cursor.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.events.is_empty()
+            && self.cursor.is_empty()
+            && self.expired == 0
+    }
+}
+
 /// A private server's clock: a time to set it to, a span to move it forward by,
 /// or neither to read it. The answer is the time it reads once moved.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -5214,6 +6480,24 @@ pub(crate) mod method {
     pub(crate) const KV_ONCE_DELETE: u16 = 0x0133;
     #[cfg(feature = "kv")]
     pub(crate) const KV_TX: u16 = 0x0140;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_OPEN: u16 = 0x0501;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_APPEND: u16 = 0x0502;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_LIST: u16 = 0x0503;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_COUNT: u16 = 0x0504;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_TOP: u16 = 0x0505;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_AGGREGATE: u16 = 0x0506;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_STREAMS: u16 = 0x0507;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_FIELD_NAMES: u16 = 0x0508;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_POLL: u16 = 0x0509;
     /// Stops the server as its closing does: the streams running finish, every
     /// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     pub(crate) const SERVER_STOP: u16 = 0x0001;
@@ -5346,6 +6630,24 @@ pub(crate) mod method {
             KV_ONCE_DELETE => Some(Access::Write),
             #[cfg(feature = "kv")]
             KV_TX => Some(Access::Write),
+            #[cfg(feature = "records")]
+            RECORDS_OPEN => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_APPEND => Some(Access::Write),
+            #[cfg(feature = "records")]
+            RECORDS_LIST => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_COUNT => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_TOP => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_AGGREGATE => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_STREAMS => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_FIELD_NAMES => Some(Access::Read),
+            #[cfg(feature = "records")]
+            RECORDS_POLL => Some(Access::Read),
             SERVER_STOP => Some(Access::Admin),
             SERVER_CLOCK => Some(Access::Admin),
             #[cfg(feature = "sql")]
@@ -5473,6 +6775,24 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("kv.once.delete", 0x0133, "call"),
     #[cfg(feature = "kv")]
     ("kv.tx", 0x0140, "call"),
+    #[cfg(feature = "records")]
+    ("records.open", 0x0501, "call"),
+    #[cfg(feature = "records")]
+    ("records.append", 0x0502, "call"),
+    #[cfg(feature = "records")]
+    ("records.list", 0x0503, "call"),
+    #[cfg(feature = "records")]
+    ("records.count", 0x0504, "call"),
+    #[cfg(feature = "records")]
+    ("records.top", 0x0505, "call"),
+    #[cfg(feature = "records")]
+    ("records.aggregate", 0x0506, "call"),
+    #[cfg(feature = "records")]
+    ("records.streams", 0x0507, "call"),
+    #[cfg(feature = "records")]
+    ("records.fieldNames", 0x0508, "call"),
+    #[cfg(feature = "records")]
+    ("records.poll", 0x0509, "call"),
     ("server.stop", 0x0001, "call"),
     ("server.clock", 0x0002, "call"),
     #[cfg(feature = "sql")]
@@ -5618,6 +6938,46 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "kv.Outcome" => KvOutcome::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
         "kv.TxResults" => KvTxResults::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Open" => RecordsOpen::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.NewEvent" => RecordsNewEvent::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Append" => RecordsAppend::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Event" => RecordsEvent::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Query" => RecordsQuery::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Page" => RecordsPage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Count" => RecordsCount::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.TopAsked" => RecordsTopAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Top" => RecordsTop::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Tops" => RecordsTops::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.AggregateAsked" => RecordsAggregateAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Stats" => RecordsStats::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Row" => RecordsRow::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Rows" => RecordsRows::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Stream" => RecordsStream::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Streams" => RecordsStreams::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.FieldNamesAsked" => RecordsFieldNamesAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Names" => RecordsNames::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.PollAsked" => RecordsPollAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Batch" => RecordsBatch::decode(body).map(|message| (message.encode(), message.size())),
         "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),

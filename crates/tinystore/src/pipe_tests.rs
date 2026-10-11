@@ -34,7 +34,9 @@ fn every_method_of_the_schema_is_answered() {
     for &(name, called, _) in METHODS {
         let stream = client.start(called, &Empty {});
         let answer = client.next_on(stream);
-        if let Err(failed) = answered::<Empty>(&answer) {
+        // an answer of its own shape, a poll's cursor among them, is an answer too
+        if answer.flags & frame::ERROR != 0 {
+            let failed = Failed::decode(&answer.body).unwrap();
             assert_ne!(failed.code, "unimplemented", "{name}: {}", failed.message);
         }
     }
