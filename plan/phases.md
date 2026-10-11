@@ -90,12 +90,14 @@ them.
   Built: streams and their `keep`, appends into fresh rows, their packing into segments and blocks, reads a page
   at a time over both, expiry. A block keeps its events by columns: integers by their steps, text by a
   dictionary or through zstd, with the times it spells cut out. On 1,534,747 lines of two production hosts'
-  containers, 215 B of text each, cut as packing cuts them, a block takes 18.02 B a record against the Go
-  engine's 17.51 on the same lines: 4.39 against 4.26 for the times, 13.59 against 13.23 for the text (11
+  containers, 215 B of text each, cut as packing cuts them, a block takes 17.48 B a record against the Go
+  engine's 17.51 on the same lines: 4.26 against 4.26 for the times, 13.19 against 13.23 for the text (11
   October, one run each, sizes alone; `TINYSTORE_DUMP=<the lines> cargo test --release -p tinystore --lib
   a_corpus_by_its_columns -- --ignored --nocapture`, the lines dumped by the Go engine's line writer at
-  `e81a050`). Before the times were cut out it took 21.71. Owed: the Go engine's packers of integers, which
-  are the 0.5 B left, then its typed values, measured on records with fields, then FSE.
+  `e81a050`). It took 21.71 before the times a text spells were cut out of it and 18.02 before integers had a
+  rice code and a steady step. Owed: the Go engine's typed values, its dictionaries of integers and its radix
+  words, measured on records with fields, where this corpus of lines has none. FSE is left for the entropy
+  coder metrics brings: with it turned off the Go engine takes 17.64 here, 0.13 B a record more.
 - [ ] metrics: series, instruments, sealing, exact aggregates, retention, the step rule; the `metrics` crate recorder.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 

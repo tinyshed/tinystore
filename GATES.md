@@ -156,6 +156,8 @@ module defines.
 - a block read with another segment's row is refused — `a_block_read_with_another_segments_row_is_refused_and_never_more` in `records::block`
 - integers are kept as integers, and a value no integer spells as its text — `integers_are_kept_as_integers_and_every_value_as_it_was_spelled` in `records::values`
 - the times of a millisecond's clock take a few bits each, and a column of one value none — `times_of_a_millisecond_clock_take_a_few_bits_each`, `a_column_of_one_value_takes_no_bit_a_value` in `records::ints`
+- small integers among a few wide ones take a rice code, at the parameter that is priced cheapest and not guessed from their mean — `small_values_among_a_few_wide_ones_take_a_rice_code` in `records::ints`, `the_cheapest_parameter_is_priced_and_not_guessed_from_the_mean`, `a_rice_code_gives_back_any_value_at_any_parameter_in_the_bits_its_cost_says` in `records::bits`
+- integers near a steady step are kept as how far off it they lie — `values_near_a_steady_step_are_kept_as_how_far_off_it_they_lie` in `records::ints`
 - text that repeats is written once — `values_that_repeat_are_written_once` in `records::text`
 - a time a line spells comes back as it was spelled — `every_layout_spells_its_text_back`, `a_fraction_is_one_to_nine_digits_and_more_stay_text`, `a_value_keeps_up_to_four_stamps_each_within_reach_of_the_one_before` in `records::stamp`; its fuzzer to come
 - what no calendar shows stays text — `a_time_no_calendar_or_clock_shows_stays_text` in `records::stamp`
