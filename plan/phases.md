@@ -136,7 +136,7 @@ them.
   Closed on 11 October, slices 1 to 8 pushed: what GATES still holds to Go alone is the format's readers,
   which wait for v0.1.0, the command's printer of phase 4, and follow's cache, level masks and an
   append's trace, which the owner left as they are; FSE is left out by the owner's choice.
-- [ ] metrics to its accepted book ([api/metrics.md](api/metrics.md)), built as [metrics-engine.md](metrics-engine.md) says, in its eight slices: series, instruments whose totals the store keeps, packing into blocks cut where hours begin, exact aggregates and percentiles, retention, the step rule and gaps; the `metrics` crate recorder.
+- [x] metrics to its accepted book ([api/metrics.md](api/metrics.md)), built as [metrics-engine.md](metrics-engine.md) says, in its eight slices: series, instruments whose totals the store keeps, packing into blocks cut where hours begin, exact aggregates and percentiles, retention, the step rule and gaps; the `metrics` crate recorder.
   Built, slice 1: `metrics.db` and its schema, series registered with their dictionary pairs and postings within
   100,000, a name's kind while it has series and its own `keep`, `ingest` whole or not at all into heads that a
   write rewrites only where it reaches, `read` of heads through postings within the read's bounds, and expiry with
@@ -181,8 +181,10 @@ them.
   Built, slice 8: fuzz targets of every decoder past its version and checksum, `metrics_runs` and `metrics_rows`,
   their seeds in the tests, which found a directory whose count past 32 shifted out of its word and panicked; GATES'
   lines in Rust: a failed open, one state while packing goes on, no engine imported, and what the Rust engine does
-  not build said so. Left: the port measured against Go `e81a050` on the same inputs and huff0's ablation, which are
-  a research round; the format's readers, which wait for v0.1.0; and what GATES still holds to Go alone: an append's
+  not build said so.
+  Closed by the owner on 12 October, slices 1 to 8 pushed. Left for later: the port measured against Go `e81a050` on
+  the same inputs and huff0's ablation, which are a research round; the format's readers, which wait for v0.1.0; and
+  what GATES still holds to Go alone: an append's
   due indexes, the store's memory, expired data spending no budget, the widest exact summaries in a directory, the
   watermark's strict edge, expiry's bound a pass and adjacent buckets fuzzed.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
