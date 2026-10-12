@@ -24,7 +24,7 @@ use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count};
 use crate::{Error, Result};
 
-const VERSION: u8 = 5;
+pub(super) const VERSION: u8 = 5;
 const HEADER: usize = 10;
 /// A body this long or shorter lives in its directory.
 pub(super) const INLINE: usize = 16;
@@ -82,7 +82,7 @@ impl Group {
     }
 
     /// What binds a directory to its group.
-    fn checksum(&self, bytes: &[u8]) -> u32 {
+    pub(super) fn checksum(&self, bytes: &[u8]) -> u32 {
         let mut key = [0_u8; 32];
         for (place, value) in [self.series, self.start, self.end, self.clock].iter().enumerate() {
             key[place * 8..place * 8 + 8].copy_from_slice(&value.to_le_bytes());
@@ -154,7 +154,8 @@ fn decoded(zstd: &mut Zstd, row: &Row, clock: Vec<Times>) -> Result<Group> {
     let count = usize::from(content[1]);
     let live = u32::from_le_bytes(content[2..6].try_into().unwrap_or_default());
     let given = u32::from_le_bytes(content[6..10].try_into().unwrap_or_default());
-    let beyond = if count == MOST_BLOCKS { 0 } else { !((1_u32 << count) - 1) };
+    // the slots past its count; a count past what a word holds is refused below
+    let beyond = 1_u32.checked_shl(u32::from(content[1])).map_or(0, |bit| !(bit - 1));
     if count == 0 || count > MOST_BLOCKS || count != clock.len() || live == 0 || (live | given) & beyond != 0 {
         return Err(Error::corrupt("its directory's slots"));
     }

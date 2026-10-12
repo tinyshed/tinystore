@@ -26,7 +26,7 @@ metrics = ["store", "dep:zstd", "dep:sha2", "dep:metrics"]
 wire = ["kv"]
 # the bodies of the fuzz targets in fuzz/, which reach decoders the library
 # keeps to itself
-fuzzing = ["records"]
+fuzzing = ["records", "metrics"]
 
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the

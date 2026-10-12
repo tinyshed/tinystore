@@ -28,7 +28,7 @@ use crate::{Error, Result};
 pub(super) const MOST_BYTES: usize = 65_536;
 /// The blocks a group holds at most.
 pub(super) const MOST_BLOCKS: usize = 32;
-const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 1;
 /// What a block's steps hold at most: a varint a step and a few bytes more.
 const MOST_STEPS: usize = 10 * MOST_SAMPLES + 32;
 

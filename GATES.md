@@ -43,7 +43,7 @@ module defines.
 ## Codec
 
 - the extremes survive too — `the_extremes_survive_too` in `metrics::codec`, on `-0`, NaN payloads, subnormals and the ends of time
-- a corrupt payload is refused — `a_corrupt_body_is_refused` in `metrics::codec`, every byte and every cut; `FuzzDecode` at `e81a050` until the fuzz target lands
+- a corrupt payload is refused — `a_corrupt_body_is_refused` in `metrics::codec`, every byte and every cut; `metrics_runs` in `fuzz/`
 - bytes written once still read — `TestPayloadsWrittenBeforeStillRead`, one vector per representation
 - a head that does not fit its body is refused — `a_head_that_does_not_fit_its_body_is_refused` in `metrics::codec`
 - a decimal travels as the integer it was written as — `a_decimal_travels_as_the_integer_it_was_written_as` in `metrics::codec`
@@ -54,21 +54,21 @@ module defines.
 
 ## Metrics
 
-- an engine's errors are the store's kinds — `TestMetricsErrorsAreTheStoresKinds`
-- a failed engine open gives its file back — `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`
+- an engine's errors are the store's kinds: one `Error` and its `ErrorKind` for the store and every engine — `a_refused_series_names_itself_and_its_sample` in `metrics::ingest`, `a_read_past_a_bound_is_a_limit_naming_it` in `metrics::query`, `a_sample_behind_what_its_series_has_packed_is_too_old` in `metrics::pack`, `a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_neighbours_go_on` in `metrics::damage`
+- a failed engine open gives its file back, and a store opens one engine — `a_failed_open_lets_its_file_go_and_the_store_opens_one_engine` in `metrics::engine`
 - one refused instrument does not keep the others out — `one_refused_instrument_keeps_no_other_out` in `metrics::instruments`, `an_instrument_the_store_refuses_is_answered_and_its_changes_go_nowhere` in `metrics::remote`; `an instrument the store refuses fails the next flush, writes nothing and keeps no other out` in `sdk/js/test/metrics.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's
 - an instrument's last value survives Close — `a_restart_begins_a_new_run_with_its_zero_and_increase_counts_both` in `metrics::instruments`: closing the store writes the totals last
 - a timer writes its count, sum and longest at each flush, and its buckets — `a_timer_writes_its_count_sum_longest_and_buckets` in `metrics::instruments`; `TestAFailedFlushKeepsATimersLongestForTheNext` at `e81a050`, which the Rust engine keeps without a test that fails a write
 - a timer's series go together and have one writer — `a_timer_the_store_refuses_writes_none_of_its_series`, `an_instrument_opens_against_what_the_store_and_its_file_hold` in `metrics::instruments`
-- a self-report never counts itself, nor rounds a value — `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports`
+- a self-report never counts itself, nor rounds a value — not in the Rust engine, whose store reports no metrics of its own; `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports` at `e81a050`
 - a sample survives the codec exactly — `every_value_representation_keeps_the_bits` in `metrics::codec`, on bits and not on values; `a_sample_comes_back_bit_for_bit` in `metrics::ingest`
 - a sample survives a file and restart — `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole` in `metrics::pack`, `a_sample_survives_a_restart` in `metrics::ingest`
 - publication is one write — `a_publication_another_write_raced_is_dropped_and_tried_again` in `metrics::pack`: nothing of it written, the next pass packs it
-- a reader sees one consistent state — `TestReadersSeeOneSnapshotWhilePackingAndIngesting`, including retention
+- a reader sees one consistent state, every ingest whole and each sample once while packing goes on — `a_read_sees_one_state_while_ingests_and_packing_go_on_beside_it` in `metrics::pack`; retention's, `TestReadersSeeOneSnapshotWhilePackingAndIngesting` at `e81a050`
 - shared clocks live as long as their owners — `series_written_at_the_same_ticks_share_a_clock_until_the_last_lets_go` in `metrics::pack`
-- production stays independent of research — `TestEngineDoesNotImportExperimentsOrFutureEngines`
+- production stays independent of research and of the other engines — `the_engine_imports_no_other_engine` in `metrics::engine`; research's prototypes live in research and never in the crate
 - a counter's increase survives a reset — `a_counters_increase_counts_a_reset_as_its_new_value` in `metrics::summary`, `an_increase_counts_a_reset_as_its_new_value_and_a_first_step_from_the_sample_before` in `metrics::bucket`, `a_restart_counts_the_same_across_blocks` in `metrics::aggregate`
-- only the safe prefix is sealed — `TestWatermarkIsStrictAndFollowsTheSeries`, on the strict edge
+- only the safe prefix is sealed: what lies before the first unit of the ladder behind the series' newest sample — `a_quiet_series_is_not_forced_into_a_block`, `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole` in `metrics::pack`; the strict edge, `TestWatermarkIsStrictAndFollowsTheSeries` at `e81a050`
 - a late sample cannot enter a sealed block — `a_sample_behind_what_its_series_has_packed_is_too_old` in `metrics::pack`
 - a partial range is not answered from a summary — `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing` in `metrics::explain`: an hour the range or a bucket cuts decodes, and its payload is read
 - retention clips before it summarises — `a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took` in `metrics::aggregate`, packed: a block the oldest kept time cuts is decoded, its older samples left out
@@ -76,7 +76,7 @@ module defines.
 - a quiet tail expires without becoming a block — `a_quiet_series_is_not_forced_into_a_block` in `metrics::pack`
 - one expired sample does not delete a block, and a group partly expired keeps its payloads' addresses — `a_block_expires_whole_once_its_last_sample_has_and_a_group_keeps_its_payloads_addresses` in `metrics::pack`
 - one damaged series does not stop its neighbours: packing goes past it, a read that does not reach its bytes still works, and one that does suspends it, which `damaged` lists after a restart too — `a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_neighbours_go_on`, `packing_suspends_a_series_whose_head_changed_and_packs_the_rest` in `metrics::damage`
-- a raised limit can resume suspended maintenance — `TestSuspendedLimitCanRecoverAfterReopen`
+- a raised limit can resume suspended maintenance — not in the Rust engine, whose maintenance no limit suspends: a series is suspended only when its bytes no longer read, until it is deleted; `TestSuspendedLimitCanRecoverAfterReopen` at `e81a050`
 - an append need not churn due indexes — `TestExistingSeriesIngestAvoidsUnchangedDueIndexes`
 - untouched head chunks keep their bytes — `untouched_head_chunks_keep_their_bytes` in `metrics::head`
 - a block is cut where a unit of the ladder begins, never across one, and a unit of more than 240 samples every 240 — `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole`, `a_unit_holding_more_than_240_samples_is_cut_every_240` in `metrics::pack`
@@ -86,15 +86,15 @@ module defines.
 - an exact sum is rounded once, as a float addition and a float division are — `a_sum_of_two_rounds_as_their_float_sum_does`, `a_quotient_rounds_as_a_float_division_does` in `metrics::exact`
 - a block's values keep their bits in every way they are kept, and read as no other block's — `every_way_keeps_the_bits_and_the_shortest_wins`, `the_extremes_keep_their_bits_in_every_way`, `a_body_read_as_another_blocks_is_refused` in `metrics::values`
 - a directory and a clock read only as their own group's — `a_directory_reads_only_as_its_own_groups` in `metrics::directory`, `a_clock_reads_back_its_blocks_and_refuses_what_changed` in `metrics::clock`
-- a posting above the old cap still ranks exactly — `TestPostingCountsRankAboveTheOldProbeCap`
-- ready waits for a safe prefix — `TestReadyWaitsForASealableWatermarkPrefix`
-- one bad publication does not count its neighbors — `TestPublicationBatchRollsBackOneConflictingSeries` and `TestPublicationBatchDoesNotCountRolledBackTransaction`
-- cancelled callers do not bypass active-work slots — `TestActiveReadAndIngestAdmissionHonorsCancellation`, `TestSlotsHonourCancellation`
+- a posting above the old cap still ranks exactly — not in the Rust engine, whose postings have no probe cap and are read within the read's bounds; `TestPostingCountsRankAboveTheOldProbeCap` at `e81a050`
+- ready waits for a safe prefix — `a_quiet_series_is_not_forced_into_a_block`, `a_series_a_sample_a_millisecond_packs_before_its_head_is_full` in `metrics::pack`
+- one bad publication does not count its neighbours: a savepoint a series — `a_publication_another_write_raced_is_dropped_and_tried_again` in `metrics::pack`
+- cancelled callers do not bypass active-work slots — not in the Rust engine, whose calls take no cancellation and are bounded by their budgets and the store's memory; `TestActiveReadAndIngestAdmissionHonorsCancellation`, `TestSlotsHonourCancellation` at `e81a050`
 - expired series return a cardinality slot, and their name its kind — `a_series_left_with_nothing_goes_with_its_pairs_and_frees_its_place_and_its_names_kind` in `metrics::maintain`
 - live siblings keep shared dictionary pairs — `a_series_left_with_nothing_goes_with_its_pairs_and_frees_its_place_and_its_names_kind` in `metrics::maintain`
-- narrow reads pay only for selected packed chunks — `TestNarrowPackedHeadChargesSelectedChunksAndChecksWholeChecksum` and `TestBatchedNarrowHeadsChargeSelectedChunks`
+- narrow reads pay only for selected packed chunks — `a_read_decodes_only_the_chunks_its_range_touches` in `metrics::head`, `a_range_reads_the_blocks_and_the_head_it_touches_and_no_more` in `metrics::pack`, `latest_reads_one_small_piece_of_each_series_however_long_the_range` in `metrics::latest`
 - an engine's work honors the store's memory — `TestStoreMemoryBoundsReadsIngestAndMaintenance`
-- streaming owns each result and exposes partial failure — `TestStreamOwnsResultsAndReportsPartialFailure`
+- streaming owns each result and exposes partial failure — not in the Rust engine, whose read answers whole or fails, and whose wire sends that one answer in parts: `a_read_comes_back_in_parts_each_value_bit_for_bit` in `wire::metrics`; `TestStreamOwnsResultsAndReportsPartialFailure` at `e81a050`
 - an error about one series carries its labels — `a_refused_series_names_itself_and_its_sample` in `metrics::ingest`
 - a metrics plan is what the call then spends, names the bound the call would stop at, and counts every sample it would decode past theirs — `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing`, `a_plan_names_the_bound_a_call_would_stop_at`, `a_plan_counts_every_sample_a_call_would_decode_past_their_bound` in `metrics::explain`, `a_plan_counts_on_past_the_samples_a_call_decodes_and_stops_at_the_bytes_it_reads` in `metrics::budget`
 - a read or an ingest past a bound is a `limit` naming it, never a smaller answer — `a_read_past_a_bound_is_a_limit_naming_it` in `metrics::query`, `an_ingest_past_its_bound_is_a_limit`, `a_series_past_the_stores_bound_is_a_limit` in `metrics::ingest`, `a_limit_names_its_bound_what_was_wanted_and_the_bound` in `metrics::budget`
@@ -102,9 +102,9 @@ module defines.
 - a range over the last `since` starts that long before now, and without `to` takes a sample of now — `a_range_is_its_start_to_its_end_excluded_or_now_included` in `metrics::query`
 - a condition finds series beyond equality, `Not` alone refused — `a_condition_finds_series_beyond_equality`, `a_condition_that_finds_nothing_or_cannot_be_taken_is_refused` in `metrics::query`; `an aggregate's buckets are exact by group, and a timer's percentile is its bounds` in `sdk/js/test/metrics.test.ts`, through each way a store is reached
 - a series that cannot be repaired can still be deleted, whole, and its neighbours keep theirs — `a_series_is_deleted_whole_and_its_neighbours_keep_theirs` in `metrics::delete`, `a_deleted_series_whose_group_no_longer_reads_leaves_that_groups_values_in_the_file` and `a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_neighbours_go_on` in `metrics::damage`
-- long-head append preserves bits and frontier — `TestLongPackedHeadAppendKeepsExactBitsAndFrontier`
+- long-head append preserves bits and frontier — `untouched_head_chunks_keep_their_bytes`, `a_head_reads_back_in_chunks_of_240` in `metrics::head`, `a_sample_comes_back_bit_for_bit` in `metrics::ingest`
 - exact aggregates cross blocks, resets and retention — `a_block_inside_a_bucket_answers_as_its_samples_would`, `a_restart_counts_the_same_across_blocks`, `a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took` in `metrics::aggregate`, `sums_are_exact_and_rounded_once` in `metrics::bucket`
-- the schema admits a histogram series before the engine ingests one, so the kind needs no rebuilt table — `TestTheSchemaAdmitsAHistogramTheEngineDoesNotIngestYet`
+- the schema admits a histogram series, which the engine ingests — `a_histograms_bound_is_written_as_javascript_writes_it_and_one_without_is_refused` in `metrics::ingest`
 - a whole block's summary answers as its samples do — `a_block_inside_a_bucket_answers_as_its_samples_would` in `metrics::aggregate`: every `op` of a gauge and of a counter with resets, three ranges and four widths, bit for bit before and after packing
 - an increase, a rate and a delta count each step in the bucket it ends in, so buckets of any width add up to the range, and two adjacent ranges to the range they make — `buckets_of_any_width_add_up_to_the_range` in `metrics::aggregate`, in the head and packed; `FuzzIncreasesAndDeltasOfAdjacentBucketsAddUpToTheRange` at `e81a050` until the fuzz target lands, `an_aggregate_and_the_newest_samples_answer_over_the_wire` in `wire::metrics`; `an aggregate's buckets are exact by group, and a timer's percentile is its bounds` in `sdk/js/test/metrics.test.ts`, `test_samples_come_back_bit_for_bit_and_aggregate_exactly` in Python's
 - the first bucket steps from the newest sample before the range, however far, which a block's directory answers undecoded — `buckets_of_any_width_add_up_to_the_range` in `metrics::aggregate`, `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing` in `metrics::explain`; of the samples before a range that one alone is taken — `an_op_a_kind_has_not_and_a_value_no_aggregate_takes_are_invalid`
@@ -114,18 +114,19 @@ module defines.
 - latest decodes one head chunk or one block a series, and no block whose directory holds its last sample — `latest_reads_one_small_piece_of_each_series_however_long_the_range` in `metrics::latest`
 - latest pays no sample budget for blocks older than its selected head, and no directory for a series whose last block ended before the range — `latest_reads_one_small_piece_of_each_series_however_long_the_range` in `metrics::latest`
 - expired heads and blocks spend no sample or payload budget — `TestBatchedReadsSpendNothingOnExpiredSeries`
-- expiry selects bounded prefixes from both retention indexes — `TestExpirySelectsABoundedPrefixOfEachIndex`
-- a retention prefix reads no unrelated later names — `TestARetentionPrefixReadsOnlyItsNames`
+- expiry selects what is due through an index, a bounded pass at a time — `samples_past_what_their_name_keeps_go_and_the_rest_stay`, `a_keep_changed_between_runs_moves_when_its_series_are_due` in `metrics::maintain`; the bound of each pass, `TestExpirySelectsABoundedPrefixOfEachIndex` at `e81a050`
+- a retention prefix reads no unrelated later names — `a_keep_changed_between_runs_moves_when_its_series_are_due` in `metrics::maintain`, through the name's postings
 - a name's `keep` is its own, for ingest, reads and expiry, and another while the store is open is refused — `a_names_keep_is_its_own_and_another_while_the_store_is_open_is_refused` in `metrics::ingest`, `samples_past_what_their_name_keeps_go_and_the_rest_stay` in `metrics::maintain`
 - a `keep` changed between runs moves when the name's series are due through its postings, and no other series — `a_keep_changed_between_runs_moves_when_its_series_are_due` in `metrics::maintain`
 - a description is kept by name, replaced by the next and removed by an empty one, and a delete of the name's series leaves it — `a_description_is_kept_by_name_replaced_by_the_next_and_removed_by_an_empty_one` in `metrics::describe`, `what_a_store_holds_and_its_removal_over_the_wire` in `wire::metrics`; `instruments count into the store's totals, a set of labels a series each`, `what a store holds, a page at a time, and its removal` in `sdk/js/test/metrics.test.ts`, `test_a_description_is_kept_by_name_and_an_instruments_is_written_at_its_flush` in Python's
 - an instrument describes the names it writes at its next write, a timer's sum and longest in milliseconds, and a failed flush keeps them — `an_instrument_describes_the_names_it_writes_at_its_next_write_and_describe_replaces_it` in `metrics::describe`; `TestAFailedFlushKeepsItsDescriptionsForTheNext` at `e81a050`, which the Rust engine keeps without a test that fails a write
-- an invalid description keeps no good instrument out of a flush — `an invalid description cannot prevent good instruments from flushing` in Bun, `test_an_invalid_description_keeps_no_good_instrument_out` in Python
+- an invalid description keeps no good instrument out of a flush: it is refused where the instrument opens — `an_instrument_opens_against_what_the_store_and_its_file_hold`, `one_refused_instrument_keeps_no_other_out` in `metrics::instruments`; `a call an instrument refuses throws where the program made it` in `sdk/js/test/metrics.test.ts`, `test_an_invalid_description_keeps_no_good_instrument_out` in Python's
 - a group joins its series exactly and rounds once, is the series of one name that share the labels kept, and never two names — `a_group_is_the_series_of_a_name_that_share_the_labels_kept` in `metrics::aggregate`, `a_group_adds_its_series_buckets_and_rounds_once` in `metrics::bucket`
 - a whole-block summary spends no decoded-sample budget — `a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing` in `metrics::explain`
-- a malformed exact summary is refused — `another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused` in `metrics::exact`; `FuzzExactSummary` at `e81a050` until the fuzz target lands
+- a malformed exact summary is refused — `another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused` in `metrics::exact`; `metrics_rows` in `fuzz/`, which reads them inside a directory
 - exact summaries keep a directory within its bound — `TestLargeExactSummariesStayWithinDirectoryBounds`
-- a directory written once still reads — `TestDirectoriesWrittenBeforeStillRead`, inline and external
+- a directory written once still reads — `TestDirectoriesWrittenBeforeStillRead` at `e81a050`, inline and external, until the format's readers of v0.1.0
+- a decoder given any bytes past the version and checksum that guard them gives what they hold or fails `corrupt`, and never panics — `a_run_read_from_any_bytes_gives_its_samples_or_fails_corrupt`, `a_head_a_clock_and_a_directory_read_from_any_bytes_give_what_they_hold_or_fail_corrupt` in `metrics::fuzzing` on seeds, and `metrics_runs` and `metrics_rows` in `fuzz/`, run by hand
 - a run's zero and a first count of the same millisecond both survive, and packing keeps the zero — `a_runs_zero_survives_a_first_count_of_the_same_millisecond` in `metrics::instruments`
 - a store opened again within the millisecond it closed writes after its last sample — `a_store_opened_again_within_the_millisecond_it_closed_writes_after_its_last_sample` in `metrics::instruments`, `a_write_lands_after_what_its_series_holds` in `metrics::flush`
 - instruments of two connections add into one total, and a gauge of one that left is no longer written — `instruments_of_two_connections_add_into_one_total` in `metrics::instruments`

@@ -178,6 +178,13 @@ them.
   the Bun SDK's metrics over protocol 2 through each way a store is reached, its durations, ops and an instrument's
   labels offered and checked as they are written. After the owner's review: a gauge's function a set of labels, in
   Rust and the SDK, and a flush failing with what the store refused or a restart may have counted.
+  Built, slice 8: fuzz targets of every decoder past its version and checksum, `metrics_runs` and `metrics_rows`,
+  their seeds in the tests, which found a directory whose count past 32 shifted out of its word and panicked; GATES'
+  lines in Rust: a failed open, one state while packing goes on, no engine imported, and what the Rust engine does
+  not build said so. Left: the port measured against Go `e81a050` on the same inputs and huff0's ablation, which are
+  a research round; the format's readers, which wait for v0.1.0; and what GATES still holds to Go alone: an append's
+  due indexes, the store's memory, expired data spending no budget, the widest exact summaries in a directory, the
+  watermark's strict edge, expiry's bound a pass and adjacent buckets fuzzed.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

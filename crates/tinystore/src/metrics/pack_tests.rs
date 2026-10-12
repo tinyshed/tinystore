@@ -82,6 +82,33 @@ fn a_range_reads_the_blocks_and_the_head_it_touches_and_no_more() {
 }
 
 #[test]
+fn a_read_sees_one_state_while_ingests_and_packing_go_on_beside_it() {
+    let f = fixture();
+    let written = f.gauge("cpu", 4000, 15 * SECOND, |index| index as f64);
+    let (from, to) = (written.samples()[0].at, written.samples()[3999].at + SECOND);
+    let done = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(std::sync::atomic::Ordering::Acquire) {
+                let read = f.metrics().query().name("cpu").from(from).to(to).read().unwrap();
+                let values: Vec<f64> =
+                    read.iter().flat_map(|series| series.samples().iter().map(|s| s.value)).collect();
+                // what a read sees is every ingest whole, each sample once, in a head or in a block
+                assert_eq!(values.len() % 100, 0, "a read saw part of an ingest");
+                assert!(values.iter().enumerate().all(|(index, &value)| value == index as f64), "a torn read");
+            }
+        });
+        for piece in written.samples().chunks(100) {
+            let mut series = Series::gauge("cpu");
+            series.extend(piece.iter().map(|sample| (sample.at, sample.value)));
+            f.metrics().ingest(&[series]).unwrap();
+            maintain(&f.store).unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::Release);
+    });
+}
+
+#[test]
 fn a_sample_behind_what_its_series_has_packed_is_too_old() {
     let f = fixture();
     let written = f.gauge("cpu", 481, 15 * SECOND, |index| index as f64);

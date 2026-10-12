@@ -25,7 +25,7 @@ pub(super) const MOST_SAMPLES: usize = 16_384;
 pub(super) const MOST_BYTES: usize = 1 << 20;
 /// What a chunk's body holds at most: the codec's stream and its frame.
 const MOST_BODY: usize = 8200;
-const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 1;
 
 /// How many samples a head holds and its first and last times, which the
 /// series' state row keeps, so that a read finds the heads its range touches

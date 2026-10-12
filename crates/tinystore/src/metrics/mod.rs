@@ -39,6 +39,9 @@ mod explain;
 #[cfg(test)]
 mod fixture;
 mod flush;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzzing;
 mod grid;
 mod head;
 mod ingest;

@@ -151,3 +151,7 @@ pub(super) fn query_one<T: FromSql>(connection: &Connection, sql: &str, params: 
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod tests;
