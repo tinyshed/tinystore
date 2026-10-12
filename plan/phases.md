@@ -154,6 +154,12 @@ them.
   answered one at a time, whole blocks from their summaries; `latest` from one chunk or one directory a series;
   `explain`, the plan the calls carry out. The ladder now reaches 200 milliseconds, and a pass goes on while a series
   holds more complete units than a group takes: a series a sample a millisecond had filled its head.
+  Built, slice 4: counters, gauges, a gauge's function, timers and histograms, a slot a set of labels whose calls
+  add without a lock, their totals written every 15 seconds, at `flush` and at close, 256 slots a transaction and a
+  savepoint a slot, each run's zero at the write before its first call and after what its series holds, 2000 sets an
+  instrument and then `__overflow`, an hour without a call ending a run, gauges by connection, the `metrics` crate's
+  recorder. A timer read by its own name, `http_request_ms` for its series, comes with its percentiles in slice 5;
+  the wire's connections declaring series come with slice 7.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

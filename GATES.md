@@ -56,10 +56,10 @@ module defines.
 
 - an engine's errors are the store's kinds — `TestMetricsErrorsAreTheStoresKinds`
 - a failed engine open gives its file back — `TestMetricsOpensOncePerStoreAndAFailedOpenLetsGo`
-- one refused instrument does not keep the others out — `TestARefusedInstrumentDoesNotKeepTheOthersOut`; `a refused instrument keeps no other out, and says so once` in `sdk/js/test/metrics.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's
-- an instrument's last value survives Close — `TestClosingTheStoreFlushesTheLastValues`
-- a timer writes its count, sum and longest at each flush — `TestATimerWritesItsCountSumAndLongestAtEachFlush`, `TestAFailedFlushKeepsATimersLongestForTheNext`
-- a timer's three series go together and have one writer — `TestATimersSeriesHaveOneWriter`, `TestARefusedTimerLeavesItsSeriesOutTogether`, `TestATimerTheSeriesLimitCutsWritesNoneOfItsSeries`
+- one refused instrument does not keep the others out — `one_refused_instrument_keeps_no_other_out` in `metrics::instruments`; `a refused instrument keeps no other out, and says so once` in `sdk/js/test/metrics.test.ts`, `test_a_refused_instrument_keeps_no_other_out_and_says_so_once` in Python's
+- an instrument's last value survives Close — `a_restart_begins_a_new_run_with_its_zero_and_increase_counts_both` in `metrics::instruments`: closing the store writes the totals last
+- a timer writes its count, sum and longest at each flush, and its buckets — `a_timer_writes_its_count_sum_longest_and_buckets` in `metrics::instruments`; `TestAFailedFlushKeepsATimersLongestForTheNext` at `e81a050`, which the Rust engine keeps without a test that fails a write
+- a timer's series go together and have one writer — `a_timer_the_store_refuses_writes_none_of_its_series`, `an_instrument_opens_against_what_the_store_and_its_file_hold` in `metrics::instruments`
 - a self-report never counts itself, nor rounds a value — `TestSelfSamplesDoNotCountThemselvesAndSurviveClose`, `TestSelfMetricsRefuseAmbiguousOrInexactReports`
 - a sample survives the codec exactly — `every_value_representation_keeps_the_bits` in `metrics::codec`, on bits and not on values; `a_sample_comes_back_bit_for_bit` in `metrics::ingest`
 - a sample survives a file and restart — `a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole` in `metrics::pack`, `a_sample_survives_a_restart` in `metrics::ingest`
@@ -126,6 +126,17 @@ module defines.
 - a malformed exact summary is refused — `another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused` in `metrics::exact`; `FuzzExactSummary` at `e81a050` until the fuzz target lands
 - exact summaries keep a directory within its bound — `TestLargeExactSummariesStayWithinDirectoryBounds`
 - a directory written once still reads — `TestDirectoriesWrittenBeforeStillRead`, inline and external
+- a run's zero and a first count of the same millisecond both survive, and packing keeps the zero — `a_runs_zero_survives_a_first_count_of_the_same_millisecond` in `metrics::instruments`
+- a store opened again within the millisecond it closed writes after its last sample — `a_store_opened_again_within_the_millisecond_it_closed_writes_after_its_last_sample` in `metrics::instruments`, `a_write_lands_after_what_its_series_holds` in `metrics::flush`
+- instruments of two connections add into one total, and a gauge of one that left is no longer written — `instruments_of_two_connections_add_into_one_total` in `metrics::instruments`
+- an overflowed set is a group of its own, and the groups add up to the total — `the_overflow_is_a_group_of_its_own` in `metrics::instruments`
+- a series nothing was sent to for an hour ends, its slot freed unless a handle holds it, and a call begins another run with its zero — `a_series_nothing_was_sent_to_for_an_hour_ends_and_a_call_begins_another_run` in `metrics::instruments`
+- calls from many threads count once each while the store writes — `calls_from_many_threads_count_once_each_while_the_store_writes` in `metrics::instruments`
+- a call an instrument refuses changes nothing — `a_call_it_refuses_changes_nothing` in `metrics::instruments`
+- an instrument opens against what the store and its file hold: another kind, keep, buckets or writer is `invalid` — `an_instrument_opens_against_what_the_store_and_its_file_hold` in `metrics::instruments`
+- a gauge's function is read at each write, and a failure, a NaN or a panic writes nothing — `a_gauges_function_is_read_at_each_write_and_writes_nothing_when_it_fails` in `metrics::instruments`
+- a bound is written as JavaScript writes the number — `a_bound_is_written_as_javascript_writes_the_number` in `metrics::buckets`, `a_histogram_records_numbers_and_its_bounds_read_as_javascript_writes_them` in `metrics::instruments`
+- the `metrics` crate's macros count into the store's instruments, a description before or after its name opens — `the_metrics_crates_macros_count_into_the_stores_instruments`, `a_description_after_a_name_is_open_is_written_at_the_next_write` in `metrics::recorder`
 - a bucket the range cut or the store's clock has not finished is `partial`, its rate a second of what is left of it, and a whole one is not — `a_bucket_the_range_cut_or_the_clock_has_not_finished_is_partial` in `metrics::aggregate`
 - a step across a whole empty bucket of the query's `every` says `gap`, and none else does — `only_a_step_across_an_empty_bucket_is_a_gap` in `metrics::aggregate`
 - an `op` a kind has not is `invalid`, and so is a bucket over a NaN, an infinity or a counter below zero, naming the series and the sample — `an_op_a_kind_has_not_and_a_value_no_aggregate_takes_are_invalid` in `metrics::aggregate`

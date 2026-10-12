@@ -18,6 +18,9 @@ use crate::{Error, Result};
 /// The label a series' name is kept as, and why a label of a program's own
 /// may not begin with `__`.
 pub(super) const NAME: &str = "__name__";
+/// The one label of the series an instrument counts into past its sets of
+/// labels, which a grouping keeps whatever it names.
+pub(super) const OVERFLOW: &str = "__overflow";
 
 /// A hundred short labels and thirty enormous ones are different threats, so
 /// a series is bounded by four budgets rather than one count, its name
@@ -54,6 +57,25 @@ impl Kept {
         if !named {
             pairs.push((NAME.to_owned(), name.to_owned()));
         }
+        let kept = Kept(pairs);
+        kept.check()?;
+        Ok(kept)
+    }
+
+    /// The series of `name` an instrument counts into past its sets of
+    /// labels: `__overflow` its one label, the store's own.
+    pub(super) fn overflow(name: &str) -> Kept {
+        Kept(vec![(NAME.to_owned(), name.to_owned()), (OVERFLOW.to_owned(), "true".to_owned())])
+    }
+
+    /// The same labels under another name, and one label more: the series a
+    /// timer writes beside its own name, `http_request_ms_bucket{le="5"}`.
+    /// A label given twice is refused.
+    pub(super) fn derived(&self, name: &str, more: Option<(&str, &str)>) -> Result<Kept> {
+        let mut pairs: Vec<(String, String)> = self.0.iter().filter(|(label, _)| label != NAME).cloned().collect();
+        pairs.push((NAME.to_owned(), name.to_owned()));
+        pairs.extend(more.map(|(label, value)| (label.to_owned(), value.to_owned())));
+        pairs.sort_unstable();
         let kept = Kept(pairs);
         kept.check()?;
         Ok(kept)

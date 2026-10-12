@@ -30,9 +30,9 @@ const ONE_SERIES_MORE: &str = "update store_state set series_count = series_coun
 const NAME_KIND: &str = "select kind from names where id = ?1";
 const SET_KIND: &str = "update names set kind = ?2 where id = ?1";
 
-/// The id of the series of `batch`, registered when the file has none yet;
-/// its kind must be its name's.
-pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<i64> {
+/// The id of the series of `batch`, and whether this write registered it,
+/// when the file had none yet; its kind must be its name's.
+pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<(i64, bool)> {
     let found = tx
         .prepare_cached(RESOLVE)
         .and_then(|mut select| {
@@ -41,11 +41,11 @@ pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<i64> {
                 .optional()
         })
         .map_err(|error| sql_error("find a series", error))?;
-    let Some((id, kind)) = found else { return register(tx, batch) };
+    let Some((id, kind)) = found else { return register(tx, batch).map(|id| (id, true)) };
     if kind.as_deref() != Some(batch.kind.as_str()) {
         return Err(kind_refused(batch.kind, kind.as_deref()));
     }
-    Ok(id)
+    Ok((id, false))
 }
 
 /// Registers a series: its name's kind, its dictionary pairs, the series,

@@ -9,7 +9,7 @@
 //! read   ◄── heads and blocks from one snapshot, decoded after it
 //! ```
 
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -18,9 +18,9 @@ use rusqlite::{Connection, Params};
 
 use super::codec::Codecs;
 use super::names::Names;
+use super::totals::Totals;
 use crate::engine::{Claim, Host, Wake};
 use crate::sqlite::{Config, File, Migration, sql_error};
-use crate::store::WeakStore;
 use crate::{Clock, Durability, Memory, Result, Store, unix_millis};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
@@ -28,12 +28,14 @@ const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_s
 /// How often maintenance runs on its own: what names keep no longer is
 /// removed, and what is ready is packed.
 const MAINTENANCE: Duration = Duration::from_mins(1);
+/// How often the instruments' totals are written: a crash of the store
+/// loses what it had not written, this long at most.
+const WRITE_EVERY: Duration = Duration::from_secs(15);
 /// How far ahead of the store's clock a sample's time may be: a later one
 /// would hold its series' watermark in the future.
 pub(super) const AHEAD: Duration = Duration::from_mins(10);
 
 pub(crate) struct Engine {
-    store: WeakStore,
     pub(super) file: File,
     pub(super) memory: Arc<Memory>,
     clock: Arc<dyn Clock>,
@@ -46,12 +48,24 @@ pub(crate) struct Engine {
     pub(super) pack_cursor: AtomicI64,
     /// What runs maintenance sooner, once a series has a block's worth.
     wake: Mutex<Option<Wake>>,
+    /// The instruments and the totals the store keeps of them.
+    pub(super) totals: Arc<Totals>,
+    /// Held by a write of the totals, so that two never write at once.
+    pub(super) writing: Mutex<()>,
+    closed: AtomicBool,
     _claim: Claim,
 }
 
 impl crate::engine::Engine for Engine {
+    /// Writes the instruments' totals last, then closes the file, which it
+    /// closes whatever the write did.
     fn close(&self) -> Result<()> {
-        self.file.close()
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let written = self.write_totals();
+        let closed = self.file.close();
+        written.and(closed)
     }
 }
 
@@ -66,15 +80,17 @@ impl Engine {
             let file = File::open(claim.path(), Config::committing(durability))?;
             file.migrate("metrics", MIGRATIONS)?;
             let engine = Arc::new(Engine {
-                store: store.downgrade(),
                 names: Names::read(&file)?,
                 file,
                 memory: Arc::clone(store.memory()),
+                totals: Arc::new(Totals::new(unix_millis(store.now()))),
                 clock: store.clock(),
                 codecs: Codecs::default(),
                 maintaining: Mutex::default(),
                 pack_cursor: AtomicI64::new(0),
                 wake: Mutex::default(),
+                writing: Mutex::default(),
+                closed: AtomicBool::new(false),
                 _claim: claim,
             });
             let weak = Arc::downgrade(&engine);
@@ -82,6 +98,10 @@ impl Engine {
                 weak.upgrade().map_or(Ok(()), |engine| engine.maintain_in_background())
             })?;
             *lock(&engine.wake) = Some(wake);
+            let weak = Arc::downgrade(&engine);
+            store.every("metrics: instruments", WRITE_EVERY, move || {
+                weak.upgrade().map_or(Ok(()), |engine| engine.write_totals())
+            })?;
             Ok(engine)
         })
     }
@@ -89,12 +109,6 @@ impl Engine {
     /// The store's clock, in milliseconds since 1970.
     pub(super) fn now(&self) -> i64 {
         unix_millis(self.clock.now())
-    }
-
-    /// The store, while it is open.
-    #[expect(dead_code, reason = "instruments write the store's totals through it, from the slice that builds them")]
-    pub(super) fn store(&self) -> Option<Store> {
-        self.store.upgrade()
     }
 
     /// Runs maintenance soon rather than at its next minute.

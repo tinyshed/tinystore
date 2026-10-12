@@ -8,16 +8,23 @@
 //! use tinystore::metrics::Series;
 //! let store = tinystore::Store::open("data", Default::default())?;
 //! let stats = store.metrics()?;
+//! let requests = stats.counter("http_requests_total").open()?;
+//! requests.with(&[("route", "/notes")]).inc();
 //! stats.ingest(&[Series::gauge("cpu").label("host", "web-1").sample(SystemTime::now(), 0.42)])?;
 //! let cpu = stats.query().name("cpu").since(Duration::from_hours(1)).read()?;
 //! assert_eq!(cpu[0].labels()["host"], "web-1");
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! A program measures itself with instruments, whose totals the store keeps
+//! and writes every 15 seconds; samples from elsewhere come by `ingest`.
+//! Both write series, and every read finds both.
 
 mod aggregate;
 mod binary;
 mod bucket;
+mod buckets;
 mod budget;
 mod clock;
 mod codec;
@@ -27,8 +34,10 @@ mod exact;
 mod explain;
 #[cfg(test)]
 mod fixture;
+mod flush;
 mod head;
 mod ingest;
+mod instruments;
 mod labels;
 mod ladder;
 mod latest;
@@ -39,6 +48,7 @@ mod pack;
 mod publish;
 mod query;
 mod read;
+mod recorder;
 mod registry;
 mod residuals;
 mod retention;
@@ -46,16 +56,20 @@ mod series;
 mod snapshot;
 mod summary;
 mod timestamp;
+mod totals;
 mod values;
 
 use std::fmt;
 use std::sync::Arc;
 
 pub use aggregate::{Aggregate, Bucket, Op};
+pub use buckets::exponential_buckets;
 pub use explain::{Exceeds, Plan};
+pub use instruments::{Builder, Counter, Gauge, GaugeFunc, Histogram, Reading, Timer, Timing};
 pub use latest::Latest;
 pub use maintain::{Maintenance, maintain};
 pub use query::{Condition, Not, Prefix, Query, Values};
+pub use recorder::Recorder;
 pub use series::{Kind, Labels, Sample, Series};
 
 use crate::{Result, Store};

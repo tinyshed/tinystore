@@ -87,7 +87,9 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
 - A value an instrument is given is a finite number: `NaN` or an infinity
   throws `invalid` at once, where the program made it, rather than failing
   every average of its bucket for as long as the name keeps it. `ingest`
-  keeps them, bit for bit.
+  keeps them, bit for bit. In Rust a call returns nothing, as the `metrics`
+  crate's do: what it refuses, a value or a label, changes nothing and is
+  said once in the store's log.
 - A counter's `inc()` adds one and `add(n)` adds `n`; a negative `n` throws
   `invalid` at once. The store keeps a counter's total, and a timer's count,
   sum and buckets, so that processes sharing a store, through a sidecar or a
@@ -134,9 +136,10 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   gives 1, 2, 4 … 8192: the start, the factor and how many.
 - The store adds the bound `+Inf`, so a duration past the last bound is
   counted above it rather than lost.
-- A bound is written as the shortest text that reads back as the same
-  number: `5` whether a program wrote `5` or `5.0`, so that two languages
-  write one series, and `+Inf`.
+- A bound is written as JavaScript's `String(n)` writes it, the fewest
+  digits that read back as the same number, so that two languages write one
+  series: `5` whether a program wrote `5` or `5.0`, `0.25`, `1e+21` past
+  10²¹, and `+Inf`.
 - With buckets a timer also writes `http_request_ms_bucket`, one series a
   bound with the label `le`, each counting the durations at most that bound,
   as Prometheus writes a histogram's.
@@ -596,8 +599,14 @@ metrics::histogram!("http_request_ms").record(started.elapsed().as_secs_f64() * 
   gives, with the buckets the recorder was given for its name. A process has
   one global recorder, which the crate lets be set once: a program that
   opens two stores, as a test may, records into the first.
+- The recorder's buckets are given by name, as a timer's are:
+  `store.metrics()?.recorder().buckets("http_request_ms", &[5.0, 25.0, 100.0])`.
 - A program that uses the crate calls the store's handle something else
   than `metrics`, as this book's examples do, so that the two read apart.
+- Rust spells the rest as a builder each: `stats.gauge_func("open_tickets",
+  || pool.len() as f64).open()?`, whose function gives a number or a
+  `Result` of one and runs on the store's thread;
+  `exponential_buckets(1.0, 2.0, 14)`; `stats.flush()?`.
 - A timing from `start()` records when it drops, so it is kept in a name,
   `let _timing = latency.start()`. `#[must_use]` makes the compiler warn of
   `latency.start();` alone; `let _ = latency.start()`, which Rust reads as a
@@ -689,7 +698,8 @@ refuses at a write is said once, and the other instruments are written.
 | What                               | Bound                                                                           |
 |------------------------------------|---------------------------------------------------------------------------------|
 | a series                           | 128 labels with its name, 16 KiB of them; a label's name 256 B, its value 4 KiB |
-| sets of labels an instrument holds | 2000; past them, `__overflow`                                                   |
+| sets of labels an instrument holds | 2000, the set without labels none of them; past them, `__overflow`              |
+| a timer's or a histogram's buckets | 128 bounds, `+Inf` added                                                        |
 | series in a store                  | 100,000                                                                         |
 | one `ingest`                       | 10,000 samples or 4 MiB                                                         |
 | a sample's time                    | from `keep` ago to ten minutes ahead                                            |
@@ -842,6 +852,15 @@ their totals written over each other would be wrong without a word.
 |---------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
 | a rate over the millisecond a range leaves of a bucket, read as an hour's | the rate still divides by what is left; the bucket says `partial`, as one retention cut does  |
 | an hour with ten minutes of data, shown as a whole hour's                 | a bucket the clock has not finished is `partial` too, which was `open: true` in the open list |
+
+Building the instruments raised these, which the book now settles:
+
+| What came up                                                       | What the book does                                                            |
+|--------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| Rust's call sites, `with(…).inc()`, and the `metrics` crate's      | a Rust call returns nothing; what it refuses changes nothing and is said once |
+| "the shortest text" of a bound, which languages write differently  | as JavaScript's `String(n)` writes it: `1e+21`, where Rust writes 22 digits   |
+| the set without labels, opened with the instrument, as one of 2000 | it takes none of the places                                                   |
+| a timer of a thousand bounds, a series each a set of labels        | 128 bounds at most                                                            |
 
 ## Free review, 11 October
 

@@ -190,10 +190,10 @@ fn ordered(mut points: Vec<Point>) -> Vec<Point> {
 /// What a series' write needs of its row: what it packed, its version, the
 /// newest time it has seen, whether it was ready, when it is due, why it
 /// stopped, and its head.
-struct State {
+pub(super) struct State {
     sealed_before: Option<i64>,
     version: i64,
-    max_seen: i64,
+    pub(super) max_seen: i64,
     ready: bool,
     due: Option<i64>,
     failure: Option<String>,
@@ -223,7 +223,7 @@ const SAVE_HEAD: &str =
     "insert into heads (series_id, body) values (?1, ?2) on conflict (series_id) do update set body = excluded.body";
 
 impl State {
-    fn read(tx: &Tx<'_>, id: i64) -> Result<State> {
+    pub(super) fn read(tx: &Tx<'_>, id: i64) -> Result<State> {
         let state = tx.prepare_cached(STATE).and_then(|mut select| {
             select
                 .query_row(params![id], |row| {
@@ -274,10 +274,16 @@ impl State {
 /// Writes one series' samples into its head, and says whether it now holds
 /// a block's worth.
 fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &Batch) -> Result<bool> {
-    let id = registry::resolve(tx, batch)?;
+    let (id, _) = registry::resolve(tx, batch)?;
     let state = State::read(tx, id)?;
+    store(tx, zstd, id, &state, batch)
+}
+
+/// Writes the samples of `batch` into the head of series `id`, whose row
+/// says `state`, and says whether it now holds a block's worth.
+pub(super) fn store(tx: &Tx<'_>, zstd: &mut Zstd, id: i64, state: &State, batch: &Batch) -> Result<bool> {
     state.accepts(&batch.points)?;
-    let (bytes, extent) = next_head(zstd, id, &state, &batch.points)?;
+    let (bytes, extent) = next_head(zstd, id, state, &batch.points)?;
     let max_seen = state.max_seen.max(batch.points[batch.points.len() - 1].at);
     let ready = ready(extent, max_seen);
     let first_due = expires(batch.points[0].at, batch.keep);

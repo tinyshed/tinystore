@@ -109,26 +109,42 @@ is one migration, `0001`, until `v0.1.0`.
 
 - In Rust an instrument is a handle on the engine's totals. A set of labels
   is a slot found through a hash of its canonical labels; a counter's slot
-  adds with an atomic operation, so `inc()` takes no lock.
+  adds with an atomic operation, so `inc()` takes no lock, and a write takes
+  what calls added with an atomic swap. A timer's slot keeps its count, sum,
+  longest and buckets under a lock of its own, so that a write takes them
+  together.
 - An SDK keeps what changed since it last sent, and sends it every second,
   or sooner once its buffer fills, as one message. A connection declares a
   series once and is given an id; what it sends afterwards is ids and
   numbers.
 - The engine's totals hold, for each series, a counter's total, a timer's
   count, sum, longest and bucket counts, a gauge's value and the connection
-  that set it, and the time its run began.
-- Every 15 seconds the store writes every live total as one `ingest`, at
-  one time for all of them, so that their clocks are one. A series written
-  for the first time since the store started, or since it was evicted, is
-  written first as a zero at the time its run began, a millisecond before
-  its first count at the latest.
+  that set it, and its run.
+- Every 15 seconds, at `flush` and when the store closes, the store writes
+  every live total at one time for all of them, so that their clocks are
+  one: 256 slots a transaction, each slot's series in a savepoint, so that a
+  timer's go together and what the store refuses of one slot is said once
+  while the others are written. A write that fails whole is tried at the
+  next, which writes the totals that grew meanwhile.
+- A run begins at the first call after a write that found none, and its
+  zero is written at that write, the last time the series is known to have
+  been zero, or at the engine's start: a millisecond before its first count
+  at the latest. The zero lies after every sample its series holds, and the
+  count after the zero, so that a store opened again within the millisecond
+  it closed, or a clock moved back, never writes over the run before.
 - A gauge whose connection left is dropped from the totals; a counter's, a
-  timer's or a histogram's series that nothing sent for an hour leaves them,
-  and its next send starts a new run. An instrument takes 2000 sets of labels
-  between two sends, and past them counts into the series of `__overflow`.
+  timer's or a histogram's series that nothing sent for an hour leaves them
+  after one more write, its slot freed unless a handle holds it, and its next
+  send starts a new run. An instrument takes 2000 sets of labels between two
+  sends, the set without labels none of them, and past them counts into the
+  series of `__overflow`.
 - A gauge's function runs where it was written: in an SDK on its own timer,
   never twice at once, a slow call skipped that time and an error said once;
-  in Rust on the store's thread, which it must not block.
+  in Rust on the thread that writes, which it must not block, an error, a
+  panic or a value that is not a finite number writing nothing that time.
+- The recorder of the `metrics` crate opens an instrument a name the first
+  time a macro names it, with what `describe_*!` said and the buckets it was
+  given; a name of another kind counts nowhere, said once.
 - Closing the store writes the totals last. A crash of a program loses what
   it had not sent, a second at most; a crash of the store, what it had not
   written, 15 seconds at most, and the next run's zero keeps `increase`

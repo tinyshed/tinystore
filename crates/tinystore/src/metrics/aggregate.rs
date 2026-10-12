@@ -39,7 +39,7 @@ use super::budget::Budget;
 use super::codec::Point;
 use super::directory::Block;
 use super::engine::Engine;
-use super::labels::{Kept, MOST_LABELS, MOST_NAME_BYTES};
+use super::labels::{Kept, MOST_LABELS, MOST_NAME_BYTES, OVERFLOW};
 use super::matching::Found;
 use super::query::Asked;
 use super::read::PATIENCE;
@@ -49,9 +49,6 @@ use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
 use crate::{Error, Reservation, Result};
 
-/// The label of the series an instrument counts into past its sets of
-/// labels, which is a group of its own whatever a query groups by.
-const OVERFLOW: &str = "__overflow";
 /// What a bucket of a group holds of the store's memory while it is counted.
 const BUCKET_HELD: u64 = 512;
 
