@@ -158,8 +158,14 @@ them.
   add without a lock, their totals written every 15 seconds, at `flush` and at close, 256 slots a transaction and a
   savepoint a slot, each run's zero at the write before its first call and after what its series holds, 2000 sets an
   instrument and then `__overflow`, an hour without a call ending a run, gauges by connection, the `metrics` crate's
-  recorder. A timer read by its own name, `http_request_ms` for its series, comes with its percentiles in slice 5;
-  the wire's connections declaring series come with slice 7.
+  recorder. The wire's connections declaring series come with slice 7.
+  Built, slice 5: percentiles, `Op::Percentile`, a rank kept as the decimal the query wrote; a gauge's the sample at
+  its nearest rank among its group's; a timer's the bucket of its spread that holds it, as `Value::Between`, a whole
+  block from its summary, each member holding the bounds whose series counted as many samples as its `+Inf`, a group
+  the bounds every member holds, an idle member none, and `estimate` as Prometheus' `histogram_quantile`; a timer read
+  by its own name, `count`, `sum`, `avg`, `max`, `rate` and percentiles; an ingested histogram's `le` written as
+  JavaScript writes it; and, as an experiment, exponential buckets on Prometheus' native grid, an interval a series
+  under the store's `__bin`, the schema lowered past 128 intervals, two resolutions merged exactly.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

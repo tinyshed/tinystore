@@ -26,6 +26,7 @@ use ::metrics::{
 };
 
 use super::Metrics;
+use super::buckets::Buckets;
 use super::engine::lock;
 use super::instruments::{Counter, Gauge, Histogram, MOST_HELP, MOST_UNIT};
 use super::totals::Description;
@@ -49,7 +50,7 @@ macro_rules! told {
 /// The `metrics` crate's recorder for a store's metrics.
 pub struct Recorder {
     stats: Metrics,
-    buckets: HashMap<String, Vec<f64>>,
+    buckets: HashMap<String, Buckets>,
     opened: Mutex<HashMap<String, Opened>>,
     /// What `describe_*!` said of a name before it was opened.
     described: Mutex<HashMap<String, Description>>,
@@ -80,8 +81,8 @@ impl Metrics {
 impl Recorder {
     /// The buckets of the histogram of `name`, as a timer's are.
     #[must_use]
-    pub fn buckets(mut self, name: impl Into<String>, bounds: &[f64]) -> Recorder {
-        self.buckets.insert(name.into(), bounds.to_vec());
+    pub fn buckets(mut self, name: impl Into<String>, buckets: impl Into<Buckets>) -> Recorder {
+        self.buckets.insert(name.into(), buckets.into());
         self
     }
 
@@ -132,8 +133,8 @@ impl Recorder {
     fn histogram(&self, name: &str) -> Option<Histogram> {
         let open = |said: Description| {
             let mut builder = told!(self.stats.histogram(name), said);
-            if let Some(bounds) = self.buckets.get(name) {
-                builder = builder.buckets(bounds);
+            if let Some(buckets) = self.buckets.get(name) {
+                builder = builder.buckets(buckets.clone());
             }
             builder.open().map(Opened::Histogram)
         };

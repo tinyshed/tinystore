@@ -20,6 +20,8 @@ use std::cmp::Ordering;
 use crate::compress::varint::{Reader, put_count};
 
 const WORDS: usize = 35;
+/// Where the units' point lies: a unit is 2⁻¹⁰⁷⁴, so 1 is 2¹⁰⁷⁴ of them.
+const POINT: u32 = 1074;
 
 /// The bits a block's exact sum of at most 240 finite floats needs: 240 is
 /// under 2⁸, and a float under 2²⁰⁹⁸ units.
@@ -67,6 +69,37 @@ impl Exact {
         self.add_float(-value)
     }
 
+    /// A count's units: `count` × 2¹⁰⁷⁴.
+    pub(super) fn of_whole(count: u64) -> Exact {
+        let mut exact = Exact::ZERO;
+        exact.add_shifted(count, POINT);
+        exact
+    }
+
+    /// The whole number it is, when it is one from 0 to 2⁶⁴ − 1: a count.
+    pub(super) fn whole(&self) -> Option<u64> {
+        if self.is_negative() || low_bits_set(&self.0, POINT) {
+            return None;
+        }
+        let whole = shift_right(&self.0, POINT);
+        whole[1..].iter().all(|word| *word == 0).then_some(whole[0])
+    }
+
+    /// It times `factor`, for a count that leaves the room: a count of 2⁶⁴
+    /// times 10¹⁷ is under 2¹²¹ units past the point, far below the sign.
+    pub(super) fn times(&self, factor: u64) -> Exact {
+        let mut words = self.magnitude();
+        multiply(&mut words, factor);
+        let product = Exact(words);
+        debug_assert!(!product.is_negative(), "a product past the accumulator");
+        if self.is_negative() {
+            let mut negative = Exact::ZERO;
+            negative.sub(&product);
+            return negative;
+        }
+        product
+    }
+
     pub(super) fn add(&mut self, other: &Exact) {
         let mut carry = false;
         for (word, more) in self.0.iter_mut().zip(other.0) {
@@ -85,7 +118,8 @@ impl Exact {
         }
     }
 
-    /// `mantissa << shift` added, a mantissa of 53 bits at most.
+    /// `mantissa << shift` added: a mantissa of 64 bits at most, which
+    /// shifted by under a word fits the 128 bits it is carried in.
     fn add_shifted(&mut self, mantissa: u64, shift: u32) {
         let (word, bits) = ((shift / 64) as usize, shift % 64);
         let wide = u128::from(mantissa) << bits;
@@ -120,7 +154,6 @@ impl Exact {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn is_zero(&self) -> bool {
         self.0.iter().all(|word| *word == 0)
     }

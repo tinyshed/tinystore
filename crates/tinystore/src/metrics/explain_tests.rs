@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use super::*;
+use crate::metrics::aggregate::Asking;
 use crate::metrics::fixture::{HOUR, MINUTE, SECOND, fixture};
 use crate::metrics::{Op, Series, maintain};
 
@@ -27,10 +28,10 @@ fn a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing() {
     let stepped = hours().from(now - 7 * HOUR).every(HOUR).explain(Op::Delta).unwrap();
     assert_eq!(stepped.decoded, 0);
     let moved = hours().from(now - 7 * HOUR).every(HOUR).filter("host", "a").aggregate(Op::Delta).unwrap();
-    assert_eq!(moved[0].buckets.iter().map(|hour| hour.value).collect::<Vec<_>>(), [240.0; 7]);
+    assert_eq!(moved[0].buckets.iter().map(|hour| hour.value.exact()).collect::<Vec<_>>(), [Some(240.0); 7]);
     // what each plan says is what its call spends
-    let hour = Shape::of(Op::Avg, Some(HOUR), None, None).unwrap();
-    let minutes = Shape::of(Op::Avg, Some(7 * MINUTE), None, None).unwrap();
+    let hour = Shape::of(Op::Avg, Asking { every: Some(HOUR), ..Asking::default() }).unwrap();
+    let minutes = Shape::of(Op::Avg, Asking { every: Some(7 * MINUTE), ..Asking::default() }).unwrap();
     let asked = hours().asked().unwrap();
     for (plan, want) in [(&hourly, Want::Buckets(&hour)), (&fine, Want::Buckets(&minutes)), (&read, Want::Samples)] {
         let mut spent = Budget::default();

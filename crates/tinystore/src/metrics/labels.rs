@@ -21,6 +21,10 @@ pub(super) const NAME: &str = "__name__";
 /// The one label of the series an instrument counts into past its sets of
 /// labels, which a grouping keeps whatever it names.
 pub(super) const OVERFLOW: &str = "__overflow";
+/// The label of a timer's `_bucket` series that counts the values of one
+/// interval of an exponential grid, where `le` counts every value at most a
+/// bound.
+pub(super) const BIN: &str = "__bin";
 
 /// A hundred short labels and thirty enormous ones are different threats, so
 /// a series is bounded by four budgets rather than one count, its name

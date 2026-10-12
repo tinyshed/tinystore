@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::Metrics;
-use super::buckets::Bounds;
+use super::buckets::{Bounds, Buckets};
 use super::engine::Engine;
 use super::labels::Kept;
 use super::names::checked_keep;
@@ -70,7 +70,7 @@ pub struct Builder<T> {
     help: Option<String>,
     unit: Option<String>,
     keep: Option<Duration>,
-    buckets: Option<Vec<f64>>,
+    buckets: Option<Buckets>,
     read: Option<Read>,
     owner: u64,
     made: PhantomData<fn() -> T>,
@@ -173,8 +173,8 @@ impl<T> Builder<T> {
         self
     }
 
-    fn the_buckets(mut self, bounds: &[f64]) -> Self {
-        self.buckets = Some(bounds.to_vec());
+    fn the_buckets(mut self, buckets: Buckets) -> Self {
+        self.buckets = Some(buckets);
         self
     }
 }
@@ -194,10 +194,11 @@ unit!(Counter, Gauge, GaugeFunc, Histogram);
 macro_rules! buckets {
     ($($made:ty),*) => {$(
         impl Builder<$made> {
-            /// The upper bounds of its spread, ascending, each a number of 0
-            /// or more; the store adds `+Inf`.
-            pub fn buckets(self, bounds: &[f64]) -> Self {
-                self.the_buckets(bounds)
+            /// Its buckets: the upper bounds of its spread, ascending, each a
+            /// number of 0 or more, to which the store adds `+Inf`, or
+            /// [`Buckets::Exponential`], a grid the store keeps.
+            pub fn buckets(self, buckets: impl Into<Buckets>) -> Self {
+                self.the_buckets(buckets.into())
             }
         }
     )*};
@@ -256,7 +257,7 @@ impl Engine {
     /// the file holds of its names, the instrument the store holds of its
     /// name, and its names settled with their keep.
     fn open_instrument<T>(&self, builder: &mut Builder<T>) -> Result<Arc<Instrument>> {
-        let bounds = builder.buckets.as_deref().map(Bounds::of).transpose()?;
+        let bounds = builder.buckets.as_ref().map(Bounds::of).transpose()?;
         check_description(builder)?;
         let keep = builder.keep.map(checked_keep).transpose()?;
         let written = builder.form.written(&builder.name, bounds.is_some());

@@ -10,11 +10,13 @@
 //! together, or nothing does. A refused series names itself by its labels, so
 //! that the call can be sent again without it.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
 
+use super::buckets::{bound_of, le};
 use super::codec::Point;
 use super::engine::{AHEAD, Engine, execute};
 use super::head::{self, Extent};
@@ -23,7 +25,7 @@ use super::ladder::{unit_end, unit_of};
 use super::names::{Name, checked_keep, millis};
 use super::registry;
 use super::retention::expires;
-use super::series::{Kind, Series};
+use super::series::{Kind, Labels, Series};
 use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
@@ -100,7 +102,8 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
     let (mut gathered, mut samples, mut bytes) = (BTreeMap::new(), 0, 0);
     for given in series {
         let named = || format!("metrics {given}");
-        let kept = Kept::of(&given.name, &given.labels).map_err(|error| error.within(named()))?;
+        let labels = bounded(given).map_err(|error| error.within(named()))?;
+        let kept = Kept::of(&given.name, &labels).map_err(|error| error.within(named()))?;
         if given.samples.is_empty() {
             return Err(Error::invalid(format!("{}: a series without samples", named())));
         }
@@ -130,6 +133,21 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
         entry.points.extend(points);
     }
     Ok((gathered, bytes))
+}
+
+/// A series' labels, a histogram's bound among them written as JavaScript
+/// writes its number, so that `5.0` from one exporter and `5` from another
+/// are one bound; a histogram's series without one is refused.
+fn bounded(series: &Series) -> Result<Cow<'_, Labels>> {
+    if series.kind != Kind::Histogram {
+        return Ok(Cow::Borrowed(&series.labels));
+    }
+    let bound = series.labels.get("le").and_then(|text| bound_of(text)).ok_or_else(|| {
+        Error::invalid("a histogram's series counts the values at most its bound, `le`: a number of 0 or more, or +Inf")
+    })?;
+    let mut labels = series.labels.clone();
+    labels.insert("le".to_owned(), le(bound));
+    Ok(Cow::Owned(labels))
 }
 
 /// Each name of the call once, with the keep it gives; two keeps of one name

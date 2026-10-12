@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::ErrorKind;
-use crate::metrics::fixture::{DAY, Fixture, HOUR, SECOND, fixture};
-use crate::metrics::{Not, Op, Series, maintain};
+use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
+use crate::metrics::grid::Bin;
+use crate::metrics::{Buckets, Not, Op, Series, Value, maintain};
 
 /// The fixture's clock at its start, in milliseconds.
 const START: i64 = 1_800_000_000_000;
@@ -27,6 +28,27 @@ fn samples(f: &Fixture, name: &str, labels: &[(&str, &str)]) -> Vec<(i64, f64)> 
 
 fn ms(span: Duration) -> i64 {
     i64::try_from(span.as_millis()).unwrap()
+}
+
+/// The intervals of `name`'s grid, each by its label `__bin`, and its
+/// samples, from the fixture's start in milliseconds.
+fn intervals(f: &Fixture, name: &str) -> Vec<(String, Vec<(i64, f64)>)> {
+    let read = f.metrics().query().name(format!("{name}_bucket")).since(DAY).read().unwrap();
+    let interval = |series: &Series| {
+        let samples = series.samples().iter().map(|sample| (crate::unix_millis(sample.at) - START, sample.value));
+        (series.labels()["__bin"].clone(), samples.collect())
+    };
+    read.iter().map(interval).collect()
+}
+
+/// The one bucket of a percentile of `name` since the day before.
+fn ranked(f: &Fixture, name: &str, percent: f64) -> (Value, u64) {
+    let answer = f.metrics().query().name(name).since(DAY).aggregate(Op::Percentile(percent)).unwrap();
+    (answer[0].buckets[0].value, answer[0].buckets[0].samples)
+}
+
+fn between((lower, upper): (f64, f64)) -> Value {
+    Value::Between { lower, upper, estimate: None }
 }
 
 #[test]
@@ -109,7 +131,7 @@ fn a_restart_begins_a_new_run_with_its_zero_and_increase_counts_both() {
     let grew = f.metrics().query().name("jobs_total").since(DAY).aggregate(Op::Increase).unwrap();
     assert_eq!(
         (grew[0].buckets[0].value, grew[0].buckets[0].resets),
-        (7.0, 1),
+        (Value::Exact(7.0), 1),
         "2, then a run that began at 0 and reached 5"
     );
 }
@@ -168,14 +190,15 @@ fn the_overflow_is_a_group_of_its_own() {
     // a query reads 1000 series at most: the users in two halves, and the series no user's label holds
     let users = |range: std::ops::Range<u32>| range.map(|user| user.to_string()).collect::<Vec<_>>();
     let query = || f.metrics().query().name("logins_total").since(HOUR);
-    let total = |query: crate::metrics::Query| query.aggregate(Op::Last).unwrap()[0].buckets[0].value;
+    let total = |query: crate::metrics::Query| query.aggregate(Op::Last).unwrap()[0].buckets[0].value.exact().unwrap();
     let halves = total(query().filter("user", users(0..1000))) + total(query().filter("user", users(1000..2000)));
     let past = query().filter("user", Not(users(0..1000))).filter("user", Not(users(1000..2000)));
     let overflow = past.by(&["user"]).aggregate(Op::Last).unwrap();
     assert_eq!(overflow.len(), 1, "a group of its own, whatever the query groups by");
     let labels: Vec<&str> = overflow[0].labels.keys().map(String::as_str).collect();
-    assert_eq!((labels, overflow[0].buckets[0].value), (vec!["__overflow"], 3.0), "the set past them and one after");
-    assert_eq!(halves + overflow[0].buckets[0].value, 2003.0, "the groups add up to the total");
+    let overflowed = overflow[0].buckets[0].value.exact().unwrap();
+    assert_eq!((labels, overflowed), (vec!["__overflow"], 3.0), "the set past them and one after");
+    assert_eq!(halves + overflowed, 2003.0, "the groups add up to the total");
 }
 
 #[test]
@@ -211,7 +234,7 @@ fn a_series_nothing_was_sent_to_for_an_hour_ends_and_a_call_begins_another_run()
     assert_eq!(samples(&f, "jobs_total", &[("queue", "sync")])[3..], [(now, 0.0), (now + ms(15 * SECOND), 7.0)]);
     let grew =
         f.metrics().query().name("jobs_total").filter("queue", "mail").since(DAY).aggregate(Op::Increase).unwrap();
-    assert_eq!(grew[0].buckets[0].value, 6.0);
+    assert_eq!(grew[0].buckets[0].value, Value::Exact(6.0));
 }
 
 #[test]
@@ -430,4 +453,106 @@ fn calls_from_many_threads_count_once_each_while_the_store_writes() {
     assert_eq!(last("latency_ms_count", &[]), Some(40_000.0));
     assert_eq!(last("latency_ms_bucket", &[("le", "+Inf")]), Some(40_000.0));
     assert_eq!(last("latency_ms_bucket", &[("le", "1")]), Some(4000.0), "0 and 1 ms of every 20");
+}
+
+#[test]
+fn an_exponential_histogram_keeps_a_series_for_each_interval_a_value_fell_in() {
+    let f = fixture();
+    let stats = f.metrics();
+    let sizes = stats.histogram("sizes").buckets(Buckets::Exponential).open().unwrap();
+    [0.0, 1.0, 1.0, 3.0, 3.0, 3.0, 1000.0].into_iter().for_each(|value| sizes.record(value));
+    stats.flush().unwrap();
+    // the interval of 1 ends at it, that of 3 above 2.83 and at most 3.08: each begins with its zero
+    let counted: Vec<(String, f64)> =
+        intervals(&f, "sizes").into_iter().map(|(bin, samples)| (bin, samples.last().unwrap().1)).collect();
+    let expected = [("zero", 1.0), ("3:0", 2.0), ("3:13", 3.0), ("3:80", 1.0)];
+    assert_eq!(counted, expected.map(|(bin, count)| (bin.to_owned(), count)), "and none for an interval left empty");
+    assert_eq!(intervals(&f, "sizes")[1].1[0], (-1, 0.0));
+    assert_eq!(ranked(&f, "sizes", 10.0), (between((0.0, 0.0)), 7), "the interval of 0 holds 0 alone");
+    assert_eq!(ranked(&f, "sizes", 50.0).0, between(Bin::of(3.0, 3).bounds()));
+    let (lower, upper) = Bin::of(3.0, 3).bounds();
+    assert!(lower < 3.0 && 3.0 <= upper && upper / lower < 1.091, "({lower}, {upper}] is about 9% wide");
+    assert_eq!(ranked(&f, "sizes", 100.0).0, between(Bin::of(1000.0, 3).bounds()));
+    assert_eq!(Bin::of(1000.0, 3).bounds().1, 1024.0);
+    let kept = f.value("select count(*) from names where name = 'sizes_bucket' and buckets = 'exponential'");
+    assert_eq!(kept, 1, "the name keeps what its buckets are");
+}
+
+#[test]
+fn past_128_intervals_the_grid_halves_and_a_percentile_merges_both_resolutions() {
+    let f = fixture();
+    let stats = f.metrics();
+    let spread = stats.histogram("spread").buckets(Buckets::Exponential).open().unwrap();
+    let bound = |index: i32| Bin::At { schema: 3, index }.bounds().1;
+    (0..100).for_each(|index| spread.record(bound(index)));
+    stats.flush().unwrap();
+    // 40 more intervals would hold 140: the finer end, and the second write counts at four a doubling
+    f.pass(MINUTE);
+    (100..140).for_each(|index| spread.record(bound(index)));
+    stats.flush().unwrap();
+    let written = intervals(&f, "spread");
+    let at = |schema: &str| written.iter().filter(|(bin, _)| bin.starts_with(schema)).collect::<Vec<_>>();
+    assert_eq!((at("3:").len(), at("2:").len()), (100, 21));
+    assert!(at("3:").iter().all(|(_, samples)| samples.last().unwrap().0 == 0), "the finer were not written again");
+    assert_eq!(at("2:")[0].1, [(0, 0.0), (ms(MINUTE), 1.0)], "the coarser began at zero at the write before");
+    // the 70th of 140 values, 2^(69/8), in an interval of the coarser grid, which the finer merge into
+    let (value, samples) = ranked(&f, "spread", 50.0);
+    assert_eq!((value, samples), (between(Bin::At { schema: 2, index: 35 }.bounds()), 140));
+    let Value::Between { lower, upper, .. } = value else { unreachable!() };
+    assert!(lower < bound(69) && bound(69) <= upper);
+    // a minute of the finer alone keeps their resolution
+    let first = f.metrics().query().name("spread").from(f.now() - 2 * MINUTE);
+    let first = first.to(f.now() - MINUTE + Duration::from_millis(1));
+    let first = first.aggregate(Op::Percentile(50.0)).unwrap();
+    assert_eq!(first[0].buckets[0].value, between(Bin::At { schema: 3, index: 49 }.bounds()));
+}
+
+#[test]
+fn an_interval_nothing_fell_in_for_an_hour_ends_and_begins_again_with_its_zero() {
+    let f = fixture();
+    let stats = f.metrics();
+    let sizes = stats.histogram("sizes").buckets(Buckets::Exponential).open().unwrap();
+    sizes.record(1.0);
+    sizes.record(8.0);
+    stats.flush().unwrap();
+    for _ in 0..3 {
+        f.pass(20 * MINUTE);
+        sizes.record(8.0);
+        stats.flush().unwrap();
+    }
+    f.pass(20 * MINUTE);
+    sizes.record(1.0);
+    stats.flush().unwrap();
+    let ones = intervals(&f, "sizes").into_iter().find(|(bin, _)| bin == "3:0").unwrap().1;
+    let minutes = |count: i64| count * ms(MINUTE);
+    let written = [(-1, 0.0), (0, 1.0), (minutes(20), 1.0), (minutes(40), 1.0), (minutes(60), 1.0)];
+    let again = [(minutes(60) + 1, 0.0), (minutes(80), 1.0)];
+    assert_eq!(
+        ones,
+        written.into_iter().chain(again).collect::<Vec<_>>(),
+        "ended after the hour, then a run of its own"
+    );
+    let counted = f.metrics().query().name("sizes").since(DAY).aggregate(Op::Percentile(30.0)).unwrap();
+    assert_eq!((counted[0].buckets[0].value, counted[0].buckets[0].samples), (between((0.9170040432046711, 1.0)), 6));
+}
+
+#[test]
+fn a_grid_and_bounds_a_program_gave_meet_at_the_bounds_both_have() {
+    let f = fixture();
+    let stats = f.metrics();
+    let given = stats.histogram("mixed").buckets(&[1.0, 2.0, 4.0]).open().unwrap();
+    given.record(0.5);
+    given.record(3.0);
+    stats.flush().unwrap();
+    f.pass(30 * SECOND);
+    let f = f.reopen();
+    let stats = f.metrics();
+    let grid = stats.histogram("mixed").buckets(Buckets::Exponential).open().unwrap();
+    f.pass(MINUTE);
+    grid.record(1.5);
+    grid.record(3.5);
+    stats.flush().unwrap();
+    // 1, 2 and 4 are bounds of every grid: 0.5 at most 1, 1.5 at most 2, 3 and 3.5 at most 4
+    assert_eq!(ranked(&f, "mixed", 50.0), (between((1.0, 2.0)), 4));
+    assert_eq!(ranked(&f, "mixed", 75.0), (between((2.0, 4.0)), 4));
 }

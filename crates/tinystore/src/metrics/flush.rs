@@ -14,6 +14,7 @@
 //! before.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rusqlite::params;
 
@@ -42,7 +43,7 @@ const ROLLBACK_TO: &str = "rollback to metrics_instrument";
 
 /// A series' sample of a write, with what its batch needs of its name.
 struct Sample {
-    written: Written,
+    written: Arc<Written>,
     name: i64,
     keep: i64,
     zero: Option<i64>,
@@ -75,7 +76,7 @@ impl Engine {
     /// A slot's samples, each with its name's id and keep.
     fn job(&self, plan: &Planned) -> Job {
         let samples = plan.values.iter().map(|value| {
-            let written = plan.slot.series[value.series].clone();
+            let written = Arc::clone(&value.written);
             let name = self.names.get(written.kept.name());
             let name =
                 name.ok_or_else(|| Error::internal(format!("{}: a name its instrument did not open", written.kept)))?;

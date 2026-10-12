@@ -25,6 +25,26 @@ fn a_sample_comes_back_bit_for_bit() {
 }
 
 #[test]
+fn a_histograms_bound_is_written_as_javascript_writes_it_and_one_without_is_refused() {
+    let f = fixture();
+    let now = f.now();
+    let bucket = |le: &str| Series::histogram("rpc_ms_bucket").label("le", le).sample(now, 1.0);
+    f.metrics().ingest(&[bucket("5.0"), bucket("1e3"), bucket("+Inf"), bucket("0.250")]).unwrap();
+    // the same bound however it is spelt is one series
+    f.metrics().ingest(&[bucket("5").sample(now - SECOND, 0.0)]).unwrap();
+    let read = f.metrics().query().name("rpc_ms_bucket").since(HOUR).read().unwrap();
+    let mut bounds: Vec<(&str, usize)> =
+        read.iter().map(|series| (series.labels()["le"].as_str(), series.samples().len())).collect();
+    bounds.sort_unstable();
+    assert_eq!(bounds, [("+Inf", 1), ("0.25", 1), ("1000", 1), ("5", 2)]);
+    for refused in [Series::histogram("rpc_ms_bucket").sample(now, 1.0), bucket("five"), bucket("-1"), bucket("NaN")] {
+        let error = f.metrics().ingest(&[refused]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        assert!(error.to_string().contains("its bound, `le`"), "{error}");
+    }
+}
+
+#[test]
 fn a_sample_survives_a_restart() {
     let f = fixture();
     let written = f.gauge("cpu", 600, SECOND, |index| index as f64 / 4.0).label("host", "web-1");

@@ -23,7 +23,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use super::aggregate::{Aggregate, Op, Shape};
+use super::aggregate::{Aggregate, Asking, Op, Shape};
 use super::engine::Engine;
 use super::explain::Plan;
 use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
@@ -139,6 +139,7 @@ pub struct Query {
     every: Option<Duration>,
     by: Option<Vec<String>>,
     without: Option<Vec<String>>,
+    estimate: bool,
 }
 
 impl fmt::Debug for Query {
@@ -152,6 +153,7 @@ impl fmt::Debug for Query {
             .field("every", &self.every)
             .field("by", &self.by)
             .field("without", &self.without)
+            .field("estimate", &self.estimate)
             .finish()
     }
 }
@@ -160,6 +162,9 @@ impl fmt::Debug for Query {
 /// `__name__`, and its range in unix milliseconds, `[from, to)`.
 #[derive(Clone, Debug)]
 pub(super) struct Asked {
+    /// The name it asked for, which a timer's query reads as the series the
+    /// timer writes.
+    pub(super) name: Option<String>,
     pub(super) conditions: Vec<(String, Condition)>,
     pub(super) from: i64,
     pub(super) to: i64,
@@ -179,6 +184,7 @@ impl Query {
             every: None,
             by: None,
             without: None,
+            estimate: false,
         }
     }
 
@@ -237,6 +243,14 @@ impl Query {
         self
     }
 
+    /// A timer's percentile also gives a point between the bounds of the
+    /// bucket of its spread that holds the rank, interpolated as Prometheus'
+    /// `histogram_quantile` does: an estimate, which no measurement gave.
+    pub fn estimate(mut self) -> Self {
+        self.estimate = true;
+        self
+    }
+
     /// The samples of each series the query finds, in its range: a series
     /// without one is left out. Past a bound of a read it is a `limit`
     /// error, naming the bound, never fewer series or samples.
@@ -290,13 +304,22 @@ impl Query {
 
     /// An aggregate's buckets and groups, checked.
     fn shape(&self, op: Op) -> Result<Shape> {
-        Shape::of(op, self.every, self.by.as_deref(), self.without.as_deref())
+        let asking = Asking {
+            every: self.every,
+            by: self.by.as_deref(),
+            without: self.without.as_deref(),
+            name: self.name.as_deref(),
+            estimate: self.estimate,
+        };
+        Shape::of(op, asking)
     }
 
     /// Refuses what only an aggregate takes, for a call that is none.
     fn plain(&self, call: &str) -> Result<()> {
-        if self.every.is_some() || self.by.is_some() || self.without.is_some() {
-            return Err(Error::invalid(format!("`every`, `by` and `without` are an aggregate's: {call} takes none")));
+        if self.every.is_some() || self.by.is_some() || self.without.is_some() || self.estimate {
+            return Err(Error::invalid(format!(
+                "`every`, `by`, `without` and `estimate` are an aggregate's: {call} takes none"
+            )));
         }
         Ok(())
     }
@@ -333,7 +356,7 @@ impl Query {
         if conditions.len() > MOST_LABELS {
             return Err(Error::invalid(format!("a query of more than {MOST_LABELS} conditions")));
         }
-        Ok(Asked { conditions, from, to, now })
+        Ok(Asked { name: self.name.clone(), conditions, from, to, now })
     }
 }
 

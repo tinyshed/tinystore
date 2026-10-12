@@ -14,14 +14,19 @@
 //! time the series is known to have been zero, so that a reset reads as one
 //! even when the new count passed the old; it ends once nothing was sent for
 //! an hour, its slot freed unless a handle holds it.
+//!
+//! A timer's exponential grid counts each interval apart, and an interval is
+//! a run of its own: it begins with its zero at the first write that finds a
+//! value in it, and ends once none fell in it for an hour.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::buckets::Bounds;
+use super::buckets::{Bounds, MOST_BOUNDS, bucket_of};
 use super::engine::lock;
-use super::labels::{Kept, OVERFLOW};
+use super::grid::{Bin, FINEST};
+use super::labels::{BIN, Kept, OVERFLOW};
 use super::series::{Kind, Labels};
 use crate::{Error, Result};
 
@@ -97,8 +102,9 @@ pub(super) struct Slot {
     /// Its labels beside its instrument's name.
     pub(super) kept: Kept,
     /// The series it writes: a counter's or a gauge's own, a timer's count,
-    /// sum, longest and buckets, `+Inf` last.
-    pub(super) series: Vec<Written>,
+    /// sum, longest and given buckets, `+Inf` last; a grid's intervals are
+    /// its run's.
+    pub(super) series: Vec<Arc<Written>>,
     /// A counter's sum of what calls added since the last write, or a
     /// gauge's value: the bits of a float.
     pending: AtomicU64,
@@ -125,8 +131,10 @@ struct Measured {
     sum: f64,
     longest: f64,
     any: bool,
-    /// Each bucket's own count, not yet summed into `le`'s.
+    /// Each given bound's bucket's own count, not yet summed into `le`'s.
     buckets: Vec<u64>,
+    /// How many values fell in each interval of the finest grid.
+    bins: BTreeMap<Bin, u64>,
 }
 
 impl Measured {
@@ -134,7 +142,8 @@ impl Measured {
     /// call meanwhile always finds its bucket.
     fn take(&mut self) -> Measured {
         let buckets = vec![0; self.buckets.len()];
-        let taken = Measured { buckets: std::mem::replace(&mut self.buckets, buckets), ..*self };
+        let buckets = std::mem::replace(&mut self.buckets, buckets);
+        let taken = Measured { buckets, bins: std::mem::take(&mut self.bins), ..*self };
         (self.count, self.sum, self.longest, self.any) = (0, 0.0, 0.0, false);
         taken
     }
@@ -150,14 +159,98 @@ pub(super) struct Run {
     count: u64,
     sum: f64,
     buckets: Vec<u64>,
+    bins: Bins,
     /// The time of the last write that found a call.
     active_at: i64,
     /// What a write last refused it for, said once.
     refusal: Option<String>,
 }
 
+/// The intervals of an exponential grid a run counts, at one schema.
+#[derive(Debug)]
+struct Bins {
+    schema: u8,
+    live: BTreeMap<Bin, Counted>,
+}
+
+impl Default for Bins {
+    fn default() -> Bins {
+        Bins { schema: FINEST, live: BTreeMap::new() }
+    }
+}
+
+/// An interval's run: how many values fell in it, the zero it begins with
+/// until a write takes it, the last write that found a value in it, and its
+/// series.
+#[derive(Debug)]
+struct Counted {
+    total: u64,
+    zero: Option<i64>,
+    active_at: i64,
+    written: Arc<Written>,
+}
+
+impl Bins {
+    /// Counts a write's values, taken at the finest schema, into the run's
+    /// intervals, and gives every live one's total. A new interval begins
+    /// with its zero at `before`, the write before. Past `MOST_BOUNDS`
+    /// intervals the schema lowers: the finer intervals end where they are,
+    /// and the coarser begin at zero with this write's values, so that no
+    /// value is counted twice. One nothing fell in for an hour ends.
+    fn count(&mut self, slot: &Slot, taken: &BTreeMap<Bin, u64>, now: i64, before: i64) -> Vec<Value> {
+        if self.schema > 0 && self.past_bound(taken) {
+            self.lower(taken);
+        }
+        for (bin, count) in taken {
+            let bin = bin.at(self.schema);
+            if let Some(counted) = self.live.get_mut(&bin) {
+                counted.total += count;
+                counted.active_at = now;
+            } else if let Some(written) = slot.interval(bin) {
+                self.live.insert(bin, Counted { total: *count, zero: Some(before), active_at: now, written });
+            }
+        }
+        let values = self.live.values().map(|counted| Value {
+            written: Arc::clone(&counted.written),
+            zero: counted.zero,
+            value: counted.total as f64,
+        });
+        let values = values.collect();
+        self.live.retain(|_, counted| now.saturating_sub(counted.active_at) < IDLE);
+        values
+    }
+
+    /// Whether a write's values would hold the run past its bound of
+    /// intervals at its schema.
+    fn past_bound(&self, taken: &BTreeMap<Bin, u64>) -> bool {
+        let fresh: BTreeSet<Bin> =
+            taken.keys().map(|bin| bin.at(self.schema)).filter(|bin| !self.live.contains_key(bin)).collect();
+        self.live.len() + fresh.len() > MOST_BOUNDS
+    }
+
+    /// Ends every live interval and lowers the schema until a write's values
+    /// alone fit, or to one interval a doubling.
+    fn lower(&mut self, taken: &BTreeMap<Bin, u64>) {
+        self.live.clear();
+        while self.schema > 0 {
+            self.schema -= 1;
+            let distinct: BTreeSet<Bin> = taken.keys().map(|bin| bin.at(self.schema)).collect();
+            if distinct.len() <= MOST_BOUNDS {
+                break;
+            }
+        }
+    }
+
+    /// A write took every live interval's zero.
+    fn written(&mut self) {
+        for counted in self.live.values_mut() {
+            counted.zero = None;
+        }
+    }
+}
+
 impl Slot {
-    fn new(kept: Kept, series: Vec<Written>, form: Form, buckets: usize) -> Slot {
+    fn new(kept: Kept, series: Vec<Arc<Written>>, form: Form, buckets: usize) -> Slot {
         let measured =
             form.measures().then(|| Mutex::new(Measured { buckets: vec![0; buckets], ..Measured::default() }));
         Slot {
@@ -222,8 +315,24 @@ impl Slot {
         measured.sum += value;
         measured.longest = if measured.any { measured.longest.max(value) } else { value };
         measured.any = true;
-        if let Some(bucket) = bounds.map(|bounds| bounds.bucket_of(value)) {
-            measured.buckets[bucket] += 1;
+        match bounds {
+            Some(Bounds::Given(bounds)) => measured.buckets[bucket_of(bounds, value)] += 1,
+            Some(Bounds::Exponential) => *measured.bins.entry(Bin::of(value, FINEST)).or_default() += 1,
+            None => {}
+        }
+    }
+
+    /// The series of an interval of its grid: its `_bucket`, the interval in
+    /// the store's label `__bin`; none for labels that leave it no room,
+    /// said once.
+    fn interval(&self, bin: Bin) -> Option<Arc<Written>> {
+        let name = format!("{}_bucket", self.kept.name());
+        match self.kept.derived(&name, Some((BIN, &bin.label()))) {
+            Ok(kept) => Some(Arc::new(Written::of(kept, Kind::Histogram))),
+            Err(error) => {
+                self.refuse(&format!("an interval of its buckets: {error}"));
+                None
+            }
         }
     }
 
@@ -340,12 +449,12 @@ impl Instrument {
             if kind == Kind::Histogram {
                 let labels = self.bounds.as_ref().map(Bounds::labels).unwrap_or_default();
                 for le in labels {
-                    series.push(Written::of(kept.derived(&name, Some(("le", &le)))?, kind));
+                    series.push(Arc::new(Written::of(kept.derived(&name, Some(("le", &le)))?, kind)));
                 }
             } else if name == self.name {
-                series.push(Written::of(kept.clone(), kind));
+                series.push(Arc::new(Written::of(kept.clone(), kind)));
             } else {
-                series.push(Written::of(kept.derived(&name, None)?, kind));
+                series.push(Arc::new(Written::of(kept.derived(&name, None)?, kind)));
             }
         }
         Ok(Slot::new(kept, series, self.form, buckets))
@@ -434,10 +543,9 @@ pub(super) struct Planned {
 }
 
 /// A series' sample of a write.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Value {
-    /// The series among its slot's.
-    pub(super) series: usize,
+    pub(super) written: Arc<Written>,
     /// The zero its run begins with, at this time.
     pub(super) zero: Option<i64>,
     pub(super) value: f64,
@@ -511,7 +619,8 @@ impl Totals {
         let mut registry = lock(&self.registry);
         registry.claim(name, &[(name.to_owned(), Kind::Gauge)])?;
         let kept = Kept::of(name, &Labels::new())?;
-        let slot = Arc::new(Slot::new(kept.clone(), vec![Written::of(kept, Kind::Gauge)], Form::Gauge, 0));
+        let written = vec![Arc::new(Written::of(kept.clone(), Kind::Gauge))];
+        let slot = Arc::new(Slot::new(kept, written, Form::Gauge, 0));
         registry.readers.insert(name.to_owned(), Arc::new(Reader { slot, read, said: Mutex::default() }));
         Ok(())
     }
@@ -594,6 +703,7 @@ impl Totals {
                 Outcome::Written => {
                     run.zero = None;
                     run.refusal = None;
+                    run.bins.written();
                 }
                 Outcome::Refused(error) => {
                     let why = error.to_string();
@@ -655,7 +765,8 @@ fn gauge(slot: &Arc<Slot>) -> Option<Planned> {
         return None;
     }
     let value = f64::from_bits(slot.pending.load(Ordering::Acquire));
-    Some(Planned { slot: Arc::clone(slot), values: vec![Value { series: 0, zero: None, value }], longest: None })
+    let values = vec![Value { written: Arc::clone(&slot.series[0]), zero: None, value }];
+    Some(Planned { slot: Arc::clone(slot), values, longest: None })
 }
 
 /// A counter's run total: what calls added since the write before taken in,
@@ -674,7 +785,7 @@ fn counted(slot: &Arc<Slot>, now: i64, zero: i64, ended: &mut Vec<Arc<Slot>>) ->
     } else {
         slot.refuse("a counter's total past what a float holds");
     }
-    let values = vec![Value { series: 0, zero: run.zero, value: run.total }];
+    let values = vec![Value { written: Arc::clone(&slot.series[0]), zero: run.zero, value: run.total }];
     end_if_idle(slot, &mut run, now, ended);
     Some(Planned { slot: Arc::clone(slot), values, longest: None })
 }
@@ -695,15 +806,19 @@ fn measured(slot: &Arc<Slot>, now: i64, zero: i64, ended: &mut Vec<Arc<Slot>>) -
     for (total, more) in run.buckets.iter_mut().zip(&taken.buckets) {
         *total += more;
     }
-    let zero = run.zero;
-    let mut values =
-        vec![Value { series: 0, zero, value: run.count as f64 }, Value { series: 1, zero, value: run.sum }];
-    values.extend(taken.any.then_some(Value { series: 2, zero: None, value: taken.longest }));
+    let begins = run.zero;
+    let series = |index: usize| Arc::clone(&slot.series[index]);
+    let mut values = vec![
+        Value { written: series(0), zero: begins, value: run.count as f64 },
+        Value { written: series(1), zero: begins, value: run.sum },
+    ];
+    values.extend(taken.any.then(|| Value { written: series(2), zero: None, value: taken.longest }));
     let mut cumulative = 0;
     for (bucket, count) in run.buckets.iter().enumerate() {
         cumulative += count;
-        values.push(Value { series: 3 + bucket, zero, value: cumulative as f64 });
+        values.push(Value { written: series(3 + bucket), zero: begins, value: cumulative as f64 });
     }
+    values.extend(run.bins.count(slot, &taken.bins, now, zero));
     end_if_idle(slot, &mut run, now, ended);
     Some(Planned { slot: Arc::clone(slot), values, longest: taken.any.then_some(taken.longest) })
 }

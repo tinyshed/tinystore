@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 use super::*;
 use crate::ErrorKind;
 use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
+use crate::metrics::labels::Kept;
 use crate::metrics::{Series, maintain};
 
 /// `series` with a sample of each value, a `step` apart from `first`.
@@ -11,17 +12,22 @@ fn run(mut series: Series, first: SystemTime, step: Duration, values: impl IntoI
     series
 }
 
+/// A bucket's number, which every `op` but a timer's percentile gives.
+pub(super) fn number(bucket: &Bucket) -> f64 {
+    bucket.value.exact().unwrap_or_else(|| panic!("a number, where {bucket:?}"))
+}
+
 /// The values of the one group an aggregate answered.
 fn values(answer: &[Aggregate]) -> Vec<f64> {
     assert_eq!(answer.len(), 1, "{answer:?}");
-    answer[0].buckets.iter().map(|bucket| bucket.value).collect()
+    answer[0].buckets.iter().map(number).collect()
 }
 
 /// Each group as its name and labels, and its buckets' values.
 fn groups(answer: &[Aggregate]) -> Vec<(String, Vec<f64>)> {
     let group = |group: &Aggregate| {
         let labels: Vec<String> = group.labels.iter().map(|(label, value)| format!("{label}={value}")).collect();
-        let values = group.buckets.iter().map(|bucket| bucket.value).collect();
+        let values = group.buckets.iter().map(number).collect();
         (format!("{}{{{}}}", group.name, labels.join(",")), values)
     };
     answer.iter().map(group).collect()
@@ -75,7 +81,7 @@ fn a_restart_counts_the_same_across_blocks() {
         }
         let grew = |from: SystemTime, to: SystemTime| {
             let answer = f.metrics().query().name("jobs_total").from(from).to(to).aggregate(Op::Increase).unwrap();
-            answer.first().map_or((0.0, 0), |group| (group.buckets[0].value, group.buckets[0].resets))
+            answer.first().map_or((0.0, 0), |group| (number(&group.buckets[0]), group.buckets[0].resets))
         };
         let end = f.now();
         assert_eq!(grew(first, end), (5.0, 1), "step {step:?}, packed: {packed}");
@@ -116,7 +122,7 @@ fn only_a_step_across_an_empty_bucket_is_a_gap() {
         "an `every` finer than the samples marks every bucket a step enters"
     );
     let since = f.metrics().query().name("silent").since(HOUR).aggregate(Op::Increase).unwrap();
-    assert_eq!((since[0].buckets[0].value, since[0].buckets[0].gap), (200.0, true));
+    assert_eq!((number(&since[0].buckets[0]), since[0].buckets[0].gap), (200.0, true));
     assert_eq!(gaps("recent", HOUR, None), [false], "its step began in the hour before the range");
     let moved = f.metrics().query().name("silent").since(HOUR).aggregate(Op::Count).unwrap();
     assert!(!moved[0].buckets[0].gap, "a count takes no step");
@@ -135,7 +141,7 @@ fn a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took() {
         }
         let ask = |name: &str, op: Op| -> Vec<(f64, bool)> {
             let query = f.metrics().query().name(name).from(start - DAY).to(f.now() + MINUTE).every(6 * HOUR);
-            query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (bucket.value, bucket.partial)).collect()
+            query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (number(bucket), bucket.partial)).collect()
         };
         // six-hour buckets begin at 12:00 and 18:00; the name keeps from 08:00 the day before, and cuts none:
         // the last is the one the clock has not finished
@@ -165,7 +171,7 @@ fn a_bucket_the_range_cut_or_the_clock_has_not_finished_is_partial() {
     f.metrics().ingest(&[counted]).unwrap();
     let query = || f.metrics().query().name("requests");
     let buckets = |query: crate::metrics::Query, op: Op| -> Vec<(f64, bool)> {
-        query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (bucket.value, bucket.partial)).collect()
+        query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (number(bucket), bucket.partial)).collect()
     };
     // the hour before the clock, whole, and the millisecond of the next that holds the sample taken now
     let hour = buckets(query().since(HOUR).every(5 * MINUTE), Op::Rate);
@@ -239,7 +245,7 @@ fn last_adds_only_series_with_a_sample_in_the_bucket() {
     // alone, a series' first and last keep their bits
     f.metrics().ingest(&[Series::gauge("zero").sample(first, -0.0).sample(first + MINUTE, 1.5)]).unwrap();
     let first_of = f.metrics().query().name("zero").since(HOUR).aggregate(Op::First).unwrap();
-    assert_eq!(first_of[0].buckets[0].value.to_bits(), (-0.0_f64).to_bits());
+    assert_eq!(number(&first_of[0].buckets[0]).to_bits(), (-0.0_f64).to_bits());
 }
 
 #[test]
@@ -275,7 +281,7 @@ fn a_block_inside_a_bucket_answers_as_its_samples_would() {
     for (head, blocks) in from_the_head.iter().zip(&from_blocks) {
         let bits = |answer: &[Aggregate]| -> Vec<(u64, u64, u64)> {
             let buckets = answer.iter().flat_map(|group| &group.buckets);
-            buckets.map(|bucket| (bucket.value.to_bits(), bucket.samples, bucket.resets)).collect()
+            buckets.map(|bucket| (number(bucket).to_bits(), bucket.samples, bucket.resets)).collect()
         };
         assert_eq!(bits(&head.4), bits(&blocks.4), "{:?}", (head.0, head.1, head.2, head.3));
         assert_eq!(head.4, blocks.4);
@@ -285,7 +291,7 @@ fn a_block_inside_a_bucket_answers_as_its_samples_would() {
     let mut exact = crate::metrics::exact::Exact::ZERO;
     read[0].samples().iter().for_each(|sample| assert!(exact.add_float(sample.value)));
     let hour = &from_blocks.iter().find(|answer| answer.3 == Op::Sum && answer.2 == Some(HOUR)).unwrap().4;
-    assert_eq!((hour[0].buckets[0].value, hour[0].buckets[0].samples), (exact.round(), 240));
+    assert_eq!((number(&hour[0].buckets[0]), hour[0].buckets[0].samples), (exact.round(), 240));
 }
 
 #[test]
@@ -303,10 +309,10 @@ fn a_rate_is_a_second_of_what_the_range_leaves_of_a_bucket_and_a_bucket_begins_o
     let begins: Vec<SystemTime> = cut[0].buckets.iter().map(|bucket| bucket.at).collect();
     assert_eq!(begins, [ten + 5 * MINUTE, ten + 10 * MINUTE], "where the bucket begins, not where the range cut it");
     let one = query().from(ten + 7 * MINUTE).to(ten + 12 * MINUTE).aggregate(Op::Count).unwrap();
-    assert_eq!((one[0].buckets[0].at, one[0].buckets[0].value), (ten + 7 * MINUTE, 20.0), "one bucket, the range");
+    assert_eq!((one[0].buckets[0].at, number(&one[0].buckets[0])), (ten + 7 * MINUTE, 20.0), "one bucket, the range");
     let all = query().aggregate(Op::Count).unwrap();
     assert_eq!(
-        (all[0].buckets[0].at, all[0].buckets[0].value),
+        (all[0].buckets[0].at, number(&all[0].buckets[0])),
         (f.now() - 30 * DAY, 240.0),
         "from where the name keeps"
     );
@@ -379,14 +385,55 @@ fn an_answer_past_its_buckets_is_a_limit() {
 }
 
 #[test]
+fn a_gauges_percentile_is_the_sample_at_its_nearest_rank_among_every_series_of_its_group() {
+    let f = fixture();
+    let now = f.now();
+    // two hosts over the hour before now: a writes 0, 0.5, 1 …, b 1000, 1001 …
+    let host = |host: &str, value: fn(usize) -> f64| f.gauge("cpu", 240, 15 * SECOND, value).label("host", host);
+    f.metrics().ingest(&[host("a", |index| index as f64 * 0.5), host("b", |index| 1000.0 + index as f64)]).unwrap();
+    let hour = || f.metrics().query().name("cpu").from(now - HOUR).to(now + SECOND);
+    let rank = |percent| values(&hour().aggregate(Op::Percentile(percent)).unwrap())[0];
+    // of 480 samples the 240th is a's greatest, and the 241st b's least
+    assert_eq!((rank(50.0), rank(50.1), rank(100.0), rank(0.001)), (119.5, 1000.0, 1239.0, 0.0));
+    let by_host = groups(&hour().by(&["host"]).aggregate(Op::Percentile(50.0)).unwrap());
+    assert_eq!(by_host, [("cpu{host=a}".to_owned(), vec![59.5]), ("cpu{host=b}".to_owned(), vec![1119.0])]);
+    let every = |percent| values(&hour().every(30 * MINUTE).aggregate(Op::Percentile(percent)).unwrap());
+    let from_the_head = (every(50.0), every(99.0));
+    // a percentile reads every sample, never a summary, and so does its plan
+    assert_eq!(maintain(&f.store).unwrap().blocks, 2);
+    assert_eq!((every(50.0), every(99.0)), from_the_head);
+    assert_eq!(hour().every(HOUR).explain(Op::Percentile(50.0)).unwrap().decoded, 480);
+    let samples = hour().aggregate(Op::Percentile(50.0)).unwrap()[0].buckets[0].samples;
+    assert_eq!(samples, 480);
+    // a sample keeps its bits, -0 below +0
+    f.metrics().ingest(&[Series::gauge("zero").sample(now - MINUTE, 0.0).sample(now - SECOND, -0.0)]).unwrap();
+    let least = f.metrics().query().name("zero").since(HOUR).aggregate(Op::Percentile(50.0)).unwrap();
+    assert_eq!(number(&least[0].buckets[0]).to_bits(), (-0.0_f64).to_bits());
+    let counter = f.metrics().ingest(&[Series::counter("hits").sample(now, 1.0)]);
+    counter.unwrap();
+    let error = f.metrics().query().name("hits").since(HOUR).aggregate(Op::Percentile(50.0)).unwrap_err();
+    assert!(error.to_string().contains("p50 of a counter"), "{error}");
+    for refused in [0.0, 100.5, f64::NAN, 1e-16] {
+        let error = hour().aggregate(Op::Percentile(refused)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{refused}: {error}");
+    }
+    assert_eq!(Op::Percentile(99.9).to_string(), "p99.9");
+}
+
+#[test]
 fn an_overflowed_set_is_a_group_of_its_own_whatever_a_query_groups_by() {
     let kept = |pairs: &[(&str, &str)]| {
         Kept::read(pairs.iter().map(|(label, value)| ((*label).to_owned(), (*value).to_owned())).collect()).unwrap()
     };
     let routed = kept(&[("__name__", "hits"), ("route", "/notes"), ("status", "200")]);
     let overflowed = kept(&[("__name__", "hits"), ("__overflow", "true")]);
-    let labels = |shape: &Shape, kept: &Kept| -> Vec<String> { shape.group_of(kept).1.into_keys().collect() };
-    let by = |by: Option<&[String]>, without: Option<&[String]>| Shape::of(Op::Increase, None, by, without).unwrap();
+    let labels = |shape: &Shape, kept: &Kept| -> Vec<String> {
+        let found = Found { id: 1, kind: Kind::Counter, kept: kept.clone() };
+        shape.group_of(&found).unwrap().1.into_keys().collect()
+    };
+    let by = |by: Option<&[String]>, without: Option<&[String]>| {
+        Shape::of(Op::Increase, Asking { by, without, ..Asking::default() }).unwrap()
+    };
     let route = ["route".to_owned()];
     assert_eq!(labels(&by(None, None), &routed), Vec::<String>::new());
     assert_eq!(labels(&by(None, None), &overflowed), ["__overflow"]);

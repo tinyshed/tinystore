@@ -134,6 +134,14 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   it becomes possible: a timer without them answers its count, its sum, its
   mean and its longest, and no percentile. `exponentialBuckets(1, 2, 14)`
   gives 1, 2, 4 … 8192: the start, the factor and how many.
+- `buckets: 'exponential'`, `Buckets::Exponential` in Rust, lets the store
+  keep a timer's spread, an experiment before Prometheus' native histograms:
+  each value counts in an interval of their grid, eight a doubling, about 9%
+  wide, and an interval no value fell in costs no series. A percentile then
+  lies within one interval, with no bound to choose. Past 128 intervals a
+  set of labels the store halves the resolution, from that write on. The
+  intervals are counted each apart, under a label of the store's own, so the
+  heatmap by `le` below is not theirs yet.
 - The store adds the bound `+Inf`, so a duration past the last bound is
   counted above it rather than lost.
 - A bound is written as JavaScript's `String(n)` writes it, the fewest
@@ -226,7 +234,10 @@ stats.ingest(&[Series::gauge("cpu").label("host", "web-1").sample(at, 0.42).samp
 
 - A series is a name, a kind and its labels: `gauge`, `counter`, or
   `histogram` for the `_bucket` series of a histogram written elsewhere,
-  each with its `le`, beside its `_sum` and `_count` counters.
+  each with its `le`, beside its `_sum` and `_count` counters. An `le` is
+  written as JavaScript writes its number, whatever spelling it came in,
+  `5.0` as `5`, so that two exporters' bounds are one; a histogram's series
+  without one, a number of 0 or more or `+Inf`, is `invalid`.
 - An ingested series has one writer: two programs ingesting one counter
   under the same labels write over each other's totals, so each gives it a
   label of its own, `instance`. The instruments' totals are the store's, and
@@ -377,6 +388,11 @@ let traffic = stats.query().name("http_requests_total").since(Duration::from_hou
 
 - A query takes `read`'s conditions and range, and `every`, `op`, `by` and
   `without`. Without `every` the range is one bucket.
+- A timer's name reads the series it writes: `count` and `rate` its count's,
+  `sum` its sum's, `avg` the one over the other, `max` its longest, a
+  percentile its buckets'. A bucket in which it measured nothing counts 0 for
+  `count`, `sum` and `rate`, and is left out of `avg`, `max` and a
+  percentile, which have nothing to take.
 - Buckets are spans of `every` counted from 1970 in UTC, as records' are; a
   range that starts or ends inside one cuts it, and its `rate` divides by
   what is left. `at` is where a bucket begins. A bucket without samples is
@@ -458,7 +474,19 @@ http_requests_total   100 on 1 October, nothing since, 300 at 11:59 on 11 Octobe
   measurement.
 - A timer without `buckets` has no percentile: `invalid`, naming it.
 - `p50` through `p99.9` and any rank between: `p` and a number above 0, at
-  most 100.
+  most 100, with 15 decimals at most. The rank is the decimal the query
+  wrote: `p99.9` ranks at 999 in 1000, never at a float near 0.999.
+- A set of a timer's bounds is what its writer wrote together: in a bucket
+  of time a timer's labels hold the bounds that counted as many samples as
+  their `+Inf`. A process that measured nothing in the bucket narrows no
+  other's bounds.
+- A timer's percentile answers a block of its buckets inside one bucket of
+  time from its summary, as `increase` does; a gauge's reads every sample.
+- In Rust a percentile is `Op::Percentile(95.0)`, and a bucket's answer a
+  `Value`: `Value::Exact(v)` as every other `op` gives, or a timer's
+  `Value::Between { lower, upper, estimate }`; `.estimate()` on the query
+  asks for the estimate, which past the last bound is that bound, and with
+  no bound below it none.
 
 ### Groups
 
@@ -537,8 +565,9 @@ let read = month.explain(None)?;   // of a read
   begin, or the longer spans that divide a day for a series that writes less
   often, and each block keeps an exact summary. A bucket that holds whole
   blocks answers from their summaries, so the hours and days a dashboard
-  draws over a month decode almost nothing; a bucket finer than a block, and
-  a percentile always, decode its samples.
+  draws over a month decode almost nothing, a timer's percentile among them;
+  a bucket finer than a block, and a gauge's percentile always, decode its
+  samples.
 
 ## What a store holds
 
@@ -600,7 +629,8 @@ metrics::histogram!("http_request_ms").record(started.elapsed().as_secs_f64() * 
   one global recorder, which the crate lets be set once: a program that
   opens two stores, as a test may, records into the first.
 - The recorder's buckets are given by name, as a timer's are:
-  `store.metrics()?.recorder().buckets("http_request_ms", &[5.0, 25.0, 100.0])`.
+  `store.metrics()?.recorder().buckets("http_request_ms", &[5.0, 25.0, 100.0])`,
+  or `Buckets::Exponential`.
 - A program that uses the crate calls the store's handle something else
   than `metrics`, as this book's examples do, so that the two read apart.
 - Rust spells the rest as a builder each: `stats.gauge_func("open_tickets",
@@ -679,14 +709,14 @@ const batch = await store.metrics.poll(cursor)   // { series, cursor, expired }
 
 ## Errors
 
-| Error                | When                                                                                                                                                                                                                                                                                              | What to do                                                   |
-|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
-| `invalid`            | a bad name, label or option; a name given two kinds, two `keep`s or two sets of buckets; a negative `add` to a counter, a NaN or an infinity to any instrument; an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket with a NaN or an infinity; a counter below zero | fix the call, or ask another `op`                            |
-| `too old`, `too new` | a sample older than its name keeps or behind what its series has packed, or more than ten minutes ahead                                                                                                                                                                                           | send the time it was taken, within the window                |
-| `limit`              | a series past 100,000; an ingest past its bound; a query past a bound, which it names                                                                                                                                                                                                             | ask for less: a shorter range, a wider `every`, fewer series |
-| `corrupt`            | a read over a series whose bytes changed                                                                                                                                                                                                                                                          | `damaged`, then `delete`                                     |
-| `suspended`          | an ingest into a damaged series                                                                                                                                                                                                                                                                   | `delete` it                                                  |
-| `closed`             | the store closed                                                                                                                                                                                                                                                                                  | open it again                                                |
+| Error                | When                                                                                                                                                                                                                                                                                                                                                                | What to do                                                   |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
+| `invalid`            | a bad name, label or option; a name given two kinds, two `keep`s or two sets of buckets; a negative `add` to a counter, a NaN or an infinity to any instrument; an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket with a NaN or an infinity; a counter below zero; a histogram's series without its `le`, or buckets without `+Inf` | fix the call, or ask another `op`                            |
+| `too old`, `too new` | a sample older than its name keeps or behind what its series has packed, or more than ten minutes ahead                                                                                                                                                                                                                                                             | send the time it was taken, within the window                |
+| `limit`              | a series past 100,000; an ingest past its bound; a query past a bound, which it names                                                                                                                                                                                                                                                                               | ask for less: a shorter range, a wider `every`, fewer series |
+| `corrupt`            | a read over a series whose bytes changed                                                                                                                                                                                                                                                                                                                            | `damaged`, then `delete`                                     |
+| `suspended`          | an ingest into a damaged series                                                                                                                                                                                                                                                                                                                                     | `delete` it                                                  |
+| `closed`             | the store closed                                                                                                                                                                                                                                                                                                                                                    | open it again                                                |
 
 Every error names the series as Prometheus prints it, and the sample:
 `metrics cpu{host="web-1"}: sample at 2026-10-11T09:00:00Z: too old`. An
@@ -699,7 +729,8 @@ refuses at a write is said once, and the other instruments are written.
 |------------------------------------|---------------------------------------------------------------------------------|
 | a series                           | 128 labels with its name, 16 KiB of them; a label's name 256 B, its value 4 KiB |
 | sets of labels an instrument holds | 2000, the set without labels none of them; past them, `__overflow`              |
-| a timer's or a histogram's buckets | 128 bounds, `+Inf` added                                                        |
+| a timer's or a histogram's buckets | 128 bounds, `+Inf` added; exponential, 128 intervals a set before they halve    |
+| a percentile's rank                | above 0, at most 100, 15 decimals                                               |
 | series in a store                  | 100,000                                                                         |
 | one `ingest`                       | 10,000 samples or 4 MiB                                                         |
 | a sample's time                    | from `keep` ago to ten minutes ahead                                            |
@@ -862,6 +893,38 @@ Building the instruments raised these, which the book now settles:
 | the set without labels, opened with the instrument, as one of 2000 | it takes none of the places                                                   |
 | a timer of a thousand bounds, a series each a set of labels        | 128 bounds at most                                                            |
 
+Building the percentiles raised these:
+
+| What came up                                                                     | What the book does                                                                         |
+|----------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| a rank of 7%, which floats make 7.000000000000001 of 100 samples                 | the decimal the query wrote, 15 decimals at most                                           |
+| which bounds are one set, in a bucket of a change or of two processes            | those written together: as many samples as `+Inf`; a process idle there narrows no other's |
+| `le="5.0"` from one exporter and `le="5"` from another                           | an ingested `le` is written as JavaScript writes its number                                |
+| a timer's percentile over a month of hours                                       | answered from summaries, as `increase` is                                                  |
+| a timer's bucket in which it measured nothing                                    | 0 for `count`, `sum` and `rate`; left out of `avg`, `max` and a percentile                 |
+| Prometheus' bounds for 2^(1/2) and two more, a unit below the float nearest them | taken as Prometheus writes them, so that its native histograms merge exactly               |
+
+## Review of the percentiles, 12 October
+
+Three Haiku agents read the new calls with no other context: a newcomer
+check of 18 call sites, a blind comparison of six spellings, and a free
+review as a developer drawing latency dashboards.
+
+| They found                                                                   | What the book does                                                              |
+|------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| `value: None` for a timer's percentile, read as no data: a loop drew nothing | `Value::Exact` beside `Value::Between`, which the blind comparison chose        |
+| `.buckets(&[5.0, 10.0])` warned by clippy, since an array by value fit too   | an array by reference, a slice or a `Vec`                                       |
+| `exponential_buckets()` beside `Buckets::Exponential`                        | both kept, the first as Prometheus' `ExponentialBuckets`; each names the other  |
+| a timer's quiet bucket: zero, or missing?                                    | said: 0 for `count`, `sum` and `rate`, left out of `avg`, `max` and percentiles |
+
+The comparison chose what the book had: `'exponential'` over `'auto'`,
+`'native'` and `{ exponential: 8 }`, whose 8 it read as a factor;
+`Op::Percentile(95.0)` over `Op::P` and `Op::Quantile(0.95)`, whose scale is
+another; `estimate` over `interpolated`; and `.estimate()` on the query, one
+word for the call and the field. The free review's asks for exponential
+buckets by default and for `upper: Infinity`, which `JSON.stringify` writes
+as `null`, are in the open list.
+
 ## Free review, 11 October
 
 A third Haiku agent reviewed the first draft as a developer choosing a store
@@ -919,7 +982,15 @@ list below.
 - Buckets by a time zone's days; UTC now.
 - An aggregate's buckets as columns, as `read`'s samples are.
 - A read past 100,000 samples as an iterator, a series at a time.
-- Prometheus' native histograms.
+- Prometheus' native histograms, whose grid the exponential buckets already
+  are: a scrape's and a remote write's, and a set's buckets kept in one
+  sample.
+- Exponential buckets for a timer that names none, which a free review
+  asked for, once their cost in series is measured beside given bounds'.
+- A heatmap of an exponential timer's intervals, which `op: 'bins'` below
+  would give.
+- `upper: Infinity` over the wire and in JSON, where `JSON.stringify` writes
+  `null`.
 - A second step for a group, `across`: the sum of each host's average, the
   greatest of each series' rate, where a group now joins by the rule of its
   `op`.

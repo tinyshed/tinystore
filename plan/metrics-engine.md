@@ -150,6 +150,35 @@ is one migration, `0001`, until `v0.1.0`.
   written, 15 seconds at most, and the next run's zero keeps `increase`
   right.
 
+### Exponential buckets
+
+An experiment before the native histogram, which keeps a set's buckets in
+one sample and comes after `v0.1.0`: a timer given `Buckets::Exponential`,
+`buckets: 'exponential'`, lets the store keep its spread.
+
+- The grid is Prometheus' native histograms': the bounds 2^(i/2^schema) for
+  every integer i, an interval (bound(i − 1), bound(i)] for each, and 0 an
+  interval of its own. The bounds come from Prometheus' table for schema 3,
+  never from `pow`: three of them lie a unit in the last place below the
+  float nearest 2^(j/8), and a value on a bound falls where Prometheus puts
+  it, so that a native histogram scraped later merges with these exactly.
+- A coarser schema's bounds are every other of the finer's, the same floats,
+  so interval i of the finer lies whole in interval ⌈i/2⌉ of the coarser and
+  two resolutions merge exactly, with nothing moved across a bound.
+- A timer counts each value into the interval of schema 3 it falls in,
+  eight a doubling, about 9% wide. Each interval a value fell in is a series,
+  `_bucket{__bin="3:13"}`, its schema and its index in the store's own label,
+  counting its own values and not every value at most a bound: a cumulative
+  count changes at every bound above a value, so only counts of intervals
+  leave the empty ones without a series, and `le` keeps its meaning.
+- An interval is a run of its own: it begins with its zero at the write
+  before the one that first finds a value in it, is written at each write
+  while it lives, and ends once none fell in it for an hour.
+- A set's intervals past 128 lower the schema: the finer end where they
+  are, and the coarser begin at zero with that write's values, as a run
+  begins, so that no value is counted twice; at schema 0, one interval a
+  doubling, the spread of a float bounds them.
+
 ## Packing
 
 - Background work through `Host::every`, each minute and when the ready
@@ -281,11 +310,55 @@ bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
   `__overflow` is a group of its own. Groups are answered one at a time, so
   that the store's memory holds one group's exact sums, a fixed 35 words a
   bucket, reserved as its buckets come.
-- A gauge's percentile gathers its bucket's samples within the decode bound
-  and selects the rank without sorting them all. A timer's adds the increase
-  of each of its `_bucket` series across the group, finds the bucket holding
-  the rank, and uses only the bounds the sets of buckets share where two
-  meet.
+
+### A timer by its name
+
+- A name without series of its own whose `_count` has some is a timer's: a
+  query of it reads, in the same snapshot, the series the timer writes that
+  the call needs. `read` and `latest` give all of them, each by its own name.
+- `count` and `rate` are its count's increase, `sum` its sum's, `avg` the one
+  over the other, exact, `max` the greatest of its longest, and a percentile
+  its buckets'; `samples` is how many durations, and `resets` and `gap` its
+  count's. A bucket in which it measured nothing counts 0 for `count`, `sum`
+  and `rate`, and is left out of `avg`, `max` and a percentile, which have
+  nothing to take. Any other `op` is `invalid`, and so is one whose series the
+  timer keeps none of: a percentile without buckets, the longest of a
+  histogram a scrape brought.
+
+### Percentiles
+
+- A rank is the decimal the query wrote, `p99.9` as 999 in 1000, at most 15
+  decimals, so that no float's rounding decides which sample or bucket holds
+  it: 0.07 × 100 is 7.000000000000001 as floats, whose ceiling takes the
+  eighth sample where the seventh holds the rank.
+- A gauge's percentile gathers its bucket's samples, every series' of the
+  group, within the decode bound, and selects the rank without sorting them
+  all, ⌈rank × n⌉, `-0` before `+0`: no block answers from its summary, which
+  holds no rank.
+- A timer's percentile counts each `_bucket` series as a counter, a block
+  inside one bucket from its summary, so that hours over a month decode
+  almost nothing.
+- A member of the group is one set of the timer's labels. A writer writes
+  every bound of its set at each write, so in a bucket of time a member holds
+  the bounds whose series counted as many samples there as its `+Inf`: a
+  bound of a set written for part of that time counts fewer. The group keeps
+  the bounds every member holds, their counts added exactly, and the rank is
+  the first whose count reaches it: `upper`, and the one before it `lower`,
+  0 below the first. A member that counted no value there takes no part, so
+  that a process idle in the bucket narrows no other's bounds; one with
+  buckets and no `+Inf` there is `invalid`, its values not all counted.
+
+  ```text
+  one member's hour   +Inf 5 samples   [10, 20, 50, 100] 3 each, then [5, 25, 75, 150] 2 each
+  the bounds it holds there: +Inf alone, so the rank lies above 0 and at most Infinity
+  ```
+
+- The intervals of exponential grids join at the coarsest schema among
+  those that counted a value; beside bounds a program gave, the rank is found
+  among the bounds both have, and every grid has 0 and the powers of two.
+- `estimate` interpolates within the bucket that holds the rank as
+  Prometheus' `histogram_quantile` does, in floats: past the last bound it is
+  that bound, and with no bound below, none.
 
 ## Retention
 
@@ -348,7 +421,7 @@ density study found unjustified.
 | 2     | the codec, clocks, directories, exact summaries, payloads, packing and publication; `read` across blocks       |
 | 3     | `aggregate`: buckets, every `op`, the step rule, `gap`, `partial`, groups; `latest`; `explain`                 |
 | 4     | instruments: the engine's totals, runs and their zeros, overflow, eviction, gauges by connection; the recorder |
-| 5     | percentiles of gauges and timers; buckets and their shared bounds                                              |
+| 5     | percentiles of gauges and timers; buckets and their shared bounds; a timer by its name; exponential buckets    |
 | 6     | `names`, `labelNames`, `labelValues`, `describe`, `delete`, `damaged`                                          |
 | 7     | `protocol/metrics.wire` and the Bun SDK                                                                        |
 | 8     | fuzz targets of every parser, GATES.md's lines in Rust, the measurements above                                 |

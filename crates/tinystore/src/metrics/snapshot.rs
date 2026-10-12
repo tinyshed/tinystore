@@ -15,7 +15,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::aggregate::Shape;
+use super::aggregate::{Op, Shape};
 use super::budget::Budget;
 use super::clock::{self, Times};
 use super::codec::Point;
@@ -25,6 +25,7 @@ use super::head::{self, Chunk, Extent};
 use super::matching::{self, Found};
 use super::names::{KEEP, millis};
 use super::query::Asked;
+use super::timer;
 use super::values;
 use crate::compress::frame::Zstd;
 use crate::sqlite::sql_error;
@@ -128,6 +129,8 @@ impl Engine {
     pub(super) fn take(&self, asked: &Asked, want: Want<'_>, budget: &mut Budget) -> Result<Vec<Taken>> {
         let mut zstd = self.codecs.take();
         let taken = self.file.read(|connection| {
+            let read_as = timer::read_as(connection, asked, want)?;
+            let asked = read_as.as_ref().unwrap_or(asked);
             let found = matching::find(connection, asked, budget)?;
             let mut reading = Reading { connection, zstd: &mut zstd, budget, clocks: Vec::new() };
             found.into_iter().map(|series| reading.series(self, series, asked, want)).collect()
@@ -176,8 +179,9 @@ impl Reading<'_, '_> {
             Want::Buckets(shape) => {
                 // a head that starts before the range holds the sample a first step begins at
                 let in_head = extent.count > 0 && extent.start < window.from;
-                let before = shape.steps() && window.from > cutoff && !in_head;
-                self.blocks(id, window, Some(shape), before)
+                let op = shape.series_op(&taken.found);
+                let before = Shape::steps(op) && window.from > cutoff && !in_head;
+                self.blocks(id, window, Some((shape, op)), before)
             }
         };
         taken.blocks = blocks.map_err(|error| error.within(&taken.found.kept))?;
@@ -216,7 +220,7 @@ impl Reading<'_, '_> {
             state.head.ok_or_else(|| Error::corrupt(format!("{}: a head its state says it has", found.kept)))?;
         let chunks = head::parse(found.id, extent, &bytes).map_err(|error| error.within(&found.kept))?;
         let from = match want {
-            Want::Buckets(shape) if shape.steps() => from_the_chunk_before(&chunks, window),
+            Want::Buckets(shape) if Shape::steps(shape.series_op(found)) => from_the_chunk_before(&chunks, window),
             Want::Samples | Want::Buckets(_) => window.from,
             Want::Newest => from_the_newest_chunk(&chunks, window),
         };
@@ -227,9 +231,10 @@ impl Reading<'_, '_> {
     /// The live blocks of a series the window touches, in the order of their
     /// times, and with `before` the newest that ends before it, of which only
     /// the last sample counts. A block an aggregate's `shape` answers from
-    /// its summary is paid for by its directory alone; any other by its
-    /// samples, and by its payload's bytes before they are copied.
-    fn blocks(&mut self, id: i64, window: Window, shape: Option<&Shape>, before: bool) -> Result<Vec<Part>> {
+    /// its summary for the series' `op` is paid for by its directory alone;
+    /// any other by its samples, and by its payload's bytes before they are
+    /// copied.
+    fn blocks(&mut self, id: i64, window: Window, shape: Option<(&Shape, Op)>, before: bool) -> Result<Vec<Part>> {
         let rows = self.group_rows(if before { GROUPS_AND_BEFORE } else { GROUPS }, id, window)?;
         let mut parts = Vec::new();
         let mut carried = None;
@@ -246,7 +251,7 @@ impl Reading<'_, '_> {
                     }
                     continue;
                 }
-                let whole = shape.is_some_and(|shape| shape.holds(&block, window));
+                let whole = shape.is_some_and(|(shape, op)| shape.holds(op, &block, window));
                 parts.push(self.part(block, whole)?);
             }
         }
