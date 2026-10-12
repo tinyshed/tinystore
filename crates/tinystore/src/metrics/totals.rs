@@ -624,7 +624,8 @@ pub(super) struct Totals {
 struct Registry {
     /// By name, a timer's and a histogram's by its own.
     instruments: HashMap<String, Arc<Instrument>>,
-    readers: HashMap<String, Arc<Reader>>,
+    /// The gauges functions read, by name, a set of labels each.
+    readers: HashMap<String, Vec<Arc<Reader>>>,
     /// The names written, each by the name of the one instrument that
     /// writes it.
     writers: HashMap<String, String>,
@@ -665,14 +666,23 @@ impl Totals {
         Ok(instrument)
     }
 
-    /// A gauge read by `read` at each write.
-    pub(super) fn reader(&self, name: &str, read: Read) -> Result<()> {
+    /// A gauge of these labels read by `read` at each write: each set of
+    /// labels of a name has a function of its own, and the name no other
+    /// instrument.
+    pub(super) fn reader(&self, name: &str, labels: &Labels, read: Read) -> Result<()> {
+        let kept = Kept::of(name, labels)?;
         let mut registry = lock(&self.registry);
-        registry.claim(name, &[(name.to_owned(), Kind::Gauge)])?;
-        let kept = Kept::of(name, &Labels::new())?;
+        match registry.readers.get(name) {
+            Some(readers) if readers.iter().any(|reader| reader.slot.kept == kept) => {
+                return Err(Error::invalid(format!("{kept}: a gauge its function already reads")));
+            }
+            Some(_) => {}
+            None => registry.claim(name, &[(name.to_owned(), Kind::Gauge)])?,
+        }
         let written = vec![Arc::new(Written::of(kept.clone(), Kind::Gauge))];
         let slot = Arc::new(Slot::new(kept, written, Form::Gauge, 0));
-        registry.readers.insert(name.to_owned(), Arc::new(Reader { slot, read, said: Mutex::default() }));
+        let reader = Arc::new(Reader { slot, read, said: Mutex::default() });
+        registry.readers.entry(name.to_owned()).or_default().push(reader);
         Ok(())
     }
 
@@ -722,7 +732,7 @@ impl Totals {
         let (instruments, readers) = {
             let registry = lock(&self.registry);
             let instruments: Vec<Arc<Instrument>> = registry.instruments.values().cloned().collect();
-            (instruments, registry.readers.values().cloned().collect::<Vec<_>>())
+            (instruments, registry.readers.values().flatten().cloned().collect::<Vec<_>>())
         };
         let zero = self.last_write.swap(now, Ordering::AcqRel);
         let mut planned = Vec::new();

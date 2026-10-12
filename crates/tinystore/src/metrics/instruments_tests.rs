@@ -410,6 +410,26 @@ fn a_gauges_function_is_read_at_each_write_and_writes_nothing_when_it_fails() {
 }
 
 #[test]
+fn a_gauges_functions_read_a_set_of_labels_each_and_a_set_is_read_by_one() {
+    let f = fixture();
+    let stats = f.metrics();
+    let refused = |opened: crate::Result<()>| {
+        let error = opened.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+        error.to_string()
+    };
+    stats.gauge_func("queue_depth", || 3.0).labels(&[("queue", "emails")]).open().unwrap();
+    stats.gauge_func("queue_depth", || 5.0).labels(&[("queue", "sms")]).open().unwrap();
+    let again = refused(stats.gauge_func("queue_depth", || 7.0).labels(&[("queue", "sms")]).open());
+    assert!(again.contains("a gauge its function already reads"), "{again}");
+    refused(stats.gauge("queue_depth").open().map(drop));
+    refused(stats.gauge_func("queue_depth", || 1.0).labels(&[("__bin", "x")]).open());
+    stats.flush().unwrap();
+    assert_eq!(samples(&f, "queue_depth", &[("queue", "emails")]), [(0, 3.0)]);
+    assert_eq!(samples(&f, "queue_depth", &[("queue", "sms")]), [(0, 5.0)]);
+}
+
+#[test]
 fn a_timer_the_store_refuses_writes_none_of_its_series() {
     let f = fixture();
     let stats = f.metrics();

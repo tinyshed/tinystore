@@ -10,11 +10,13 @@ import { InvalidError } from './errors.ts'
 import {
 	Counter,
 	Gauge,
+	type GaugeFuncOptions,
 	Histogram,
 	type HistogramOptions,
 	type InstrumentOptions,
 	type Instruments,
 	type LabelValue,
+	labelsOf,
 	Timer,
 	type TimerOptions,
 } from './instruments.ts'
@@ -44,6 +46,7 @@ export {
 	Counter,
 	exponentialBuckets,
 	Gauge,
+	type GaugeFuncOptions,
 	Histogram,
 	type HistogramOptions,
 	type InstrumentLabels,
@@ -482,16 +485,21 @@ export class Metrics {
 	}
 
 	/**
-	 * A gauge whose value read gives every 15 seconds; it may be async, is
-	 * never called again while a call of it runs, and an error or an answer
-	 * that is not a number writes nothing that time, said once while it repeats.
+	 * A gauge whose value read gives every 15 seconds, of the set of labels
+	 * given; another set of the name takes a function of its own, and a set
+	 * is read by one. It may be async, is never called again while a call of
+	 * it runs, and an error or an answer that is not a number writes nothing
+	 * that time, said once while it repeats.
+	 *
+	 *     store.metrics.gaugeFunc('queue_depth', () => emails.depth(), { labels: { queue: 'emails' } })
 	 */
 	gaugeFunc(
 		name: string,
 		read: () => number | Promise<number>,
-		options: InstrumentOptions = {},
+		options: GaugeFuncOptions = {},
 	): void {
-		this.#instruments.declare(name, 'gauge', options, read)
+		const { labels, ...told } = options
+		this.#instruments.reader(name, labelsOf(labels ?? {}, false), told, read)
 	}
 
 	/** How many things took how long: their count, sum and longest in milliseconds, and with buckets their spread. */

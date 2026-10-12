@@ -504,8 +504,13 @@ instruments(S, after N+1)            ──►    applied N+2: the answer was lo
   and holds at most 16 batches unanswered, past which changes gather for the
   next. `flush()` sends what waits in a batch that asks the store to write
   its totals before it answers.
-- A flush the store cannot be reached for fails as a call does, once the
-  SDK has dialled again twice, and what it carried waits for the next send.
+- A flush the store cannot be reached for fails as a call does, once a
+  connection lost on the way was dialled again twice, and what it carried
+  waits for the next send. What the store refused since the flush before,
+  an instrument it would not open, fails the next flush `invalid`, and the
+  batches a store that started again may have counted, which the SDK
+  dropped, fail it `outcome_unknown`: a flush's success is the store's
+  confirmation of what it carried.
   A batch the store refuses as `invalid` would be refused again: the SDK
   drops it, says so once, and numbers on those after it, so that one bad
   change stops no later count.

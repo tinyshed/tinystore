@@ -13,6 +13,7 @@ import {
 	exponentialBuckets,
 	InvalidError,
 	type MetricsQuery,
+	OutcomeUnknownError,
 	open,
 	type Store,
 	UnavailableError,
@@ -21,7 +22,7 @@ import {
 import { binOf, Instruments } from '../src/instruments.ts'
 import { Metrics } from '../src/metrics.ts'
 import { bunRuntime } from '../src/runtime/bun.ts'
-import { caught, removed, ways } from './ways.ts'
+import { caught, removed, until, ways } from './ways.ts'
 
 /** The last value of each series of a name, by the labels given. */
 async function last(store: Store, name: string): Promise<Record<string, number>> {
@@ -163,7 +164,7 @@ for (const way of ways) {
 			expect(await last(store, 'measured_ms_count')).toEqual({ '{}': 2 })
 		})
 
-		test('an instrument the store refuses writes nothing and keeps no other out', async () => {
+		test('an instrument the store refuses fails the next flush, writes nothing and keeps no other out', async () => {
 			await store.metrics.ingest({
 				name: 'taken',
 				kind: 'gauge',
@@ -171,9 +172,36 @@ for (const way of ways) {
 			})
 			store.metrics.counter('taken').inc()
 			store.metrics.counter('others_total').inc()
+			expect(await caught(store.metrics.flush())).toBeInstanceOf(InvalidError)
 			await store.metrics.flush()
 			expect(await last(store, 'others_total')).toEqual({ '{}': 1 })
 			expect(await last(store, 'taken')).toEqual({ '{}': 1 })
+		})
+
+		test('a call that would take a sum past the largest number throws where the program made it', async () => {
+			const huge = store.metrics.histogram('huge_bytes')
+			huge.record(1e308)
+			expect(() => huge.record(1e308)).toThrow(InvalidError)
+			const added = store.metrics.counter('huge_total')
+			added.add(1e308)
+			expect(() => added.add(1e308)).toThrow(InvalidError)
+			await store.metrics.flush()
+			expect(await last(store, 'huge_bytes_count')).toEqual({ '{}': 1 })
+			expect(await last(store, 'huge_total')).toEqual({ '{}': 1e308 })
+		})
+
+		test("a gauge's functions read a set of labels each, and a set is read by one", async () => {
+			store.metrics.gaugeFunc('queue_depth_jobs', () => 3, { labels: { queue: 'emails' } })
+			store.metrics.gaugeFunc('queue_depth_jobs', async () => 5, { labels: { queue: 'sms' } })
+			const again = () =>
+				store.metrics.gaugeFunc('queue_depth_jobs', () => 7, { labels: { queue: 'sms' } })
+			expect(again).toThrow(InvalidError)
+			expect(() => store.metrics.gauge('queue_depth_jobs')).toThrow(InvalidError)
+			await store.metrics.flush()
+			expect(await last(store, 'queue_depth_jobs')).toEqual({
+				'{"queue":"emails"}': 3,
+				'{"queue":"sms"}': 5,
+			})
 		})
 
 		test('a call an instrument refuses throws where the program made it', () => {
@@ -335,6 +363,52 @@ test('what a program writes wrong does not compile: a duration, an op, a label i
 	}
 	expect(typeof written).toBe('function')
 })
+
+test.skipIf(library === undefined)(
+	'a flush whose batch a store that started again may have counted fails, its outcome unknown, and counts nothing twice',
+	async () => {
+		const [first, second] = [0, 1].map(() =>
+			mkdtempSync(join(tmpdir(), 'tinystore-metrics-restart-')),
+		)
+		const keeper = await open(first!, { embedded: true, library })
+		let dial = embedded(bunRuntime, first!, () => library ?? '')
+		// a connection that hears nothing: the store applies a batch whose answer never comes
+		let deaf = false
+		const dialled: Connection[] = []
+		const link = new Link(async () => {
+			const connection = await dial()
+			const read = connection.session.read.bind(connection.session)
+			connection.session.read = (bytes, length) => (deaf ? length : read(bytes, length))
+			dialled.push(connection)
+			return connection
+		})
+		const instruments = new Instruments(link)
+		const metrics = new Metrics(link, instruments)
+		const jobs = metrics.counter('restart_jobs_total')
+		jobs.inc()
+		await metrics.flush()
+		deaf = true
+		jobs.add(2)
+		const flushed = caught(metrics.flush())
+		await until(async () => (await last(keeper, 'restart_jobs_total'))['{}'] === 3)
+		// the next connection reaches a store that knows no session, as one started again does
+		dial = embedded(bunRuntime, second!, () => library ?? '')
+		deaf = false
+		dialled.at(-1)?.session.end(new Error('restarted'))
+		expect(await flushed).toBeInstanceOf(OutcomeUnknownError)
+		jobs.inc()
+		await metrics.flush()
+		const restarted = await open(second!, { embedded: true, library })
+		expect(await last(keeper, 'restart_jobs_total')).toEqual({ '{}': 3 })
+		expect(await last(restarted, 'restart_jobs_total')).toEqual({ '{}': 1 })
+		await instruments.stop()
+		await link.close()
+		await restarted.close()
+		await keeper.close()
+		await removed(first!)
+		await removed(second!)
+	},
+)
 
 test('a value falls in the interval of the grid where the store puts it', () => {
 	expect([binOf(0), binOf(1), binOf(1.05), binOf(0.99), binOf(Math.SQRT2)]).toEqual([

@@ -77,6 +77,7 @@ export {
 	type Description as MetricsDescription,
 	exponentialBuckets,
 	type Gauge,
+	type GaugeFuncOptions,
 	type Histogram,
 	type HistogramOptions,
 	type InstrumentLabels,

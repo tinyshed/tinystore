@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto'
 
 import { FailureLog, messageOf } from './background.ts'
 import type { Link } from './connection.ts'
-import { InvalidError, UnavailableError } from './errors.ts'
+import { InvalidError, OutcomeUnknownError, UnavailableError } from './errors.ts'
 import { sayOwn } from './logger.ts'
 import { LostError, type Stream } from './session.ts'
 import { type Duration, ms } from './time.ts'
@@ -41,6 +41,11 @@ export interface TimerOptions {
 
 export interface HistogramOptions extends InstrumentOptions {
 	buckets?: Buckets | undefined
+}
+
+export interface GaugeFuncOptions extends InstrumentOptions {
+	/** the set of labels its function reads; another set of the name takes a function of its own */
+	labels?: InstrumentLabels | undefined
 }
 
 /**
@@ -79,11 +84,18 @@ interface Declared {
 	overflow: LabelSet | undefined
 	/** the store refused it: its calls change nothing, said once */
 	refused: boolean
-	read: (() => unknown) | undefined
-	/** a call of its function runs: it is not called again until it ends */
+	/** a gauge functions read, one a set of labels, by the key of its labels */
+	reads: Map<string, GaugeRead> | undefined
+}
+
+/** A function that reads a gauge's set of labels. */
+interface GaugeRead {
+	labels: Record<string, string>
+	read: () => unknown
+	/** a call of it runs: it is not called again until it ends */
 	reading: boolean
-	/** the error its function last gave, said once while it repeats */
-	readFailed: string | undefined
+	/** the error it last gave, said once while it repeats */
+	failed: string | undefined
 }
 
 /** A set of labels of an instrument: its id on the stream, and a gauge's value. */
@@ -151,27 +163,23 @@ export class Instruments {
 	#sending: ReturnType<typeof setInterval> | undefined
 	#reading: ReturnType<typeof setInterval> | undefined
 	#stopped = false
+	/** What the store refused, or a restart lost, since a flush last failed with it */
+	#unreported: Error | undefined
 	readonly #failures = new FailureLog('metrics instruments', sayOwn)
 
 	constructor(link: Link) {
 		this.#link = link
 	}
 
-	/** An instrument of name, made the first time; another form or other options than it has are refused. */
-	declare(name: string, form: Form, options: HistogramOptions, read?: () => unknown): Declared {
+	/**
+	 * An instrument of name, made the first time, read by functions when
+	 * `read` says so; another form or other options than it has are refused.
+	 */
+	declare(name: string, form: Form, options: HistogramOptions, read = false): Declared {
 		const told = toldOf(name, form, options)
 		const held = this.#declared.get(name)
-		if (held !== undefined && read !== undefined) {
-			throw new InvalidError(
-				`metrics ${name}: a gauge's function is made once while the store is open`,
-			)
-		}
 		if (held !== undefined) {
-			if (
-				held.form !== form ||
-				!sameOptions(held, told) ||
-				(read !== undefined) !== (held.read !== undefined)
-			) {
+			if (held.form !== form || !sameOptions(held, told) || read !== (held.reads !== undefined)) {
 				throw new InvalidError(
 					`metrics ${name}: another instrument or other options than it has while the store is open`,
 				)
@@ -186,14 +194,32 @@ export class Instruments {
 			sets: new Map(),
 			overflow: undefined,
 			refused: false,
-			read,
-			reading: false,
-			readFailed: undefined,
+			reads: read ? new Map() : undefined,
 		}
 		this.#declared.set(name, declared)
 		this.#byId.set(declared.id, declared)
 		this.#start()
 		return declared
+	}
+
+	/**
+	 * A gauge of name whose set of labels `read` gives every 15 seconds; each
+	 * set has a function of its own, made once while the store is open.
+	 */
+	reader(
+		name: string,
+		labels: Record<string, string>,
+		options: InstrumentOptions,
+		read: () => unknown,
+	): void {
+		const declared = this.declare(name, 'gauge', options, true)
+		const key = keyOf(labels)
+		if (declared.reads?.has(key)) {
+			throw new InvalidError(
+				`metrics ${name}: a function reads its gauge of ${JSON.stringify(labels)} already while the store is open`,
+			)
+		}
+		declared.reads?.set(key, { labels, read, reading: false, failed: undefined })
 	}
 
 	/** The set of labels of an instrument, made the first time; past the sets it holds, its __overflow. */
@@ -216,6 +242,11 @@ export class Instruments {
 		return { id: ++this.#ids, instrument, labels, overflow, touched: Date.now(), value: undefined }
 	}
 
+	/** What calls changed of a set since the last batch, if any. */
+	pending(set: LabelSet): Change | undefined {
+		return this.#pending.get(set)
+	}
+
 	/** What a call changes of a set, kept for the next batch. */
 	change(set: LabelSet): Change {
 		set.touched = Date.now()
@@ -231,7 +262,9 @@ export class Instruments {
 	 * Sends what changed now and has the store write its totals; resolves
 	 * once it has, and says whether there was anything to send it with. One
 	 * the store cannot be reached for fails as a call does, and what it
-	 * carried goes once the store can be.
+	 * carried goes once the store can be. What the store refused since the
+	 * flush before, and what a store that started again may have lost, fail
+	 * it, each once.
 	 */
 	async flush(): Promise<boolean> {
 		if (this.#declared.size === 0) {
@@ -377,10 +410,18 @@ export class Instruments {
 			changes: dropped.changes.size,
 			error,
 		})
-		for (const waiter of dropped.waiters) {
-			waiter.reject(errorOf(err))
-		}
+		this.#failWith(dropped.waiters, errorOf(err))
 		this.#renumber()
+	}
+
+	/** Fails the flushes that wait with err, or the next flush when none does. */
+	#failWith(waiters: Waiter[], err: Error): void {
+		if (waiters.length === 0) {
+			this.#unreported ??= err
+		}
+		for (const waiter of waiters.splice(0)) {
+			waiter.reject(err)
+		}
 	}
 
 	/** The stream open now, or one opened and resumed: the store says what it applied of the session. */
@@ -415,8 +456,7 @@ export class Instruments {
 	#resume(ack: ReturnType<typeof MetricsAck.decode>): void {
 		const applied = ack.applied ?? 0
 		if (ack.known === true) {
-			this.#answered = Math.max(this.#answered, applied)
-			this.#settle(applied)
+			this.#answer(ack)
 		} else {
 			const lost = this.#unanswered.filter(batch => batch.sentOn !== undefined)
 			this.#unanswered = this.#unanswered.filter(batch => batch.sentOn === undefined)
@@ -431,12 +471,14 @@ export class Instruments {
 					},
 				)
 			}
-			for (const batch of lost) {
-				for (const waiter of batch.waiters) {
-					waiter.reject(
-						new UnavailableError('the store started again; what this flush sent may be lost'),
-					)
-				}
+			if (lost.length > 0) {
+				const unknown = new OutcomeUnknownError(
+					`the store started again: ${lost.length} batches of instruments it may have counted before it stopped are dropped rather than counted twice`,
+				)
+				this.#failWith(
+					lost.flatMap(batch => batch.waiters),
+					unknown,
+				)
 			}
 			this.#answered = applied
 			this.#renumber()
@@ -489,28 +531,36 @@ export class Instruments {
 		}
 	}
 
+	/** An answer: the instruments the store refused, then the batches it applied. */
 	#answer(ack: ReturnType<typeof MetricsAck.decode>): void {
-		const applied = ack.applied ?? 0
-		this.#answered = Math.max(this.#answered, applied)
-		this.#settle(applied)
 		for (const refused of ack.refused ?? []) {
 			const instrument = this.#byId.get(refused.instrument ?? 0)
 			if (instrument !== undefined && !instrument.refused) {
 				instrument.refused = true
-				sayOwn('warn', 'metrics instrument refused', {
-					instrument: instrument.name,
-					error: refused.error ?? '',
-				})
+				const error = refused.error ?? ''
+				sayOwn('warn', 'metrics instrument refused', { instrument: instrument.name, error })
+				this.#unreported ??= new InvalidError(
+					`metrics ${instrument.name}: the store refused it: ${error}`,
+				)
 			}
 		}
+		const applied = ack.applied ?? 0
+		this.#answered = Math.max(this.#answered, applied)
+		this.#settle(applied)
 	}
 
-	/** The batches the store applied, each done. */
+	/** The batches the store applied, each done: a flush waiting resolves, or fails with what it was not told yet. */
 	#settle(applied: number): void {
 		while ((this.#unanswered[0]?.number ?? Infinity) <= applied) {
 			const done = this.#unanswered.shift()
 			for (const waiter of done?.waiters ?? []) {
-				waiter.resolve()
+				const failed = this.#unreported
+				this.#unreported = undefined
+				if (failed === undefined) {
+					waiter.resolve()
+				} else {
+					waiter.reject(failed)
+				}
 			}
 		}
 	}
@@ -519,32 +569,35 @@ export class Instruments {
 	async #readGauges(): Promise<void> {
 		const reads: Promise<void>[] = []
 		for (const instrument of this.#declared.values()) {
-			if (instrument.read !== undefined && !instrument.reading && !instrument.refused) {
-				reads.push(this.#readGauge(instrument, instrument.read))
+			for (const gauge of instrument.refused ? [] : (instrument.reads?.values() ?? [])) {
+				if (!gauge.reading) {
+					reads.push(this.#readGauge(instrument, gauge))
+				}
 			}
 		}
 		await Promise.all(reads)
 	}
 
-	async #readGauge(instrument: Declared, read: () => unknown): Promise<void> {
-		instrument.reading = true
+	async #readGauge(instrument: Declared, gauge: GaugeRead): Promise<void> {
+		gauge.reading = true
 		try {
-			const value = await read()
+			const value = await gauge.read()
 			if (typeof value !== 'number' || !Number.isFinite(value)) {
 				throw new InvalidError(`a gauge's function gave ${String(value)}, where a finite number is`)
 			}
-			const set = this.setOf(instrument, {})
+			const set = this.setOf(instrument, gauge.labels)
 			set.value = value
 			this.change(set).value = value
-			instrument.readFailed = undefined
+			gauge.failed = undefined
 		} catch (err) {
 			const error = messageOf(err)
-			if (error !== instrument.readFailed) {
-				sayOwn('warn', 'metrics gauge read failed', { instrument: instrument.name, error })
-				instrument.readFailed = error
+			if (error !== gauge.failed) {
+				const labels = JSON.stringify(gauge.labels)
+				sayOwn('warn', 'metrics gauge read failed', { instrument: instrument.name, labels, error })
+				gauge.failed = error
 			}
 		} finally {
-			instrument.reading = false
+			gauge.reading = false
 		}
 	}
 }
@@ -711,6 +764,16 @@ function keyOf(labels: Record<string, string>): string {
 	return JSON.stringify(Object.entries(labels).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
+/**
+ * What a send would carry of a set, refused at the call that would take it
+ * past the largest number, which the store would refuse with nobody told.
+ */
+function sums(declared: Declared, sum: number): void {
+	if (!Number.isFinite(sum)) {
+		throw new InvalidError(`metrics ${declared.name}: a sum past the largest number a send carries`)
+	}
+}
+
 /** A finite number an instrument takes, or invalid at once where the program made it. */
 function finite(name: string, what: string, value: number): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -751,8 +814,10 @@ export class Counter<L extends string = string> {
 		if (this.#declared.refused) {
 			return
 		}
-		const change = this.#instruments.change(this.#instruments.setOf(this.#declared, this.#labels))
-		change.add = (change.add ?? 0) + n
+		const set = this.#instruments.setOf(this.#declared, this.#labels)
+		const added = (this.#instruments.pending(set)?.add ?? 0) + n
+		sums(this.#declared, added)
+		this.#instruments.change(set).add = added
 	}
 }
 
@@ -814,7 +879,9 @@ function measured(
 	if (declared.refused) {
 		return
 	}
-	const change = instruments.change(instruments.setOf(declared, labels))
+	const set = instruments.setOf(declared, labels)
+	sums(declared, (instruments.pending(set)?.sum ?? 0) + value)
+	const change = instruments.change(set)
 	change.count++
 	change.sum += value
 	change.longest = change.count === 1 ? value : Math.max(change.longest, value)

@@ -74,6 +74,8 @@ pub struct Builder<T> {
     keep: Option<Duration>,
     buckets: Option<Buckets>,
     read: Option<Read>,
+    /// The set of labels a gauge's function reads.
+    labels: Labels,
     owner: u64,
     made: PhantomData<fn() -> T>,
 }
@@ -145,6 +147,7 @@ impl<T> Builder<T> {
             keep: None,
             buckets: None,
             read: None,
+            labels: Labels::new(),
             owner: LOCAL,
             made: PhantomData,
         }
@@ -231,6 +234,13 @@ impl Builder<Gauge> {
 }
 
 impl Builder<GaugeFunc> {
+    /// The set of labels its function reads; another set of the name takes
+    /// a function of its own, and a set is read by one.
+    pub fn labels(mut self, labels: &[(&str, &str)]) -> Self {
+        self.labels = labels.iter().map(|(label, value)| ((*label).to_owned(), (*value).to_owned())).collect();
+        self
+    }
+
     /// Opens the gauge; its function is read from the next write on, while
     /// the store is open.
     pub fn open(mut self) -> Result<()> {
@@ -281,7 +291,7 @@ impl Engine {
         self.check_kinds(&written)?;
         let instrument = match builder.read.take() {
             Some(read) => {
-                self.totals.reader(&builder.name, read)?;
+                self.totals.reader(&builder.name, &builder.labels, read)?;
                 Arc::new(Instrument::new(&builder.name, Form::Gauge, None))
             }
             None => self.totals.instrument(&builder.name, builder.form, bounds.clone())?,

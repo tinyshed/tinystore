@@ -176,7 +176,8 @@ them.
   stream of their own, in batches numbered in the SDK's session that the store applies once and in order, a lost
   answer found again when the stream opens again, and a store that started again sent nothing it may have counted;
   the Bun SDK's metrics over protocol 2 through each way a store is reached, its durations, ops and an instrument's
-  labels offered and checked as they are written.
+  labels offered and checked as they are written. After the owner's review: a gauge's function a set of labels, in
+  Rust and the SDK, and a flush failing with what the store refused or a restart may have counted.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

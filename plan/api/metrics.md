@@ -89,6 +89,9 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   written, and what it had no time to answer, rather than count it twice.
   `flush()` resolves once the store has written; when the store cannot be
   reached it fails as a call does, and what it carried goes once it can be.
+  What the store refused since the flush before, and what a store that
+  started again may have counted, fail the next flush, `invalid` and
+  `outcome_unknown`, each once.
 - In TypeScript an instrument made with its label names,
   `counter<'route' | 'status'>(…)`, takes only those in `with`, checked as
   they are written; without them it takes any. A duration's text, an `op`
@@ -186,6 +189,19 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   never a zero, and is said once while it repeats.
 - In Rust the function runs on the store's thread and must not block: a value
   that takes time to read is a gauge the program sets.
+- A function reads one set of labels, none unless given; another set of the
+  name takes a function of its own, and a set already read is `invalid`, as
+  is a name a function reads for any other instrument:
+
+```ts
+store.metrics.gaugeFunc('queue_depth', () => emails.depth(), { labels: { queue: 'emails' } })
+store.metrics.gaugeFunc('queue_depth', () => sms.depth(), { labels: { queue: 'sms' } })
+```
+
+```rust
+stats.gauge_func("queue_depth", move || emails.depth()).labels(&[("queue", "emails")]).open()?;
+stats.gauge_func("queue_depth", move || sms.depth()).labels(&[("queue", "sms")]).open()?;
+```
 
 ### How many series
 
@@ -1034,19 +1050,29 @@ offers neither; an intersection keeps them apart. Found while answering
 them: a second `gaugeFunc` of a name kept the first's function and dropped
 the second without a word; it throws.
 
-Left for the owner:
+What the owner decided the same day, after an outside reviewer's reading:
 
-| Asked                                                               | By    | Why it waits                                                                     |
-|---------------------------------------------------------------------|-------|----------------------------------------------------------------------------------|
-| `describe` merging, `null` removing a part                          | three | the owner kept `describe` replacing both on 12 October                           |
-| `flush()` answering what was dropped, overflowed or is still unsent | three | a drop is said once in the log; a value to answer is a new shape of `flush`      |
-| `buckets: 'exponential'` beside `exponentialBuckets()` as one thing | three | `'native'` would rename Rust's, the wire's and the book's experiment             |
-| a gauge's function with labels, and a way to stop one               | two   | Rust's `gauge_func` takes none either: one design for both                       |
-| a delete by a condition or of a name whole, with what it took       | two   | in the open list since the review of what a store holds                          |
-| a percentile as one number                                          | two   | a timer's answer is the bucket that holds it, exact; `estimate` asks for a point |
-| `labels` for `with`, OpenTelemetry's `forceFlush` and `shutdown`    | one   | the book's vocabulary                                                            |
-| `since` and `from`, `by` and `without` apart in the types           | one   | each pair is refused at the call                                                 |
-| a series' columns that `JSON.stringify` writes as objects           | one   | `Float64Array` keeps every value's bits                                          |
+| Asked                                                               | By    | Decided                                                                                  |
+|---------------------------------------------------------------------|-------|------------------------------------------------------------------------------------------|
+| `describe` merging, `null` removing a part                          | three | kept: `describe` replaces both                                                           |
+| `flush()` answering what was dropped, overflowed or is still unsent | three | no count, whose three causes are not one; a flush fails with what it was not told, below |
+| `buckets: 'exponential'` beside `exponentialBuckets()` as one thing | three | kept                                                                                     |
+| a gauge's function with labels, and a way to stop one               | two   | built: a function a set of labels, in Rust and the SDK, a set read by one                |
+| a delete by a condition or of a name whole, with what it took       | two   | later, a feature of its own with a dry run, a bound and what it does to instruments      |
+| a percentile as one number                                          | two   | kept: a timer's answer is the bucket that holds it, exact; `estimate` asks for a point   |
+| `labels` for `with`, OpenTelemetry's `forceFlush` and `shutdown`    | one   | kept: the book's vocabulary                                                              |
+| `since` and `from`, `by` and `without` apart in the types           | one   | kept: each pair is refused at the call                                                   |
+| a series' columns that `JSON.stringify` writes as objects           | one   | kept: `Float64Array` keeps every value's bits                                            |
+
+A flush's success means the store confirmed what it carried. What it was
+not told fails it: what the store refused since the flush before, an
+instrument it would not open, is `invalid`; the batches a store that
+started again may have counted, which the SDK dropped rather than count
+twice, are `outcome_unknown`; each fails one flush, the next. A call that
+would take what a send carries past the largest number throws `invalid`
+where the program made it, since the store would refuse it with nobody
+told. Counters of what background sends failed or left unconfirmed,
+`metrics.diagnostics()`, are in the open list.
 
 ## Free review, 11 October
 
@@ -1080,6 +1106,9 @@ list below.
 
 ## Open
 
+- `metrics.diagnostics()`: how many of the background sends failed, and how
+  many batches a restart left unconfirmed, for a program that watches its
+  own instruments beside its flushes.
 - Whether a timer has buckets unless told otherwise: a percentile then works
   at once, at a dozen series more a set of labels. The comparison chose
   buckets only when asked.
