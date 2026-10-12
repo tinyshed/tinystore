@@ -27,7 +27,12 @@ Go, TypeScript and Python, held together only by test vectors. Config gets a
 real layer system with one fixed order, because today's order depends on the
 order of arguments and nobody can tell which source wins. In Rust the logger
 is a `tracing` layer and the metrics engine a recorder for the `metrics`
-crate ([architecture.md](architecture.md)).
+crate ([architecture.md](architecture.md)). On 13 October the owner chose
+another way out of that: a config is declared in layers, each declaring
+again what the ones before it gave, in the order the program writes them,
+which `explain` shows setting by setting; only a setting marked `live`
+changes while the program runs, and its change goes over every layer
+([api/config.md](api/config.md)).
 
 **4. Go embeds the core through cgo.** cgo is the base. The project takes the
 whole build burden: Actions builds a static library for every platform and the
@@ -148,8 +153,6 @@ C6) are shapes for later.
 
 ## Open
 
-- The order of config layers: the draft in
-  [architecture.md](architecture.md#config) waits for the owner.
 - Every name in [dx.md](dx.md) marked draft waits for its engine's API book.
 - Whether the Rust API is blocking only or also offers `async` wrappers.
 - Crate names on crates.io, the npm scope and the PyPI name, checked free

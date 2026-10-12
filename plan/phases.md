@@ -26,7 +26,7 @@ them; the workspace builds and tests on three operating systems.
 - [ ] SQLite's memory in the store's budget through `SQLITE_CONFIG_MALLOC`; today only `sqlite3_memory_used` is read.
 - [x] The runtime: Store, LOCK, clock, memory budget, background work, errors, the engine registry.
 - [x] The logger in the core, a `tracing` layer; the console builds alone, without a store or SQLite.
-- [ ] Config in the core.
+- [ ] Config in the core, to its book ([api/config.md](api/config.md)), accepted on 13 October.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.

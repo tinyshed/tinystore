@@ -160,26 +160,32 @@ are; neither is a file's mode, so each has its own word.
 
 ## Config
 
-Config lives in the core and is the same in every language: the host declares
-its settings' shape (a struct, a dataclass, an object) and the core does the
-rest.
-
-The draft order, waiting for the owner, is one line:
+Config lives in the core and is the same in every language
+([api/config.md](api/config.md)): the program declares its settings as its
+language does, an object, a struct, a dataclass, and the core reads the
+layers, checks the rules and keeps the changes.
 
 ```text
-code  →  files  →  changes at run time  →  environment      (the last wins)
+declaration  →  objects in code  →  files  →  environment      (the last that gives a setting wins)
+                                                     ↑ a live setting's change goes over all of them
 ```
 
-- The order is fixed and never depends on the order of arguments.
-- The environment pins a setting: a setting it gives cannot change at run
-  time, and `update` refuses with the variable's name.
-- `explain()` says where each value came from: `limits.rps = 300 (APP_LIMITS_RPS)`.
+- The layers are read in the order the declaration writes them, each
+  declaring again what came before, and `explain()` says where each value
+  came from: `limits.rps = 300 (APP_LIMITS_RPS)`.
+- Only a setting marked `live` changes while the program runs. Its change is
+  kept in kv under the config's name, goes over every layer until `reset`,
+  and reaches every process at once.
 - A conflict is an error, never a silent winner: `X` beside `X_FILE`, a value
-  of the wrong type. Every bad variable is reported at once.
-- The core parses TOML, YAML and JSON, one parser for every language. Through a
-  sidecar, the SDK sends its own environment by prefix, since the environment
-  belongs to the application and not to the sidecar.
-- Changes at run time are kept in kv and reach every process at once.
+  of the wrong type, a key the declaration lacks. Every bad variable is
+  reported at once.
+- The core parses TOML, YAML and JSON, one parser for every language. Through
+  a sidecar, the SDK sends its own files and environment, since they belong to
+  the application and not to the sidecar.
+- The declaration reaches the core as data, so that the rules of one value,
+  `int`, `oneOf`, `duration` and `list`, are checked by the core against
+  every declaration that has the config open; a program's own `validate`
+  runs in that program.
 
 ## Logger
 
