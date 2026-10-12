@@ -87,7 +87,6 @@ const CANDIDATE: &str = "select st.version, st.max_seen, st.scale, st.head_count
     left join heads h on h.series_id = st.series_id
     where st.series_id = ?1 and st.failed_at is null";
 const UNREADY: &str = "update series_state set ready = 0 where series_id = ?1 and version = ?2";
-const SUSPEND: &str = "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
 
 impl Engine {
     /// Packs a pass's worth of the ready series, a group each, and says
@@ -142,7 +141,7 @@ impl Engine {
         });
         match staged {
             Err(error) if matches!(error.kind(), ErrorKind::Corrupt | ErrorKind::Limit) => {
-                packed.suspended += self.suspend(id, now, &error)?;
+                packed.suspended += self.suspend(id, &error.to_string())?;
                 Ok(None)
             }
             staged => staged,
@@ -170,19 +169,6 @@ impl Engine {
     fn unready(&self, candidate: &Candidate) -> Result<()> {
         let (id, version) = (candidate.id, candidate.version);
         self.file.write(0, move |tx| execute(tx, UNREADY, params![id, version], "wait for a block's worth").map(drop))
-    }
-
-    /// Stops a series taking samples, with what broke, said once; its
-    /// neighbours go on.
-    pub(super) fn suspend(&self, id: i64, now: i64, error: &Error) -> Result<u64> {
-        let failure: String = error.to_string().chars().take(1024).collect();
-        let reason = failure.clone();
-        let changed =
-            self.file.write(0, move |tx| execute(tx, SUSPEND, params![id, now, reason], "suspend a series"))?;
-        if changed == 1 {
-            tracing::warn!(target: "tinystore", series = id, failure, "metrics: a series stopped taking samples");
-        }
-        Ok(changed as u64)
     }
 }
 

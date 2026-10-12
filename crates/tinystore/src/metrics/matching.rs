@@ -120,7 +120,7 @@ fn membership(set: &Set, alias: &str, values: &mut Vec<Value>) -> String {
 }
 
 /// A matched series' row: its id, its name's kind and its label ids.
-type Row = (i64, Option<String>, Vec<u8>);
+pub(super) type Row = (i64, Option<String>, Vec<u8>);
 
 /// The series of the postings every finding set holds and no leaving set
 /// does, the first past the budget's count refused.
@@ -154,7 +154,7 @@ fn series_of(connection: &Connection, finding: &[Set], leaving: &[Set], budget: 
 
 /// Each series' labels, read from the dictionary in one statement for the
 /// whole match rather than one a series.
-fn labelled(connection: &Connection, rows: Vec<Row>, budget: &mut Budget) -> Result<Vec<Found>> {
+pub(super) fn labelled(connection: &Connection, rows: Vec<Row>, budget: &mut Budget) -> Result<Vec<Found>> {
     let mut ids = Vec::with_capacity(rows.len());
     for (_, _, label_ids) in &rows {
         ids.push(decode_ids(label_ids)?);

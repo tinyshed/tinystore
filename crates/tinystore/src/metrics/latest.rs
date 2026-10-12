@@ -32,25 +32,26 @@ impl Engine {
         let taken = self.take(asked, Want::Newest, &mut budget)?;
         let _held = self.memory.reserve(budget.bytes as u64, "metrics: the newest samples", PATIENCE)?;
         let mut zstd = self.codecs.take();
-        let answer = newest_of_each(&mut zstd, &taken, &mut budget);
+        let answer = self.newest_of_each(&mut zstd, &taken, &mut budget);
         self.codecs.give_back(zstd);
         answer
     }
-}
 
-/// Each series' newest sample in its window, in the order a read gives
-/// series; one without a sample there is left out.
-fn newest_of_each(zstd: &mut Zstd, taken: &[Taken], budget: &mut Budget) -> Result<Vec<Latest>> {
-    let mut answer = Vec::new();
-    let mut points = Vec::new();
-    for series in taken {
-        let kept = &series.found.kept;
-        let Some(newest) = newest(zstd, series, &mut points).map_err(|error| error.within(kept))? else { continue };
-        budget.take_answer(1)?;
-        let (name, labels) = (kept.name().to_owned(), kept.labels());
-        answer.push(Latest { name, labels, at: from_unix_millis(newest.at), value: newest.value });
+    /// Each series' newest sample in its window, in the order a read gives
+    /// series; one without a sample there is left out.
+    fn newest_of_each(&self, zstd: &mut Zstd, taken: &[Taken], budget: &mut Budget) -> Result<Vec<Latest>> {
+        let mut answer = Vec::new();
+        let mut points = Vec::new();
+        for series in taken {
+            let newest = newest(zstd, series, &mut points).map_err(|error| self.met(&series.found, error))?;
+            let Some(newest) = newest else { continue };
+            budget.take_answer(1)?;
+            let kept = &series.found.kept;
+            let (name, labels) = (kept.name().to_owned(), kept.labels());
+            answer.push(Latest { name, labels, at: from_unix_millis(newest.at), value: newest.value });
+        }
+        Ok(answer)
     }
-    Ok(answer)
 }
 
 /// A series' newest sample in its window: its head's when the window touches

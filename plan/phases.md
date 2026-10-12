@@ -166,6 +166,11 @@ them.
   by its own name, `count`, `sum`, `avg`, `max`, `rate` and percentiles; an ingested histogram's `le` written as
   JavaScript writes it; and, as an experiment, exponential buckets on Prometheus' native grid, an interval a series
   under the store's `__bin`, the schema lowered past 128 intervals, two resolutions merged exactly.
+  Built, slice 6: what a store holds, none of it reading a sample: `names`, each with its kind, series, unit, help,
+  `keep`, oldest and newest sample, `labelNames` and `labelValues`, by prefix, `limit` and `after`, from a name's
+  newest time on its row, an index of its series by their oldest sample and a table of its labels' values; `describe`
+  and `description`; `delete` of a series with every sample it held, whether it still reads or not; a read that meets
+  bytes that no longer read suspending the series, and `damaged`.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

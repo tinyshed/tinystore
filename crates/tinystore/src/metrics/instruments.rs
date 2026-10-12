@@ -30,7 +30,7 @@ use super::engine::Engine;
 use super::labels::Kept;
 use super::names::checked_keep;
 use super::series::{Kind, Labels};
-use super::totals::{Description, Form, Instrument, LOCAL, Read, Slot};
+use super::totals::{Form, Instrument, LOCAL, Read, Slot, Told};
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
@@ -310,12 +310,12 @@ impl Engine {
         };
         for (name, kind) in written {
             let counts = builder.form != Form::Counter && *kind == Kind::Counter && name.ends_with("_count");
-            let description = Description {
+            let description = Told {
                 unit: if counts { None } else { unit.clone() },
                 help: builder.help.clone(),
                 buckets: (*kind == Kind::Histogram).then(|| bounds.map(Bounds::text)).flatten(),
             };
-            if description != Description::default() {
+            if description != Told::default() {
                 self.totals.describe(name, description);
             }
         }

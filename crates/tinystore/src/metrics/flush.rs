@@ -23,7 +23,7 @@ use super::engine::{Engine, execute, lock};
 use super::ingest::{Batch, State, store};
 use super::names::millis;
 use super::registry;
-use super::totals::{Description, Outcome, Planned, Written};
+use super::totals::{Outcome, Planned, Told, Written};
 use crate::compress::frame::Zstd;
 use crate::sqlite::Tx;
 use crate::{Error, ErrorKind, Result};
@@ -92,7 +92,7 @@ impl Engine {
     fn write_jobs(
         &self,
         jobs: Vec<Job>,
-        described: &BTreeMap<String, Description>,
+        described: &BTreeMap<String, Told>,
         now: i64,
     ) -> (Vec<Outcome>, Option<Error>) {
         let mut outcomes = Vec::with_capacity(jobs.len());
@@ -131,7 +131,7 @@ impl Engine {
     fn write_chunk(
         &self,
         chunk: Vec<Job>,
-        described: BTreeMap<String, Description>,
+        described: BTreeMap<String, Told>,
         now: i64,
     ) -> Result<(Vec<Outcome>, bool)> {
         let samples: usize = chunk.iter().map(|job| job.as_ref().map_or(0, Vec::len)).sum();
@@ -141,7 +141,7 @@ impl Engine {
         let (zstd, done) = self.file.write(samples * SAMPLE_BYTES, move |tx| {
             let mut zstd = zstd;
             for (name, description) in &described {
-                let Description { unit, help, buckets } = description;
+                let Told { unit, help, buckets } = description;
                 execute(tx, DESCRIBE, params![name, unit, help, buckets], "describe a name")?;
             }
             let mut ready = false;

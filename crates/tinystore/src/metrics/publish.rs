@@ -288,11 +288,22 @@ fn without(points: &[Point], packed: &[Point]) -> Result<Vec<Point>> {
 /// expiry: its oldest live block's end, since a block goes whole, or its
 /// head's first sample, whichever is earlier.
 pub(super) fn due(connection: &Connection, zstd: &mut Zstd, id: i64, head_start: Option<i64>) -> Result<Option<i64>> {
-    let Some((_, oldest)) = group_row(connection, OLDEST, id, params![id])? else { return Ok(head_start) };
+    let block = oldest_block(connection, zstd, id)?;
+    Ok(earlier(block.map(|(_, end)| end), head_start))
+}
+
+/// The first and last times of a series' oldest live block.
+pub(super) fn oldest_block(connection: &Connection, zstd: &mut Zstd, id: i64) -> Result<Option<(i64, i64)>> {
+    let Some((_, oldest)) = group_row(connection, OLDEST, id, params![id])? else { return Ok(None) };
     let group = read_group(connection, zstd, &oldest)?;
-    let first_live = (0..group.blocks.len()).find(|slot| group.is_live(*slot)).map(|slot| group.blocks[slot].times.end);
-    Ok(match (first_live, head_start) {
-        (Some(block), Some(head)) => Some(block.min(head)),
-        (block, head) => block.or(head),
-    })
+    let first_live = (0..group.blocks.len()).find(|slot| group.is_live(*slot));
+    Ok(first_live.map(|slot| (group.blocks[slot].times.start, group.blocks[slot].times.end)))
+}
+
+/// The earlier of two times either may lack.
+pub(super) fn earlier(one: Option<i64>, other: Option<i64>) -> Option<i64> {
+    match (one, other) {
+        (Some(one), Some(other)) => Some(one.min(other)),
+        (one, other) => one.or(other),
+    }
 }

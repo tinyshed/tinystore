@@ -36,8 +36,15 @@ impl Engine {
         let taken = self.take(asked, Want::Buckets(shape), &mut budget)?;
         let mut held = self.memory.reserve(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
         let mut zstd = self.codecs.take();
-        let mut counting =
-            Counting { shape, asked, zstd: &mut zstd, budget: &mut budget, held: &mut held, points: Vec::new() };
+        let mut counting = Counting {
+            engine: self,
+            shape,
+            asked,
+            zstd: &mut zstd,
+            budget: &mut budget,
+            held: &mut held,
+            points: Vec::new(),
+        };
         let answer = counting.groups(taken);
         self.codecs.give_back(zstd);
         answer
@@ -46,6 +53,7 @@ impl Engine {
 
 /// One aggregate being answered from what a snapshot took.
 struct Counting<'a> {
+    engine: &'a Engine,
     shape: &'a Shape,
     asked: &'a Asked,
     zstd: &'a mut Zstd,
@@ -82,7 +90,7 @@ impl Counting<'_> {
         let mut joining = Joining::new(self.shape);
         for series in &members {
             let counted = joining.begin(series).and_then(|()| self.series(series, &mut joining));
-            counted.map_err(|error| error.within(&series.found.kept))?;
+            counted.map_err(|error| self.engine.met(&series.found, error))?;
         }
         let buckets = joining.answer()?;
         self.held.shrink(self.budget.bytes as u64);

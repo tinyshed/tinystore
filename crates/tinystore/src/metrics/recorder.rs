@@ -29,13 +29,13 @@ use super::Metrics;
 use super::buckets::Buckets;
 use super::engine::lock;
 use super::instruments::{Counter, Gauge, Histogram, MOST_HELP, MOST_UNIT};
-use super::totals::Description;
+use super::totals::Told;
 
 /// A builder told what `describe_*!` said of its name, what passes a
 /// name's bounds left out rather than refusing the name.
 macro_rules! told {
     ($builder:expr, $said:expr) => {{
-        let said: Description = $said;
+        let said: Told = $said;
         let mut builder = $builder;
         if let Some(help) = said.help.filter(|help| help.len() <= MOST_HELP) {
             builder = builder.help(help);
@@ -53,7 +53,7 @@ pub struct Recorder {
     buckets: HashMap<String, Buckets>,
     opened: Mutex<HashMap<String, Opened>>,
     /// What `describe_*!` said of a name before it was opened.
-    described: Mutex<HashMap<String, Description>>,
+    described: Mutex<HashMap<String, Told>>,
 }
 
 impl std::fmt::Debug for Recorder {
@@ -91,7 +91,7 @@ impl Recorder {
     fn opened<T>(
         &self,
         name: &str,
-        open: impl FnOnce(Description) -> crate::Result<Opened>,
+        open: impl FnOnce(Told) -> crate::Result<Opened>,
         pick: impl Fn(&Opened) -> Option<T>,
     ) -> Option<T> {
         let mut opened = lock(&self.opened);
@@ -115,7 +115,7 @@ impl Recorder {
     }
 
     fn counter(&self, name: &str) -> Option<Counter> {
-        let open = |said: Description| told!(self.stats.counter(name), said).open().map(Opened::Counter);
+        let open = |said: Told| told!(self.stats.counter(name), said).open().map(Opened::Counter);
         self.opened(name, open, |held| match held {
             Opened::Counter(counter) => Some(counter.clone()),
             _ => None,
@@ -123,7 +123,7 @@ impl Recorder {
     }
 
     fn gauge(&self, name: &str) -> Option<Gauge> {
-        let open = |said: Description| told!(self.stats.gauge(name), said).open().map(Opened::Gauge);
+        let open = |said: Told| told!(self.stats.gauge(name), said).open().map(Opened::Gauge);
         self.opened(name, open, |held| match held {
             Opened::Gauge(gauge) => Some(gauge.clone()),
             _ => None,
@@ -131,7 +131,7 @@ impl Recorder {
     }
 
     fn histogram(&self, name: &str) -> Option<Histogram> {
-        let open = |said: Description| {
+        let open = |said: Told| {
             let mut builder = told!(self.stats.histogram(name), said);
             if let Some(buckets) = self.buckets.get(name) {
                 builder = builder.buckets(buckets.clone());
@@ -147,7 +147,7 @@ impl Recorder {
     /// Keeps what `describe_*!` says of a name: for its opening, or for
     /// the next write once it is open.
     fn describe(&self, name: &KeyName, unit: Option<Unit>, help: &SharedString) {
-        let description = Description {
+        let description = Told {
             unit: unit.and_then(unit_text).map(str::to_owned),
             help: Some(help.to_string()).filter(|help| !help.is_empty()),
             buckets: None,
@@ -161,7 +161,7 @@ impl Recorder {
             }
             Some(Opened::Histogram(_)) => {
                 // a count is no unit: it takes the help alone
-                let count = Description { unit: None, ..description.clone() };
+                let count = Told { unit: None, ..description.clone() };
                 self.stats.engine.totals.describe(&format!("{name}_count"), count);
                 vec![format!("{name}_sum"), format!("{name}_max"), format!("{name}_bucket")]
             }

@@ -47,6 +47,10 @@ pub(super) struct Names {
 
 const SELECT_NAMES: &str = "select id, name, keep from names";
 const INSERT_NAME: &str = "insert into names (name, keep) values (?1, ?2) returning id";
+/// A name's unit and help in place of what they were, its row made when it
+/// has none yet.
+const DESCRIBE: &str = "insert into names (name, unit, help) values (?1, ?2, ?3)
+    on conflict (name) do update set unit = excluded.unit, help = excluded.help returning id";
 const SET_KEEP: &str = "update names set keep = ?2 where id = ?1";
 /// Moves when the next sample of each series of a name expires, by what its
 /// keep moved, through the name's postings rather than every series.
@@ -103,6 +107,21 @@ impl Names {
             }
         }
         Ok(wanted.keys().filter_map(|name| known.get(*name).map(|held| ((*name).to_owned(), held.clone()))).collect())
+    }
+
+    /// Writes a name's unit and help, the name made the first time it is
+    /// given.
+    pub(super) fn describe(&self, file: &File, name: &str, unit: String, help: String) -> Result<()> {
+        let mut known = lock(&self.known);
+        let (owned, bytes) = (name.to_owned(), name.len() + unit.len() + help.len());
+        let id = file.write(bytes, move |tx| {
+            let mut describe = tx.prepare_cached(DESCRIBE).map_err(|error| sql_error("describe a name", error))?;
+            describe
+                .query_row(params![owned, unit, help], |row| row.get(0))
+                .map_err(|error| sql_error("describe a name", error))
+        })?;
+        known.entry(name.to_owned()).or_insert(Name { id, keep: None, said: None });
+        Ok(())
     }
 }
 

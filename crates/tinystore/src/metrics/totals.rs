@@ -523,10 +523,10 @@ impl Reader {
     }
 }
 
-/// What a name says of itself at the next write: its unit, its help, a
-/// timer's bounds.
+/// What an instrument was told of a name it writes, which the next write
+/// writes: its unit, its help, a timer's bounds.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Description {
+pub(super) struct Told {
     pub(super) unit: Option<String>,
     pub(super) help: Option<String>,
     pub(super) buckets: Option<String>,
@@ -562,7 +562,7 @@ pub(super) enum Outcome {
 /// The instruments of an engine and the totals of their series.
 pub(super) struct Totals {
     registry: Mutex<Registry>,
-    described: Mutex<BTreeMap<String, Description>>,
+    described: Mutex<BTreeMap<String, Told>>,
     /// The time of the last write, or the engine's start: a run that begins
     /// after it begins with a zero there.
     last_write: AtomicI64,
@@ -627,7 +627,7 @@ impl Totals {
 
     /// Keeps what a name says of itself for the next write; a later call
     /// replaces what it gives.
-    pub(super) fn describe(&self, name: &str, description: Description) {
+    pub(super) fn describe(&self, name: &str, description: Told) {
         let mut described = lock(&self.described);
         let kept = described.entry(name.to_owned()).or_default();
         kept.unit = description.unit.or(kept.unit.take());
@@ -635,19 +635,19 @@ impl Totals {
         kept.buckets = description.buckets.or(kept.buckets.take());
     }
 
-    pub(super) fn take_descriptions(&self) -> BTreeMap<String, Description> {
+    pub(super) fn take_descriptions(&self) -> BTreeMap<String, Told> {
         std::mem::take(&mut *lock(&self.described))
     }
 
     /// Gives back what a failed write took, under what was said since.
-    pub(super) fn give_back_descriptions(&self, taken: BTreeMap<String, Description>) {
+    pub(super) fn give_back_descriptions(&self, taken: BTreeMap<String, Told>) {
         let mut described = lock(&self.described);
         for (name, description) in taken {
             let newer = described.remove(&name).unwrap_or_default();
             let unit = newer.unit.or(description.unit);
             let help = newer.help.or(description.help);
             let buckets = newer.buckets.or(description.buckets);
-            described.insert(name, Description { unit, help, buckets });
+            described.insert(name, Told { unit, help, buckets });
         }
     }
 

@@ -29,7 +29,7 @@ use super::timer;
 use super::values;
 use crate::compress::frame::Zstd;
 use crate::sqlite::sql_error;
-use crate::{Error, Result};
+use crate::{Error, ErrorKind, Result};
 
 /// The decoded clocks a snapshot keeps, since series written together share
 /// theirs.
@@ -125,28 +125,36 @@ const PAYLOAD: &str = "select body from payloads where id = ?1";
 
 impl Engine {
     /// Copies what a call needs out of one snapshot of the file: the series
-    /// its query finds, and of each the bytes the call takes.
+    /// its query finds, and of each the bytes the call takes. A series whose
+    /// bytes no longer read is suspended once the snapshot has ended, since
+    /// a suspension writes.
     pub(super) fn take(&self, asked: &Asked, want: Want<'_>, budget: &mut Budget) -> Result<Vec<Taken>> {
         let mut zstd = self.codecs.take();
+        let mut met = None;
         let taken = self.file.read(|connection| {
             let read_as = timer::read_as(connection, asked, want)?;
             let asked = read_as.as_ref().unwrap_or(asked);
             let found = matching::find(connection, asked, budget)?;
-            let mut reading = Reading { connection, zstd: &mut zstd, budget, clocks: Vec::new() };
+            let mut reading = Reading { connection, zstd: &mut zstd, budget, clocks: Vec::new(), met: &mut met };
             found.into_iter().map(|series| reading.series(self, series, asked, want)).collect()
         });
         self.codecs.give_back(zstd);
+        if let Some((id, failure)) = met {
+            // the read's own error is what its caller needs
+            self.suspend(id, &failure).ok();
+        }
         taken
     }
 }
 
-/// One snapshot being copied: its connection, the budget it pays from, and
-/// the clocks it decoded.
+/// One snapshot being copied: its connection, the budget it pays from, the
+/// clocks it decoded, and the series whose bytes it met no longer reading.
 struct Reading<'r, 'c> {
     connection: &'c Connection,
     zstd: &'r mut Zstd,
     budget: &'r mut Budget,
     clocks: Vec<(i64, Vec<Times>)>,
+    met: &'r mut Option<(i64, String)>,
 }
 
 /// A series' row of state, as a snapshot reads it.
@@ -162,36 +170,53 @@ impl Reading<'_, '_> {
         let keep = engine.names.get(found.kept.name()).map_or(KEEP, |name| name.keeps());
         let cutoff = asked.now.saturating_sub(millis(keep));
         let window = Window { from: asked.from.max(cutoff), to: asked.to, cutoff };
-        let state = self.state(&found, window, asked.now)?;
-        let (extent, trimmed) = (state.extent, state.trimmed);
-        let mut taken = Taken { found, window, trimmed, blocks: Vec::new(), head: None };
+        let mut taken = Taken { found, window, trimmed: false, blocks: Vec::new(), head: None };
+        match self.fill(&mut taken, asked.now, want) {
+            Ok(()) => Ok(taken),
+            Err(error) => Err(self.met(&taken.found, error)),
+        }
+    }
+
+    /// Names an error a series met as the series; when its bytes no longer
+    /// read, the series is kept for the suspension the snapshot's end makes.
+    fn met(&mut self, found: &Found, error: Error) -> Error {
+        if error.kind() == ErrorKind::Corrupt {
+            *self.met = Some((found.id, error.to_string()));
+        }
+        error.within(&found.kept)
+    }
+
+    /// A series' state, and the head and blocks of it the call takes.
+    fn fill(&mut self, taken: &mut Taken, now: i64, want: Want<'_>) -> Result<()> {
+        let (id, window) = (taken.found.id, taken.window);
+        let state = self.state(id, window, now)?;
+        let extent = state.extent;
+        taken.trimmed = state.trimmed;
         // every block is older than the head, so a head that ends before the
         // window leaves it nothing
         if extent.count > 0 && extent.end < window.from {
-            return Ok(taken);
+            return Ok(());
         }
         taken.head = self.head(&taken.found, state, window, want)?;
-        let id = taken.found.id;
-        let blocks = match want {
-            Want::Newest if taken.head.is_some() => Ok(Vec::new()),
-            Want::Newest => self.newest_block(id, window),
-            Want::Samples => self.blocks(id, window, None, false),
+        taken.blocks = match want {
+            Want::Newest if taken.head.is_some() => Vec::new(),
+            Want::Newest => self.newest_block(id, window)?,
+            Want::Samples => self.blocks(id, window, None, false)?,
             Want::Buckets(shape) => {
                 // a head that starts before the range holds the sample a first step begins at
                 let in_head = extent.count > 0 && extent.start < window.from;
                 let op = shape.series_op(&taken.found);
-                let before = Shape::steps(op) && window.from > cutoff && !in_head;
-                self.blocks(id, window, Some((shape, op)), before)
+                let before = Shape::steps(op) && window.from > window.cutoff && !in_head;
+                self.blocks(id, window, Some((shape, op)), before)?
             }
         };
-        taken.blocks = blocks.map_err(|error| error.within(&taken.found.kept))?;
-        Ok(taken)
+        Ok(())
     }
 
-    fn state(&mut self, found: &Found, window: Window, now: i64) -> Result<State> {
+    fn state(&mut self, id: i64, window: Window, now: i64) -> Result<State> {
         let room = self.budget.bytes_left() as i64;
         let row = self.connection.prepare_cached(STATE).and_then(|mut select| {
-            let asked = params![found.id, window.from, window.to, room, now];
+            let asked = params![id, window.from, window.to, room, now];
             let read = select.query_row(asked, |row| {
                 let extent = (row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?);
                 Ok((extent, row.get::<_, bool>(3)?, row.get::<_, Option<i64>>(4)?, row.get::<_, Option<Vec<u8>>>(5)?))
@@ -200,7 +225,7 @@ impl Reading<'_, '_> {
         });
         let row = row.map_err(|error| sql_error("read a series' state", error))?;
         let Some(((count, start, end), trimmed, length, head)) = row else {
-            return Err(Error::corrupt(format!("{}: a series without its state", found.kept)));
+            return Err(Error::corrupt("a series without its state"));
         };
         let extent =
             Extent { count: usize::try_from(count).unwrap_or(0), start: start.unwrap_or(0), end: end.unwrap_or(0) };
@@ -216,9 +241,8 @@ impl Reading<'_, '_> {
             return Ok(None);
         }
         self.budget.take_bytes(state.head_len)?;
-        let bytes =
-            state.head.ok_or_else(|| Error::corrupt(format!("{}: a head its state says it has", found.kept)))?;
-        let chunks = head::parse(found.id, extent, &bytes).map_err(|error| error.within(&found.kept))?;
+        let bytes = state.head.ok_or_else(|| Error::corrupt("a head its state says it has"))?;
+        let chunks = head::parse(found.id, extent, &bytes)?;
         let from = match want {
             Want::Buckets(shape) if Shape::steps(shape.series_op(found)) => from_the_chunk_before(&chunks, window),
             Want::Samples | Want::Buckets(_) => window.from,

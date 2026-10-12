@@ -15,7 +15,7 @@ use super::head::{self, Extent};
 use super::ingest::ready;
 use super::labels::decode_ids;
 use super::names::{KEEP, millis};
-use super::publish::{self, group_row, read_group};
+use super::publish::{self, earlier, group_row, read_group};
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
@@ -51,7 +51,7 @@ const SAVE_STATE: &str = "update series_state set version = version + 1, ready =
     head_count = ?3, head_start = ?4, head_end = ?5 where series_id = ?1";
 /// A series retention took samples of says so from then on: the step from
 /// the last of them into its oldest sample is one no read counts.
-const SET_DUE: &str = "update series_state set due = ?2, trimmed = max(trimmed, ?3) where series_id = ?1";
+const SET_DUE: &str = "update series_state set due = ?2, trimmed = max(trimmed, ?3), oldest = ?4 where series_id = ?1";
 const HAS_GROUPS: &str = "select exists (select 1 from groups where series_id = ?1)";
 const OLDEST: &str = "select id, start_ts, end_ts, clock, directory from groups
     where series_id = ?1 order by start_ts limit 1";
@@ -131,9 +131,11 @@ fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
         reclaim(tx, due.id)?;
         return Ok(Expired { reclaimed: 1, ..expired });
     }
-    let next = publish::due(tx, zstd, due.id, points.first().map(|point| point.at))?;
-    let next = next.map(|oldest| expires(oldest, due.keep));
-    execute(tx, SET_DUE, params![due.id, next, expired.samples > 0], "write when a series is due").map(drop)?;
+    let (block, head) = (publish::oldest_block(tx, zstd, due.id)?, points.first().map(|point| point.at));
+    let next = earlier(block.map(|(_, end)| end), head).map(|oldest| expires(oldest, due.keep));
+    let oldest = earlier(block.map(|(start, _)| start), head);
+    let saved = params![due.id, next, expired.samples > 0, oldest];
+    execute(tx, SET_DUE, saved, "write when a series is due").map(drop)?;
     Ok(expired)
 }
 
@@ -208,34 +210,40 @@ fn read_head(connection: &Connection, id: i64) -> Result<Option<HeadRow>> {
     row.map_err(|error| sql_error("read a series' head", error))
 }
 
-const LABEL_IDS: &str = "select label_ids from series where id = ?1";
+const SERIES_ROW: &str = "select label_ids, name from series where id = ?1";
 const UNCOUNT: &str = "update label_values set posting_count = posting_count - 1 where id = ?1";
 const UNPOST: &str = "delete from postings where label_id = ?1 and series_id = ?2";
-/// A name loses its kind with its last series, so that its next may have
-/// another.
-const FREE_KIND: &str = "update names set kind = null where id = (select name from series where id = ?1)
+const PAIR_TEXT: &str = "select name, value from label_values where id = ?1";
+/// A name's label its last series held goes; one that others hold is held
+/// by one fewer.
+const UNLABEL_LAST: &str = "delete from name_labels where name = ?1 and label = ?2 and value = ?3 and series = 1";
+const UNLABEL: &str = "update name_labels set series = series - 1 where name = ?1 and label = ?2 and value = ?3";
+/// A name loses its kind and its newest time with its last series, so that
+/// its next may have another kind.
+const FREE_KIND: &str = "update names set kind = null, newest = null where id = ?1
     and coalesce((select posting_count from label_values where name = '__name__' and value = names.name), 0) = 0";
 const UNSTATE: &str = "delete from series_state where series_id = ?1";
 const UNSERIES: &str = "delete from series where id = ?1";
 const UNUSED_PAIR: &str = "delete from label_values where id = ?1 and posting_count = 0";
 const ONE_SERIES_LESS: &str = "update store_state set series_count = series_count - 1 where id = 1";
 
-/// Removes an empty series: its postings and their counts, the pairs no
-/// other series uses, its state, its row and its place among the store's
-/// series.
+/// Removes a series and what it holds: its postings and their counts, its
+/// name's labels, the pairs no other series uses, its head, its state, its
+/// row and its place among the store's series.
 pub(super) fn reclaim(tx: &Tx<'_>, id: i64) -> Result<()> {
     // the series' pairs from its row, so that its postings go by their key:
     // the postings have no index by series, and a walk of them all would
     // grow with every series of the store
-    let encoded: Vec<u8> = query_one(tx, LABEL_IDS, params![id], "read a series' label ids")?;
+    let (encoded, name) = series_row(tx, id)?;
     let pairs = decode_ids(&encoded)?;
     for pair in &pairs {
         if execute(tx, UNPOST, params![pair, id], "remove a series' posting")? != 1 {
             return Err(Error::corrupt("a series' posting is missing"));
         }
         execute(tx, UNCOUNT, params![pair], "uncount a series' label")?;
+        unlabel(tx, name, *pair)?;
     }
-    execute(tx, FREE_KIND, params![id], "free a name's kind")?;
+    execute(tx, FREE_KIND, params![name], "free a name's kind")?;
     execute(tx, DROP_HEAD, params![id], "remove a head")?;
     execute(tx, UNSTATE, params![id], "remove a series' state")?;
     execute(tx, UNSERIES, params![id], "remove a series")?;
@@ -243,4 +251,30 @@ pub(super) fn reclaim(tx: &Tx<'_>, id: i64) -> Result<()> {
         execute(tx, UNUSED_PAIR, params![pair], "remove a pair no series uses")?;
     }
     execute(tx, ONE_SERIES_LESS, params![], "count a series less").map(drop)
+}
+
+/// A series' label ids and its name's id.
+fn series_row(tx: &Tx<'_>, id: i64) -> Result<(Vec<u8>, i64)> {
+    let row = tx
+        .prepare_cached(SERIES_ROW)
+        .and_then(|mut select| select.query_row(params![id], |row| Ok((row.get(0)?, row.get(1)?))).optional());
+    row.map_err(|error| sql_error("read a series' row", error))?
+        .ok_or_else(|| Error::corrupt("a series without its row"))
+}
+
+/// One series fewer holds a label of its name; the store's own were never
+/// counted.
+fn unlabel(tx: &Tx<'_>, name: i64, pair: i64) -> Result<()> {
+    let text = tx.prepare_cached(PAIR_TEXT).and_then(|mut select| {
+        select.query_row(params![pair], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).optional()
+    });
+    let text = text.map_err(|error| sql_error("read a series' label", error))?;
+    let (label, value) = text.ok_or_else(|| Error::corrupt("a series' label missing from the dictionary"))?;
+    if label.starts_with("__") {
+        return Ok(());
+    }
+    if execute(tx, UNLABEL_LAST, params![name, label, value], "remove a name's label")? == 0 {
+        execute(tx, UNLABEL, params![name, label, value], "uncount a name's label")?;
+    }
+    Ok(())
 }

@@ -25,7 +25,10 @@ const INSERT_PAIR: &str = "insert into label_values (name, value) values (?1, ?2
 const INSERT_SERIES: &str = "insert into series (identity, name, label_ids) values (?1, ?2, ?3) returning id";
 const INSERT_POSTING: &str = "insert into postings (label_id, series_id) values (?1, ?2)";
 const COUNT_POSTING: &str = "update label_values set posting_count = posting_count + 1 where id = ?1";
-const INSERT_STATE: &str = "insert into series_state (series_id, max_seen) values (?1, ?2)";
+/// A name's label one series more holds; the store's own are left out.
+const COUNT_NAME_LABEL: &str = "insert into name_labels (name, label, value, series) values (?1, ?2, ?3, 1)
+    on conflict (name, label, value) do update set series = series + 1";
+const INSERT_STATE: &str = "insert into series_state (series_id, name, oldest, max_seen) values (?1, ?2, ?3, ?3)";
 const ONE_SERIES_MORE: &str = "update store_state set series_count = series_count + 1 where id = 1";
 const NAME_KIND: &str = "select kind from names where id = ?1";
 const SET_KIND: &str = "update names set kind = ?2 where id = ?1";
@@ -49,7 +52,8 @@ pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<(i64, bool)> {
 }
 
 /// Registers a series: its name's kind, its dictionary pairs, the series,
-/// its postings and its state, and one series more against the bound.
+/// its postings, its name's labels and its state, and one series more
+/// against the bound.
 fn register(tx: &Tx<'_>, batch: &Batch) -> Result<i64> {
     let count: i64 = query_one(tx, SERIES_COUNT, params![], "read the count of series")?;
     if count >= MOST_SERIES {
@@ -69,7 +73,10 @@ fn register(tx: &Tx<'_>, batch: &Batch) -> Result<i64> {
         execute(tx, INSERT_POSTING, params![pair, id], "index a series' label")?;
         execute(tx, COUNT_POSTING, params![pair], "count a label's series")?;
     }
-    execute(tx, INSERT_STATE, params![id, batch.points[0].at], "start a series' state")?;
+    for (label, value) in batch.kept.pairs().iter().filter(|(label, _)| !label.starts_with("__")) {
+        execute(tx, COUNT_NAME_LABEL, params![batch.name, label, value], "count a name's label")?;
+    }
+    execute(tx, INSERT_STATE, params![id, batch.name, batch.points[0].at], "start a series' state")?;
     execute(tx, ONE_SERIES_MORE, params![], "count a series")?;
     Ok(id)
 }

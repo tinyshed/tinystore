@@ -8,7 +8,9 @@ create table store_state (
 insert into store_state (id, series_count, next_payload_id) values (1, 0, 1);
 
 -- What a name owns: its kind while it has series, how long its samples stay
--- (null: 30 days), a timer's or a histogram's bounds, and what its values mean.
+-- (null: 30 days), a timer's or a histogram's bounds, what its values mean,
+-- and the time of its newest sample while it has series, which a write past
+-- it moves.
 create table names (
     id      integer primary key,
     name    text not null unique,
@@ -16,7 +18,8 @@ create table names (
     keep    integer check (keep is null or keep > 0),
     buckets text,
     unit    text not null default '' check (length(unit) <= 32),
-    help    text not null default '' check (length(help) <= 1024)
+    help    text not null default '' check (length(help) <= 1024),
+    newest  integer
 ) strict;
 
 -- A series by the SHA-256 of its canonical labels, its name among them, and
@@ -49,14 +52,28 @@ create table postings (
     primary key (label_id, series_id)
 ) strict, without rowid;
 
--- A series' state, fixed in size: the newest time it has seen, what it has
--- packed (null: nothing), a version every change of its head moves, whether a
--- block's worth waits to be packed, when its next sample expires, whether
--- retention has taken samples of it, so that the step from one into its
--- oldest is known not to be counted, the scale its next block's grid tries
--- first, its head's extent, and why it stopped taking samples when it did.
+-- Each label and value of a name's series but the store's own, and how many
+-- of its series hold it: a name's labels and a label's values in order,
+-- without walking its series. Written and removed with a series' postings.
+create table name_labels (
+    name   integer not null,
+    label  text not null,
+    value  text not null,
+    series integer not null check (series > 0),
+    primary key (name, label, value)
+) strict, without rowid;
+
+-- A series' state, fixed in size: its name, the time of its oldest sample and
+-- the newest time it has seen, what it has packed (null: nothing), a version
+-- every change of its head moves, whether a block's worth waits to be packed,
+-- when its next sample expires, whether retention has taken samples of it, so
+-- that the step from one into its oldest is known not to be counted, the
+-- scale its next block's grid tries first, its head's extent, and why it
+-- stopped taking samples when it did.
 create table series_state (
     series_id     integer primary key references series (id),
+    name          integer not null,
+    oldest        integer not null,
     max_seen      integer not null,
     sealed_before integer,
     version       integer not null default 0 check (version >= 0),
@@ -73,6 +90,9 @@ create table series_state (
 create index series_ready on series_state (series_id) where ready = 1 and failed_at is null;
 create index series_due on series_state (due) where due is not null and failed_at is null;
 create index series_failed on series_state (series_id) where failed_at is not null;
+-- A name's oldest sample, one seek, which changes only where expiry or a
+-- sample before it moves a series' oldest, never at each write.
+create index series_by_name on series_state (name, oldest);
 
 -- A series' samples not packed yet, rewritten as they come: a table of their
 -- own, so that their growing and shrinking leaves the state rows' pages full.

@@ -572,29 +572,47 @@ let read = month.explain(None)?;   // of a read
 ## What a store holds
 
 ```ts
-const names = await store.metrics.names({ prefix: 'http_' })
-// [{ name: 'http_requests_total', kind: 'counter', series: 12, unit: '', help: 'Requests served.', keep: '30d', oldest, newest }, …]
-const labels = await store.metrics.labelNames('http_requests_total')                              // ['route', 'status']
-const routes = await store.metrics.labelValues('http_requests_total', 'route', { prefix: '/api' })   // ['/api/notes', …]
+const page = await store.metrics.names({ prefix: 'http_' })
+// { names: [{ name: 'http_requests_total', kind: 'counter', series: 12, unit: '', help: 'Requests served.', keep: '30d', oldest, newest }, …], next }
+const more = await store.metrics.names({ prefix: 'http_', after: page.next })
+const { labels } = await store.metrics.labelNames('http_requests_total')                                // ['route', 'status']
+const { values } = await store.metrics.labelValues('http_requests_total', 'route', { prefix: '/api' })   // ['/api/notes', …]
 
 await store.metrics.describe('cpu', { unit: '%', help: 'Busy time of a core.' })
 const { unit, help } = await store.metrics.description('cpu')
 ```
 
-- `names` gives every name with samples, sorted, with its kind, how many
-  series it has, its unit and help, what it keeps, and the times of its
-  oldest and newest sample. `prefix` narrows them, `limit` bounds them,
-  1000 unless given, and `after`, the last name of one answer, continues.
-- `labelNames` gives a name's label names, sorted, and `labelValues` a
-  label's values, sorted, with `prefix`, `limit` and `after` as `names`
-  takes them.
+```rust
+let page = stats.names().prefix("http_").page()?;                                             // NamePage { names, next }
+let labels = stats.label_names("http_requests_total").page()?.labels;                         // ["route", "status"]
+let routes = stats.label_values("http_requests_total", "route").prefix("/api").page()?.values;   // ["/api/notes", …]
+
+stats.describe("cpu", Description { unit: "%".into(), help: "Busy time of a core.".into() })?;
+let Description { unit, help } = stats.description("cpu")?;
+```
+
+- `names` gives a page of the names with samples, in the byte order of
+  their text, each with its kind, how many series it has, its unit and
+  help, what it keeps, and the times of its oldest and newest sample.
+  `prefix` narrows them, `limit` bounds a page, 1000 unless given, and
+  `next`, when there is more, is where the next page starts: `after:
+  page.next`, as kv's and blobs' pages are. A name's `oldest` is where its
+  `keep` begins while it holds samples from before, which no read finds.
+- `labelNames` gives a page of a name's label names, and `labelValues` of a
+  label's values, each as `names` gives its own. The store's own labels,
+  `__overflow` and `__bin`, are not among them.
 - None of them reads a sample: the file keeps what they give beside the
-  series.
+  series. What a write or a `delete` changes they give at once.
+- In Rust each is a builder that `page()` runs, `limit` and `after` beside
+  `prefix`; `describe` takes a `Description` whole, as `description` gives
+  one.
 - `describe` sets a name's unit and help, in place of what it had, as the
   Rust `metrics` crate's `describe_counter!` does; both absent remove them.
-  They belong to the name, not to a series, so `delete` leaves them. An
-  instrument given `unit` or `help` describes its name at its next write; a
-  timer describes its sum and its longest in `ms`.
+  They belong to the name, not to a series, so `delete` leaves them, and a
+  name with no series yet keeps them for its first. An instrument given
+  `unit` or `help` describes its name at its first write after it opens,
+  and a `describe` after that stands; a timer describes its sum and its
+  longest in `ms`.
 
 ## Remove a series
 
@@ -604,13 +622,28 @@ await store.metrics.delete({ name: 'cpu', labels: { host: 'web-1' } })   // true
 for (const series of await store.metrics.damaged()) await store.metrics.delete(series)
 ```
 
+```rust
+let held = stats.delete("cpu", [("host", "web-1")])?;   // true if it held that series
+
+for damage in stats.damaged()? {
+    stats.delete(&damage.name, &damage.labels)?;
+}
+```
+
 - `delete` removes the one series of exactly these labels, no more and no
-  fewer, and all its samples, whether they still read or not. Writing the
-  same labels later starts a new series.
+  fewer, and all its samples, whether they still read or not: no labels is
+  the series without labels, and the store's own, `__overflow` and `__bin`,
+  name their series too. Writing the same labels later starts a new series,
+  as an instrument that counts into them does at its next write: a delete
+  stops no writer. A name keeps its `keep`, unit and help.
 - A series whose bytes changed under it reads `corrupt`, naming it, and
-  stops taking samples, `suspended`; its neighbours go on. `damaged` lists
-  such series, `{ name, labels, error }`, and `delete` removes one with every
-  sample it held: read what still reads first, if it matters.
+  stops taking samples, `suspended`; its neighbours go on, and a read that
+  does not reach the bytes that changed still works. `damaged` lists such
+  series, `{ name, labels, error }`, 1000 at most, and `delete` removes one
+  with every sample it held: read what still reads first, if it matters.
+  Deleting those listed shows the next.
+- In Rust `delete` takes a series' name and its labels, as pairs or as the
+  `Labels` a read or `damaged` gave.
 
 ## Rust: the metrics crate
 
@@ -725,23 +758,24 @@ refuses at a write is said once, and the other instruments are written.
 
 ## Bounds
 
-| What                               | Bound                                                                           |
-|------------------------------------|---------------------------------------------------------------------------------|
-| a series                           | 128 labels with its name, 16 KiB of them; a label's name 256 B, its value 4 KiB |
-| sets of labels an instrument holds | 2000, the set without labels none of them; past them, `__overflow`              |
-| a timer's or a histogram's buckets | 128 bounds, `+Inf` added; exponential, 128 intervals a set before they halve    |
-| a percentile's rank                | above 0, at most 100, 15 decimals                                               |
-| series in a store                  | 100,000                                                                         |
-| one `ingest`                       | 10,000 samples or 4 MiB                                                         |
-| a sample's time                    | from `keep` ago to ten minutes ahead                                            |
-| `keep`                             | 30 days unless the name says                                                    |
-| a query's series                   | 1000                                                                            |
-| a query's bytes read               | 16 MiB                                                                          |
-| a query's samples decoded          | 1,048,576                                                                       |
-| an answer                          | 100,000 samples or buckets                                                      |
-| `names`, `labelValues`             | 1000 an answer, 10,000 at most                                                  |
-| a unit, a help                     | 32 bytes, 1024 bytes                                                            |
-| instruments                        | written every 15 seconds and when the store closes                              |
+| What                                 | Bound                                                                           |
+|--------------------------------------|---------------------------------------------------------------------------------|
+| a series                             | 128 labels with its name, 16 KiB of them; a label's name 256 B, its value 4 KiB |
+| sets of labels an instrument holds   | 2000, the set without labels none of them; past them, `__overflow`              |
+| a timer's or a histogram's buckets   | 128 bounds, `+Inf` added; exponential, 128 intervals a set before they halve    |
+| a percentile's rank                  | above 0, at most 100, 15 decimals                                               |
+| series in a store                    | 100,000                                                                         |
+| one `ingest`                         | 10,000 samples or 4 MiB                                                         |
+| a sample's time                      | from `keep` ago to ten minutes ahead                                            |
+| `keep`                               | 30 days unless the name says                                                    |
+| a query's series                     | 1000                                                                            |
+| a query's bytes read                 | 16 MiB                                                                          |
+| a query's samples decoded            | 1,048,576                                                                       |
+| an answer                            | 100,000 samples or buckets                                                      |
+| `names`, `labelNames`, `labelValues` | 1000 a page, 10,000 at most                                                     |
+| `damaged`                            | 1000 an answer                                                                  |
+| a unit, a help                       | 32 bytes, 1024 bytes                                                            |
+| instruments                          | written every 15 seconds and when the store closes                              |
 
 A `limit` error names its bound as the table does: `series`, `bytes read`,
 `samples decoded`, `answer`.
@@ -925,6 +959,38 @@ word for the call and the field. The free review's asks for exponential
 buckets by default and for `upper: Infinity`, which `JSON.stringify` writes
 as `null`, are in the open list.
 
+## Review of what a store holds, 12 October
+
+Three Haiku agents read `names`, `labelNames`, `labelValues`, `describe`,
+`delete` and `damaged` with no other context: a newcomer check of 16 call
+sites, a blind comparison of six spellings, and a free review as a
+developer building a metrics browser and a page that cleans up series.
+
+| They found                                                                      | What the book does                                                                  |
+|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| a list whose `after` is its last name, which says no more whether there is more | a page and its `next`, as kv's, blobs' and records' are, which the comparison chose |
+| `delete` of no labels: every series of the name, or the one without labels?     | said: the one without labels; the store's own labels name their series too          |
+| a series deleted while an instrument still counts into it comes back            | said: a delete stops no writer                                                      |
+| who wins, `describe` or an instrument's `help`                                  | said: the instrument's first write after it opens, and a `describe` after that      |
+| `sorted`, by what                                                               | the byte order of their text                                                        |
+
+The comparison chose what the book had in four of six: `NameInfo`,
+`describe` taking a `Description` whole, since a builder that leaves `unit`
+out would erase it, `delete("cpu", [("host", "web-1")])`, and `damaged`.
+
+Kept as they are, against them: a name's `oldest` where its `keep` begins
+while it holds samples from before, where the comparison and the free review
+expected the earliest sample a read returns, since that moves with the clock
+inside a block and finding it would decode a block of every series of the
+name; `describe` replacing both, where the free review asked for each part
+alone; `stats` in the Rust examples, where two asked for `metrics`, the
+crate's own name; `describe` beside `description`, which the free review
+would have made `setDescription`; and `description` of a name nothing
+described, empty rather than an error. Its asks for a list of series
+without their samples, a delete by a name or a condition with what it took
+and a dry run, and values narrowed by time and other labels are in the open
+list.
+
 ## Free review, 11 October
 
 A third Haiku agent reviewed the first draft as a developer choosing a store
@@ -1005,6 +1071,15 @@ list below.
 - A gauge's bucket holding a NaN or an infinity answered by IEEE's rules
   and marked, rather than failing the whole answer.
 - A read that leaves a damaged series out and says so, rather than failing.
+- A timer's series of one set of labels deleted by its name, its count, sum,
+  longest and buckets at once, where `delete` takes one series.
+- `labelValues` of the series that meet a query's conditions, as
+  Prometheus' `match[]` narrows them, where it now takes a name alone.
+- A page of a name's series by their labels, without their samples, which a
+  free review asked for a cleanup page; `latest` gives each series with its
+  newest sample now.
+- `delete` by a name or a condition, saying how many series and samples it
+  took, with a dry run, where it now takes one series.
 - A step across a gap given as an amount of its own beside the bucket's
   value, which a free review asked for, where the bucket now counts it and
   says `gap`.

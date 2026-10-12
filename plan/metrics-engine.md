@@ -48,18 +48,19 @@ read, latest, aggregate: plan ──► one short snapshot of bytes ──► de
 `metrics.db`, `durability: 'os'` unless the store opened `'full'`. The schema
 is one migration, `0001`, until `v0.1.0`.
 
-| Table          | Holds                                                                                                                           | Why this shape                                                                              |
-|----------------|---------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| `store_state`  | the count of series, the next payload id                                                                                        | one row                                                                                     |
-| `names`        | a name's id, kind, `keep`, buckets, unit and help                                                                               | what the book says a name owns, set by instruments, `ingest` and `describe`                 |
-| `series`       | its id, its identity, its name, its label ids gap-coded                                                                         | the identity is the SHA-256 of the canonical labels as 32 bytes, where Go kept 44 of base64 |
-| `label_values` | a pair's id, name, value and the count of its series                                                                            | the dictionary: a pair kept once, its count choosing the shortest posting list              |
-| `postings`     | a pair and a series, `WITHOUT ROWID`, no foreign key                                                                            | which series hold a pair, so that nothing scans every series; a removal goes by their key   |
-| `series_state` | the newest time seen, what is sealed, a version, when it is due to expire, whether retention took samples of it, ready, failure | fixed in size, with partial indexes for ready, due and failed series                        |
-| `heads`        | a series' packed head                                                                                                           | its growing and shrinking stays out of the state rows; Go kept it in them                   |
-| `clocks`       | a digest, the groups that use it, the timestamps                                                                                | shared by digest and bytes: series written at the same ticks share one                      |
-| `groups`       | a series, its start and end, its clock, its directory; unique on series and start                                               | a rowid table, where Go's was `WITHOUT ROWID`                                               |
-| `payloads`     | an id and a body                                                                                                                | bodies over 16 bytes; smaller ones live in the directory, a constant block has none         |
+| Table          | Holds                                                                                                                                                           | Why this shape                                                                                              |
+|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| `store_state`  | the count of series, the next payload id                                                                                                                        | one row                                                                                                     |
+| `names`        | a name's id, kind, `keep`, buckets, unit and help, and the time of its newest sample                                                                            | what the book says a name owns, set by instruments, `ingest` and `describe`                                 |
+| `series`       | its id, its identity, its name, its label ids gap-coded                                                                                                         | the identity is the SHA-256 of the canonical labels as 32 bytes, where Go kept 44 of base64                 |
+| `label_values` | a pair's id, name, value and the count of its series                                                                                                            | the dictionary: a pair kept once, its count choosing the shortest posting list                              |
+| `postings`     | a pair and a series, `WITHOUT ROWID`, no foreign key                                                                                                            | which series hold a pair, so that nothing scans every series; a removal goes by their key                   |
+| `name_labels`  | a name, a label and a value its series hold, and how many hold them, `WITHOUT ROWID`                                                                            | a name's labels and a label's values read in order, without walking the name's series                       |
+| `series_state` | its name, its oldest sample and the newest time seen, what is sealed, a version, when it is due to expire, whether retention took samples of it, ready, failure | fixed in size, with partial indexes for ready, due and failed series, and its name's series by their oldest |
+| `heads`        | a series' packed head                                                                                                                                           | its growing and shrinking stays out of the state rows; Go kept it in them                                   |
+| `clocks`       | a digest, the groups that use it, the timestamps                                                                                                                | shared by digest and bytes: series written at the same ticks share one                                      |
+| `groups`       | a series, its start and end, its clock, its directory; unique on series and start                                                                               | a rowid table, where Go's was `WITHOUT ROWID`                                                               |
+| `payloads`     | an id and a body                                                                                                                                                | bodies over 16 bytes; smaller ones live in the directory, a constant block has none                         |
 
 - The identity as 32 bytes took 12 bytes from the row and 12 from its index a
   series: −5.56% on 512 short series, never more bytes elsewhere (density
@@ -373,6 +374,58 @@ bounded reader, bits read a word at a time, zstd and CRC-32, is the root's
   series, nor a foreign key that would walk them all to remove one.
 - A name whose `keep` changed between two runs moves the due time of its
   series through the name, never by scanning every series.
+
+## What a store holds
+
+None of these reads a sample or a head: each reads what the file keeps
+beside the series, by an index.
+
+- `names` walks the names that have series in the order of their bytes,
+  from `after` or the prefix on, one past a page's `limit`, so that `next`
+  says there is more, and gives of each its kind, `keep`, unit and help
+  from its row; its count of series, which the dictionary keeps of the pair
+  `__name__`; its newest sample's time, kept on its row, which a write
+  past it moves; and its oldest, the least of its series' oldest samples, one
+  seek of an index by name. A name whose newest sample is older than it keeps
+  holds nothing a read finds, and is left out.
+- A series' oldest sample is kept exactly: written with its first, moved
+  back by a sample before it and forward by expiry; packing moves samples
+  and never their times. A name's `oldest` is where its `keep` begins while
+  it holds samples from before, which no read finds.
+- `name_labels` keeps each label and value of a name's series but the
+  store's own, `__name__`, `__overflow` and `__bin`, with how many series
+  hold it, written with a series' postings and removed with them.
+  `labelValues` reads a label's values in order; `labelNames` takes each next
+  label by one seek, so that a label with a value a series costs it no walk.
+- `describe` writes a name's unit and help on its row, in place of what they
+  were, the row made when the name has none yet; an instrument's description
+  is written at its next write, and gives only what it was told.
+
+## Removing a series
+
+- `delete` finds the series by its identity and removes it in one write,
+  under maintenance's lock, so that no pass packs or expires it meanwhile:
+  its head; its groups, the payloads their directories name and their clocks
+  let go; and then the series as expiry reclaims one, its postings, its
+  name's labels, the pairs no other series uses, its state, its row and its
+  place among the 100,000. A group whose directory or clock no longer reads
+  goes without the payloads it named, which stay in the file, said once: only
+  a directory that reads proves which payloads are its.
+- A name that loses its last series loses its kind and its newest time. One
+  that loses the series its newest time came from finds it again among its
+  series, a walk of them that a delete of any other series never makes. Its
+  `keep`, unit and help stay.
+- An instrument that writes the series again starts a new one at its next
+  write.
+- A read that meets a series' bytes that no longer read suspends the series
+  once its snapshot has ended, as packing and publication do: what reads over
+  those bytes fails `corrupt` till it is deleted, the series takes no sample,
+  `suspended`, and packing and expiry pass it by; what reads over the rest
+  still works. A dictionary that fails to give a series its labels suspends
+  nothing, since `delete` would need them.
+- `damaged` reads the suspended series from their index, 1000 at most, the
+  first by their ids, with their labels and what broke; deleting them shows
+  the next.
 
 ## Concurrency and memory
 

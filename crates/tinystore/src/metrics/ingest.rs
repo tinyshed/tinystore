@@ -205,12 +205,13 @@ fn ordered(mut points: Vec<Point>) -> Vec<Point> {
     kept
 }
 
-/// What a series' write needs of its row: what it packed, its version, the
-/// newest time it has seen, whether it was ready, when it is due, why it
-/// stopped, and its head.
+/// What a series' write needs of its row: what it packed, its version, its
+/// oldest sample and the newest time it has seen, whether it was ready, when
+/// it is due, why it stopped, and its head.
 pub(super) struct State {
     sealed_before: Option<i64>,
     version: i64,
+    oldest: i64,
     pub(super) max_seen: i64,
     ready: bool,
     due: Option<i64>,
@@ -220,7 +221,7 @@ pub(super) struct State {
 }
 
 const STATE: &str = "select s.sealed_before, s.version, s.max_seen, s.ready, s.due, s.failed_at, s.failure,
-    s.head_count, s.head_start, s.head_end, h.body
+    s.head_count, s.head_start, s.head_end, h.body, s.oldest
     from series_state s left join heads h on h.series_id = s.series_id where s.series_id = ?1";
 macro_rules! save_state {
     ($set:literal) => {
@@ -237,6 +238,11 @@ const SAVE_STATE_READY: &str = save_state!(", ready = ?6");
 const SAVE_STATE_DUE: &str = save_state!(", due = ?6");
 const SAVE_STATE_BOTH: &str = save_state!(", ready = ?6, due = ?7");
 const SAVING: &str = "write a series' state";
+/// A series' oldest sample, indexed by its name, written only when a sample
+/// before it moves it.
+const SET_OLDEST: &str = "update series_state set oldest = ?2 where series_id = ?1";
+/// A name's newest sample, which a write past it moves.
+const SET_NEWEST: &str = "update names set newest = ?2 where id = ?1 and (newest is null or newest < ?2)";
 const SAVE_HEAD: &str =
     "insert into heads (series_id, body) values (?1, ?2) on conflict (series_id) do update set body = excluded.body";
 
@@ -252,6 +258,7 @@ impl State {
                     Ok(State {
                         sealed_before: row.get(0)?,
                         version: row.get(1)?,
+                        oldest: row.get(11)?,
                         max_seen: row.get(2)?,
                         ready: row.get(3)?,
                         due: row.get(4)?,
@@ -316,6 +323,10 @@ pub(super) fn store(tx: &Tx<'_>, zstd: &mut Zstd, id: i64, state: &State, batch:
     };
     saved?;
     execute(tx, SAVE_HEAD, params![id, bytes], "write a series' head")?;
+    if batch.points[0].at < state.oldest {
+        execute(tx, SET_OLDEST, params![id, batch.points[0].at], "move a series' oldest sample")?;
+    }
+    execute(tx, SET_NEWEST, params![batch.name, max_seen], "move a name's newest sample")?;
     Ok(ready)
 }
 

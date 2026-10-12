@@ -66,6 +66,21 @@ impl Kept {
         Ok(kept)
     }
 
+    /// The labels of a series the store may hold, the store's own among
+    /// them, as a call that names one series exactly gives them: `delete`.
+    pub(super) fn held(name: &str, labels: &Labels) -> Result<Kept> {
+        if name.is_empty() {
+            return Err(Error::invalid("a series needs a name"));
+        }
+        let mut pairs: Vec<(String, String)> =
+            labels.iter().map(|(label, value)| (label.clone(), value.clone())).collect();
+        pairs.push((NAME.to_owned(), name.to_owned()));
+        pairs.sort_unstable();
+        let kept = Kept(pairs);
+        kept.check()?;
+        Ok(kept)
+    }
+
     /// The series of `name` an instrument counts into past its sets of
     /// labels: `__overflow` its one label, the store's own.
     pub(super) fn overflow(name: &str) -> Kept {
