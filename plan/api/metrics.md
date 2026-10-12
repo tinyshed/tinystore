@@ -573,7 +573,7 @@ let read = month.explain(None)?;   // of a read
 
 ```ts
 const page = await store.metrics.names({ prefix: 'http_' })
-// { names: [{ name: 'http_requests_total', kind: 'counter', series: 12, unit: '', help: 'Requests served.', keep: '30d', oldest, newest }, …], next }
+// { names: [{ name: 'http_requests_total', kind: 'counter', seriesCount: 12, unit: '', help: 'Requests served.', keep: '30d', retainedFrom, newest }, …], next }
 const more = await store.metrics.names({ prefix: 'http_', after: page.next })
 const { labels } = await store.metrics.labelNames('http_requests_total')                                // ['route', 'status']
 const { values } = await store.metrics.labelValues('http_requests_total', 'route', { prefix: '/api' })   // ['/api/notes', …]
@@ -593,11 +593,14 @@ let Description { unit, help } = stats.description("cpu")?;
 
 - `names` gives a page of the names with samples, in the byte order of
   their text, each with its kind, how many series it has, its unit and
-  help, what it keeps, and the times of its oldest and newest sample.
-  `prefix` narrows them, `limit` bounds a page, 1000 unless given, and
-  `next`, when there is more, is where the next page starts: `after:
-  page.next`, as kv's and blobs' pages are. A name's `oldest` is where its
-  `keep` begins while it holds samples from before, which no read finds.
+  help, what it keeps, `retainedFrom`, where that begins, and its newest
+  sample's time. `prefix` narrows them, `limit` bounds a page, 1000 unless
+  given, and `next`, when there is more, is where the next page starts:
+  `after: page.next`, as kv's and blobs' pages are. `retainedFrom` is its
+  oldest sample's time, or where its `keep` begins while it holds samples
+  from before, which no read finds: what it keeps is gone a block at a time,
+  so the oldest sample it holds may lie before it, an hour at most for a
+  series that writes every 15 seconds, as records' streams say it.
 - `labelNames` gives a page of a name's label names, and `labelValues` of a
   label's values, each as `names` gives its own. The store's own labels,
   `__overflow` and `__bin`, are not among them.
@@ -607,7 +610,8 @@ let Description { unit, help } = stats.description("cpu")?;
   `prefix`; `describe` takes a `Description` whole, as `description` gives
   one.
 - `describe` sets a name's unit and help, in place of what it had, as the
-  Rust `metrics` crate's `describe_counter!` does; both absent remove them.
+  Rust `metrics` crate's `describe_counter!` does; both absent remove them,
+  `{}` and `Description::default()` alike.
   They belong to the name, not to a series, so `delete` leaves them, and a
   name with no series yet keeps them for its first. An instrument given
   `unit` or `help` describes its name at its first write after it opens,

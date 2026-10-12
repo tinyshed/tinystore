@@ -32,7 +32,7 @@ fn a_series_is_deleted_whole_and_its_neighbours_keep_theirs() {
     let read = stats.query().name("cpu").read().unwrap();
     assert_eq!((read.len(), bits(&read[0])), (1, bits(&stays)));
     assert_eq!(stats.label_values("cpu", "host").page().unwrap().values, ["b"]);
-    assert_eq!(stats.names().page().unwrap().names[0].series, 1);
+    assert_eq!(stats.names().page().unwrap().names[0].series_count, 1);
     // the last series takes everything with it, the name's kind among them
     assert!(stats.delete("cpu", stays.labels()).unwrap());
     assert_eq!(left(&f), [0; 9]);

@@ -60,14 +60,13 @@ const VALUES: &str = "select value from name_labels where name = ?1 and label = 
 pub struct NameInfo {
     pub name: String,
     pub kind: Kind,
-    /// How many series it has.
-    pub series: u64,
+    pub series_count: u64,
     pub unit: String,
     pub help: String,
     pub keep: Duration,
-    /// Its oldest sample's time, or where its `keep` begins while it holds
-    /// samples from before, which no read finds.
-    pub oldest: SystemTime,
+    /// Where what it keeps begins: its oldest sample's time, or where its
+    /// `keep` begins while it holds samples from before, which no read finds.
+    pub retained_from: SystemTime,
     pub newest: SystemTime,
 }
 
@@ -128,8 +127,9 @@ impl<P> std::fmt::Debug for List<P> {
 }
 
 impl Metrics {
-    /// The names the store holds samples of, each with its kind, its series,
-    /// its unit and help, what it keeps and its oldest and newest sample.
+    /// The names the store holds samples of, each with its kind, its count
+    /// of series, its unit and help, what it keeps and where that begins, and
+    /// its newest sample's time.
     pub fn names(&self) -> List<NamePage> {
         List::of(&self.engine, Of::Names)
     }
@@ -319,22 +319,21 @@ fn name_id(connection: &Connection, name: &str) -> Result<Option<i64>> {
     id.map_err(|error| sql_error("find a name", error))
 }
 
-/// A name's row as `names` gives it, its oldest no earlier than where its
-/// `keep` begins.
+/// A name's row as `names` gives it, what it keeps beginning no earlier than
+/// where its `keep` does.
 fn name_info((name, kind, keep, unit, help, newest, series, oldest): NameRow, now: i64) -> Result<NameInfo> {
     let kind = kind.as_deref().and_then(Kind::parse).ok_or_else(|| Error::corrupt(format!("{name}: a kind")))?;
     let keep = keep.map_or(KEEP, |millis| Duration::from_millis(millis.max(0).unsigned_abs()));
     let cutoff = now.saturating_sub(millis(keep));
-    let oldest = oldest.unwrap_or(cutoff).max(cutoff);
-    let series = u64::try_from(series).unwrap_or(0);
+    let retained_from = oldest.unwrap_or(cutoff).max(cutoff);
     Ok(NameInfo {
         name,
         kind,
-        series,
+        series_count: u64::try_from(series).unwrap_or(0),
         unit,
         help,
         keep,
-        oldest: from_unix_millis(oldest),
+        retained_from: from_unix_millis(retained_from),
         newest: from_unix_millis(newest),
     })
 }

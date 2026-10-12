@@ -390,8 +390,8 @@ beside the series, by an index.
   holds nothing a read finds, and is left out.
 - A series' oldest sample is kept exactly: written with its first, moved
   back by a sample before it and forward by expiry; packing moves samples
-  and never their times. A name's `oldest` is where its `keep` begins while
-  it holds samples from before, which no read finds.
+  and never their times. A name's `retainedFrom` is its oldest, or where its
+  `keep` begins while it holds samples from before, which no read finds.
 - `name_labels` keeps each label and value of a name's series but the
   store's own, `__name__`, `__overflow` and `__bin`, with how many series
   hold it, written with a series' postings and removed with them.

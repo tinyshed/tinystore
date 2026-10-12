@@ -37,7 +37,7 @@ pub struct Description {
 
 impl Metrics {
     /// Sets a name's unit and help in place of what it had; empty ones
-    /// remove them.
+    /// remove them, and `Description::default()` removes both.
     pub fn describe(&self, name: &str, description: Description) -> Result<()> {
         let described = checked(name, &description).and_then(|()| self.engine.describe(name, description));
         described.map_err(|error| error.within(format!("metrics {name}")))

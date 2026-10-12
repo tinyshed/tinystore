@@ -47,13 +47,13 @@ fn names_give_each_name_with_samples_its_kind_series_description_keep_and_times(
     assert_eq!(names(&f), ["cpu", "http_in_flight", "http_requests_total"]);
     let total = named(&f, "http_requests_total");
     assert_eq!(
-        (total.kind, total.series, total.help.as_str(), total.keep),
+        (total.kind, total.series_count, total.help.as_str(), total.keep),
         (Kind::Counter, 2, "Requests served.", 7 * DAY)
     );
-    assert_eq!((total.oldest, total.newest), (now - HOUR, now));
+    assert_eq!((total.retained_from, total.newest), (now - HOUR, now));
     let cpu = named(&f, "cpu");
     assert_eq!(
-        (cpu.kind, cpu.series, cpu.keep, cpu.oldest, cpu.newest),
+        (cpu.kind, cpu.series_count, cpu.keep, cpu.retained_from, cpu.newest),
         (Kind::Gauge, 1, 30 * DAY, now - 2 * HOUR, now - 2 * HOUR)
     );
     let http = stats.names().prefix("http_").page().unwrap();
@@ -68,23 +68,23 @@ fn names_give_each_name_with_samples_its_kind_series_description_keep_and_times(
 }
 
 #[test]
-fn a_names_oldest_is_its_oldest_sample_and_where_its_keep_begins_while_it_holds_older() {
+fn a_name_is_retained_from_its_oldest_sample_or_where_its_keep_begins_while_it_holds_older() {
     let f = fixture();
     let (stats, start) = (f.metrics(), f.now());
     stats.ingest(&[f.gauge("cpu", 841, 15 * SECOND, |index| index as f64).label("host", "a")]).unwrap();
     let first = start - 840 * 15 * SECOND;
-    assert_eq!(named(&f, "cpu").oldest, first);
+    assert_eq!(named(&f, "cpu").retained_from, first);
     assert_eq!(maintain(&f.store).unwrap().packed, 840);
-    assert_eq!(named(&f, "cpu").oldest, first, "packing moves samples, never their times");
+    assert_eq!(named(&f, "cpu").retained_from, first, "packing moves samples, never their times");
     // a sample before every other moves it back
     stats.ingest(&[Series::gauge("cpu").label("host", "b").sample(start - DAY, 1.0)]).unwrap();
-    assert_eq!((named(&f, "cpu").oldest, named(&f, "cpu").series), (start - DAY, 2));
+    assert_eq!((named(&f, "cpu").retained_from, named(&f, "cpu").series_count), (start - DAY, 2));
     // past what the name keeps, a read finds nothing before its keep begins
     f.pass(30 * DAY - 12 * HOUR);
-    assert_eq!(named(&f, "cpu").oldest, f.now() - 30 * DAY);
+    assert_eq!(named(&f, "cpu").retained_from, f.now() - 30 * DAY);
     let done = maintain(&f.store).unwrap();
     assert_eq!(done.reclaimed, 1, "b's one sample expired");
-    assert_eq!((named(&f, "cpu").oldest, named(&f, "cpu").series), (first, 1));
+    assert_eq!((named(&f, "cpu").retained_from, named(&f, "cpu").series_count), (first, 1));
     // once its newest sample is past what it keeps, a name holds nothing a read finds
     f.pass(DAY);
     assert!(names(&f).is_empty(), "before expiry removes them");
