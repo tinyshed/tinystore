@@ -19,13 +19,36 @@ type Spelled<U extends readonly string[]> = U extends readonly [
 	? `${number}${First}${Spelled<Rest> | ''}` | Spelled<Rest>
 	: never
 
+/** The spans a program names most, which an editor offers as their text is typed. */
+type Offered =
+	| '1s'
+	| '5s'
+	| '10s'
+	| '15s'
+	| '30s'
+	| '1m'
+	| '5m'
+	| '10m'
+	| '15m'
+	| '30m'
+	| '1h'
+	| '6h'
+	| '12h'
+	| '24h'
+	| '1d'
+	| '7d'
+	| '30d'
+	| '90d'
+
 /**
  * A duration's text, '30d', '1h30m', '15m', '1s' or '250ms', which the type
  * checks as it is written, so that '1hr' or '90mins' does not compile. Text
  * from elsewhere, an environment's, is cast as Duration and checked when the
  * call runs.
  */
-export type DurationText = Spelled<Units>
+// a literal beside a template that takes it in is folded into it and no longer
+// offered; the intersection keeps them apart, where `& {}` of a union does not
+export type DurationText = Offered | (Spelled<Units> & Record<never, never>)
 
 /** A length of time: milliseconds, or the text of one, such as '1h30m'. */
 export type Duration = number | DurationText

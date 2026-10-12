@@ -18,6 +18,8 @@ use rusqlite::{Connection, Params};
 
 use super::codec::Codecs;
 use super::names::Names;
+#[cfg(feature = "wire")]
+use super::remote::Sessions;
 use super::totals::Totals;
 use crate::engine::{Claim, Host, Wake};
 use crate::sqlite::{Config, File, Migration, sql_error};
@@ -52,6 +54,9 @@ pub(crate) struct Engine {
     pub(super) totals: Arc<Totals>,
     /// Held by a write of the totals, so that two never write at once.
     pub(super) writing: Mutex<()>,
+    /// The sessions of clients' instruments: the last batch each applied.
+    #[cfg(feature = "wire")]
+    pub(super) sessions: Sessions,
     closed: AtomicBool,
     _claim: Claim,
 }
@@ -90,6 +95,8 @@ impl Engine {
                 pack_cursor: AtomicI64::new(0),
                 wake: Mutex::default(),
                 writing: Mutex::default(),
+                #[cfg(feature = "wire")]
+                sessions: Sessions::default(),
                 closed: AtomicBool::new(false),
                 _claim: claim,
             });

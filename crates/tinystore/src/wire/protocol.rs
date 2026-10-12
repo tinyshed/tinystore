@@ -4233,6 +4233,2011 @@ impl Message for KvTxResults {
     }
 }
 
+/// What a label's value must be: one of values, none of them with not, the
+/// label absent too, or a value that starts with prefix.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsCondition {
+    pub(crate) values: Vec<String>,
+    pub(crate) not: bool,
+    pub(crate) prefix: Option<String>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsCondition {
+    const NAME: &'static str = "metrics.Condition";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.values = codec::list(r, "values", codec::str)?,
+                2 => message.not = codec::bool(r, "not")?,
+                3 => message.prefix = Some(codec::str(r, "prefix")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.values.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.values, codec::write_str);
+        }
+        if self.not {
+            map.field(out, 2);
+            codec::write_bool(out, &self.not);
+        }
+        if let Some(prefix) = &self.prefix {
+            map.field(out, 3);
+            codec::write_str(out, prefix);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.values, |item| 5 + item.len())
+            + 2
+            + self.prefix.as_ref().map_or(0, |prefix| 1 + 5 + prefix.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.values.is_empty()
+            && !self.not
+            && self.prefix.is_none()
+    }
+}
+
+/// The series a call finds, and its range: since before now, or from and to.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsQuery {
+    pub(crate) name: Option<String>,
+    pub(crate) r#where: BTreeMap<String, MetricsCondition>,
+    /// Milliseconds.
+    pub(crate) since: Option<u64>,
+    /// Unix milliseconds.
+    pub(crate) from: Option<i64>,
+    /// Excluded; now, a sample taken now in the range, unless given. Unix milliseconds.
+    pub(crate) to: Option<i64>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsQuery {
+    const NAME: &'static str = "metrics.Query";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = Some(codec::str(r, "name")?),
+                2 => message.r#where = codec::names(r, "where", codec::message::<MetricsCondition>)?,
+                3 => message.since = Some(codec::uint(r, "since")?),
+                4 => message.from = Some(codec::int(r, "from")?),
+                5 => message.to = Some(codec::int(r, "to")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(name) = &self.name {
+            map.field(out, 1);
+            codec::write_str(out, name);
+        }
+        if !self.r#where.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.r#where, codec::write_message);
+        }
+        if let Some(since) = &self.since {
+            map.field(out, 3);
+            codec::write_uint(out, since);
+        }
+        if let Some(from) = &self.from {
+            map.field(out, 4);
+            codec::write_int(out, from);
+        }
+        if let Some(to) = &self.to {
+            map.field(out, 5);
+            codec::write_int(out, to);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.name.as_ref().map_or(0, |name| 1 + 5 + name.len())
+            + 1 + codec::names_size(&self.r#where, codec::message_size)
+            + self.since.map_or(0, |_| 10)
+            + self.from.map_or(0, |_| 10)
+            + self.to.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_none()
+            && self.r#where.is_empty()
+            && self.since.is_none()
+            && self.from.is_none()
+            && self.to.is_none()
+    }
+}
+
+/// A series and its samples, or a part of them: a series longer than a body
+/// goes on in the next part.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsSeries {
+    pub(crate) name: String,
+    /// Gauge, counter or histogram.
+    pub(crate) kind: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    /// An int64 a sample.
+    pub(crate) times: Vec<u8>,
+    /// A float64 a sample.
+    pub(crate) values: Vec<u8>,
+    /// The next part goes on with this series.
+    pub(crate) more: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsSeries {
+    const NAME: &'static str = "metrics.Series";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.kind = codec::str(r, "kind")?,
+                3 => message.labels = codec::names(r, "labels", codec::str)?,
+                4 => message.times = codec::bin(r, "times")?,
+                5 => message.values = codec::bin(r, "values")?,
+                6 => message.more = codec::bool(r, "more")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.kind.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.kind);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 3);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if !self.times.is_empty() {
+            map.field(out, 4);
+            codec::write_bin(out, &self.times);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 5);
+            codec::write_bin(out, &self.values);
+        }
+        if self.more {
+            map.field(out, 6);
+            codec::write_bool(out, &self.more);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.kind.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + 1 + 5 + self.times.len()
+            + 1 + 5 + self.values.len()
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.kind.is_empty()
+            && self.labels.is_empty()
+            && self.times.is_empty()
+            && self.values.is_empty()
+            && !self.more
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsRead {
+    pub(crate) series: Vec<MetricsSeries>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsRead {
+    const NAME: &'static str = "metrics.Read";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.series = codec::list(r, "series", codec::message::<MetricsSeries>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.series.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.series, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.series, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.series.is_empty()
+    }
+}
+
+/// A series' newest sample in the range.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsNewest {
+    pub(crate) name: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    /// Unix milliseconds.
+    pub(crate) at: i64,
+    pub(crate) value: f64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsNewest {
+    const NAME: &'static str = "metrics.Newest";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.labels = codec::names(r, "labels", codec::str)?,
+                3 => message.at = codec::int(r, "at")?,
+                4 => message.value = codec::float(r, "value")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if self.at != 0 {
+            map.field(out, 3);
+            codec::write_int(out, &self.at);
+        }
+        if self.value.to_bits() != 0 {
+            map.field(out, 4);
+            codec::write_float(out, &self.value);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.labels.is_empty()
+            && self.at == 0
+            && self.value.to_bits() == 0
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsLatest {
+    pub(crate) series: Vec<MetricsNewest>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsLatest {
+    const NAME: &'static str = "metrics.Latest";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.series = codec::list(r, "series", codec::message::<MetricsNewest>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.series.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.series, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.series, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.series.is_empty()
+    }
+}
+
+/// An aggregate: read's query, its buckets, its op and its groups. Without
+/// by and without, every series of a name is one group; without: [] keeps
+/// every series apart.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsAggregateAsked {
+    pub(crate) query: MetricsQuery,
+    /// Milliseconds.
+    pub(crate) every: Option<u64>,
+    /// Count, sum, avg, min, max, increase, rate, delta, first, last, or p and a rank; none for a read's plan.
+    pub(crate) op: Option<String>,
+    pub(crate) by: Option<Vec<String>>,
+    pub(crate) without: Option<Vec<String>>,
+    /// A timer's percentile also gives a point between its bounds.
+    pub(crate) estimate: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsAggregateAsked {
+    const NAME: &'static str = "metrics.AggregateAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.query = MetricsQuery::read(r)?,
+                2 => message.every = Some(codec::uint(r, "every")?),
+                3 => message.op = Some(codec::str(r, "op")?),
+                4 => message.by = Some(codec::list(r, "by", codec::str)?),
+                5 => message.without = Some(codec::list(r, "without", codec::str)?),
+                6 => message.estimate = codec::bool(r, "estimate")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.query.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.query);
+        }
+        if let Some(every) = &self.every {
+            map.field(out, 2);
+            codec::write_uint(out, every);
+        }
+        if let Some(op) = &self.op {
+            map.field(out, 3);
+            codec::write_str(out, op);
+        }
+        if let Some(by) = &self.by {
+            map.field(out, 4);
+            codec::write_list(out, by, codec::write_str);
+        }
+        if let Some(without) = &self.without {
+            map.field(out, 5);
+            codec::write_list(out, without, codec::write_str);
+        }
+        if self.estimate {
+            map.field(out, 6);
+            codec::write_bool(out, &self.estimate);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.query.size()
+            + self.every.map_or(0, |_| 10)
+            + self.op.as_ref().map_or(0, |op| 1 + 5 + op.len())
+            + self.by.as_ref().map_or(0, |by| 1 + codec::list_size(by, |item| 5 + item.len()))
+            + self.without.as_ref().map_or(0, |without| 1 + codec::list_size(without, |item| 5 + item.len()))
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.query.is_zero()
+            && self.every.is_none()
+            && self.op.is_none()
+            && self.by.is_none()
+            && self.without.is_none()
+            && !self.estimate
+    }
+}
+
+/// A bucket of an aggregate: its value, or a timer's percentile's bounds.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsBucket {
+    /// Where it begins. Unix milliseconds.
+    pub(crate) at: i64,
+    /// None for a timer's percentile.
+    pub(crate) value: Option<f64>,
+    pub(crate) lower: Option<f64>,
+    /// Infinity past the last bound.
+    pub(crate) upper: Option<f64>,
+    pub(crate) estimate: Option<f64>,
+    pub(crate) samples: u64,
+    pub(crate) resets: u64,
+    /// Its value comes from less than its span.
+    pub(crate) partial: bool,
+    /// Its first step began before the bucket before it.
+    pub(crate) gap: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsBucket {
+    const NAME: &'static str = "metrics.Bucket";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.at = codec::int(r, "at")?,
+                2 => message.value = Some(codec::float(r, "value")?),
+                3 => message.lower = Some(codec::float(r, "lower")?),
+                4 => message.upper = Some(codec::float(r, "upper")?),
+                5 => message.estimate = Some(codec::float(r, "estimate")?),
+                6 => message.samples = codec::uint(r, "samples")?,
+                7 => message.resets = codec::uint(r, "resets")?,
+                8 => message.partial = codec::bool(r, "partial")?,
+                9 => message.gap = codec::bool(r, "gap")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.at != 0 {
+            map.field(out, 1);
+            codec::write_int(out, &self.at);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 2);
+            codec::write_float(out, value);
+        }
+        if let Some(lower) = &self.lower {
+            map.field(out, 3);
+            codec::write_float(out, lower);
+        }
+        if let Some(upper) = &self.upper {
+            map.field(out, 4);
+            codec::write_float(out, upper);
+        }
+        if let Some(estimate) = &self.estimate {
+            map.field(out, 5);
+            codec::write_float(out, estimate);
+        }
+        if self.samples != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.samples);
+        }
+        if self.resets != 0 {
+            map.field(out, 7);
+            codec::write_uint(out, &self.resets);
+        }
+        if self.partial {
+            map.field(out, 8);
+            codec::write_bool(out, &self.partial);
+        }
+        if self.gap {
+            map.field(out, 9);
+            codec::write_bool(out, &self.gap);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.value.map_or(0, |_| 10)
+            + self.lower.map_or(0, |_| 10)
+            + self.upper.map_or(0, |_| 10)
+            + self.estimate.map_or(0, |_| 10)
+            + 10
+            + 10
+            + 2
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.at == 0
+            && self.value.is_none()
+            && self.lower.is_none()
+            && self.upper.is_none()
+            && self.estimate.is_none()
+            && self.samples == 0
+            && self.resets == 0
+            && !self.partial
+            && !self.gap
+    }
+}
+
+/// A group's buckets, or a part of them: a group longer than a body goes on
+/// in the next part.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsGroup {
+    pub(crate) name: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) buckets: Vec<MetricsBucket>,
+    pub(crate) more: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsGroup {
+    const NAME: &'static str = "metrics.Group";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.labels = codec::names(r, "labels", codec::str)?,
+                3 => message.buckets = codec::list(r, "buckets", codec::message::<MetricsBucket>)?,
+                4 => message.more = codec::bool(r, "more")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if !self.buckets.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.buckets, codec::write_message);
+        }
+        if self.more {
+            map.field(out, 4);
+            codec::write_bool(out, &self.more);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.buckets, codec::message_size)
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.labels.is_empty()
+            && self.buckets.is_empty()
+            && !self.more
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsAggregates {
+    pub(crate) groups: Vec<MetricsGroup>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsAggregates {
+    const NAME: &'static str = "metrics.Aggregates";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.groups = codec::list(r, "groups", codec::message::<MetricsGroup>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.groups.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.groups, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.groups, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.groups.is_empty()
+    }
+}
+
+/// What a call would spend of each bound, and the bound it would stop at.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsPlan {
+    pub(crate) series: u64,
+    pub(crate) bytes: u64,
+    pub(crate) decoded: u64,
+    pub(crate) exceeds: Option<MetricsExceeds>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsPlan {
+    const NAME: &'static str = "metrics.Plan";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.series = codec::uint(r, "series")?,
+                2 => message.bytes = codec::uint(r, "bytes")?,
+                3 => message.decoded = codec::uint(r, "decoded")?,
+                4 => message.exceeds = Some(MetricsExceeds::read(r)?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.series != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.series);
+        }
+        if self.bytes != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.bytes);
+        }
+        if self.decoded != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.decoded);
+        }
+        if let Some(exceeds) = &self.exceeds {
+            map.field(out, 4);
+            codec::write_message(out, exceeds);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 10
+            + self.exceeds.as_ref().map_or(0, |exceeds| 1 + exceeds.size())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.series == 0
+            && self.bytes == 0
+            && self.decoded == 0
+            && self.exceeds.is_none()
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsExceeds {
+    /// Series, bytes read or samples decoded.
+    pub(crate) limit: String,
+    pub(crate) wanted: u64,
+    pub(crate) bound: u64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsExceeds {
+    const NAME: &'static str = "metrics.Exceeds";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.limit = codec::str(r, "limit")?,
+                2 => message.wanted = codec::uint(r, "wanted")?,
+                3 => message.bound = codec::uint(r, "bound")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.limit.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.limit);
+        }
+        if self.wanted != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.wanted);
+        }
+        if self.bound != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.bound);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.limit.len()
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.limit.is_empty()
+            && self.wanted == 0
+            && self.bound == 0
+    }
+}
+
+/// A series to write, its samples as two columns.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsNewSeries {
+    pub(crate) name: String,
+    /// Gauge, counter or histogram.
+    pub(crate) kind: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    /// An int64 a sample.
+    pub(crate) times: Vec<u8>,
+    /// A float64 a sample.
+    pub(crate) values: Vec<u8>,
+    /// How long the name's samples stay: its own, kept in the file. Milliseconds.
+    pub(crate) keep: Option<u64>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsNewSeries {
+    const NAME: &'static str = "metrics.NewSeries";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.kind = codec::str(r, "kind")?,
+                3 => message.labels = codec::names(r, "labels", codec::str)?,
+                4 => message.times = codec::bin(r, "times")?,
+                5 => message.values = codec::bin(r, "values")?,
+                6 => message.keep = Some(codec::uint(r, "keep")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.kind.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.kind);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 3);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if !self.times.is_empty() {
+            map.field(out, 4);
+            codec::write_bin(out, &self.times);
+        }
+        if !self.values.is_empty() {
+            map.field(out, 5);
+            codec::write_bin(out, &self.values);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 6);
+            codec::write_uint(out, keep);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.kind.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + 1 + 5 + self.times.len()
+            + 1 + 5 + self.values.len()
+            + self.keep.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.kind.is_empty()
+            && self.labels.is_empty()
+            && self.times.is_empty()
+            && self.values.is_empty()
+            && self.keep.is_none()
+    }
+}
+
+/// Series to write, every one or none.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsIngest {
+    pub(crate) series: Vec<MetricsNewSeries>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsIngest {
+    const NAME: &'static str = "metrics.Ingest";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.series = codec::list(r, "series", codec::message::<MetricsNewSeries>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.series.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.series, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.series, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.series.is_empty()
+    }
+}
+
+/// A page of names, of a name's labels or of a label's values.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsPageAsked {
+    /// The name whose labels, or whose label's values, it lists.
+    pub(crate) name: Option<String>,
+    /// The label whose values it lists.
+    pub(crate) label: Option<String>,
+    pub(crate) prefix: Option<String>,
+    /// A page's next.
+    pub(crate) after: Option<String>,
+    /// 1000 unless given, 10,000 at most.
+    pub(crate) limit: Option<u64>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsPageAsked {
+    const NAME: &'static str = "metrics.PageAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = Some(codec::str(r, "name")?),
+                2 => message.label = Some(codec::str(r, "label")?),
+                3 => message.prefix = Some(codec::str(r, "prefix")?),
+                4 => message.after = Some(codec::str(r, "after")?),
+                5 => message.limit = Some(codec::uint(r, "limit")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if let Some(name) = &self.name {
+            map.field(out, 1);
+            codec::write_str(out, name);
+        }
+        if let Some(label) = &self.label {
+            map.field(out, 2);
+            codec::write_str(out, label);
+        }
+        if let Some(prefix) = &self.prefix {
+            map.field(out, 3);
+            codec::write_str(out, prefix);
+        }
+        if let Some(after) = &self.after {
+            map.field(out, 4);
+            codec::write_str(out, after);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 5);
+            codec::write_uint(out, limit);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + self.name.as_ref().map_or(0, |name| 1 + 5 + name.len())
+            + self.label.as_ref().map_or(0, |label| 1 + 5 + label.len())
+            + self.prefix.as_ref().map_or(0, |prefix| 1 + 5 + prefix.len())
+            + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
+            + self.limit.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_none()
+            && self.label.is_none()
+            && self.prefix.is_none()
+            && self.after.is_none()
+            && self.limit.is_none()
+    }
+}
+
+/// A name the store holds samples of.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsName {
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) series_count: u64,
+    pub(crate) unit: String,
+    pub(crate) help: String,
+    /// Milliseconds.
+    pub(crate) keep: u64,
+    /// Its oldest sample, or where its keep begins while it holds older. Unix milliseconds.
+    pub(crate) retained_from: i64,
+    /// Unix milliseconds.
+    pub(crate) newest: i64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsName {
+    const NAME: &'static str = "metrics.Name";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.kind = codec::str(r, "kind")?,
+                3 => message.series_count = codec::uint(r, "seriesCount")?,
+                4 => message.unit = codec::str(r, "unit")?,
+                5 => message.help = codec::str(r, "help")?,
+                6 => message.keep = codec::uint(r, "keep")?,
+                7 => message.retained_from = codec::int(r, "retainedFrom")?,
+                8 => message.newest = codec::int(r, "newest")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.kind.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.kind);
+        }
+        if self.series_count != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.series_count);
+        }
+        if !self.unit.is_empty() {
+            map.field(out, 4);
+            codec::write_str(out, &self.unit);
+        }
+        if !self.help.is_empty() {
+            map.field(out, 5);
+            codec::write_str(out, &self.help);
+        }
+        if self.keep != 0 {
+            map.field(out, 6);
+            codec::write_uint(out, &self.keep);
+        }
+        if self.retained_from != 0 {
+            map.field(out, 7);
+            codec::write_int(out, &self.retained_from);
+        }
+        if self.newest != 0 {
+            map.field(out, 8);
+            codec::write_int(out, &self.newest);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.kind.len()
+            + 10
+            + 1 + 5 + self.unit.len()
+            + 1 + 5 + self.help.len()
+            + 10
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.kind.is_empty()
+            && self.series_count == 0
+            && self.unit.is_empty()
+            && self.help.is_empty()
+            && self.keep == 0
+            && self.retained_from == 0
+            && self.newest == 0
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsNamePage {
+    pub(crate) names: Vec<MetricsName>,
+    /// The page after it; the last page has none.
+    pub(crate) next: Option<String>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsNamePage {
+    const NAME: &'static str = "metrics.NamePage";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.names = codec::list(r, "names", codec::message::<MetricsName>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.names.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.names, codec::write_message);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.names, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.names.is_empty()
+            && self.next.is_none()
+    }
+}
+
+/// A page of a name's labels, or of a label's values.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsTextPage {
+    pub(crate) texts: Vec<String>,
+    pub(crate) next: Option<String>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsTextPage {
+    const NAME: &'static str = "metrics.TextPage";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.texts = codec::list(r, "texts", codec::str)?,
+                2 => message.next = Some(codec::str(r, "next")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.texts.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.texts, codec::write_str);
+        }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.texts, |item| 5 + item.len())
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.texts.is_empty()
+            && self.next.is_none()
+    }
+}
+
+/// A name's unit and help; empty ones remove them.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsDescription {
+    pub(crate) name: String,
+    pub(crate) unit: String,
+    pub(crate) help: String,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsDescription {
+    const NAME: &'static str = "metrics.Description";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.unit = codec::str(r, "unit")?,
+                3 => message.help = codec::str(r, "help")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.unit.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.unit);
+        }
+        if !self.help.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.help);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.unit.len()
+            + 1 + 5 + self.help.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.unit.is_empty()
+            && self.help.is_empty()
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsNameAsked {
+    pub(crate) name: String,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsNameAsked {
+    const NAME: &'static str = "metrics.NameAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+    }
+}
+
+/// One series, by exactly its name and labels.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsSeriesNamed {
+    pub(crate) name: String,
+    pub(crate) labels: BTreeMap<String, String>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsSeriesNamed {
+    const NAME: &'static str = "metrics.SeriesNamed";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.labels = codec::names(r, "labels", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.labels.is_empty()
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsDeleted {
+    pub(crate) found: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsDeleted {
+    const NAME: &'static str = "metrics.Deleted";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+    }
+}
+
+/// A series whose bytes no longer read, and what broke.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsDamage {
+    pub(crate) name: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) error: String,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsDamage {
+    const NAME: &'static str = "metrics.Damage";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.labels = codec::names(r, "labels", codec::str)?,
+                3 => message.error = codec::str(r, "error")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if !self.error.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.error);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + 1 + 5 + self.error.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.labels.is_empty()
+            && self.error.is_empty()
+    }
+}
+
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsDamages {
+    pub(crate) damages: Vec<MetricsDamage>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsDamages {
+    const NAME: &'static str = "metrics.Damages";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.damages = codec::list(r, "damages", codec::message::<MetricsDamage>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.damages.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.damages, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.damages, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.damages.is_empty()
+    }
+}
+
+/// An SDK's instruments' stream: its session, sixteen random bytes drawn when
+/// it opened the store, and the last batch the store answered it, 0 for none.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsSession {
+    pub(crate) id: Vec<u8>,
+    pub(crate) after: u64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsSession {
+    const NAME: &'static str = "metrics.Session";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.id = codec::bin(r, "id")?,
+                2 => message.after = codec::uint(r, "after")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.id.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.id);
+        }
+        if self.after != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.after);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.id.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.id.is_empty()
+            && self.after == 0
+    }
+}
+
+/// An instrument a batch counts into, by a number the stream gives it.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsInstrument {
+    pub(crate) number: u64,
+    pub(crate) name: String,
+    /// Counter, gauge, timer or histogram.
+    pub(crate) form: String,
+    pub(crate) unit: Option<String>,
+    pub(crate) help: Option<String>,
+    /// Milliseconds.
+    pub(crate) keep: Option<u64>,
+    /// A timer's or a histogram's upper bounds, ascending.
+    pub(crate) bounds: Option<Vec<f64>>,
+    /// A timer's spread on the store's grid.
+    pub(crate) exponential: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsInstrument {
+    const NAME: &'static str = "metrics.Instrument";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.number = codec::uint(r, "number")?,
+                2 => message.name = codec::str(r, "name")?,
+                3 => message.form = codec::str(r, "form")?,
+                4 => message.unit = Some(codec::str(r, "unit")?),
+                5 => message.help = Some(codec::str(r, "help")?),
+                6 => message.keep = Some(codec::uint(r, "keep")?),
+                7 => message.bounds = Some(codec::list(r, "bounds", codec::float)?),
+                8 => message.exponential = codec::bool(r, "exponential")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.number != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.number);
+        }
+        if !self.name.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.name);
+        }
+        if !self.form.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.form);
+        }
+        if let Some(unit) = &self.unit {
+            map.field(out, 4);
+            codec::write_str(out, unit);
+        }
+        if let Some(help) = &self.help {
+            map.field(out, 5);
+            codec::write_str(out, help);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 6);
+            codec::write_uint(out, keep);
+        }
+        if let Some(bounds) = &self.bounds {
+            map.field(out, 7);
+            codec::write_list(out, bounds, codec::write_float);
+        }
+        if self.exponential {
+            map.field(out, 8);
+            codec::write_bool(out, &self.exponential);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.form.len()
+            + self.unit.as_ref().map_or(0, |unit| 1 + 5 + unit.len())
+            + self.help.as_ref().map_or(0, |help| 1 + 5 + help.len())
+            + self.keep.map_or(0, |_| 10)
+            + self.bounds.as_ref().map_or(0, |bounds| 1 + codec::list_size(bounds, |_| 9))
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.number == 0
+            && self.name.is_empty()
+            && self.form.is_empty()
+            && self.unit.is_none()
+            && self.help.is_none()
+            && self.keep.is_none()
+            && self.bounds.is_none()
+            && !self.exponential
+    }
+}
+
+/// A set of labels of an instrument, by a number the stream gives it, or its
+/// series of __overflow, where a client counts past the sets it holds.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsSet {
+    pub(crate) number: u64,
+    pub(crate) instrument: u64,
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) overflow: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsSet {
+    const NAME: &'static str = "metrics.Set";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.number = codec::uint(r, "number")?,
+                2 => message.instrument = codec::uint(r, "instrument")?,
+                3 => message.labels = codec::names(r, "labels", codec::str)?,
+                4 => message.overflow = codec::bool(r, "overflow")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.number != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.number);
+        }
+        if self.instrument != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.instrument);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 3);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if self.overflow {
+            map.field(out, 4);
+            codec::write_bool(out, &self.overflow);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.number == 0
+            && self.instrument == 0
+            && self.labels.is_empty()
+            && !self.overflow
+    }
+}
+
+/// What a set of labels changed since the batch before: a counter's sum to
+/// add, a gauge's value, or what a timer or a histogram measured.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsChange {
+    pub(crate) set: u64,
+    pub(crate) add: Option<f64>,
+    pub(crate) value: Option<f64>,
+    pub(crate) count: u64,
+    pub(crate) sum: f64,
+    pub(crate) longest: f64,
+    /// Each bound's own count, +Inf last.
+    pub(crate) buckets: Vec<u64>,
+    /// Each interval of the grid's count, by its label: 3:13, zero.
+    pub(crate) bins: BTreeMap<String, u64>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsChange {
+    const NAME: &'static str = "metrics.Change";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.set = codec::uint(r, "set")?,
+                2 => message.add = Some(codec::float(r, "add")?),
+                3 => message.value = Some(codec::float(r, "value")?),
+                4 => message.count = codec::uint(r, "count")?,
+                5 => message.sum = codec::float(r, "sum")?,
+                6 => message.longest = codec::float(r, "longest")?,
+                7 => message.buckets = codec::list(r, "buckets", codec::uint)?,
+                8 => message.bins = codec::names(r, "bins", codec::uint)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.set != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.set);
+        }
+        if let Some(add) = &self.add {
+            map.field(out, 2);
+            codec::write_float(out, add);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 3);
+            codec::write_float(out, value);
+        }
+        if self.count != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.count);
+        }
+        if self.sum.to_bits() != 0 {
+            map.field(out, 5);
+            codec::write_float(out, &self.sum);
+        }
+        if self.longest.to_bits() != 0 {
+            map.field(out, 6);
+            codec::write_float(out, &self.longest);
+        }
+        if !self.buckets.is_empty() {
+            map.field(out, 7);
+            codec::write_list(out, &self.buckets, codec::write_uint);
+        }
+        if !self.bins.is_empty() {
+            map.field(out, 8);
+            codec::write_names(out, &self.bins, codec::write_uint);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + self.add.map_or(0, |_| 10)
+            + self.value.map_or(0, |_| 10)
+            + 10
+            + 10
+            + 10
+            + 1 + codec::list_size(&self.buckets, |_| 9)
+            + 1 + codec::names_size(&self.bins, |_| 9)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.set == 0
+            && self.add.is_none()
+            && self.value.is_none()
+            && self.count == 0
+            && self.sum.to_bits() == 0
+            && self.longest.to_bits() == 0
+            && self.buckets.is_empty()
+            && self.bins.is_empty()
+    }
+}
+
+/// A batch of an SDK's changes, numbered from 1 in its session, with the
+/// instruments and the sets of labels it names that the stream has not
+/// declared yet.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsBatch {
+    pub(crate) number: u64,
+    pub(crate) instruments: Vec<MetricsInstrument>,
+    pub(crate) sets: Vec<MetricsSet>,
+    pub(crate) changes: Vec<MetricsChange>,
+    /// The store writes its totals before it answers.
+    pub(crate) flush: bool,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsBatch {
+    const NAME: &'static str = "metrics.Batch";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.number = codec::uint(r, "number")?,
+                2 => message.instruments = codec::list(r, "instruments", codec::message::<MetricsInstrument>)?,
+                3 => message.sets = codec::list(r, "sets", codec::message::<MetricsSet>)?,
+                4 => message.changes = codec::list(r, "changes", codec::message::<MetricsChange>)?,
+                5 => message.flush = codec::bool(r, "flush")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.number != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.number);
+        }
+        if !self.instruments.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.instruments, codec::write_message);
+        }
+        if !self.sets.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.sets, codec::write_message);
+        }
+        if !self.changes.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.changes, codec::write_message);
+        }
+        if self.flush {
+            map.field(out, 5);
+            codec::write_bool(out, &self.flush);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.instruments, codec::message_size)
+            + 1 + codec::list_size(&self.sets, codec::message_size)
+            + 1 + codec::list_size(&self.changes, codec::message_size)
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.number == 0
+            && self.instruments.is_empty()
+            && self.sets.is_empty()
+            && self.changes.is_empty()
+            && !self.flush
+    }
+}
+
+/// An instrument the store refused, by the stream's number for it.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsRefused {
+    pub(crate) instrument: u64,
+    pub(crate) error: String,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsRefused {
+    const NAME: &'static str = "metrics.Refused";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.instrument = codec::uint(r, "instrument")?,
+                2 => message.error = codec::str(r, "error")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.instrument != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.instrument);
+        }
+        if !self.error.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.error);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.error.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.instrument == 0
+            && self.error.is_empty()
+    }
+}
+
+/// The store's answer: the last batch of the session it applied, and whether
+/// it knew the session; the stream's RESPONSE says it first.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsAck {
+    pub(crate) applied: u64,
+    pub(crate) known: bool,
+    pub(crate) refused: Vec<MetricsRefused>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsAck {
+    const NAME: &'static str = "metrics.Ack";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.applied = codec::uint(r, "applied")?,
+                2 => message.known = codec::bool(r, "known")?,
+                3 => message.refused = codec::list(r, "refused", codec::message::<MetricsRefused>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.applied != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.applied);
+        }
+        if self.known {
+            map.field(out, 2);
+            codec::write_bool(out, &self.known);
+        }
+        if !self.refused.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.refused, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 2
+            + 1 + codec::list_size(&self.refused, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.applied == 0
+            && !self.known
+            && self.refused.is_empty()
+    }
+}
+
 /// Opens a stream of events by name, made with its first event.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -6744,6 +8749,34 @@ pub(crate) mod method {
     pub(crate) const KV_ONCE_DELETE: u16 = 0x0133;
     #[cfg(feature = "kv")]
     pub(crate) const KV_TX: u16 = 0x0140;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_READ: u16 = 0x0601;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_LATEST: u16 = 0x0602;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_AGGREGATE: u16 = 0x0603;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_EXPLAIN: u16 = 0x0604;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_NAMES: u16 = 0x0605;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_LABEL_NAMES: u16 = 0x0606;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_LABEL_VALUES: u16 = 0x0607;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_DESCRIPTION: u16 = 0x0608;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_DAMAGED: u16 = 0x0609;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_INGEST: u16 = 0x060a;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_DESCRIBE: u16 = 0x060b;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_DELETE: u16 = 0x060c;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_FLUSH: u16 = 0x060d;
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_INSTRUMENTS: u16 = 0x060e;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_OPEN: u16 = 0x0501;
     #[cfg(feature = "records")]
@@ -6902,6 +8935,34 @@ pub(crate) mod method {
             KV_ONCE_DELETE => Some(Access::Write),
             #[cfg(feature = "kv")]
             KV_TX => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_READ => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_LATEST => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_AGGREGATE => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_EXPLAIN => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_NAMES => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_LABEL_NAMES => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_LABEL_VALUES => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_DESCRIPTION => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_DAMAGED => Some(Access::Read),
+            #[cfg(feature = "metrics")]
+            METRICS_INGEST => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_DESCRIBE => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_DELETE => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_FLUSH => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_INSTRUMENTS => Some(Access::Write),
             #[cfg(feature = "records")]
             RECORDS_OPEN => Some(Access::Read),
             #[cfg(feature = "records")]
@@ -7055,6 +9116,34 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("kv.once.delete", 0x0133, "call"),
     #[cfg(feature = "kv")]
     ("kv.tx", 0x0140, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.read", 0x0601, "download"),
+    #[cfg(feature = "metrics")]
+    ("metrics.latest", 0x0602, "download"),
+    #[cfg(feature = "metrics")]
+    ("metrics.aggregate", 0x0603, "download"),
+    #[cfg(feature = "metrics")]
+    ("metrics.explain", 0x0604, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.names", 0x0605, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.labelNames", 0x0606, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.labelValues", 0x0607, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.description", 0x0608, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.damaged", 0x0609, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.ingest", 0x060a, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.describe", 0x060b, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.delete", 0x060c, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.flush", 0x060d, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.instruments", 0x060e, "exchange"),
     #[cfg(feature = "records")]
     ("records.open", 0x0501, "call"),
     #[cfg(feature = "records")]
@@ -7226,6 +9315,68 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "kv.Outcome" => KvOutcome::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
         "kv.TxResults" => KvTxResults::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Condition" => MetricsCondition::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Query" => MetricsQuery::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Series" => MetricsSeries::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Read" => MetricsRead::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Newest" => MetricsNewest::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Latest" => MetricsLatest::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.AggregateAsked" => MetricsAggregateAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Bucket" => MetricsBucket::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Group" => MetricsGroup::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Aggregates" => MetricsAggregates::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Plan" => MetricsPlan::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Exceeds" => MetricsExceeds::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.NewSeries" => MetricsNewSeries::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Ingest" => MetricsIngest::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.PageAsked" => MetricsPageAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Name" => MetricsName::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.NamePage" => MetricsNamePage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.TextPage" => MetricsTextPage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Description" => MetricsDescription::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.NameAsked" => MetricsNameAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.SeriesNamed" => MetricsSeriesNamed::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Deleted" => MetricsDeleted::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Damage" => MetricsDamage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Damages" => MetricsDamages::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Session" => MetricsSession::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Instrument" => MetricsInstrument::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Set" => MetricsSet::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Change" => MetricsChange::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Batch" => MetricsBatch::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Refused" => MetricsRefused::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Ack" => MetricsAck::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Open" => RecordsOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

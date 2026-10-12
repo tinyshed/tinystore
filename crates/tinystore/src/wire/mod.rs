@@ -10,6 +10,8 @@ pub(crate) mod frame;
 mod jobs;
 mod kv;
 mod message;
+#[cfg(feature = "metrics")]
+mod metrics;
 pub(crate) mod msgpack;
 #[rustfmt::skip]
 pub(crate) mod protocol;
@@ -53,16 +55,24 @@ pub(crate) enum Route {
     Tail,
     #[cfg(feature = "records")]
     Lines,
+    /// A read, the newest samples or an aggregate, answered in parts.
+    #[cfg(feature = "metrics")]
+    Parts,
+    /// A client's instruments, whose batches and answers are the stream's
+    /// items.
+    #[cfg(feature = "metrics")]
+    Instruments,
     Worker,
 }
 
 /// Work on a session's workers, off the thread that asked.
-#[cfg(any(feature = "blobs", feature = "records"))]
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
 pub(crate) type Spawn = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
 
 /// What a stream whose DATA goes either way needs of its session: a file's
-/// bytes, a tail's batches, a writer's lines.
-#[cfg(any(feature = "blobs", feature = "records"))]
+/// bytes, a tail's batches, a writer's lines, a read's parts, the answers to
+/// a client's instruments.
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
 #[derive(Clone)]
 pub(crate) struct Link {
     /// A DATA on the stream.

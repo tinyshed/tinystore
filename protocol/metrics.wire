@@ -1,0 +1,262 @@
+# metrics, as plan/api/metrics.md has it: series by their name and labels,
+# their samples read back by range and in buckets, what a store holds of
+# them, and the instruments of a program, whose totals the store keeps. Times
+# are Unix milliseconds; a column of a series' samples holds an int64 or a
+# float64 a sample, 8 bytes, little end first, so that every value's bits
+# come back as they were written.
+
+# What a label's value must be: one of values, none of them with not, the
+# label absent too, or a value that starts with prefix.
+message metrics.Condition {
+  1 values: [str]
+  2 not: bool
+  3 prefix: str?
+}
+
+# The series a call finds, and its range: since before now, or from and to.
+message metrics.Query {
+  1 name: str?
+  2 where: {metrics.Condition}
+  3 since: duration?
+  4 from: time?
+  5 to: time?           # excluded; now, a sample taken now in the range, unless given
+}
+
+# A series and its samples, or a part of them: a series longer than a body
+# goes on in the next part.
+message metrics.Series {
+  1 name: str
+  2 kind: str           # gauge, counter or histogram
+  3 labels: {str}
+  4 times: bin          # an int64 a sample
+  5 values: bin         # a float64 a sample
+  6 more: bool          # the next part goes on with this series
+}
+
+message metrics.Read {
+  1 series: [metrics.Series]
+}
+
+# A series' newest sample in the range.
+message metrics.Newest {
+  1 name: str
+  2 labels: {str}
+  3 at: time
+  4 value: float
+}
+
+message metrics.Latest {
+  1 series: [metrics.Newest]
+}
+
+# An aggregate: read's query, its buckets, its op and its groups. Without
+# by and without, every series of a name is one group; without: [] keeps
+# every series apart.
+message metrics.AggregateAsked {
+  1 query: metrics.Query
+  2 every: duration?
+  3 op: str?            # count, sum, avg, min, max, increase, rate, delta, first, last, or p and a rank; none for a read's plan
+  4 by: [str]?
+  5 without: [str]?
+  6 estimate: bool      # a timer's percentile also gives a point between its bounds
+}
+
+# A bucket of an aggregate: its value, or a timer's percentile's bounds.
+message metrics.Bucket {
+  1 at: time            # where it begins
+  2 value: float?       # none for a timer's percentile
+  3 lower: float?
+  4 upper: float?       # infinity past the last bound
+  5 estimate: float?
+  6 samples: uint
+  7 resets: uint
+  8 partial: bool       # its value comes from less than its span
+  9 gap: bool           # its first step began before the bucket before it
+}
+
+# A group's buckets, or a part of them: a group longer than a body goes on
+# in the next part.
+message metrics.Group {
+  1 name: str
+  2 labels: {str}
+  3 buckets: [metrics.Bucket]
+  4 more: bool
+}
+
+message metrics.Aggregates {
+  1 groups: [metrics.Group]
+}
+
+# What a call would spend of each bound, and the bound it would stop at.
+message metrics.Plan {
+  1 series: uint
+  2 bytes: uint
+  3 decoded: uint
+  4 exceeds: metrics.Exceeds?
+}
+
+message metrics.Exceeds {
+  1 limit: str          # series, bytes read or samples decoded
+  2 wanted: uint
+  3 bound: uint
+}
+
+# A series to write, its samples as two columns.
+message metrics.NewSeries {
+  1 name: str
+  2 kind: str           # gauge, counter or histogram
+  3 labels: {str}
+  4 times: bin          # an int64 a sample
+  5 values: bin         # a float64 a sample
+  6 keep: duration?     # how long the name's samples stay: its own, kept in the file
+}
+
+# Series to write, every one or none.
+message metrics.Ingest {
+  1 series: [metrics.NewSeries]
+}
+
+# A page of names, of a name's labels or of a label's values.
+message metrics.PageAsked {
+  1 name: str?          # the name whose labels, or whose label's values, it lists
+  2 label: str?         # the label whose values it lists
+  3 prefix: str?
+  4 after: str?         # a page's next
+  5 limit: uint?        # 1000 unless given, 10,000 at most
+}
+
+# A name the store holds samples of.
+message metrics.Name {
+  1 name: str
+  2 kind: str
+  3 seriesCount: uint
+  4 unit: str
+  5 help: str
+  6 keep: duration
+  7 retainedFrom: time  # its oldest sample, or where its keep begins while it holds older
+  8 newest: time
+}
+
+message metrics.NamePage {
+  1 names: [metrics.Name]
+  2 next: str?          # the page after it; the last page has none
+}
+
+# A page of a name's labels, or of a label's values.
+message metrics.TextPage {
+  1 texts: [str]
+  2 next: str?
+}
+
+# A name's unit and help; empty ones remove them.
+message metrics.Description {
+  1 name: str
+  2 unit: str
+  3 help: str
+}
+
+message metrics.NameAsked {
+  1 name: str
+}
+
+# One series, by exactly its name and labels.
+message metrics.SeriesNamed {
+  1 name: str
+  2 labels: {str}
+}
+
+message metrics.Deleted {
+  1 found: bool
+}
+
+# A series whose bytes no longer read, and what broke.
+message metrics.Damage {
+  1 name: str
+  2 labels: {str}
+  3 error: str
+}
+
+message metrics.Damages {
+  1 damages: [metrics.Damage]
+}
+
+# An SDK's instruments' stream: its session, sixteen random bytes drawn when
+# it opened the store, and the last batch the store answered it, 0 for none.
+message metrics.Session {
+  1 id: bin
+  2 after: uint
+}
+
+# An instrument a batch counts into, by a number the stream gives it.
+message metrics.Instrument {
+  1 number: uint
+  2 name: str
+  3 form: str           # counter, gauge, timer or histogram
+  4 unit: str?
+  5 help: str?
+  6 keep: duration?
+  7 bounds: [float]?    # a timer's or a histogram's upper bounds, ascending
+  8 exponential: bool   # a timer's spread on the store's grid
+}
+
+# A set of labels of an instrument, by a number the stream gives it, or its
+# series of __overflow, where a client counts past the sets it holds.
+message metrics.Set {
+  1 number: uint
+  2 instrument: uint
+  3 labels: {str}
+  4 overflow: bool
+}
+
+# What a set of labels changed since the batch before: a counter's sum to
+# add, a gauge's value, or what a timer or a histogram measured.
+message metrics.Change {
+  1 set: uint
+  2 add: float?
+  3 value: float?
+  4 count: uint
+  5 sum: float
+  6 longest: float
+  7 buckets: [uint]     # each bound's own count, +Inf last
+  8 bins: {uint}        # each interval of the grid's count, by its label: 3:13, zero
+}
+
+# A batch of an SDK's changes, numbered from 1 in its session, with the
+# instruments and the sets of labels it names that the stream has not
+# declared yet.
+message metrics.Batch {
+  1 number: uint
+  2 instruments: [metrics.Instrument]
+  3 sets: [metrics.Set]
+  4 changes: [metrics.Change]
+  5 flush: bool         # the store writes its totals before it answers
+}
+
+# An instrument the store refused, by the stream's number for it.
+message metrics.Refused {
+  1 instrument: uint
+  2 error: str
+}
+
+# The store's answer: the last batch of the session it applied, and whether
+# it knew the session; the stream's RESPONSE says it first.
+message metrics.Ack {
+  1 applied: uint
+  2 known: bool
+  3 refused: [metrics.Refused]
+}
+
+read  0x0601 metrics.read(metrics.Query)               -> download metrics.Read until metrics.Read
+read  0x0602 metrics.latest(metrics.Query)             -> download metrics.Latest until metrics.Latest
+read  0x0603 metrics.aggregate(metrics.AggregateAsked) -> download metrics.Aggregates until metrics.Aggregates
+read  0x0604 metrics.explain(metrics.AggregateAsked)   -> metrics.Plan
+read  0x0605 metrics.names(metrics.PageAsked)          -> metrics.NamePage
+read  0x0606 metrics.labelNames(metrics.PageAsked)     -> metrics.TextPage
+read  0x0607 metrics.labelValues(metrics.PageAsked)    -> metrics.TextPage
+read  0x0608 metrics.description(metrics.NameAsked)    -> metrics.Description
+read  0x0609 metrics.damaged(Empty)                    -> metrics.Damages
+write 0x060a metrics.ingest(metrics.Ingest)            -> Empty
+write 0x060b metrics.describe(metrics.Description)     -> Empty
+write 0x060c metrics.delete(metrics.SeriesNamed)       -> metrics.Deleted
+write 0x060d metrics.flush(Empty)                      -> Empty
+write 0x060e metrics.instruments(metrics.Session)      -> exchange metrics.Ack for metrics.Batch

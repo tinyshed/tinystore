@@ -57,6 +57,8 @@ mod rank;
 mod read;
 mod recorder;
 mod registry;
+#[cfg(feature = "wire")]
+mod remote;
 mod residuals;
 mod retention;
 mod series;
@@ -82,6 +84,8 @@ pub use listing::{LabelPage, List, NameInfo, NamePage, ValuePage};
 pub use maintain::{Maintenance, maintain};
 pub use query::{Condition, Not, Prefix, Query, Values};
 pub use recorder::Recorder;
+#[cfg(feature = "wire")]
+pub(crate) use remote::{Ack, Batch, Change, Declared, Remote, Set};
 pub use series::{Kind, Labels, Sample, Series};
 
 use crate::{Result, Store};

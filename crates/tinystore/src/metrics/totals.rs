@@ -51,6 +51,12 @@ pub(super) enum Form {
 }
 
 impl Form {
+    /// The form a client names over the wire.
+    #[cfg(feature = "wire")]
+    pub(super) fn parse(word: &str) -> Option<Form> {
+        [Form::Counter, Form::Gauge, Form::Timer, Form::Histogram].into_iter().find(|form| form.as_str() == word)
+    }
+
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Form::Counter => "counter",
@@ -122,6 +128,19 @@ pub(super) struct Slot {
     said: AtomicBool,
     /// What the writes keep of it.
     pub(super) run: Mutex<Run>,
+}
+
+/// What a client's timer or histogram measured since its last batch.
+#[cfg(feature = "wire")]
+#[derive(Debug, Default)]
+pub(super) struct Measures {
+    pub(super) count: u64,
+    pub(super) sum: f64,
+    pub(super) longest: f64,
+    /// Each given bound's bucket's own count, `+Inf` last.
+    pub(super) buckets: Vec<u64>,
+    /// How many values fell in each interval of the finest grid.
+    pub(super) bins: Vec<(Bin, u64)>,
 }
 
 /// What a timer or a histogram measured since the last write.
@@ -322,6 +341,27 @@ impl Slot {
         }
     }
 
+    /// Adds what a client's timer or histogram measured since its last
+    /// batch, under the lock a call takes, so that its parts move together.
+    #[cfg(feature = "wire")]
+    pub(super) fn merge(&self, measures: &Measures) {
+        let Some(measured) = &self.measured else { return };
+        if measures.count == 0 {
+            return;
+        }
+        let mut measured = lock(measured);
+        measured.count += measures.count;
+        measured.sum += measures.sum;
+        measured.longest = if measured.any { measured.longest.max(measures.longest) } else { measures.longest };
+        measured.any = true;
+        for (total, more) in measured.buckets.iter_mut().zip(&measures.buckets) {
+            *total += more;
+        }
+        for (bin, count) in &measures.bins {
+            *measured.bins.entry(*bin).or_default() += count;
+        }
+    }
+
     /// The series of an interval of its grid: its `_bucket`, the interval in
     /// the store's label `__bin`; none for labels that leave it no room,
     /// said once.
@@ -424,6 +464,13 @@ impl Instrument {
         let slot = Arc::new(self.made(kept.clone())?);
         sets.by_labels.insert(kept, Arc::clone(&slot));
         Ok(slot)
+    }
+
+    /// Its series of `__overflow`, for a client that counts past the sets
+    /// of labels it holds.
+    #[cfg(feature = "wire")]
+    pub(super) fn overflowed(&self) -> Result<Arc<Slot>> {
+        self.overflow(&mut lock(&self.sets))
     }
 
     /// Its series of `__overflow`, said once when it is first counted into.
@@ -566,6 +613,10 @@ pub(super) struct Totals {
     /// The time of the last write, or the engine's start: a run that begins
     /// after it begins with a zero there.
     last_write: AtomicI64,
+    #[cfg_attr(
+        all(not(test), not(feature = "wire")),
+        expect(dead_code, reason = "a client's connection comes over the wire")
+    )]
     next_owner: AtomicU64,
 }
 
@@ -654,8 +705,8 @@ impl Totals {
     /// A connection of its own for the gauges a client sets, which leave the
     /// totals when it does.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the wire's sessions are connections, from the slice that builds them")
+        all(not(test), not(feature = "wire")),
+        expect(dead_code, reason = "a client's connection comes over the wire")
     )]
     pub(super) fn connect(self: &Arc<Totals>) -> Connection {
         Connection { totals: Arc::clone(self), id: self.next_owner.fetch_add(1, Ordering::Relaxed) }
@@ -728,6 +779,10 @@ impl Totals {
     }
 
     /// Unsets the gauges `owner` set last: they are written no longer.
+    #[cfg_attr(
+        all(not(test), not(feature = "wire")),
+        expect(dead_code, reason = "a client's connection comes over the wire")
+    )]
     fn leave(&self, owner: u64) {
         let instruments: Vec<Arc<Instrument>> = lock(&self.registry).instruments.values().cloned().collect();
         for instrument in instruments.iter().filter(|instrument| instrument.form == Form::Gauge) {
@@ -870,6 +925,10 @@ fn give_back(plan: &Planned) {
 }
 
 /// A client's own gauges: they leave the totals when it does.
+#[cfg_attr(
+    all(not(test), not(feature = "wire")),
+    expect(dead_code, reason = "a client's connection comes over the wire")
+)]
 pub(super) struct Connection {
     totals: Arc<Totals>,
     pub(super) id: u64,

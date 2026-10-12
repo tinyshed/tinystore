@@ -2061,6 +2061,1178 @@
     },
     {
       "fields": {
+        "not": {
+          "bool": true
+        },
+        "prefix": {
+          "str": "prefix"
+        },
+        "values": {
+          "list": [
+            {
+              "str": "values"
+            }
+          ]
+        }
+      },
+      "hex": "830191a676616c75657302c303a6707265666978",
+      "message": "metrics.Condition",
+      "name": "metrics.Condition with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Condition",
+      "name": "metrics.Condition with no field"
+    },
+    {
+      "fields": {
+        "from": {
+          "int": "1790000000000"
+        },
+        "name": {
+          "str": "name"
+        },
+        "since": {
+          "uint": "1500"
+        },
+        "to": {
+          "int": "1790000000000"
+        },
+        "where": {
+          "names": {
+            "a": {
+              "fields": {
+                "not": {
+                  "bool": true
+                },
+                "prefix": {
+                  "str": "prefix"
+                },
+                "values": {
+                  "list": [
+                    {
+                      "str": "values"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "hex": "8501a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c00",
+      "message": "metrics.Query",
+      "name": "metrics.Query with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Query",
+      "name": "metrics.Query with no field"
+    },
+    {
+      "fields": {
+        "kind": {
+          "str": "kind"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "more": {
+          "bool": true
+        },
+        "name": {
+          "str": "name"
+        },
+        "times": {
+          "bin": "01ff"
+        },
+        "values": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06c3",
+      "message": "metrics.Series",
+      "name": "metrics.Series with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Series",
+      "name": "metrics.Series with no field"
+    },
+    {
+      "fields": {
+        "series": {
+          "list": [
+            {
+              "fields": {
+                "kind": {
+                  "str": "kind"
+                },
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "more": {
+                  "bool": true
+                },
+                "name": {
+                  "str": "name"
+                },
+                "times": {
+                  "bin": "01ff"
+                },
+                "values": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06c3",
+      "message": "metrics.Read",
+      "name": "metrics.Read with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Read",
+      "name": "metrics.Read with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "name": {
+          "str": "name"
+        },
+        "value": {
+          "float": "3ff8000000000000"
+        }
+      },
+      "hex": "8401a46e616d650281a161a66c6162656c7303cf000001a0c4506c0004cb3ff8000000000000",
+      "message": "metrics.Newest",
+      "name": "metrics.Newest with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Newest",
+      "name": "metrics.Newest with no field"
+    },
+    {
+      "fields": {
+        "series": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000"
+                },
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "name": {
+                  "str": "name"
+                },
+                "value": {
+                  "float": "3ff8000000000000"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918401a46e616d650281a161a66c6162656c7303cf000001a0c4506c0004cb3ff8000000000000",
+      "message": "metrics.Latest",
+      "name": "metrics.Latest with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Latest",
+      "name": "metrics.Latest with no field"
+    },
+    {
+      "fields": {
+        "by": {
+          "list": [
+            {
+              "str": "by"
+            }
+          ]
+        },
+        "estimate": {
+          "bool": true
+        },
+        "every": {
+          "uint": "1500"
+        },
+        "op": {
+          "str": "op"
+        },
+        "query": {
+          "fields": {
+            "from": {
+              "int": "1790000000000"
+            },
+            "name": {
+              "str": "name"
+            },
+            "since": {
+              "uint": "1500"
+            },
+            "to": {
+              "int": "1790000000000"
+            },
+            "where": {
+              "names": {
+                "a": {
+                  "fields": {
+                    "not": {
+                      "bool": true
+                    },
+                    "prefix": {
+                      "str": "prefix"
+                    },
+                    "values": {
+                      "list": [
+                        {
+                          "str": "values"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "without": {
+          "list": [
+            {
+              "str": "without"
+            }
+          ]
+        }
+      },
+      "hex": "86018501a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0002cd05dc03a26f700491a262790591a7776974686f757406c3",
+      "message": "metrics.AggregateAsked",
+      "name": "metrics.AggregateAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.AggregateAsked",
+      "name": "metrics.AggregateAsked with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "estimate": {
+          "float": "3ff8000000000000"
+        },
+        "gap": {
+          "bool": true
+        },
+        "lower": {
+          "float": "3ff8000000000000"
+        },
+        "partial": {
+          "bool": true
+        },
+        "resets": {
+          "uint": "707"
+        },
+        "samples": {
+          "uint": "607"
+        },
+        "upper": {
+          "float": "3ff8000000000000"
+        },
+        "value": {
+          "float": "3ff8000000000000"
+        }
+      },
+      "hex": "8901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c3",
+      "message": "metrics.Bucket",
+      "name": "metrics.Bucket with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Bucket",
+      "name": "metrics.Bucket with no field"
+    },
+    {
+      "fields": {
+        "buckets": {
+          "list": [
+            {
+              "fields": {
+                "at": {
+                  "int": "1790000000000"
+                },
+                "estimate": {
+                  "float": "3ff8000000000000"
+                },
+                "gap": {
+                  "bool": true
+                },
+                "lower": {
+                  "float": "3ff8000000000000"
+                },
+                "partial": {
+                  "bool": true
+                },
+                "resets": {
+                  "uint": "707"
+                },
+                "samples": {
+                  "uint": "607"
+                },
+                "upper": {
+                  "float": "3ff8000000000000"
+                },
+                "value": {
+                  "float": "3ff8000000000000"
+                }
+              }
+            }
+          ]
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "more": {
+          "bool": true
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8401a46e616d650281a161a66c6162656c7303918901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c304c3",
+      "message": "metrics.Group",
+      "name": "metrics.Group with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Group",
+      "name": "metrics.Group with no field"
+    },
+    {
+      "fields": {
+        "groups": {
+          "list": [
+            {
+              "fields": {
+                "buckets": {
+                  "list": [
+                    {
+                      "fields": {
+                        "at": {
+                          "int": "1790000000000"
+                        },
+                        "estimate": {
+                          "float": "3ff8000000000000"
+                        },
+                        "gap": {
+                          "bool": true
+                        },
+                        "lower": {
+                          "float": "3ff8000000000000"
+                        },
+                        "partial": {
+                          "bool": true
+                        },
+                        "resets": {
+                          "uint": "707"
+                        },
+                        "samples": {
+                          "uint": "607"
+                        },
+                        "upper": {
+                          "float": "3ff8000000000000"
+                        },
+                        "value": {
+                          "float": "3ff8000000000000"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "more": {
+                  "bool": true
+                },
+                "name": {
+                  "str": "name"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918401a46e616d650281a161a66c6162656c7303918901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c304c3",
+      "message": "metrics.Aggregates",
+      "name": "metrics.Aggregates with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Aggregates",
+      "name": "metrics.Aggregates with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "uint": "207"
+        },
+        "decoded": {
+          "uint": "307"
+        },
+        "exceeds": {
+          "fields": {
+            "bound": {
+              "uint": "307"
+            },
+            "limit": {
+              "str": "limit"
+            },
+            "wanted": {
+              "uint": "207"
+            }
+          }
+        },
+        "series": {
+          "uint": "107"
+        }
+      },
+      "hex": "84016b02cccf03cd0133048301a56c696d697402cccf03cd0133",
+      "message": "metrics.Plan",
+      "name": "metrics.Plan with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Plan",
+      "name": "metrics.Plan with no field"
+    },
+    {
+      "fields": {
+        "bound": {
+          "uint": "307"
+        },
+        "limit": {
+          "str": "limit"
+        },
+        "wanted": {
+          "uint": "207"
+        }
+      },
+      "hex": "8301a56c696d697402cccf03cd0133",
+      "message": "metrics.Exceeds",
+      "name": "metrics.Exceeds with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Exceeds",
+      "name": "metrics.Exceeds with no field"
+    },
+    {
+      "fields": {
+        "keep": {
+          "uint": "1500"
+        },
+        "kind": {
+          "str": "kind"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "name": {
+          "str": "name"
+        },
+        "times": {
+          "bin": "01ff"
+        },
+        "values": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06cd05dc",
+      "message": "metrics.NewSeries",
+      "name": "metrics.NewSeries with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.NewSeries",
+      "name": "metrics.NewSeries with no field"
+    },
+    {
+      "fields": {
+        "series": {
+          "list": [
+            {
+              "fields": {
+                "keep": {
+                  "uint": "1500"
+                },
+                "kind": {
+                  "str": "kind"
+                },
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "name": {
+                  "str": "name"
+                },
+                "times": {
+                  "bin": "01ff"
+                },
+                "values": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06cd05dc",
+      "message": "metrics.Ingest",
+      "name": "metrics.Ingest with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Ingest",
+      "name": "metrics.Ingest with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "str": "after"
+        },
+        "label": {
+          "str": "label"
+        },
+        "limit": {
+          "uint": "507"
+        },
+        "name": {
+          "str": "name"
+        },
+        "prefix": {
+          "str": "prefix"
+        }
+      },
+      "hex": "8501a46e616d6502a56c6162656c03a670726566697804a5616674657205cd01fb",
+      "message": "metrics.PageAsked",
+      "name": "metrics.PageAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.PageAsked",
+      "name": "metrics.PageAsked with no field"
+    },
+    {
+      "fields": {
+        "help": {
+          "str": "help"
+        },
+        "keep": {
+          "uint": "1500"
+        },
+        "kind": {
+          "str": "kind"
+        },
+        "name": {
+          "str": "name"
+        },
+        "newest": {
+          "int": "1790000000000"
+        },
+        "retainedFrom": {
+          "int": "1790000000000"
+        },
+        "seriesCount": {
+          "uint": "307"
+        },
+        "unit": {
+          "str": "unit"
+        }
+      },
+      "hex": "8801a46e616d6502a46b696e6403cd013304a4756e697405a468656c7006cd05dc07cf000001a0c4506c0008cf000001a0c4506c00",
+      "message": "metrics.Name",
+      "name": "metrics.Name with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Name",
+      "name": "metrics.Name with no field"
+    },
+    {
+      "fields": {
+        "names": {
+          "list": [
+            {
+              "fields": {
+                "help": {
+                  "str": "help"
+                },
+                "keep": {
+                  "uint": "1500"
+                },
+                "kind": {
+                  "str": "kind"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "newest": {
+                  "int": "1790000000000"
+                },
+                "retainedFrom": {
+                  "int": "1790000000000"
+                },
+                "seriesCount": {
+                  "uint": "307"
+                },
+                "unit": {
+                  "str": "unit"
+                }
+              }
+            }
+          ]
+        },
+        "next": {
+          "str": "next"
+        }
+      },
+      "hex": "8201918801a46e616d6502a46b696e6403cd013304a4756e697405a468656c7006cd05dc07cf000001a0c4506c0008cf000001a0c4506c0002a46e657874",
+      "message": "metrics.NamePage",
+      "name": "metrics.NamePage with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.NamePage",
+      "name": "metrics.NamePage with no field"
+    },
+    {
+      "fields": {
+        "next": {
+          "str": "next"
+        },
+        "texts": {
+          "list": [
+            {
+              "str": "texts"
+            }
+          ]
+        }
+      },
+      "hex": "820191a5746578747302a46e657874",
+      "message": "metrics.TextPage",
+      "name": "metrics.TextPage with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.TextPage",
+      "name": "metrics.TextPage with no field"
+    },
+    {
+      "fields": {
+        "help": {
+          "str": "help"
+        },
+        "name": {
+          "str": "name"
+        },
+        "unit": {
+          "str": "unit"
+        }
+      },
+      "hex": "8301a46e616d6502a4756e697403a468656c70",
+      "message": "metrics.Description",
+      "name": "metrics.Description with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Description",
+      "name": "metrics.Description with no field"
+    },
+    {
+      "fields": {
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8101a46e616d65",
+      "message": "metrics.NameAsked",
+      "name": "metrics.NameAsked with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.NameAsked",
+      "name": "metrics.NameAsked with no field"
+    },
+    {
+      "fields": {
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8201a46e616d650281a161a66c6162656c73",
+      "message": "metrics.SeriesNamed",
+      "name": "metrics.SeriesNamed with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.SeriesNamed",
+      "name": "metrics.SeriesNamed with no field"
+    },
+    {
+      "fields": {
+        "found": {
+          "bool": true
+        }
+      },
+      "hex": "8101c3",
+      "message": "metrics.Deleted",
+      "name": "metrics.Deleted with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Deleted",
+      "name": "metrics.Deleted with no field"
+    },
+    {
+      "fields": {
+        "error": {
+          "str": "error"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8301a46e616d650281a161a66c6162656c7303a56572726f72",
+      "message": "metrics.Damage",
+      "name": "metrics.Damage with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Damage",
+      "name": "metrics.Damage with no field"
+    },
+    {
+      "fields": {
+        "damages": {
+          "list": [
+            {
+              "fields": {
+                "error": {
+                  "str": "error"
+                },
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "name": {
+                  "str": "name"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918301a46e616d650281a161a66c6162656c7303a56572726f72",
+      "message": "metrics.Damages",
+      "name": "metrics.Damages with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Damages",
+      "name": "metrics.Damages with no field"
+    },
+    {
+      "fields": {
+        "after": {
+          "uint": "207"
+        },
+        "id": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8201c40201ff02cccf",
+      "message": "metrics.Session",
+      "name": "metrics.Session with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Session",
+      "name": "metrics.Session with no field"
+    },
+    {
+      "fields": {
+        "bounds": {
+          "list": [
+            {
+              "float": "3ff8000000000000"
+            }
+          ]
+        },
+        "exponential": {
+          "bool": true
+        },
+        "form": {
+          "str": "form"
+        },
+        "help": {
+          "str": "help"
+        },
+        "keep": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        },
+        "number": {
+          "uint": "107"
+        },
+        "unit": {
+          "str": "unit"
+        }
+      },
+      "hex": "88016b02a46e616d6503a4666f726d04a4756e697405a468656c7006cd05dc0791cb3ff800000000000008c3",
+      "message": "metrics.Instrument",
+      "name": "metrics.Instrument with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Instrument",
+      "name": "metrics.Instrument with no field"
+    },
+    {
+      "fields": {
+        "instrument": {
+          "uint": "207"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "number": {
+          "uint": "107"
+        },
+        "overflow": {
+          "bool": true
+        }
+      },
+      "hex": "84016b02cccf0381a161a66c6162656c7304c3",
+      "message": "metrics.Set",
+      "name": "metrics.Set with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Set",
+      "name": "metrics.Set with no field"
+    },
+    {
+      "fields": {
+        "add": {
+          "float": "3ff8000000000000"
+        },
+        "bins": {
+          "names": {
+            "a": {
+              "uint": "807"
+            }
+          }
+        },
+        "buckets": {
+          "list": [
+            {
+              "uint": "707"
+            }
+          ]
+        },
+        "count": {
+          "uint": "407"
+        },
+        "longest": {
+          "float": "3ff8000000000000"
+        },
+        "set": {
+          "uint": "107"
+        },
+        "sum": {
+          "float": "3ff8000000000000"
+        },
+        "value": {
+          "float": "3ff8000000000000"
+        }
+      },
+      "hex": "88016b02cb3ff800000000000003cb3ff800000000000004cd019705cb3ff800000000000006cb3ff80000000000000791cd02c30881a161cd0327",
+      "message": "metrics.Change",
+      "name": "metrics.Change with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Change",
+      "name": "metrics.Change with no field"
+    },
+    {
+      "fields": {
+        "changes": {
+          "list": [
+            {
+              "fields": {
+                "add": {
+                  "float": "3ff8000000000000"
+                },
+                "bins": {
+                  "names": {
+                    "a": {
+                      "uint": "807"
+                    }
+                  }
+                },
+                "buckets": {
+                  "list": [
+                    {
+                      "uint": "707"
+                    }
+                  ]
+                },
+                "count": {
+                  "uint": "407"
+                },
+                "longest": {
+                  "float": "3ff8000000000000"
+                },
+                "set": {
+                  "uint": "107"
+                },
+                "sum": {
+                  "float": "3ff8000000000000"
+                },
+                "value": {
+                  "float": "3ff8000000000000"
+                }
+              }
+            }
+          ]
+        },
+        "flush": {
+          "bool": true
+        },
+        "instruments": {
+          "list": [
+            {
+              "fields": {
+                "bounds": {
+                  "list": [
+                    {
+                      "float": "3ff8000000000000"
+                    }
+                  ]
+                },
+                "exponential": {
+                  "bool": true
+                },
+                "form": {
+                  "str": "form"
+                },
+                "help": {
+                  "str": "help"
+                },
+                "keep": {
+                  "uint": "1500"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "number": {
+                  "uint": "107"
+                },
+                "unit": {
+                  "str": "unit"
+                }
+              }
+            }
+          ]
+        },
+        "number": {
+          "uint": "107"
+        },
+        "sets": {
+          "list": [
+            {
+              "fields": {
+                "instrument": {
+                  "uint": "207"
+                },
+                "labels": {
+                  "names": {
+                    "a": {
+                      "str": "labels"
+                    }
+                  }
+                },
+                "number": {
+                  "uint": "107"
+                },
+                "overflow": {
+                  "bool": true
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "85016b029188016b02a46e616d6503a4666f726d04a4756e697405a468656c7006cd05dc0791cb3ff800000000000008c3039184016b02cccf0381a161a66c6162656c7304c3049188016b02cb3ff800000000000003cb3ff800000000000004cd019705cb3ff800000000000006cb3ff80000000000000791cd02c30881a161cd032705c3",
+      "message": "metrics.Batch",
+      "name": "metrics.Batch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Batch",
+      "name": "metrics.Batch with no field"
+    },
+    {
+      "fields": {
+        "error": {
+          "str": "error"
+        },
+        "instrument": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02a56572726f72",
+      "message": "metrics.Refused",
+      "name": "metrics.Refused with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Refused",
+      "name": "metrics.Refused with no field"
+    },
+    {
+      "fields": {
+        "applied": {
+          "uint": "107"
+        },
+        "known": {
+          "bool": true
+        },
+        "refused": {
+          "list": [
+            {
+              "fields": {
+                "error": {
+                  "str": "error"
+                },
+                "instrument": {
+                  "uint": "107"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "83016b02c3039182016b02a56572726f72",
+      "message": "metrics.Ack",
+      "name": "metrics.Ack with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Ack",
+      "name": "metrics.Ack with no field"
+    },
+    {
+      "fields": {
         "keep": {
           "uint": "1500"
         },
@@ -3574,6 +4746,20 @@
     "kv.set": 260,
     "kv.take": 262,
     "kv.tx": 320,
+    "metrics.aggregate": 1539,
+    "metrics.damaged": 1545,
+    "metrics.delete": 1548,
+    "metrics.describe": 1547,
+    "metrics.description": 1544,
+    "metrics.explain": 1540,
+    "metrics.flush": 1549,
+    "metrics.ingest": 1546,
+    "metrics.instruments": 1550,
+    "metrics.labelNames": 1542,
+    "metrics.labelValues": 1543,
+    "metrics.latest": 1538,
+    "metrics.names": 1541,
+    "metrics.read": 1537,
     "records.aggregate": 1286,
     "records.append": 1282,
     "records.count": 1284,

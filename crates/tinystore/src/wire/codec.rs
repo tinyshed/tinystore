@@ -171,7 +171,10 @@ pub(crate) fn int(r: &mut Reader<'_>, name: &str) -> Result<i64, Failure> {
 }
 
 /// A float, or an integer a float holds exactly, as JavaScript writes 3.0.
-#[cfg_attr(not(feature = "records"), expect(dead_code, reason = "only records' messages have a float field"))]
+#[cfg_attr(
+    not(any(feature = "records", feature = "metrics")),
+    expect(dead_code, reason = "only records' and metrics' messages have a float field")
+)]
 pub(crate) fn float(r: &mut Reader<'_>, name: &str) -> Result<f64, Failure> {
     let float = match r.next()? {
         Token::Float(float) => Some(float),
@@ -293,7 +296,10 @@ pub(crate) fn write_int(out: &mut Vec<u8>, number: &i64) {
     msgpack::write_int(out, *number);
 }
 
-#[cfg_attr(not(feature = "records"), expect(dead_code, reason = "only records' messages have a float field"))]
+#[cfg_attr(
+    not(any(feature = "records", feature = "metrics")),
+    expect(dead_code, reason = "only records' and metrics' messages have a float field")
+)]
 pub(crate) fn write_float(out: &mut Vec<u8>, float: &f64) {
     msgpack::write_float(out, *float);
 }

@@ -442,10 +442,75 @@ beside the series, by an index.
 
 - `protocol/metrics.wire`: `read`, `latest`, `aggregate`, `explain`, `names`,
   `labelNames`, `labelValues`, `description` and `damaged` are read methods,
-  which a `read` token may call; `ingest`, `describe` and `delete` write; a
-  connection declares its instruments' series and sends what changed.
-- A read answers in parts within the client's credit, as columns, as
-  `sql.columns` does.
+  which a `read` token may call; `ingest`, `describe`, `delete` and `flush`
+  write, and so does `instruments`, the stream an SDK's instruments send on.
+- `read`, `latest` and `aggregate` answer in parts within the client's
+  credit, as `sql.columns` does: each part as many series or groups as a body
+  holds, and a series longer than a body cut across parts. A series' samples
+  go as two columns, its times as int64 and its values as float64 bits, 8
+  bytes each, little end first, so that every value's bits come back.
+- `names`, `labelNames`, `labelValues` and `damaged` give what a body holds
+  of what they would give, and `next` says where the rest starts.
+
+### Instruments over the wire
+
+An SDK keeps what its instruments changed and sends it to the store's
+totals, which the store writes every 15 seconds as it writes its own
+instruments'. What crosses the boundary between two processes is counted
+once or, when the store crashes, lost with what the store had not written,
+and never twice.
+
+```text
+SDK                                         store
+instruments(session S, after N)      ──►    its last batch of S applied, or that it knows no S
+batch N+1: declarations, changes     ──►    applied once, in order
+                                     ◄──    ack N+1
+connection lost, batch N+2 unanswered
+instruments(S, after N+1)            ──►    applied N+2: the answer was lost, the batch was not
+                                     ◄──    the SDK sends again only what came after it
+```
+
+- A session is an SDK's run of a store: 16 random bytes drawn when it opens
+  the store, its batches numbered from 1. The store applies a batch once, and
+  only the one after the last it applied; a number it applied already is
+  answered again and changes nothing, and one past the next is refused, so
+  that the SDK sends again from what the store says.
+- A connection that ends with batches unanswered: the SDK opens the stream
+  again with its session and the last number it was answered, the store
+  says the last it applied, and the SDK sends again only those after it.
+- A store that started again knows no session, and lost what it had not
+  written, 15 seconds at most, as its own instruments' totals do. The SDK
+  then drops the batches it had sent and had no answer to, and says so once:
+  the store may have applied and written them before it stopped, and a batch
+  counted twice is a wrong total nobody sees, where one lost is a dip the
+  restart explains. It numbers its batches on from its last answered one.
+  So is a session the store forgot, an hour after its last stream ended.
+- A batch holds a change a set of labels: a counter's sum to add, a gauge's
+  value to set, a timer's or a histogram's count, sum and longest and the
+  counts of its buckets or of its grid's intervals to add, all of one set in
+  one change, which the store applies to its slot under the slot's lock, so
+  that a timer's series move together. A call made while a batch is on its
+  way counts in the next.
+- A batch declares the instruments and the sets of labels its changes name,
+  a number of the stream's each, the first time a stream needs them, so
+  that what follows is numbers. The store opens an instrument as a Rust one
+  opens, and answers one it refuses with the ack, its changes dropped; the
+  SDK says it once. An SDK that opens the stream again declares again.
+- A gauge's value is the connection's: a connection that ends takes its
+  gauges out of the totals, and an SDK that opens the stream again sends
+  every gauge's value in its first batch. A gauge's function is called every
+  15 seconds by the SDK, never twice at once.
+- The SDK sends what changed every second, 1000 changes a batch at most,
+  and holds at most 16 batches unanswered, past which changes gather for the
+  next. `flush()` sends what waits in a batch that asks the store to write
+  its totals before it answers.
+- A flush the store cannot be reached for fails as a call does, once the
+  SDK has dialled again twice, and what it carried waits for the next send.
+  A batch the store refuses as `invalid` would be refused again: the SDK
+  drops it, says so once, and numbers on those after it, so that one bad
+  change stops no later count.
+- What the store keeps of a session is the last batch it applied, in memory,
+  forgotten an hour after its last stream ended.
 
 ## What measurements decide
 

@@ -38,7 +38,7 @@ them. Both write series, and every read finds both.
 ## Measure the program
 
 ```ts
-const requests = store.metrics.counter('http_requests_total', { help: 'Requests served.' })
+const requests = store.metrics.counter<'route' | 'status'>('http_requests_total', { help: 'Requests served.' })
 requests.with({ route: '/notes', status: 200 }).inc()
 
 const depth = store.metrics.gauge('queue_depth', { unit: 'jobs' })
@@ -84,6 +84,17 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   instruments send what changed to the store, which adds it to the totals it
   keeps and writes them every 15 seconds, at `flush()` and when it closes; a
   crash loses at most the last 15 seconds.
+- What an SDK sends counts once: a send whose connection was lost goes again
+  on the next and counts once; a store that crashed loses what it had not
+  written, and what it had no time to answer, rather than count it twice.
+  `flush()` resolves once the store has written; when the store cannot be
+  reached it fails as a call does, and what it carried goes once it can be.
+- In TypeScript an instrument made with its label names,
+  `counter<'route' | 'status'>(…)`, takes only those in `with`, checked as
+  they are written; without them it takes any. A duration's text, an `op`
+  and a percentile are offered as they are typed, `'15m'`, `'p99'`, and one
+  misspelled, `'1hr'`, does not compile. A bucket of `count` … `last` has its
+  `value` as a number; a percentile's may have a timer's bounds in its place.
 - A value an instrument is given is a finite number: `NaN` or an infinity
   throws `invalid` at once, where the program made it, rather than failing
   every average of its bucket for as long as the name keeps it. `ingest`
@@ -623,7 +634,9 @@ let Description { unit, help } = stats.description("cpu")?;
 ```ts
 await store.metrics.delete({ name: 'cpu', labels: { host: 'web-1' } })   // true if it held that series
 
-for (const series of await store.metrics.damaged()) await store.metrics.delete(series)
+for (let damaged = await store.metrics.damaged(); damaged.length > 0; damaged = await store.metrics.damaged()) {
+  for (const series of damaged) await store.metrics.delete(series)
+}
 ```
 
 ```rust
@@ -635,9 +648,10 @@ for damage in stats.damaged()? {
 ```
 
 - `delete` removes the one series of exactly these labels, no more and no
-  fewer, and all its samples, whether they still read or not: no labels is
-  the series without labels, and the store's own, `__overflow` and `__bin`,
-  name their series too. Writing the same labels later starts a new series,
+  fewer, and all its samples, whether they still read or not: `labels: {}`
+  is the series without labels, and the store's own, `__overflow` and
+  `__bin`, name their series too. The labels are always given, so that a
+  delete never reads as one of every series of a name. Writing the same labels later starts a new series,
   as an instrument that counts into them does at its next write: a delete
   stops no writer. A name keeps its `keep`, unit and help.
 - A series whose bytes changed under it reads `corrupt`, naming it, and
@@ -994,6 +1008,45 @@ described, empty rather than an error. Its asks for a list of series
 without their samples, a delete by a name or a condition with what it took
 and a dry run, and values narrowed by time and other labels are in the open
 list.
+
+## Review of the Bun SDK over the wire, 12 October
+
+Three Haiku agents read the TypeScript surface of slice 7 and an example
+program with no other context: a newcomer check of eight tasks, a blind
+comparison with prom-client, OpenTelemetry, StatsD clients and Prometheus'
+and InfluxDB's queries, and a free review. What two or more of them asked
+for is built; the owner also asked for types that offer and check what a
+program writes.
+
+| They found                                                                 | What the SDK does                                                                    |
+|----------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
+| a label misspelled in `with` makes a new series; no label names to declare | `counter<'route' \| 'status'>(…)`: `with` compiles with those alone                  |
+| `delete({ name })` reads as every series of the name                       | `labels` always given, `{}` the series without labels, as Rust's `delete` takes them |
+| `damaged()`'s one-line loop stops at 1000                                  | the loop asks again until none is left, in the book and the SDK                      |
+| `stop()` beside the store's close, and beside a timing's `stop()`          | gone from `store.metrics`: the store's close stops the instruments                   |
+| `rate` with no unit; whether a write without `keep` resets it              | said: a second's increase; what the name keeps already                               |
+
+Built at the owner's ask: a duration's text, an `op` and a percentile are
+offered as they are typed and one misspelled does not compile, and a bucket
+of `count` … `last` has its `value` as a number. TypeScript folds a literal
+into a template beside it that takes it in, `'1h'` into `${number}h`, and
+offers neither; an intersection keeps them apart. Found while answering
+them: a second `gaugeFunc` of a name kept the first's function and dropped
+the second without a word; it throws.
+
+Left for the owner:
+
+| Asked                                                               | By    | Why it waits                                                                     |
+|---------------------------------------------------------------------|-------|----------------------------------------------------------------------------------|
+| `describe` merging, `null` removing a part                          | three | the owner kept `describe` replacing both on 12 October                           |
+| `flush()` answering what was dropped, overflowed or is still unsent | three | a drop is said once in the log; a value to answer is a new shape of `flush`      |
+| `buckets: 'exponential'` beside `exponentialBuckets()` as one thing | three | `'native'` would rename Rust's, the wire's and the book's experiment             |
+| a gauge's function with labels, and a way to stop one               | two   | Rust's `gauge_func` takes none either: one design for both                       |
+| a delete by a condition or of a name whole, with what it took       | two   | in the open list since the review of what a store holds                          |
+| a percentile as one number                                          | two   | a timer's answer is the bucket that holds it, exact; `estimate` asks for a point |
+| `labels` for `with`, OpenTelemetry's `forceFlush` and `shutdown`    | one   | the book's vocabulary                                                            |
+| `since` and `from`, `by` and `without` apart in the types           | one   | each pair is refused at the call                                                 |
+| a series' columns that `JSON.stringify` writes as objects           | one   | `Float64Array` keeps every value's bits                                          |
 
 ## Free review, 11 October
 

@@ -1,1013 +1,693 @@
-// Series of samples in metrics.db, as Go's metrics package keeps them: a
-// sample is kept bit for bit, a range read exactly, an aggregate computed
-// exactly and rounded once. Instruments live in the SDK and are ingested
-// every flush.
+// Numbers that move over time, as plan/api/metrics.md has them, over
+// protocol 2: series by their name and labels, written whole by ingest and
+// read back by range, in buckets and as their newest samples; what a store
+// holds of them; and a program's instruments, whose totals the store keeps.
+// A series' samples travel as two columns, an int64 time and a float64 value
+// a sample, so that every value's bits come back as they were written.
 
-import { FailureLog, messageOf } from './background.ts'
 import { download, type Link } from './connection.ts'
-import { type Code, errorOf, InvalidError, type LimitError, TinystoreError } from './errors.ts'
-import { sayOwn } from './logger.ts'
-import { type Duration, ms, type Time, unixMs } from './time.ts'
-import { byCodePoint } from './wire/codec.ts'
+import { InvalidError } from './errors.ts'
 import {
-	MetricsBatch,
-	MetricsBuckets,
+	Counter,
+	Gauge,
+	Histogram,
+	type HistogramOptions,
+	type InstrumentOptions,
+	type Instruments,
+	type LabelValue,
+	Timer,
+	type TimerOptions,
+} from './instruments.ts'
+import { type Duration, type DurationText, ms, type Time, unixMs } from './time.ts'
+import {
+	Empty,
+	MetricsAggregateAsked,
+	MetricsAggregates,
+	MetricsDamages,
+	MetricsDeleted,
 	MetricsDescription,
-	MetricsDropped,
-	MetricsLabels,
+	MetricsIngest,
+	MetricsLatest,
+	MetricsNameAsked,
+	MetricsNamePage,
+	MetricsPageAsked,
 	MetricsPlan,
-	MetricsRange,
-	MetricsSeries,
+	MetricsQuery,
+	MetricsRead,
+	MetricsSeriesNamed,
+	MetricsTextPage,
 	methods,
-} from './wire/messages.ts'
+} from './wire/protocol.ts'
 
-export type SeriesKind = 'gauge' | 'counter'
+export {
+	type Buckets,
+	Counter,
+	exponentialBuckets,
+	Gauge,
+	Histogram,
+	type HistogramOptions,
+	type InstrumentLabels,
+	type InstrumentOptions,
+	type LabelValue,
+	Timer,
+	type TimerOptions,
+	Timing,
+} from './instruments.ts'
 
-/**
- * What tells the series of one name apart: a host, a route, a status. A label
- * whose name begins with __ is the store's own, and refused.
- */
+/** What a series' samples are. */
+export type SeriesKind = 'gauge' | 'counter' | 'histogram'
+
+/** What tells the series of one name apart: a host, a route, a status. */
 export type Labels = Record<string, string>
 
-export interface SeriesInput {
-	/** the metric: 'http_requests_total' */
-	name: string
-	kind: SeriesKind
-	labels?: Labels
-	/** samples as [time, value] pairs, or as columns: unix milliseconds and their values */
-	samples:
-		| readonly (readonly [time: Time, value: number])[]
-		| { times: readonly number[] | BigInt64Array; values: readonly number[] | Float64Array }
+/**
+ * What a label's value must be: a value, one of a list, none of them with
+ * `not` (or the label absent), or a prefix. A number or a boolean is its
+ * text, as in an instrument's `with`.
+ */
+export type Condition =
+	| LabelValue
+	| readonly LabelValue[]
+	| { not: LabelValue | readonly LabelValue[] }
+	| { prefix: string }
+
+/**
+ * The series a call finds and its range: `{ name: 'cpu', where: { host:
+ * 'web-1' }, since: '1h' }`. A query is data, the same in every language.
+ */
+export interface Query {
+	/** the series of this name; a timer's name, the series it writes */
+	name?: string | undefined
+	where?: Record<string, Condition> | undefined
+	/** the span before now the range covers; or from and to */
+	since?: Duration | undefined
+	/** the range's start, included */
+	from?: Time | undefined
+	/** the range's end, excluded; now, a sample taken now in the range, unless given */
+	to?: Time | undefined
 }
 
+/** A series to write: its samples as [time, value] pairs, or as times and values columns. */
+export interface SeriesInput {
+	name: string
+	kind: SeriesKind
+	labels?: Record<string, LabelValue>
+	samples?: readonly (readonly [time: Time, value: number])[]
+	times?: readonly Time[] | Float64Array
+	values?: readonly number[] | Float64Array
+	/** how long the name's samples stay: its own, kept in the file; unless given, what it keeps already */
+	keep?: Duration | undefined
+}
+
+/** A series as a read gives it: its samples as two columns. */
 export interface Series {
 	name: string
 	kind: SeriesKind
 	labels: Labels
-	/** unix milliseconds, in time order */
-	times: number[]
-	/** the values, their bits as they were ingested: -0 and a NaN's payload survive */
+	/** unix milliseconds, in the order of their times */
+	times: Float64Array
+	/** the values, whose bytes keep each one's bits: -0 and a NaN's payload survive */
 	values: Float64Array
 }
 
-/**
- * The series of a name, of labels, or of both, each matched exactly, and
- * their samples over the last `since` or from `from` to `to`.
- *
- * ```ts
- * { name: 'cpu', since: '1h' }                         // the last hour of every cpu series
- * { match: { host: 'web-1' }, from: start, to: end }   // every series of web-1
- * ```
- */
-/**
- * What a label's value must be beyond equality, made by oneOf, noneOf or
- * prefix: an object of the SDK's own, so that a stored value is never read as
- * a query.
- */
-export class Condition {
-	readonly kind: 'one_of' | 'none_of' | 'prefix'
-	readonly values: readonly string[]
+/** p and a rank: 'p95', 'p99.9'. The ranks offered are those asked most; any other is written the same way. */
+export type Percentile =
+	| 'p50'
+	| 'p75'
+	| 'p90'
+	| 'p95'
+	| 'p99'
+	| 'p99.9'
+	// kept apart from the ranks offered, which it would otherwise fold in
+	| (`p${number}` & Record<never, never>)
 
-	constructor(kind: Condition['kind'], values: readonly string[]) {
-		this.kind = kind
-		this.values = values
-	}
-}
-
-/** The label is one of the values. */
-export function oneOf(...values: string[]): Condition {
-	return new Condition('one_of', values)
-}
-
-/** The label is none of the values, or the series has none. */
-export function noneOf(...values: string[]): Condition {
-	return new Condition('none_of', values)
-}
-
-/** The label's value begins with the prefix. */
-export function prefix(start: string): Condition {
-	return new Condition('prefix', [start])
-}
-
-/** What a read or an aggregate would spend, each use beside its limit. */
-export interface Plan {
-	series: number
-	blocks: number
-	/** the blocks an aggregate answers from their summaries, decoding none of their samples */
-	summarized: number
-	bytes: number
-	decoded: number
-	limits: { series: number; blocks: number; bytes: number; decoded: number; answered: number }
-	/** the limit the call would reach, which it would end with; undefined when it fits */
-	stops: LimitError | undefined
-}
-
-export interface Range {
-	name?: string
-	/** labels a series holds, each exactly */
-	match?: Labels
-	/**
-	 * labels under a condition: `{ status: oneOf('500', '502'), env: noneOf('dev'), host: prefix('api-') }`;
-	 * a plain value is equality. A range of noneOf alone is refused, since it would scan every series.
-	 */
-	where?: Record<string, Condition | string>
-	/** the span before now the range covers: '1h', '15m', or milliseconds */
-	since?: Duration
-	/** the range's start, included; the oldest sample kept when absent */
-	from?: Time
-	/** excluded; the open end when absent */
-	to?: Time
-	/** each narrows the server's: series matched, blocks decoded, bytes fetched, samples decoded, answered */
-	limits?: { series?: number; blocks?: number; bytes?: number; decoded?: number; answered?: number }
-}
-
-/**
- * Each computed exactly and rounded once, a group's too: avg is the mean of
- * every sample, rate a counter's increase a second, delta how far a gauge
- * moved, first and last the bucket's first and last samples, which a group
- * adds up. An increase, a rate or a delta counts each step between samples in
- * the bucket it ends in, so buckets add up to the whole range.
- */
-export type AggregateOp =
+/** What a bucket answers: count … last, or a percentile; rate is a second's increase. */
+export type Op =
 	| 'count'
 	| 'sum'
+	| 'avg'
 	| 'min'
 	| 'max'
-	| 'avg'
 	| 'increase'
 	| 'rate'
 	| 'delta'
 	| 'first'
 	| 'last'
+	| Percentile
+
+/** An aggregate: a query cut into buckets of every, each one exact value of op, by groups. */
+export interface AggregateQuery<O extends Op = Op> extends Query {
+	/** the buckets' span, counted from 1970 in UTC; the range is one bucket without it */
+	every?: Duration | undefined
+	op: O
+	/** the labels a group keeps; without by and without, every series of a name is one group */
+	by?: readonly string[] | undefined
+	/** the labels a group leaves out, keeping every other; [] keeps every series apart */
+	without?: readonly string[] | undefined
+	/** a timer's percentile also gives a point between its bounds, interpolated: an estimate */
+	estimate?: boolean | undefined
+}
+
+/** What every bucket of an aggregate says of itself. */
+interface Spanned {
+	/** where it begins */
+	at: Date
+	/** how many samples it comes from; a timer's, how many durations */
+	samples: number
+	resets: number
+	/** its value comes from less than its span: the range, the clock or retention cut it */
+	partial: boolean
+	/** its first step began before the bucket before it: a whole bucket between had no samples */
+	gap: boolean
+}
+
+/** A bucket of count … last: its one exact value. */
+export interface ValueBucket extends Spanned {
+	value: number
+}
 
 /**
- * An aggregate's buckets and, to join series, what groups them: by these
- * labels, or without them, each group one result. `by: []` joins every series
- * of a name. A group never joins two names or two kinds.
+ * A bucket of a percentile: a gauge's sample at the rank, as value, or a
+ * timer's bucket of its spread that holds it, from lower to upper, and with
+ * estimate asked a point between them.
  */
-export interface AggregateRange extends Range {
-	width: Duration
-	op: AggregateOp
-	by?: string[]
-	without?: string[]
-	/** how far before the range an increase, a rate or a delta looks for its first step: one width when absent */
-	lookback?: Duration
+export interface PercentileBucket extends Spanned {
+	value?: number
+	lower?: number
+	/** Infinity past the last bound */
+	upper?: number
+	estimate?: number
 }
 
-export interface Bucket {
-	from: Date
-	to: Date
-	/** the samples it counted */
-	count: number
-	/** the resets among them, a counter's */
-	resets: number
-	/** computed exactly and rounded once */
+/** A bucket of an aggregate of op: a value, or what a percentile gives. */
+export type Bucket<O extends Op = Op> = O extends Percentile ? PercentileBucket : ValueBucket
+
+export interface Aggregate<O extends Op = Op> {
+	name: string
+	/** the labels by kept or without left */
+	labels: Labels
+	/** a bucket without samples is left out */
+	buckets: Bucket<O>[]
+}
+
+/** A series' newest sample in the range. */
+export interface Newest {
+	name: string
+	labels: Labels
+	at: Date
 	value: number
-	/** the value overflowed to an infinity */
-	overflow: boolean
-	/** retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first */
-	partial: boolean
-	/** its first step started from a sample before the range */
-	lookback: boolean
 }
 
-/** What the values of a metric's name mean: their unit, such as 'ms', 'bytes' or '%', and a line of help. */
+/** What a read or an aggregate would spend of each bound, and the bound it would stop at. */
+export interface Plan {
+	series: number
+	bytes: number
+	decoded: number
+	exceeds: { limit: string; wanted: number; bound: number } | undefined
+}
+
+/** A page's options: a prefix, how many, and where the page before ended. */
+export interface PageOptions {
+	prefix?: string | undefined
+	/** 1000 unless given, 10,000 at most */
+	limit?: number | undefined
+	/** a page's next, so that a page's options can be the one before's */
+	after?: string | undefined
+}
+
+/** A name the store holds samples of. */
+export interface NameInfo {
+	name: string
+	kind: SeriesKind
+	seriesCount: number
+	unit: string
+	help: string
+	keep: DurationText
+	/** its oldest sample, or where its keep begins while it holds samples from before */
+	retainedFrom: Date
+	newest: Date
+}
+
+export interface NamePage {
+	names: NameInfo[]
+	/** where the next page starts; none on the last */
+	next?: string
+}
+
+export interface LabelPage {
+	labels: string[]
+	next?: string
+}
+
+export interface ValuePage {
+	values: string[]
+	next?: string
+}
+
+/** A name's unit and help; empty ones remove them. */
 export interface Description {
-	/** 32 bytes of UTF-8 at most */
 	unit?: string
-	/** 1024 bytes of UTF-8 at most */
 	help?: string
 }
 
-export interface Aggregate {
+/** A series whose bytes no longer read, which delete removes. */
+export interface Damage {
 	name: string
-	kind: SeriesKind
 	labels: Labels
-	/** only buckets holding samples */
-	buckets: Bucket[]
+	error: string
 }
 
-const openEnd = 0x7fff_ffff_ffff_ffffn
+/**
+ * A store's metrics: series by name and labels, their reads and aggregates,
+ * what the store holds of them, and the program's instruments.
+ */
+export class Metrics {
+	readonly #link: Link
+	readonly #instruments: Instruments
 
-function lookbackOf(range: { lookback?: Duration | undefined }): number | undefined {
-	return range.lookback === undefined ? undefined : ms(range.lookback)
-}
+	/** The store's close stops instruments, sending what they changed last. */
+	constructor(link: Link, instruments: Instruments) {
+		this.#link = link
+		this.#instruments = instruments
+	}
 
-/** The label the wire carries a series' name as, the store's own spelling. */
-const wireName = '__name__'
+	/** Writes series and their samples, every one or none: a refused series names itself. */
+	async ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void> {
+		const given = Array.isArray(series)
+			? (series as readonly SeriesInput[])
+			: [series as SeriesInput]
+		const body = MetricsIngest.encode({ series: given.map(newSeries) })
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.ingest'], body),
+		)
+	}
 
-/** A series' name and labels as the wire spells them, its name among its labels. */
-function wireLabels(name: string | undefined, labels: Labels | undefined): Labels {
-	const spelled: Labels = {}
-	for (const [key, value] of Object.entries(labels ?? {})) {
-		if (key.startsWith('__')) {
-			throw new InvalidError(`the label ${key}: a name beginning with __ is the store's own`)
+	/** The samples of each series the query finds, in its range: whole, or a limit error naming its bound. */
+	async read(query: Query): Promise<Series[]> {
+		const parts = await this.#download('metrics.read', MetricsQuery.encode(queryOf(query)))
+		const series: Series[] = []
+		let more = false
+		for (const piece of parts.flatMap(part => MetricsRead.decode(part).series ?? [])) {
+			const times = timesOf(piece.times ?? new Uint8Array(0))
+			const values = valuesOf(piece.values ?? new Uint8Array(0))
+			const last = series.at(-1)
+			if (more && last !== undefined) {
+				last.times = joined(last.times, times)
+				last.values = joined(last.values, values)
+			} else {
+				const kind = (piece.kind ?? 'gauge') as SeriesKind
+				series.push({ name: piece.name ?? '', kind, labels: piece.labels ?? {}, times, values })
+			}
+			more = piece.more === true
 		}
-		spelled[key] = value
+		return series
 	}
-	if (name !== undefined) {
-		spelled[wireName] = name
-	}
-	return spelled
-}
 
-/** A series as the wire spelled it: its name apart from its labels. */
-function namedSeries(spelled: Labels | undefined): { name: string; labels: Labels } {
-	const { [wireName]: name = '', ...labels } = spelled ?? {}
-	return { name, labels }
-}
+	/** The newest sample of each series the query finds, when it has one in the range. */
+	async latest(query: Query): Promise<Newest[]> {
+		const parts = await this.#download('metrics.latest', MetricsQuery.encode(queryOf(query)))
+		return parts.flatMap(part =>
+			(MetricsLatest.decode(part).series ?? []).map(newest => ({
+				name: newest.name ?? '',
+				labels: newest.labels ?? {},
+				at: new Date(newest.at ?? 0),
+				value: newest.value ?? 0,
+			})),
+		)
+	}
 
-function rangeOf(
-	r: Range,
-	extra?: {
-		width?: number
-		op?: AggregateOp
-		by?: string[] | undefined
-		without?: string[] | undefined
-		lookback?: number | undefined
-	},
-): Parameters<typeof MetricsRange.encode>[0] {
-	const { match, where } = conditionsOf(r)
-	if (r.name === undefined && Object.keys(match).length === 0 && !where.some(finds)) {
-		throw new InvalidError('a range names a series, a label to match, or a oneOf or a prefix')
-	}
-	if (r.since !== undefined && r.from !== undefined) {
-		throw new InvalidError('a range starts since a span before now or from a time, not both')
-	}
-	const from =
-		r.since !== undefined ? Date.now() - ms(r.since) : r.from === undefined ? 0 : unixMs(r.from)
-	return {
-		matchers: wireLabels(r.name, match),
-		where: where.length > 0 ? where : undefined,
-		from: BigInt(from),
-		to: r.to === undefined ? openEnd : BigInt(unixMs(r.to)),
-		limitSeries: r.limits?.series,
-		limitBlocks: r.limits?.blocks,
-		limitBytes: r.limits?.bytes,
-		limitDecoded: r.limits?.decoded,
-		limitAnswered: r.limits?.answered,
-		...extra,
-	}
-}
-
-/** A range's equality, plain values of where included, and its conditions in the order of their labels. */
-function conditionsOf(r: Range): {
-	match: Labels
-	where: { label: string; kind: Condition['kind']; values: string[] }[]
-} {
-	const match: Labels = { ...r.match }
-	const where = []
-	for (const [label, condition] of Object.entries(r.where ?? {}).sort(([a], [b]) =>
-		byCodePoint(a, b),
-	)) {
-		if (label in match) {
-			throw new InvalidError(`label ${label} is matched and has a condition`)
+	/**
+	 * The buckets of each group of the series the query finds, each one exact
+	 * value of op, rounded once; a bucket of count … last has its value.
+	 */
+	async aggregate<O extends Op>(query: AggregateQuery<O>): Promise<Aggregate<O>[]> {
+		const parts = await this.#download(
+			'metrics.aggregate',
+			MetricsAggregateAsked.encode(aggregateOf(query)),
+		)
+		const groups: Aggregate<O>[] = []
+		let more = false
+		for (const piece of parts.flatMap(part => MetricsAggregates.decode(part).groups ?? [])) {
+			const buckets = (piece.buckets ?? []).map(bucket => bucketOf(bucket) as Bucket<O>)
+			const last = groups.at(-1)
+			if (more && last !== undefined) {
+				last.buckets.push(...buckets)
+			} else {
+				groups.push({ name: piece.name ?? '', labels: piece.labels ?? {}, buckets })
+			}
+			more = piece.more === true
 		}
-		if (typeof condition === 'string') {
-			match[label] = condition
-		} else if (condition instanceof Condition) {
-			where.push({ label, kind: condition.kind, values: [...condition.values] })
-		} else {
-			throw new InvalidError(`label ${label}: a condition is made by oneOf, noneOf or prefix`)
-		}
+		return groups
 	}
-	return { match, where }
-}
 
-function finds(condition: { kind: Condition['kind'] }): boolean {
-	return condition.kind !== 'none_of'
-}
-
-function columnsOf(samples: SeriesInput['samples']): {
-	times: BigInt64Array
-	values: Float64Array
-} {
-	if (Array.isArray(samples)) {
-		const pairs = samples as readonly (readonly [Time, number])[]
+	/** What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample. */
+	async explain(query: Query & Partial<Omit<AggregateQuery, keyof Query>>): Promise<Plan> {
+		const asked =
+			query.op === undefined ? { query: queryOf(query) } : aggregateOf(query as AggregateQuery)
+		const answer = await this.#read('metrics.explain', MetricsAggregateAsked.encode(asked))
+		const plan = MetricsPlan.decode(answer)
+		const exceeds = plan.exceeds
 		return {
-			times: BigInt64Array.from(pairs, ([t]) => BigInt(unixMs(t))),
-			values: Float64Array.from(pairs, ([, v]) => v),
+			series: plan.series ?? 0,
+			bytes: plan.bytes ?? 0,
+			decoded: plan.decoded ?? 0,
+			exceeds:
+				exceeds === undefined
+					? undefined
+					: { limit: exceeds.limit ?? '', wanted: exceeds.wanted ?? 0, bound: exceeds.bound ?? 0 },
 		}
 	}
-	const columns = samples as {
-		times: readonly number[] | BigInt64Array
-		values: readonly number[] | Float64Array
+
+	/** A page of the names the store holds samples of, in the byte order of their text. */
+	async names(options: PageOptions = {}): Promise<NamePage> {
+		const answer = await this.#read('metrics.names', MetricsPageAsked.encode(pageOf(options)))
+		const page = MetricsNamePage.decode(answer)
+		const names = (page.names ?? []).map(name => ({
+			name: name.name ?? '',
+			kind: (name.kind ?? 'gauge') as SeriesKind,
+			seriesCount: name.seriesCount ?? 0,
+			unit: name.unit ?? '',
+			help: name.help ?? '',
+			keep: spelled(name.keep ?? 0),
+			retainedFrom: new Date(name.retainedFrom ?? 0),
+			newest: new Date(name.newest ?? 0),
+		}))
+		return page.next === undefined ? { names } : { names, next: page.next }
+	}
+
+	/** A page of a name's label names, but the store's own. */
+	async labelNames(name: string, options: PageOptions = {}): Promise<LabelPage> {
+		const page = await this.#texts('metrics.labelNames', { ...pageOf(options), name })
+		return page.next === undefined
+			? { labels: page.texts }
+			: { labels: page.texts, next: page.next }
+	}
+
+	/** A page of the values a label of a name's series holds. */
+	async labelValues(name: string, label: string, options: PageOptions = {}): Promise<ValuePage> {
+		const page = await this.#texts('metrics.labelValues', { ...pageOf(options), name, label })
+		return page.next === undefined
+			? { values: page.texts }
+			: { values: page.texts, next: page.next }
+	}
+
+	async #texts(
+		method: 'metrics.labelNames' | 'metrics.labelValues',
+		asked: Parameters<typeof MetricsPageAsked.encode>[0],
+	): Promise<{ texts: string[]; next: string | undefined }> {
+		const page = MetricsTextPage.decode(await this.#read(method, MetricsPageAsked.encode(asked)))
+		return { texts: page.texts ?? [], next: page.next }
+	}
+
+	/**
+	 * Sets a name's unit and help in place of what it had, as the Rust metrics
+	 * crate's describe_counter! does: what is not given is removed, and `{}`
+	 * removes both. They belong to the name, so a delete of its series leaves them.
+	 */
+	async describe(name: string, description: Description): Promise<void> {
+		const body = MetricsDescription.encode({
+			name,
+			unit: description.unit ?? '',
+			help: description.help ?? '',
+		})
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.describe'], body),
+		)
+	}
+
+	/** A name's unit and help; both empty when nothing described it. */
+	async description(name: string): Promise<{ unit: string; help: string }> {
+		const answer = MetricsDescription.decode(
+			await this.#read('metrics.description', MetricsNameAsked.encode({ name })),
+		)
+		return { unit: answer.unit ?? '', help: answer.help ?? '' }
+	}
+
+	/**
+	 * Removes the one series of exactly this name and these labels, no more
+	 * and no fewer, with every sample it holds, whether they still read or
+	 * not; true when the store held it. `labels: {}` is the series without labels.
+	 */
+	async delete(series: { name: string; labels: Record<string, LabelValue> }): Promise<boolean> {
+		const labels: Labels = {}
+		for (const [label, value] of Object.entries(series.labels)) {
+			labels[label] = String(value)
+		}
+		const body = MetricsSeriesNamed.encode({ name: series.name, labels })
+		const answer = await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.delete'], body),
+		)
+		return MetricsDeleted.decode(answer).found === true
+	}
+
+	/**
+	 * The series whose bytes no longer read, 1000 at most, each with what
+	 * broke; deleting them shows the next.
+	 *
+	 *     for (let damaged = await store.metrics.damaged(); damaged.length > 0; damaged = await store.metrics.damaged()) {
+	 *         for (const series of damaged) await store.metrics.delete(series)
+	 *     }
+	 */
+	async damaged(): Promise<Damage[]> {
+		const answer = MetricsDamages.decode(await this.#read('metrics.damaged', Empty.encode({})))
+		return (answer.damages ?? []).map(damage => ({
+			name: damage.name ?? '',
+			labels: damage.labels ?? {},
+			error: damage.error ?? '',
+		}))
+	}
+
+	/** Sends what every instrument changed and has the store write its totals now, as it does every 15 seconds. */
+	async flush(): Promise<void> {
+		if (await this.#instruments.flush()) {
+			return
+		}
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.flush'], Empty.encode({})),
+		)
+	}
+
+	/**
+	 * A total that only goes up, which the store keeps: processes counting
+	 * into one series count into one total. Its label names, when given,
+	 * `counter<'route' | 'status'>(…)`, are the only ones `with` compiles with.
+	 */
+	counter<L extends string = string>(name: string, options: InstrumentOptions = {}): Counter<L> {
+		return new Counter(this.#instruments, this.#instruments.declare(name, 'counter', options), {})
+	}
+
+	/** A value that goes up and down: a queue's length, a temperature. */
+	gauge<L extends string = string>(name: string, options: InstrumentOptions = {}): Gauge<L> {
+		return new Gauge(this.#instruments, this.#instruments.declare(name, 'gauge', options), {})
+	}
+
+	/**
+	 * A gauge whose value read gives every 15 seconds; it may be async, is
+	 * never called again while a call of it runs, and an error or an answer
+	 * that is not a number writes nothing that time, said once while it repeats.
+	 */
+	gaugeFunc(
+		name: string,
+		read: () => number | Promise<number>,
+		options: InstrumentOptions = {},
+	): void {
+		this.#instruments.declare(name, 'gauge', options, read)
+	}
+
+	/** How many things took how long: their count, sum and longest in milliseconds, and with buckets their spread. */
+	timer<L extends string = string>(name: string, options: TimerOptions = {}): Timer<L> {
+		return new Timer(this.#instruments, this.#instruments.declare(name, 'timer', options), {})
+	}
+
+	/** A timer of numbers that are not durations: a response's size in bytes. */
+	histogram<L extends string = string>(name: string, options: HistogramOptions = {}): Histogram<L> {
+		return new Histogram(
+			this.#instruments,
+			this.#instruments.declare(name, 'histogram', options),
+			{},
+		)
+	}
+
+	#read(method: keyof typeof methods, body: Uint8Array): Promise<Uint8Array> {
+		return this.#link.run('read', connection => connection.session.call(methods[method], body))
+	}
+
+	async #download(method: keyof typeof methods, body: Uint8Array): Promise<Uint8Array[]> {
+		const got = await this.#link.run('read', connection =>
+			download(connection, methods[method], body),
+		)
+		return got.items.length === 0 ? [got.trailer] : [...got.items, got.trailer]
+	}
+}
+
+/** A query as the wire carries it; a condition given as undefined is refused, never left out. */
+function queryOf(query: Query): Parameters<typeof MetricsQuery.encode>[0] {
+	const where: Record<string, { values?: string[]; not?: boolean; prefix?: string }> = {}
+	for (const [label, condition] of Object.entries(query.where ?? {})) {
+		where[label] = conditionOf(label, condition)
+	}
+	if (query.since !== undefined && query.from !== undefined) {
+		throw new InvalidError('a query starts since a span before now or from a time, not both')
 	}
 	return {
-		times:
-			columns.times instanceof BigInt64Array
-				? columns.times
-				: BigInt64Array.from(columns.times, t => BigInt(t)),
-		values:
-			columns.values instanceof Float64Array ? columns.values : Float64Array.from(columns.values),
+		name: query.name,
+		where,
+		since: query.since === undefined ? undefined : ms(query.since),
+		from: query.from === undefined ? undefined : unixMs(query.from),
+		to: query.to === undefined ? undefined : unixMs(query.to),
 	}
 }
 
-/** Joins the pieces a series longer than a body came in, one after another with its name and labels. */
-function joined<T extends { name: string; labels: Labels }>(
-	pieces: T[],
-	join: (into: T, piece: T) => void,
-): T[] {
-	const out: T[] = []
-	for (const piece of pieces) {
-		const last = out.at(-1)
-		if (last !== undefined && last.name === piece.name && sameLabels(last.labels, piece.labels)) {
-			join(last, piece)
-		} else {
-			out.push(piece)
+function conditionOf(
+	label: string,
+	condition: Condition | undefined,
+): { values?: string[]; not?: boolean; prefix?: string } {
+	if (condition === undefined || condition === null) {
+		throw new InvalidError(`where ${label}: a condition given as ${String(condition)}`)
+	}
+	if (Array.isArray(condition)) {
+		return { values: (condition as readonly LabelValue[]).map(String) }
+	}
+	if (typeof condition === 'object') {
+		if ('not' in condition) {
+			return { values: [condition.not].flat().map(String), not: true }
 		}
+		if ('prefix' in condition) {
+			return { prefix: condition.prefix }
+		}
+		throw new InvalidError(`where ${label}: a value, a list, { not } or { prefix }`)
 	}
-	return out
+	return { values: [String(condition)] }
 }
 
-function sameLabels(a: Labels, b: Labels): boolean {
-	const keys = Object.keys(a)
-	return keys.length === Object.keys(b).length && keys.every(k => a[k] === b[k])
+function aggregateOf(query: AggregateQuery): Parameters<typeof MetricsAggregateAsked.encode>[0] {
+	return {
+		query: queryOf(query),
+		every: query.every === undefined ? undefined : ms(query.every),
+		op: query.op,
+		by: query.by === undefined ? undefined : [...query.by],
+		without: query.without === undefined ? undefined : [...query.without],
+		estimate: query.estimate === true,
+	}
 }
 
-function concatFloats(a: Float64Array, b: Float64Array): Float64Array {
+function pageOf(options: PageOptions): Parameters<typeof MetricsPageAsked.encode>[0] {
+	return { prefix: options.prefix, limit: options.limit, after: options.after }
+}
+
+/** A bucket as the wire carries it. */
+type WireBucket = NonNullable<
+	NonNullable<ReturnType<typeof MetricsAggregates.decode>['groups']>[number]['buckets']
+>[number]
+
+function bucketOf(bucket: WireBucket): PercentileBucket {
+	const answer: PercentileBucket = {
+		at: new Date(bucket.at ?? 0),
+		samples: bucket.samples ?? 0,
+		resets: bucket.resets ?? 0,
+		partial: bucket.partial === true,
+		gap: bucket.gap === true,
+	}
+	if (bucket.value !== undefined) {
+		answer.value = bucket.value
+	}
+	if (bucket.lower !== undefined) {
+		answer.lower = bucket.lower
+		answer.upper = bucket.upper ?? Infinity
+	}
+	if (bucket.estimate !== undefined) {
+		answer.estimate = bucket.estimate
+	}
+	return answer
+}
+
+/** A series to write, its samples as the two columns the wire carries. */
+function newSeries(
+	given: SeriesInput,
+): NonNullable<Parameters<typeof MetricsIngest.encode>[0]['series']>[number] {
+	const labels: Labels = {}
+	for (const [label, value] of Object.entries(given.labels ?? {})) {
+		labels[label] = String(value)
+	}
+	const [times, values] = columnsOf(given)
+	const timeBytes = new BigInt64Array(times.length)
+	for (let i = 0; i < times.length; i++) {
+		timeBytes[i] = BigInt(unixMs(times[i]!))
+	}
+	// a Float64Array's bytes go as they are, a NaN's payload with them
+	const valueBytes =
+		values instanceof Float64Array
+			? new Uint8Array(
+					values.buffer.slice(values.byteOffset, values.byteOffset + values.byteLength),
+				)
+			: new Uint8Array(Float64Array.from(values).buffer)
+	return {
+		name: given.name,
+		kind: given.kind,
+		labels,
+		times: new Uint8Array(timeBytes.buffer),
+		values: valueBytes,
+		keep: given.keep === undefined ? undefined : ms(given.keep),
+	}
+}
+
+function columnsOf(given: SeriesInput): [ArrayLike<Time>, ArrayLike<number>] {
+	if (given.samples !== undefined) {
+		if (given.times !== undefined || given.values !== undefined) {
+			throw new InvalidError(`metrics ${given.name}: samples, or times and values, not both`)
+		}
+		return [given.samples.map(([time]) => time), given.samples.map(([, value]) => value)]
+	}
+	if (
+		given.times === undefined ||
+		given.values === undefined ||
+		given.times.length !== given.values.length
+	) {
+		throw new InvalidError(
+			`metrics ${given.name}: samples, or times and values as long as each other`,
+		)
+	}
+	return [given.times, given.values]
+}
+
+/** A column of int64 times, read as the unix milliseconds a Float64Array holds. */
+function timesOf(bytes: Uint8Array): Float64Array {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+	const times = new Float64Array(bytes.byteLength / 8)
+	for (let i = 0; i < times.length; i++) {
+		times[i] = Number(view.getBigInt64(i * 8, true))
+	}
+	return times
+}
+
+/**
+ * A column of float64 values, its bytes copied as they came, so that each
+ * value's bits stay. A socket's bytes are a Buffer, whose slice is a view of
+ * a shared pool rather than a copy, so they are copied into a buffer of their own.
+ */
+function valuesOf(bytes: Uint8Array): Float64Array {
+	const copy = new Uint8Array(bytes.byteLength)
+	copy.set(bytes)
+	return new Float64Array(copy.buffer)
+}
+
+function joined(a: Float64Array, b: Float64Array): Float64Array {
 	const out = new Float64Array(a.length + b.length)
 	out.set(a)
 	out.set(b, a.length)
 	return out
 }
 
-export class Metrics {
-	readonly #link: Link
-	readonly #instruments = new Map<string, Instrument>()
-	readonly #timers = new Map<string, TimerInstrument>()
-	readonly #described = new Map<string, Description>() // for the next flush to write
-	#interval: ReturnType<typeof setInterval> | undefined
-	readonly #failureLog = new FailureLog('metrics instruments', sayOwn)
-	/** instruments' flushes that failed, and why the last did */
-	failures = 0
-	lastFailure: Error | undefined
-
-	constructor(link: Link) {
-		this.#link = link
-	}
-
-	/** Stores series and their samples, all or none; a refused series is named by its labels. */
-	async ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void> {
-		const batch = (Array.isArray(series) ? series : [series as SeriesInput]).map(s => ({
-			labels: wireLabels(s.name, s.labels),
-			kind: s.kind,
-			...columnsOf(s.samples),
-		}))
-		await this.#link.run('write', connection =>
-			connection.session.call(methods['metrics.ingest'], MetricsBatch.encode({ series: batch })),
-		)
-	}
-
-	/** Every sample of the series a range matches, exactly, read whole before the first leaves the server. */
-	async read(range: Range): Promise<Series[]> {
-		return this.#series(methods['metrics.read'], range)
-	}
-
-	/**
-	 * The newest sample of each series a range matches, one sample a series.
-	 * The range bounds how old it may be: a series without one in it is left
-	 * out, so a series that stopped reads as absent rather than as its last value.
-	 */
-	async latest(range: Range): Promise<Series[]> {
-		return this.#series(methods['metrics.latest'], range)
-	}
-
-	async #series(method: number, range: Range): Promise<Series[]> {
-		const got = await this.#link.run('read', connection =>
-			download(connection, method, MetricsRange.encode(rangeOf(range))),
-		)
-		const pieces = got.items.map(item => {
-			const s = MetricsSeries.decode(item)
-			return {
-				...namedSeries(s.labels as Labels | undefined),
-				kind: (s.kind ?? 'gauge') as SeriesKind,
-				times: Array.from(s.times ?? [], Number),
-				values: s.values ?? new Float64Array(0),
-			}
-		})
-		return joined(pieces, (into, piece) => {
-			into.times.push(...piece.times)
-			into.values = concatFloats(into.values, piece.values)
-		})
-	}
-
-	/**
-	 * Buckets of a width from the range's start, each computed exactly: a
-	 * counter's increase counts its resets, and the first bucket the step from
-	 * the last sample a lookback before the range.
-	 */
-	async aggregate(range: AggregateRange): Promise<Aggregate[]> {
-		if (range.by !== undefined && range.without !== undefined) {
-			throw new InvalidError('an aggregate groups by labels or without them, not both')
-		}
-		const grouping = { by: range.by, without: range.without, lookback: lookbackOf(range) }
-		const got = await this.#link.run('read', connection =>
-			download(
-				connection,
-				methods['metrics.aggregate'],
-				MetricsRange.encode(rangeOf(range, { width: ms(range.width), op: range.op, ...grouping })),
-			),
-		)
-		const pieces = got.items.map(item => {
-			const b = MetricsBuckets.decode(item)
-			const values = b.values ?? new Float64Array(0)
-			const buckets: Bucket[] = Array.from(values, (value, i) => ({
-				from: new Date(Number(b.from?.[i] ?? 0n)),
-				to: new Date(Number(b.to?.[i] ?? 0n)),
-				count: Number(b.count?.[i] ?? 0n),
-				resets: Number(b.resets?.[i] ?? 0n),
-				value,
-				overflow: ((b.flags?.[i] ?? 0) & 1) !== 0,
-				partial: ((b.flags?.[i] ?? 0) & 2) !== 0,
-				lookback: ((b.flags?.[i] ?? 0) & 4) !== 0,
-			}))
-			return {
-				...namedSeries(b.labels as Labels | undefined),
-				kind: (b.kind ?? 'gauge') as SeriesKind,
-				buckets,
-			}
-		})
-		return joined(pieces, (into, piece) => {
-			into.buckets.push(...piece.buckets)
-		})
-	}
-
-	/**
-	 * What read(range), or aggregate(range) when it names an op, would spend
-	 * of its limits, found without a payload fetched or a sample decoded: the
-	 * series, the blocks, those an aggregate answers from their summaries, the
-	 * bytes and the samples, beside the limits; stops is the LimitError the
-	 * call would end with, undefined when it fits.
-	 */
-	async explain(
-		range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without' | 'lookback'>>,
-	): Promise<Plan> {
-		const extra =
-			range.op === undefined
-				? {}
-				: {
-						width: ms(range.width ?? 0),
-						op: range.op,
-						by: range.by,
-						without: range.without,
-						lookback: lookbackOf(range),
-					}
-		const body = await this.#link.run('read', connection =>
-			connection.session.call(
-				methods['metrics.explain'],
-				MetricsRange.encode(rangeOf(range, extra)),
-			),
-		)
-		const p = MetricsPlan.decode(body)
-		const stops = p.stops === undefined || p.stops === null ? undefined : p.stops
-		return {
-			series: Number(p.series ?? 0),
-			blocks: Number(p.blocks ?? 0),
-			summarized: Number(p.summarized ?? 0),
-			bytes: Number(p.bytes ?? 0),
-			decoded: Number(p.decoded ?? 0),
-			limits: {
-				series: Number(p.limitSeries ?? 0),
-				blocks: Number(p.limitBlocks ?? 0),
-				bytes: Number(p.limitBytes ?? 0),
-				decoded: Number(p.limitDecoded ?? 0),
-				answered: Number(p.limitAnswered ?? 0),
-			},
-			stops:
-				stops === undefined
-					? undefined
-					: (errorOf(stops.code ?? 'limit', stops.message ?? '', stops.what ?? {}) as LimitError),
+function spelled(millis: number): DurationText {
+	for (const [unit, size] of [
+		['d', 86_400_000],
+		['h', 3_600_000],
+		['m', 60_000],
+		['s', 1000],
+	] as const) {
+		if (millis >= size && millis % size === 0) {
+			return `${millis / size}${unit}` as DurationText
 		}
 	}
-
-	/** Removes one series and everything it holds, whether it still reads or not. */
-	async drop(series: {
-		name: string
-		labels?: Labels
-	}): Promise<{ found: boolean; unreadableGroups: number }> {
-		const labels = wireLabels(series.name, series.labels)
-		const body = await this.#link.run('write', connection =>
-			connection.session.call(methods['metrics.drop'], MetricsLabels.encode({ labels })),
-		)
-		const dropped = MetricsDropped.decode(body)
-		return { found: dropped.found === true, unreadableGroups: dropped.unreadableGroups ?? 0 }
-	}
-
-	/**
-	 * Keeps what a name's values mean in place of what they meant; with
-	 * neither a unit nor help it removes it. Every series of the name shares it.
-	 */
-	async describe(name: string, description: Description): Promise<void> {
-		const body = MetricsDescription.encode({ name, unit: description.unit, help: description.help })
-		await this.#link.run('write', connection =>
-			connection.session.call(methods['metrics.describe'], body),
-		)
-	}
-
-	/** What describe kept for a name, empty strings when it has none. */
-	async description(name: string): Promise<{ unit: string; help: string }> {
-		const body = await this.#link.run('read', connection =>
-			connection.session.call(methods['metrics.described'], MetricsDescription.encode({ name })),
-		)
-		const described = MetricsDescription.decode(body)
-		return { unit: described.unit ?? '', help: described.help ?? '' }
-	}
-
-	/**
-	 * A counter: its total since this process started, ingested every flush;
-	 * a restart is a reset. A description is written at the next flush.
-	 */
-	counter(name: string, description?: Description): Counter {
-		this.#describe(name, description)
-		return new Counter(this.#instrument(name, 'counter'), {})
-	}
-
-	/** A gauge: its value at each flush. */
-	gauge(name: string, description?: Description): Gauge {
-		this.#describe(name, description)
-		return new Gauge(this.#instrument(name, 'gauge'), {})
-	}
-
-	/** A gauge read by a function at each flush; a function that throws skips that sample. */
-	gaugeFunc(name: string, read: () => number | Promise<number>, description?: Description): void {
-		this.#describe(name, description)
-		this.#instrument(name, 'gauge').read = read
-	}
-
-	/**
-	 * A timer: how many durations it measured and their sum in milliseconds,
-	 * ingested every flush as the counters name_count and name_sum, and the
-	 * longest since the flush before as the gauge name_max, left out when it
-	 * measured none. A range's mean is its sum's increase over its count's.
-	 * Given a description, its sum and longest are in milliseconds, whatever
-	 * unit it names.
-	 */
-	timer(name: string, description?: Description): Timer {
-		if (description !== undefined) {
-			const help = description.help ?? ''
-			this.#describe(`${name}_count`, { help })
-			this.#describe(`${name}_sum`, { unit: 'ms', help })
-			this.#describe(`${name}_max`, { unit: 'ms', help })
-		}
-		return new Timer(this.#timer(name), {})
-	}
-
-	// an instrument's description, checked now, since a flush the store
-	// refused it in would refuse every flush after
-	#describe(name: string, description: Description | undefined): void {
-		if (!description?.unit && !description?.help) {
-			return
-		}
-		const bytes = (text: string | undefined) => new TextEncoder().encode(text ?? '').length
-		if (name === '' || !name.isWellFormed() || bytes(name) > 4096) {
-			throw new InvalidError(`metric name ${JSON.stringify(name)}: 1 to 4096 bytes of UTF-8`)
-		}
-		if (bytes(description.unit) > 32 || bytes(description.help) > 1024) {
-			throw new InvalidError(
-				`the description of ${name}: a unit of 32 bytes and help of 1024 at most`,
-			)
-		}
-		this.#described.set(name, { ...description })
-	}
-
-	async #writeDescriptions(): Promise<void> {
-		for (const [name, description] of [...this.#described]) {
-			await this.describe(name, description)
-			if (this.#described.get(name) === description) {
-				this.#described.delete(name)
-			}
-		}
-	}
-
-	#instrument(name: string, kind: SeriesKind): Instrument {
-		let instrument = this.#instruments.get(name)
-		if (instrument === undefined) {
-			const timer = timerWriting(name, this.#timers)
-			if (timer !== undefined) {
-				throw new InvalidError(`${name} is written by the timer ${timer}`)
-			}
-			instrument = { name, kind, series: new Map(), refused: new Set(), lastRead: undefined }
-			this.#instruments.set(name, instrument)
-			this.#flushing()
-		} else if (instrument.kind !== kind) {
-			throw new InvalidError(`${name} is a ${instrument.kind}, not a ${kind}`)
-		}
-		return instrument
-	}
-
-	#timer(name: string): TimerInstrument {
-		let timer = this.#timers.get(name)
-		if (timer === undefined) {
-			for (const { suffix } of timerSeries) {
-				const writer = this.#instruments.get(name + suffix)
-				if (writer !== undefined) {
-					throw new InvalidError(
-						`${name + suffix} is a ${writer.kind}; the timer ${name} would write it`,
-					)
-				}
-			}
-			timer = { name, series: new Map(), refused: new Set() }
-			this.#timers.set(name, timer)
-			this.#flushing()
-		}
-		return timer
-	}
-
-	#flushing(): void {
-		this.#interval ??= setInterval(() => void this.#flushInBackground(), flushEvery)
-		this.#interval.unref?.()
-	}
-
-	// a flush no caller awaits says its failure, as Go's background work does
-	async #flushInBackground(): Promise<void> {
-		try {
-			await this.flush()
-			this.#failureLog.succeeded()
-		} catch (err) {
-			this.#failureLog.failed(err)
-		}
-	}
-
-	/**
-	 * Ingests every instrument's value now, as the timer does every 15 s. A
-	 * series the store refuses is left out from then on, said once, so that one
-	 * bad instrument keeps no other out.
-	 */
-	async flush(): Promise<void> {
-		await this.#writeDescriptions()
-		const at = BigInt(Date.now())
-		const batch = await this.#instrumentSamples(at)
-		const taken = this.#takeTimers(at, batch)
-		if (batch.length === 0) {
-			return
-		}
-		try {
-			await this.#ingestLeavingRefusedOut(batch)
-		} catch (err) {
-			for (const [timing, longest] of taken) {
-				timing.longest = Math.max(timing.longest, longest)
-				timing.measured = true
-			}
-			this.failures++
-			this.lastFailure = err as Error
-			throw err
-		}
-	}
-
-	// every instrument's value now; a gauge whose function throws skips this
-	// flush, said once while its error stays the same
-	async #instrumentSamples(at: bigint): Promise<Owned[]> {
-		const batch: Owned[] = []
-		for (const instrument of this.#instruments.values()) {
-			if (instrument.read !== undefined && !(await readGauge(instrument, instrument.read))) {
-				continue
-			}
-			for (const [key, s] of instrument.series) {
-				batch.push({
-					sample: sampleAt(at, instrument.name, s.labels, instrument.kind, s.value),
-					owner: {
-						series: formatSeries(instrument.name, s.labels),
-						refuse: () => refuse(instrument, key),
-					},
-				})
-			}
-		}
-		return batch
-	}
-
-	// sends the batch until the store takes what is left of it: a refusal that
-	// names one of its series leaves that series out, for good, and goes again
-	async #ingestLeavingRefusedOut(batch: Owned[]): Promise<void> {
-		let sending = batch
-		while (sending.length > 0) {
-			try {
-				const series = sending.map(owned => owned.sample)
-				await this.#link.run('write', connection =>
-					connection.session.call(methods['metrics.ingest'], MetricsBatch.encode({ series })),
-				)
-				return
-			} catch (err) {
-				const refused = refusedIn(sending, err)
-				if (refused === undefined) {
-					throw err
-				}
-				refused.refuse()
-				sayOwn('warn', 'instrument refused', { series: refused.series, error: messageOf(err) })
-				sending = sending.filter(owned => owned.owner !== refused)
-			}
-		}
-	}
-
-	// adds what the timers ingest to batch and starts their longest again,
-	// answering what it took so that a failed flush gives it back; a timer's
-	// series of one label set share an owner, so a refusal leaves all three out
-	#takeTimers(at: bigint, batch: Owned[]): [Timing, number][] {
-		const taken: [Timing, number][] = []
-		for (const timer of this.#timers.values()) {
-			for (const [key, t] of timer.series) {
-				const owner = {
-					series: formatSeries(timer.name, t.labels),
-					refuse: () => refuse(timer, key),
-				}
-				const add = (suffix: string, kind: SeriesKind, value: number) =>
-					batch.push({ sample: sampleAt(at, timer.name + suffix, t.labels, kind, value), owner })
-				add('_count', 'counter', t.count)
-				add('_sum', 'counter', t.sum)
-				if (t.measured) {
-					add('_max', 'gauge', t.longest)
-					taken.push([t, t.longest])
-					t.longest = 0
-					t.measured = false
-				}
-			}
-		}
-		return taken
-	}
-
-	/** Stops flushing every 15 s and ingests the instruments' last values; the store's close calls it. */
-	async stop(): Promise<void> {
-		if (this.#interval !== undefined) {
-			clearInterval(this.#interval)
-			this.#interval = undefined
-		}
-		if (this.instruments > 0) {
-			await this.#flushInBackground()
-		}
-	}
-
-	get instruments(): number {
-		return this.#instruments.size + this.#timers.size
-	}
-}
-
-const flushEvery = 15_000
-
-interface Instrument {
-	name: string
-	kind: SeriesKind
-	/** by the canonical spelling of each label set */
-	series: Map<string, { labels: Labels; value: number }>
-	/** the spellings of the label sets the store refused, whose writes are left out */
-	refused: Set<string>
-	read?: () => number | Promise<number>
-	/** the error a gauge's function last threw, said once while it stays the same */
-	lastRead: string | undefined
-}
-
-/** what a timer ingests, each series its name and a suffix */
-const timerSeries = [
-	{ suffix: '_count', kind: 'counter' },
-	{ suffix: '_sum', kind: 'counter' },
-	{ suffix: '_max', kind: 'gauge' },
-] as const
-
-interface TimerInstrument {
-	name: string
-	/** by the canonical spelling of each label set */
-	series: Map<string, Timing>
-	refused: Set<string>
-}
-
-interface Timing {
-	labels: Labels
-	count: number
-	/** milliseconds */
-	sum: number
-	/** milliseconds, since the flush before */
-	longest: number
-	/** since the flush before */
-	measured: boolean
-}
-
-/** the timer that writes the series name, if one does */
-function timerWriting(name: string, timers: Map<string, TimerInstrument>): string | undefined {
-	for (const { suffix } of timerSeries) {
-		const base = name.slice(0, -suffix.length)
-		if (name.endsWith(suffix) && timers.has(base)) {
-			return base
-		}
-	}
-	return undefined
-}
-
-/** one sample of a series, as metrics.ingest takes it */
-interface Sampled {
-	labels: Labels
-	kind: SeriesKind
-	times: BigInt64Array
-	values: Float64Array
-}
-
-function sampleAt(
-	at: bigint,
-	name: string,
-	labels: Labels,
-	kind: SeriesKind,
-	value: number,
-): Sampled {
-	return {
-		labels: { ...labels, [wireName]: name },
-		kind,
-		times: BigInt64Array.of(at),
-		values: Float64Array.of(value),
-	}
-}
-
-function keyOf(labels: Labels): string {
-	return JSON.stringify(Object.entries(labels).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-}
-
-function seriesOf(instrument: Instrument, labels: Labels): { labels: Labels; value: number } {
-	const key = keyOf(labels)
-	let s = instrument.series.get(key)
-	if (s === undefined) {
-		s = { labels, value: 0 }
-		// a refused series' writes go to a value no flush reads
-		if (!instrument.refused.has(key)) {
-			instrument.series.set(key, s)
-		}
-	}
-	return s
-}
-
-/** a sample of an instrument's, and the series a refusal of it leaves out */
-interface Owned {
-	sample: Sampled
-	owner: Owner
-}
-
-/** an instrument's series, or a timer's three of one label set */
-interface Owner {
-	/** as Go prints a series: name{route="/a"} */
-	series: string
-	refuse(): void
-}
-
-function refuse(instrument: Instrument | TimerInstrument, key: string): void {
-	instrument.series.delete(key)
-	instrument.refused.add(key)
-}
-
-/** the codes of a refusal that is the series' own doing, as Go's metrics tells them apart */
-const seriesRefusals = new Set<Code>([
-	'invalid',
-	'limit',
-	'too_old',
-	'too_new',
-	'conflict',
-	'corrupt',
-	'suspended',
-])
-
-/** the owner of the series a refusal names by its labels, when it names one of these */
-function refusedIn(sending: Owned[], err: unknown): Owner | undefined {
-	if (!(err instanceof TinystoreError) || !seriesRefusals.has(err.code)) {
-		return undefined
-	}
-	const named = Object.entries(err.what)
-	return sending.find(
-		({ sample }) =>
-			named.length === Object.keys(sample.labels).length &&
-			named.every(([key, value]) => sample.labels[key] === value),
-	)?.owner
-}
-
-/** a gauge's value from its function, or false when it threw: said once while the error stays the same */
-async function readGauge(
-	instrument: Instrument,
-	read: () => number | Promise<number>,
-): Promise<boolean> {
-	if (instrument.refused.size > 0) {
-		return false
-	}
-	try {
-		instrument.series.set('{}', { labels: {}, value: await read() })
-		instrument.lastRead = undefined
-		return true
-	} catch (err) {
-		const error = messageOf(err)
-		if (error !== instrument.lastRead) {
-			sayOwn('warn', 'gauge read failed', { series: instrument.name, error })
-			instrument.lastRead = error
-		}
-		return false
-	}
-}
-
-/** a series as Go prints one: its name, then its labels sorted and quoted */
-function formatSeries(name: string, labels: Labels): string {
-	const keys = Object.keys(labels).sort()
-	if (keys.length === 0) {
-		return name
-	}
-	return `${name}{${keys.map(key => `${key}=${JSON.stringify(labels[key])}`).join(',')}}`
-}
-
-export class Counter {
-	readonly #instrument: Instrument
-	readonly #labels: Labels
-
-	constructor(instrument: Instrument, labels: Labels) {
-		this.#instrument = instrument
-		this.#labels = labels
-	}
-
-	/** The counter of these labels besides its own: the same labels in any order are one series. */
-	with(labels: Labels): Counter {
-		return new Counter(this.#instrument, { ...this.#labels, ...labels })
-	}
-
-	inc(): void {
-		this.add(1)
-	}
-
-	add(n: number): void {
-		if (!(n >= 0)) {
-			throw new InvalidError(`a counter adds ${n}; it only grows`)
-		}
-		seriesOf(this.#instrument, this.#labels).value += n
-	}
-}
-
-export class Gauge {
-	readonly #instrument: Instrument
-	readonly #labels: Labels
-
-	constructor(instrument: Instrument, labels: Labels) {
-		this.#instrument = instrument
-		this.#labels = labels
-	}
-
-	with(labels: Labels): Gauge {
-		return new Gauge(this.#instrument, { ...this.#labels, ...labels })
-	}
-
-	set(value: number): void {
-		seriesOf(this.#instrument, this.#labels).value = value
-	}
-
-	add(n: number): void {
-		seriesOf(this.#instrument, this.#labels).value += n
-	}
-
-	inc(): void {
-		this.add(1)
-	}
-
-	dec(): void {
-		this.add(-1)
-	}
-}
-
-/** A timer of labels; record and measure add a duration to the next flush. */
-export class Timer {
-	readonly #timer: TimerInstrument
-	readonly #labels: Labels
-
-	constructor(timer: TimerInstrument, labels: Labels) {
-		this.#timer = timer
-		this.#labels = labels
-	}
-
-	/** The timer of these labels besides its own: the same labels in any order are one series. */
-	with(labels: Labels): Timer {
-		return new Timer(this.#timer, { ...this.#labels, ...labels })
-	}
-
-	/** Adds one duration: milliseconds, their fractions kept, or text such as '250ms'. */
-	record(d: Duration): void {
-		const millis = typeof d === 'number' ? d : ms(d)
-		if (!(Number.isFinite(millis) && millis >= 0)) {
-			throw new InvalidError(`a timer records ${d}; a duration is never negative`)
-		}
-		const key = keyOf(this.#labels)
-		if (this.#timer.refused.has(key)) {
-			return
-		}
-		let t = this.#timer.series.get(key)
-		if (t === undefined) {
-			t = { labels: this.#labels, count: 0, sum: 0, longest: 0, measured: false }
-			this.#timer.series.set(key, t)
-		}
-		t.count++
-		t.sum += millis
-		t.longest = Math.max(t.longest, millis)
-		t.measured = true
-	}
-
-	/**
-	 * Runs fn and records how long it took, whether it returned or threw: its
-	 * result comes back, and what it threw is thrown again.
-	 *
-	 *     const user = await latency.with({ route: '/users' }).measure(() => users.get(id))
-	 */
-	async measure<R>(fn: () => R | Promise<R>): Promise<R> {
-		const start = performance.now()
-		try {
-			return await fn()
-		} finally {
-			this.record(performance.now() - start)
-		}
-	}
+	return `${millis}ms` as DurationText
 }

@@ -29,6 +29,8 @@ use super::buckets::{Bounds, Buckets};
 use super::engine::Engine;
 use super::labels::Kept;
 use super::names::checked_keep;
+#[cfg(feature = "wire")]
+use super::remote::Declared;
 use super::series::{Kind, Labels};
 use super::totals::{Form, Instrument, LOCAL, Read, Slot, Told};
 use crate::sqlite::sql_error;
@@ -253,6 +255,18 @@ impl Builder<Histogram> {
 }
 
 impl Engine {
+    /// Opens an instrument a client declared over the wire, as a Rust one
+    /// opens.
+    #[cfg(feature = "wire")]
+    pub(super) fn open_declared(self: &Arc<Engine>, declared: &Declared, form: Form) -> Result<Arc<Instrument>> {
+        let mut builder: Builder<()> = Builder::of(self, declared.name.clone(), form);
+        builder.help.clone_from(&declared.help);
+        builder.unit.clone_from(&declared.unit);
+        builder.keep = declared.keep;
+        builder.buckets.clone_from(&declared.buckets);
+        builder.opened()
+    }
+
     /// Opens an instrument: its bounds and description checked, the kinds
     /// the file holds of its names, the instrument the store holds of its
     /// name, and its names settled with their keep.

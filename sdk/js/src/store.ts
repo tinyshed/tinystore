@@ -15,6 +15,7 @@ import {
 	sidecar,
 } from './connection.ts'
 import { ClosedError, InvalidError } from './errors.ts'
+import { Instruments } from './instruments.ts'
 import {
 	openQueue,
 	openSchedule,
@@ -146,11 +147,13 @@ export class Store implements AsyncDisposable {
 	readonly #configs = new Set<Config<object>>()
 	readonly #workers = new Set<Worker>()
 	readonly #loggers = new Set<Logger>()
+	readonly #instruments: Instruments
 
 	constructor(link: Link) {
 		this.#link = link
 		this.clock = new Clock(link)
-		this.metrics = new Metrics(link)
+		this.#instruments = new Instruments(link)
+		this.metrics = new Metrics(link, this.#instruments)
 	}
 
 	/**
@@ -384,7 +387,7 @@ export class Store implements AsyncDisposable {
 	 */
 	async close(): Promise<void> {
 		await Promise.all([...this.#workers].map(worker => worker.stop()))
-		await this.metrics.stop()
+		await this.#instruments.stop()
 		await Promise.all([...this.#loggers].map(logger => logger.stop()))
 		for (const config of this.#configs) {
 			config.stop()

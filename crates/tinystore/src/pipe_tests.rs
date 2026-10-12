@@ -46,7 +46,7 @@ fn every_method_of_the_schema_is_answered() {
 fn a_method_the_core_does_not_have_is_unimplemented() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
-    let failed = client.call::<Empty>(0x0601, &Empty {}).unwrap_err();
+    let failed = client.call::<Empty>(0x0f01, &Empty {}).unwrap_err();
     assert_eq!(failed.code, "unimplemented");
 }
 

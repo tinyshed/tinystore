@@ -171,6 +171,12 @@ them.
   newest time on its row, an index of its series by their oldest sample and a table of its labels' values; `describe`
   and `description`; `delete` of a series with every sample it held, whether it still reads or not; a read that meets
   bytes that no longer read suspending the series, and `damaged`.
+  Built, slice 7: `protocol/metrics.wire`, every call over the wire, a read's series, the newest samples and an
+  aggregate's groups in parts within the client's credit, their values as float64 bits; a program's instruments on a
+  stream of their own, in batches numbered in the SDK's session that the store applies once and in order, a lost
+  answer found again when the stream opens again, and a store that started again sent nothing it may have counted;
+  the Bun SDK's metrics over protocol 2 through each way a store is reached, its durations, ops and an instrument's
+  labels offered and checked as they are written.
 - [ ] Formats chosen by measurement: rowid groups for metrics, records' column layout.
 
 **Gate:** their GATES.md lines pass; records' exact filter, single trace and

@@ -1,399 +1,353 @@
-// records and metrics through a real tinystore serve, the one test/binary.ts built.
+// Metrics as plan/api/metrics.md has them over protocol 2, through each way a
+// store is reached: series ingested whole and read back bit for bit, the
+// buckets of an aggregate, the newest samples, what a store holds and its
+// removal, and instruments whose changes reach the store's totals once.
 
-import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { type Connection, embedded, Link } from '../src/connection.ts'
 import {
-	type Condition,
+	exponentialBuckets,
 	InvalidError,
-	LimitError,
-	noneOf,
-	oneOf,
+	type MetricsQuery,
 	open,
-	prefix,
 	type Store,
+	UnavailableError,
+	type ValueBucket,
 } from '../src/index.ts'
+import { binOf, Instruments } from '../src/instruments.ts'
+import { Metrics } from '../src/metrics.ts'
+import { bunRuntime } from '../src/runtime/bun.ts'
+import { caught, removed, ways } from './ways.ts'
 
-let dir: string
-let store: Store
-
-beforeAll(async () => {
-	dir = mkdtempSync(join(tmpdir(), 'tinystore-metrics-'))
-	store = await open(dir, { private: true })
-})
-
-afterAll(async () => {
-	await store.close()
-	rmSync(dir, { recursive: true, force: true })
-})
-
-async function caught(promise: Promise<unknown>): Promise<unknown> {
-	return promise.then(
-		() => undefined,
-		(err: unknown) => err,
+/** The last value of each series of a name, by the labels given. */
+async function last(store: Store, name: string): Promise<Record<string, number>> {
+	const read = await store.metrics.read({ name, since: '1h' })
+	return Object.fromEntries(
+		read.map(series => [JSON.stringify(series.labels), series.values.at(-1)!]),
 	)
 }
 
-/** What was written to stderr while fn ran, where TinyStore says its own lines. */
-async function stderrWhile(fn: () => Promise<void>): Promise<string> {
-	const spy = spyOn(process.stderr, 'write')
-	try {
-		await fn()
-		return spy.mock.calls.map(([text]) => String(text)).join('')
-	} finally {
-		spy.mockRestore()
-	}
-}
+for (const way of ways) {
+	describe.skipIf(!way.ready)(`metrics through ${way.name}`, () => {
+		let dir: string
+		let store: Store
 
-function times(text: string, said: string): number {
-	return text.split(said).length - 1
-}
-
-describe('metrics', () => {
-	test('a sample comes back bit for bit, -0 and a NaN payload included', async () => {
-		const now = Date.now()
-		const values = new Float64Array(3)
-		const view = new DataView(values.buffer)
-		view.setBigUint64(0, 0x8000000000000000n, true)
-		view.setBigUint64(8, 0x7ff8000000000001n, true)
-		values[2] = 0.5
-		await store.metrics.ingest({
-			name: 'cpu',
-			kind: 'gauge',
-			labels: { host: 'web-1' },
-			samples: { times: [now - 2000, now - 1000, now], values },
+		beforeAll(async () => {
+			dir = mkdtempSync(join(tmpdir(), 'tinystore-metrics-'))
+			store = await way.open(dir)
 		})
-		const [series] = await store.metrics.read({ name: 'cpu', since: '1m' })
-		expect([series?.name, series?.labels]).toEqual(['cpu', { host: 'web-1' }])
-		expect(series?.times).toEqual([now - 2000, now - 1000, now])
-		const read = new DataView(series!.values.buffer, series!.values.byteOffset)
-		expect(read.getBigUint64(0, true)).toBe(0x8000000000000000n)
-		expect(read.getBigUint64(8, true)).toBe(0x7ff8000000000001n)
-		expect(series?.values[2]).toBe(0.5)
-	})
 
-	test("an aggregate's increase counts a counter's reset", async () => {
-		const start = Date.now() - 50 * 60_000
-		await store.metrics.ingest({
-			name: 'requests_total',
-			kind: 'counter',
-			samples: [
-				[start, 100],
-				[start + 60_000, 110],
-				[start + 120_000, 5],
-				[start + 180_000, 20],
-			],
+		afterAll(async () => {
+			await store.close()
+			await way.leave(dir)
+			await removed(dir)
 		})
-		const [agg] = await store.metrics.aggregate({
-			name: 'requests_total',
-			from: start,
-			to: start + 3_600_000,
-			width: '1h',
-			op: 'increase',
-		})
-		expect(agg?.buckets.length).toBe(1)
-		expect([agg?.buckets[0]?.value, agg?.buckets[0]?.resets, agg?.buckets[0]?.count]).toEqual([
-			30, 1, 4,
-		])
-	})
 
-	test('an increase counts the step into each bucket, the first from before the range', async () => {
-		const start = Date.now() - 50 * 60_000
-		await store.metrics.ingest({
-			name: 'steps_total',
-			kind: 'counter',
-			samples: [
-				[start, 100],
-				[start + 60_000, 110],
-				[start + 120_000, 5],
-				[start + 180_000, 20],
-			],
-		})
-		const range = {
-			name: 'steps_total',
-			from: start + 60_000,
-			to: start + 240_000,
-			op: 'increase',
-		} as const
-		const [minutes] = await store.metrics.aggregate({ ...range, width: '1m' })
-		expect(minutes?.buckets.map(b => [b.value, b.resets, b.lookback])).toEqual([
-			[10, 0, true],
-			[5, 1, false],
-			[15, 0, false],
-		])
-		const [halves] = await store.metrics.aggregate({ ...range, width: '30s' })
-		expect([halves?.buckets[0]?.value, halves?.buckets[0]?.lookback]).toEqual([0, false])
-		const [looked] = await store.metrics.aggregate({ ...range, width: '30s', lookback: '1m' })
-		expect([looked?.buckets[0]?.value, looked?.buckets[0]?.lookback]).toEqual([10, true])
-	})
-
-	test("latest is each series' newest sample, and first and last a bucket's ends", async () => {
-		const now = Date.now()
-		await store.metrics.ingest([
-			{
-				name: 'depth',
-				kind: 'gauge',
-				labels: { queue: 'mail' },
-				samples: [
-					[now - 3000, 4],
-					[now - 1000, 7],
-				],
-			},
-			{ name: 'depth', kind: 'gauge', labels: { queue: 'sms' }, samples: [[now - 600_000, 2]] },
-		])
-		const latest = await store.metrics.latest({ name: 'depth', since: '1m' })
-		expect(latest.map(s => [s.labels.queue, s.times, Array.from(s.values)])).toEqual([
-			['mail', [now - 1000], [7]],
-		])
-		const range = { name: 'depth', match: { queue: 'mail' }, since: '1m', width: '1m' } as const
-		const [first] = await store.metrics.aggregate({ ...range, op: 'first' })
-		const [last] = await store.metrics.aggregate({ ...range, op: 'last' })
-		expect([first?.buckets[0]?.value, last?.buckets[0]?.value]).toEqual([4, 7])
-	})
-
-	test("a description is kept by name, and an instrument's is written at its flush", async () => {
-		await store.metrics.describe('query_ms', { unit: 'ms', help: 'How long a query took.' })
-		expect(await store.metrics.description('query_ms')).toEqual({
-			unit: 'ms',
-			help: 'How long a query took.',
-		})
-		expect(await store.metrics.description('never_described')).toEqual({ unit: '', help: '' })
-		store.metrics.counter('described_total', { help: 'Requests served.' }).inc()
-		store.metrics.timer('described_query', { help: 'Queries.' }).record(2)
-		await store.metrics.flush()
-		expect(await store.metrics.description('described_total')).toEqual({
-			unit: '',
-			help: 'Requests served.',
-		})
-		expect(await store.metrics.description('described_query_sum')).toEqual({
-			unit: 'ms',
-			help: 'Queries.',
-		})
-		expect(() => store.metrics.gauge('described_gauge', { unit: 'x'.repeat(33) })).toThrow(
-			InvalidError,
-		)
-	})
-
-	test('instruments are ingested at a flush, the same labels in any order one series', async () => {
-		const requests = store.metrics.counter('http_requests_total')
-		requests.with({ route: '/notes', method: 'POST' }).inc()
-		requests.with({ method: 'POST', route: '/notes' }).add(2)
-		store.metrics.gauge('inflight').set(5)
-		store.metrics.gaugeFunc('queue_depth', () => 7)
-		await store.metrics.flush()
-		const [posts] = await store.metrics.read({
-			name: 'http_requests_total',
-			match: { route: '/notes' },
-			since: '1m',
-		})
-		expect(posts?.values[0]).toBe(3)
-		expect(posts?.labels).toEqual({ route: '/notes', method: 'POST' })
-		const [depth] = await store.metrics.read({ name: 'queue_depth', since: '1m' })
-		expect(depth?.values[0]).toBe(7)
-	})
-
-	test('a refused instrument keeps no other out, and says so once', async () => {
-		const refused = store.metrics.counter('refused_total').with({ '': 'x' })
-		const said = await stderrWhile(async () => {
-			store.metrics.counter('kept_total').inc()
-			refused.inc()
-			store.metrics.timer('refused_ms').with({ '': 'y' }).record(5)
-			store.metrics.gaugeFunc('unread', () => {
-				throw new Error('no reading')
-			})
-			await store.metrics.flush()
-			store.metrics.counter('kept_total').inc()
-			refused.inc()
-			await store.metrics.flush()
-		})
-		const [kept] = await store.metrics.read({ name: 'kept_total', since: '1m' })
-		expect(kept?.values).toEqual(Float64Array.of(1, 2))
-		expect(times(said, 'instrument refused')).toBe(2)
-		expect(said).toContain('refused_total')
-		expect(said).toContain('refused_ms')
-		expect(times(said, 'gauge read failed')).toBe(1)
-		expect(store.metrics.failures).toBe(0)
-	})
-
-	test('a timer writes its count, sum and longest at each flush; measure answers and rethrows', async () => {
-		const latency = store.metrics.timer('timed_ms')
-		latency.record(10)
-		latency.record('30ms')
-		latency.with({ route: '/a' }).record(2.5)
-		expect(await latency.measure(() => 42)).toBe(42)
-		const boom = new Error('boom')
-		expect(
-			await caught(
-				latency.measure(async () => {
-					throw boom
-				}),
-			),
-		).toBe(boom)
-		expect(() => latency.record(-1)).toThrow(InvalidError)
-		expect(() => store.metrics.counter('timed_ms_count')).toThrow(InvalidError)
-		store.metrics.counter('busy_ms_sum').inc()
-		expect(() => store.metrics.timer('busy_ms')).toThrow(InvalidError)
-		await store.metrics.flush()
-		await Bun.sleep(2)
-		await store.metrics.flush() // nothing measured since: the totals again, no longest
-
-		const last = async (name: string, route?: string) => {
-			const series = await store.metrics.read({ name, since: '1m' })
-			const s = series.find(s => s.labels.route === route)
-			return s?.values
-		}
-		expect((await last('timed_ms_count'))?.at(-1)).toBe(4)
-		const sum = (await last('timed_ms_sum'))?.at(-1) ?? 0
-		expect(sum >= 40 && sum < 1040).toBe(true)
-		expect(await last('timed_ms_max')).toEqual(Float64Array.of(30))
-		expect(await last('timed_ms_count', '/a')).toEqual(Float64Array.of(1, 1))
-		expect(await last('timed_ms_sum', '/a')).toEqual(Float64Array.of(2.5, 2.5))
-		expect(await last('timed_ms_max', '/a')).toEqual(Float64Array.of(2.5))
-	})
-
-	test('conditions find series beyond equality, and noneOf alone is refused', async () => {
-		const at = new Date()
-		for (const [host, status, env] of [
-			['api-1', '200', 'prod'],
-			['api-2', '502', 'dev'],
-			['web-1', '500', 'prod'],
-			['web-2', '500', undefined],
-		] as const) {
-			const labels: Record<string, string> = { host, status }
-			if (env !== undefined) {
-				labels.env = env
-			}
-			await store.metrics.ingest({ name: 'requests', kind: 'counter', labels, samples: [[at, 1]] })
-		}
-		const hosts = async (where: Record<string, Condition | string>) =>
-			(await store.metrics.read({ name: 'requests', where })).map(s => s.labels.host).sort()
-		expect(await hosts({ status: oneOf('500', '502') })).toEqual(['api-2', 'web-1', 'web-2'])
-		expect(await hosts({ env: noneOf('dev') })).toEqual(['api-1', 'web-1', 'web-2'])
-		expect(await hosts({ host: prefix('api-'), status: '200' })).toEqual(['api-1'])
-		expect(await hosts({ status: oneOf('418') })).toEqual([])
-		expect(await caught(store.metrics.read({ where: { env: noneOf('dev') } }))).toBeInstanceOf(
-			InvalidError,
-		)
-		expect(
-			await caught(store.metrics.read({ name: 'requests', where: { env: prefix('') } })),
-		).toBeInstanceOf(InvalidError)
-	})
-
-	test('an aggregate joins series by a label, exactly, and rates and deltas each', async () => {
-		const start = Date.now() - 60_000
-		const at = (s: number) => new Date(start + s * 1000)
-		for (const [route, host, values] of [
-			['/a', '1', [10, 15, 5, 8]],
-			['/a', '2', [0, 2, 4, 6]],
-			['/b', '1', [100, 100, 101, 103]],
-		] as const) {
+		test('a series comes back bit for bit, its samples as two columns', async () => {
+			const at = Date.now() - 60_000
+			const values = new Float64Array([0.42, -0, Number.NaN, Number.POSITIVE_INFINITY])
+			new DataView(values.buffer).setBigUint64(16, 0x7ff8_0000_dead_beefn, true)
+			const times = [at, at + 1000, at + 2000, at + 3000]
 			await store.metrics.ingest({
-				name: 'hits',
-				kind: 'counter',
-				labels: { route, host },
-				samples: values.map((v, i) => [at(i), v] as [Date, number]),
+				name: 'cpu',
+				kind: 'gauge',
+				labels: { host: 'web-1' },
+				times,
+				values,
 			})
+			const [cpu] = await store.metrics.read({ name: 'cpu', where: { host: 'web-1' }, since: '1h' })
+			expect(cpu?.labels).toEqual({ host: 'web-1' })
+			expect(Array.from(cpu?.times ?? [])).toEqual(times)
+			expect(new Uint8Array(cpu?.values.buffer ?? new ArrayBuffer(0))).toEqual(
+				new Uint8Array(values.buffer),
+			)
+			const newest = await store.metrics.latest({ name: 'cpu', since: '1h' })
+			expect(newest.map(sample => [sample.at.getTime(), sample.labels.host])).toEqual([
+				[at + 3000, 'web-1'],
+			])
+		})
+
+		test("an aggregate's buckets are exact by group, and a timer's percentile is its bounds", async () => {
+			const at = Date.now() - 60_000
+			const route = (name: string, values: number[]) => ({
+				name: 'requests_total',
+				kind: 'counter' as const,
+				labels: { route: name },
+				samples: values.map((value, i) => [at + i * 1000, value] as const),
+			})
+			await store.metrics.ingest([route('/a', [0, 10, 25]), route('/b', [0, 3, 1])])
+			const traffic = await store.metrics.aggregate({
+				name: 'requests_total',
+				since: '1h',
+				op: 'increase',
+				by: ['route'],
+			})
+			const byRoute = Object.fromEntries(
+				traffic.map(group => [group.labels.route, group.buckets[0]]),
+			)
+			expect(byRoute['/a']).toMatchObject({ value: 25, resets: 0 })
+			expect(byRoute['/b']).toMatchObject({ value: 4, resets: 1 })
+			const routes = async (where: NonNullable<MetricsQuery['where']>) => {
+				const read = await store.metrics.read({ name: 'requests_total', where, since: '1h' })
+				return read.map(series => series.labels.route).sort()
+			}
+			expect(await routes({ route: { not: '/a' } })).toEqual(['/b'])
+			expect(await routes({ route: ['/a', '/b'] })).toEqual(['/a', '/b'])
+			expect(await routes({ route: { prefix: '/' } })).toEqual(['/a', '/b'])
+			const latency = store.metrics.timer('db_ms', { buckets: [5, 10, 25] })
+			for (const took of [3, 7, 20, 100]) {
+				latency.record(took)
+			}
+			await store.metrics.flush()
+			const [p50] = await store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'p50' })
+			expect(p50?.buckets[0]).toMatchObject({ lower: 5, upper: 10, samples: 4 })
+			const [p99] = await store.metrics.aggregate({
+				name: 'db_ms',
+				since: '1h',
+				op: 'p99.9',
+				estimate: true,
+			})
+			expect(p99?.buckets[0]).toMatchObject({
+				lower: 25,
+				upper: Number.POSITIVE_INFINITY,
+				estimate: 25,
+			})
+			const [mean] = await store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'avg' })
+			expect(mean?.buckets[0]?.value).toBe(32.5)
+			const unranked = store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'p' as 'p95' })
+			expect(await caught(unranked)).toBeInstanceOf(InvalidError)
+		})
+
+		test("instruments count into the store's totals, a set of labels a series each", async () => {
+			const requests = store.metrics.counter('http_requests_total', { help: 'Requests served.' })
+			requests.with({ route: '/notes', status: 200 }).inc()
+			requests.with({ status: 200, route: '/notes' }).add(2)
+			requests.with({ route: '/users', status: 200 }).add(0)
+			const depth = store.metrics.gauge('queue_depth', { unit: 'jobs' })
+			depth.set(12)
+			depth.inc()
+			store.metrics.gaugeFunc('open_tickets', async () => 7)
+			const sizes = store.metrics.histogram('response_bytes', {
+				unit: 'bytes',
+				buckets: [100, 1000],
+			})
+			sizes.record(50)
+			sizes.record(5000)
+			await store.metrics.flush()
+			expect(await last(store, 'http_requests_total')).toEqual({
+				'{"route":"/notes","status":"200"}': 3,
+				'{"route":"/users","status":"200"}': 0,
+			})
+			expect(await last(store, 'queue_depth')).toEqual({ '{}': 13 })
+			expect(await last(store, 'open_tickets')).toEqual({ '{}': 7 })
+			expect(await last(store, 'response_bytes_count')).toEqual({ '{}': 2 })
+			expect(await last(store, 'response_bytes_sum')).toEqual({ '{}': 5050 })
+			expect(await store.metrics.description('http_requests_total')).toEqual({
+				unit: '',
+				help: 'Requests served.',
+			})
+		})
+
+		test("a timer's measure answers, rethrows, and records either way", async () => {
+			const took = store.metrics.timer('measured_ms')
+			expect(await took.measure(async () => 7)).toBe(7)
+			const thrown = took.measure(() => {
+				throw new InvalidError('no')
+			})
+			expect(await caught(thrown)).toBeInstanceOf(InvalidError)
+			await store.metrics.flush()
+			expect(await last(store, 'measured_ms_count')).toEqual({ '{}': 2 })
+		})
+
+		test('an instrument the store refuses writes nothing and keeps no other out', async () => {
+			await store.metrics.ingest({
+				name: 'taken',
+				kind: 'gauge',
+				samples: [[Date.now() - 1000, 1]],
+			})
+			store.metrics.counter('taken').inc()
+			store.metrics.counter('others_total').inc()
+			await store.metrics.flush()
+			expect(await last(store, 'others_total')).toEqual({ '{}': 1 })
+			expect(await last(store, 'taken')).toEqual({ '{}': 1 })
+		})
+
+		test('a call an instrument refuses throws where the program made it', () => {
+			const counter = store.metrics.counter('refusals_total')
+			expect(() => counter.add(-1)).toThrow(InvalidError)
+			expect(() => counter.add(Number.NaN)).toThrow(InvalidError)
+			expect(() => counter.with({ __store: 'a' })).toThrow(InvalidError)
+			expect(() => store.metrics.gauge('refused_depth').set(Number.POSITIVE_INFINITY)).toThrow(
+				InvalidError,
+			)
+			expect(() => store.metrics.timer('refused_ms').record(-5)).toThrow(InvalidError)
+			expect(() => store.metrics.timer('refused_ms').with({ le: '5' })).toThrow(InvalidError)
+			expect(() => store.metrics.timer('unordered_ms', { buckets: [10, 5] })).toThrow(InvalidError)
+			expect(() => store.metrics.gauge('refusals_total')).toThrow(InvalidError)
+			store.metrics.gaugeFunc('read_once', () => 1)
+			expect(() => store.metrics.gaugeFunc('read_once', () => 2)).toThrow(InvalidError)
+		})
+
+		test('a call made while a batch is on its way counts in the next', async () => {
+			const jobs = store.metrics.counter('jobs_total')
+			for (let i = 0; i < 20; i++) {
+				jobs.inc()
+				const flushing = store.metrics.flush()
+				jobs.inc()
+				await flushing
+			}
+			await store.metrics.flush()
+			expect(await last(store, 'jobs_total')).toEqual({ '{}': 40 })
+		})
+
+		test('what a store holds, a page at a time, and its removal', async () => {
+			const page = await store.metrics.names({ prefix: 'http_' })
+			const requests = page.names.find(name => name.name === 'http_requests_total')
+			expect(requests).toMatchObject({
+				kind: 'counter',
+				seriesCount: 2,
+				help: 'Requests served.',
+				keep: '30d',
+			})
+			expect(requests?.retainedFrom.getTime()).toBeLessThanOrEqual(requests?.newest.getTime() ?? 0)
+			expect(page.next).toBeUndefined()
+			const first = await store.metrics.names({ limit: 1 })
+			expect(first.names.length).toBe(1)
+			const rest = await store.metrics.names({ after: first.next })
+			expect(rest.names.map(name => name.name)).not.toContain(first.names[0]?.name)
+			expect(await store.metrics.labelNames('http_requests_total')).toEqual({
+				labels: ['route', 'status'],
+			})
+			expect(
+				await store.metrics.labelValues('http_requests_total', 'route', { prefix: '/n' }),
+			).toEqual({
+				values: ['/notes'],
+			})
+			await store.metrics.describe('cpu', { unit: '%', help: 'Busy.' })
+			expect(await store.metrics.description('cpu')).toEqual({ unit: '%', help: 'Busy.' })
+			await store.metrics.describe('cpu', {})
+			expect(await store.metrics.description('cpu')).toEqual({ unit: '', help: '' })
+			expect(await store.metrics.delete({ name: 'cpu', labels: { host: 'web-1' } })).toBe(true)
+			expect(await store.metrics.delete({ name: 'cpu', labels: { host: 'web-1' } })).toBe(false)
+			expect(await store.metrics.damaged()).toEqual([])
+			const plan = await store.metrics.explain({
+				name: 'requests_total',
+				since: '1h',
+				every: '1m',
+				op: 'rate',
+			})
+			expect(plan).toMatchObject({ series: 2, exceeds: undefined })
+		})
+	})
+}
+
+const library = process.env.TINYSTORE_LIBRARY
+
+test.skipIf(library === undefined)(
+	'a batch whose answer a lost connection took counts once',
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'tinystore-metrics-cut-'))
+		// a second handle keeps the store open while the connection under test is cut
+		const keeper = await open(dir, { embedded: true, library })
+		const dialled: Connection[] = []
+		const dial = embedded(bunRuntime, dir, () => library ?? '')
+		const link = new Link(async () => {
+			const connection = await dial()
+			dialled.push(connection)
+			return connection
+		})
+		const instruments = new Instruments(link)
+		const metrics = new Metrics(link, instruments)
+		const jobs = metrics.counter('cut_jobs_total')
+		jobs.inc()
+		await metrics.flush()
+		for (let cut = 0; cut < 5; cut++) {
+			jobs.add(2)
+			const flushed = metrics.flush()
+			await Bun.sleep(cut)
+			dialled.at(-1)?.session.end(new Error('cut'))
+			await flushed
 		}
-		const range = { name: 'hits', from: at(0), to: at(4), width: 4000 } as const
-		const byRoute = await store.metrics.aggregate({ ...range, op: 'increase', by: ['route'] })
-		expect(byRoute.map(g => [g.labels.route, g.buckets[0]?.value, g.buckets[0]?.resets])).toEqual([
-			['/a', 19, 1],
-			['/b', 3, 0],
-		])
-		const all = await store.metrics.aggregate({ ...range, op: 'count', by: [] })
-		expect(all.map(g => [g.labels, g.buckets[0]?.value])).toEqual([[{}, 12]])
-		const rates = await store.metrics.aggregate({ ...range, op: 'rate', without: ['host'] })
-		expect(rates.map(g => g.buckets[0]?.value)).toEqual([19 / 4, 3 / 4])
-		expect(
-			await caught(store.metrics.aggregate({ ...range, op: 'delta', by: ['route'] })),
-		).toBeInstanceOf(InvalidError)
-	})
+		expect(await last(keeper, 'cut_jobs_total')).toEqual({ '{}': 11 })
+		await instruments.stop()
+		await link.close()
+		await keeper.close()
+		await removed(dir)
+	},
+)
 
-	test('a limit says which it is, what the read wanted and the bound', async () => {
-		const now = Date.now()
-		await store.metrics.ingest({
-			name: 'bounded',
-			kind: 'gauge',
-			samples: [
-				[new Date(now - 3000), 1],
-				[new Date(now - 2000), 2],
-				[new Date(now - 1000), 3],
-			],
+test.skipIf(library === undefined)(
+	'a flush the store cannot be reached for fails, and what it carried goes once it can be',
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'tinystore-metrics-down-'))
+		const keeper = await open(dir, { embedded: true, library })
+		const dial = embedded(bunRuntime, dir, () => library ?? '')
+		const dialled: Connection[] = []
+		let down = false
+		const link = new Link(async () => {
+			if (down) {
+				throw new UnavailableError('the store is down')
+			}
+			const connection = await dial()
+			dialled.push(connection)
+			return connection
 		})
-		const refused = await caught(
-			store.metrics.read({ name: 'bounded', since: '1m', limits: { decoded: 1 } }),
-		)
-		expect(refused).toBeInstanceOf(LimitError)
-		const limit = refused as LimitError
-		expect([limit.limit, limit.bound]).toEqual(['decoded samples', 1])
-		expect(limit.wanted).toBeGreaterThan(1)
-	})
+		const instruments = new Instruments(link)
+		const metrics = new Metrics(link, instruments)
+		const jobs = metrics.counter('down_jobs_total')
+		jobs.inc()
+		await metrics.flush()
+		down = true
+		dialled.at(-1)?.session.end(new Error('cut'))
+		jobs.add(2)
+		expect(await caught(metrics.flush())).toBeInstanceOf(UnavailableError)
+		down = false
+		await metrics.flush()
+		expect(await last(keeper, 'down_jobs_total')).toEqual({ '{}': 3 })
+		await instruments.stop()
+		await link.close()
+		await keeper.close()
+		await removed(dir)
+	},
+)
 
-	test('a plan says what a read would spend, and where it would stop', async () => {
-		const now = Date.now()
-		await store.metrics.ingest({
-			name: 'planned',
-			kind: 'gauge',
-			samples: [
-				[new Date(now - 3000), 1],
-				[new Date(now - 2000), 2],
-				[new Date(now - 1000), 3],
-			],
-		})
-		const plan = await store.metrics.explain({ name: 'planned', since: '1m' })
-		expect([plan.series, plan.decoded, plan.stops]).toEqual([1, 3, undefined])
-		const tight = await store.metrics.explain({
-			name: 'planned',
-			since: '1m',
-			limits: { decoded: 1 },
-		})
-		expect([tight.stops?.limit, tight.stops?.bound, tight.limits.decoded]).toEqual([
-			'decoded samples',
-			1,
-			1,
-		])
-		const buckets = await store.metrics.explain({
-			name: 'planned',
-			since: '1m',
-			width: '1m',
-			op: 'sum',
-		})
-		expect(buckets.series).toBe(1)
-	})
+test('what a program writes wrong does not compile: a duration, an op, a label its instrument has not', () => {
+	const written = async (metrics: Metrics) => {
+		const requests = metrics.counter<'route' | 'status'>('typed_total')
+		requests.with({ route: '/a', status: 200 }).inc()
+		// @ts-expect-error: rout is not among the labels the counter was made with
+		requests.with({ rout: '/a' })
+		// @ts-expect-error: '1hr' spells no duration
+		await metrics.read({ name: 'cpu', since: '1hr' })
+		// @ts-expect-error: mean is no op; avg is
+		await metrics.aggregate({ name: 'cpu', op: 'mean' })
+		const [mean] = await metrics.aggregate({ name: 'cpu', since: '1h', op: 'avg' })
+		const exact: number | undefined = mean?.buckets[0]?.value
+		const [p95] = await metrics.aggregate({ name: 'cpu', since: '1h', op: 'p95' })
+		// @ts-expect-error: a percentile may have bounds in place of a value
+		const ranked: number = p95!.buckets[0]!.value
+		const valued = (bucket: ValueBucket): number => bucket.value
+		return [exact, ranked, valued(mean!.buckets[0]!)]
+	}
+	expect(typeof written).toBe('function')
+})
 
-	test('an invalid description cannot prevent good instruments from flushing', async () => {
-		for (const name of ['', 'x'.repeat(4097), String.fromCharCode(0xd800)]) {
-			expect(() => store.metrics.counter(name, { help: 'requests' })).toThrow(InvalidError)
-		}
-		const description = { unit: 'count', help: 'requests' }
-		store.metrics.counter('described-good', description).inc()
-		description.unit = 'x'.repeat(100)
-		await store.metrics.flush()
-		expect((await store.metrics.read({ name: 'described-good', since: '1h' })).length).toBe(1)
-		expect(await store.metrics.description('described-good')).toEqual({
-			unit: 'count',
-			help: 'requests',
-		})
-	})
-
-	test('a drop removes a series', async () => {
-		expect(await store.metrics.drop({ name: 'cpu', labels: { host: 'web-1' } })).toEqual({
-			found: true,
-			unreadableGroups: 0,
-		})
-		expect(await store.metrics.read({ name: 'cpu' })).toEqual([])
-	})
-
-	test("a label of the store's own, a range of nothing or of both kinds of start are refused", async () => {
-		for (const refused of [
-			() => store.metrics.read({ name: 'cpu', match: { __name__: 'other' } }),
-			() => store.metrics.read({}),
-			() => store.metrics.read({ name: 'cpu', since: '1h', from: 0 }),
-			() => store.metrics.ingest({ name: 'cpu', kind: 'gauge', labels: { __x: 'y' }, samples: [] }),
-		]) {
-			expect(await caught(refused())).toBeInstanceOf(InvalidError)
-		}
-	})
+test('a value falls in the interval of the grid where the store puts it', () => {
+	expect([binOf(0), binOf(1), binOf(1.05), binOf(0.99), binOf(Math.SQRT2)]).toEqual([
+		'zero',
+		'3:0',
+		'3:1',
+		'3:0',
+		'3:5',
+	])
+	const below = new DataView(new ArrayBuffer(8))
+	below.setFloat64(0, Math.SQRT2)
+	below.setBigUint64(0, below.getBigUint64(0) - 1n)
+	expect(binOf(below.getFloat64(0))).toBe('3:4')
+	expect(binOf(Number.MAX_VALUE)).toBe('3:8192')
+	expect(exponentialBuckets(1, 2, 4)).toEqual([1, 2, 4, 8])
 })

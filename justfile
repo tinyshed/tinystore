@@ -53,11 +53,11 @@ protocol-check:
 build:
     cargo build --release --locked -p tinystore-ffi -p tinystore-cli
 
-# run the Bun SDK's kv, jobs, sql and files over the core in its own process, a private child, a sidecar and a remote server, its test clock, its codecs against the vectors, and its console lines
+# run the Bun SDK's kv, jobs, sql, files, events and metrics over the core in its own process, a private child, a sidecar and a remote server, its test clock, its codecs against the vectors, and its console lines
 [working-directory: 'sdk/js']
 sdk: build
     bun install --frozen-lockfile
-    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts
+    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts
 
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']

@@ -74,6 +74,20 @@ export const methods = {
 	'kv.once.get': 0x0132,
 	'kv.once.delete': 0x0133,
 	'kv.tx': 0x0140,
+	'metrics.read': 0x0601,
+	'metrics.latest': 0x0602,
+	'metrics.aggregate': 0x0603,
+	'metrics.explain': 0x0604,
+	'metrics.names': 0x0605,
+	'metrics.labelNames': 0x0606,
+	'metrics.labelValues': 0x0607,
+	'metrics.description': 0x0608,
+	'metrics.damaged': 0x0609,
+	'metrics.ingest': 0x060a,
+	'metrics.describe': 0x060b,
+	'metrics.delete': 0x060c,
+	'metrics.flush': 0x060d,
+	'metrics.instruments': 0x060e,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -4575,6 +4589,2119 @@ export const KvTxResults = message(
 )
 
 /**
+ * What a label's value must be: one of values, none of them with not, the
+ * label absent too, or a value that starts with prefix.
+ */
+export const MetricsCondition = message(
+	'metrics.Condition',
+	{
+		values: [1, list(str)],
+		not: [2, bool],
+		prefix: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.values !== undefined) {
+				w.field(1)
+				w.array(v.values.length)
+				for (const item0 of v.values) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.not !== undefined) {
+				w.field(2)
+				w.bool(v.not)
+				n++
+			}
+			if (v.prefix !== undefined) {
+				w.field(3)
+				w.str(v.prefix)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $values: string[] | undefined
+			let $not: boolean | undefined
+			let $prefix: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$values = items0
+						break
+					}
+					case 2:
+						$not = r.bool()
+						break
+					case 3:
+						$prefix = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { values: $values, not: $not, prefix: $prefix }
+		},
+	},
+)
+
+/**
+ * The series a call finds, and its range: since before now, or from and to.
+ */
+export const MetricsQuery = message(
+	'metrics.Query',
+	{
+		name: [1, str],
+		where: [2, names(MetricsCondition)],
+		since: [3, uint],
+		from: [4, int],
+		/** excluded; now, a sample taken now in the range, unless given */
+		to: [5, int],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.where !== undefined) {
+				w.field(2)
+				writeNames(w, v.where, MetricsCondition.write)
+				n++
+			}
+			if (v.since !== undefined) {
+				w.field(3)
+				w.uint(v.since)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(4)
+				w.int(v.from)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(5)
+				w.int(v.to)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $where: Record<string, Read<typeof MetricsCondition.fields>> | undefined
+			let $since: number | undefined
+			let $from: number | undefined
+			let $to: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$where = readNames(r, MetricsCondition.read)
+						break
+					case 3:
+						$since = r.uint()
+						break
+					case 4:
+						$from = r.int()
+						break
+					case 5:
+						$to = r.int()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, where: $where, since: $since, from: $from, to: $to }
+		},
+	},
+)
+
+/**
+ * A series and its samples, or a part of them: a series longer than a body
+ * goes on in the next part.
+ */
+export const MetricsSeries = message(
+	'metrics.Series',
+	{
+		name: [1, str],
+		/** gauge, counter or histogram */
+		kind: [2, str],
+		labels: [3, names(str)],
+		/** an int64 a sample */
+		times: [4, bin],
+		/** a float64 a sample */
+		values: [5, bin],
+		/** the next part goes on with this series */
+		more: [6, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.kind !== undefined) {
+				w.field(2)
+				w.str(v.kind)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(3)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.times !== undefined) {
+				w.field(4)
+				w.bin(v.times)
+				n++
+			}
+			if (v.values !== undefined) {
+				w.field(5)
+				w.bin(v.values)
+				n++
+			}
+			if (v.more !== undefined) {
+				w.field(6)
+				w.bool(v.more)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $kind: string | undefined
+			let $labels: Record<string, string> | undefined
+			let $times: Uint8Array | undefined
+			let $values: Uint8Array | undefined
+			let $more: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$kind = r.str()
+						break
+					case 3:
+						$labels = readNames(r, str.read)
+						break
+					case 4:
+						$times = r.bytes()
+						break
+					case 5:
+						$values = r.bytes()
+						break
+					case 6:
+						$more = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				kind: $kind,
+				labels: $labels,
+				times: $times,
+				values: $values,
+				more: $more,
+			}
+		},
+	},
+)
+
+export const MetricsRead = message(
+	'metrics.Read',
+	{
+		series: [1, list(MetricsSeries)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.series !== undefined) {
+				w.field(1)
+				w.array(v.series.length)
+				for (const item0 of v.series) {
+					MetricsSeries.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $series: Read<typeof MetricsSeries.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsSeries.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsSeries.read(r))
+						}
+						r.leave()
+						$series = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { series: $series }
+		},
+	},
+)
+
+/**
+ * A series' newest sample in the range.
+ */
+export const MetricsNewest = message(
+	'metrics.Newest',
+	{
+		name: [1, str],
+		labels: [2, names(str)],
+		at: [3, int],
+		value: [4, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.at !== undefined) {
+				w.field(3)
+				w.int(v.at)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(4)
+				w.float(v.value)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $labels: Record<string, string> | undefined
+			let $at: number | undefined
+			let $value: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					case 3:
+						$at = r.int()
+						break
+					case 4:
+						$value = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, labels: $labels, at: $at, value: $value }
+		},
+	},
+)
+
+export const MetricsLatest = message(
+	'metrics.Latest',
+	{
+		series: [1, list(MetricsNewest)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.series !== undefined) {
+				w.field(1)
+				w.array(v.series.length)
+				for (const item0 of v.series) {
+					MetricsNewest.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $series: Read<typeof MetricsNewest.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsNewest.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsNewest.read(r))
+						}
+						r.leave()
+						$series = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { series: $series }
+		},
+	},
+)
+
+/**
+ * An aggregate: read's query, its buckets, its op and its groups. Without
+ * by and without, every series of a name is one group; without: [] keeps
+ * every series apart.
+ */
+export const MetricsAggregateAsked = message(
+	'metrics.AggregateAsked',
+	{
+		query: [1, MetricsQuery],
+		every: [2, uint],
+		/** count, sum, avg, min, max, increase, rate, delta, first, last, or p and a rank; none for a read's plan */
+		op: [3, str],
+		by: [4, list(str)],
+		without: [5, list(str)],
+		/** a timer's percentile also gives a point between its bounds */
+		estimate: [6, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.query !== undefined) {
+				w.field(1)
+				MetricsQuery.write(w, v.query)
+				n++
+			}
+			if (v.every !== undefined) {
+				w.field(2)
+				w.uint(v.every)
+				n++
+			}
+			if (v.op !== undefined) {
+				w.field(3)
+				w.str(v.op)
+				n++
+			}
+			if (v.by !== undefined) {
+				w.field(4)
+				w.array(v.by.length)
+				for (const item0 of v.by) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.without !== undefined) {
+				w.field(5)
+				w.array(v.without.length)
+				for (const item0 of v.without) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.estimate !== undefined) {
+				w.field(6)
+				w.bool(v.estimate)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $query: Read<typeof MetricsQuery.fields> | undefined
+			let $every: number | undefined
+			let $op: string | undefined
+			let $by: string[] | undefined
+			let $without: string[] | undefined
+			let $estimate: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$query = MetricsQuery.read(r)
+						break
+					case 2:
+						$every = r.uint()
+						break
+					case 3:
+						$op = r.str()
+						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$by = items0
+						break
+					}
+					case 5: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$without = items0
+						break
+					}
+					case 6:
+						$estimate = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				query: $query,
+				every: $every,
+				op: $op,
+				by: $by,
+				without: $without,
+				estimate: $estimate,
+			}
+		},
+	},
+)
+
+/**
+ * A bucket of an aggregate: its value, or a timer's percentile's bounds.
+ */
+export const MetricsBucket = message(
+	'metrics.Bucket',
+	{
+		/** where it begins */
+		at: [1, int],
+		/** none for a timer's percentile */
+		value: [2, float],
+		lower: [3, float],
+		/** infinity past the last bound */
+		upper: [4, float],
+		estimate: [5, float],
+		samples: [6, uint],
+		resets: [7, uint],
+		/** its value comes from less than its span */
+		partial: [8, bool],
+		/** its first step began before the bucket before it */
+		gap: [9, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.at !== undefined) {
+				w.field(1)
+				w.int(v.at)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.float(v.value)
+				n++
+			}
+			if (v.lower !== undefined) {
+				w.field(3)
+				w.float(v.lower)
+				n++
+			}
+			if (v.upper !== undefined) {
+				w.field(4)
+				w.float(v.upper)
+				n++
+			}
+			if (v.estimate !== undefined) {
+				w.field(5)
+				w.float(v.estimate)
+				n++
+			}
+			if (v.samples !== undefined) {
+				w.field(6)
+				w.uint(v.samples)
+				n++
+			}
+			if (v.resets !== undefined) {
+				w.field(7)
+				w.uint(v.resets)
+				n++
+			}
+			if (v.partial !== undefined) {
+				w.field(8)
+				w.bool(v.partial)
+				n++
+			}
+			if (v.gap !== undefined) {
+				w.field(9)
+				w.bool(v.gap)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $at: number | undefined
+			let $value: number | undefined
+			let $lower: number | undefined
+			let $upper: number | undefined
+			let $estimate: number | undefined
+			let $samples: number | undefined
+			let $resets: number | undefined
+			let $partial: boolean | undefined
+			let $gap: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$at = r.int()
+						break
+					case 2:
+						$value = r.float()
+						break
+					case 3:
+						$lower = r.float()
+						break
+					case 4:
+						$upper = r.float()
+						break
+					case 5:
+						$estimate = r.float()
+						break
+					case 6:
+						$samples = r.uint()
+						break
+					case 7:
+						$resets = r.uint()
+						break
+					case 8:
+						$partial = r.bool()
+						break
+					case 9:
+						$gap = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				at: $at,
+				value: $value,
+				lower: $lower,
+				upper: $upper,
+				estimate: $estimate,
+				samples: $samples,
+				resets: $resets,
+				partial: $partial,
+				gap: $gap,
+			}
+		},
+	},
+)
+
+/**
+ * A group's buckets, or a part of them: a group longer than a body goes on
+ * in the next part.
+ */
+export const MetricsGroup = message(
+	'metrics.Group',
+	{
+		name: [1, str],
+		labels: [2, names(str)],
+		buckets: [3, list(MetricsBucket)],
+		more: [4, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.buckets !== undefined) {
+				w.field(3)
+				w.array(v.buckets.length)
+				for (const item0 of v.buckets) {
+					MetricsBucket.write(w, item0)
+				}
+				n++
+			}
+			if (v.more !== undefined) {
+				w.field(4)
+				w.bool(v.more)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $labels: Record<string, string> | undefined
+			let $buckets: Read<typeof MetricsBucket.fields>[] | undefined
+			let $more: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					case 3: {
+						const items0: Read<typeof MetricsBucket.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsBucket.read(r))
+						}
+						r.leave()
+						$buckets = items0
+						break
+					}
+					case 4:
+						$more = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, labels: $labels, buckets: $buckets, more: $more }
+		},
+	},
+)
+
+export const MetricsAggregates = message(
+	'metrics.Aggregates',
+	{
+		groups: [1, list(MetricsGroup)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.groups !== undefined) {
+				w.field(1)
+				w.array(v.groups.length)
+				for (const item0 of v.groups) {
+					MetricsGroup.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $groups: Read<typeof MetricsGroup.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsGroup.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsGroup.read(r))
+						}
+						r.leave()
+						$groups = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { groups: $groups }
+		},
+	},
+)
+
+export const MetricsExceeds = message(
+	'metrics.Exceeds',
+	{
+		/** series, bytes read or samples decoded */
+		limit: [1, str],
+		wanted: [2, uint],
+		bound: [3, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.limit !== undefined) {
+				w.field(1)
+				w.str(v.limit)
+				n++
+			}
+			if (v.wanted !== undefined) {
+				w.field(2)
+				w.uint(v.wanted)
+				n++
+			}
+			if (v.bound !== undefined) {
+				w.field(3)
+				w.uint(v.bound)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $limit: string | undefined
+			let $wanted: number | undefined
+			let $bound: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$limit = r.str()
+						break
+					case 2:
+						$wanted = r.uint()
+						break
+					case 3:
+						$bound = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { limit: $limit, wanted: $wanted, bound: $bound }
+		},
+	},
+)
+
+/**
+ * A series to write, its samples as two columns.
+ */
+export const MetricsNewSeries = message(
+	'metrics.NewSeries',
+	{
+		name: [1, str],
+		/** gauge, counter or histogram */
+		kind: [2, str],
+		labels: [3, names(str)],
+		/** an int64 a sample */
+		times: [4, bin],
+		/** a float64 a sample */
+		values: [5, bin],
+		/** how long the name's samples stay: its own, kept in the file */
+		keep: [6, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.kind !== undefined) {
+				w.field(2)
+				w.str(v.kind)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(3)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.times !== undefined) {
+				w.field(4)
+				w.bin(v.times)
+				n++
+			}
+			if (v.values !== undefined) {
+				w.field(5)
+				w.bin(v.values)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(6)
+				w.uint(v.keep)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $kind: string | undefined
+			let $labels: Record<string, string> | undefined
+			let $times: Uint8Array | undefined
+			let $values: Uint8Array | undefined
+			let $keep: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$kind = r.str()
+						break
+					case 3:
+						$labels = readNames(r, str.read)
+						break
+					case 4:
+						$times = r.bytes()
+						break
+					case 5:
+						$values = r.bytes()
+						break
+					case 6:
+						$keep = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				kind: $kind,
+				labels: $labels,
+				times: $times,
+				values: $values,
+				keep: $keep,
+			}
+		},
+	},
+)
+
+/**
+ * Series to write, every one or none.
+ */
+export const MetricsIngest = message(
+	'metrics.Ingest',
+	{
+		series: [1, list(MetricsNewSeries)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.series !== undefined) {
+				w.field(1)
+				w.array(v.series.length)
+				for (const item0 of v.series) {
+					MetricsNewSeries.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $series: Read<typeof MetricsNewSeries.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsNewSeries.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsNewSeries.read(r))
+						}
+						r.leave()
+						$series = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { series: $series }
+		},
+	},
+)
+
+/**
+ * A page of names, of a name's labels or of a label's values.
+ */
+export const MetricsPageAsked = message(
+	'metrics.PageAsked',
+	{
+		/** the name whose labels, or whose label's values, it lists */
+		name: [1, str],
+		/** the label whose values it lists */
+		label: [2, str],
+		prefix: [3, str],
+		/** a page's next */
+		after: [4, str],
+		/** 1000 unless given, 10,000 at most */
+		limit: [5, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.label !== undefined) {
+				w.field(2)
+				w.str(v.label)
+				n++
+			}
+			if (v.prefix !== undefined) {
+				w.field(3)
+				w.str(v.prefix)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(4)
+				w.str(v.after)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(5)
+				w.uint(v.limit)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $label: string | undefined
+			let $prefix: string | undefined
+			let $after: string | undefined
+			let $limit: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$label = r.str()
+						break
+					case 3:
+						$prefix = r.str()
+						break
+					case 4:
+						$after = r.str()
+						break
+					case 5:
+						$limit = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, label: $label, prefix: $prefix, after: $after, limit: $limit }
+		},
+	},
+)
+
+/**
+ * A name the store holds samples of.
+ */
+export const MetricsName = message(
+	'metrics.Name',
+	{
+		name: [1, str],
+		kind: [2, str],
+		seriesCount: [3, uint],
+		unit: [4, str],
+		help: [5, str],
+		keep: [6, uint],
+		/** its oldest sample, or where its keep begins while it holds older */
+		retainedFrom: [7, int],
+		newest: [8, int],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.kind !== undefined) {
+				w.field(2)
+				w.str(v.kind)
+				n++
+			}
+			if (v.seriesCount !== undefined) {
+				w.field(3)
+				w.uint(v.seriesCount)
+				n++
+			}
+			if (v.unit !== undefined) {
+				w.field(4)
+				w.str(v.unit)
+				n++
+			}
+			if (v.help !== undefined) {
+				w.field(5)
+				w.str(v.help)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(6)
+				w.uint(v.keep)
+				n++
+			}
+			if (v.retainedFrom !== undefined) {
+				w.field(7)
+				w.int(v.retainedFrom)
+				n++
+			}
+			if (v.newest !== undefined) {
+				w.field(8)
+				w.int(v.newest)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $kind: string | undefined
+			let $seriesCount: number | undefined
+			let $unit: string | undefined
+			let $help: string | undefined
+			let $keep: number | undefined
+			let $retainedFrom: number | undefined
+			let $newest: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$kind = r.str()
+						break
+					case 3:
+						$seriesCount = r.uint()
+						break
+					case 4:
+						$unit = r.str()
+						break
+					case 5:
+						$help = r.str()
+						break
+					case 6:
+						$keep = r.uint()
+						break
+					case 7:
+						$retainedFrom = r.int()
+						break
+					case 8:
+						$newest = r.int()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				kind: $kind,
+				seriesCount: $seriesCount,
+				unit: $unit,
+				help: $help,
+				keep: $keep,
+				retainedFrom: $retainedFrom,
+				newest: $newest,
+			}
+		},
+	},
+)
+
+export const MetricsNamePage = message(
+	'metrics.NamePage',
+	{
+		names: [1, list(MetricsName)],
+		/** the page after it; the last page has none */
+		next: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.names !== undefined) {
+				w.field(1)
+				w.array(v.names.length)
+				for (const item0 of v.names) {
+					MetricsName.write(w, item0)
+				}
+				n++
+			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $names: Read<typeof MetricsName.fields>[] | undefined
+			let $next: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsName.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsName.read(r))
+						}
+						r.leave()
+						$names = items0
+						break
+					}
+					case 2:
+						$next = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { names: $names, next: $next }
+		},
+	},
+)
+
+/**
+ * A page of a name's labels, or of a label's values.
+ */
+export const MetricsTextPage = message(
+	'metrics.TextPage',
+	{
+		texts: [1, list(str)],
+		next: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.texts !== undefined) {
+				w.field(1)
+				w.array(v.texts.length)
+				for (const item0 of v.texts) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $texts: string[] | undefined
+			let $next: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$texts = items0
+						break
+					}
+					case 2:
+						$next = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { texts: $texts, next: $next }
+		},
+	},
+)
+
+/**
+ * A name's unit and help; empty ones remove them.
+ */
+export const MetricsDescription = message(
+	'metrics.Description',
+	{
+		name: [1, str],
+		unit: [2, str],
+		help: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.unit !== undefined) {
+				w.field(2)
+				w.str(v.unit)
+				n++
+			}
+			if (v.help !== undefined) {
+				w.field(3)
+				w.str(v.help)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $unit: string | undefined
+			let $help: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$unit = r.str()
+						break
+					case 3:
+						$help = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, unit: $unit, help: $help }
+		},
+	},
+)
+
+export const MetricsNameAsked = message(
+	'metrics.NameAsked',
+	{
+		name: [1, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name }
+		},
+	},
+)
+
+/**
+ * One series, by exactly its name and labels.
+ */
+export const MetricsSeriesNamed = message(
+	'metrics.SeriesNamed',
+	{
+		name: [1, str],
+		labels: [2, names(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $labels: Record<string, string> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, labels: $labels }
+		},
+	},
+)
+
+export const MetricsDeleted = message(
+	'metrics.Deleted',
+	{
+		found: [1, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.found !== undefined) {
+				w.field(1)
+				w.bool(v.found)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $found: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$found = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { found: $found }
+		},
+	},
+)
+
+/**
+ * A series whose bytes no longer read, and what broke.
+ */
+export const MetricsDamage = message(
+	'metrics.Damage',
+	{
+		name: [1, str],
+		labels: [2, names(str)],
+		error: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.error !== undefined) {
+				w.field(3)
+				w.str(v.error)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $labels: Record<string, string> | undefined
+			let $error: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					case 3:
+						$error = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, labels: $labels, error: $error }
+		},
+	},
+)
+
+export const MetricsDamages = message(
+	'metrics.Damages',
+	{
+		damages: [1, list(MetricsDamage)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.damages !== undefined) {
+				w.field(1)
+				w.array(v.damages.length)
+				for (const item0 of v.damages) {
+					MetricsDamage.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $damages: Read<typeof MetricsDamage.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof MetricsDamage.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsDamage.read(r))
+						}
+						r.leave()
+						$damages = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { damages: $damages }
+		},
+	},
+)
+
+/**
+ * An SDK's instruments' stream: its session, sixteen random bytes drawn when
+ * it opened the store, and the last batch the store answered it, 0 for none.
+ */
+export const MetricsSession = message(
+	'metrics.Session',
+	{
+		id: [1, bin],
+		after: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.id !== undefined) {
+				w.field(1)
+				w.bin(v.id)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(2)
+				w.uint(v.after)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $id: Uint8Array | undefined
+			let $after: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$id = r.bytes()
+						break
+					case 2:
+						$after = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { id: $id, after: $after }
+		},
+	},
+)
+
+/**
+ * An instrument a batch counts into, by a number the stream gives it.
+ */
+export const MetricsInstrument = message(
+	'metrics.Instrument',
+	{
+		number: [1, uint],
+		name: [2, str],
+		/** counter, gauge, timer or histogram */
+		form: [3, str],
+		unit: [4, str],
+		help: [5, str],
+		keep: [6, uint],
+		/** a timer's or a histogram's upper bounds, ascending */
+		bounds: [7, list(float)],
+		/** a timer's spread on the store's grid */
+		exponential: [8, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.number !== undefined) {
+				w.field(1)
+				w.uint(v.number)
+				n++
+			}
+			if (v.name !== undefined) {
+				w.field(2)
+				w.str(v.name)
+				n++
+			}
+			if (v.form !== undefined) {
+				w.field(3)
+				w.str(v.form)
+				n++
+			}
+			if (v.unit !== undefined) {
+				w.field(4)
+				w.str(v.unit)
+				n++
+			}
+			if (v.help !== undefined) {
+				w.field(5)
+				w.str(v.help)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(6)
+				w.uint(v.keep)
+				n++
+			}
+			if (v.bounds !== undefined) {
+				w.field(7)
+				w.array(v.bounds.length)
+				for (const item0 of v.bounds) {
+					w.float(item0)
+				}
+				n++
+			}
+			if (v.exponential !== undefined) {
+				w.field(8)
+				w.bool(v.exponential)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $number: number | undefined
+			let $name: string | undefined
+			let $form: string | undefined
+			let $unit: string | undefined
+			let $help: string | undefined
+			let $keep: number | undefined
+			let $bounds: number[] | undefined
+			let $exponential: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$number = r.uint()
+						break
+					case 2:
+						$name = r.str()
+						break
+					case 3:
+						$form = r.str()
+						break
+					case 4:
+						$unit = r.str()
+						break
+					case 5:
+						$help = r.str()
+						break
+					case 6:
+						$keep = r.uint()
+						break
+					case 7: {
+						const items0: number[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.float())
+						}
+						r.leave()
+						$bounds = items0
+						break
+					}
+					case 8:
+						$exponential = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				number: $number,
+				name: $name,
+				form: $form,
+				unit: $unit,
+				help: $help,
+				keep: $keep,
+				bounds: $bounds,
+				exponential: $exponential,
+			}
+		},
+	},
+)
+
+/**
+ * A set of labels of an instrument, by a number the stream gives it, or its
+ * series of __overflow, where a client counts past the sets it holds.
+ */
+export const MetricsSet = message(
+	'metrics.Set',
+	{
+		number: [1, uint],
+		instrument: [2, uint],
+		labels: [3, names(str)],
+		overflow: [4, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.number !== undefined) {
+				w.field(1)
+				w.uint(v.number)
+				n++
+			}
+			if (v.instrument !== undefined) {
+				w.field(2)
+				w.uint(v.instrument)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(3)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.overflow !== undefined) {
+				w.field(4)
+				w.bool(v.overflow)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $number: number | undefined
+			let $instrument: number | undefined
+			let $labels: Record<string, string> | undefined
+			let $overflow: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$number = r.uint()
+						break
+					case 2:
+						$instrument = r.uint()
+						break
+					case 3:
+						$labels = readNames(r, str.read)
+						break
+					case 4:
+						$overflow = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { number: $number, instrument: $instrument, labels: $labels, overflow: $overflow }
+		},
+	},
+)
+
+/**
+ * What a set of labels changed since the batch before: a counter's sum to
+ * add, a gauge's value, or what a timer or a histogram measured.
+ */
+export const MetricsChange = message(
+	'metrics.Change',
+	{
+		set: [1, uint],
+		add: [2, float],
+		value: [3, float],
+		count: [4, uint],
+		sum: [5, float],
+		longest: [6, float],
+		/** each bound's own count, +Inf last */
+		buckets: [7, list(uint)],
+		/** each interval of the grid's count, by its label: 3:13, zero */
+		bins: [8, names(uint)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.set !== undefined) {
+				w.field(1)
+				w.uint(v.set)
+				n++
+			}
+			if (v.add !== undefined) {
+				w.field(2)
+				w.float(v.add)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(3)
+				w.float(v.value)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(4)
+				w.uint(v.count)
+				n++
+			}
+			if (v.sum !== undefined) {
+				w.field(5)
+				w.float(v.sum)
+				n++
+			}
+			if (v.longest !== undefined) {
+				w.field(6)
+				w.float(v.longest)
+				n++
+			}
+			if (v.buckets !== undefined) {
+				w.field(7)
+				w.array(v.buckets.length)
+				for (const item0 of v.buckets) {
+					w.uint(item0)
+				}
+				n++
+			}
+			if (v.bins !== undefined) {
+				w.field(8)
+				writeNames(w, v.bins, uint.write)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $set: number | undefined
+			let $add: number | undefined
+			let $value: number | undefined
+			let $count: number | undefined
+			let $sum: number | undefined
+			let $longest: number | undefined
+			let $buckets: number[] | undefined
+			let $bins: Record<string, number> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$set = r.uint()
+						break
+					case 2:
+						$add = r.float()
+						break
+					case 3:
+						$value = r.float()
+						break
+					case 4:
+						$count = r.uint()
+						break
+					case 5:
+						$sum = r.float()
+						break
+					case 6:
+						$longest = r.float()
+						break
+					case 7: {
+						const items0: number[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.uint())
+						}
+						r.leave()
+						$buckets = items0
+						break
+					}
+					case 8:
+						$bins = readNames(r, uint.read)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				set: $set,
+				add: $add,
+				value: $value,
+				count: $count,
+				sum: $sum,
+				longest: $longest,
+				buckets: $buckets,
+				bins: $bins,
+			}
+		},
+	},
+)
+
+/**
+ * A batch of an SDK's changes, numbered from 1 in its session, with the
+ * instruments and the sets of labels it names that the stream has not
+ * declared yet.
+ */
+export const MetricsBatch = message(
+	'metrics.Batch',
+	{
+		number: [1, uint],
+		instruments: [2, list(MetricsInstrument)],
+		sets: [3, list(MetricsSet)],
+		changes: [4, list(MetricsChange)],
+		/** the store writes its totals before it answers */
+		flush: [5, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.number !== undefined) {
+				w.field(1)
+				w.uint(v.number)
+				n++
+			}
+			if (v.instruments !== undefined) {
+				w.field(2)
+				w.array(v.instruments.length)
+				for (const item0 of v.instruments) {
+					MetricsInstrument.write(w, item0)
+				}
+				n++
+			}
+			if (v.sets !== undefined) {
+				w.field(3)
+				w.array(v.sets.length)
+				for (const item0 of v.sets) {
+					MetricsSet.write(w, item0)
+				}
+				n++
+			}
+			if (v.changes !== undefined) {
+				w.field(4)
+				w.array(v.changes.length)
+				for (const item0 of v.changes) {
+					MetricsChange.write(w, item0)
+				}
+				n++
+			}
+			if (v.flush !== undefined) {
+				w.field(5)
+				w.bool(v.flush)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $number: number | undefined
+			let $instruments: Read<typeof MetricsInstrument.fields>[] | undefined
+			let $sets: Read<typeof MetricsSet.fields>[] | undefined
+			let $changes: Read<typeof MetricsChange.fields>[] | undefined
+			let $flush: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$number = r.uint()
+						break
+					case 2: {
+						const items0: Read<typeof MetricsInstrument.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsInstrument.read(r))
+						}
+						r.leave()
+						$instruments = items0
+						break
+					}
+					case 3: {
+						const items0: Read<typeof MetricsSet.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsSet.read(r))
+						}
+						r.leave()
+						$sets = items0
+						break
+					}
+					case 4: {
+						const items0: Read<typeof MetricsChange.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsChange.read(r))
+						}
+						r.leave()
+						$changes = items0
+						break
+					}
+					case 5:
+						$flush = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				number: $number,
+				instruments: $instruments,
+				sets: $sets,
+				changes: $changes,
+				flush: $flush,
+			}
+		},
+	},
+)
+
+/**
+ * An instrument the store refused, by the stream's number for it.
+ */
+export const MetricsRefused = message(
+	'metrics.Refused',
+	{
+		instrument: [1, uint],
+		error: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.instrument !== undefined) {
+				w.field(1)
+				w.uint(v.instrument)
+				n++
+			}
+			if (v.error !== undefined) {
+				w.field(2)
+				w.str(v.error)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $instrument: number | undefined
+			let $error: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$instrument = r.uint()
+						break
+					case 2:
+						$error = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { instrument: $instrument, error: $error }
+		},
+	},
+)
+
+/**
+ * The store's answer: the last batch of the session it applied, and whether
+ * it knew the session; the stream's RESPONSE says it first.
+ */
+export const MetricsAck = message(
+	'metrics.Ack',
+	{
+		applied: [1, uint],
+		known: [2, bool],
+		refused: [3, list(MetricsRefused)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.applied !== undefined) {
+				w.field(1)
+				w.uint(v.applied)
+				n++
+			}
+			if (v.known !== undefined) {
+				w.field(2)
+				w.bool(v.known)
+				n++
+			}
+			if (v.refused !== undefined) {
+				w.field(3)
+				w.array(v.refused.length)
+				for (const item0 of v.refused) {
+					MetricsRefused.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $applied: number | undefined
+			let $known: boolean | undefined
+			let $refused: Read<typeof MetricsRefused.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$applied = r.uint()
+						break
+					case 2:
+						$known = r.bool()
+						break
+					case 3: {
+						const items0: Read<typeof MetricsRefused.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(MetricsRefused.read(r))
+						}
+						r.leave()
+						$refused = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { applied: $applied, known: $known, refused: $refused }
+		},
+	},
+)
+
+/**
  * Opens a stream of events by name, made with its first event.
  */
 export const RecordsOpen = message(
@@ -7145,6 +9272,72 @@ export const SqlTxAnswer = message(
 			}
 			r.leave()
 			return { rows: $rows, done: $done, failure: $failure, body: $body }
+		},
+	},
+)
+
+/**
+ * What a call would spend of each bound, and the bound it would stop at.
+ */
+export const MetricsPlan = message(
+	'metrics.Plan',
+	{
+		series: [1, uint],
+		bytes: [2, uint],
+		decoded: [3, uint],
+		exceeds: [4, MetricsExceeds],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.series !== undefined) {
+				w.field(1)
+				w.uint(v.series)
+				n++
+			}
+			if (v.bytes !== undefined) {
+				w.field(2)
+				w.uint(v.bytes)
+				n++
+			}
+			if (v.decoded !== undefined) {
+				w.field(3)
+				w.uint(v.decoded)
+				n++
+			}
+			if (v.exceeds !== undefined) {
+				w.field(4)
+				MetricsExceeds.write(w, v.exceeds)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $series: number | undefined
+			let $bytes: number | undefined
+			let $decoded: number | undefined
+			let $exceeds: Read<typeof MetricsExceeds.fields> | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$series = r.uint()
+						break
+					case 2:
+						$bytes = r.uint()
+						break
+					case 3:
+						$decoded = r.uint()
+						break
+					case 4:
+						$exceeds = MetricsExceeds.read(r)
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { series: $series, bytes: $bytes, decoded: $decoded, exceeds: $exceeds }
 		},
 	},
 )
