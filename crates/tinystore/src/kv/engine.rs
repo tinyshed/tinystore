@@ -44,6 +44,10 @@ pub(crate) struct Kv {
     counting: Mutex<HashMap<i64, Option<Arc<Buffer>>>>,
     renewals: Renewals,
     runs: Runs,
+    /// The configs open in this process, a hub each, which every handle of
+    /// one name shares.
+    #[cfg(feature = "config")]
+    configs: Mutex<HashMap<String, Weak<super::config::Hub>>>,
     _claim: Option<Claim>,
 }
 
@@ -99,6 +103,8 @@ impl Kv {
             counting: Mutex::new(HashMap::new()),
             renewals: Renewals::default(),
             runs: Runs::default(),
+            #[cfg(feature = "config")]
+            configs: Mutex::new(HashMap::new()),
             _claim: claim,
         });
         let weak = Arc::downgrade(&kv);
@@ -155,6 +161,11 @@ impl Kv {
 
     pub(crate) fn runs(&self) -> &Runs {
         &self.runs
+    }
+
+    #[cfg(feature = "config")]
+    pub(crate) fn configs(&self) -> &Mutex<HashMap<String, Weak<super::config::Hub>>> {
+        &self.configs
     }
 
     /// The id of `name`, made the first time it opens; a name opened as

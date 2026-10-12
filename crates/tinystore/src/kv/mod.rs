@@ -20,6 +20,8 @@ mod batch;
 mod bucket;
 mod buffer;
 mod cells;
+#[cfg(feature = "config")]
+pub mod config;
 mod counters;
 mod encrypted;
 mod engine;

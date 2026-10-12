@@ -27,6 +27,11 @@ them; the workspace builds and tests on three operating systems.
 - [x] The runtime: Store, LOCK, clock, memory budget, background work, errors, the engine registry.
 - [x] The logger in the core, a `tracing` layer; the console builds alone, without a store or SQLite.
 - [ ] Config in the core, to its book ([api/config.md](api/config.md)), accepted on 13 October.
+  Built, slice 1: the Rust core, a declaration of serde values with `Secret`, `Required` and `Live`, files of TOML,
+  YAML 1.2 and JSON with comments parsed by the core, the environment with `NAME_FILE` and `.env` files, layers in
+  the order written, a live setting's changes in kv.db, checked against every handle open and kept with a version,
+  one hub a process that every handle and watcher follows, `explain`, `validate`, `strict`, and the rules of one
+  value as data, which the wire's declarations will carry. Left: the wire and the Bun SDK, then the logger's config.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.

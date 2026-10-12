@@ -9,11 +9,13 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kv", "jobs", "sql", "blobs", "records", "metrics", "wire"]
+default = ["kv", "config", "jobs", "sql", "blobs", "records", "metrics", "wire"]
 # Each engine is a feature: a program links the engines it opens. Every engine
 # stands on the store, its directory and SQLite; the console alone does not.
 store = ["dep:rusqlite"]
 kv = ["store", "dep:chacha20poly1305", "dep:sha2"]
+# a program's settings, kept in kv.db, and the parsers of the files that give them
+config = ["kv", "dep:toml", "dep:yaml-rust2"]
 jobs = ["store", "dep:jiff"]
 sql = ["store"]
 blobs = ["store", "dep:sha2", "dep:libc"]
@@ -51,6 +53,11 @@ chacha20poly1305 = { version = "0.11.0", optional = true }
 # the rows of records: libzstd, built with the crate and linked into it, its
 # frames any Zstandard decoder reads
 zstd = { version = "0.14.2", optional = true, default-features = false }
+# a config's files, parsed by the core so that no program brings a parser and
+# every language reads them alike: TOML, and YAML 1.2 without the encodings
+# that would cost a megabyte
+toml = { version = "0.9.12", default-features = false, features = ["std", "parse", "serde"], optional = true }
+yaml-rust2 = { version = "0.13.0", default-features = false, optional = true }
 # the facade whose macros a Rust program counts with: the metrics engine is a
 # recorder of it, as the logger is a layer of tracing
 metrics = { version = "0.24.6", optional = true, default-features = false }

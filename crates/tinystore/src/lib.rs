@@ -25,6 +25,8 @@ pub mod jobs;
 mod key;
 #[cfg(feature = "kv")]
 pub mod kv;
+#[cfg(feature = "config")]
+pub use kv::config;
 #[cfg(feature = "store")]
 mod memory;
 #[cfg(feature = "metrics")]

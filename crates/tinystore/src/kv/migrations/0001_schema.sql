@@ -45,6 +45,26 @@ create table _tinystore_kv_branches (
     primary key (bucket, prefix)
 ) strict, without rowid;
 
+-- a config: its version, which every change of it moves, and the last
+-- declaration a program opened it with, as JSON, so that a command can read
+-- a config while no program runs
+create table _tinystore_kv_configs (
+    name        text    primary key,
+    version     integer not null,
+    declaration text
+) strict, without rowid;
+
+-- a change made while programs ran, a row a setting of a config: its value
+-- as JSON, the config's version that made it, and when, in unix milliseconds
+create table _tinystore_kv_config_changes (
+    name    text    not null,
+    path    text    not null,
+    value   text    not null,
+    version integer not null,
+    at      integer not null,
+    primary key (name, path)
+) strict, without rowid;
+
 -- revision: the high-water mark of versions, kept with the writes that take them
 create table _tinystore_kv_meta (
     name  text    primary key,

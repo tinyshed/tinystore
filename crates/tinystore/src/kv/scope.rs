@@ -184,7 +184,7 @@ fn described(lent_by: Option<&str>, kind: Kind, name: &str) -> String {
     }
 }
 
-fn check_name(name: &str) -> Result<()> {
+pub(super) fn check_name(name: &str) -> Result<()> {
     let bytes = name.as_bytes();
     let first_fits = bytes.first().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
     let rest_fits =

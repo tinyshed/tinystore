@@ -103,7 +103,7 @@ config, err := tinystore.Config(store, "app",
 ```rust
 use tinystore::config::{Env, File, Live, Required, Secret};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
     port: u16,
@@ -171,6 +171,10 @@ let config = store
 - Python's first layer is the dataclass itself, and its later objects are
   dictionaries. Go and Rust compute their declaration in code, so the layers
   after it are files and the environment.
+- In Rust the declaration is a value of a `serde` type that is `Clone`, its
+  defaults where `#[serde(default)]` finds them; a `Duration` is a span, and a
+  map declared empty, a `HashMap` or a `BTreeMap`, is one setting that a
+  layer gives whole. A path is 256 bytes at most.
 
 ### Files
 
@@ -192,7 +196,8 @@ let config = store
   `APP_DB_MAX_IDLE`. Two settings that would read one variable are
   `invalid`.
 - A variable is read as its setting's type: a number in decimal, `true` or
-  `false`, a list as `a,b,c` or as JSON, a group as JSON, text as it is.
+  `false`, a list as `a,b,c` or as JSON, a map as JSON, text as it is; a
+  group is given by its settings' variables.
 - `vars` gives a setting a variable of its own in place of the prefixed one,
   such as the `PORT` and `DATABASE_URL` platforms set.
 - `APP_DB_URL_FILE=/run/secrets/db` reads the setting from that file, its
@@ -375,7 +380,7 @@ settings := config.Get() // a copy
 ```
 
 ```rust
-let settings = config.get(); // Arc<Settings>, its version in settings.version()
+let settings = config.get(); // a Snapshot<Settings>, its version in settings.version()
 ```
 
 - A read is a read of memory: read the value where it is used, on every
@@ -383,7 +388,8 @@ let settings = config.get(); // Arc<Settings>, its version in settings.version()
 - `value` is the settings as they are now, a frozen object that a change
   replaces whole: a reference kept keeps what it had, and
   `const { rps } = config.value.limits` does not follow a change; `watch`
-  does. Rust's `get()` is an `Arc` of the same, and Go's `Get()` a copy.
+  does. Rust's `get()` is a `Snapshot` of the same, which reads as the
+  settings, and Go's `Get()` a copy.
 - `value` and `version` change together, so an admin page that shows one and
   sends the other with `ifVersion` changes what it showed.
 
@@ -421,8 +427,10 @@ let watching = config.watch(move |next, _previous| limiter.set_rate(*next.limits
   changed.
 - A handle whose connection was lost reads the config again when it is
   back, and calls its watchers if the config changed meanwhile.
-- In Rust it runs on the store's thread and must not block, as a gauge's
-  function.
+- In Rust the function runs on the thread that made the change, once it is
+  committed, and must not block; a watcher that changes the config itself is
+  called again after it returns, with each version in order. Rust's reset of
+  every change is `reset_all()`.
 
 ## Explain
 
@@ -545,9 +553,11 @@ config app: limits.rps: 800 is above 500, as another program that has the config
   still starts; `strict` makes it refuse to open instead. While the two
   versions run, the earlier one reads the change and the later its layers,
   and `explain` says so in each.
-- No program's `validate` is run for another's change: a rule only a
-  function knows holds the changes of the program that has it, and the
-  rules that are data hold everyone's.
+- No program's `validate` is run for another's change when it is made: a
+  rule only a function knows holds the changes of the program that has it,
+  and the rules that are data hold everyone's. A program whose `validate`
+  refuses a change another made ignores it and says so, as it does at
+  open.
 - Two declarations that give one setting different types are said once in
   the log of the program that opens second; a change of that setting then
   fits neither, and the error says so.
