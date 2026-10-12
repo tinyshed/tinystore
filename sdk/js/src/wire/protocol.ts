@@ -5637,7 +5637,8 @@ export const RecordsStream = message(
 	{
 		name: [1, str],
 		keep: [2, uint],
-		oldest: [3, int64],
+		/** its oldest event, or where its keep begins while it holds older */
+		retainedFrom: [3, int64],
 		newest: [4, int64],
 	},
 	{
@@ -5654,9 +5655,9 @@ export const RecordsStream = message(
 				w.uint(v.keep)
 				n++
 			}
-			if (v.oldest !== undefined) {
+			if (v.retainedFrom !== undefined) {
 				w.field(3)
-				w.int(v.oldest)
+				w.int(v.retainedFrom)
 				n++
 			}
 			if (v.newest !== undefined) {
@@ -5669,7 +5670,7 @@ export const RecordsStream = message(
 		read(r) {
 			let $name: string | undefined
 			let $keep: number | undefined
-			let $oldest: bigint | undefined
+			let $retainedFrom: bigint | undefined
 			let $newest: bigint | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
@@ -5680,7 +5681,7 @@ export const RecordsStream = message(
 						$keep = r.uint()
 						break
 					case 3:
-						$oldest = r.int64()
+						$retainedFrom = r.int64()
 						break
 					case 4:
 						$newest = r.int64()
@@ -5690,7 +5691,7 @@ export const RecordsStream = message(
 				}
 			}
 			r.leave()
-			return { name: $name, keep: $keep, oldest: $oldest, newest: $newest }
+			return { name: $name, keep: $keep, retainedFrom: $retainedFrom, newest: $newest }
 		},
 	},
 )

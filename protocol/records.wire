@@ -6,20 +6,20 @@
 
 # Opens a stream of events by name, made with its first event.
 message records.Open {
-  1 stream: str       # [a-z0-9][a-z0-9_-]{0,63}
-  2 keep: duration?   # how long it keeps its events: its own, kept in the file
+  1 stream: str          # [a-z0-9][a-z0-9_-]{0,63}
+  2 keep: duration?      # how long it keeps its events: its own, kept in the file
 }
 
 # An event to write.
 message records.NewEvent {
   1 name: str
-  2 at: nanos?        # the store's clock's now unless given
-  3 level: int?       # -4 debug, 0 info, 4 warn, 8 error, between them as slog counts
+  2 at: nanos?           # the store's clock's now unless given
+  3 level: int?          # -4 debug, 0 info, 4 warn, 8 error, between them as slog counts
   4 message: str?
-  5 fields: json?     # an object
-  6 context: json?    # an object
-  7 traceId: bin?     # 16 bytes
-  8 spanId: bin?      # 8 bytes
+  5 fields: json?        # an object
+  6 context: json?       # an object
+  7 traceId: bin?        # 16 bytes
+  8 spanId: bin?         # 8 bytes
 }
 
 # Events to write to a stream, all of them or none.
@@ -35,7 +35,7 @@ message records.Event {
   3 name: str
   4 level: int?
   5 message: str?
-  6 fields: json?     # an object; none when it has no field
+  6 fields: json?        # an object; none when it has no field
   7 context: json?
   8 traceId: bin?
   9 spanId: bin?
@@ -43,24 +43,24 @@ message records.Event {
 
 # What a read finds: each condition given holds.
 message records.Query {
-  1 handle: uint?     # the stream opened as it; every stream without one
-  2 since: duration?  # the span before now; or from and to
+  1 handle: uint?        # the stream opened as it; every stream without one
+  2 since: duration?     # the span before now; or from and to
   3 from: nanos?
   4 to: nanos?
   5 streams: [str]
   6 names: [str]
   7 minLevel: int?
   8 traceId: bin?
-  9 where: {json}     # each key with this value, in fields or in context
+  9 where: {json}        # each key with this value, in fields or in context
   10 search: str?
   11 newest: bool
-  12 limit: uint?     # a page's events, top's values, fieldNames' keys
-  13 after: str?      # a page's next
+  12 limit: uint?        # a page's events, top's values, fieldNames' keys
+  13 after: str?         # a page's next
 }
 
 message records.Page {
   1 events: [records.Event]
-  2 next: str?        # the page after it; the last page has none
+  2 next: str?           # the page after it; the last page has none
 }
 
 message records.Count {
@@ -70,7 +70,7 @@ message records.Count {
 # A key's most frequent values among what a query finds.
 message records.TopAsked {
   1 query: records.Query
-  2 key: str          # a field's or a context's, or stream, name or level
+  2 key: str             # a field's or a context's, or stream, name or level
 }
 
 message records.Top {
@@ -102,7 +102,7 @@ message records.Stats {
 }
 
 message records.Row {
-  1 at: nanos         # where the row's span begins, counted from 1970
+  1 at: nanos            # where the row's span begins, counted from 1970
   2 count: uint
   3 by: {json}
   4 stats: {records.Stats}
@@ -116,7 +116,7 @@ message records.Rows {
 message records.Stream {
   1 name: str
   2 keep: duration
-  3 oldest: nanos
+  3 retainedFrom: nanos  # its oldest event, or where its keep begins while it holds older
   4 newest: nanos
 }
 
@@ -136,14 +136,14 @@ message records.Names {
 
 # Every packed event once, a batch a call, from a cursor the program keeps.
 message records.PollAsked {
-  1 cursor: str?      # the oldest event kept without one
-  2 limit: uint?      # 1000 unless given
+  1 cursor: str?         # the oldest event kept without one
+  2 limit: uint?         # 1000 unless given
 }
 
 message records.Batch {
   1 events: [records.Event]
   2 cursor: str
-  3 expired: uint     # the events keep removed before the cursor reached them
+  3 expired: uint        # the events keep removed before the cursor reached them
 }
 
 # A tail's batch: the events appended since the last that its query finds,
@@ -167,12 +167,12 @@ message records.Dropped {
 # A head row or a segment that no longer reads, as damaged lists it and drop
 # takes it: a head row holds events not packed yet, a segment packed ones.
 message records.Damage {
-  1 part: str         # head row or segment
+  1 part: str            # head row or segment
   2 id: uint
   3 stream: str
-  4 first: nanos      # its events' oldest time
+  4 first: nanos         # its events' oldest time
   5 last: nanos
-  6 error: str        # what broke
+  6 error: str           # what broke
 }
 
 message records.Damages {

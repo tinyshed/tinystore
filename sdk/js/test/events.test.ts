@@ -131,7 +131,7 @@ for (const way of ways) {
 			await kept.append('signup', { plan: 'pro', user: 1 })
 			const stream = (await store.events().streams()).find(info => info.name === 'kept')
 			expect(stream?.keep).toBe('30d')
-			expect(stream?.oldest.getTime()).toBeLessThanOrEqual(stream?.newest.getTime() ?? 0)
+			expect(stream?.retainedFrom.getTime()).toBeLessThanOrEqual(stream?.newest.getTime() ?? 0)
 			expect(await kept.fieldNames({ prefix: 'p' })).toEqual(['plan'])
 		})
 

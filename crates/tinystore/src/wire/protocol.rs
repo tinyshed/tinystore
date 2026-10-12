@@ -5195,8 +5195,8 @@ pub(crate) struct RecordsStream {
     pub(crate) name: String,
     /// Milliseconds.
     pub(crate) keep: u64,
-    /// Unix nanoseconds.
-    pub(crate) oldest: i64,
+    /// Its oldest event, or where its keep begins while it holds older. Unix nanoseconds.
+    pub(crate) retained_from: i64,
     /// Unix nanoseconds.
     pub(crate) newest: i64,
 }
@@ -5212,7 +5212,7 @@ impl Message for RecordsStream {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.name = codec::str(r, "name")?,
                 2 => message.keep = codec::uint(r, "keep")?,
-                3 => message.oldest = codec::int(r, "oldest")?,
+                3 => message.retained_from = codec::int(r, "retainedFrom")?,
                 4 => message.newest = codec::int(r, "newest")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
@@ -5230,9 +5230,9 @@ impl Message for RecordsStream {
             map.field(out, 2);
             codec::write_uint(out, &self.keep);
         }
-        if self.oldest != 0 {
+        if self.retained_from != 0 {
             map.field(out, 3);
-            codec::write_int(out, &self.oldest);
+            codec::write_int(out, &self.retained_from);
         }
         if self.newest != 0 {
             map.field(out, 4);
@@ -5252,7 +5252,7 @@ impl Message for RecordsStream {
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.keep == 0
-            && self.oldest == 0
+            && self.retained_from == 0
             && self.newest == 0
     }
 }

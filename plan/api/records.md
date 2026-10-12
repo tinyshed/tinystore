@@ -387,12 +387,16 @@ const latency = await api.aggregate({ since: '24h', names: ['request'], every: '
 ## What a store holds
 
 ```ts
-const streams = await store.events().streams()        // [{ name: 'api', keep: '30d', oldest, newest }, …]
+const streams = await store.events().streams()        // [{ name: 'api', keep: '30d', retainedFrom, newest }, …]
 const names = await api.fieldNames({ since: '1h' })   // ['ms', 'requestId', 'route', 'user']
 ```
 
-- `streams` gives every stream with events, by name, with what it keeps and
-  the times of its oldest and newest event.
+- `streams` gives every stream with events, by name, with what it keeps,
+  `retainedFrom`, where that begins, and its newest event's time.
+  `retainedFrom` is its oldest event's time, or where its `keep` begins
+  while it holds events from before, which no read finds: what it keeps
+  is gone a segment at a time, so the oldest event it holds may lie
+  before it.
 - `fieldNames` gives the keys events hold, in `fields` and in `context`,
   sorted; `prefix` narrows them and `limit` bounds them, 1000 unless given.
   It reads no packed event, whose keys the file keeps beside them, and reads

@@ -162,7 +162,8 @@ export interface Aggregate extends Counted {
 export interface StreamInfo {
 	name: string
 	keep: DurationText
-	oldest: Date
+	/** its oldest event, or where its keep begins while it holds older */
+	retainedFrom: Date
 	newest: Date
 }
 
@@ -464,13 +465,13 @@ export class AllEvents extends Reads {
 		this.#link = link
 	}
 
-	/** Every stream with events, by name, with what it keeps and its oldest and newest event's time. */
+	/** Every stream with events, by name, with what it keeps, where that begins and its newest event's time. */
 	async streams(): Promise<StreamInfo[]> {
 		const answer = await this.ask('records.streams', () => Empty.encode({}))
 		return (RecordsStreams.decode(answer).streams ?? []).map(stream => ({
 			name: stream.name ?? '',
 			keep: spelled(stream.keep ?? 0),
-			oldest: dateOf(stream.oldest ?? 0n),
+			retainedFrom: dateOf(stream.retainedFrom ?? 0n),
 			newest: dateOf(stream.newest ?? 0n),
 		}))
 	}

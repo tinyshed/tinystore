@@ -135,8 +135,9 @@ pub struct StreamInfo {
     pub name: String,
     /// How long it keeps its events.
     pub keep: Duration,
-    /// The times of its oldest and newest event it keeps.
-    pub oldest: SystemTime,
+    /// Where what it keeps begins: its oldest event's time, or where its
+    /// `keep` begins while it holds events from before, which no read finds.
+    pub retained_from: SystemTime,
     pub newest: SystemTime,
 }
 
@@ -192,8 +193,8 @@ impl List {
 }
 
 impl AllEvents {
-    /// Every stream with events, by name: what it keeps, and the times of
-    /// its oldest and newest event it keeps.
+    /// Every stream with events, by name: what it keeps, where what it keeps
+    /// begins, and its newest event's time.
     pub fn streams(&self) -> Result<Vec<StreamInfo>> {
         self.records.streams_held()
     }
@@ -214,7 +215,7 @@ impl Records {
                 let info = StreamInfo {
                     name: stream.name.to_string(),
                     keep: stream.keeps(),
-                    oldest: time(oldest.max(cutoff)),
+                    retained_from: time(oldest.max(cutoff)),
                     newest: time(newest),
                 };
                 held.push(info);

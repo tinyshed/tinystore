@@ -237,7 +237,7 @@ fn streams(store: &Store) -> Answered {
     let streams = store.all_events()?.streams()?.into_iter().map(|stream| RecordsStream {
         name: stream.name,
         keep: u64::try_from(stream.keep.as_millis()).unwrap_or(u64::MAX),
-        oldest: unix_nanos(stream.oldest),
+        retained_from: unix_nanos(stream.retained_from),
         newest: unix_nanos(stream.newest),
     });
     Ok(RecordsStreams { streams: streams.collect() }.encode())

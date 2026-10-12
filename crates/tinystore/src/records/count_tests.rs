@@ -129,13 +129,13 @@ fn an_aggregate_past_ten_thousand_rows_is_limit_and_never_a_smaller_answer() {
 }
 
 #[test]
-fn streams_are_those_with_events_with_what_they_keep_and_their_oldest_and_newest() {
+fn streams_are_those_with_events_with_what_they_keep_where_it_begins_and_their_newest() {
     let fixture = fixture();
     let (_, base) = api(&fixture);
     fixture.store.events("quiet").keep(DAY).open().unwrap();
     let all = fixture.store.all_events().unwrap();
     let streams = all.streams().unwrap();
-    let api = StreamInfo { name: "api".to_owned(), keep: KEEP, oldest: base, newest: fixture.now() };
+    let api = StreamInfo { name: "api".to_owned(), keep: KEEP, retained_from: base, newest: fixture.now() };
     assert_eq!(streams, [api]);
 }
 
