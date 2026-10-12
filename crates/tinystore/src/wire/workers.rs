@@ -38,9 +38,10 @@ struct Queue {
     idle: usize,
     /// Whether a thread was woken and has not taken its job yet. One wake is
     /// under way at a time: whoever queues a job wakes one thread, and that
-    /// thread wakes the next when jobs still wait. A wake a job cost the
-    /// thread that reads a connection more than the job itself, and with 64
-    /// calls in flight that thread is all the connection has.
+    /// thread wakes the next when jobs still wait, or starts it when none
+    /// sleeps. A wake a job cost the thread that reads a connection more
+    /// than the job itself, and with 64 calls in flight that thread is all
+    /// the connection has.
     waking: bool,
     /// Whether a thread that found no job is looking for the next before it
     /// sleeps. One does at a time, and a job that comes meanwhile is its own:
@@ -55,6 +56,9 @@ struct Queue {
     /// for nothing.
     dense: bool,
     started: usize,
+    /// Threads started that have not looked at the queue yet: each takes a
+    /// job waiting, so a job they will take starts no thread more.
+    coming: usize,
     stopped: bool,
 }
 
@@ -85,6 +89,7 @@ impl Workers {
         let taken = queue.lingering && queue.jobs.len() == 1;
         if !taken && queue.idle == 0 && queue.started < MOST {
             queue.started += 1;
+            queue.coming += 1;
             drop(queue);
             return self.start();
         }
@@ -101,12 +106,17 @@ impl Workers {
         match spawned {
             Ok(handle) => self.threads.lock().unwrap_or_else(PoisonError::into_inner).push(handle),
             // the jobs queued wait for a thread already running, or for the next start
-            Err(_) => self.lock().started -= 1,
+            Err(_) => {
+                let mut queue = self.lock();
+                queue.started -= 1;
+                queue.coming -= 1;
+            }
         }
     }
 
-    fn work(&self) {
+    fn work(self: &Arc<Self>) {
         let mut queue = self.lock();
+        queue.coming -= 1;
         loop {
             if let Some(job) = queue.jobs.pop_front() {
                 self.waiting.store(queue.jobs.len(), Ordering::Release);
@@ -114,9 +124,13 @@ impl Workers {
                     queue.dense = emptied.elapsed() < self.linger;
                 }
                 let wakes = queue.wakes_one();
+                let starts = !wakes && queue.starts_one();
                 drop(queue);
                 if wakes {
                     self.ready.notify_one();
+                }
+                if starts {
+                    self.start();
                 }
                 job();
                 queue = self.lock();
@@ -176,6 +190,21 @@ impl Queue {
         let wakes = !self.jobs.is_empty() && self.idle > 0 && !self.waking && !self.lingering;
         self.waking |= wakes;
         wakes
+    }
+
+    /// Whether the thread that took a job starts another for the jobs behind
+    /// it: more wait than threads on their way to them, none sleeps or looks
+    /// for them, and the job taken may block its thread, a write waiting for
+    /// its file's writer, while no call comes to start one. The calls a burst
+    /// queued while the one thread slept found it counted idle until it
+    /// woke, and started none. A pool that closes starts none. It counts the
+    /// thread as started and coming.
+    fn starts_one(&mut self) -> bool {
+        let starts =
+            self.jobs.len() > self.coming && self.idle == 0 && !self.lingering && !self.stopped && self.started < MOST;
+        self.started += usize::from(starts);
+        self.coming += usize::from(starts);
+        starts
     }
 }
 
@@ -281,6 +310,33 @@ mod tests {
         run_one(&workers);
         wait_until("a thread never slept", |queue| queue.idle == queue.started, &workers);
         assert!(!workers.lock().dense, "jobs this far apart are not worth looking for");
+        workers.close().unwrap();
+    }
+
+    #[test]
+    fn the_jobs_behind_one_that_blocks_its_thread_get_a_thread_of_their_own() {
+        let workers = Arc::new(Workers::lingering(Duration::ZERO));
+        run_one(&workers);
+        wait_until("the thread never slept", |queue| queue.idle == 1, &workers);
+        // A burst queues its calls while the one thread sleeps: the first wakes
+        // it, and the rest find it counted idle still, so they start none. The
+        // first then blocks its thread, as a kv write waiting for its file's
+        // writer does.
+        let (release, released) = mpsc::channel::<()>();
+        let (ran, behind) = mpsc::channel();
+        {
+            let mut queue = workers.lock();
+            queue.jobs.push_back(Box::new(move || {
+                let _ = released.recv();
+            }));
+            queue.jobs.push_back(Box::new(move || ran.send(()).unwrap()));
+            workers.waiting.store(queue.jobs.len(), Ordering::Release);
+            assert!(queue.wakes_one());
+        }
+        workers.ready.notify_one();
+        let behind = behind.recv_timeout(Duration::from_secs(10));
+        release.send(()).unwrap();
+        behind.expect("the job behind one that blocks its thread never ran");
         workers.close().unwrap();
     }
 
