@@ -569,11 +569,16 @@ module defines.
 
 ## Backups
 
-- a backup restores every engine — `TestABackupRestoresEveryEngine`
-- a host file cannot take the backup manifest's name — `TestAHostFileCannotReplaceTheBackupManifest`
-- a changed backup is refused and leaves nothing — `TestAChangedByteIsRefusedAndLeavesNothing`
-- a backup restores every object bit for bit — `TestABackupRestoresEveryObject`; past 4 GiB when `TINYSTORE_LARGE_BACKUP` is set
-- a backup holds a file of the host's only when it is named, and restores it checked — `TestABackupKeepsANamedHostFileAndRestoresIt`, `TestAHostFileOutsideTheStoreIsRefused`; over the wire `TestABackupOverTheWireKeepsANamedHostFile`, `TestBackupKeepsAFileItIsGiven` in `cmd/tinystore`, `a backup keeps a file of the application's only when files names it` in `sdk/js/test/backup.test.ts`, `test_a_backup_keeps_a_file_of_the_applications_only_when_files_names_it` in Python's
+- a backup restores every engine while its store keeps working, an engine no handle opened from its files — `a_backup_restores_every_engine_while_its_store_keeps_working`, `an_engine_no_handle_opened_is_backed_up_from_its_files` in `backup`
+- a backup copies while a writer writes, and holds one moment of each engine — `a_backup_copies_while_a_writer_writes_and_holds_a_moment_of_it` in `backup`
+- a file of the program's cannot take the manifest's name or any of the store's own — `a_file_of_the_programs_is_kept_only_when_named_and_one_of_the_stores_never` in `backup`
+- a changed backup is refused and leaves nothing, by its zip's CRC-32 and by its manifest's SHA-256 — `a_changed_byte_is_refused_and_leaves_nothing`, `a_file_whose_sha256_is_not_its_manifests_is_refused_though_its_crc_is_the_zips` in `backup`, `a_changed_byte_fails_its_crc_and_a_zip_cut_short_reads_as_none` in `backup::zip`
+- a backup restores every object bit for bit — a photo's bytes in `a_backup_restores_every_engine_while_its_store_keeps_working` in `backup`; ZIP64's fields read back where a size or an offset passes its field, `zip64s_fields_read_back_where_a_size_or_an_offset_is_past_its_field` in `backup::zip`; an object past 4 GiB, `TestABackupRestoresAnObjectPast4GiB` at `e81a050`
+- a zip a backup writes holds each file stored as it is, which every tool opens — `a_zip_reads_back_every_file_it_holds` in `backup::zip`
+- a backup holds a file of the program's only when it is named, and restores it checked — `a_file_of_the_programs_is_kept_only_when_named_and_one_of_the_stores_never` in `backup`; over the wire `TestABackupOverTheWireKeepsANamedHostFile`, `TestBackupKeepsAFileItIsGiven` in `cmd/tinystore` and `a backup keeps a file of the application's only when files names it` in `sdk/js/test/backup.test.ts` at `e81a050`, until the wire's slice
+- the store's encryption key is left out unless asked for, and the backup says so — `the_encryption_key_is_left_out_unless_asked_for_and_the_backup_says_so` in `backup`
+- a restore writes into an empty directory and none other — `a_restore_writes_into_an_empty_directory_and_none_other` in `backup`
+- a backup that fails leaves no zip and no snapshot, and a closed store takes none — `a_backup_that_fails_leaves_no_zip`, `a_closed_store_takes_no_backup` in `backup`
 
 ## The server and the wire
 

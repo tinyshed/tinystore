@@ -10,6 +10,11 @@ use crate::{Clock, Durability, Error, Memory, Result, Store};
 /// The history a database's own migrations are kept under.
 const HISTORY: &str = "migrations";
 
+/// A database's file in the store's directory.
+fn file_of(name: &str) -> String {
+    format!("sql/{name}.db")
+}
+
 /// Statements known to write that a database remembers; past them it forgets
 /// them all and asks SQLite again.
 const WRITES_KEPT: usize = 1024;
@@ -90,7 +95,7 @@ impl Databases {
             }
             return Ok(base);
         }
-        let claim = store.claim(&format!("sql/{name}.db"))?;
+        let claim = store.claim(&file_of(name))?;
         let config = config(durability.or(store.durability()));
         let durability = config.durability;
         let file = File::open(claim.path(), config)?;
@@ -124,6 +129,13 @@ impl Engine for Databases {
             }
         }
         first_failure.map_or(Ok(()), Err)
+    }
+
+    /// Copies each database open, the buckets and queues it keeps with it.
+    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+        let open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
+        let copy = |base: &Arc<Base>| crate::engine::copy_file(base.file(), &file_of(&base.name), "sql", into);
+        open.iter().map(copy).collect()
     }
 }
 

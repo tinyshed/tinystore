@@ -169,7 +169,7 @@ impl Store {
     }
 
     /// The file its options named for its encryption key, if they named one.
-    #[cfg(feature = "wire")]
+    #[cfg(all(feature = "kv", any(feature = "wire", feature = "backup")))]
     pub(crate) fn encryption_key_file(&self) -> Option<&Path> {
         self.inner.encryption_key_file.as_deref()
     }
@@ -256,6 +256,15 @@ impl Store {
     #[cfg(any(feature = "kv", feature = "jobs"))]
     pub(crate) fn engine_files(&self) -> Vec<Arc<EngineFile>> {
         lock(&self.inner.files).clone()
+    }
+
+    /// Every engine the store has open, and the names they hold in its
+    /// directory: what a snapshot asks to copy their own.
+    #[cfg(feature = "backup")]
+    pub(crate) fn engines_open(&self) -> Result<EnginesOpen> {
+        self.refuse_when_closed("a snapshot")?;
+        let _opening = lock(&self.inner.open);
+        Ok((lock(&self.inner.engines).clone(), lock(&self.inner.claims).clone()))
     }
 
     fn describe(&self) -> String {
@@ -361,7 +370,11 @@ fn absolute(dir: &Path) -> Result<PathBuf> {
 /// Takes the directory's `LOCK`. The lock belongs to the open file, so a
 /// second store in the same process is refused like one in another process,
 /// and the operating system lets go of it if the process dies.
-fn take_lock(dir: &Path) -> Result<File> {
+/// The engines a store has open, and the names they hold in its directory.
+#[cfg(feature = "backup")]
+pub(crate) type EnginesOpen = (Vec<Arc<dyn Engine>>, HashSet<String>);
+
+pub(crate) fn take_lock(dir: &Path) -> Result<File> {
     let path = dir.join("LOCK");
     let what = || format!("store {}: LOCK", dir.display());
     let file = OpenOptions::new()

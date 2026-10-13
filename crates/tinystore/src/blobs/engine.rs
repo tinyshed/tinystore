@@ -18,7 +18,7 @@ use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
 use super::scrub::Scrubbing;
-use crate::engine::{Claim, Engine, Host};
+use crate::engine::{Claim, Copied, Engine, Host, copy_file};
 use crate::sqlite::{Config, File, Migration, Tx, sql_error};
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
 
@@ -46,7 +46,33 @@ impl Engine for Blobs {
     fn close(&self) -> Result<()> {
         self.file.close()
     }
+
+    /// Copies blobs.db and links beside the copy every file it names: a link
+    /// copies no byte and keeps the bytes after the engine lets its own name
+    /// go, so a film costs the snapshot a directory entry. No file is removed
+    /// meanwhile, so that none the copy names goes before it is linked.
+    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
+        let _removals = self.disk.hold_removals();
+        let mut copied = vec![copy_file(&self.file, &format!("{DIR}/{FILE}"), "blobs", into)?];
+        let named = crate::sqlite::read_copy(&into.join(DIR).join(FILE), |connection| {
+            let mut statement = connection.prepare(SELECT_NAMED)?;
+            let ids = statement.query_map([], |row| row.get::<_, i64>(0))?;
+            ids.collect::<rusqlite::Result<Vec<i64>>>()
+        })
+        .map_err(|error| error.within("snapshot blobs: the files the copy names"))?;
+        for id in named {
+            if let Some(name) = self.disk.link_object(id, &into.join(DIR))? {
+                copied.push(Copied { name: format!("{DIR}/{name}"), engine: "blobs" });
+            }
+        }
+        Ok(copied)
+    }
 }
+
+/// blobs' directory in the store's, and its file in it.
+const DIR: &str = "blobs";
+const FILE: &str = "blobs.db";
+const SELECT_NAMED: &str = "select id from contents where inline = 0 and names > 0 order by id";
 
 const SELECT_MARKS: &str = "select (select value from meta where name = 'revision'),
     (select value from meta where name = 'ids'), (select value from meta where name = 'settled')";
@@ -60,7 +86,7 @@ impl Blobs {
     /// removed before anything is written.
     pub(crate) fn of(store: &Store) -> Result<Arc<Blobs>> {
         store.engine(|store| {
-            let claim = store.claim("blobs")?;
+            let claim = store.claim(DIR)?;
             let dir = claim.path().to_owned();
             for made in [dir.clone(), dir.join(UPLOADS), dir.join(OBJECTS)] {
                 std::fs::create_dir_all(&made)
@@ -68,7 +94,7 @@ impl Blobs {
             }
             let config = Config::committing(store.durability());
             let durable = config.durability == Durability::Full;
-            let file = File::open(dir.join("blobs.db"), config)?;
+            let file = File::open(dir.join(FILE), config)?;
             file.migrate("blobs", MIGRATIONS)?;
             let blobs = Arc::new(Blobs {
                 file,

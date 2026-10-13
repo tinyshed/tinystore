@@ -185,6 +185,13 @@ impl File {
         self.readers.read(read)
     }
 
+    /// Copies the file into `target` as one moment of it, its writer and
+    /// readers going on meanwhile.
+    pub(crate) fn copy_into(&self, target: &Path) -> Result<()> {
+        self.refuse_when_closed("a copy")?;
+        connection::copy(&self.path, target)
+    }
+
     pub(crate) fn migrate(&self, history: &str, migrations: &[Migration]) -> Result<()> {
         self.transaction(|tx| migrate::apply(tx, history, migrations)).map_err(|error| error.within(self.describe()))
     }

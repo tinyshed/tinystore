@@ -9,7 +9,7 @@ use super::once::Runs;
 use super::renewals::Renewals;
 use super::scope::Kind;
 use crate::encryption::EncryptionKey;
-use crate::engine::{Claim, Engine, Home, Host};
+use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
 use crate::sqlite::{Config, File, Migration, Tx};
 use crate::store::WeakStore;
 use crate::{Clock, Error, Result, Store, unix_millis};
@@ -17,6 +17,9 @@ use crate::{Clock, Error, Result, Store, unix_millis};
 /// kv.db's schema, a step a file; until `v0.1.0` the first step is edited
 /// rather than a second added.
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+
+/// kv's own file in the store's directory.
+const FILE: &str = "kv.db";
 
 /// Expired cells a maintenance transaction deletes, and transactions a call.
 const EXPIRE_BATCH: usize = 10_000;
@@ -68,7 +71,7 @@ impl Kv {
     /// The store's kv engine, in kv.db, opened by the first handle.
     pub(crate) fn of(store: &Store) -> Result<Arc<Kv>> {
         store.engine(|store| {
-            let claim = store.claim("kv.db")?;
+            let claim = store.claim(FILE)?;
             let file = Arc::new(File::open(claim.path(), Config::committing(store.durability()))?);
             store.keep_file(&file);
             Kv::start(store, file, None, Some(claim))
@@ -316,6 +319,18 @@ impl Engine for Kv {
         let flushed = self.flush_buffers();
         let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
         renewed.and(flushed).and(closed)
+    }
+
+    /// Writes what memory holds, so that the copy has every counter and
+    /// renewal, then copies kv.db; kv in a database's file is the database's
+    /// to copy.
+    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
+        if self.lent_by.is_some() {
+            return Ok(Vec::new());
+        }
+        self.renewals.flush(&self.file)?;
+        self.flush_buffers()?;
+        Ok(vec![copy_file(&self.file, FILE, "kv", into)?])
     }
 }
 

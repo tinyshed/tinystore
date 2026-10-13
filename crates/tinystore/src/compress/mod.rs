@@ -4,7 +4,10 @@
 //! every stored row ends with. Neither engine imports the other: both stand
 //! on this.
 
+#[cfg(any(feature = "records", feature = "metrics"))]
 pub(crate) mod bits;
 pub(crate) mod checksum;
+#[cfg(any(feature = "records", feature = "metrics"))]
 pub(crate) mod frame;
+#[cfg(any(feature = "records", feature = "metrics"))]
 pub(crate) mod varint;

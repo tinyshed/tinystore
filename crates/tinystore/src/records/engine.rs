@@ -23,6 +23,9 @@ use crate::{Clock, Durability, Error, Memory, Result, Store, unix_nanos};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
+/// records' file in the store's directory.
+const FILE: &str = "records.db";
+
 /// How long a stream keeps its events until an open says.
 pub(crate) const KEEP: Duration = Duration::from_hours(14 * 24);
 /// How far ahead of the store's clock an event's time may be: a later one
@@ -86,6 +89,12 @@ impl Engine for Records {
         self.recent.close();
         self.file.close().and(flushed)
     }
+
+    /// Writes what loggers and writers of lines hold, then copies records.db.
+    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+        self.flush_held(false)?;
+        Ok(vec![crate::engine::copy_file(&self.file, FILE, "records", into)?])
+    }
 }
 
 const SELECT_STREAMS: &str = "select id, name, keep from streams";
@@ -98,7 +107,7 @@ impl Records {
     /// file claimed and migrated, its streams read.
     pub(crate) fn of(store: &Store) -> Result<Arc<Records>> {
         store.engine(|store| {
-            let claim = store.claim("records.db")?;
+            let claim = store.claim(FILE)?;
             // 'os' unless the store says: a log line a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
             let config = Config { page_size: 1024, ..Config::committing(durability) };

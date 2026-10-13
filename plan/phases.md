@@ -210,9 +210,13 @@ that ran clean.
 
 ## 4. Backup, the command line, the release
 
-- [ ] Backup and restore; a recovery tool's `openBeside`. A backup leaves the
-  store's encryption key out unless told to take it, and says so when the store
-  holds encrypted buckets, since their values open with no other key.
+- [ ] Backup and restore, to their book ([api/backup.md](api/backup.md)); a recovery tool's `openBeside`. A backup
+  leaves the store's encryption key out unless told to take it, and says so when the store holds encrypted buckets,
+  since their values open with no other key.
+  Built, slice 1: the Rust core, each engine's snapshot while it keeps working, `vacuum into` on a connection of its
+  own and blobs' bytes linked while none is removed, an engine no handle opened copied from its files, one zip of
+  them stored as they are with ZIP64's fields and a manifest of each file's size and SHA-256, the program's files
+  and the key only when asked for, and `restore` into an empty directory, every byte checked or nothing left.
 - [ ] `tinystore` serve, status, logs, mcp, backup, restore, migrate, schema.
 - [ ] Self-metrics.
 - [ ] The thin Go SDK on cgo and a sidecar, under the root module path.

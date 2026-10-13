@@ -26,6 +26,45 @@ pub trait Engine: Send + Sync + 'static {
     /// The store's clock was moved by hand, as a test moves it: what sleeps
     /// until a time reads the clock again.
     fn clock_moved(&self) {}
+
+    /// Copies the engine's files into `into`, each at the path it has in the
+    /// store's directory, as one moment of the engine while it keeps working.
+    /// An engine whose file another lends copies nothing: the lender does.
+    fn snapshot(&self, into: &Path) -> Result<Vec<Copied>> {
+        let _ = into;
+        Ok(Vec::new())
+    }
+}
+
+/// A file of a snapshot: its path inside the store, `/` between its parts,
+/// as `kv.db`, `sql/app.db` or `blobs/objects/1a3/1a3f07`, and the engine
+/// whose it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Copied {
+    pub name: String,
+    pub engine: &'static str,
+}
+
+/// Copies an SQLite file of an engine's, `name` inside the store, into the
+/// snapshot at `into`, its directory made.
+#[cfg_attr(
+    not(any(
+        feature = "kv",
+        feature = "jobs",
+        feature = "sql",
+        feature = "blobs",
+        feature = "records",
+        feature = "metrics"
+    )),
+    expect(dead_code, reason = "every engine copies its files with it, and a store of none has none")
+)]
+pub(crate) fn copy_file(file: &crate::sqlite::File, name: &str, engine: &'static str, into: &Path) -> Result<Copied> {
+    let target = into.join(name);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| crate::Error::io(format!("snapshot {name}"), error))?;
+    }
+    file.copy_into(&target).map_err(|error| error.within(format!("snapshot {name}")))?;
+    Ok(Copied { name: name.to_owned(), engine })
 }
 
 /// The store's calls for the engines opened against it.

@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, RwLockWriteGuard};
 use std::time::Duration;
 
 use super::engine::lock;
@@ -32,6 +32,8 @@ pub(crate) struct Disk {
     durable: bool,
     made: Mutex<HashSet<i64>>,
     syncs: Mutex<HashMap<PathBuf, Arc<DirSync>>>,
+    /// Held by every removal of a content's file, and alone by a snapshot.
+    removals: RwLock<()>,
 }
 
 impl Disk {
@@ -40,7 +42,13 @@ impl Disk {
     }
 
     pub(crate) fn new(dir: PathBuf, durable: bool) -> Disk {
-        Disk { dir, durable, made: Mutex::new(HashSet::new()), syncs: Mutex::new(HashMap::new()) }
+        Disk {
+            dir,
+            durable,
+            made: Mutex::new(HashSet::new()),
+            syncs: Mutex::new(HashMap::new()),
+            removals: RwLock::new(()),
+        }
     }
 
     pub(crate) fn durable(&self) -> bool {
@@ -128,9 +136,39 @@ impl Disk {
     }
 
     /// Removes a content's file, which no file names any more; one already
-    /// gone counts as removed.
+    /// gone counts as removed. It waits while a snapshot links files.
     pub(crate) fn remove_object(&self, id: i64) -> Result<()> {
+        let _removing = self.removals.read().unwrap_or_else(PoisonError::into_inner);
         remove(&self.object_path(id))
+    }
+
+    /// Keeps every content's file where it is until the guard is dropped.
+    pub(crate) fn hold_removals(&self) -> RwLockWriteGuard<'_, ()> {
+        self.removals.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Puts content `id`'s file into `into` at the path it has under the
+    /// blobs' directory, which it gives back: a hard link, or a copy where the
+    /// system links nothing. A file that is missing is left out and logged,
+    /// as the scrub will find it missing in the store.
+    pub(crate) fn link_object(&self, id: i64, into: &Path) -> Result<Option<String>> {
+        let name = format!("{OBJECTS}/{:x}/{id:x}", Disk::fan(id));
+        let (source, target) = (self.object_path(id), into.join(&name));
+        let failed = |error: io::Error| Error::io(format!("snapshot blobs: {name}"), error);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(failed)?;
+        }
+        match std::fs::hard_link(&source, &target) {
+            Ok(()) => Ok(Some(name)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                tracing::warn!(target: "tinystore", content = id, "blobs: a file the snapshot names is missing");
+                Ok(None)
+            }
+            Err(_) => {
+                std::fs::copy(&source, &target).map_err(failed)?;
+                Ok(Some(name))
+            }
+        }
     }
 
     /// Removes an upload's file wherever it was left.

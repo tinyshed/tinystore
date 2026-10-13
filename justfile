@@ -26,7 +26,7 @@ test:
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
 # console alone, the wire alone and every engine without the wire; CI lints on each platform, since cfg
 # hides one's code from another
-lint: && (lint-alone "console") (lint-alone "kv") (lint-alone "config") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "wire") (lint-alone "kv,config,jobs,sql,blobs,records,metrics")
+lint: && (lint-alone "console") (lint-alone "kv") (lint-alone "config") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,config,jobs,sql,blobs,records,metrics,backup")
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # run clippy on the library built with these features alone
@@ -67,7 +67,7 @@ sdk-check:
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
-    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console kv config jobs sql blobs records metrics wire kv,config,jobs,sql,blobs,records,metrics; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked'
+    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console kv config jobs sql blobs records metrics wire kv,backup kv,config,jobs,sql,blobs,records,metrics,backup; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked'
 
 # lint the GitHub workflows
 lint-actions:

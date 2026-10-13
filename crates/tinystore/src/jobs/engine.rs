@@ -8,13 +8,16 @@ use super::policy::Policy;
 use super::rows;
 use super::state::{Kind, QueueState};
 use super::work::Running;
-use crate::engine::{Claim, Engine, Home, Host};
+use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
 use crate::sqlite::{Config, File, Migration};
 use crate::{Clock, Error, Result, Store, unix_millis};
 
 /// jobs.db's schema, a step a file; until `v0.1.0` the first step is edited
 /// rather than a second added.
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+
+/// jobs' own file in the store's directory.
+const FILE: &str = "jobs.db";
 
 /// How often the store removes what the queues keep no longer.
 const MAINTENANCE: Duration = Duration::from_secs(60);
@@ -40,7 +43,7 @@ impl Jobs {
     /// The store's jobs engine, in jobs.db, opened by the first queue.
     pub(crate) fn of(store: &Store) -> Result<Arc<Jobs>> {
         store.engine(|store| {
-            let claim = store.claim("jobs.db")?;
+            let claim = store.claim(FILE)?;
             let file = Arc::new(File::open(claim.path(), Config::committing(store.durability()))?);
             store.keep_file(&file);
             Jobs::start(store, file, None, Some(claim))
@@ -192,6 +195,14 @@ impl Engine for Jobs {
             queue.alarm.wake();
             queue.watchers.changed();
         }
+    }
+
+    /// Copies jobs.db; jobs in a database's file are the database's to copy.
+    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
+        if self.lent_by.is_some() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![copy_file(&self.file, FILE, "jobs", into)?])
     }
 }
 

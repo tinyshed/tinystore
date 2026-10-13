@@ -9,7 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kv", "config", "jobs", "sql", "blobs", "records", "metrics", "wire"]
+default = ["kv", "config", "jobs", "sql", "blobs", "records", "metrics", "backup", "wire"]
 # Each engine is a feature: a program links the engines it opens. Every engine
 # stands on the store, its directory and SQLite; the console alone does not.
 store = ["dep:rusqlite"]
@@ -19,6 +19,8 @@ config = ["kv", "dep:toml", "dep:yaml-rust2"]
 jobs = ["store", "dep:jiff"]
 sql = ["store"]
 blobs = ["store", "dep:sha2", "dep:libc"]
+# a backup of every engine as one zip, checked by SHA-256, and its restore
+backup = ["store", "dep:sha2"]
 # a logger's lines printed, which a store's logger keeps too
 console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]

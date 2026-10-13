@@ -4,14 +4,16 @@
 //! The store gives every engine the clock it reads, the memory budget its work
 //! reserves from, the background work it runs and the errors they all share.
 
+#[cfg(feature = "backup")]
+pub mod backup;
 #[cfg(feature = "blobs")]
 pub mod blobs;
 mod clock;
-#[cfg(any(feature = "records", feature = "metrics"))]
+#[cfg(any(feature = "records", feature = "metrics", feature = "backup"))]
 mod compress;
 #[cfg(feature = "console")]
 pub mod console;
-#[cfg(any(feature = "kv", feature = "blobs"))]
+#[cfg(any(feature = "kv", feature = "blobs", feature = "backup"))]
 mod durable;
 #[cfg(feature = "kv")]
 mod encryption;

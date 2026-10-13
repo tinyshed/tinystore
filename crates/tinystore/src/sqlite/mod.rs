@@ -27,7 +27,7 @@ use rusqlite::Connection;
 
 pub use config::Durability;
 pub(crate) use config::{Config, GroupLimits};
-pub(crate) use connection::{execute, sql_error};
+pub(crate) use connection::{copy, execute, read_copy, sql_error};
 pub(crate) use constraint::named as name_constraint;
 pub(crate) use file::{Begun, File, Mark};
 pub(crate) use given::given;

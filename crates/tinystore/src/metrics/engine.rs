@@ -27,6 +27,9 @@ use crate::{Clock, Durability, Memory, Result, Store, unix_millis};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
+/// metrics' file in the store's directory.
+const FILE: &str = "metrics.db";
+
 /// How often maintenance runs on its own: what names keep no longer is
 /// removed, and what is ready is packed.
 const MAINTENANCE: Duration = Duration::from_mins(1);
@@ -72,6 +75,12 @@ impl crate::engine::Engine for Engine {
         let closed = self.file.close();
         written.and(closed)
     }
+
+    /// Writes the instruments' totals, then copies metrics.db.
+    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+        self.write_totals()?;
+        Ok(vec![crate::engine::copy_file(&self.file, FILE, "metrics", into)?])
+    }
 }
 
 impl Engine {
@@ -79,7 +88,7 @@ impl Engine {
     /// and migrated, its names read.
     pub(crate) fn of(store: &Store) -> Result<Arc<Engine>> {
         store.engine(|store| {
-            let claim = store.claim("metrics.db")?;
+            let claim = store.claim(FILE)?;
             // 'os' unless the store says: a sample a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
             let file = File::open(claim.path(), Config::committing(durability))?;
