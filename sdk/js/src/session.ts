@@ -229,20 +229,12 @@ export class Stream {
  * its answer is read where it arrives and given to whoever asked, with no
  * stream's state between. Nothing cancels it.
  */
-class Direct {
-	readonly read: (r: Reader) => unknown
-	readonly resolve: (value: never) => void
-	readonly reject: (err: Error) => void
-
-	constructor(
-		read: (r: Reader) => unknown,
-		resolve: (value: never) => void,
-		reject: (err: Error) => void,
-	) {
-		this.read = read
-		this.resolve = resolve
-		this.reject = reject
-	}
+export interface Direct {
+	readonly method: number
+	write(w: Writer): void
+	read(r: Reader): unknown
+	resolve(value: never): void
+	reject(err: Error): void
 }
 
 /** A frame waiting for the connection's credit, in the order it was asked for. */
@@ -253,6 +245,61 @@ interface Queued {
 	request: boolean
 }
 
+/** Most stream IDs go through a bounded table; a long stream's collisions keep their full IDs in a map. */
+class Streams {
+	readonly #slots: (Stream | Direct | undefined)[] = new Array(1024)
+	readonly #ids = new Uint32Array(1024)
+	readonly #collisions = new Map<number, Stream | Direct>()
+	size = 0
+
+	get(id: number): Stream | Direct | undefined {
+		return this.#ids[id & 1023] === id ? this.#slots[id & 1023] : this.#collisions.get(id)
+	}
+
+	has(id: number): boolean {
+		return this.get(id) !== undefined
+	}
+
+	set(id: number, stream: Stream | Direct): void {
+		const slot = id & 1023
+		if (this.#slots[slot] === undefined || this.#ids[slot] === id) {
+			if (this.#slots[slot] === undefined) this.size++
+			this.#slots[slot] = stream
+			this.#ids[slot] = id
+		} else {
+			if (!this.#collisions.has(id)) this.size++
+			this.#collisions.set(id, stream)
+		}
+	}
+
+	delete(id: number): boolean {
+		const slot = id & 1023
+		if (this.#ids[slot] === id && this.#slots[slot] !== undefined) {
+			this.#slots[slot] = undefined
+			this.#ids[slot] = 0
+			this.size--
+			return true
+		}
+		if (!this.#collisions.delete(id)) return false
+		this.size--
+		return true
+	}
+
+	*values(): IterableIterator<Stream | Direct> {
+		for (const stream of this.#slots) {
+			if (stream !== undefined) yield stream
+		}
+		yield* this.#collisions.values()
+	}
+
+	clear(): void {
+		this.#slots.fill(undefined)
+		this.#ids.fill(0)
+		this.#collisions.clear()
+		this.size = 0
+	}
+}
+
 /**
  * The protocol of one connection. It writes through send, which the
  * transport takes whole, and reads what receive is given, frames split
@@ -260,13 +307,14 @@ interface Queued {
  */
 export class Session {
 	readonly #send: (bytes: Uint8Array) => void
+	readonly #sendBorrowed: ((bytes: Uint8Array, length: number) => void) | undefined
 	readonly #options: SessionOptions
 	/** resolves with what the WELCOME agreed, or rejects with why there is none */
 	readonly welcomed: Promise<Agreed>
 	#welcome: Waiter<Agreed>
 	#agreed: Agreed | undefined
 
-	#streams = new Map<number, Stream | Direct>()
+	#streams = new Streams()
 	#next = 0
 	#waitingToOpen: Waiter<void>[] = []
 	#queue: Queued[] = []
@@ -284,8 +332,13 @@ export class Session {
 	#ended: Error | undefined
 	readonly #endListeners: ((err: Error) => void)[] = []
 
-	constructor(send: (bytes: Uint8Array) => void, options: SessionOptions) {
+	constructor(
+		send: (bytes: Uint8Array) => void,
+		options: SessionOptions,
+		sendBorrowed?: (bytes: Uint8Array, length: number) => void,
+	) {
 		this.#send = send
+		this.#sendBorrowed = sendBorrowed
 		this.#options = options
 		let welcome!: Waiter<Agreed>
 		this.welcomed = new Promise<Agreed>((resolve, reject) => {
@@ -313,6 +366,10 @@ export class Session {
 
 	get agreed(): Agreed | undefined {
 		return this.#agreed
+	}
+
+	get pending(): number {
+		return this.#streams.size
 	}
 
 	/** The server said GOAWAY: no stream opens here any more. */
@@ -402,6 +459,11 @@ export class Session {
 		resolve: (value: T) => void,
 		reject: (err: Error) => void,
 	): boolean {
+		return this.request({ method, write, read, resolve, reject })
+	}
+
+	/** Sends a prepared call without allocating callbacks for its fields or failure. */
+	request(call: Direct): boolean {
 		const agreed = this.#agreed
 		if (
 			agreed === undefined ||
@@ -417,7 +479,7 @@ export class Session {
 		const start = out.reserve(headerSize)
 		let length: number
 		try {
-			write(out)
+			call.write(out)
 			length = out.length - start - headerSize
 		} catch (err) {
 			out.truncate(start)
@@ -428,9 +490,9 @@ export class Session {
 			return false
 		}
 		const id = this.#nextID()
-		putHeader(out.buffer, start, Kind.request, Flag.end, method, id, length)
+		putHeader(out.buffer, start, Kind.request, Flag.end, call.method, id, length)
 		this.#credit -= length
-		this.#streams.set(id, new Direct(read, resolve as (value: never) => void, reject))
+		this.#streams.set(id, call)
 		this.#soon()
 		return true
 	}
@@ -515,6 +577,13 @@ export class Session {
 	#flush(): void {
 		this.#flushing = false
 		if (this.#out.length === 0 || this.#ended !== undefined) {
+			return
+		}
+		if (this.#sendBorrowed !== undefined) {
+			const length = this.#out.length
+			const bytes = this.#out.buffer
+			this.#out.truncate(0)
+			this.#sendBorrowed(bytes, length)
 			return
 		}
 		const bytes = this.#out.bytes()
@@ -665,7 +734,7 @@ export class Session {
 		if (stream === undefined) {
 			throw new ProtocolError(`a ${kindName(kind)} on stream ${id}, which is not in use`)
 		}
-		if (stream instanceof Direct) {
+		if (!(stream instanceof Stream)) {
 			this.#answerDirect(stream, h, bytes, from, to)
 			return
 		}
@@ -760,7 +829,7 @@ export class Session {
 		this.#ended = err
 		this.#welcome.reject(err)
 		for (const stream of this.#streams.values()) {
-			if (stream instanceof Direct) {
+			if (!(stream instanceof Stream)) {
 				stream.reject(new LostError(`the connection ended: ${err.message}`, true))
 				continue
 			}

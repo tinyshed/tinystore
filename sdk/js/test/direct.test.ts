@@ -10,6 +10,7 @@ import { OutcomeUnknownError, ProtocolError } from '../src/errors.ts'
 import { Bucket, bucketOpen, valuesOf } from '../src/kv.ts'
 import { Session } from '../src/session.ts'
 import { Flag, frame, headerSize, Kind, parseHeader } from '../src/wire/frame.ts'
+import { Writer } from '../src/wire/msgpack.ts'
 import { Handle, KvCall, KvEntry, KvWritten, methods, Welcome } from '../src/wire/protocol.ts'
 import { caught } from './ways.ts'
 
@@ -99,7 +100,7 @@ test('calls made in one turn leave in one write, and each gets its own answer', 
 	expect(await bucket.get('first')).toBe('first')
 
 	const before = server.writes.length
-	const direct = spyOn(Session.prototype, 'direct')
+	const direct = spyOn(Session.prototype, 'request')
 	const answers = await Promise.all(['a', 'b', 'c'].map(key => bucket.get(key)))
 	const inPlace = direct.mock.results.filter(result => result.value === true).length
 	direct.mockRestore()
@@ -146,4 +147,83 @@ test('an answer that is not its message fails its call alone', async () => {
 	expect(await caught(bucket.get('k'))).toBeInstanceOf(ProtocolError)
 	broken = false
 	expect(await bucket.get('after')).toBe('after')
+})
+
+test('stream IDs sharing a table slot resolve their own calls in any order', async () => {
+	const writes: Uint8Array[] = []
+	const session = new Session(bytes => writes.push(bytes), { client: 'test/0' })
+	session.receive(
+		frame(
+			Kind.welcome,
+			0,
+			0,
+			0,
+			Welcome.encode({
+				protocol: 2,
+				maxBody: 1 << 20,
+				inFlight: 2048,
+				connectionCredit: 1 << 20,
+			}),
+		),
+	)
+	await session.welcomed
+	const answers = Array.from(
+		{ length: 1100 },
+		(_, i) =>
+			new Promise<number>((resolve, reject) => {
+				expect(
+					session.direct(
+						methods['kv.get'],
+						w => w.uint(i),
+						r => r.uint(),
+						resolve,
+						reject,
+					),
+				).toBe(true)
+			}),
+	)
+	await Bun.sleep(0)
+	const ids: number[] = []
+	for (const bytes of writes) {
+		for (let at = 0; at < bytes.length; ) {
+			const h = parseHeader(bytes, at)
+			if (h.kind === Kind.request) ids.push(h.stream)
+			at += headerSize + h.length
+		}
+	}
+	for (let i = ids.length - 1; i >= 0; i--) {
+		const answer = new Writer()
+		answer.uint(i)
+		session.receive(frame(Kind.response, Flag.end, 0, ids[i]!, answer.bytes()))
+	}
+	expect(await Promise.all(answers)).toEqual(Array.from({ length: 1100 }, (_, i) => i))
+})
+
+test('a prepared get keeps key validation and rebuilds its prefix after reconnecting', async () => {
+	let ending = false
+	let opened = 0
+	const link = new Link(async () => {
+		const handle = ++opened === 1 ? 300 : 70_000
+		return (
+			await served((method, body) => {
+				if (method === methods['kv.bucket.open']) return Handle.encode({ handle })
+				if (ending && opened === 1) return 'end'
+				const decoded = KvCall.decode(body)
+				expect(decoded.handle).toBe(handle)
+				expect(decoded.under).toEqual(['owner', 'β'])
+				return echo(method, body)
+			})
+		).connection
+	})
+	const bucket = bucketOver(link).under('owner', 'β')
+	expect(await bucket.get('warm')).toBe('warm')
+	expect(await bucket.get('λ')).toBe('λ')
+	expect(await bucket.get(123n)).toBe('123')
+	expect(await bucket.has('present')).toBe(true)
+	expect(await caught(bucket.has(1.5))).toHaveProperty('code', 'invalid')
+	expect(await caught(bucket.get(1.5))).toHaveProperty('code', 'invalid')
+	expect(await bucket.get('after')).toBe('after')
+	ending = true
+	expect(await bucket.get('again')).toBe('again')
+	expect(await bucket.get('new-prefix')).toBe('new-prefix')
 })

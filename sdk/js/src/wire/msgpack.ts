@@ -822,7 +822,12 @@ export class Reader {
 
 	/** Reads the next field's number in the message entered last, refusing one it showed before. */
 	field(): number {
-		const key = this.uint()
+		const at = this.#at
+		let key = this.#next()
+		if (key > 0x7f) {
+			this.#at = at
+			key = this.uint()
+		}
 		const depth = this.#depth
 		if (key < 31) {
 			const bit = 1 << key

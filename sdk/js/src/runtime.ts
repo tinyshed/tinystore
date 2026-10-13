@@ -13,6 +13,8 @@ export interface TransportEvents {
 export interface Transport {
 	/** Writes bytes whole and in order; what the stream does not take yet waits for it. */
 	write(bytes: Uint8Array): void
+	/** Consumes the first length bytes before returning, keeping none of their buffer. */
+	writeBorrowed?(bytes: Uint8Array, length: number): void
 	/** Ends the stream: a socket's close, or a child's stdin, which is its end. */
 	close(): void
 }

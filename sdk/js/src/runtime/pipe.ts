@@ -37,6 +37,8 @@ const symbols = {
 
 /** What the pipe tells the session reading it. */
 export interface PipeEvents {
+	/** Several calls wait on the host, so a loop turn can collect their answers together. */
+	busy?(): boolean
 	/**
 	 * Reads the frames whole in the first `length` bytes and says how many
 	 * bytes they were. The bytes are the pipe's, written over by its next
@@ -118,30 +120,46 @@ export function openPipe(
 		}
 	}
 
-	const send = (bytes: Uint8Array): void => {
+	const send = (bytes: Uint8Array, length = bytes.length): void => {
 		if (connection === null) {
 			return
 		}
 		if (reading) {
-			waiting.push(bytes)
+			waiting.push(bytes.slice(0, length))
 			return
 		}
 		const free = inbox.length - held
 		const written = lib.symbols.tinystore_send(
 			connection,
 			ptr(bytes),
-			bytes.length,
+			length,
 			ptr(inbox, held),
 			free,
 		)
 		readOn(Number(written))
 	}
 
-	const wake = new JSCallback(() => readOn(undefined), {
-		args: [FFIType.ptr],
-		returns: FFIType.void,
-		threadsafe: true,
-	})
+	let queued = false
+	const drain = () => {
+		queued = false
+		if (connection !== null) readOn(undefined)
+	}
+	const wake = new JSCallback(
+		() => {
+			if (queued || connection === null) return
+			if (events.busy?.() === true) {
+				queued = true
+				setImmediate(drain)
+			} else {
+				readOn(undefined)
+			}
+		},
+		{
+			args: [FFIType.ptr],
+			returns: FFIType.void,
+			threadsafe: true,
+		},
+	)
 	const failed = Number(
 		lib.symbols.tinystore_open(
 			ptr(name),
@@ -164,6 +182,7 @@ export function openPipe(
 	connection = Number(opened[0]) as Pointer
 	return {
 		write: send,
+		writeBorrowed: send,
 		close() {
 			if (connection === null) {
 				return

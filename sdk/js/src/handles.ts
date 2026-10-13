@@ -1,5 +1,6 @@
 import { type Connection, goesAgain, type Idempotence, type Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
+import type { Direct } from './session.ts'
 import type { Key } from './wire/codec.ts'
 import { Reader, Writer } from './wire/msgpack.ts'
 import { Handle } from './wire/protocol.ts'
@@ -39,6 +40,8 @@ export interface Home {
  * opened there first, or inside a database's transaction, on its stream.
  */
 export interface Via {
+	/** Binds a call's handle, method and codecs once, before its first value. */
+	prepare?<T, V>(request: Prepared<T, V>): (value: V) => Promise<T>
 	call(
 		openMethod: number,
 		open: Open,
@@ -59,6 +62,83 @@ export interface Via {
 		read: (r: Reader) => T,
 		idempotence: Idempotence,
 	): Promise<T>
+}
+
+export interface Prepared<T, V> {
+	openMethod: number
+	open: Open
+	method: number
+	write(w: Writer, handle: number, value: V): void
+	read(r: Reader): T
+	idempotence: Idempotence
+}
+
+/** A prepared call keeps its value until an error has either retried it or ended it. */
+class Request<T, V> implements Direct {
+	readonly method: number
+	readonly read: (r: Reader) => T
+	readonly #prepared: Prepared<T, V> & { link: Link; call: Via['call'] }
+	readonly #value: V
+	readonly resolve: (value: T) => void
+	readonly #reject: (err: Error) => void
+	#handle = 0
+
+	constructor(
+		prepared: Prepared<T, V> & { link: Link; call: Via['call'] },
+		value: V,
+		resolve: (value: T) => void,
+		reject: (err: Error) => void,
+	) {
+		this.#prepared = prepared
+		this.#value = value
+		this.method = prepared.method
+		this.read = prepared.read
+		this.resolve = resolve
+		this.#reject = reject
+	}
+
+	send(): void {
+		const connection = this.#prepared.link.ready()
+		const handle = connection?.opened.get(this.#prepared.open)
+		if (connection === undefined || handle === undefined) {
+			this.#wait()
+			return
+		}
+		this.#handle = handle
+		if (!connection.session.request(this)) {
+			this.#wait()
+		}
+	}
+
+	write(w: Writer): void {
+		this.#prepared.write(w, this.#handle, this.#value)
+	}
+
+	reject(err: Error): void {
+		try {
+			if (goesAgain(err, this.#prepared.idempotence)) {
+				this.#wait()
+				return
+			}
+		} catch (unknown) {
+			this.#reject(unknown as Error)
+			return
+		}
+		this.#reject(err)
+	}
+
+	#wait(): void {
+		const p = this.#prepared
+		askByCall(
+			p.call,
+			p.openMethod,
+			p.open,
+			p.method,
+			(w, handle) => p.write(w, handle, this.#value),
+			p.read,
+			p.idempotence,
+		).then(this.resolve, this.#reject)
+	}
 }
 
 /** Asks through `call`, the body and the answer each in bytes of their own. */
@@ -93,6 +173,11 @@ export function viaLink(link: Link): Via {
 		})
 	return {
 		call,
+		prepare: request => {
+			const prepared = { ...request, link, call }
+			return value =>
+				new Promise((resolve, reject) => new Request(prepared, value, resolve, reject).send())
+		},
 		ask: (openMethod, open, method, write, read, idempotence) => {
 			const waiting = () => askByCall(call, openMethod, open, method, write, read, idempotence)
 			const connection = link.ready()

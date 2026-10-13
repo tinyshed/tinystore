@@ -473,10 +473,15 @@ export function embedded(
 		const { openPipe } = await import('./runtime/pipe.ts')
 		let session: Session | undefined
 		const transport = openPipe(library(), resolve(dir), options, {
+			busy: () => (session?.pending ?? 0) > 1,
 			frames: (bytes, length) => session?.read(bytes, length) ?? length,
 			end: err => session?.end(err),
 		})
-		session = new Session(bytes => transport.write(bytes), { client: runtime.client })
+		session = new Session(
+			bytes => transport.write(bytes),
+			{ client: runtime.client },
+			transport.writeBorrowed,
+		)
 		return await Connection.overPipe(session, transport)
 	}
 }

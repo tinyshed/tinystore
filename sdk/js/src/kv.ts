@@ -17,6 +17,7 @@ import {
 import { type Duration, dateOf, ms, type Time, unixMs } from './time.ts'
 import { type Key, type Raw, textOf, type Written } from './wire/codec.ts'
 import type { Reader } from './wire/msgpack.ts'
+import { Writer } from './wire/msgpack.ts'
 import {
 	KvBranch,
 	KvBucketOpen,
@@ -133,6 +134,8 @@ export class Bucket<T> {
 	readonly #via: Via
 	/** reads a get's or a take's answer: the value, undefined where the key held none */
 	readonly #value: (r: Reader) => T | undefined
+	readonly #get: ((key: Key) => Promise<T | undefined>) | undefined
+	readonly #has: ((key: Key) => Promise<boolean>) | undefined
 
 	/**
 	 * Buckets come from `store.bucket`, `db.bucket` and their `under`; inside
@@ -156,6 +159,23 @@ export class Bucket<T> {
 		this.#home = home
 		this.#via = via ?? home?.via(`kv bucket ${name}`) ?? viaLink(link)
 		this.#value = r => valueIn(r, values)
+		const writeKey = getWriter(under)
+		this.#get = this.#via.prepare?.({
+			openMethod: methods['kv.bucket.open'],
+			open,
+			method: methods['kv.get'],
+			write: writeKey,
+			read: this.#value,
+			idempotence: 'read',
+		})
+		this.#has = this.#via.prepare?.({
+			openMethod: methods['kv.bucket.open'],
+			open,
+			method: methods['kv.has'],
+			write: writeKey,
+			read: found,
+			idempotence: 'read',
+		})
 		const own = { link, name, open, openMethod: 'kv.bucket.open', under, home } as const
 		parts.set(this, { ...own, values: values as Values<unknown> })
 	}
@@ -168,7 +188,9 @@ export class Bucket<T> {
 
 	/** The key's value, undefined when it holds none. */
 	get(key: Key): Promise<T | undefined> {
-		return this.#ask('kv.get', { key }, 'read', this.#value)
+		return this.#get === undefined
+			? this.#ask('kv.get', { key }, 'read', this.#value)
+			: this.#get(key)
 	}
 
 	/** The key's value with its version and expiry, undefined when it holds none. */
@@ -180,7 +202,7 @@ export class Bucket<T> {
 	}
 
 	has(key: Key): Promise<boolean> {
-		return this.#ask('kv.has', { key }, 'read', found)
+		return this.#has === undefined ? this.#ask('kv.has', { key }, 'read', found) : this.#has(key)
 	}
 
 	/** Writes the value; a key that exists keeps its expiry unless the options give one. */
@@ -292,6 +314,26 @@ export class Bucket<T> {
 			read,
 			idempotence,
 		)
+	}
+}
+
+/** A get's handle and branch stay constant between calls; its key's codec still checks every key. */
+function getWriter(under: readonly string[]): (w: Writer, handle: number, key: Key) => void {
+	const [field, codec] = KvCall.fields.key
+	let opened: number | undefined
+	let prefix: Uint8Array
+	return (w, handle, key) => {
+		if (opened !== handle) {
+			const head = new Writer()
+			const branch = underField(under)
+			KvCall.write(head, { handle, under: branch })
+			head.field(field)
+			head.mapAt(0, branch === undefined ? 2 : 3)
+			prefix = head.bytes()
+			opened = handle
+		}
+		w.raw(prefix)
+		codec.write(w, key)
 	}
 }
 
