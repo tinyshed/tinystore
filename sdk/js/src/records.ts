@@ -10,7 +10,13 @@ import { type ConsoleLine, jsonOf } from './console.ts'
 import { ClosedError, InvalidError } from './errors.ts'
 import { checkName, handleOn, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
-import { encodeFields, type Logger, type LoggerOptions, newLogger } from './logger.ts'
+import {
+	encodeFields,
+	type LogConfig,
+	type Logger,
+	type LoggerOptions,
+	newStoreLogger,
+} from './logger.ts'
 import type { Stream } from './session.ts'
 import { type Duration, type DurationText, ms } from './time.ts'
 import { currentTrace, type Trace } from './trace.ts'
@@ -713,11 +719,18 @@ export interface StoreLoggerOptions extends LoggerOptions {
 	keep?: Duration
 }
 
-/** A logger of `stream` that keeps its lines there through an append of their own. */
-export function storeLogger(link: Link, stream: string, options: StoreLoggerOptions = {}): Logger {
+/**
+ * A logger of `stream` that keeps its lines there through an append of their
+ * own, and what it declares its config `log` with.
+ */
+export function storeLogger(
+	link: Link,
+	stream: string,
+	options: StoreLoggerOptions = {},
+): [Logger, LogConfig] {
 	const { keep, ...told } = options
 	const events = openEvents(link, stream, keep === undefined ? undefined : { keep })
-	return newLogger(lines => events.appendLines(lines), stream, told)
+	return newStoreLogger(lines => events.appendLines(lines), stream, told)
 }
 
 /** The event an append of a name, its fields and its options writes. */

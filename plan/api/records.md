@@ -112,6 +112,10 @@ let log = store.logger("api").level(Level::INFO).console(Format::Json).redact(SE
   without a build: `LOG_FORMAT=json`, `LOG_LEVEL=warn`, `LOG_TIME=full`. It
   never turns on a console the code turned off. A value none of them can mean
   is ignored, and said once.
+- A store's logger reads these options through the config `log`, whose level
+  a change of any process sets for every logger of the store, as
+  [config.md](config.md#the-loggers-config) has it; `trace`, below `debug`,
+  is the level of a logger told none.
 - `redact` hides a value wherever its key names a secret, in the store and on
   the console, at any depth of a value: a key is split into words, and a name
   hides it when the name's words stand together in it. `'api key'` hides

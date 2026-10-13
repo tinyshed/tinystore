@@ -22,7 +22,10 @@ pub(super) type Validate<T> = Box<dyn Fn(&T) -> Result<(), String> + Send + Sync
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum View {
     Rust,
-    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    #[cfg_attr(
+        not(any(test, feature = "wire", feature = "records")),
+        expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
+    )]
     Data,
 }
 

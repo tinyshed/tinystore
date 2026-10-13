@@ -271,6 +271,40 @@ for (const way of ways) {
 			expect(((await caught(checked.update({ rps: 7 }))) as Error).message).toContain('not 7')
 		})
 
+		test("a store's logger takes its level from the config log, which a change sets and reset gives back", async () => {
+			const written: string[] = []
+			const to = { write: (text: string) => void written.push(text) }
+			const from = { APP_LOG_LEVEL: 'warning' }
+			const log = store.logger('logged', {
+				level: 'debug',
+				console: 'json',
+				to,
+				env: env('APP', { from }),
+			})
+			const printed = (message: string) => written.some(line => line.includes(`"msg":"${message}"`))
+			let probes = 0
+			const probed = () => {
+				probes++
+				log.debug(`probe ${probes}`)
+				return printed(`probe ${probes}`)
+			}
+			expect(probed()).toBe(false)
+			const settings = await store.config('log', [{ level: live('info') }])
+			await settings.update({ level: 'debug' })
+			await until(probed)
+			expect(printed(`probe ${probes}`)).toBe(true)
+			const refused = await caught(settings.update({ level: 'verbose' }))
+			expect(refused).toBeInstanceOf(InvalidError)
+			expect((refused as Error).message).toContain(
+				'"verbose" is not one of debug, trace, info, warn, error',
+			)
+			await settings.reset('level')
+			await until(() => !probed())
+			expect(printed(`probe ${probes}`)).toBe(false)
+			log.warn('warned')
+			expect(printed('warned')).toBe(true)
+		})
+
 		test('a list checks each item, and a list of groups fills its items’ defaults', async () => {
 			const config = await store.config('lists', [
 				{

@@ -147,7 +147,7 @@ describe('LOG_LEVEL, LOG_FORMAT and LOG_TIME', () => {
 			stream: 'tinystore',
 			msg: 'LOG_LEVEL is ignored',
 			value,
-			expected: 'debug, info, warn or error',
+			expected: 'trace, debug, info, warn or error',
 		})
 		expect(second).toHaveLength(1)
 	})

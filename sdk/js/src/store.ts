@@ -45,7 +45,7 @@ import {
 	type RateLimitOptions,
 	rateLimitOpen,
 } from './limits.ts'
-import type { Logger } from './logger.ts'
+import { type Logger, sayOwn } from './logger.ts'
 import { Metrics } from './metrics.ts'
 import { Once, type OnceOptions, onceOpen } from './once.ts'
 import {
@@ -149,6 +149,7 @@ export class Store implements AsyncDisposable {
 	readonly #workers = new Set<Worker>()
 	readonly #loggers = new Set<Logger>()
 	readonly #instruments: Instruments
+	#closing = false
 
 	constructor(link: Link) {
 		this.#link = link
@@ -178,13 +179,25 @@ export class Store implements AsyncDisposable {
 	 * A logger of the stream: each line printed as it is logged and kept
 	 * within a second, and a call never waits; what its buffer has no room
 	 * for is dropped and counted. The store's close hands over what it holds.
+	 * Its options are the config `log`'s, whose level a change of any process
+	 * sets for every logger of the store once each has its config open:
 	 *
 	 *     const log = store.logger('api', { redact: secrets })
 	 *     log.info('signed in', { user: 42 })
+	 *     const settings = await store.config('log', [{ level: live('info') }])
+	 *     await settings.update({ level: 'debug' })
 	 */
 	logger(stream: string, options?: StoreLoggerOptions): Logger {
-		const logger = storeLogger(this.#link, stream, options)
+		const [logger, log] = storeLogger(this.#link, stream, options)
 		this.#loggers.add(logger)
+		this.config('log', log.layers).then(
+			config => void config.watch(value => log.take(value.level)),
+			(err: unknown) => {
+				if (!this.#closing) {
+					saidUnfollowed(err)
+				}
+			},
+		)
 		return logger
 	}
 
@@ -394,6 +407,7 @@ export class Store implements AsyncDisposable {
 	 * sidecar goes once it has been idle.
 	 */
 	async close(): Promise<void> {
+		this.#closing = true
 		await Promise.all([...this.#workers].map(worker => worker.stop()))
 		await this.#instruments.stop()
 		await Promise.all([...this.#loggers].map(logger => logger.stop()))
@@ -409,6 +423,18 @@ export class Store implements AsyncDisposable {
 
 	[Symbol.asyncDispose](): Promise<void> {
 		return this.close()
+	}
+}
+
+let unfollowed = false
+
+/** Says once in a process that a store's logger follows no config `log`, its level then the code's and the environment's. */
+function saidUnfollowed(err: unknown): void {
+	if (!unfollowed) {
+		unfollowed = true
+		sayOwn('warn', 'a logger follows no config log', {
+			error: err instanceof Error ? err.message : String(err),
+		})
 	}
 }
 

@@ -40,7 +40,10 @@ impl File {
 
     /// A file a program's SDK read where the program runs: its name as the
     /// program wrote it, and its text, none when it was absent.
-    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    #[cfg_attr(
+        not(any(test, feature = "wire", feature = "records")),
+        expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
+    )]
     pub(super) fn sent(name: String, optional: bool, text: Option<String>) -> File {
         File { path: name.into(), optional, sent: Some(text) }
     }

@@ -60,8 +60,13 @@ impl<'s> LoggerBuilder<'s> {
         let records = Records::of(self.store)?;
         let stream = records.open_stream(&self.stream, self.keep).map_err(|error| error.within(&shown))?;
         let console = Arc::new(Console::new(&self.stream, self.told));
+        #[cfg(feature = "config")]
+        let following = crate::log_config::follow(self.store, &console).map_err(|error| error.within(&shown))?;
         let buffer = Buffer::open(&records, stream, self.buffer, Some(Arc::clone(&console)))?;
-        Ok(Layer::new(console, Some(buffer)))
+        let layer = Layer::new(console, Some(buffer));
+        #[cfg(feature = "config")]
+        let layer = layer.following(following);
+        Ok(layer)
     }
 }
 

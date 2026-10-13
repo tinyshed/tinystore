@@ -205,7 +205,9 @@ program and the command, in each SDK for its language
   anyway.
 - **The same bytes:** every formatter, the core's and each SDK's, is checked
   against the same console vectors.
-- `LOG_*` and the logger's options come through the config layers.
+- A store's logger's options come through the config `log`: the code's are
+  its defaults, `LOG_*` a layer over them, and its level live, so that a
+  change reaches every logger of the store at once.
 
 ## Later modules
 

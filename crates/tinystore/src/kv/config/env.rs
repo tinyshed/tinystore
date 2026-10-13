@@ -31,7 +31,10 @@ pub struct Env {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Dotenv {
     Path(PathBuf),
-    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    #[cfg_attr(
+        not(any(test, feature = "wire", feature = "records")),
+        expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
+    )]
     Sent {
         name: String,
         text: String,
@@ -68,7 +71,10 @@ impl Env {
 impl Env {
     /// What a program's SDK read where the program runs: its variables, the
     /// texts of the files their `NAME_FILE` name, and its `.env` files.
-    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    #[cfg_attr(
+        not(any(test, feature = "wire", feature = "records")),
+        expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
+    )]
     pub(super) fn sent(mut self, variables: Vec<(String, String)>, files: Texts, dotenv: Vec<(String, String)>) -> Env {
         self.files = dotenv.into_iter().map(|(name, text)| Dotenv::Sent { name, text }).collect();
         self.from = Some(variables);

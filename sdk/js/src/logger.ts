@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { DropNotice, FailureLog, type Say } from './background.ts'
-import { type EnvLayer, env as environmentOf } from './config.ts'
+import { type EnvLayer, env as environmentOf, live, oneOf, type Setting } from './config.ts'
 import {
 	type ConsoleFormat,
 	type ConsoleLine,
@@ -69,7 +69,11 @@ export interface ConsoleOut {
 	readonly isTTY?: boolean
 }
 
-const levels = { debug: -4, info: 0, warn: 4, error: 8 } as const
+// slog's numbers, trace below debug as Python's levels map, so that a logger
+// at trace takes every line
+const levels = { trace: -8, debug: -4, info: 0, warn: 4, error: 8 } as const
+const formats = ['pretty', 'json', 'off'] as const
+const times = ['clock', 'full', 'off'] as const
 const flushEvery = 1000
 
 /** What a logger and the loggers its `with` makes share: one buffer, one timer, one count, one console. */
@@ -113,6 +117,71 @@ export function newLogger(
 	options: LoggerOptions = {},
 	out?: ConsoleOut & { utc?: boolean },
 ): Logger {
+	return new Logger(sharedOf(append, stream, options, out).shared, [])
+}
+
+/**
+ * What a store's logger declares its config `log` with: the code's options
+ * as the defaults, trace for a logger told no level, and the variables it
+ * read as the layer over them; and how it takes the level each value gives.
+ */
+export interface LogConfig {
+	readonly layers: readonly [LogDeclaration, ...EnvLayer[]]
+	take(level: string): void
+}
+
+type LogDeclaration = {
+	level: Setting<string, true>
+	format: Setting<string>
+	time: Setting<string>
+}
+
+/** A store's logger of one stream, and what it declares its config `log` with. */
+export function newStoreLogger(
+	append: (lines: ConsoleLine[]) => Promise<void>,
+	stream: string,
+	options: LoggerOptions = {},
+): [Logger, LogConfig] {
+	const { shared, spelled } = sharedOf(append, stream, options, undefined)
+	const level = options.level === undefined ? 'trace' : nameOf(levelOf(options.level))
+	const format = options.console ?? (prettyUntold(options, undefined) ? 'pretty' : 'json')
+	const time = options.time ?? 'clock'
+	const others = (all: readonly string[], one: string) => all.filter(name => name !== one)
+	const declaration: LogDeclaration = {
+		level: live(oneOf(level, others(Object.keys(levels), level))),
+		format: oneOf(format, others(formats, format)),
+		time: oneOf(time, others(times, time)),
+	}
+	const env = options.env ?? environmentOf('')
+	const take = (name: string) => {
+		if (Object.hasOwn(levels, name)) {
+			shared.least = levels[name as keyof typeof levels]
+		}
+	}
+	if (env === false) {
+		return [new Logger(shared, []), { layers: [declaration], take }]
+	}
+	const prefix = env.prefix === '' ? 'LOG' : `${env.prefix}_LOG`
+	const layers = [declaration, environmentOf(prefix, { from: spelled })] as const
+	return [new Logger(shared, []), { layers, take }]
+}
+
+/** The least named level at or above a level the code gave as a number. */
+function nameOf(least: number): string {
+	const found = Object.entries(levels).find(([, number]) => number >= least)
+	return found?.[0] ?? 'error'
+}
+
+/**
+ * What a logger shares with the loggers its `with` makes, and the variables
+ * it read as the config `log` spells them.
+ */
+function sharedOf(
+	append: ((lines: ConsoleLine[]) => Promise<void>) | undefined,
+	stream: string,
+	options: LoggerOptions,
+	out: (ConsoleOut & { utc?: boolean }) | undefined,
+): { shared: Shared; spelled: Record<string, string> } {
 	if (stream === '') {
 		throw new InvalidError('a logger of no stream')
 	}
@@ -120,7 +189,7 @@ export function newLogger(
 	if (!Number.isInteger(most) || most < 1) {
 		throw new InvalidError(`a logger's buffer of ${most} lines`)
 	}
-	const [read, ignored] = fromEnvironment(options)
+	const [read, ignored, spelled] = fromEnvironment(options)
 	const shared: Shared = {
 		append,
 		stream,
@@ -138,21 +207,25 @@ export function newLogger(
 		drops: append === undefined ? undefined : new DropNotice(stream, most, sayOwn),
 	}
 	sayIgnored(shared.print, ignored)
-	return new Logger(shared, [])
+	return { shared, spelled }
 }
 
 type Unread = [name: string, value: string, expected: string]
 
 /**
  * LOG_LEVEL, LOG_FORMAT and LOG_TIME over the options, after the prefix env
- * names, as Go and Python read them; a console turned off stays off.
+ * names, as Go and Python read them; a console turned off stays off. Each
+ * variable read is spelled as the config `log` reads it, by its name.
  */
-function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
+function fromEnvironment(
+	options: LoggerOptions,
+): [LoggerOptions, Unread[], Record<string, string>] {
 	const read = { ...options }
 	const ignored: Unread[] = []
+	const spelled: Record<string, string> = {}
 	const env = options.env ?? environmentOf('')
 	if (env === false) {
-		return [read, ignored]
+		return [read, ignored, spelled]
 	}
 	const variables = environment(env)
 	const name = (variable: string) => (env.prefix === '' ? variable : `${env.prefix}_${variable}`)
@@ -160,9 +233,10 @@ function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
 	if (level !== undefined) {
 		const known = level.toLowerCase() === 'warning' ? 'warn' : level.toLowerCase()
 		if (Object.hasOwn(levels, known)) {
-			read.level = known as keyof typeof levels
+			read.level = levels[known as keyof typeof levels]
+			spelled[name('LOG_LEVEL')] = known
 		} else {
-			ignored.push([name('LOG_LEVEL'), level, 'debug, info, warn or error'])
+			ignored.push([name('LOG_LEVEL'), level, 'trace, debug, info, warn or error'])
 		}
 	}
 	const format = variables(name('LOG_FORMAT'))
@@ -172,6 +246,7 @@ function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
 			ignored.push([name('LOG_FORMAT'), format, 'pretty, json or off'])
 		} else if (read.console !== 'off') {
 			read.console = known
+			spelled[name('LOG_FORMAT')] = known
 		}
 	}
 	const time = variables(name('LOG_TIME'))
@@ -179,11 +254,12 @@ function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
 		const known = time.toLowerCase()
 		if (known === 'clock' || known === 'full' || known === 'off') {
 			read.time = known
+			spelled[name('LOG_TIME')] = known
 		} else {
 			ignored.push([name('LOG_TIME'), time, 'clock, full or off'])
 		}
 	}
-	return [read, ignored]
+	return [read, ignored, spelled]
 }
 
 /** The variables of env's files, the process's or `from`'s over them, a missing file skipped; an empty one is none. */
@@ -237,17 +313,23 @@ function forceColor(): boolean {
 	return force !== undefined && force !== '' && force !== '0'
 }
 
+/** Whether a console told no format prints pretty lines: on a terminal, or where FORCE_COLOR asks. */
+function prettyUntold(options: LoggerOptions, out: ConsoleOut | undefined): boolean {
+	const stream: ConsoleOut = out ?? options.to ?? process.stderr
+	// FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
+	return stream.isTTY === true || (out === undefined && forceColor())
+}
+
 /** How a logger prints its lines, or undefined when it prints none. */
 function printer(options: LoggerOptions, out?: ConsoleOut & { utc?: boolean }): Shared['print'] {
 	if (options.console === 'off') {
 		return undefined
 	}
 	const stream: ConsoleOut = out ?? options.to ?? process.stderr
-	// FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
 	const forced = out === undefined && forceColor()
 	const terminal = stream.isTTY === true
 	const pretty =
-		options.console === 'pretty' || (options.console === undefined && (terminal || forced))
+		options.console === 'pretty' || (options.console === undefined && prettyUntold(options, out))
 	if (!pretty) {
 		return line => void stream.write(jsonLine(line))
 	}

@@ -12,7 +12,7 @@
 
 use std::fmt;
 use std::io::{IsTerminal, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
@@ -25,6 +25,8 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::{LookupSpan, Registry, Scope};
 
 use super::Format;
+#[cfg(all(feature = "records", feature = "config"))]
+use super::env::Said;
 use super::env::{Environment, colors, first_said, forced};
 use super::line::{LOG, Line, Look, SOURCE, Time, json, object_pairs, pretty, quoted};
 use super::redact::Redactor;
@@ -36,6 +38,8 @@ use crate::unix_nanos;
 const OWN: &str = "tinystore";
 /// slog's number of info.
 const INFO: i32 = 0;
+/// slog's number of trace, below which `tracing` has no level.
+const TRACE: i32 = -8;
 
 /// What changes each field before it is hidden and kept: given its key and
 /// its JSON, the value to keep, or none to drop the field.
@@ -112,8 +116,9 @@ impl Printer {
 /// wanted, its fields changed and hidden, and where and how it prints.
 pub(crate) struct Console {
     stream: String,
-    /// slog's number of the least level printed and kept; every one without.
-    least: Option<i32>,
+    /// slog's number of the least level printed and kept, which the config
+    /// `log` changes while the logger runs; trace takes every level.
+    least: AtomicI32,
     printer: Option<Printer>,
     redactor: Redactor,
     replace: Option<Replace>,
@@ -121,6 +126,23 @@ pub(crate) struct Console {
     /// Events refused before they could be kept: no name, or fields that
     /// are no object.
     refused: AtomicU64,
+    #[cfg(all(feature = "records", feature = "config"))]
+    declared: Declared,
+}
+
+/// What a store's logger declares its config `log` with: the code's options
+/// as its defaults, trace for a logger told no level, and the variables of
+/// the environment it read, which go over them.
+#[cfg(all(feature = "records", feature = "config"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Declared {
+    pub(crate) level: &'static str,
+    /// The code's format, or the one its terminal chose.
+    pub(crate) format: &'static str,
+    pub(crate) time: &'static str,
+    /// The variables' prefix and those that said what a logger can mean;
+    /// none for a logger that reads no variable.
+    pub(crate) env: Option<(String, Vec<(String, String)>)>,
 }
 
 impl Console {
@@ -133,9 +155,13 @@ impl Console {
         let format = if told.format == Some(Format::Off) { Some(Format::Off) } else { said.format.or(told.format) };
         // colours are the terminal's, whatever variables of its own a logger reads
         let lookup: fn(&str) -> Option<String> = told.env.as_ref().map_or(real, |env| env.lookup);
+        let terminal = told.to.is_none() && std::io::stderr().is_terminal();
+        // whether a console told no format prints pretty lines
+        let chosen = terminal || forced(lookup);
+        #[cfg(all(feature = "records", feature = "config"))]
+        let declared = Declared::of(&told, &said, chosen);
         let printer = (format != Some(Format::Off)).then(|| {
-            let terminal = told.to.is_none() && std::io::stderr().is_terminal();
-            let pretty = format == Some(Format::Pretty) || format.is_none() && (terminal || forced(lookup));
+            let pretty = format == Some(Format::Pretty) || format.is_none() && chosen;
             let look = Look {
                 color: pretty && colors(terminal, lookup),
                 zone: TimeZone::system(),
@@ -147,12 +173,14 @@ impl Console {
         });
         let console = Console {
             stream: stream.to_owned(),
-            least,
+            least: AtomicI32::new(least.unwrap_or(TRACE)),
             printer,
             redactor: Redactor::new(&told.redact, told.keep_url_passwords),
             replace: told.replace,
             source: told.source,
             refused: AtomicU64::new(0),
+            #[cfg(all(feature = "records", feature = "config"))]
+            declared,
         };
         for (name, value, expected) in said.ignored {
             if first_said(&name, &value) {
@@ -174,8 +202,28 @@ impl Console {
         }
     }
 
+    /// slog's number of the least level wanted; none when every one is.
+    fn least(&self) -> Option<i32> {
+        let least = self.least.load(Ordering::Relaxed);
+        (least > TRACE).then_some(least)
+    }
+
     fn wants(&self, level: i32) -> bool {
-        self.least.is_none_or(|least| level >= least)
+        self.least().is_none_or(|least| level >= least)
+    }
+
+    /// Takes the level the config `log` gives, a name of `LEVELS`, for every
+    /// line logged after.
+    #[cfg(all(feature = "records", feature = "config"))]
+    pub(crate) fn set_level(&self, name: &str) {
+        if let Some(least) = super::env::level(name) {
+            self.least.store(least, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(all(feature = "records", feature = "config"))]
+    pub(crate) fn declared(&self) -> &Declared {
+        &self.declared
     }
 
     /// Fields as they are kept: changed or dropped by `replace`, then hidden.
@@ -195,6 +243,23 @@ impl Console {
     }
 }
 
+#[cfg(all(feature = "records", feature = "config"))]
+impl Declared {
+    /// What the code and the environment told a logger, `pretty` whether a
+    /// console told no format prints pretty lines.
+    fn of(told: &Told, said: &Said, pretty: bool) -> Declared {
+        use super::env::{FORMATS, LEVELS, TIMES, spelled};
+        let format = told.format.unwrap_or(if pretty { Format::Pretty } else { Format::Json });
+        let console_off = told.format == Some(Format::Off);
+        Declared {
+            level: told.level.and_then(|level| spelled(&LEVELS, number(level))).unwrap_or("trace"),
+            format: spelled(&FORMATS, format).unwrap_or("json"),
+            time: spelled(&TIMES, told.time).unwrap_or("clock"),
+            env: told.env.as_ref().map(|env| env.as_config(said, console_off)),
+        }
+    }
+}
+
 /// A line of the store's own at `at`, which a logger prints and never keeps.
 pub(crate) fn own_line(at: i64) -> Line {
     Line { at, stream: OWN.to_owned(), name: LOG.to_owned(), ..Line::default() }
@@ -211,17 +276,33 @@ fn real(name: &str) -> Option<String> {
 pub struct Layer {
     console: Arc<Console>,
     keep: Option<Arc<dyn Keep>>,
+    /// The config `log` a store's logger follows, whose watch sets its
+    /// level, held while any clone of the logger is.
+    #[cfg(all(feature = "records", feature = "config"))]
+    #[expect(dead_code, reason = "held for its drop, which ends the watch")]
+    following: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl fmt::Debug for Layer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Layer").field("stream", &self.console.stream).field("least", &self.console.least).finish()
+        f.debug_struct("Layer").field("stream", &self.console.stream).field("least", &self.console.least()).finish()
     }
 }
 
 impl Layer {
     pub(crate) fn new(console: Arc<Console>, keep: Option<Arc<dyn Keep>>) -> Layer {
-        Layer { console, keep }
+        Layer {
+            console,
+            keep,
+            #[cfg(all(feature = "records", feature = "config"))]
+            following: None,
+        }
+    }
+
+    /// The layer holding what keeps its console's level the config's.
+    #[cfg(all(feature = "records", feature = "config"))]
+    pub(crate) fn following(self, following: Arc<dyn std::any::Any + Send + Sync>) -> Layer {
+        Layer { following: Some(following), ..self }
     }
 
     /// Writes what the logger holds and returns once it is written, as the
@@ -351,7 +432,7 @@ where
         let metadata = event.metadata();
         let (level, own) = (number(*metadata.level()), metadata.target() == OWN);
         // the store's own lines show from info up, or from the logger's level when it has one, as Go's
-        let shown = if own && self.console.least.is_none() { level >= INFO } else { self.console.wants(level) };
+        let shown = if own && self.console.least().is_none() { level >= INFO } else { self.console.wants(level) };
         if !shown {
             return;
         }

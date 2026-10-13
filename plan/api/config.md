@@ -581,12 +581,47 @@ config app: limits.rps: 800 is above 500, as another program that has the config
 ## The logger's config
 
 ```ts
-store.config('log', [{ level: live('info'), format: 'pretty', time: 'clock' }, env('LOG')])
+const log = store.logger('api', { level: 'info' })
+const settings = await store.config('log', [{ level: live('info') }])
+await settings.update({ level: 'debug' })   // every logger of the store, in every process
+await settings.reset('level')               // each logger's own level again
 ```
 
-The store's logger reads its options from a config named `log`:
-`LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME` read as they do today, and
-`update({ level: 'debug' })` reaches the logger of every process.
+```rust
+let log = store.logger("api").level(Level::INFO).layer()?;
+let settings = store.config("log", Log { level: Live::new("info".to_owned()) }).open()?;
+settings.update(|log| *log.level = "debug".to_owned())?;
+```
+
+A store's logger reads its options from the config `log`, which it opens as
+it is made and follows while it runs:
+
+| Setting  | Allows                                          | Its default                                      |
+|----------|-------------------------------------------------|--------------------------------------------------|
+| `level`  | `trace`, `debug`, `info`, `warn`, `error`; live | the code's `level`, or `trace`: every level      |
+| `format` | `pretty`, `json`, `off`                         | the code's `console`, or what its terminal chose |
+| `time`   | `clock`, `full`, `off`                          | the code's `time`, or `clock`                    |
+
+- The code's options are the declaration's defaults, and `LOG_LEVEL`,
+  `LOG_FORMAT` and `LOG_TIME` the environment's layer over them, after the
+  logger's prefix: `env('APP')` reads `APP_LOG_LEVEL`. They read as they
+  did: a value none of them can mean is ignored and said once, and never
+  refuses the config; a console the code turned off stays off.
+- Only the level is live. A change reaches every logger of the store at
+  once, in every process, over its code and its environment, until it is
+  reset. A level no logger means is refused while one has the config open,
+  and one kept is ignored and said, as a kept change that no longer fits is.
+- `trace` is the level below `debug` that Rust's `tracing` logs at, and the
+  default of a logger told none, so that it takes every line as it did; the
+  store's own lines show from `info` up at it.
+- The logger of the console alone has no store and no config, and reads its
+  variables itself.
+- An SDK's logger opens its config in the background, since a logger is
+  made without waiting: a line logged before it is open takes the code's and
+  the environment's level. A server older than the config engine leaves it
+  there, said once.
+- Its declaration lists each set its default first, as `oneOf` does, so
+  that a refusal names the set as the logger that refused it declares it.
 
 ## Slices
 

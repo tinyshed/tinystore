@@ -36,7 +36,7 @@
 //! # }
 //! ```
 
-#[cfg(any(test, feature = "wire"))]
+#[cfg(any(test, feature = "wire", feature = "records"))]
 mod data;
 mod declaration;
 mod env;
@@ -137,9 +137,9 @@ where
     }
 }
 
-/// A config as a program's SDK opens it over the wire: its declaration and
-/// its layers as data, as `data` reads them.
-#[cfg(any(test, feature = "wire"))]
+/// A config as a program's SDK opens it over the wire, and a store's logger
+/// its own: its declaration and its layers as data, as `data` reads them.
+#[cfg(any(test, feature = "wire", feature = "records"))]
 pub(crate) struct Sent<'a> {
     pub(crate) name: &'a str,
     pub(crate) declaration: &'a serde_json::Value,
@@ -150,7 +150,7 @@ pub(crate) struct Sent<'a> {
     pub(crate) remember: bool,
 }
 
-#[cfg(any(test, feature = "wire"))]
+#[cfg(any(test, feature = "wire", feature = "records"))]
 impl Store {
     /// Opens the config an SDK sent, its value given back as data.
     pub(crate) fn config_sent(&self, sent: &Sent<'_>) -> Result<Config<serde_json::Value>> {

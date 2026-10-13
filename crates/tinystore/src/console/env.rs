@@ -57,42 +57,53 @@ impl Environment {
             }
             Some(text.to_lowercase())
         };
-        let level = read("LOG_LEVEL", "debug, info, warn or error", |text| level(text).map(drop));
-        let format = read("LOG_FORMAT", "pretty, json or off", |text| format(text).map(drop));
-        let time = read("LOG_TIME", "clock, full or off", |text| time(text).map(drop));
+        let level = read("LOG_LEVEL", "trace, debug, info, warn or error", |text| level(text).map(drop));
+        let format = read("LOG_FORMAT", "pretty, json or off", |text| named(&FORMATS, text).map(drop));
+        let time = read("LOG_TIME", "clock, full or off", |text| named(&TIMES, text).map(drop));
         said.level = level.as_deref().and_then(self::level);
-        said.format = format.as_deref().and_then(self::format);
-        said.time = time.as_deref().and_then(self::time);
+        said.format = format.as_deref().and_then(|text| named(&FORMATS, text));
+        said.time = time.as_deref().and_then(|text| named(&TIMES, text));
         said
     }
-}
 
-fn level(text: &str) -> Option<i32> {
-    match text {
-        "debug" => Some(-4),
-        "info" => Some(0),
-        "warn" | "warning" => Some(4),
-        "error" => Some(8),
-        _ => None,
+    /// What the environment said as the config `log` reads it: the
+    /// variables' prefix, `LOG` or `APP_LOG`, and each variable that said
+    /// what a logger can mean, spelled as the config spells it; the format
+    /// left out of a console the code turned off, which stays off.
+    #[cfg(all(feature = "records", feature = "config"))]
+    pub(crate) fn as_config(&self, said: &Said, console_off: bool) -> (String, Vec<(String, String)>) {
+        let format = said.format.filter(|_| !console_off);
+        let spelled = [
+            ("LOG_LEVEL", said.level.and_then(|level| spelled(&LEVELS, level))),
+            ("LOG_FORMAT", format.and_then(|format| spelled(&FORMATS, format))),
+            ("LOG_TIME", said.time.and_then(|time| spelled(&TIMES, time))),
+        ];
+        let variables = spelled.into_iter().filter_map(|(name, text)| Some((self.name(name), text?.to_owned())));
+        (self.name("LOG"), variables.collect())
     }
 }
 
-fn format(text: &str) -> Option<Format> {
-    match text {
-        "pretty" => Some(Format::Pretty),
-        "json" => Some(Format::Json),
-        "off" => Some(Format::Off),
-        _ => None,
-    }
+/// The levels a logger takes, with slog's number of each: trace below
+/// debug, as Python's levels map, and below trace `tracing` has none, so
+/// that a logger at trace takes every line.
+pub(crate) const LEVELS: [(&str, i32); 5] = [("trace", -8), ("debug", -4), ("info", 0), ("warn", 4), ("error", 8)];
+pub(crate) const FORMATS: [(&str, Format); 3] =
+    [("pretty", Format::Pretty), ("json", Format::Json), ("off", Format::Off)];
+pub(crate) const TIMES: [(&str, Time); 3] = [("clock", Time::Clock), ("full", Time::Full), ("off", Time::Off)];
+
+/// slog's number of a level's name, `warning` read as `warn`.
+pub(crate) fn level(text: &str) -> Option<i32> {
+    named(&LEVELS, if text == "warning" { "warn" } else { text })
 }
 
-fn time(text: &str) -> Option<Time> {
-    match text {
-        "clock" => Some(Time::Clock),
-        "full" => Some(Time::Full),
-        "off" => Some(Time::Off),
-        _ => None,
-    }
+fn named<T: Copy>(table: &[(&str, T)], text: &str) -> Option<T> {
+    table.iter().find(|(name, _)| *name == text).map(|(_, value)| *value)
+}
+
+/// The name a table gives a value.
+#[cfg(all(feature = "records", feature = "config"))]
+pub(crate) fn spelled<T: PartialEq>(table: &[(&'static str, T)], value: T) -> Option<&'static str> {
+    table.iter().find(|(_, named)| *named == value).map(|(name, _)| *name)
 }
 
 /// Whether an ignored variable's value has been said already, so that the

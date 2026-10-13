@@ -225,7 +225,7 @@ fn a_variable_none_can_mean_is_said_once_and_ignored() {
         || Told { env: Some(Environment { prefix: "APP".to_owned(), lookup: loud_said }), ..told(&printed, silent) };
     logged(layer(told()), || tracing::debug!("kept"));
     logged(layer(told()), || {});
-    let said = r#"{"level":"WARN","stream":"tinystore","msg":"APP_LOG_LEVEL is ignored","value":"loud-in-a-layer-test","expected":"debug, info, warn or error"}"#;
+    let said = r#"{"level":"WARN","stream":"tinystore","msg":"APP_LOG_LEVEL is ignored","value":"loud-in-a-layer-test","expected":"trace, debug, info, warn or error"}"#;
     assert_eq!(printed.untimed(), [said, r#"{"level":"DEBUG","stream":"api","msg":"kept"}"#]);
 }
 

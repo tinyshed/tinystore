@@ -37,7 +37,11 @@ them; the workspace builds and tests on three operating systems.
   connection follows again; the Bun SDK's `store.config(name, [declaration, ...layers])` with `secret`, `required`,
   `live`, `int`, `oneOf`, `duration`, `list`, `file` and `env`, the value typed from the declaration and a change
   from its live settings, `Secret` printing as `***`, `validate` run in the program, and a config opened again
-  sharing its handle and its stream. Left: the logger's options as a config.
+  sharing its handle and its stream.
+  Built, slice 3: a store's logger's options as the config `log` in Rust and in the Bun SDK, the code's options its
+  defaults and `LOG_*` a layer over them, read as they were, its level live for every logger of the store and
+  `trace` the level of a logger told none; records and kv's config meet in `log_config.rs`. Every slice of the book
+  is built; Python and Go come with their bindings, and the book's Later waits for the owner.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.

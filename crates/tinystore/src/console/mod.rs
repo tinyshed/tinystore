@@ -101,6 +101,10 @@ pub use line::Time;
 pub use redact::SECRETS;
 
 pub(crate) use env::Environment;
+#[cfg(all(feature = "records", feature = "config"))]
+pub(crate) use env::{FORMATS, LEVELS, TIMES};
+#[cfg(all(test, feature = "records", feature = "config"))]
+pub(crate) use layer::Declared;
 #[allow(unused_imports, reason = "a store's logger takes them; the console alone has none")]
 pub(crate) use layer::{Console, Keep, Told, own_line};
 #[allow(unused_imports, reason = "a store's logger takes them; the console alone has none")]
