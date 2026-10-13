@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 
-import { fromEnv } from '../src/config.ts'
+import { env } from '../src/config.ts'
 import {
 	type ConsoleLine,
 	type ConsoleTime,
@@ -219,7 +219,7 @@ describe('the environment', () => {
 		const log = newLogger(
 			undefined,
 			'api',
-			{ level: 'info', env: fromEnv('APP') },
+			{ level: 'info', env: env('APP') },
 			{ write: t => written.push(t), isTTY: true },
 		)
 		log.debug('hidden')

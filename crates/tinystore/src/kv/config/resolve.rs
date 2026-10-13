@@ -16,6 +16,24 @@ use super::rules;
 /// A program's own check of its whole value, which says why it refuses one.
 pub(super) type Validate<T> = Box<dyn Fn(&T) -> Result<(), String> + Send + Sync>;
 
+/// How a value reaches its program: as a Rust type reads it, each span the
+/// seconds and nanoseconds of a `Duration`, or as data, each span its
+/// milliseconds, for an SDK that spells them in its own language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum View {
+    Rust,
+    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    Data,
+}
+
+/// What a config's value is made with: its declaration, the program's check
+/// of it, and the view it reaches the program in.
+pub(super) struct Making<'a, T> {
+    pub(super) declaration: &'a Declaration,
+    pub(super) validate: Option<&'a Validate<T>>,
+    pub(super) view: View,
+}
+
 /// A config's value, and what of the kept changes it took.
 #[derive(Debug)]
 pub(super) struct Resolved<T> {
@@ -31,114 +49,106 @@ pub(super) struct Resolved<T> {
     pub(super) foreign: Vec<String>,
 }
 
-/// The value the layers alone make, or every problem with it, each named by
-/// the layer whose value broke it.
-pub(super) fn layered<T: DeserializeOwned>(
-    declaration: &Declaration,
-    base: &Base,
-    validate: Option<&Validate<T>>,
-) -> Result<(T, Value), Vec<String>> {
-    let tree = base.tree();
-    let value = built::<T>(declaration, &tree).map_err(|why| culprits::<T>(declaration, base, &tree, &why))?;
-    if let Some(validate) = validate {
-        validate(&value).map_err(|why| vec![why])?;
-    }
-    Ok((value, tree))
-}
-
-/// The value with each kept change that keeps it good, from the value the
-/// layers make.
-pub(super) fn resolve<T: DeserializeOwned>(
-    declaration: &Declaration,
-    layered: (&Arc<T>, &Value),
-    kept: &Kept,
-    validate: Option<&Validate<T>>,
-) -> Resolved<T> {
-    let (mut value, mut tree) = (Arc::clone(layered.0), layered.1.clone());
-    let (mut applied, mut ignored, mut foreign) = (BTreeMap::new(), Vec::new(), Vec::new());
-    for (path, change) in kept.in_order() {
-        if declaration.node(path).is_none() {
-            foreign.push(path.clone());
-            continue;
+impl<T: DeserializeOwned> Making<'_, T> {
+    /// The value the layers alone make, or every problem with it, each named
+    /// by the layer whose value broke it.
+    pub(super) fn layered(&self, base: &Base) -> Result<(T, Value), Vec<String>> {
+        let tree = base.tree();
+        let value = self.built(&tree).map_err(|why| self.culprits(base, &tree, &why))?;
+        if let Some(validate) = self.validate {
+            validate(&value).map_err(|why| vec![why])?;
         }
-        match applied_to::<T>(declaration, &tree, path, &change.value, validate) {
-            Ok((next, next_tree)) => {
-                (value, tree) = (Arc::new(next), next_tree);
-                applied.insert(path.clone(), change.clone());
+        Ok((value, tree))
+    }
+
+    /// The value with each kept change that keeps it good, from the value
+    /// the layers make.
+    pub(super) fn resolve(&self, layered: (&Arc<T>, &Value), kept: &Kept) -> Resolved<T> {
+        let (mut value, mut tree) = (Arc::clone(layered.0), layered.1.clone());
+        let (mut applied, mut ignored, mut foreign) = (BTreeMap::new(), Vec::new(), Vec::new());
+        for (path, change) in kept.in_order() {
+            if self.declaration.node(path).is_none() {
+                foreign.push(path.clone());
+                continue;
             }
-            Err(why) => ignored.push((path.clone(), change.clone(), why)),
+            match self.applied_to(&tree, path, &change.value) {
+                Ok((next, next_tree)) => {
+                    (value, tree) = (Arc::new(next), next_tree);
+                    applied.insert(path.clone(), change.clone());
+                }
+                Err(why) => ignored.push((path.clone(), change.clone(), why)),
+            }
         }
+        Resolved { value, tree, applied, ignored, foreign }
     }
-    Resolved { value, tree, applied, ignored, foreign }
-}
 
-/// `tree` with `value` at the live setting `path`, and the value it makes.
-pub(super) fn applied_to<T: DeserializeOwned>(
-    declaration: &Declaration,
-    tree: &Value,
-    path: &str,
-    value: &Value,
-    validate: Option<&Validate<T>>,
-) -> Result<(T, Value), String> {
-    let setting = declaration.setting(path).ok_or_else(|| "a group, not a setting".to_owned())?;
-    if setting.secret {
-        return Err("a secret, which only a layer gives".to_owned());
+    /// `tree` with `value` at the live setting `path`, and the value it makes.
+    fn applied_to(&self, tree: &Value, path: &str, value: &Value) -> Result<(T, Value), String> {
+        let setting = self.declaration.setting(path).ok_or_else(|| "a group, not a setting".to_owned())?;
+        if setting.secret {
+            return Err("a secret, which only a layer gives".to_owned());
+        }
+        if !setting.live {
+            return Err("not live".to_owned());
+        }
+        let value = rules::check(setting, value)?;
+        let mut next = tree.clone();
+        set(&mut next, path, value);
+        let built = self.built(&next)?;
+        if let Some(validate) = self.validate {
+            validate(&built)?;
+        }
+        Ok((built, next))
     }
-    if !setting.live {
-        return Err("not live".to_owned());
-    }
-    let value = rules::check(setting, value)?;
-    let mut next = tree.clone();
-    set(&mut next, path, value);
-    let built = built::<T>(declaration, &next)?;
-    if let Some(validate) = validate {
-        validate(&built)?;
-    }
-    Ok((built, next))
-}
 
-/// The program's value from what the config keeps.
-pub(super) fn built<T: DeserializeOwned>(declaration: &Declaration, tree: &Value) -> Result<T, String> {
-    serde_json::from_value(rust_view(declaration, tree)).map_err(|error| error.to_string())
-}
+    /// The program's value from what the config keeps, in its view.
+    pub(super) fn built(&self, tree: &Value) -> Result<T, String> {
+        let viewed = match self.view {
+            View::Rust => rust_view(self.declaration, tree),
+            View::Data => tree.clone(),
+        };
+        serde_json::from_value(viewed).map_err(|error| error.to_string())
+    }
 
-/// What broke the value the layers make, each named by its layer: every
-/// value a layer gave is put back to its default, then given again alone.
-fn culprits<T: DeserializeOwned>(declaration: &Declaration, base: &Base, tree: &Value, why: &str) -> Vec<String> {
-    let given: Vec<(&String, &Given, &Value)> = base
-        .stacks
-        .iter()
-        .filter_map(|(path, stack)| {
-            let last = stack.last().filter(|last| last.from != Source::Declaration)?;
-            let default = declaration.setting(path)?.default.as_ref()?;
-            Some((path, last, default))
-        })
-        .collect();
-    let mut clean = tree.clone();
-    for (path, _, default) in &given {
-        set(&mut clean, path, (*default).clone());
+    /// What broke the value the layers make, each named by its layer: every
+    /// value a layer gave is put back to its default, then given again alone.
+    fn culprits(&self, base: &Base, tree: &Value, why: &str) -> Vec<String> {
+        let given: Vec<(&String, &Given, &Value)> = base
+            .stacks
+            .iter()
+            .filter_map(|(path, stack)| {
+                let last = stack.last().filter(|last| last.from != Source::Declaration)?;
+                let default = self.declaration.setting(path)?.default.as_ref()?;
+                Some((path, last, default))
+            })
+            .collect();
+        let mut clean = tree.clone();
+        for (path, _, default) in &given {
+            set(&mut clean, path, (*default).clone());
+        }
+        if self.built(&clean).is_err() {
+            return vec![why.to_owned()];
+        }
+        let found: Vec<String> = given
+            .iter()
+            .filter_map(|(path, last, _)| {
+                let mut alone = clean.clone();
+                set(&mut alone, path, last.value.clone());
+                let secret = self.declaration.setting(path).is_some_and(|setting| setting.secret);
+                let shown =
+                    |why: String| if secret { "a secret that does not read as its type".to_owned() } else { why };
+                self.built(&alone).err().map(|why| named(&last.from, path, &shown(why)))
+            })
+            .collect();
+        if found.is_empty() { vec![why.to_owned()] } else { found }
     }
-    if built::<T>(declaration, &clean).is_err() {
-        return vec![why.to_owned()];
-    }
-    let found: Vec<String> = given
-        .iter()
-        .filter_map(|(path, last, _)| {
-            let mut alone = clean.clone();
-            set(&mut alone, path, last.value.clone());
-            let secret = declaration.setting(path).is_some_and(|setting| setting.secret);
-            let shown = |why: String| if secret { "a secret that does not read as its type".to_owned() } else { why };
-            built::<T>(declaration, &alone).err().map(|why| named(&last.from, path, &shown(why)))
-        })
-        .collect();
-    if found.is_empty() { vec![why.to_owned()] } else { found }
 }
 
 /// A problem as the layer whose value it is about says it.
 fn named(from: &Source, path: &str, why: &str) -> String {
     match from {
         Source::Variable { .. } => format!("{from}: {why}"),
-        Source::File(_) => format!("{from}: {path}: {why}"),
+        Source::File(_) | Source::Object(_) => format!("{from}: {path}: {why}"),
         Source::Declaration | Source::Change { .. } => format!("{path}: {why}"),
     }
 }

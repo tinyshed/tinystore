@@ -35,6 +35,15 @@ export const methods = {
 	'blobs.usage': 0x040b,
 	'blobs.clear': 0x040c,
 	'blobs.read': 0x040d,
+	'config.open': 0x0701,
+	/**
+	 * The config's value now, then each time it changes, until the client
+	 * cancels: one stream a config a process, whose value every handle and
+	 * watcher of it there takes.
+	 */
+	'config.follow': 0x0702,
+	'config.update': 0x0703,
+	'config.reset': 0x0704,
 	'jobs.queue.open': 0x0201,
 	'jobs.schedule.open': 0x0202,
 	'jobs.add': 0x0203,
@@ -1255,6 +1264,260 @@ export const BlobsUsage = message(
 			}
 			r.leave()
 			return { count: $count, size: $size }
+		},
+	},
+)
+
+/**
+ * A config a program opens: its declaration and its layers as data, as
+ * plan/api/config.md has them, with what the program read itself, a file's
+ * text and its variables, since those belong to it and not to the server.
+ */
+export const ConfigOpen = message(
+	'config.Open',
+	{
+		/** [a-z0-9][a-z0-9_-]{0,63} */
+		name: [1, str],
+		/** each setting's kind, rules, default and marks */
+		declaration: [2, str],
+		/** objects, files and the environment, in the order written */
+		layers: [3, str],
+		/** a kept change that no longer fits refuses the open */
+		strict: [4, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.declaration !== undefined) {
+				w.field(2)
+				w.str(v.declaration)
+				n++
+			}
+			if (v.layers !== undefined) {
+				w.field(3)
+				w.str(v.layers)
+				n++
+			}
+			if (v.strict !== undefined) {
+				w.field(4)
+				w.bool(v.strict)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $declaration: string | undefined
+			let $layers: string | undefined
+			let $strict: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$declaration = r.str()
+						break
+					case 3:
+						$layers = r.str()
+						break
+					case 4:
+						$strict = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, declaration: $declaration, layers: $layers, strict: $strict }
+		},
+	},
+)
+
+/**
+ * A setting's line of explain.
+ */
+export const ConfigLine = message(
+	'config.Line',
+	{
+		path: [1, str],
+		/** as JSON, a span spelled, a secret as *** */
+		value: [2, str],
+		from: [3, str],
+		/** the values it went over, newest first */
+		over: [4, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.path !== undefined) {
+				w.field(1)
+				w.str(v.path)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(3)
+				w.str(v.from)
+				n++
+			}
+			if (v.over !== undefined) {
+				w.field(4)
+				w.array(v.over.length)
+				for (const item0 of v.over) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $path: string | undefined
+			let $value: string | undefined
+			let $from: string | undefined
+			let $over: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$path = r.str()
+						break
+					case 2:
+						$value = r.str()
+						break
+					case 3:
+						$from = r.str()
+						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$over = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { path: $path, value: $value, from: $from, over: $over }
+		},
+	},
+)
+
+/**
+ * A change of live settings, made on the version the program's value had.
+ */
+export const ConfigUpdate = message(
+	'config.Update',
+	{
+		handle: [1, uint],
+		/** a change made since is a conflict */
+		version: [2, int],
+		/** the settings it changes, in the declaration's shape */
+		changes: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.version !== undefined) {
+				w.field(2)
+				w.int(v.version)
+				n++
+			}
+			if (v.changes !== undefined) {
+				w.field(3)
+				w.str(v.changes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $version: number | undefined
+			let $changes: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$version = r.int()
+						break
+					case 3:
+						$changes = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, version: $version, changes: $changes }
+		},
+	},
+)
+
+/**
+ * Drops the changes kept of a setting or of a group, or of every setting.
+ */
+export const ConfigReset = message(
+	'config.Reset',
+	{
+		handle: [1, uint],
+		/** empty for every change */
+		path: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(2)
+				w.str(v.path)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $path: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$path = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, path: $path }
 		},
 	},
 )
@@ -9272,6 +9535,103 @@ export const SqlTxAnswer = message(
 			}
 			r.leave()
 			return { rows: $rows, done: $done, failure: $failure, body: $body }
+		},
+	},
+)
+
+/**
+ * A config's value at a version of its changes, and where each setting's
+ * value came from.
+ */
+export const ConfigValue = message(
+	'config.Value',
+	{
+		handle: [1, uint],
+		version: [2, int],
+		/** the settings, each span its milliseconds, each secret its text */
+		value: [3, str],
+		lines: [4, list(ConfigLine)],
+		/** what was read and not used, each with why */
+		notes: [5, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.version !== undefined) {
+				w.field(2)
+				w.int(v.version)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(3)
+				w.str(v.value)
+				n++
+			}
+			if (v.lines !== undefined) {
+				w.field(4)
+				w.array(v.lines.length)
+				for (const item0 of v.lines) {
+					ConfigLine.write(w, item0)
+				}
+				n++
+			}
+			if (v.notes !== undefined) {
+				w.field(5)
+				w.array(v.notes.length)
+				for (const item0 of v.notes) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $version: number | undefined
+			let $value: string | undefined
+			let $lines: Read<typeof ConfigLine.fields>[] | undefined
+			let $notes: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$version = r.int()
+						break
+					case 3:
+						$value = r.str()
+						break
+					case 4: {
+						const items0: Read<typeof ConfigLine.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(ConfigLine.read(r))
+						}
+						r.leave()
+						$lines = items0
+						break
+					}
+					case 5: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$notes = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, version: $version, value: $value, lines: $lines, notes: $notes }
 		},
 	},
 )

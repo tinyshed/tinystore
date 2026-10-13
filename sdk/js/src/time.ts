@@ -85,14 +85,36 @@ export function ms(d: Duration | string): number {
 		)
 	}
 	const [, w, days, h, m, s, milli] = parts
-	return (
+	const total =
 		Number(w ?? 0) * units.w! +
 		Number(days ?? 0) * units.d! +
 		Number(h ?? 0) * units.h! +
 		Number(m ?? 0) * units.m! +
 		Number(s ?? 0) * units.s! +
 		Number(milli ?? 0)
-	)
+	if (!Number.isSafeInteger(total)) {
+		throw new InvalidError(
+			`the duration ${JSON.stringify(d)} is past the milliseconds a number holds`,
+		)
+	}
+	return total
+}
+
+/** Milliseconds as a duration is written, largest units first: 5_400_000 is 1h30m, 0 is 0s. */
+export function spelled(milliseconds: number): DurationText {
+	if (milliseconds === 0) {
+		return '0s'
+	}
+	let left = milliseconds
+	let text = ''
+	for (const unit of ['w', 'd', 'h', 'm', 's', 'ms']) {
+		const size = units[unit]!
+		if (left >= size) {
+			text += `${Math.floor(left / size)}${unit}`
+			left %= size
+		}
+	}
+	return text as DurationText
 }
 
 /** A moment's unix milliseconds. */

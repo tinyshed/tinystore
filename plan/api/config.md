@@ -513,7 +513,21 @@ call after the store closed is `closed`.
   own environment nor its files for a client's config, since they belong to
   the program and not to the server.
 - A process follows a config's changes on one stream, however many handles
-  and watchers it holds, and gives each of them every change.
+  and watchers it holds, and gives each of them every change: the SDK opens a
+  config once for the same name, declaration, layers and `validate`, every
+  call of `store.config` for it sharing that handle and its stream, and a
+  declaration of its own opens one of its own.
+- A change answers with the value it made, so that the program that made it
+  sees it at once whatever its stream carries; one made on a version another
+  change passed is `conflict`, and the SDK makes it again on the newer value,
+  its `validate` run again, unless `ifVersion` was given.
+- A value another program's change made that this program's `validate`
+  refuses leaves the value before it, says so on standard error, and
+  `explain` lists it.
+- In TypeScript `explain()` is a list of lines for `console.table`, each its
+  path, value, layer and what it went over, and its `notes` property what
+  was read and not used; a number written as a value, `port: 8080`, is any
+  number, and `int` a whole one.
 - A token that only reads opens, reads and watches a config; a change takes
   a token that writes.
 

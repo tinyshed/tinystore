@@ -96,6 +96,8 @@ fn every_method_runs_as_the_shape_its_schema_line_says() {
             Route::Parts => "download",
             #[cfg(feature = "metrics")]
             Route::Instruments => "exchange",
+            #[cfg(feature = "config")]
+            Route::Follow => "download",
         };
         assert_eq!(runs, shape, "{name}");
     }

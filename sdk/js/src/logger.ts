@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { DropNotice, FailureLog, type Say } from './background.ts'
-import { FromEnv, parseDotenv } from './config.ts'
+import { type EnvLayer, env as environmentOf } from './config.ts'
 import {
 	type ConsoleFormat,
 	type ConsoleLine,
@@ -24,6 +24,7 @@ import {
 	redactor,
 	sourceKey,
 } from './console.ts'
+import { parseDotenv } from './dotenv.ts'
 import { InvalidError } from './errors.ts'
 import type { Fields, Level } from './records.ts'
 import { currentTrace, type Trace } from './trace.ts'
@@ -54,10 +55,10 @@ export interface LoggerOptions {
 	replace?: (key: string, value: unknown) => unknown
 	/**
 	 * where LOG_LEVEL, LOG_FORMAT and LOG_TIME are read, which win over the
-	 * options: `fromEnv('APP')` reads APP_LOG_LEVEL and the rest, and false
+	 * options: `env('APP')` reads APP_LOG_LEVEL and the rest, and false
 	 * reads nothing; the bare names when absent
 	 */
-	env?: FromEnv | false
+	env?: EnvLayer | false
 	/** adds where each line was logged: source={"function":…,"file":…,"line":…} */
 	source?: boolean
 }
@@ -149,7 +150,7 @@ type Unread = [name: string, value: string, expected: string]
 function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
 	const read = { ...options }
 	const ignored: Unread[] = []
-	const env = options.env ?? new FromEnv('', [])
+	const env = options.env ?? environmentOf('')
 	if (env === false) {
 		return [read, ignored]
 	}
@@ -185,8 +186,8 @@ function fromEnvironment(options: LoggerOptions): [LoggerOptions, Unread[]] {
 	return [read, ignored]
 }
 
-/** The variables of fromEnv's files, the process's over them, a missing file skipped; an empty one is none. */
-function environment(env: FromEnv): (name: string) => string | undefined {
+/** The variables of env's files, the process's or `from`'s over them, a missing file skipped; an empty one is none. */
+function environment(env: EnvLayer): (name: string) => string | undefined {
 	const fromFiles: Record<string, string> = {}
 	for (const file of env.files) {
 		let text: string
@@ -198,7 +199,7 @@ function environment(env: FromEnv): (name: string) => string | undefined {
 		Object.assign(fromFiles, parseDotenv(text))
 	}
 	return name => {
-		const text = (process.env[name] ?? fromFiles[name])?.trim()
+		const text = ((env.from ?? process.env)[name] ?? fromFiles[name])?.trim()
 		return text === '' ? undefined : text
 	}
 }

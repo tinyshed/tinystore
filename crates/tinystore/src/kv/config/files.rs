@@ -22,17 +22,27 @@ const MOST_BYTES: u64 = 1 << 20;
 pub struct File {
     path: PathBuf,
     optional: bool,
+    /// The text a program's SDK read and sent, none for a file it found
+    /// absent; a file the core reads itself has none.
+    sent: Option<Option<String>>,
 }
 
 impl File {
     /// A file that may be absent: then it declares nothing, and `explain`
     /// says it was absent.
     pub fn optional(path: impl Into<PathBuf>) -> File {
-        File { path: path.into(), optional: true }
+        File { path: path.into(), optional: true, sent: None }
     }
 
     fn required(path: PathBuf) -> File {
-        File { path, optional: false }
+        File { path, optional: false, sent: None }
+    }
+
+    /// A file a program's SDK read where the program runs: its name as the
+    /// program wrote it, and its text, none when it was absent.
+    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    pub(super) fn sent(name: String, optional: bool, text: Option<String>) -> File {
+        File { path: name.into(), optional, sent: Some(text) }
     }
 
     /// The file as an error names it: its path as the program wrote it.
@@ -75,7 +85,11 @@ pub(super) struct Read {
 /// What `file` gives the settings of `declaration`, or every problem with it.
 pub(super) fn read(file: &File, declaration: &Declaration) -> Result<Read, Vec<String>> {
     let name = file.shown();
-    let text = match text(&file.path) {
+    let read = match &file.sent {
+        Some(sent) => check_size(sent.clone()),
+        None => text(&file.path),
+    };
+    let text = match read {
         Ok(Some(text)) => text,
         Ok(None) if file.optional => return Ok(Read { absent: true, ..Read::default() }),
         Ok(None) => return Err(vec![format!("{name}: no such file; File::optional lets it be absent")]),
@@ -86,6 +100,16 @@ pub(super) fn read(file: &File, declaration: &Declaration) -> Result<Read, Vec<S
     walk(&declaration.root, &tree, "", &mut given, &mut problems);
     let problems: Vec<String> = problems.into_iter().map(|problem| format!("{name}: {problem}")).collect();
     if problems.is_empty() { Ok(Read { given, absent: false }) } else { Err(problems) }
+}
+
+/// A sent file's text, refused past the size a file holds.
+fn check_size(text: Option<String>) -> Result<Option<String>, String> {
+    match text {
+        Some(text) if text.len() as u64 > MOST_BYTES => {
+            Err(format!("{} bytes, past the {MOST_BYTES} a config's file holds", text.len()))
+        }
+        other => Ok(other),
+    }
 }
 
 /// The file's text, none when it does not exist.
@@ -235,7 +259,7 @@ fn closes(bytes: &[u8], mut at: usize) -> bool {
 
 /// What a file's tree gives each setting, and what it gives that no setting
 /// takes. A null declares nothing, as an empty YAML key does.
-fn walk(
+pub(super) fn walk(
     group: &Group,
     tree: &Map<String, Value>,
     path: &str,

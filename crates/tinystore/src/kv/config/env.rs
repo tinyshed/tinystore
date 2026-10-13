@@ -20,8 +20,22 @@ const MOST_BYTES: usize = 16 << 10;
 pub struct Env {
     prefix: String,
     names: Vec<(String, String)>,
-    files: Vec<PathBuf>,
+    files: Vec<Dotenv>,
     from: Option<Vec<(String, String)>>,
+    /// The texts of the files `NAME_FILE` variables name, as a program's SDK
+    /// read them; none when the core reads them itself.
+    sent: Option<Texts>,
+}
+
+/// A `.env` file: one the core reads, or one a program's SDK read and sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Dotenv {
+    Path(PathBuf),
+    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    Sent {
+        name: String,
+        text: String,
+    },
 }
 
 impl Env {
@@ -39,7 +53,7 @@ impl Env {
     /// `.env` files, whose variables count where the process has none; one
     /// that does not exist is skipped, a later one over an earlier.
     pub fn files<P: Into<PathBuf>>(mut self, files: impl IntoIterator<Item = P>) -> Env {
-        self.files.extend(files.into_iter().map(Into::into));
+        self.files.extend(files.into_iter().map(|file| Dotenv::Path(file.into())));
         self
     }
 
@@ -52,6 +66,16 @@ impl Env {
 }
 
 impl Env {
+    /// What a program's SDK read where the program runs: its variables, the
+    /// texts of the files their `NAME_FILE` name, and its `.env` files.
+    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    pub(super) fn sent(mut self, variables: Vec<(String, String)>, files: Texts, dotenv: Vec<(String, String)>) -> Env {
+        self.files = dotenv.into_iter().map(|(name, text)| Dotenv::Sent { name, text }).collect();
+        self.from = Some(variables);
+        self.sent = Some(files);
+        self
+    }
+
     /// The variable that gives the setting at `path`.
     pub(super) fn name_of(&self, path: &str) -> String {
         let given = self.names.iter().rev().find(|(named, _)| named == path);
@@ -84,6 +108,9 @@ pub(super) struct Read {
     pub(super) unused: Vec<String>,
 }
 
+/// The texts of the files `NAME_FILE` variables name, by their path.
+pub(super) type Texts = HashMap<String, String>;
+
 /// A variable's text and the `.env` file it came from, if one did.
 type Variables = HashMap<String, (String, Option<String>)>;
 
@@ -94,7 +121,7 @@ pub(super) fn read(env: &Env, declaration: &Declaration) -> Result<Read, Vec<Str
     let mut read = Read::default();
     let mut problems = Vec::new();
     for (path, (name, setting)) in &names {
-        match variable(&variables, name) {
+        match variable(env, &variables, name) {
             Ok(None) => {}
             Ok(Some((text, origin, shown))) => match parsed(setting, &text) {
                 Ok(value) => read.given.push((path.clone(), value, shown, origin)),
@@ -125,7 +152,7 @@ fn names<'a>(env: &Env, declaration: &'a Declaration) -> Result<BTreeMap<String,
     }
     for (path, _) in &env.names {
         if declaration.setting(path).is_none() {
-            problems.push(format!("Env::var names {path}, which is no setting"));
+            problems.push(format!("a variable is named for {path}, which is no setting"));
         }
     }
     let mut taken: HashMap<String, &str> = HashMap::new();
@@ -181,11 +208,13 @@ fn key(name: &str) -> String {
 fn variables(env: &Env) -> Result<Variables, Vec<String>> {
     let mut variables = Variables::new();
     for file in &env.files {
-        let shown = file.display().to_string();
-        let text = match std::fs::read_to_string(file) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(vec![format!("{shown}: {error}")]),
+        let (shown, text) = match file {
+            Dotenv::Sent { name, text } => (name.clone(), text.clone()),
+            Dotenv::Path(path) => match std::fs::read_to_string(path) {
+                Ok(text) => (path.display().to_string(), text),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(vec![format!("{}: {error}", path.display())]),
+            },
         };
         let read = dotenv(&text).map_err(|why| vec![format!("{shown}: {why}")])?;
         variables.extend(read.into_iter().map(|(name, value)| (key(&name), (value, Some(shown.clone())))));
@@ -202,14 +231,20 @@ fn variables(env: &Env) -> Result<Variables, Vec<String>> {
 
 /// A variable's text, where it came from and how `explain` names it; none
 /// when neither `NAME` nor `NAME_FILE` is set, and both set is refused.
-fn variable(variables: &Variables, name: &str) -> Result<Option<(String, Origin, String)>, String> {
+fn variable(env: &Env, variables: &Variables, name: &str) -> Result<Option<(String, Origin, String)>, String> {
     let file_name = format!("{name}_FILE");
     match (variables.get(&key(name)), variables.get(&key(&file_name))) {
         (Some(_), Some(_)) => Err(format!("{name} and {file_name} are both set")),
         (Some((text, None)), None) => Ok(Some((text.clone(), Origin::Process, name.to_owned()))),
         (Some((text, Some(dotenv))), None) => Ok(Some((text.clone(), Origin::DotEnv(dotenv.clone()), name.to_owned()))),
         (None, Some((path, _))) => {
-            let text = std::fs::read_to_string(path).map_err(|error| format!("{file_name}: {path}: {error}"))?;
+            let text = match &env.sent {
+                Some(sent) => sent
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| format!("{file_name}: {path}: the program could not read it"))?,
+                None => std::fs::read_to_string(path).map_err(|error| format!("{file_name}: {path}: {error}"))?,
+            };
             Ok(Some((without_newline(text), Origin::File(path.clone()), file_name)))
         }
         (None, None) => Ok(None),

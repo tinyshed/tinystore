@@ -12,9 +12,15 @@ use super::env::{self, Env, Origin};
 use super::files::{self, File};
 use super::rules::spelled;
 
-/// A file or the environment, in the order the program wrote them.
+/// An object in code, a file or the environment, in the order the program
+/// wrote them. Only an SDK sends an object: Rust computes its declaration.
 #[derive(Clone, Debug)]
 pub(super) enum Layer {
+    #[cfg_attr(not(any(test, feature = "wire")), expect(dead_code, reason = "only an SDK sends it, over the wire"))]
+    Object {
+        place: usize,
+        value: Map<String, Value>,
+    },
     File(File),
     Env(Env),
 }
@@ -23,6 +29,8 @@ pub(super) enum Layer {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Source {
     Declaration,
+    /// An object in code, by its place in the list, the declaration first.
+    Object(usize),
     File(String),
     Variable {
         name: String,
@@ -40,6 +48,7 @@ impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Source::Declaration => f.write_str("the declaration"),
+            Source::Object(place) => write!(f, "layer {place}"),
             Source::File(name) => f.write_str(name),
             Source::Variable { name, origin: Origin::Process } => f.write_str(name),
             Source::Variable { name, origin: Origin::DotEnv(file) } => write!(f, "{name} in {file}"),
@@ -111,6 +120,16 @@ impl Base {
 
     fn take(&mut self, layer: &Layer, declaration: &Declaration) -> Result<(), Vec<String>> {
         match layer {
+            Layer::Object { place, value } => {
+                let (mut given, mut problems) = (Vec::new(), Vec::new());
+                files::walk(&declaration.root, value, "", &mut given, &mut problems);
+                if !problems.is_empty() {
+                    return Err(problems.into_iter().map(|problem| format!("layer {place}: {problem}")).collect());
+                }
+                for (path, value) in given {
+                    self.push(path, Given { value, from: Source::Object(*place) });
+                }
+            }
             Layer::File(file) => {
                 let read = files::read(file, declaration)?;
                 if read.absent {
@@ -168,6 +187,7 @@ fn givers(path: &str, layers: &[Layer]) -> String {
         .map(|layer| match layer {
             Layer::Env(env) => format!("set {}", env.name_of(path)),
             Layer::File(file) => format!("{path} in {}", file.shown()),
+            Layer::Object { place, .. } => format!("{path} in layer {place}"),
         })
         .collect();
     if ways.is_empty() { "no layer gives it".to_owned() } else { ways.join(", or ") }

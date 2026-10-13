@@ -9,6 +9,8 @@ use super::Route;
 #[cfg(feature = "blobs")]
 use super::blobs;
 use super::codec::Message;
+#[cfg(feature = "config")]
+use super::config;
 use super::frame::{self, Frame, Kind};
 #[cfg(feature = "jobs")]
 use super::jobs;
@@ -70,6 +72,8 @@ struct Shared {
     store: Store,
     workers: Arc<Workers>,
     kv: kv::Handles,
+    #[cfg(feature = "config")]
+    config: config::Configs,
     #[cfg(feature = "jobs")]
     jobs: jobs::Handles,
     #[cfg(feature = "sql")]
@@ -175,6 +179,8 @@ impl Session {
             store,
             workers,
             kv: kv::Handles::default(),
+            #[cfg(feature = "config")]
+            config: config::Configs::default(),
             #[cfg(feature = "jobs")]
             jobs: jobs::Handles::default(),
             #[cfg(feature = "sql")]
@@ -280,6 +286,8 @@ impl Session {
         }
         #[cfg(feature = "records")]
         self.shared.records.go_away();
+        #[cfg(feature = "config")]
+        self.shared.config.go_away();
     }
 
     pub(crate) fn streams(&self) -> usize {
@@ -328,6 +336,8 @@ impl Session {
         self.shared.records.end();
         #[cfg(feature = "metrics")]
         self.shared.metrics.end();
+        #[cfg(feature = "config")]
+        self.shared.config.end();
     }
 }
 
@@ -485,6 +495,8 @@ impl Shared {
             Route::Parts => self.parts(input, stream, method, body),
             #[cfg(feature = "metrics")]
             Route::Instruments => self.instruments(input, stream, &body),
+            #[cfg(feature = "config")]
+            Route::Follow => self.follow(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -686,9 +698,24 @@ impl Shared {
         }
     }
 
+    /// Starts a client's follow of a config: the stream's RESPONSE, then a
+    /// DATA with its value now and one each time it changes.
+    #[cfg(feature = "config")]
+    fn follow(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.stream_link(input, stream);
+        match guarded(|| config::follow(&self.config, stream, body, link)) {
+            Ok(following) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                following.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
     /// What a stream of a file's bytes, a tail's batches, a writer's lines, a
-    /// read's parts or a client's instruments needs of the session.
-    #[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
+    /// read's parts, a client's instruments or a config's values needs of the
+    /// session.
+    #[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config"))]
     fn stream_link(self: &Arc<Self>, input: &Input, stream: u32) -> super::Link {
         let (sending, finishing, granting, spawning) =
             (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
@@ -865,8 +892,18 @@ impl Shared {
     /// what waited for it. No other stream sends DATA a client grants credit
     /// for: a call answers in one message, within the body agreed.
     #[cfg_attr(
-        not(any(feature = "jobs", feature = "sql", feature = "blobs", feature = "records", feature = "metrics")),
-        expect(unused_variables, reason = "only jobs', sql's, blobs', records' and metrics' streams take credit")
+        not(any(
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "config"
+        )),
+        expect(
+            unused_variables,
+            reason = "only jobs', sql's, blobs', records', metrics' and config's streams take credit"
+        )
     )]
     fn credit(&self, frame: &Frame) {
         let Ok(granted) = <[u8; 4]>::try_from(frame.body.as_slice()) else {
@@ -883,6 +920,8 @@ impl Shared {
         self.records.grant(frame.stream, granted);
         #[cfg(feature = "metrics")]
         self.metrics.grant(frame.stream, granted);
+        #[cfg(feature = "config")]
+        self.config.grant(frame.stream, granted);
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
@@ -904,6 +943,10 @@ impl Shared {
         }
         #[cfg(feature = "metrics")]
         if self.metrics.cancel(stream) {
+            return;
+        }
+        #[cfg(feature = "config")]
+        if self.config.cancel(stream) {
             return;
         }
         #[cfg(feature = "jobs")]
@@ -1000,6 +1043,8 @@ impl Shared {
             0x05 => records::call(&self.store, &self.records, method, body, self.read_only.load(Ordering::Relaxed)),
             #[cfg(feature = "metrics")]
             0x06 => metrics::call(&self.store, method, body, max_body),
+            #[cfg(feature = "config")]
+            0x07 => config::call(&self.store, &self.config, method, body, self.read_only.load(Ordering::Relaxed)),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -1123,6 +1168,8 @@ fn route(method: u16) -> Route {
         0x05 => records::route(method),
         #[cfg(feature = "metrics")]
         0x06 => metrics::route(method),
+        #[cfg(feature = "config")]
+        0x07 => config::route(method),
         _ => Route::Worker,
     }
 }
@@ -1134,7 +1181,8 @@ fn engines() -> Vec<String> {
     let blobs = cfg!(feature = "blobs").then_some("blobs");
     let records = cfg!(feature = "records").then_some("records");
     let metrics = cfg!(feature = "metrics").then_some("metrics");
-    [Some("kv"), jobs, sql, blobs, records, metrics].into_iter().flatten().map(str::to_owned).collect()
+    let config = cfg!(feature = "config").then_some("config");
+    [Some("kv"), config, jobs, sql, blobs, records, metrics].into_iter().flatten().map(str::to_owned).collect()
 }
 
 /// A call that panics answers `internal` rather than leaving its stream open.

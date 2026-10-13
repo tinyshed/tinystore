@@ -3,7 +3,7 @@ import { open as openFile, rename, rm } from 'node:fs/promises'
 
 import { type Files, type FilesOptions, openFiles } from './blobs.ts'
 import { Clock } from './clock.ts'
-import { Config, type ConfigLayer, type ConfigValue } from './config.ts'
+import { Config, type ConfigOptions, type Layer, type Value } from './config.ts'
 import {
 	asking,
 	checkDurability,
@@ -144,7 +144,8 @@ export class Store implements AsyncDisposable {
 	/** The test's clock of a private store opened with `clock`; on any other, its calls are InvalidError. */
 	readonly clock: Clock
 	readonly #link: Link
-	readonly #configs = new Set<Config<object>>()
+	/** the configs open, by what opened them, so that the same open shares one stream */
+	readonly #configs = new Map<string, { config: Promise<{ stop(): void }>; validate: unknown }>()
 	readonly #workers = new Set<Worker>()
 	readonly #loggers = new Set<Logger>()
 	readonly #instruments: Instruments
@@ -275,25 +276,32 @@ export class Store implements AsyncDisposable {
 	}
 
 	/**
-	 * The config name, shaped and typed as its defaults, then each layer over
-	 * the one before: a file's values, `fromEnv`, and what update kept over
-	 * them all. It resolves once the store's state is read, and follows every
-	 * change from then on, whoever makes it, until the store closes.
+	 * A program's settings as one typed value: the declaration first, every
+	 * setting with its default, then objects, files and the environment, each
+	 * over the ones before it, and a live setting's change over them all.
+	 *
+	 *     const config = await store.config('app', [
+	 *       { port: 8080, db: { url: secret(String) }, limits: { rps: live(100) } },
+	 *       file('app.yaml'),
+	 *       env('APP', { vars: { port: 'PORT' } }),
+	 *     ])
+	 *
+	 * It follows every change, whoever makes it, until the store closes; the
+	 * same config opened again in the process shares its one stream.
 	 */
 	async config<D extends object>(
 		name: string,
-		defaults: D,
-		...layers: ConfigLayer<ConfigValue<D>>[]
-	): Promise<Config<ConfigValue<D>>> {
-		const config = new Config<ConfigValue<D>>(this.#link, name, defaults)
-		await config.lay(layers)
-		this.#configs.add(config as unknown as Config<object>)
-		try {
-			await config.start()
-		} catch (err) {
-			this.#configs.delete(config as unknown as Config<object>)
-			throw err
+		layers: readonly [D, ...NoInfer<Layer<D>>[]],
+		options: ConfigOptions<Value<D>> = {},
+	): Promise<Config<D>> {
+		const key = JSON.stringify([name, layers, options.strict === true])
+		const found = this.#configs.get(key)
+		if (found !== undefined && found.validate === options.validate) {
+			return found.config as unknown as Promise<Config<D>>
 		}
+		const config = Config.open<D>(this.#link, name, layers, options)
+		this.#configs.set(key, { config, validate: options.validate })
+		config.catch(() => this.#configs.delete(key))
 		return config
 	}
 
@@ -389,9 +397,13 @@ export class Store implements AsyncDisposable {
 		await Promise.all([...this.#workers].map(worker => worker.stop()))
 		await this.#instruments.stop()
 		await Promise.all([...this.#loggers].map(logger => logger.stop()))
-		for (const config of this.#configs) {
-			config.stop()
+		for (const { config } of this.#configs.values()) {
+			config.then(
+				opened => opened.stop(),
+				() => {},
+			)
 		}
+		await Promise.allSettled([...this.#configs.values()].map(({ config }) => config))
 		await this.#link.close()
 	}
 

@@ -36,6 +36,8 @@
 //! # }
 //! ```
 
+#[cfg(any(test, feature = "wire"))]
+mod data;
 mod declaration;
 mod env;
 mod explain;
@@ -132,6 +134,39 @@ where
 
     pub fn open(self) -> Result<Config<T>> {
         handle::open(self)
+    }
+}
+
+/// A config as a program's SDK opens it over the wire: its declaration and
+/// its layers as data, as `data` reads them.
+#[cfg(any(test, feature = "wire"))]
+pub(crate) struct Sent<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) declaration: &'a serde_json::Value,
+    pub(crate) layers: &'a serde_json::Value,
+    pub(crate) strict: bool,
+    /// Whether kv.db keeps the declaration: not for a connection that may
+    /// only read.
+    pub(crate) remember: bool,
+}
+
+#[cfg(any(test, feature = "wire"))]
+impl Store {
+    /// Opens the config an SDK sent, its value given back as data.
+    pub(crate) fn config_sent(&self, sent: &Sent<'_>) -> Result<Config<serde_json::Value>> {
+        let within = |why: String| crate::Error::invalid(why).within(format!("config {}", sent.name));
+        let declaration = data::declaration(sent.declaration).map_err(within)?;
+        let layers = data::layers(sent.layers).map_err(within)?;
+        handle::open_with(handle::Opening {
+            store: self.clone(),
+            name: sent.name.to_owned(),
+            declaration,
+            layers,
+            validate: None,
+            strict: sent.strict,
+            view: resolve::View::Data,
+            remember: sent.remember,
+        })
     }
 }
 

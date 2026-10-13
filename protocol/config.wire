@@ -1,0 +1,48 @@
+# A config a program opens: its declaration and its layers as data, as
+# plan/api/config.md has them, with what the program read itself, a file's
+# text and its variables, since those belong to it and not to the server.
+message config.Open {
+  1 name: str          # [a-z0-9][a-z0-9_-]{0,63}
+  2 declaration: json  # each setting's kind, rules, default and marks
+  3 layers: json       # objects, files and the environment, in the order written
+  4 strict: bool       # a kept change that no longer fits refuses the open
+}
+
+# A config's value at a version of its changes, and where each setting's
+# value came from.
+message config.Value {
+  1 handle: uint
+  2 version: int
+  3 value: json        # the settings, each span its milliseconds, each secret its text
+  4 lines: [config.Line]
+  5 notes: [str]       # what was read and not used, each with why
+}
+
+# A setting's line of explain.
+message config.Line {
+  1 path: str
+  2 value: str         # as JSON, a span spelled, a secret as ***
+  3 from: str
+  4 over: [str]        # the values it went over, newest first
+}
+
+# A change of live settings, made on the version the program's value had.
+message config.Update {
+  1 handle: uint
+  2 version: int       # a change made since is a conflict
+  3 changes: json      # the settings it changes, in the declaration's shape
+}
+
+# Drops the changes kept of a setting or of a group, or of every setting.
+message config.Reset {
+  1 handle: uint
+  2 path: str          # empty for every change
+}
+
+read  0x0701 config.open(config.Open)     -> config.Value
+# The config's value now, then each time it changes, until the client
+# cancels: one stream a config a process, whose value every handle and
+# watcher of it there takes.
+read  0x0702 config.follow(Handle)        -> download config.Value until Empty
+write 0x0703 config.update(config.Update) -> config.Value
+write 0x0704 config.reset(config.Reset)   -> config.Value

@@ -5,6 +5,8 @@
 #[cfg(feature = "blobs")]
 mod blobs;
 pub(crate) mod codec;
+#[cfg(feature = "config")]
+mod config;
 pub(crate) mod frame;
 #[cfg(feature = "jobs")]
 mod jobs;
@@ -62,17 +64,20 @@ pub(crate) enum Route {
     /// items.
     #[cfg(feature = "metrics")]
     Instruments,
+    /// A config's values, now and at each change, until the client cancels.
+    #[cfg(feature = "config")]
+    Follow,
     Worker,
 }
 
 /// Work on a session's workers, off the thread that asked.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config"))]
 pub(crate) type Spawn = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
 
 /// What a stream whose DATA goes either way needs of its session: a file's
 /// bytes, a tail's batches, a writer's lines, a read's parts, the answers to
-/// a client's instruments.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
+/// a client's instruments, a config's values.
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config"))]
 #[derive(Clone)]
 pub(crate) struct Link {
     /// A DATA on the stream.

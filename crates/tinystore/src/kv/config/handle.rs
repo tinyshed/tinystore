@@ -14,15 +14,17 @@ use serde_json::Value;
 
 use super::ConfigBuilder;
 use super::declaration::{Declaration, Kind, Setting, unmarked};
+#[cfg(any(test, feature = "wire"))]
+use super::declaration::{Group, Node, joined, shown};
 use super::explain::{Explained, Line};
 use super::hub::{Change, Follower, Hub, Kept};
-use super::layers::{Base, Given, Source, set, shown_value};
+use super::layers::{Base, Given, Layer, Source, set, shown_value};
 use super::marks::marked;
-use super::resolve::{self, Resolved, Validate};
+use super::resolve::{Making, Resolved, Validate, View};
 use super::rules::{self, described};
 use crate::kv::engine::Kv;
 use crate::kv::scope::check_name;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, Store};
 
 /// The tries a change makes while others race it before it gives up.
 const ATTEMPTS: usize = 8;
@@ -95,6 +97,7 @@ struct Inner<T> {
     /// The value the layers alone make, and the config's keeping of it.
     layered: (Arc<T>, Value),
     validate: Option<Validate<T>>,
+    view: View,
     current: Mutex<Current<T>>,
     watchers: Watchers<T>,
     /// The ignored changes said in the log already, by path and version.
@@ -107,37 +110,66 @@ struct Current<T> {
     resolved: Resolved<T>,
 }
 
-/// Opens the config `builder` describes: its layers read, its value made
-/// and checked, then the changes kept in kv.db applied.
+/// What a config opens with: its declaration as the core reads it, its
+/// layers, the program's check, and how its value reaches the program.
+pub(super) struct Opening<T> {
+    pub(super) store: Store,
+    pub(super) name: String,
+    pub(super) declaration: Declaration,
+    pub(super) layers: Vec<Layer>,
+    pub(super) validate: Option<Validate<T>>,
+    pub(super) strict: bool,
+    pub(super) view: View,
+    /// Whether kv.db keeps the declaration: not for a connection that may
+    /// only read.
+    pub(super) remember: bool,
+}
+
+/// Opens the config a Rust program's builder describes.
 pub(super) fn open<T>(builder: ConfigBuilder<T>) -> Result<Config<T>>
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    let shown = format!("config {}", builder.name);
-    let within = |error: Error| error.within(&shown);
+    let within = |error: Error| error.within(format!("config {}", builder.name));
     check_name(&builder.name).map_err(within)?;
     let declaration = declared(&builder.declaration).map_err(within)?;
-    let base = Base::read(&declaration, &builder.layers).map_err(|problems| within(refused(problems)))?;
-    let (value, tree) = resolve::layered(&declaration, &base, builder.validate.as_ref())
-        .map_err(|problems| within(refused(problems)))?;
-    let hub = Hub::of(&Kv::of(&builder.store).map_err(within)?, &builder.name).map_err(within)?;
+    let (store, name, layers, validate, strict) =
+        (builder.store, builder.name, builder.layers, builder.validate, builder.strict);
+    open_with(Opening { store, name, declaration, layers, validate, strict, view: View::Rust, remember: true })
+}
+
+/// Opens a config: its layers read, its value made and checked, then the
+/// changes kept in kv.db applied.
+pub(super) fn open_with<T>(opening: Opening<T>) -> Result<Config<T>>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    let shown = format!("config {}", opening.name);
+    let within = |error: Error| error.within(&shown);
+    check_name(&opening.name).map_err(within)?;
+    let making = Making { declaration: &opening.declaration, validate: opening.validate.as_ref(), view: opening.view };
+    let base = Base::read(&opening.declaration, &opening.layers).map_err(|problems| within(refused(problems)))?;
+    let (value, tree) = making.layered(&base).map_err(|problems| within(refused(problems)))?;
+    let hub = Hub::of(&Kv::of(&opening.store).map_err(within)?, &opening.name).map_err(within)?;
     let layered = (Arc::new(value), tree);
     let kept = hub.kept();
-    let resolved = resolve::resolve(&declaration, (&layered.0, &layered.1), &kept, builder.validate.as_ref());
-    if builder.strict && !resolved.ignored.is_empty() {
-        return Err(within(refused(
-            resolved.ignored.iter().map(|(path, change, why)| ignored(path, change, why)).collect(),
-        )));
+    let resolved = making.resolve((&layered.0, &layered.1), &kept);
+    if opening.strict && !resolved.ignored.is_empty() {
+        let lines = resolved.ignored.iter().map(|(path, change, why)| ignored(path, change, why));
+        return Err(within(refused(lines.collect())));
     }
-    hub.remember(&declaration).map_err(within)?;
+    if opening.remember {
+        hub.remember(&opening.declaration).map_err(within)?;
+    }
     let current = Mutex::new(Current { version: kept.version, resolved });
     let inner = Arc::new(Inner {
-        name: builder.name,
+        name: opening.name,
         hub,
-        declaration,
+        declaration: opening.declaration,
         base,
         layered,
-        validate: builder.validate,
+        validate: opening.validate,
+        view: opening.view,
         current,
         watchers: Watchers::default(),
         warned: Mutex::default(),
@@ -230,6 +262,22 @@ where
 
     pub fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    /// Changes the live settings `changes` names, a partial value in the
+    /// declaration's shape, while the config is still at `version`: what a
+    /// program's SDK sends once its own `validate` took the value they make.
+    #[cfg(any(test, feature = "wire"))]
+    pub(crate) fn update_data(&self, version: i64, changes: &Value) -> Result<()> {
+        let within = |error: Error| error.within(format!("config {}", self.inner.name));
+        let mut leaves = Vec::new();
+        self.inner.flatten(&self.inner.declaration.root, changes, "", &mut leaves).map_err(within)?;
+        if leaves.is_empty() {
+            return Ok(());
+        }
+        let (_, tree) = self.inner.state();
+        self.inner.candidate(&tree, &leaves).map_err(within)?;
+        self.inner.hub.change(version, leaves).map(drop).map_err(within)
     }
 
     fn change(&self, if_version: Option<i64>, change: impl FnOnce(&mut T)) -> Result<()> {
@@ -340,11 +388,36 @@ where
         for (path, value) in leaves {
             set(&mut next, path, value.clone());
         }
-        let built = resolve::built::<T>(&self.declaration, &next).map_err(Error::invalid)?;
+        let built = self.making().built(&next).map_err(Error::invalid)?;
         match &self.validate {
             Some(validate) => validate(&built).map_err(Error::invalid),
             None => Ok(()),
         }
+    }
+
+    fn making(&self) -> Making<'_, T> {
+        Making { declaration: &self.declaration, validate: self.validate.as_ref(), view: self.view }
+    }
+
+    /// The settings a partial value names, each with its value checked.
+    #[cfg(any(test, feature = "wire"))]
+    fn flatten(&self, group: &Group, changes: &Value, path: &str, leaves: &mut Vec<(String, Value)>) -> Result<()> {
+        let Value::Object(map) = changes else {
+            let at = if path.is_empty() { "a change" } else { path };
+            return Err(Error::invalid(format!("{at}: {} is not a group of settings", shown(changes))));
+        };
+        for (key, value) in map {
+            let at = joined(path, key);
+            match group.get(key) {
+                None => return Err(Error::invalid(format!("{at}: no such setting"))),
+                Some(Node::Group(inner)) => self.flatten(inner, value, &at, leaves)?,
+                Some(Node::Setting(setting)) => {
+                    let checked = self.checked(&at, setting, value)?;
+                    leaves.push((at, checked));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn explain(&self) -> Explained {
@@ -422,8 +495,7 @@ where
         if kept.version <= lock(&self.current).version {
             return;
         }
-        let resolved =
-            resolve::resolve(&self.declaration, (&self.layered.0, &self.layered.1), kept, self.validate.as_ref());
+        let resolved = self.making().resolve((&self.layered.0, &self.layered.1), kept);
         {
             let mut current = lock(&self.current);
             if kept.version <= current.version {

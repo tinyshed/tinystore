@@ -549,6 +549,154 @@
     },
     {
       "fields": {
+        "declaration": {
+          "str": "{\"a\":1}"
+        },
+        "layers": {
+          "str": "{\"a\":1}"
+        },
+        "name": {
+          "str": "name"
+        },
+        "strict": {
+          "bool": true
+        }
+      },
+      "hex": "8401a46e616d6502a77b2261223a317d03a77b2261223a317d04c3",
+      "message": "config.Open",
+      "name": "config.Open with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Open",
+      "name": "config.Open with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "lines": {
+          "list": [
+            {
+              "fields": {
+                "from": {
+                  "str": "from"
+                },
+                "over": {
+                  "list": [
+                    {
+                      "str": "over"
+                    }
+                  ]
+                },
+                "path": {
+                  "str": "path"
+                },
+                "value": {
+                  "str": "value"
+                }
+              }
+            }
+          ]
+        },
+        "notes": {
+          "list": [
+            {
+              "str": "notes"
+            }
+          ]
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        },
+        "version": {
+          "int": "-7"
+        }
+      },
+      "hex": "85016b02f903a77b2261223a317d04918401a47061746802a576616c756503a466726f6d0491a46f7665720591a56e6f746573",
+      "message": "config.Value",
+      "name": "config.Value with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Value",
+      "name": "config.Value with no field"
+    },
+    {
+      "fields": {
+        "from": {
+          "str": "from"
+        },
+        "over": {
+          "list": [
+            {
+              "str": "over"
+            }
+          ]
+        },
+        "path": {
+          "str": "path"
+        },
+        "value": {
+          "str": "value"
+        }
+      },
+      "hex": "8401a47061746802a576616c756503a466726f6d0491a46f766572",
+      "message": "config.Line",
+      "name": "config.Line with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Line",
+      "name": "config.Line with no field"
+    },
+    {
+      "fields": {
+        "changes": {
+          "str": "{\"a\":1}"
+        },
+        "handle": {
+          "uint": "107"
+        },
+        "version": {
+          "int": "-7"
+        }
+      },
+      "hex": "83016b02f903a77b2261223a317d",
+      "message": "config.Update",
+      "name": "config.Update with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Update",
+      "name": "config.Update with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "path": {
+          "str": "path"
+        }
+      },
+      "hex": "82016b02a470617468",
+      "message": "config.Reset",
+      "name": "config.Reset with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Reset",
+      "name": "config.Reset with no field"
+    },
+    {
+      "fields": {
         "challenge": {
           "bin": "01ff"
         },
@@ -4707,6 +4855,10 @@
     "blobs.rename": 1032,
     "blobs.upload": 1027,
     "blobs.usage": 1035,
+    "config.follow": 1794,
+    "config.open": 1793,
+    "config.reset": 1796,
+    "config.update": 1795,
     "jobs.add": 515,
     "jobs.cancel": 518,
     "jobs.get": 519,

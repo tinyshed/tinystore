@@ -84,7 +84,7 @@ fn a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share
     let clash = read_refused(&Env::prefix("APP"), &declared);
     assert_eq!(clash, ["APP_DB_URL would give both db.url and dbUrl"]);
     let typo = read_refused(&Env::prefix("APP").var("db.ulr", "X"), &declaration(json!({ "db": { "url": "" } })));
-    assert_eq!(typo, ["Env::var names db.ulr, which is no setting"]);
+    assert_eq!(typo, ["a variable is named for db.ulr, which is no setting"]);
 }
 
 #[test]

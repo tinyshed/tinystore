@@ -1077,6 +1077,334 @@ impl Message for BlobsUsage {
     }
 }
 
+/// A config a program opens: its declaration and its layers as data, as
+/// plan/api/config.md has them, with what the program read itself, a file's
+/// text and its variables, since those belong to it and not to the server.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigOpen {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    /// Each setting's kind, rules, default and marks.
+    pub(crate) declaration: String,
+    /// Objects, files and the environment, in the order written.
+    pub(crate) layers: String,
+    /// A kept change that no longer fits refuses the open.
+    pub(crate) strict: bool,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigOpen {
+    const NAME: &'static str = "config.Open";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.declaration = codec::str(r, "declaration")?,
+                3 => message.layers = codec::str(r, "layers")?,
+                4 => message.strict = codec::bool(r, "strict")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.declaration.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.declaration);
+        }
+        if !self.layers.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.layers);
+        }
+        if self.strict {
+            map.field(out, 4);
+            codec::write_bool(out, &self.strict);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.declaration.len()
+            + 1 + 5 + self.layers.len()
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.declaration.is_empty()
+            && self.layers.is_empty()
+            && !self.strict
+    }
+}
+
+/// A config's value at a version of its changes, and where each setting's
+/// value came from.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigValue {
+    pub(crate) handle: u64,
+    pub(crate) version: i64,
+    /// The settings, each span its milliseconds, each secret its text.
+    pub(crate) value: String,
+    pub(crate) lines: Vec<ConfigLine>,
+    /// What was read and not used, each with why.
+    pub(crate) notes: Vec<String>,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigValue {
+    const NAME: &'static str = "config.Value";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.version = codec::int(r, "version")?,
+                3 => message.value = codec::str(r, "value")?,
+                4 => message.lines = codec::list(r, "lines", codec::message::<ConfigLine>)?,
+                5 => message.notes = codec::list(r, "notes", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if self.version != 0 {
+            map.field(out, 2);
+            codec::write_int(out, &self.version);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.value);
+        }
+        if !self.lines.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.lines, codec::write_message);
+        }
+        if !self.notes.is_empty() {
+            map.field(out, 5);
+            codec::write_list(out, &self.notes, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 1 + 5 + self.value.len()
+            + 1 + codec::list_size(&self.lines, codec::message_size)
+            + 1 + codec::list_size(&self.notes, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.version == 0
+            && self.value.is_empty()
+            && self.lines.is_empty()
+            && self.notes.is_empty()
+    }
+}
+
+/// A setting's line of explain.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigLine {
+    pub(crate) path: String,
+    /// As JSON, a span spelled, a secret as ***.
+    pub(crate) value: String,
+    pub(crate) from: String,
+    /// The values it went over, newest first.
+    pub(crate) over: Vec<String>,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigLine {
+    const NAME: &'static str = "config.Line";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.path = codec::str(r, "path")?,
+                2 => message.value = codec::str(r, "value")?,
+                3 => message.from = codec::str(r, "from")?,
+                4 => message.over = codec::list(r, "over", codec::str)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.path.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.path);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.value);
+        }
+        if !self.from.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.from);
+        }
+        if !self.over.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.over, codec::write_str);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.path.len()
+            + 1 + 5 + self.value.len()
+            + 1 + 5 + self.from.len()
+            + 1 + codec::list_size(&self.over, |item| 5 + item.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.path.is_empty()
+            && self.value.is_empty()
+            && self.from.is_empty()
+            && self.over.is_empty()
+    }
+}
+
+/// A change of live settings, made on the version the program's value had.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigUpdate {
+    pub(crate) handle: u64,
+    /// A change made since is a conflict.
+    pub(crate) version: i64,
+    /// The settings it changes, in the declaration's shape.
+    pub(crate) changes: String,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigUpdate {
+    const NAME: &'static str = "config.Update";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.version = codec::int(r, "version")?,
+                3 => message.changes = codec::str(r, "changes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if self.version != 0 {
+            map.field(out, 2);
+            codec::write_int(out, &self.version);
+        }
+        if !self.changes.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.changes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 1 + 5 + self.changes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.version == 0
+            && self.changes.is_empty()
+    }
+}
+
+/// Drops the changes kept of a setting or of a group, or of every setting.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigReset {
+    pub(crate) handle: u64,
+    /// Empty for every change.
+    pub(crate) path: String,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigReset {
+    const NAME: &'static str = "config.Reset";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.path = codec::str(r, "path")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.path.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.path);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.path.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.path.is_empty()
+    }
+}
+
 /// What a client says first.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Hello {
@@ -8671,6 +8999,17 @@ pub(crate) mod method {
     pub(crate) const BLOBS_CLEAR: u16 = 0x040c;
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_READ: u16 = 0x040d;
+    #[cfg(feature = "config")]
+    pub(crate) const CONFIG_OPEN: u16 = 0x0701;
+    /// The config's value now, then each time it changes, until the client
+    /// cancels: one stream a config a process, whose value every handle and
+    /// watcher of it there takes.
+    #[cfg(feature = "config")]
+    pub(crate) const CONFIG_FOLLOW: u16 = 0x0702;
+    #[cfg(feature = "config")]
+    pub(crate) const CONFIG_UPDATE: u16 = 0x0703;
+    #[cfg(feature = "config")]
+    pub(crate) const CONFIG_RESET: u16 = 0x0704;
     #[cfg(feature = "jobs")]
     pub(crate) const JOBS_QUEUE_OPEN: u16 = 0x0201;
     #[cfg(feature = "jobs")]
@@ -8857,6 +9196,14 @@ pub(crate) mod method {
             BLOBS_CLEAR => Some(Access::Write),
             #[cfg(feature = "blobs")]
             BLOBS_READ => Some(Access::Read),
+            #[cfg(feature = "config")]
+            CONFIG_OPEN => Some(Access::Read),
+            #[cfg(feature = "config")]
+            CONFIG_FOLLOW => Some(Access::Read),
+            #[cfg(feature = "config")]
+            CONFIG_UPDATE => Some(Access::Write),
+            #[cfg(feature = "config")]
+            CONFIG_RESET => Some(Access::Write),
             #[cfg(feature = "jobs")]
             JOBS_QUEUE_OPEN => Some(Access::Read),
             #[cfg(feature = "jobs")]
@@ -9038,6 +9385,14 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("blobs.clear", 0x040c, "call"),
     #[cfg(feature = "blobs")]
     ("blobs.read", 0x040d, "download"),
+    #[cfg(feature = "config")]
+    ("config.open", 0x0701, "call"),
+    #[cfg(feature = "config")]
+    ("config.follow", 0x0702, "download"),
+    #[cfg(feature = "config")]
+    ("config.update", 0x0703, "call"),
+    #[cfg(feature = "config")]
+    ("config.reset", 0x0704, "call"),
     #[cfg(feature = "jobs")]
     ("jobs.queue.open", 0x0201, "call"),
     #[cfg(feature = "jobs")]
@@ -9226,6 +9581,16 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "blobs.Folder" => BlobsFolder::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Usage" => BlobsUsage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Open" => ConfigOpen::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Value" => ConfigValue::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Line" => ConfigLine::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Update" => ConfigUpdate::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Reset" => ConfigReset::decode(body).map(|message| (message.encode(), message.size())),
         "Hello" => Hello::decode(body).map(|message| (message.encode(), message.size())),
         "Welcome" => Welcome::decode(body).map(|message| (message.encode(), message.size())),
         "store.Options" => StoreOptions::decode(body).map(|message| (message.encode(), message.size())),

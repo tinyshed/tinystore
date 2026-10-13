@@ -31,7 +31,13 @@ them; the workspace builds and tests on three operating systems.
   YAML 1.2 and JSON with comments parsed by the core, the environment with `NAME_FILE` and `.env` files, layers in
   the order written, a live setting's changes in kv.db, checked against every handle open and kept with a version,
   one hub a process that every handle and watcher follows, `explain`, `validate`, `strict`, and the rules of one
-  value as data, which the wire's declarations will carry. Left: the wire and the Bun SDK, then the logger's config.
+  value as data, which the wire's declarations will carry.
+  Built, slice 2: `protocol/config.wire`, config an engine of the wire under `07`, its declaration and layers as data
+  with what the program read itself, a change answered with the value it made, a stream a config that a lost
+  connection follows again; the Bun SDK's `store.config(name, [declaration, ...layers])` with `secret`, `required`,
+  `live`, `int`, `oneOf`, `duration`, `list`, `file` and `env`, the value typed from the declaration and a change
+  from its live settings, `Secret` printing as `***`, `validate` run in the program, and a config opened again
+  sharing its handle and its stream. Left: the logger's options as a config.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.

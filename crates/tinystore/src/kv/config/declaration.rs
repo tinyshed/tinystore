@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use super::marks::{LIVE, REQUIRED, SECRET, SECRET_REQUIRED};
 
 /// The longest path of a setting, its keys joined by dots.
-const MOST_PATH: usize = 256;
+pub(super) const MOST_PATH: usize = 256;
 
 /// The settings and groups of a group, by key.
 pub(crate) type Group = BTreeMap<String, Node>;
@@ -182,7 +182,7 @@ fn rules_json(rules: &Rules, map: &mut Map<String, Value>) {
 /// field of a list's item is neither live nor a secret, since a list is one
 /// setting.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Place {
+pub(super) enum Place {
     Root,
     Item,
 }

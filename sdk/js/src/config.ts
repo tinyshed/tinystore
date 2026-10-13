@@ -1,172 +1,564 @@
-// An application's settings, as Go's kv.Config makes them: the defaults, then
-// each layer in the order given, then what update kept, which the server
-// keeps field by field in kv.db and sends to every store watching the config.
-// `value` is read from memory and is new after each change.
+// A program's settings as one typed value, as plan/api/config.md has it: a
+// declaration, then objects, files and the environment in the order the
+// program writes them, each declaring again what came before, and the live
+// settings' changes, which the store keeps and every process sees. The core
+// reads the layers, checks the rules and keeps the changes. This module
+// spells the declaration as data, reads the program's own files and
+// variables, which belong to it and not to the server, and follows the config
+// on one stream that every handle and watcher of it in the process shares.
 
 import { readFile } from 'node:fs/promises'
 
-import type { Link } from './connection.ts'
-import { ClosedError, InvalidError } from './errors.ts'
-import { checkName, handleOn } from './handles.ts'
+import type { Connection, Idempotence, Link } from './connection.ts'
+import { CancelledError, ConflictError, InvalidError, UnavailableError } from './errors.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
-import type { Stream } from './session.ts'
-import { KvBucket, KvCall, KvConfigure, KvKept, methods } from './wire/messages.ts'
+import { LostError, type Stream } from './session.ts'
+import { type DurationText, ms, spelled } from './time.ts'
+import type { Read } from './wire/codec.ts'
+import {
+	ConfigOpen,
+	ConfigReset,
+	ConfigUpdate,
+	ConfigValue,
+	Handle,
+	methods,
+} from './wire/protocol.ts'
 
-/** A value of T with any of its fields, at any depth, left out. */
-export type DeepPartial<T> = {
-	[K in keyof T]?: T[K] extends readonly unknown[]
-		? T[K]
-		: T[K] extends object
-			? DeepPartial<T[K]>
-			: T[K]
+// what marks a setting and a layer: text keys, so that a program's own keys
+// never are one and the types say them in a published declaration
+const mark = '~setting'
+const layerMark = '~layer'
+
+/** The tries a change makes while other changes race it. */
+const attempts = 8
+
+// The declaration as the core reads it: plan/api/config.md, and
+// crates/tinystore/src/kv/config/data.rs, which reads this JSON.
+type Kind =
+	| 'text'
+	| 'integer'
+	| 'number'
+	| 'boolean'
+	| 'duration'
+	| 'object'
+	| 'any'
+	| { list: Item }
+type Item = ({ kind: Kind } & Rules) | { group: Group }
+type Group = Record<string, Node>
+type Node = Described | { group: Group }
+
+interface Rules {
+	min?: number
+	max?: number
+	oneOf?: string[]
 }
 
-type Kind = 'string' | 'number' | 'boolean'
-
-/** A field of a config's defaults made by `secret` or `required`, in place of its value. */
-export class Setting<V> {
-	readonly kind: Kind
-	/** absent for a field a layer has to give */
-	readonly fallback: V | undefined
-	readonly secret: boolean
-	/** its own variable, read in place of the prefix and its path */
-	readonly variable: string | undefined
-	/** set by the layers alone, which update refuses to change */
-	readonly fixed: boolean
-
-	constructor(
-		kind: Kind,
-		fallback: V | undefined,
-		secret: boolean,
-		variable: string | undefined,
-		fixed = false,
-	) {
-		this.kind = kind
-		this.fallback = fallback
-		this.secret = secret
-		this.variable = variable
-		this.fixed = fixed
-	}
-}
-
-/**
- * A field the defaults, a file or the environment set alone: update refuses
- * it, and sources() shows where its value came from. It takes a default or
- * another marker.
- *
- * ```ts
- * addr: fixed(':8080'), workers: fixed(required(Number))
- * ```
- */
-export function fixed<V>(value: V | Setting<V>): Setting<V> {
-	if (value instanceof Setting) {
-		return new Setting<V>(value.kind, value.fallback, value.secret, value.variable, true)
-	}
-	const kind =
-		typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string'
-	return new Setting<V>(kind, value, false, undefined, true)
+interface Described extends Rules {
+	kind: Kind
+	default?: unknown
+	required?: boolean
+	live?: boolean
+	secret?: boolean
 }
 
 /**
- * A secret: never kept by update, and shown as *** by sources(). It reads
- * its own variable when given one, and is required without a default.
- *
- * ```ts
- * db: { url: secret('DATABASE_URL'), pool: 10 }
- * ```
+ * A setting its declaration says more of than a default would: its rules, a
+ * secret, one a layer must give, or one that may change while the program
+ * runs. `V` is what the program reads it as, `Live` whether it may change,
+ * and `Given` whether it has a default or is required, as a declaration needs.
  */
-export function secret(variable?: string, fallback?: string): Setting<string> {
-	return new Setting('string', fallback, true, variable)
+export interface Setting<
+	V,
+	Live extends boolean = false,
+	Given extends boolean = true,
+	IsSecret extends boolean = false,
+> {
+	readonly [mark]: Described
+	/** what the program reads it as; nothing at run time */
+	readonly '~value'?: V
+	readonly '~live'?: Live
+	readonly '~given'?: Given
+	readonly '~secret'?: IsSecret
 }
 
-/** A field a layer has to give, or the config does not open: a string unless kind says. */
-export function required(): Setting<string>
-export function required(kind: StringConstructor): Setting<string>
-export function required(kind: NumberConstructor): Setting<number>
-export function required(kind: BooleanConstructor): Setting<boolean>
-export function required(
-	kind: StringConstructor | NumberConstructor | BooleanConstructor = String,
-): Setting<string | number | boolean> {
-	return new Setting<string | number | boolean>(
-		kind === Number ? 'number' : kind === Boolean ? 'boolean' : 'string',
-		undefined,
-		false,
-		undefined,
-	)
-}
+/** A setting's text that prints as *** wherever it goes; `reveal` gives it. */
+export class Secret {
+	readonly #text: string
 
-/** The environment as a layer of a config, which `fromEnv` makes. */
-export class FromEnv {
-	readonly prefix: string
-	readonly files: readonly string[]
+	constructor(text: string) {
+		this.#text = text
+	}
 
-	constructor(prefix: string, files: readonly string[]) {
-		this.prefix = prefix
-		this.files = files
+	/** The secret's text, where the program hands it to what needs it. */
+	reveal(): string {
+		return this.#text
+	}
+
+	toString(): string {
+		return '***'
+	}
+
+	toJSON(): string {
+		return '***'
+	}
+
+	[Symbol.for('nodejs.util.inspect.custom')](): string {
+		return '***'
 	}
 }
 
-/**
- * The environment as a config's layer: `fromEnv('APP')` reads db.pool from
- * APP_DB_POOL, and `fromEnv()` from DB_POOL. The .env files given are read
- * first, the process's own variables over them, a missing file skipped.
- */
-export function fromEnv(prefix = '', ...files: string[]): FromEnv {
-	return new FromEnv(prefix, files)
-}
-
-/** A config's check, which `validate` makes. */
-export class Validate {
-	readonly schema: StandardSchemaV1
-
-	constructor(schema: StandardSchemaV1) {
-		this.schema = schema
-	}
-}
-
-/** Checks a config each time it is made, with zod's, valibot's or another Standard Schema. */
-export function validate(schema: StandardSchemaV1): Validate {
-	return new Validate(schema)
-}
-
-/** A config's value, as its defaults make it: each Setting its value's type. */
-export type ConfigValue<D extends object> = { [K in keyof D]: FieldValue<D[K]> }
-
-type FieldValue<F> =
-	F extends Setting<infer V>
+/** What a program reads of a declaration: a setting as its value, a group as its settings. */
+export type Value<D> =
+	D extends Setting<infer V, boolean, boolean, boolean>
 		? V
-		: F extends readonly unknown[] | Date
-			? F
-			: F extends object
-				? ConfigValue<F>
-				: F
+		: D extends string
+			? string
+			: D extends number
+				? number
+				: D extends boolean
+					? boolean
+					: D extends null
+						? null
+						: D extends readonly (infer I)[]
+							? readonly Value<I>[]
+							: D extends object
+								? { readonly [K in keyof D]: Value<D[K]> }
+								: never
 
-/** What a config takes after its defaults, each over the one before. */
-export type ConfigLayer<V> = DeepPartial<V> | FromEnv | Validate
+type LiveIn<D> =
+	D extends Setting<unknown, infer L, boolean, boolean>
+		? L
+		: D extends readonly unknown[]
+			? false
+			: D extends object
+				? true extends { [K in keyof D]: LiveIn<D[K]> }[keyof D]
+					? true
+					: false
+				: false
 
-/** Where a field's value came from. */
-export interface Source {
-	path: string
-	/** its JSON, or *** for a secret */
-	value: string
-	/** 'default', 'file', 'env NAME' or 'kept' */
-	from: string
-	/** why a kept value is left out, when it is */
-	ignored?: string
+/** The live settings a change may name, each as the program reads it, at any depth. */
+export type Changes<D> = {
+	readonly [K in keyof D as LiveIn<D[K]> extends true ? K : never]?: D[K] extends Setting<
+		infer V,
+		true,
+		boolean,
+		boolean
+	>
+		? V
+		: Changes<D[K]>
 }
 
-interface Field {
-	/** its default, or '', 0 or false for one without */
-	sample: unknown
-	secret: boolean
-	fixed: boolean
-	required: boolean
-	variable: string | undefined
+/** An object in code over the declaration: any of its settings, at any depth, a secret as text. */
+export type Overlay<D> = {
+	readonly [K in keyof D]?: D[K] extends Setting<infer V, boolean, boolean, boolean>
+		? V extends Secret
+			? string
+			: V
+		: D[K] extends readonly unknown[]
+			? Value<D[K]>
+			: D[K] extends object
+				? Overlay<D[K]>
+				: Value<D[K]>
+}
+
+/** A file a config reads: TOML, YAML or JSON by its extension. */
+export interface FileLayer {
+	readonly [layerMark]: 'file'
+	readonly path: string
+	readonly optional: boolean
+}
+
+/** The environment a config reads. */
+export interface EnvLayer {
+	readonly [layerMark]: 'env'
+	readonly prefix: string
+	/** a setting's own variable, by its path */
+	readonly vars: Readonly<Record<string, string>>
+	readonly files: readonly string[]
+	readonly from: Readonly<Record<string, string | undefined>> | undefined
+}
+
+/** A layer of a config's list: an object in code, a file, the environment, or nothing. */
+export type Layer<D> = FileLayer | EnvLayer | Overlay<D> | false | null | undefined
+
+export interface FileOptions {
+	/** a file that may be absent: then it declares nothing, and explain says so */
+	optional?: boolean | undefined
+}
+
+/** Settings' own variables by their paths: `{ port: 'PORT', db: { url: 'DATABASE_URL' } }`. */
+export interface Vars {
+	readonly [key: string]: string | Vars
+}
+
+export interface EnvOptions {
+	/** a setting's variable of its own, in place of its prefixed one */
+	vars?: Vars | undefined
+	/** .env files, whose variables count where the process has none; Bun reads .env itself */
+	files?: readonly string[] | undefined
+	/** these variables in place of the process's, the only environment read, as a test gives them */
+	from?: Readonly<Record<string, string | undefined>> | undefined
+}
+
+export interface ConfigOptions<V> {
+	/**
+	 * the program's own check of the whole value, at open and before a change
+	 * is kept: a Standard Schema such as zod's or valibot's, or a function
+	 * that throws
+	 */
+	validate?: StandardSchemaV1 | ((value: V) => unknown) | undefined
+	/** refuses to open while a kept change no longer fits, rather than ignoring it and saying so */
+	strict?: boolean | undefined
+}
+
+export interface UpdateOptions {
+	/** keeps the change only while the config is at this version, else ConflictError */
+	ifVersion?: number | undefined
+}
+
+/** A setting's line of explain. */
+export interface ExplainLine {
+	readonly path: string
+	/** as JSON, a duration spelled, a secret as *** */
+	readonly value: string
+	/** the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change */
+	readonly from: string
+	/** the values it went over, newest first */
+	readonly over: string
+}
+
+/** Every setting's line, for console.table, and what was read and not used. */
+export type Explained = readonly ExplainLine[] & { readonly notes: readonly string[] }
+
+type Token = StringConstructor | NumberConstructor | BooleanConstructor
+type Of<T> = T extends StringConstructor
+	? string
+	: T extends NumberConstructor
+		? number
+		: T extends BooleanConstructor
+			? boolean
+			: never
+type Primitive = string | number | boolean
+type Widened<V> = V extends string
+	? string
+	: V extends number
+		? number
+		: V extends boolean
+			? boolean
+			: V extends readonly (infer I)[]
+				? Widened<I>[]
+				: V
+
+/** The bounds of a number: the smallest and the largest it may be. */
+export interface Bounds {
+	min?: number | undefined
+	max?: number | undefined
+}
+
+/** The bounds of a duration, each a duration's text. */
+export interface DurationBounds {
+	min?: DurationText | undefined
+	max?: DurationText | undefined
+}
+
+/** A list's default and how many items it holds at least and at most. */
+export interface ListOptions<V> extends Bounds {
+	default?: readonly V[] | undefined
+}
+
+function setting<V, L extends boolean = false, G extends boolean = true, S extends boolean = false>(
+	described: Described,
+): Setting<V, L, G, S> {
+	return Object.freeze({ [mark]: described }) as unknown as Setting<V, L, G, S>
+}
+
+function describedOf(value: unknown): Described | undefined {
+	return typeof value === 'object' && value !== null && mark in value
+		? (value as { [mark]: Described })[mark]
+		: undefined
+}
+
+function layerOf(value: unknown): string | undefined {
+	return typeof value === 'object' && value !== null && layerMark in value
+		? (value as { [layerMark]: string })[layerMark]
+		: undefined
+}
+
+function kindOf(token: Token): Kind {
+	return token === String ? 'text' : token === Number ? 'number' : 'boolean'
+}
+
+function bounds(rules: Bounds | undefined): Rules {
+	const out: Rules = {}
+	if (rules?.min !== undefined) {
+		out.min = rules.min
+	}
+	if (rules?.max !== undefined) {
+		out.max = rules.max
+	}
+	return out
 }
 
 /**
- * A field's variable: the prefix and its path in upper snake case, as Go's and
- * Python's configs name it.
+ * A setting that prints as *** wherever it goes and that only a layer gives:
+ * `secret(String)` must be given, `secret('')` has a default.
+ */
+export function secret(given: StringConstructor | string): Setting<Secret, false, true, true> {
+	if (given === String) {
+		return setting({ kind: 'text', secret: true, required: true })
+	}
+	if (typeof given !== 'string') {
+		throw new InvalidError('a secret is text: secret(String), or secret with its default text')
+	}
+	return setting({ kind: 'text', secret: true, default: given })
+}
+
+/** A setting with no default: a layer must give it, or the config does not open. */
+export function required<T extends Token>(type: T): Setting<Of<T>>
+export function required<V>(rule: Setting<V, false, false>): Setting<V>
+export function required(
+	given: Token | Setting<unknown, boolean, boolean, boolean>,
+): Setting<unknown> {
+	const inner = typeof given === 'function' ? { kind: kindOf(given) } : describedOf(given)
+	if (inner === undefined) {
+		throw new InvalidError('required takes String, Number, Boolean, or a rule without its default')
+	}
+	if (inner.secret === true) {
+		throw new InvalidError('a secret is required already: secret(String)')
+	}
+	if (inner.live === true) {
+		throw new InvalidError('live is the outermost mark: live(required(…))')
+	}
+	const { default: _default, ...rest } = inner
+	return setting({ ...rest, required: true })
+}
+
+/**
+ * A setting that may change while the program runs: its change is kept in
+ * the store, goes over every layer until it is reset, and reaches every
+ * process. `live(100)`, `live(int(100, { min: 0 }))`, `live(required(String))`.
+ */
+export function live<V>(rule: Setting<V, false, true>): Setting<V, true>
+export function live<const V extends Primitive | readonly Primitive[]>(
+	value: V,
+): Setting<Widened<V>, true>
+export function live(given: unknown): Setting<unknown, true> {
+	if (isPlainObject(given) && describedOf(given) === undefined && Object.keys(given).length > 0) {
+		throw new InvalidError('a mark goes on a setting, not on a group: mark each of its settings')
+	}
+	const inner = describedOf(given) ?? declaredValue(given, 'live')
+	if (inner.secret === true) {
+		throw new InvalidError('a secret is never live')
+	}
+	if (inner.live === true) {
+		throw new InvalidError('live twice')
+	}
+	return setting({ ...inner, live: true })
+}
+
+/** A whole number in its bounds: `int(8080, { min: 1, max: 65535 })`; `int({ min: 1 })` goes in required. */
+export function int(rules?: Bounds): Setting<number, false, false>
+export function int(fallback: number, rules?: Bounds): Setting<number>
+export function int(first?: number | Bounds, rules?: Bounds): Setting<number, boolean, boolean> {
+	if (typeof first === 'number') {
+		return setting({ kind: 'integer', default: first, ...bounds(rules) })
+	}
+	return setting({ kind: 'integer', ...bounds(first) })
+}
+
+/**
+ * One of a set of texts, its default first: `oneOf('info', ['debug', 'warn', 'error'])`
+ * reads as 'info' | 'debug' | 'warn' | 'error'; `oneOf(['eu', 'us'])` goes in required.
+ */
+export function oneOf<const O extends readonly [string, ...string[]]>(
+	values: O,
+): Setting<O[number], false, false>
+export function oneOf<const T extends string, const O extends readonly string[]>(
+	fallback: T,
+	others: O,
+): Setting<T | O[number]>
+export function oneOf(
+	first: string | readonly string[],
+	others: readonly string[] = [],
+): Setting<string, boolean, boolean> {
+	if (typeof first === 'string') {
+		return setting({ kind: 'text', default: first, oneOf: [first, ...others] })
+	}
+	return setting({ kind: 'text', oneOf: [...first] })
+}
+
+/** A duration, read as one is written: `duration('30s')`, `duration({ max: '1h' })` in required. */
+export function duration(rules?: DurationBounds): Setting<DurationText, false, false>
+export function duration(fallback: DurationText, rules?: DurationBounds): Setting<DurationText>
+export function duration(
+	first?: DurationText | DurationBounds,
+	rules?: DurationBounds,
+): Setting<DurationText, boolean, boolean> {
+	const [fallback, given] = typeof first === 'string' ? [first, rules] : [undefined, first]
+	const described: Described = { kind: 'duration' }
+	if (given?.min !== undefined) {
+		described.min = ms(given.min)
+	}
+	if (given?.max !== undefined) {
+		described.max = ms(given.max)
+	}
+	return setting(fallback === undefined ? described : { ...described, default: fallback })
+}
+
+/**
+ * A list: of `String`, `Number` or `Boolean`, of a rule, or of groups, each
+ * item checked; its `min` and `max` count its items. A list written as a
+ * value, `['localhost']`, needs no `list`.
+ */
+export function list<T extends Token>(
+	item: T,
+	options?: ListOptions<Of<T>>,
+): Setting<readonly Of<T>[]>
+export function list<V>(
+	item: Setting<V, false, boolean>,
+	options?: ListOptions<V>,
+): Setting<readonly V[]>
+export function list<G extends object>(
+	item: G,
+	options?: ListOptions<Value<G>>,
+): Setting<readonly Value<G>[]>
+export function list(item: unknown, options: ListOptions<unknown> = {}): Setting<unknown> {
+	return setting({
+		kind: { list: itemOf(item) },
+		default: options.default ?? [],
+		...bounds(options),
+	})
+}
+
+function itemOf(item: unknown): Item {
+	if (item === String || item === Number || item === Boolean) {
+		return { kind: kindOf(item as Token) }
+	}
+	const inner = describedOf(item)
+	if (inner !== undefined) {
+		if (inner.live === true || inner.secret === true) {
+			throw new InvalidError("a list's items are neither live nor secret: the list is one setting")
+		}
+		const { kind, min, max, oneOf } = inner
+		return { kind, ...bounds({ min, max }), ...(oneOf === undefined ? {} : { oneOf }) }
+	}
+	if (isPlainObject(item)) {
+		return { group: declaredGroup(item, '[]') }
+	}
+	throw new InvalidError(`a list of ${String(item)}: of String, Number, Boolean, a rule or a group`)
+}
+
+/** A file a config reads: TOML, YAML or JSON by its extension, a relative path the program's. */
+export function file(path: string, options: FileOptions = {}): FileLayer {
+	return Object.freeze({ [layerMark]: 'file' as const, path, optional: options.optional === true })
+}
+
+/**
+ * The environment a config reads: `env('APP')` reads APP_ and each setting's
+ * path in upper snake case, `APP_LIMITS_RPS` for limits.rps.
+ */
+export function env(prefix: string, options: EnvOptions = {}): EnvLayer {
+	return Object.freeze({
+		[layerMark]: 'env' as const,
+		prefix,
+		vars: flattened(options.vars ?? {}, ''),
+		files: [...(options.files ?? [])],
+		from: options.from,
+	})
+}
+
+function flattened(vars: Vars, path: string): Record<string, string> {
+	const out: Record<string, string> = {}
+	for (const [key, value] of Object.entries(vars)) {
+		const at = path === '' ? key : `${path}.${key}`
+		if (typeof value === 'string') {
+			out[at] = value
+		} else {
+			Object.assign(out, flattened(value, at))
+		}
+	}
+	return out
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		return false
+	}
+	const proto = Object.getPrototypeOf(value)
+	return proto === Object.prototype || proto === null
+}
+
+function declaredGroup(value: Record<string, unknown>, path: string): Group {
+	const group: Group = {}
+	for (const [key, field] of Object.entries(value)) {
+		group[key] = declaredNode(field, path === '' ? key : `${path}.${key}`)
+	}
+	return group
+}
+
+function declaredNode(value: unknown, path: string): Node {
+	const described = describedOf(value)
+	if (described !== undefined) {
+		return described
+	}
+	if (isPlainObject(value) && Object.keys(value).length > 0) {
+		return { group: declaredGroup(value, path) }
+	}
+	return declaredValue(value, path)
+}
+
+/** A setting a plain default declares: its kind is its default's. */
+function declaredValue(value: unknown, path: string): Described {
+	switch (typeof value) {
+		case 'string':
+			return { kind: 'text', default: value }
+		case 'number':
+			return { kind: 'number', default: value }
+		case 'boolean':
+			return { kind: 'boolean', default: value }
+		case 'function':
+			throw new InvalidError(
+				`${path}: a type is no default; required(${(value as Token).name}) declares one a layer must give`,
+			)
+		case 'undefined':
+			throw new InvalidError(`${path}: a setting has a default, or is required`)
+	}
+	if (value === null) {
+		return { kind: 'any', default: null }
+	}
+	if (Array.isArray(value)) {
+		return { kind: { list: plainItem(value[0]) }, default: value }
+	}
+	if (isPlainObject(value)) {
+		return { kind: 'object', default: {} }
+	}
+	throw new InvalidError(`${path}: ${String(value)} is no default a config keeps`)
+}
+
+function plainItem(first: unknown): Item {
+	switch (typeof first) {
+		case 'string':
+			return { kind: 'text' }
+		case 'number':
+			return { kind: 'number' }
+		case 'boolean':
+			return { kind: 'boolean' }
+		default:
+			return { kind: 'any' }
+	}
+}
+
+/** Every setting's path, as the core names its variable. */
+function paths(group: Group, path: string): string[] {
+	return Object.entries(group).flatMap(([key, node]) => {
+		const at = path === '' ? key : `${path}.${key}`
+		return 'group' in node ? paths(node.group, at) : [at]
+	})
+}
+
+/**
+ * A setting's variable: the prefix and its path in upper snake case, as Go,
+ * Python and the core name it (testdata/config/env.json).
  *
  *     'APP', 'limits.maxRps' → APP_LIMITS_MAX_RPS
  */
@@ -195,641 +587,444 @@ const isUpper = (c: string) => c !== c.toLowerCase() && c === c.toUpperCase()
 const isLower = (c: string) => c !== c.toUpperCase() && c === c.toLowerCase()
 const isDigit = (c: string) => c >= '0' && c <= '9'
 
-/**
- * The variables of a .env file, as Go's and Python's configs read one: NAME=value
- * lines, export before a name, # comments, a comment after a space, double
- * quotes reading \n \r \t \" and \\, single quotes reading nothing, a quoted
- * value over lines; a later name wins.
- */
-export function parseDotenv(text: string): Record<string, string> {
-	const values: Record<string, string> = {}
-	let line = 1
-	let rest = text
-	while (rest !== '') {
-		const [name, value, after] = dotenvAssignment(rest, line)
-		line += rest.slice(0, rest.length - after.length).split('\n').length - 1
-		if (name !== '') {
-			values[name] = value
-		}
-		rest = after
-	}
-	return values
-}
-
-function dotenvAssignment(text: string, number: number): [string, string, string] {
-	const end = text.indexOf('\n')
-	const line = end < 0 ? text : text.slice(0, end)
-	const rest = end < 0 ? '' : text.slice(end + 1)
-	const trimmed = line.trim()
-	if (trimmed === '' || trimmed.startsWith('#')) {
-		return ['', '', rest]
-	}
-	const equals = line.indexOf('=')
-	if (equals < 0) {
-		throw new InvalidError(`line ${number}: ${JSON.stringify(line)} is no NAME=value`)
-	}
-	let name = line.slice(0, equals).trim()
-	if (name.startsWith('export ')) {
-		name = name.slice('export '.length).trim()
-	}
-	if (!/^[\p{L}_][\p{L}\p{Nd}_]*$/u.test(name)) {
-		throw new InvalidError(`line ${number}: ${JSON.stringify(name)} is no variable's name`)
-	}
-	let start = equals + 1
-	while (line[start] === ' ' || line[start] === '\t') {
-		start++
-	}
-	if (line[start] === '"' || line[start] === "'") {
-		return [name, ...dotenvQuoted(text.slice(start), number)]
-	}
-	let value = line.slice(start)
-	const comment = value.indexOf(' #')
-	if (comment >= 0) {
-		value = value.slice(0, comment)
-	}
-	return [name, value.replace(/[ \t\r]+$/, ''), rest]
-}
-
-function dotenvQuoted(text: string, number: number): [string, string] {
-	const quote = text[0]
-	let out = ''
-	for (let i = 1; i < text.length; i++) {
-		const c = text[i] as string
-		if (c === quote) {
-			const end = text.indexOf('\n', i + 1)
-			return [out, end < 0 ? '' : text.slice(end + 1)]
-		}
-		if (c === '\\' && quote === '"' && i + 1 < text.length) {
-			i++
-			const escaped = text[i] as string
-			out += escaped === 'n' ? '\n' : escaped === 'r' ? '\r' : escaped === 't' ? '\t' : escaped
-		} else {
-			out += c
-		}
-	}
-	throw new InvalidError(`line ${number}: a value opened with ${quote} is never closed`)
-}
-
-/** A config: open it with `store.kv.config(name, defaults, ...layers)`. */
-export class Config<T extends object> {
-	readonly name: string
-	readonly #link: Link
-	readonly #open: Uint8Array
-	readonly #fields: Map<string, Field>
-	readonly #base: Record<string, unknown>
-	readonly #from: Map<string, string>
-	readonly #schemas: StandardSchemaV1[] = []
-	readonly #listeners = new Set<(value: T) => void>()
-	/** the last fromEnv's prefix, for a missing field's variable */
-	#prefix: string | undefined
-	#kept = new Map<string, string>()
-	#ignored = new Map<string, string>()
-	#value = {} as T
-	#stream: Stream | undefined
-	#closed = false
-
-	/** Configs come from `store.kv.config`, which lays their layers and waits for the first state. */
-	constructor(link: Link, name: string, defaults: object) {
-		checkName(name, 'config')
-		this.#link = link
-		this.name = name
-		this.#open = KvBucket.encode({ name, config: true })
-		this.#fields = new Map(leavesOf(defaults).map(([path, leaf]) => [path, fieldOf(leaf)]))
-		this.#base = valuesOf(defaults as Record<string, unknown>)
-		this.#from = new Map(
-			[...this.#fields].filter(([, field]) => !field.required).map(([path]) => [path, 'default']),
-		)
-	}
-
-	/** The config now, frozen: update changes it. */
-	get value(): T {
-		return this.#value
-	}
-
-	/** Lays each layer over the defaults, the one before it under it, and checks what is required. */
-	async lay(layers: readonly unknown[]): Promise<void> {
-		for (const layer of layers) {
-			if (layer instanceof FromEnv) {
-				await this.#layEnvironment(layer)
-			} else if (layer instanceof Validate) {
-				this.#schemas.push(layer.schema)
-			} else if (isSchema(layer)) {
-				throw new InvalidError(
-					`config ${this.name}: a schema checks the config as validate(schema)`,
-				)
-			} else if (plain(layer)) {
-				this.#layFile(layer)
-			} else {
-				throw new InvalidError(
-					`config ${this.name}: a layer is a file's values, fromEnv() or validate(), not ${String(layer)}`,
-				)
-			}
-		}
-		const absent = [...this.#fields]
-			.filter(([path, field]) => field.required && missing(pathIn(this.#base, path)))
-			.map(([path, field]) => this.#requiredText(path, field))
-		if (absent.length > 0) {
-			throw new InvalidError(`config ${this.name}: ${absent.join('\n')}`)
-		}
-		this.#value = deepFreeze(structuredClone(this.#base)) as T
-	}
-
-	/**
-	 * Changes the fields change names, at any depth; each one that changed is
-	 * checked, kept, and seen by every store watching the config. A change the
-	 * schema refuses, one of a fixed field or a secret, or one leaving a required
-	 * field empty, is InvalidError and keeps nothing.
-	 */
-	async update(change: DeepPartial<T>): Promise<void> {
-		const next = merged(structuredClone(this.#value) as Record<string, unknown>, change)
-		const set: string[] = []
-		for (const [path, field] of this.#fields) {
-			const now = JSON.stringify(pathIn(next, path))
-			if (now === JSON.stringify(pathIn(this.#value, path))) {
-				continue
-			}
-			if (field.secret || field.fixed) {
-				throw new InvalidError(
-					`config ${this.name}: ${path} is ${field.secret ? 'a secret' : 'fixed'}, set by the defaults, a file or the environment alone`,
-				)
-			}
-			if (field.required && missing(pathIn(next, path))) {
-				throw new InvalidError(`config ${this.name}: ${path} is required`)
-			}
-			set.push(path, now)
-		}
-		if (set.length === 0) {
-			return
-		}
-		await this.#checked(next)
-		await this.#send(set, [])
-	}
-
-	/** Forgets what update kept for paths, each a field or a group of them; all of it without paths. */
-	async reset(...paths: string[]): Promise<void> {
-		for (const path of paths) {
-			if (![...this.#fields.keys()].some(leaf => under(leaf, path))) {
-				throw new InvalidError(`config ${this.name} has no field ${path}`)
-			}
-		}
-		const reset = [...this.#kept.keys()].filter(
-			kept => paths.length === 0 || paths.some(path => under(kept, path)),
-		)
-		if (reset.length > 0) {
-			await this.#send([], reset)
-		}
-	}
-
-	/** Calls fn with the config now and after each change, whoever made it; the function it returns stops that. */
-	watch(fn: (value: T) => void): () => void {
-		this.#listeners.add(fn)
-		fn(this.#value)
-		return () => this.#listeners.delete(fn)
-	}
-
-	/** Where each field's value came from, and why a kept value is left out. */
-	sources(): Source[] {
-		return [...this.#fields].map(([path, field]) => {
-			const kept = this.#kept.has(path) && !this.#ignored.has(path)
-			const source: Source = {
-				path,
-				value: field.secret ? '***' : (JSON.stringify(pathIn(this.#value, path)) ?? 'null'),
-				from: kept ? 'kept' : (this.#from.get(path) ?? 'default'),
-			}
-			const ignored = this.#ignored.get(path)
-			return ignored === undefined ? source : { ...source, ignored }
-		})
-	}
-
-	/** Follows the config's changes until the store closes; resolves once the first state is read. */
-	start(): Promise<void> {
-		return new Promise((resolve, reject) => {
-			void this.#follow(resolve, reject)
-		})
-	}
-
-	/** Stops following the config, as the store does when it closes. */
-	stop(): void {
-		this.#closed = true
-		this.#stream?.cancel()
-	}
-
-	#layFile(values: Record<string, unknown>): void {
-		for (const [path, value] of leavesOf(values)) {
-			const field = this.#fields.get(path)
-			if (field === undefined) {
-				continue
-			}
-			if (!fits(value, field.sample)) {
-				throw new InvalidError(
-					`the file's ${path}: ${JSON.stringify(value)} is no ${kindOf(field.sample)}`,
-				)
-			}
-			setPath(this.#base, path, value)
-			this.#from.set(path, 'file')
-		}
-	}
-
-	/**
-	 * Sets each field whose variable, or whose file NAME_FILE names, is there.
-	 * Every variable that does not read is said at once, so one restart shows
-	 * them all.
-	 */
-	async #layEnvironment(layer: FromEnv): Promise<void> {
-		const variables: Record<string, string | undefined> = {}
-		for (const file of layer.files) {
-			Object.assign(variables, await readDotenv(file))
-		}
-		Object.assign(variables, process.env)
-		const unread: string[] = []
-		for (const [path, field] of this.#fields) {
-			const name = field.variable ?? envName(layer.prefix, path)
-			try {
-				const found = await variable(variables, name)
-				if (found !== undefined) {
-					setPath(this.#base, path, readVariable(found.text, field.sample, found.from))
-					this.#from.set(path, `env ${found.from}`)
-				}
-			} catch (err) {
-				unread.push((err as Error).message)
-			}
-		}
-		this.#prefix = layer.prefix
-		if (unread.length > 0) {
-			throw new InvalidError(`config ${this.name}: ${unread.join('\n')}`)
-		}
-	}
-
-	#requiredText(path: string, field: Field): string {
-		if (this.#prefix === undefined) {
-			return `${path} is required`
-		}
-		return `${path} is required: set ${field.variable ?? envName(this.#prefix, path)}`
-	}
-
-	async #follow(ready: () => void, failed: (err: unknown) => void): Promise<void> {
-		let first = true
-		for (let pause = 100; !this.#closed; pause = Math.min(pause * 2, 5000)) {
-			try {
-				await this.#link.run('read', async connection => {
-					const handle = await handleOn(connection, methods['kv.open'], this.#open)
-					const stream = await connection.session.open(
-						methods['kv.watch'],
-						KvCall.encode({ handle }),
-						true,
-					)
-					this.#stream = stream
-					await stream.next()
-					for (;;) {
-						const event = await stream.next()
-						stream.consumed(event.body.length)
-						if (event.end) {
-							return
-						}
-						await this.#apply(KvKept.decode(event.body).fields ?? [])
-						pause = 100
-						if (first) {
-							first = false
-							ready()
-						}
-					}
-				})
-			} catch (err) {
-				if (first) {
-					failed(err)
-					return
-				}
-				if (this.#closed || err instanceof ClosedError) {
-					return
-				}
-			}
-			await new Promise(resolve => setTimeout(resolve, pause))
-		}
-	}
-
-	/** Keeps set, path and JSON each, and forgets reset, then makes the config with them. */
-	async #send(set: string[], reset: string[]): Promise<void> {
-		await this.#link.run('write', async connection => {
-			const handle = await handleOn(connection, methods['kv.open'], this.#open)
-			const body = KvConfigure.encode({
-				handle,
-				set: set.length > 0 ? set : undefined,
-				reset: reset.length > 0 ? reset : undefined,
-			})
-			await connection.session.call(methods['kv.configure'], body)
-		})
-		const kept = new Map(this.#kept)
-		for (let i = 0; i + 1 < set.length; i += 2) {
-			kept.set(set[i] as string, set[i + 1] as string)
-		}
-		for (const path of reset) {
-			kept.delete(path)
-		}
-		await this.#build(kept)
-	}
-
-	/** Takes up the kept fields a watch sent. */
-	async #apply(fields: string[]): Promise<void> {
-		const kept = new Map<string, string>()
-		for (let i = 0; i + 1 < fields.length; i += 2) {
-			kept.set(fields[i] as string, fields[i + 1] as string)
-		}
-		await this.#build(kept)
-	}
-
-	/** Makes the config from its base and what is kept, leaving out what no longer fits, and tells the watchers. */
-	async #build(kept: Map<string, string>): Promise<void> {
-		const ignored = new Map<string, string>()
-		let next = withKept(this.#base, this.#fields, kept, ignored)
-		let issues = await this.#issues(next)
-		if (issues !== undefined && kept.size > ignored.size) {
-			for (const path of kept.keys()) {
-				ignored.set(path, ignored.get(path) ?? `the config fails with it: ${issues}`)
-			}
-			next = structuredClone(this.#base)
-			issues = await this.#issues(next)
-		}
-		if (issues !== undefined) {
-			throw new InvalidError(`config ${this.name}: ${issues}`)
-		}
-		const changed = JSON.stringify(next) !== JSON.stringify(this.#value)
-		this.#kept = kept
-		this.#ignored = ignored
-		this.#value = deepFreeze(next) as T
-		if (changed) {
-			for (const listener of this.#listeners) {
-				listener(this.#value)
-			}
-		}
-	}
-
-	async #checked(value: Record<string, unknown>): Promise<void> {
-		const issues = await this.#issues(value)
-		if (issues !== undefined) {
-			throw new InvalidError(`config ${this.name}: ${issues}`)
-		}
-	}
-
-	async #issues(value: Record<string, unknown>): Promise<string | undefined> {
-		for (const schema of this.#schemas) {
-			const checked = await check(schema, value)
-			if ('issues' in checked) {
-				return checked.issues
-			}
-		}
-		return undefined
-	}
-}
-
-function fieldOf(leaf: unknown): Field {
-	if (!(leaf instanceof Setting)) {
-		return { sample: leaf, secret: false, fixed: false, required: false, variable: undefined }
-	}
-	return {
-		sample: leaf.fallback ?? { string: '', number: 0, boolean: false }[leaf.kind],
-		secret: leaf.secret,
-		fixed: leaf.fixed,
-		required: leaf.fallback === undefined,
-		variable: leaf.variable,
-	}
-}
-
-/**
- * A field's variable, or the text of the file NAME_FILE names, as Docker and
- * Kubernetes give a secret, its last newline taken off; both set is refused.
- */
-async function variable(
-	variables: Record<string, string | undefined>,
-	name: string,
-): Promise<{ text: string; from: string } | undefined> {
-	const text = variables[name]
-	const path = variables[`${name}_FILE`]
-	if (text !== undefined && path !== undefined) {
-		throw new InvalidError(`both ${name} and ${name}_FILE are set`)
-	}
-	if (text !== undefined) {
-		return { text, from: name }
-	}
-	if (path === undefined) {
-		return undefined
-	}
-	let read: string
+/** A file's text, none when it does not exist. */
+async function readText(path: string): Promise<string | undefined> {
 	try {
-		read = await readFile(path, 'utf8')
-	} catch (err) {
-		throw new InvalidError(`${name}_FILE: ${(err as Error).message}`)
-	}
-	const trimmed = read.endsWith('\n') ? read.slice(0, -1) : read
-	return { text: trimmed.endsWith('\r') ? trimmed.slice(0, -1) : trimmed, from: `${name}_FILE` }
-}
-
-/** The defaults' values: a Setting's default, and nothing for one without. */
-function valuesOf(tree: Record<string, unknown>): Record<string, unknown> {
-	const values: Record<string, unknown> = {}
-	for (const [key, inner] of Object.entries(tree)) {
-		if (inner instanceof Setting) {
-			if (inner.fallback !== undefined) {
-				values[key] = inner.fallback
-			}
-		} else {
-			values[key] = plain(inner) ? valuesOf(inner) : structuredClone(inner)
-		}
-	}
-	return values
-}
-
-/** A required field's value no layer gave, or gave empty. */
-function missing(value: unknown): boolean {
-	return value === undefined || value === ''
-}
-
-async function readDotenv(path: string): Promise<Record<string, string>> {
-	let text: string
-	try {
-		text = await readFile(path, 'utf8')
+		return await readFile(path, 'utf8')
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-			return {}
+			return undefined
 		}
-		throw err
-	}
-	try {
-		return parseDotenv(text)
-	} catch (err) {
 		throw new InvalidError(`${path}: ${(err as Error).message}`)
 	}
 }
 
-/** The base with each kept value that fits its field over it; a secret is never taken from what was kept. */
-function withKept(
-	base: Record<string, unknown>,
-	fields: Map<string, Field>,
-	kept: Map<string, string>,
-	ignored: Map<string, string>,
-): Record<string, unknown> {
-	const next = structuredClone(base)
-	for (const [path, spelled] of kept) {
-		const field = fields.get(path)
-		if (field === undefined) {
-			ignored.set(path, 'the config has no such field')
-			continue
-		}
-		if (field.secret) {
-			ignored.set(path, 'the field is a secret')
-			continue
-		}
-		if (field.fixed) {
-			ignored.set(path, 'the field is fixed')
-			continue
-		}
-		let value: unknown
-		try {
-			value = JSON.parse(spelled)
-		} catch {
-			ignored.set(path, `${spelled} is no JSON`)
-			continue
-		}
-		if (!fits(value, field.sample)) {
-			ignored.set(path, `${spelled} is no ${kindOf(field.sample)}`)
-			continue
-		}
-		if (field.required && missing(value)) {
-			ignored.set(path, 'the field is required')
-			continue
-		}
-		setPath(next, path, value)
+/** A layer as the core reads it, its files and variables read here. */
+async function layerData(
+	layer: unknown,
+	place: number,
+	declared: Group,
+): Promise<object | undefined> {
+	if (layer === false || layer === null || layer === undefined) {
+		return undefined
 	}
-	return next
+	const kind = layerOf(layer)
+	if (kind === 'file') {
+		const { path, optional } = layer as FileLayer
+		const text = await readText(path)
+		return { file: { name: path, optional, ...(text === undefined ? {} : { text }) } }
+	}
+	if (kind === 'env') {
+		return { env: await envData(layer as EnvLayer, declared) }
+	}
+	if (isPlainObject(layer)) {
+		return { object: layer, place }
+	}
+	throw new InvalidError(`layer ${place}: an object, file(…) or env(…)`)
 }
 
 /**
- * A variable's text as a value of its default's kind: a number, true or
- * false, a list split at its commas or given as JSON, and anything else as JSON.
- *
- *     8080 ← '3000' → 3000, ['x'] ← 'a.com, b.com' → ['a.com', 'b.com']
+ * What the environment gives, read here: the variables of every setting and
+ * those with the prefix, never the rest of the process's, the files their
+ * NAME_FILE names, and the .env files' text.
  */
-function readVariable(text: string, wanted: unknown, name: string): unknown {
-	const trimmed = text.trim()
-	if (typeof wanted === 'string') {
-		return text
-	}
-	if (typeof wanted === 'number') {
-		const n = Number(trimmed)
-		if (trimmed === '' || !Number.isFinite(n)) {
-			throw new InvalidError(`${name}: ${JSON.stringify(text)} is no number`)
-		}
-		return n
-	}
-	if (typeof wanted === 'boolean') {
-		if (['1', 't', 'T', 'TRUE', 'true', 'True'].includes(trimmed)) {
-			return true
-		}
-		if (['0', 'f', 'F', 'FALSE', 'false', 'False'].includes(trimmed)) {
-			return false
-		}
-		throw new InvalidError(`${name}: ${JSON.stringify(text)} is not true or false`)
-	}
-	if (Array.isArray(wanted) && !trimmed.startsWith('[')) {
-		const item = wanted[0] ?? ''
-		return trimmed === ''
-			? []
-			: trimmed.split(',').map(part => readVariable(part.trim(), item, name))
-	}
-	try {
-		const value: unknown = JSON.parse(trimmed)
-		if (fits(value, wanted)) {
-			return value
-		}
-	} catch {
-		// refused below, naming the variable
-	}
-	throw new InvalidError(`${name}: ${JSON.stringify(text)} is no ${kindOf(wanted)}`)
-}
-
-/** A value's fields to the last that is not a plain object, by their dotted paths. */
-function leavesOf(value: unknown, parent = ''): [string, unknown][] {
-	const leaves: [string, unknown][] = []
-	for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
-		const path = parent === '' ? key : `${parent}.${key}`
-		if (plain(inner)) {
-			leaves.push(...leavesOf(inner, path))
-		} else {
-			leaves.push([path, inner])
+async function envData(layer: EnvLayer, declared: Group): Promise<object> {
+	const windows = process.platform === 'win32'
+	const key = (name: string) => (windows ? name.toUpperCase() : name)
+	const named = paths(declared, '').map(path => layer.vars[path] ?? envName(layer.prefix, path))
+	const wanted = new Set(named.flatMap(name => [key(name), key(`${name}_FILE`)]))
+	const start = key(`${layer.prefix}_`)
+	const variables: Record<string, string> = {}
+	for (const [name, value] of Object.entries(layer.from ?? process.env)) {
+		const k = key(name)
+		if (value !== undefined && (wanted.has(k) || (layer.prefix !== '' && k.startsWith(start)))) {
+			variables[k] = value
 		}
 	}
-	return leaves
-}
-
-function plain(value: unknown): value is Record<string, unknown> {
-	return (
-		typeof value === 'object' &&
-		value !== null &&
-		!Array.isArray(value) &&
-		!(value instanceof Date) &&
-		!(value instanceof Setting) &&
-		!(value instanceof FromEnv) &&
-		!(value instanceof Validate)
-	)
-}
-
-/** A value fits a field when it is of its default's kind; a default of null takes anything. */
-function fits(value: unknown, wanted: unknown): boolean {
-	if (wanted === null || wanted === undefined) {
-		return true
-	}
-	if (Array.isArray(wanted)) {
-		return Array.isArray(value)
-	}
-	return typeof value === typeof wanted && (typeof wanted !== 'object' || plain(value))
-}
-
-function kindOf(wanted: unknown): string {
-	return Array.isArray(wanted) ? 'list' : typeof wanted
-}
-
-function pathIn(tree: unknown, path: string): unknown {
-	let at = tree
-	for (const name of path.split('.')) {
-		if (!plain(at)) {
-			return undefined
+	const dotenv: { name: string; text: string }[] = []
+	for (const name of layer.files) {
+		const text = await readText(name)
+		if (text !== undefined) {
+			dotenv.push({ name, text })
 		}
-		at = at[name]
 	}
-	return at
-}
-
-function setPath(tree: Record<string, unknown>, path: string, value: unknown): void {
-	const names = path.split('.')
-	let at = tree
-	for (const name of names.slice(0, -1)) {
-		const inner = at[name]
-		if (!plain(inner)) {
-			at[name] = {}
+	const files: Record<string, string> = {}
+	const namedFiles = [...Object.entries(variables), ...dotenv.flatMap(d => fileVariables(d.text))]
+	for (const [name, path] of namedFiles) {
+		if (name.endsWith('_FILE')) {
+			const text = await readText(path)
+			if (text !== undefined) {
+				files[path] = text
+			}
 		}
-		at = at[name] as Record<string, unknown>
 	}
-	at[names[names.length - 1] as string] = value
+	return { prefix: layer.prefix, vars: layer.vars, variables, files, dotenv }
 }
 
-/** change merged into tree at every depth; a list is replaced whole. */
-function merged(tree: Record<string, unknown>, change: unknown): Record<string, unknown> {
-	for (const [key, value] of Object.entries(change as Record<string, unknown>)) {
-		const inner = tree[key]
-		tree[key] = plain(value) && plain(inner) ? merged(inner, value) : value
+/** The NAME_FILE lines of a .env file's text, whose files the core cannot read. */
+function fileVariables(text: string): [string, string][] {
+	const found: [string, string][] = []
+	for (const line of text.split('\n')) {
+		const match = /^\s*(?:export\s+)?([\p{L}_][\p{L}\p{Nd}_]*_FILE)\s*=\s*(.*?)\s*$/u.exec(line)
+		if (match !== null) {
+			found.push([match[1]!, match[2]!.replace(/^(['"])(.*)\1$/, '$2')])
+		}
 	}
-	return tree
+	return found
 }
 
-function under(path: string, given: string): boolean {
-	return path === given || path.startsWith(`${given}.`)
+/** A value as the program reads it: a duration spelled, a secret wrapped, all of it frozen. */
+function viewed(group: Group, value: unknown): unknown {
+	const source = (isPlainObject(value) ? value : {}) as Record<string, unknown>
+	const out: Record<string, unknown> = {}
+	for (const [key, node] of Object.entries(group)) {
+		out[key] = 'group' in node ? viewed(node.group, source[key]) : viewedSetting(node, source[key])
+	}
+	return Object.freeze(out)
 }
 
-function deepFreeze<V>(value: V): V {
-	if (typeof value === 'object' && value !== null) {
+function viewedSetting(described: Described, value: unknown): unknown {
+	if (described.secret === true) {
+		return new Secret(typeof value === 'string' ? value : '')
+	}
+	return viewedKind(described.kind, value)
+}
+
+function viewedKind(kind: Kind, value: unknown): unknown {
+	if (kind === 'duration' && typeof value === 'number') {
+		return spelled(value)
+	}
+	if (typeof kind === 'object' && Array.isArray(value)) {
+		const item = kind.list
+		const items = value.map(each =>
+			'group' in item ? viewed(item.group, each) : viewedKind(item.kind, each),
+		)
+		return Object.freeze(items)
+	}
+	return frozen(value)
+}
+
+function frozen(value: unknown): unknown {
+	if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
 		for (const inner of Object.values(value)) {
-			deepFreeze(inner)
+			frozen(inner)
 		}
 		Object.freeze(value)
 	}
 	return value
+}
+
+/** A partial value over a whole one: the groups it names merged, anything else replaced. */
+function merged(value: unknown, changes: unknown): unknown {
+	if (!isPlainObject(value) || !isPlainObject(changes)) {
+		return changes
+	}
+	const out: Record<string, unknown> = { ...value }
+	for (const [key, change] of Object.entries(changes)) {
+		out[key] = merged(value[key], change)
+	}
+	return out
+}
+
+type Watcher<V> = (next: V, previous: V | undefined) => void
+type Answer = Read<typeof ConfigValue.fields>
+
+/**
+ * A program's settings as one typed value, read from memory: open one with
+ * `store.config(name, [declaration, ...layers])`.
+ */
+export class Config<D> {
+	readonly name: string
+	readonly #link: Link
+	readonly #declared: Group
+	readonly #open: Uint8Array
+	readonly #check: ((value: unknown) => Promise<void>) | undefined
+	readonly #handles = new WeakMap<Connection, Promise<number>>()
+	readonly #watchers = new Set<Watcher<Value<D>>>()
+	#value: Value<D>
+	#version = 0
+	#lines: ExplainLine[] = []
+	#notes: string[] = []
+	/** why validate refused the newest value the store sent, a change another program made */
+	#refused: InvalidError | undefined
+	#taking: Promise<void> = Promise.resolve()
+	#newer: (() => void)[] = []
+	#stream: Stream | undefined
+	#stopped = false
+
+	private constructor(
+		link: Link,
+		name: string,
+		declared: Group,
+		open: Uint8Array,
+		check: ((value: unknown) => Promise<void>) | undefined,
+	) {
+		this.#link = link
+		this.name = name
+		this.#declared = declared
+		this.#open = open
+		this.#check = check
+		this.#value = viewed(declared, {}) as Value<D>
+	}
+
+	/** Opens a config from its list: the declaration first, then its layers in order. */
+	static async open<D>(
+		link: Link,
+		name: string,
+		layers: readonly unknown[],
+		options: ConfigOptions<Value<D>>,
+	): Promise<Config<D>> {
+		const [declaration, ...rest] = layers
+		if (!isPlainObject(declaration)) {
+			throw new InvalidError(`config ${name}: the list's first entry is its declaration, an object`)
+		}
+		const declared = declaredGroup(declaration, '')
+		const data = await Promise.all(rest.map((layer, at) => layerData(layer, at + 2, declared)))
+		const open = ConfigOpen.encode({
+			name,
+			declaration: JSON.stringify(declared),
+			layers: JSON.stringify(data.filter(layer => layer !== undefined)),
+			strict: options.strict === true,
+		})
+		const config = new Config<D>(link, name, declared, open, checkerOf(name, options.validate))
+		await link.run('read', connection => config.#handleOn(connection))
+		await config.#taking
+		if (config.#refused !== undefined) {
+			throw config.#refused
+		}
+		void config.#follow()
+		return config
+	}
+
+	/** The settings as they are now: a read of memory, so read it where it is used. */
+	get value(): Value<D> {
+		return this.#value
+	}
+
+	/** The version of the changes the value holds, which `ifVersion` takes. */
+	get version(): number {
+		return this.#version
+	}
+
+	/**
+	 * Changes live settings: the ones `changes` names are kept in the store, go
+	 * over every layer until they are reset, and reach every handle of the
+	 * config. The value they make passes validate first; all are kept or none.
+	 */
+	async update(changes: Changes<D>, options: UpdateOptions = {}): Promise<void> {
+		for (let tries = 1; ; tries++) {
+			const version = options.ifVersion ?? this.#version
+			await this.#check?.(merged(this.#value, changes))
+			const body = (handle: number) =>
+				ConfigUpdate.encode({ handle, version, changes: JSON.stringify(changes) })
+			try {
+				await this.#call('write', methods['config.update'], body)
+				return
+			} catch (err) {
+				if (
+					!(err instanceof ConflictError) ||
+					options.ifVersion !== undefined ||
+					tries === attempts
+				) {
+					throw err
+				}
+				await this.#newerThan(version)
+			}
+		}
+	}
+
+	/** Drops the change kept of the setting or the group at `path`, or of every setting. */
+	async reset(path = ''): Promise<void> {
+		await this.#call('write', methods['config.reset'], handle =>
+			ConfigReset.encode({ handle, path }),
+		)
+	}
+
+	/**
+	 * Calls `watcher` with the settings now, then with each change and the value
+	 * before it, made in this process or another. It returns the call that stops it.
+	 */
+	watch(watcher: (next: Value<D>, previous: Value<D> | undefined) => void): () => void {
+		this.#watchers.add(watcher)
+		watcher(this.#value, undefined)
+		return () => {
+			this.#watchers.delete(watcher)
+		}
+	}
+
+	/** Every setting with its value, the layer that gave it and what it went over. */
+	explain(): Explained {
+		const refused =
+			this.#refused === undefined ? [] : [`a value validate refused: ${this.#refused.message}`]
+		return Object.assign([...this.#lines], { notes: [...this.#notes, ...refused] })
+	}
+
+	/** Stops following the config: the store closes. */
+	stop(): void {
+		this.#stopped = true
+		this.#watchers.clear()
+		this.#stream?.cancel()
+		for (const wake of this.#newer.splice(0)) {
+			wake()
+		}
+	}
+
+	/** Runs a call on the config's handle on the link's connection, and takes the value it answers. */
+	async #call(
+		idempotence: Idempotence,
+		method: number,
+		body: (handle: number) => Uint8Array,
+	): Promise<void> {
+		await this.#link.run(idempotence, async connection => {
+			const handle = await this.#handleOn(connection)
+			await this.#take(ConfigValue.decode(await connection.session.call(method, body(handle))))
+		})
+	}
+
+	/** The config's handle on a connection, opened there first, its value taken. */
+	#handleOn(connection: Connection): Promise<number> {
+		let handle = this.#handles.get(connection)
+		if (handle === undefined) {
+			handle = connection.session.call(methods['config.open'], this.#open).then(async body => {
+				const opened = ConfigValue.decode(body)
+				await this.#take(opened)
+				return opened.handle ?? 0
+			})
+			this.#handles.set(connection, handle)
+			handle.catch(() => this.#handles.delete(connection))
+		}
+		return handle
+	}
+
+	/** Takes a value the store sent, in the order it came; an older one than this has is left. */
+	#take(answer: Answer): Promise<void> {
+		this.#taking = this.#taking.then(() => this.#accept(answer))
+		return this.#taking
+	}
+
+	async #accept(answer: Answer): Promise<void> {
+		const version = answer.version ?? 0
+		if (version < this.#version || (version === this.#version && this.#lines.length > 0)) {
+			return
+		}
+		const next = viewed(this.#declared, JSON.parse(answer.value ?? '{}')) as Value<D>
+		try {
+			await this.#check?.(next)
+		} catch (err) {
+			this.#refused = err instanceof InvalidError ? err : new InvalidError((err as Error).message)
+			if (this.#lines.length > 0) {
+				process.stderr.write(
+					`version ${version}: ${this.#refused.message}; the value before it stays\n`,
+				)
+			}
+			return
+		}
+		const previous = this.#value
+		this.#refused = undefined
+		this.#value = next
+		this.#version = version
+		this.#lines = (answer.lines ?? []).map(line => ({
+			path: line.path ?? '',
+			value: line.value ?? '',
+			from: line.from ?? '',
+			over: (line.over ?? []).join(', '),
+		}))
+		this.#notes = answer.notes ?? []
+		for (const wake of this.#newer.splice(0)) {
+			wake()
+		}
+		for (const watcher of this.#watchers) {
+			try {
+				watcher(next, previous)
+			} catch (err) {
+				process.stderr.write(`config ${this.name}: a watcher threw: ${(err as Error).message}\n`)
+			}
+		}
+	}
+
+	/** Waits until a version later than `version` came, or a second passed. */
+	#newerThan(version: number): Promise<void> {
+		if (this.#version > version || this.#stopped) {
+			return Promise.resolve()
+		}
+		return new Promise(resolve => {
+			const timer = setTimeout(resolve, 1000)
+			this.#newer.push(() => {
+				clearTimeout(timer)
+				resolve()
+			})
+		})
+	}
+
+	/**
+	 * Follows the config on one stream until the store closes: a lost
+	 * connection or a server going away follows again on the next one.
+	 */
+	async #follow(): Promise<void> {
+		while (!this.#stopped) {
+			try {
+				const stream = await this.#link.run('read', async connection => {
+					const handle = await this.#handleOn(connection)
+					const opened = await connection.session.open(
+						methods['config.follow'],
+						Handle.encode({ handle }),
+						true,
+					)
+					await opened.next()
+					return opened
+				})
+				this.#stream = stream
+				if (this.#stopped) {
+					stream.cancel()
+					return
+				}
+				for (;;) {
+					const event = await stream.next()
+					stream.consumed(event.body.length)
+					if (event.end) {
+						break
+					}
+					await this.#take(ConfigValue.decode(event.body))
+				}
+			} catch (err) {
+				if (this.#stopped) {
+					return
+				}
+				const passing =
+					err instanceof LostError ||
+					err instanceof UnavailableError ||
+					err instanceof CancelledError
+				if (!passing) {
+					await new Promise(resolve => setTimeout(resolve, 1000))
+				}
+			}
+		}
+	}
+}
+
+/** The check a config's validate makes of a whole value, throwing InvalidError when it refuses. */
+function checkerOf<V>(
+	name: string,
+	validate: ConfigOptions<V>['validate'],
+): ((value: unknown) => Promise<void>) | undefined {
+	if (validate === undefined) {
+		return undefined
+	}
+	if (isSchema(validate)) {
+		return async value => {
+			const checked = await check(validate, value)
+			if ('issues' in checked) {
+				throw new InvalidError(`config ${name}: ${checked.issues}`)
+			}
+		}
+	}
+	return async value => {
+		try {
+			await validate(value as V)
+		} catch (err) {
+			throw err instanceof InvalidError
+				? err
+				: new InvalidError(`config ${name}: ${(err as Error).message}`)
+		}
+	}
 }

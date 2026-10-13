@@ -1,235 +1,292 @@
-// Configs through a real tinystore serve, the one test/binary.ts built, and
-// the variables and .env files of kv/testdata/config.json, which Go's and
-// Python's configs are tested against too.
+// Configs as plan/api/config.md has them over protocol 2, through each way a
+// store is reached: a declaration in layers, each declaring again what came
+// before, the rules of one value the core checks, live settings whose change
+// every handle sees on one stream, secrets that print as ***, and the names,
+// .env files and durations every language reads alike (testdata/config/env.json).
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { envName, parseDotenv } from '../src/config.ts'
+import { envName } from '../src/config.ts'
+import { parseDotenv } from '../src/dotenv.ts'
 import {
-	fixed,
-	fromEnv,
+	ConflictError,
+	duration,
+	env,
+	file,
 	InvalidError,
-	open,
+	int,
+	list,
+	live,
+	oneOf,
 	required,
-	type StandardSchemaV1,
+	Secret,
 	type Store,
 	secret,
-	validate,
 } from '../src/index.ts'
+import { ms, spelled } from '../src/time.ts'
+import { caught, removed, until, ways } from './ways.ts'
 
-async function caught(promise: Promise<unknown>): Promise<unknown> {
-	return promise.then(
-		() => undefined,
-		(err: unknown) => err,
-	)
-}
-
-let dir: string
-let store: Store
-
-beforeAll(async () => {
-	dir = mkdtempSync(join(tmpdir(), 'tinystore-config-'))
-	store = await open(dir, { private: true })
-})
-
-afterAll(async () => {
-	await store.close()
-	rmSync(dir, { recursive: true, force: true })
-})
-
-const defaults = {
-	port: 8080,
-	dbUrl: secret('LAYERS_DATABASE_URL', ''),
-	origins: ['localhost'],
-	limits: { rps: 100, burst: 10, on: false },
-}
-
-const vectors: {
+const vectors = JSON.parse(
+	readFileSync(join(import.meta.dir, '..', '..', '..', 'testdata', 'config', 'env.json'), 'utf8'),
+) as {
 	names: [string, string, string][]
 	dotenv: { name: string; text: string; want?: Record<string, string>; refused?: number }[]
-} = await Bun.file(join(import.meta.dir, '..', '..', '..', 'kv', 'testdata', 'config.json')).json()
+	spans: [string, number | null][]
+}
 
-describe('variables', () => {
-	for (const [prefix, path, name] of vectors.names) {
-		test(`${prefix} ${path} is ${name}`, () => {
-			expect(envName(prefix, path)).toBe(name)
-		})
-	}
-})
+describe('what every language reads alike', () => {
+	test("a setting's variable is its prefix and its path in upper snake case", () => {
+		for (const [prefix, path, want] of vectors.names) {
+			expect(envName(prefix, path)).toBe(want)
+		}
+	})
 
-describe('.env files', () => {
-	for (const v of vectors.dotenv) {
-		test(v.name, () => {
-			if (v.refused === undefined) {
-				expect(parseDotenv(v.text)).toEqual(v.want ?? {})
+	test('a .env file reads as the core reads one', () => {
+		for (const { name, text, want, refused } of vectors.dotenv) {
+			if (refused === undefined) {
+				expect(parseDotenv(text), name).toEqual(want ?? {})
 			} else {
-				expect(() => parseDotenv(v.text)).toThrow(`line ${v.refused}:`)
+				expect(() => parseDotenv(text), name).toThrow(`line ${refused}:`)
 			}
-		})
-	}
+		}
+	})
+
+	test('a duration reads and spells back as the core reads one', () => {
+		for (const [text, want] of vectors.spans) {
+			if (want === null) {
+				expect(() => ms(text), text).toThrow(InvalidError)
+			} else {
+				expect(ms(text), text).toBe(want)
+				expect(ms(spelled(want)), text).toBe(want)
+			}
+		}
+		expect(spelled(5_400_000)).toBe('1h30m')
+	})
+
+	test('a secret prints as *** wherever it goes, and reveal gives it', () => {
+		const url = new Secret('postgres://user:password@host')
+		const shown = [
+			String(url),
+			`${url}`,
+			JSON.stringify({ url }),
+			Bun.inspect({ url }),
+			JSON.stringify({ ...url }),
+		]
+		for (const text of shown) {
+			expect(text).not.toContain('password')
+		}
+		expect(url.reveal()).toBe('postgres://user:password@host')
+	})
+
+	test('a mark that means nothing is refused where it is written', () => {
+		// @ts-expect-error a secret is never live
+		expect(() => live(secret(String))).toThrow('a secret is never live')
+		// @ts-expect-error a secret is required already
+		expect(() => required(secret(String))).toThrow('a secret is required already')
+		// @ts-expect-error a group is no setting
+		expect(() => live({ rps: 1 })).toThrow('a mark goes on a setting, not on a group')
+		expect(() => list(live(1) as never)).toThrow("a list's items are neither live nor secret")
+	})
 })
 
-describe('a config', () => {
-	test('is its defaults, then each layer in its order, then what update kept', async () => {
-		const dotenv = join(dir, 'layers.env')
-		writeFileSync(dotenv, 'LAYERS_PORT=3000\nLAYERS_ORIGINS=a.com, b.com\n')
-		process.env.LAYERS_LIMITS_ON = 'true'
-		process.env.LAYERS_DATABASE_URL = 'postgres://secret'
-		const file = { port: 5000, limits: { burst: 20 } }
-		const cfg = await store.config('layers', defaults, file, fromEnv('LAYERS', dotenv))
-		expect(cfg.value).toEqual({
-			port: 3000,
-			dbUrl: 'postgres://secret',
-			origins: ['a.com', 'b.com'],
-			limits: { rps: 100, burst: 20, on: true },
+for (const way of ways) {
+	describe.skipIf(!way.ready)(`configs through ${way.name}`, () => {
+		let dir: string
+		let store: Store
+
+		beforeAll(async () => {
+			dir = mkdtempSync(join(tmpdir(), 'tinystore-config-'))
+			store = await way.open(dir)
 		})
 
-		await cfg.update({ port: 4000, limits: { rps: 50 } })
-		expect([cfg.value.port, cfg.value.limits.rps, cfg.value.limits.burst]).toEqual([4000, 50, 20])
-		const sources = Object.fromEntries(cfg.sources().map(s => [s.path, s]))
-		expect(sources.port).toEqual({ path: 'port', value: '4000', from: 'kept' })
-		expect(sources['limits.burst']?.from).toBe('file')
-		expect(sources.dbUrl).toEqual({ path: 'dbUrl', value: '***', from: 'env LAYERS_DATABASE_URL' })
+		afterAll(async () => {
+			await store.close()
+			await way.leave(dir)
+			await removed(dir)
+		})
 
-		const again = await store.config('layers', defaults, file, fromEnv('LAYERS', dotenv))
-		expect([again.value.port, again.value.limits.rps]).toEqual([4000, 50])
-		await cfg.reset('port')
-		expect(cfg.value.port).toBe(3000)
-		await cfg.reset()
-		expect(cfg.value.limits.rps).toBe(100)
-	})
+		const declaration = () => ({
+			port: int(8080, { min: 1, max: 65535 }),
+			level: oneOf('info', ['debug', 'warn', 'error']),
+			timeout: duration('30s'),
+			origins: ['localhost'],
+			db: { url: secret(String), pool: 10 },
+			limits: { rps: live(int(100, { min: 0 })), burst: live(10) },
+		})
 
-	test('reads no variable without fromEnv, and a layer after it goes over it', async () => {
-		process.env.ORDER_PORT = '3000'
-		const none = await store.config('order', { port: 8080 })
-		const last = await store.config('order', { port: 8080 }, fromEnv('ORDER'), { port: 9000 })
-		expect([none.value.port, last.value.port]).toEqual([8080, 9000])
-	})
+		test('a config is its declaration, then each layer in the order written', async () => {
+			const yaml = join(dir, 'app.yaml')
+			writeFileSync(yaml, 'port: 8000\nlimits:\n  rps: 50\n')
+			const config = await store.config('ordered', [
+				declaration(),
+				{ level: 'debug' as const },
+				file(yaml),
+				env('APP', { from: { APP_PORT: '9000', APP_DB_URL: 'postgres://local' } }),
+			])
+			const port: number = config.value.port
+			expect([port, config.value.limits.rps, config.value.level]).toEqual([9000, 50, 'debug'])
+			expect(config.value.timeout).toBe('30s')
+			const lines = Object.fromEntries(config.explain().map(line => [line.path, line]))
+			expect(lines.port).toEqual({
+				path: 'port',
+				value: '9000',
+				from: 'APP_PORT',
+				over: `8000 from ${yaml}, 8080 from the declaration`,
+			})
+			expect(lines.level?.from).toBe('layer 2')
+			expect(lines['db.url']?.value).toBe('***')
+		})
 
-	test('a change through one config reaches another of its name at once', async () => {
-		const first = await store.config('shared', defaults)
-		const second = await store.config('shared', defaults)
-		const seen: number[] = []
-		second.watch(c => seen.push(c.port))
-		await first.update({ port: 9090 })
-		for (let i = 0; i < 100 && second.value.port !== 9090; i++) {
-			await Bun.sleep(10)
-		}
-		expect(second.value.port).toBe(9090)
-		expect(seen).toEqual([8080, 9090])
-	})
+		test('a rule of one value is the core’s, and a refusal names the layer that gave it', async () => {
+			const opening = (from: Record<string, string>) =>
+				store.config('rules', [declaration(), env('APP', { from: { APP_DB_URL: 'u', ...from } })])
+			const err = await caught(opening({ APP_PORT: '70000', APP_LEVEL: 'verbose' }))
+			expect(err).toBeInstanceOf(InvalidError)
+			expect((err as Error).message).toContain('APP_PORT: 70000 is above 65535')
+			expect((err as Error).message).toContain(
+				'APP_LEVEL: "verbose" is not one of info, debug, warn, error',
+			)
+			const config = await opening({ APP_TIMEOUT: '1m30s', APP_ORIGINS: 'a.com, b.com' })
+			expect(config.value.timeout).toBe('1m30s')
+			expect(config.value.origins).toEqual(['a.com', 'b.com'])
+		})
 
-	test('a change the schema refuses, or one of a secret, keeps nothing', async () => {
-		const ports: StandardSchemaV1<unknown, { port: number }> = {
-			'~standard': {
-				version: 1,
-				vendor: 'test',
-				validate: value => {
-					const port = (value as { port: number }).port
-					return port > 0 && port < 65536
-						? { value: value as { port: number } }
-						: { issues: [{ message: 'no port', path: ['port'] }] }
+		test('a required setting is given by a layer, or the config does not open, naming what would', async () => {
+			const opening = (from: Record<string, string>) =>
+				store.config('required', [
+					{ region: required(String), workers: required(int({ min: 1 })), token: secret(String) },
+					env('APP', { from }),
+				])
+			const err = await caught(opening({ APP_REGION: '' }))
+			expect(err).toBeInstanceOf(InvalidError)
+			expect((err as Error).message).toContain('region is required: set APP_REGION')
+			expect((err as Error).message).toContain('token is required: set APP_TOKEN')
+			const config = await opening({ APP_REGION: 'eu', APP_WORKERS: '4', APP_TOKEN: 't' })
+			const token: Secret = config.value.token
+			expect([config.value.region, config.value.workers, token.reveal()]).toEqual(['eu', 4, 't'])
+		})
+
+		test('a file absent is refused unless optional, and a key no setting has is named', async () => {
+			const missing = join(dir, 'missing.toml')
+			const opening = (layers: Parameters<typeof file>[]) =>
+				store.config('files', [
+					{ port: 8080 },
+					...layers.map(([path, options]) => file(path, options)),
+				])
+			expect(((await caught(opening([[missing]]))) as Error).message).toContain('no such file')
+			const config = await opening([[missing, { optional: true }]])
+			expect(config.explain().notes).toEqual([`${missing}: absent`])
+			const json = join(dir, 'app.jsonc')
+			writeFileSync(json, '{\n  // a comment\n  "prot": 1,\n}\n')
+			expect(((await caught(opening([[json]]))) as Error).message).toContain(
+				'prot: no such setting',
+			)
+		})
+
+		test('a live setting changes for every handle, and reset gives the layers back', async () => {
+			const layers = [
+				declaration(),
+				env('APP', { from: { APP_DB_URL: 'u', APP_LIMITS_RPS: '1000' } }),
+			] as const
+			const config = await store.config('live', layers)
+			expect(await store.config('live', layers)).toBe(config)
+			const other = await store.config('live', [
+				{ limits: { rps: live(1), burst: live(1) } },
+				env('APP', { from: {} }),
+			])
+			await config.update({ limits: { rps: 200 } })
+			expect(config.value.limits.rps).toBe(200)
+			const rps = config.explain().find(line => line.path === 'limits.rps')
+			expect(rps?.from.startsWith('a change, version ')).toBe(true)
+			expect(rps?.over).toBe('1000 from APP_LIMITS_RPS, 100 from the declaration')
+			await until(() => other.value.limits.rps === 200)
+			// @ts-expect-error port is not live
+			const refused = await caught(config.update({ port: 1 }))
+			expect((refused as Error).message).toContain('port is not live')
+			await config.reset('limits.rps')
+			expect(config.value.limits.rps).toBe(1000)
+			await until(() => other.value.limits.rps === 1)
+		})
+
+		test('ifVersion refuses a change made since, and two changes of different settings both stay', async () => {
+			const first = await store.config('versions', [{ a: live(1), b: live(2) }])
+			const second = await store.config('versions', [{ a: live(1), b: live(2), c: 3 }])
+			const shown = first.version
+			await first.update({ a: 10 })
+			await second.update({ b: 20 })
+			await until(() => first.value.b === 20 && second.value.a === 10)
+			const err = await caught(first.update({ a: 30 }, { ifVersion: shown }))
+			expect(err).toBeInstanceOf(ConflictError)
+			await first.update({ a: 40 }, { ifVersion: first.version })
+			expect(first.value.a).toBe(40)
+		})
+
+		test('every watcher of a config is called now, then once for each change, until it stops', async () => {
+			const config = await store.config('watched', [{ rps: live(100) }])
+			const seen: [number, number | undefined][][] = [[], [], []]
+			const stops = seen.map(calls =>
+				config.watch((next, previous) => calls.push([next.rps, previous?.rps])),
+			)
+			await config.update({ rps: 200 })
+			for (const calls of seen) {
+				expect(calls).toEqual([
+					[100, undefined],
+					[200, 100],
+				])
+			}
+			stops[0]?.()
+			await config.update({ rps: 300 })
+			expect(seen[0]).toHaveLength(2)
+			expect(seen[1]).toHaveLength(3)
+		})
+
+		test('validate refuses a value at open, and a change it refuses keeps nothing', async () => {
+			const atMost = (most: number) => (value: { readonly rps: number }) => {
+				if (value.rps > most) {
+					throw new Error(`rps past ${most}`)
+				}
+			}
+			const refused = await caught(
+				store.config('validated', [{ rps: live(5000) }], { validate: atMost(1000) }),
+			)
+			expect((refused as Error).message).toContain('rps past 1000')
+			const config = await store.config('validated', [{ rps: live(100) }], {
+				validate: atMost(1000),
+			})
+			const err = await caught(config.update({ rps: 2000 }))
+			expect(err).toBeInstanceOf(InvalidError)
+			expect(config.value.rps).toBe(100)
+			const schema = {
+				'~standard': {
+					version: 1 as const,
+					vendor: 'test',
+					validate: (value: unknown) =>
+						(value as { rps: number }).rps === 7 ? { issues: [{ message: 'not 7' }] } : { value },
 				},
-			},
-		}
-		const cfg = await store.config('checked', defaults, validate(ports))
-		// @ts-expect-error: a schema is no file's values; it checks through validate
-		expect(await caught(store.config('checked', defaults, ports))).toBeInstanceOf(InvalidError)
-		expect(await caught(cfg.update({ port: 70000 }))).toBeInstanceOf(InvalidError)
-		expect(await caught(cfg.update({ dbUrl: 'leaked' }))).toBeInstanceOf(InvalidError)
-		expect(cfg.value.port).toBe(8080)
-		expect(cfg.sources().find(s => s.path === 'dbUrl')?.value).toBe('***')
-	})
-
-	test('a required field is given by a layer, or the config does not open, naming its variable', async () => {
-		const settings = {
-			url: secret('REQUIRED_DATABASE_URL'),
-			region: required(),
-			workers: required(Number),
-		}
-		delete process.env.REQUIRED_DATABASE_URL
-		process.env.REQUIRED_REGION = 'eu'
-		process.env.REQUIRED_WORKERS = '0'
-		const err = await caught(store.config('required', settings, fromEnv('REQUIRED')))
-		expect(err).toBeInstanceOf(InvalidError)
-		expect(String(err)).toContain('url is required: set REQUIRED_DATABASE_URL')
-		expect(String(await caught(store.config('required', settings)))).toContain('url is required')
-
-		process.env.REQUIRED_DATABASE_URL = ''
-		expect(await caught(store.config('required', settings, fromEnv('REQUIRED')))).toBeInstanceOf(
-			InvalidError,
-		)
-
-		process.env.REQUIRED_DATABASE_URL = 'postgres://secret'
-		const cfg = await store.config('required', settings, fromEnv('REQUIRED'))
-		const value: { url: string; region: string; workers: number } = cfg.value
-		expect(value).toEqual({ url: 'postgres://secret', region: 'eu', workers: 0 })
-		expect(await caught(cfg.update({ region: '' }))).toBeInstanceOf(InvalidError)
-		await cfg.update({ region: 'us' })
-		expect(cfg.value.region).toBe('us')
-	})
-
-	test('a kept value that no longer fits its field, or names a secret, is left out and named', async () => {
-		const older = await store.config('changed', { port: 8080, token: '' })
-		await older.update({ port: 4000, token: 'leaked' })
-		const newer = await store.config('changed', {
-			port: 'eighty',
-			token: secret('CHANGED_TOKEN', 'safe'),
+			}
+			const checked = await store.config('schema', [{ rps: live(1) }], { validate: schema })
+			expect(((await caught(checked.update({ rps: 7 }))) as Error).message).toContain('not 7')
 		})
-		expect([newer.value.port, newer.value.token]).toEqual(['eighty', 'safe'])
-		const sources = Object.fromEntries(newer.sources().map(s => [s.path, s]))
-		expect(sources.port?.ignored).toContain('is no string')
-		expect(sources.token?.ignored).toBe('the field is a secret')
-	})
 
-	test('a variable that is not its field kind is refused, naming it', async () => {
-		process.env.BAD_PORT = 'abc'
-		const err = await caught(store.config('bad', defaults, fromEnv('BAD')))
-		expect(err).toBeInstanceOf(InvalidError)
-		expect(String(err)).toContain('BAD_PORT')
-	})
-
-	test('every variable that does not read is said at once', async () => {
-		process.env.EVERY_PORT = 'eighty'
-		process.env.EVERY_LIMITS_ON = 'yes'
-		const err = String(await caught(store.config('every', defaults, fromEnv('EVERY'))))
-		expect(err).toContain('EVERY_PORT: "eighty" is no number')
-		expect(err).toContain('EVERY_LIMITS_ON: "yes" is not true or false')
-		delete process.env.EVERY_PORT
-		delete process.env.EVERY_LIMITS_ON
-	})
-
-	test('a fixed field refuses update, ignores what was kept, and says where it came from', async () => {
-		const settings = { addr: fixed(':8080'), instance: 'dashbin' }
-		process.env.FIXED_ADDR = ':9090'
-		const cfg = await store.config('fixed', settings, fromEnv('FIXED'))
-		expect(String(await caught(cfg.update({ addr: ':1' })))).toContain('addr is fixed')
-		await cfg.update({ instance: 'eu-1' })
-		expect(cfg.value).toEqual({ addr: ':9090', instance: 'eu-1' })
-		expect(cfg.sources().find(s => s.path === 'addr')).toEqual({
-			path: 'addr',
-			value: '":9090"',
-			from: 'env FIXED_ADDR',
+		test('a list checks each item, and a list of groups fills its items’ defaults', async () => {
+			const config = await store.config('lists', [
+				{
+					hosts: list(String, { default: ['localhost'], max: 2 }),
+					upstreams: list({ host: required(String), port: int(80) }),
+				},
+				env('APP', { from: { APP_UPSTREAMS: '[{"host":"a.com"}]' } }),
+			])
+			expect(config.value.upstreams).toEqual([{ host: 'a.com', port: 80 }])
+			const err = await caught(
+				store.config('lists', [
+					{ hosts: list(String, { max: 2 }) },
+					env('APP', { from: { APP_HOSTS: 'a,b,c' } }),
+				]),
+			)
+			expect((err as Error).message).toContain('APP_HOSTS: 3 items is above 2 items')
 		})
-		delete process.env.FIXED_ADDR
 	})
-
-	test("a variable's file is read when NAME_FILE names it, and both set is refused", async () => {
-		const file = join(dir, 'smtp')
-		writeFileSync(file, 'hunter2\n')
-		process.env.FILED_PASSWORD_FILE = file
-		const cfg = await store.config('filed', { password: secret() }, fromEnv('FILED'))
-		expect(cfg.value.password).toBe('hunter2')
-		expect(cfg.sources()[0]?.from).toBe('env FILED_PASSWORD_FILE')
-		process.env.FILED_PASSWORD = 'other'
-		const err = String(
-			await caught(store.config('filed', { password: secret() }, fromEnv('FILED'))),
-		)
-		expect(err).toContain('both FILED_PASSWORD and FILED_PASSWORD_FILE are set')
-		delete process.env.FILED_PASSWORD
-		delete process.env.FILED_PASSWORD_FILE
-	})
-})
+}
