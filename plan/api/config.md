@@ -683,6 +683,23 @@ doubted, and what changed:
 | how Rust's `watch`, a blocking iterator, stops                   | a function, and a guard that stops it when dropped             |
 | whether a secret is hidden anywhere but `explain`                | it prints as `***` everywhere, and `reveal()` gives it         |
 
+## Newcomer check, 13 October: the logger's config
+
+The backup's newcomer check (see [backup.md](backup.md#newcomer-check-13-october))
+read two call sites of the logger's config besides:
+`await store.config('log', [{ level: live('info') }])` and
+`await settings.update({ level: 'debug' })`.
+
+- The reader took them for the program's own settings: nothing at the call
+  says that a store's logger reads a config named `log`. The store's
+  `logger` says so in its doc, and the records book beside its options.
+- One reader would rather write `await store.setLogLevel('debug')`; the
+  config stays the one place a level is changed and reset, and a call of
+  the store's on top of it is the owner's choice.
+- One reader asked what a program's own config named `log` does: it shares
+  the name, each declaration answering for its own settings, as two
+  programs' declarations of one config do.
+
 ## Review, 12 October
 
 Two more Haiku agents with no other context: one compared eight choices

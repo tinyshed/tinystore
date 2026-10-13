@@ -1,3 +1,4 @@
+export type { Backup, BackupOptions } from './backup.ts'
 export type {
 	Body,
 	FileBytes,
@@ -161,7 +162,6 @@ export {
 	sql,
 } from './sql.ts'
 export {
-	type BackupOptions,
 	type ConnectOptions,
 	connect,
 	type OpenOptions,

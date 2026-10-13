@@ -7,6 +7,159 @@ use super::codec::{self, Map, Message, Row};
 use super::codec::Cell;
 use super::msgpack::Reader;
 
+/// What a backup takes beside every engine's files: the files of the
+/// program's it includes, by their paths inside the store's directory, and
+/// whether it includes the store's encryption key.
+#[cfg(feature = "backup")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BackupWrite {
+    pub(crate) include: Vec<String>,
+    pub(crate) include_encryption_key: bool,
+}
+
+#[cfg(feature = "backup")]
+impl Message for BackupWrite {
+    const NAME: &'static str = "backup.Write";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.include = codec::list(r, "include", codec::str)?,
+                2 => message.include_encryption_key = codec::bool(r, "includeEncryptionKey")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.include.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.include, codec::write_str);
+        }
+        if self.include_encryption_key {
+            map.field(out, 2);
+            codec::write_bool(out, &self.include_encryption_key);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.include, |item| 5 + item.len())
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.include.is_empty()
+            && !self.include_encryption_key
+    }
+}
+
+/// A piece of the zip, in order.
+#[cfg(feature = "backup")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BackupPiece {
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "backup")]
+impl Message for BackupPiece {
+    const NAME: &'static str = "backup.Piece";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.bytes = codec::bin(r, "bytes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.bytes.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.bytes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.bytes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+/// What the backup holds, once its zip has gone whole.
+#[cfg(feature = "backup")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BackupWritten {
+    pub(crate) files: u64,
+    pub(crate) bytes: u64,
+    /// The store seals values with a key the backup does not hold.
+    pub(crate) key_left_out: bool,
+}
+
+#[cfg(feature = "backup")]
+impl Message for BackupWritten {
+    const NAME: &'static str = "backup.Written";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.files = codec::uint(r, "files")?,
+                2 => message.bytes = codec::uint(r, "bytes")?,
+                3 => message.key_left_out = codec::bool(r, "keyLeftOut")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.files != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.files);
+        }
+        if self.bytes != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.bytes);
+        }
+        if self.key_left_out {
+            map.field(out, 3);
+            codec::write_bool(out, &self.key_left_out);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 10
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.files == 0
+            && self.bytes == 0
+            && !self.key_left_out
+    }
+}
+
 /// Opens a set of files by name, made the first time.
 #[cfg(feature = "blobs")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -8973,6 +9126,8 @@ impl Message for SqlTxAnswer {
 
 /// Every method's number, by its name in the schema.
 pub(crate) mod method {
+    #[cfg(feature = "backup")]
+    pub(crate) const BACKUP_WRITE: u16 = 0x0801;
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_OPEN: u16 = 0x0401;
     #[cfg(feature = "blobs")]
@@ -9170,6 +9325,8 @@ pub(crate) mod method {
     /// Who may call a method; none for a number the schema does not have.
     pub(crate) fn access(method: u16) -> Option<Access> {
         match method {
+            #[cfg(feature = "backup")]
+            BACKUP_WRITE => Some(Access::Admin),
             #[cfg(feature = "blobs")]
             BLOBS_OPEN => Some(Access::Read),
             #[cfg(feature = "blobs")]
@@ -9359,6 +9516,8 @@ pub(crate) mod method {
 /// one message, for the tests that the server answers each, and as its line says.
 #[cfg(test)]
 pub(crate) const METHODS: &[(&str, u16, &str)] = &[
+    #[cfg(feature = "backup")]
+    ("backup.write", 0x0801, "download"),
     #[cfg(feature = "blobs")]
     ("blobs.open", 0x0401, "call"),
     #[cfg(feature = "blobs")]
@@ -9547,6 +9706,12 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
 #[cfg(test)]
 pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize), Failure>> {
     let rewritten = match name {
+        #[cfg(feature = "backup")]
+        "backup.Write" => BackupWrite::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "backup")]
+        "backup.Piece" => BackupPiece::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "backup")]
+        "backup.Written" => BackupWritten::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Open" => BlobsOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]

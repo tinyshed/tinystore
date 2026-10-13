@@ -16,7 +16,7 @@
 //! ```no_run
 //! # fn main() -> tinystore::Result<()> {
 //! let store = tinystore::Store::open("data", Default::default())?;
-//! let backup = store.backup().file("secret.key").write("backup-2026-10-13.zip")?;
+//! let backup = store.backup().include("secret.key").write("backup-2026-10-13.zip")?;
 //! assert!(!backup.key_left_out, "a store that seals values needs its key beside the backup");
 //! # drop(store);
 //! tinystore::backup::restore("backup-2026-10-13.zip", "restored")?;
@@ -57,15 +57,15 @@ pub struct Backup {
 #[must_use = "a backup is made by write or write_to"]
 pub struct BackupBuilder {
     store: Store,
-    files: Vec<String>,
-    encryption_key: bool,
+    include: Vec<String>,
+    include_encryption_key: bool,
 }
 
 impl std::fmt::Debug for BackupBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BackupBuilder")
-            .field("files", &self.files)
-            .field("encryption_key", &self.encryption_key)
+            .field("include", &self.include)
+            .field("include_encryption_key", &self.include_encryption_key)
             .finish()
     }
 }
@@ -73,24 +73,24 @@ impl std::fmt::Debug for BackupBuilder {
 impl Store {
     /// A backup of every engine of the store, made while it keeps working.
     pub fn backup(&self) -> BackupBuilder {
-        BackupBuilder { store: self.clone(), files: Vec::new(), encryption_key: false }
+        BackupBuilder { store: self.clone(), include: Vec::new(), include_encryption_key: false }
     }
 }
 
 impl BackupBuilder {
-    /// Takes a file of the program's, by its path inside the store's
+    /// Includes a file of the program's, by its path inside the store's
     /// directory, such as `secret.key`, which a restore puts back where it
     /// was. A backup holds no file but the engines' unless one is named.
-    pub fn file(mut self, name: &str) -> Self {
-        self.files.push(name.to_owned());
+    pub fn include(mut self, name: &str) -> Self {
+        self.include.push(name.to_owned());
         self
     }
 
-    /// Takes the store's encryption key, which a backup leaves out otherwise:
-    /// a backup with it opens every value it holds, so it is kept as safely
-    /// as the key.
-    pub fn encryption_key(mut self) -> Self {
-        self.encryption_key = true;
+    /// Includes the store's encryption key, as it is, which a backup leaves
+    /// out otherwise: the zip is not encrypted, so a backup with the key
+    /// opens every value it holds, and is kept as safely as the key.
+    pub fn include_encryption_key(mut self) -> Self {
+        self.include_encryption_key = true;
         self
     }
 
@@ -138,7 +138,7 @@ impl BackupBuilder {
     /// key when asked for: their names in the backup and where they are.
     fn taken(&self) -> Result<Taken> {
         let mut files = Vec::new();
-        for name in &self.files {
+        for name in &self.include {
             check_file(name)?;
             if files.iter().any(|(taken, _, _)| taken == name) {
                 return Err(Error::invalid(format!("{name}: named twice")));
@@ -146,8 +146,8 @@ impl BackupBuilder {
             files.push((name.clone(), self.store.dir().join(name), "program"));
         }
         let key = encryption_key_file(&self.store).filter(|file| file.exists());
-        let key_left_out = key.is_some() && !self.encryption_key;
-        if let Some(file) = key.filter(|_| self.encryption_key) {
+        let key_left_out = key.is_some() && !self.include_encryption_key;
+        if let Some(file) = key.filter(|_| self.include_encryption_key) {
             files.push((KEY.to_owned(), file, "key"));
         }
         Ok(Taken { files, key_left_out })
@@ -198,7 +198,7 @@ fn check_file(name: &str) -> Result<()> {
         return refused("not a path inside the store's directory, its parts joined by /");
     }
     if name == KEY {
-        return refused("the store's encryption key, which encryption_key() takes");
+        return refused("the store's encryption key, which include_encryption_key() takes");
     }
     let first = name.split('/').next().unwrap_or_default();
     let own = |own: &&str| first == *own || first.strip_prefix(own).is_some_and(|rest| rest.starts_with('-'));

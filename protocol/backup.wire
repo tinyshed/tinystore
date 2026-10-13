@@ -1,0 +1,26 @@
+# A backup of the whole store as one zip, as plan/api/backup.md has it: the
+# zip in pieces as the server writes it, within the client's credit, then
+# what it holds; for a connection that may administer, since a backup holds
+# every byte of the store.
+
+# What a backup takes beside every engine's files: the files of the
+# program's it includes, by their paths inside the store's directory, and
+# whether it includes the store's encryption key.
+message backup.Write {
+  1 include: [str]
+  2 includeEncryptionKey: bool
+}
+
+# A piece of the zip, in order.
+message backup.Piece {
+  1 bytes: bin
+}
+
+# What the backup holds, once its zip has gone whole.
+message backup.Written {
+  1 files: uint
+  2 bytes: uint
+  3 keyLeftOut: bool  # the store seals values with a key the backup does not hold
+}
+
+admin 0x0801 backup.write(backup.Write) -> download backup.Piece until backup.Written

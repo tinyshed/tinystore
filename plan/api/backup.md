@@ -20,17 +20,17 @@ release candidates at `e81a050` its promises, `backup/` and
 
 ```rust
 let backup = store.backup().write("backup-2026-10-13.zip")?;    // the store keeps working meanwhile
-store.backup().file("secret.key").encryption_key().write("full.zip")?;
+store.backup().include("secret.key").include_encryption_key().write("full.zip")?;
 store.backup().write_to(&mut upload)?;                           // to any writer, as it is made
 ```
 
 ```ts
 const backup = await store.backup('backup-2026-10-13.zip')
-await store.backup('full.zip', { files: ['secret.key'], encryptionKey: true })
+await store.backup('full.zip', { include: ['secret.key'], includeEncryptionKey: true })
 ```
 
 ```sh
-tinystore backup ./data backup-2026-10-13.zip --file secret.key
+tinystore backup ./data backup-2026-10-13.zip --include secret.key
 ```
 
 `write` and `store.backup` answer what the backup holds:
@@ -59,18 +59,22 @@ tinystore backup ./data backup-2026-10-13.zip --file secret.key
 
 ## Files of the program's, and the key
 
-- A backup holds the engines' files and nothing else unless told: `file`
+- A backup holds the engines' files and nothing else unless told: `include`
   takes a file of the program's, by its path inside the store's directory,
   `/` between its parts, which a restore puts back where it was.
 - A name outside the store's directory, spelled otherwise than as a path in
   it, or of the store's own, an engine's file, `LOCK`, `server/` or the
   manifest's, is `invalid`.
-- The store's encryption key is left out unless `encryption_key` takes it:
-  a backup without it shows nothing of the values it seals, and one with it
-  opens them all, so it is kept as safely as the key. A store that seals
-  values says so of a backup without the key: `key_left_out`, and the
-  manifest's `keyLeftOut`. A restored store opens such a bucket with the key
-  alone, and says it is missing.
+- The zip is not encrypted: what the engines keep in the clear, rows,
+  events, samples and files, is in the clear in it, and a backup is kept as
+  safely as the store's directory, or encrypted where it is kept.
+- The store's encryption key is left out unless `include_encryption_key`
+  includes it, as it is: a backup without it shows nothing of the values it
+  seals, and one with it opens them all, so it is kept as safely as the key.
+  A store that seals values says so of a backup without the key:
+  `key_left_out`, and the manifest's `keyLeftOut`. A restored store opens
+  such a bucket with the key alone, and says it is missing. `include`
+  refuses the key's name, which only `include_encryption_key` takes.
 - The key is the file the store's options name, or `encryption.key` of its
   directory; a backup that takes it names it `encryption.key`, where a store
   restored without options reads it.
@@ -113,13 +117,19 @@ tinystore restore backup-2026-10-13.zip ./data
 
 ## Through a server
 
-- `server.backup` is a download of the zip as the server writes it, for a
-  connection whose token may administer: a backup holds every byte of the
-  store, the key's too when asked.
-- The SDK writes the zip beside its name and renames it once it is whole.
-- `tinystore backup <dir> <zip>` backs up a directory no server holds;
-  through a running server it comes with the command line's client, as
-  `status` and `logs` do. `tinystore restore <zip> <dir>` needs no server.
+- `backup.write` is a download of the zip as the server writes it, a piece
+  of 256 KiB at most a DATA within the client's credit, then what it holds,
+  for a connection that may administer: a backup holds every byte of the
+  store, the key's too when asked. The backup writes on one of the session's
+  workers and waits while four pieces wait for the client; a client that
+  cancels or leaves ends it, and its snapshot goes.
+- The SDK writes the zip beside its name and renames it once it is whole; a
+  connection lost on the way makes the backup again from its start.
+- `tinystore backup <dir> <zip>` backs up a directory no server holds, and
+  refuses one a program or a server holds, saying that its backup goes
+  through it; through a running server it comes with the command line's
+  client, as `status` and `logs` do. `tinystore restore <zip> <dir>` needs no
+  server.
 
 ## Slices
 
@@ -142,12 +152,39 @@ Python and Go come with their bindings.
 - A backup of a directory a running server holds from the command line, with
   its client.
 
+## Newcomer check, 13 October
+
+Three Haiku agents that had read nothing about TinyStore read the call sites
+of the first draft at the highest effort: a newcomer's reading of twelve bare
+calls, a free review, and a blind choice between spellings.
+
+- All three read `encryption_key()` and `encryptionKey: true` as "encrypt the
+  zip with the key", where it puts the key in the zip as it is: a backup
+  that holds its own key would pass for a protected one. It is
+  `include_encryption_key()`, `includeEncryptionKey` and
+  `--include-encryption-key`, and the book says the zip is not encrypted.
+- Two found `files` read two ways, the files a backup takes and the count it
+  answers, `files: 7`, and `file` is blobs' word for a stored file. It is
+  `include`, in Rust, TypeScript and the command line, beside
+  `include_encryption_key`.
+- Left for the owner, each named by one reader: `key_left_out` as
+  `sealed_without_key`, or a backup that refuses to leave a key out without
+  being told; `write_to` as `stream_to`; the answer's `files` and `bytes` as
+  `entries` and `zipBytes`; a `store.setLogLevel('debug')` beside the config
+  `log`, which one reader preferred to declaring the config, and the name
+  `log`, which a program's own config of that name shares, each declaration
+  answering for its own settings; `verify`, a backup's progress and its
+  cancel from TypeScript.
+- What they read right: `store.backup().write(path)` as a builder whose
+  defaults are safe, `restore` as a function since no store is open yet, and
+  a restore that writes into an empty directory only.
+
 ## Was, in Go
 
-| Go at `e81a050`                                  | Now                                     |
-|--------------------------------------------------|-----------------------------------------|
-| `backup.Write(ctx, store, w, backup.File(name))` | `store.backup().file(name).write_to(w)` |
-| `backup.Restore(ctx, dir, archive, size)`        | `backup::restore(zip, dir)`             |
-| `store.Snapshot(ctx)` public                     | the snapshot is the backup's own        |
-| database files deflated, blobs stored            | every file stored                       |
-| a guest's backup beside the server               | not yet: guests are not built           |
+| Go at `e81a050`                                  | Now                                        |
+|--------------------------------------------------|--------------------------------------------|
+| `backup.Write(ctx, store, w, backup.File(name))` | `store.backup().include(name).write_to(w)` |
+| `backup.Restore(ctx, dir, archive, size)`        | `backup::restore(zip, dir)`                |
+| `store.Snapshot(ctx)` public                     | the snapshot is the backup's own           |
+| database files deflated, blobs stored            | every file stored                          |
+| a guest's backup beside the server               | not yet: guests are not built              |

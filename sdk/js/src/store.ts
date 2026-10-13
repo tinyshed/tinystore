@@ -1,6 +1,4 @@
-import { randomBytes } from 'node:crypto'
-import { open as openFile, rename, rm } from 'node:fs/promises'
-
+import { type Backup, type BackupOptions, backup } from './backup.ts'
 import { type Files, type FilesOptions, openFiles } from './blobs.ts'
 import { Clock } from './clock.ts'
 import { Config, type ConfigOptions, type Layer, type Value } from './config.ts'
@@ -63,7 +61,6 @@ import type { StandardSchemaV1 } from './schema.ts'
 import { type Database, type DatabaseOptions, openDatabase } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { runTx, type Tx } from './tx.ts'
-import { Backup, methods } from './wire/messages.ts'
 
 export interface OpenOptions {
 	/**
@@ -121,12 +118,6 @@ export interface Status {
 	engines: string[]
 	/** admin may change a schema and drop records; data reads and writes */
 	capability: 'admin' | 'data'
-}
-
-/** What `store.backup` keeps beside the engines' files. */
-export interface BackupOptions {
-	/** files of the application's, by their paths inside the store's directory */
-	files?: readonly string[] | undefined
 }
 
 export interface ConnectOptions {
@@ -319,6 +310,22 @@ export class Store implements AsyncDisposable {
 	}
 
 	/**
+	 * A backup of every engine of the store as one zip, made while the store
+	 * keeps working, written beside `path` and renamed once whole, so that a
+	 * backup that fails leaves no zip. A file of the program's goes in only
+	 * when `include` names it, and the store's encryption key only when
+	 * `includeEncryptionKey` asks; `tinystore restore` puts it back into an empty
+	 * directory, every byte checked. Through a server, it takes an admin's
+	 * token.
+	 *
+	 *     const backup = await store.backup('backup-2026-10-13.zip', { include: ['secret.key'] })
+	 *     if (backup.keyLeftOut) console.warn('keep encryption.key apart: the backup opens with it alone')
+	 */
+	backup(path: string, options: BackupOptions = {}): Promise<Backup> {
+		return backup(this.#link, path, options)
+	}
+
+	/**
 	 * What the server this store reaches is: its version, the protocol the
 	 * connection speaks, the engines it serves and what the connection may do.
 	 * A client newer than its server learns here what it may ask for; a call
@@ -354,49 +361,6 @@ export class Store implements AsyncDisposable {
 	 */
 	database(name: string, options?: DatabaseOptions): Promise<Database> {
 		return openDatabase(this.#link, this.#workers, name, options)
-	}
-
-	/**
-	 * Writes a backup of the whole store to a zip at path while the store keeps
-	 * working, as `tinystore backup` does: every engine's file, with its size
-	 * and checksum, which `tinystore restore` checks. The zip is written beside
-	 * path and renamed into place once whole, so a backup that fails leaves no
-	 * zip. It needs an admin connection; a remote server sends the zip over it.
-	 *
-	 * A backup holds no file but the engines' unless `files` names it: a file
-	 * of the application's inside the store's directory, such as a key kept
-	 * beside the data, `{ files: ['encryption.key'] }`.
-	 */
-	async backup(path: string, options: BackupOptions = {}): Promise<void> {
-		const part = `${path}.${randomBytes(4).toString('hex')}.part`
-		try {
-			await this.#link.run('read', async connection => {
-				const file = await openFile(part, 'w')
-				try {
-					const stream = await connection.session.open(
-						methods['server.backup'],
-						Backup.encode({ files: options.files === undefined ? undefined : [...options.files] }),
-						true,
-					)
-					await stream.next() // the RESPONSE that heads the zip
-					for (;;) {
-						const event = await stream.next()
-						stream.consumed(event.body.length)
-						await file.write(event.body)
-						if (event.end) {
-							break
-						}
-					}
-					await file.sync()
-				} finally {
-					await file.close()
-				}
-			})
-			await rename(part, path)
-		} catch (err) {
-			await rm(part, { force: true })
-			throw err
-		}
 	}
 
 	/**

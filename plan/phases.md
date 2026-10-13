@@ -217,6 +217,10 @@ that ran clean.
   own and blobs' bytes linked while none is removed, an engine no handle opened copied from its files, one zip of
   them stored as they are with ZIP64's fields and a manifest of each file's size and SHA-256, the program's files
   and the key only when asked for, and `restore` into an empty directory, every byte checked or nothing left.
+  Built, slice 2: `backup.write`, the zip in pieces within the client's credit and what it holds after them, for an
+  admin's connection; the Bun SDK's `store.backup(path, { files, encryptionKey })` through each way a store is
+  reached; `tinystore backup` of a directory no server holds and `tinystore restore`. Left: `openBeside`, and a
+  backup through a running server from the command line, with its client.
 - [ ] `tinystore` serve, status, logs, mcp, backup, restore, migrate, schema.
 - [ ] Self-metrics.
 - [ ] The thin Go SDK on cgo and a sidecar, under the root module path.

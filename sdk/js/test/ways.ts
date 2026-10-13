@@ -23,6 +23,8 @@ export interface Way {
 	open(dir: string): Promise<Store>
 	/** Waits until whatever served the directory has let go of it. */
 	leave(dir: string): Promise<void>
+	/** The store's own directory inside the test's: the test's, but a remote server's. */
+	home(dir: string): string
 }
 
 const remotes = new Map<string, ReturnType<typeof Bun.spawn>>()
@@ -33,12 +35,14 @@ export const ways: Way[] = [
 		ready: library !== undefined,
 		open: dir => open(dir, { embedded: true, library }),
 		leave: async () => {},
+		home: dir => dir,
 	},
 	{
 		name: 'a private child',
 		ready: served,
 		open: dir => open(dir, { private: true }),
 		leave: async () => {},
+		home: dir => dir,
 	},
 	{
 		name: 'a sidecar',
@@ -46,6 +50,7 @@ export const ways: Way[] = [
 		// gone at once once the store closes, so that its directory can go
 		open: dir => open(dir, { idle: 1 }),
 		leave: dir => until(() => !existsSync(join(dir, 'server', 'SERVE'))),
+		home: dir => dir,
 	},
 	{
 		name: 'a remote server over TCP',
@@ -71,6 +76,7 @@ export const ways: Way[] = [
 			server?.kill()
 			await server?.exited
 		},
+		home: dir => join(dir, 'store'),
 	},
 ]
 

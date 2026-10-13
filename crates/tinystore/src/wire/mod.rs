@@ -2,6 +2,8 @@
 //! session that answers them, and each engine's messages. The server's
 //! sockets and the FFI's pipe carry the same frames through the same session.
 
+#[cfg(feature = "backup")]
+mod backup;
 #[cfg(feature = "blobs")]
 mod blobs;
 pub(crate) mod codec;
@@ -67,17 +69,20 @@ pub(crate) enum Route {
     /// A config's values, now and at each change, until the client cancels.
     #[cfg(feature = "config")]
     Follow,
+    /// A backup's zip in pieces, then what it holds.
+    #[cfg(feature = "backup")]
+    Backup,
     Worker,
 }
 
 /// Work on a session's workers, off the thread that asked.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config"))]
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config", feature = "backup"))]
 pub(crate) type Spawn = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
 
 /// What a stream whose DATA goes either way needs of its session: a file's
 /// bytes, a tail's batches, a writer's lines, a read's parts, the answers to
 /// a client's instruments, a config's values.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config"))]
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config", feature = "backup"))]
 #[derive(Clone)]
 pub(crate) struct Link {
     /// A DATA on the stream.

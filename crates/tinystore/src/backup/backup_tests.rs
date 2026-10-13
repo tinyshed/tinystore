@@ -162,24 +162,24 @@ fn a_file_of_the_programs_is_kept_only_when_named_and_one_of_the_stores_never() 
 
     fs::remove_dir_all(&f.restored).unwrap();
     fs::remove_file(&f.zip).unwrap();
-    store.backup().file("secret.key").file("keys/signing.pem").write(&f.zip).unwrap();
+    store.backup().include("secret.key").include("keys/signing.pem").write(&f.zip).unwrap();
     restore(&f.zip, &f.restored).unwrap();
     assert_eq!(fs::read_to_string(f.restored.join("secret.key")).unwrap(), "k3y");
     assert_eq!(fs::read_to_string(f.restored.join("keys/signing.pem")).unwrap(), "pem");
 
     for name in ["../outside", "/etc/passwd", "a\\b", "kv.db", "kv.db-wal", "LOCK", "manifest.json", "sql/app.db"] {
-        let error = store.backup().file(name).write(f.zip.with_extension("refused")).unwrap_err();
+        let error = store.backup().include(name).write(f.zip.with_extension("refused")).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Invalid, "{name}: {error}");
     }
-    let error = store.backup().file("encryption.key").write(f.zip.with_extension("refused")).unwrap_err();
-    assert!(error.to_string().contains("encryption_key()"), "{error}");
+    let error = store.backup().include("encryption.key").write(f.zip.with_extension("refused")).unwrap_err();
+    assert!(error.to_string().contains("include_encryption_key()"), "{error}");
 }
 
 #[test]
 fn a_backup_that_fails_leaves_no_zip() {
     let f = fixture();
     let store = f.filled();
-    let error = store.backup().file("missing.txt").write(&f.zip).unwrap_err();
+    let error = store.backup().include("missing.txt").write(&f.zip).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Io, "{error}");
     let beside: Vec<String> =
         tree(f.zip.parent().unwrap()).into_iter().filter(|name| name.contains("backup.zip")).collect();
@@ -201,7 +201,7 @@ fn the_encryption_key_is_left_out_unless_asked_for_and_the_backup_says_so() {
     assert!(error.to_string().contains("encrypted with the key"), "a bucket whose key is not there says so: {error}");
 
     let (zip, restored) = (f.zip.with_extension("keyed"), f.restored.with_extension("keyed"));
-    let with = store.backup().encryption_key().write(&zip).unwrap();
+    let with = store.backup().include_encryption_key().write(&zip).unwrap();
     assert!(!with.key_left_out);
     restore(&zip, &restored).unwrap();
     let back = f.open(&restored);

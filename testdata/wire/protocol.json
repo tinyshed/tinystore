@@ -3,6 +3,67 @@
   "messages": [
     {
       "fields": {
+        "include": {
+          "list": [
+            {
+              "str": "include"
+            }
+          ]
+        },
+        "includeEncryptionKey": {
+          "bool": true
+        }
+      },
+      "hex": "820191a7696e636c75646502c3",
+      "message": "backup.Write",
+      "name": "backup.Write with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "backup.Write",
+      "name": "backup.Write with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8101c40201ff",
+      "message": "backup.Piece",
+      "name": "backup.Piece with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "backup.Piece",
+      "name": "backup.Piece with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "uint": "207"
+        },
+        "files": {
+          "uint": "107"
+        },
+        "keyLeftOut": {
+          "bool": true
+        }
+      },
+      "hex": "83016b02cccf03c3",
+      "message": "backup.Written",
+      "name": "backup.Written with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "backup.Written",
+      "name": "backup.Written with no field"
+    },
+    {
+      "fields": {
         "maxFileSize": {
           "uint": "307"
         },
@@ -4842,6 +4903,7 @@
     }
   ],
   "methods": {
+    "backup.write": 2049,
     "blobs.clear": 1036,
     "blobs.copy": 1031,
     "blobs.delete": 1030,

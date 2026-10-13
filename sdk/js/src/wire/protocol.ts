@@ -22,6 +22,7 @@ import {
 } from './codec.ts'
 
 export const methods = {
+	'backup.write': 0x0801,
 	'blobs.open': 0x0401,
 	'blobs.put': 0x0402,
 	'blobs.upload': 0x0403,
@@ -125,6 +126,156 @@ export const methods = {
 } as const
 
 export type Method = keyof typeof methods
+
+/**
+ * What a backup takes beside every engine's files: the files of the
+ * program's it includes, by their paths inside the store's directory, and
+ * whether it includes the store's encryption key.
+ */
+export const BackupWrite = message(
+	'backup.Write',
+	{
+		include: [1, list(str)],
+		includeEncryptionKey: [2, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.include !== undefined) {
+				w.field(1)
+				w.array(v.include.length)
+				for (const item0 of v.include) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.includeEncryptionKey !== undefined) {
+				w.field(2)
+				w.bool(v.includeEncryptionKey)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $include: string[] | undefined
+			let $includeEncryptionKey: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$include = items0
+						break
+					}
+					case 2:
+						$includeEncryptionKey = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { include: $include, includeEncryptionKey: $includeEncryptionKey }
+		},
+	},
+)
+
+/**
+ * A piece of the zip, in order.
+ */
+export const BackupPiece = message(
+	'backup.Piece',
+	{
+		bytes: [1, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.bytes !== undefined) {
+				w.field(1)
+				w.bin(v.bytes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $bytes: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$bytes = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { bytes: $bytes }
+		},
+	},
+)
+
+/**
+ * What the backup holds, once its zip has gone whole.
+ */
+export const BackupWritten = message(
+	'backup.Written',
+	{
+		files: [1, uint],
+		bytes: [2, uint],
+		/** the store seals values with a key the backup does not hold */
+		keyLeftOut: [3, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.files !== undefined) {
+				w.field(1)
+				w.uint(v.files)
+				n++
+			}
+			if (v.bytes !== undefined) {
+				w.field(2)
+				w.uint(v.bytes)
+				n++
+			}
+			if (v.keyLeftOut !== undefined) {
+				w.field(3)
+				w.bool(v.keyLeftOut)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $files: number | undefined
+			let $bytes: number | undefined
+			let $keyLeftOut: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$files = r.uint()
+						break
+					case 2:
+						$bytes = r.uint()
+						break
+					case 3:
+						$keyLeftOut = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { files: $files, bytes: $bytes, keyLeftOut: $keyLeftOut }
+		},
+	},
+)
 
 /**
  * Opens a set of files by name, made the first time.

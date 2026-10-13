@@ -6,6 +6,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::Route;
+#[cfg(feature = "backup")]
+use super::backup;
 #[cfg(feature = "blobs")]
 use super::blobs;
 use super::codec::Message;
@@ -84,6 +86,8 @@ struct Shared {
     records: records::Handles,
     #[cfg(feature = "metrics")]
     metrics: metrics::Handles,
+    #[cfg(feature = "backup")]
+    backups: backup::Backups,
     input: Mutex<Input>,
     output: Mutex<Output>,
     /// Clients' runs of once, by stream, from the REQUEST to the last frame.
@@ -191,6 +195,8 @@ impl Session {
             records: records::Handles::default(),
             #[cfg(feature = "metrics")]
             metrics: metrics::Handles::default(),
+            #[cfg(feature = "backup")]
+            backups: backup::Backups::default(),
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
@@ -338,6 +344,8 @@ impl Session {
         self.shared.metrics.end();
         #[cfg(feature = "config")]
         self.shared.config.end();
+        #[cfg(feature = "backup")]
+        self.shared.backups.end_all("the connection is gone");
     }
 }
 
@@ -497,6 +505,8 @@ impl Shared {
             Route::Instruments => self.instruments(input, stream, &body),
             #[cfg(feature = "config")]
             Route::Follow => self.follow(input, stream, &body),
+            #[cfg(feature = "backup")]
+            Route::Backup => self.backup(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -712,10 +722,24 @@ impl Shared {
         }
     }
 
+    /// Starts a backup of the store: the stream's RESPONSE, then its zip in
+    /// pieces within the client's credit, then what it holds.
+    #[cfg(feature = "backup")]
+    fn backup(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.stream_link(input, stream);
+        match guarded(|| backup::asked(&self.backups, stream, body, link)) {
+            Ok(sending) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                sending.begin(&self.store, &self.backups);
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
     /// What a stream of a file's bytes, a tail's batches, a writer's lines, a
-    /// read's parts, a client's instruments or a config's values needs of the
-    /// session.
-    #[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config"))]
+    /// read's parts, a client's instruments, a config's values or a backup's
+    /// zip needs of the session.
+    #[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config", feature = "backup"))]
     fn stream_link(self: &Arc<Self>, input: &Input, stream: u32) -> super::Link {
         let (sending, finishing, granting, spawning) =
             (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
@@ -898,11 +922,12 @@ impl Shared {
             feature = "blobs",
             feature = "records",
             feature = "metrics",
-            feature = "config"
+            feature = "config",
+            feature = "backup"
         )),
         expect(
             unused_variables,
-            reason = "only jobs', sql's, blobs', records', metrics' and config's streams take credit"
+            reason = "only jobs', sql's, blobs', records', metrics', config's and a backup's streams take credit"
         )
     )]
     fn credit(&self, frame: &Frame) {
@@ -922,6 +947,8 @@ impl Shared {
         self.metrics.grant(frame.stream, granted);
         #[cfg(feature = "config")]
         self.config.grant(frame.stream, granted);
+        #[cfg(feature = "backup")]
+        self.backups.grant(frame.stream, granted);
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
@@ -947,6 +974,10 @@ impl Shared {
         }
         #[cfg(feature = "config")]
         if self.config.cancel(stream) {
+            return;
+        }
+        #[cfg(feature = "backup")]
+        if self.backups.cancel(stream) {
             return;
         }
         #[cfg(feature = "jobs")]
@@ -1170,6 +1201,8 @@ fn route(method: u16) -> Route {
         0x06 => metrics::route(method),
         #[cfg(feature = "config")]
         0x07 => config::route(method),
+        #[cfg(feature = "backup")]
+        0x08 => Route::Backup,
         _ => Route::Worker,
     }
 }
@@ -1182,7 +1215,9 @@ fn engines() -> Vec<String> {
     let records = cfg!(feature = "records").then_some("records");
     let metrics = cfg!(feature = "metrics").then_some("metrics");
     let config = cfg!(feature = "config").then_some("config");
-    [Some("kv"), config, jobs, sql, blobs, records, metrics].into_iter().flatten().map(str::to_owned).collect()
+    let backup = cfg!(feature = "backup").then_some("backup");
+    let engines = [Some("kv"), config, jobs, sql, blobs, records, metrics, backup];
+    engines.into_iter().flatten().map(str::to_owned).collect()
 }
 
 /// A call that panics answers `internal` rather than leaving its stream open.
