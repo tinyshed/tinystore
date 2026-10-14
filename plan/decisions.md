@@ -157,3 +157,4 @@ C6) are shapes for later.
 - Whether the Rust API is blocking only or also offers `async` wrappers.
 - Crate names on crates.io, the npm scope and the PyPI name, checked free
   before the first release.
+- Scaling past one machine: the calls under [scaling.md](scaling.md)'s Open.
