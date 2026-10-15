@@ -9,6 +9,8 @@
 #![allow(dead_code, unused_imports)]
 
 mod capture;
+#[cfg(feature = "capture-experiment")]
+pub(crate) use capture::checkpoint as capture_checkpoint;
 mod config;
 mod connection;
 mod constraint;

@@ -31,6 +31,17 @@ impl Capture {
         Ok(())
     }
 
+    pub(crate) fn before_write(&self, connection: &Connection) -> Result<()> {
+        self.check()?;
+        #[cfg(feature = "capture-experiment")]
+        if let Some(state) = &self.state {
+            state.observer.before_write(&state.path, connection)?;
+        }
+        #[cfg(not(feature = "capture-experiment"))]
+        let _ = connection;
+        Ok(())
+    }
+
     pub(crate) fn commit(&self, connection: &Connection) -> Result<()> {
         self.check()?;
         #[cfg(feature = "capture-experiment")]
@@ -126,4 +137,13 @@ mod observed {
             result
         }
     }
+}
+
+#[cfg(feature = "capture-experiment")]
+pub(crate) fn checkpoint(connection: &Connection, truncate: bool) -> Result<(i64, i64, i64)> {
+    use super::given::own;
+    let sql = if truncate { own!("pragma wal_checkpoint(truncate)") } else { own!("pragma wal_checkpoint(passive)") };
+    connection
+        .query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(|e| crate::Error::new(crate::ErrorKind::Unavailable, "research checkpoint").with_source(e))
 }

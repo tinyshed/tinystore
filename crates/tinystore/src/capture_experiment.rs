@@ -11,12 +11,22 @@ use crate::{Error, Result};
 
 /// Calls run under the file writer. No network waits belong here.
 pub trait Observer: Debug + Send + Sync + 'static {
+    /// Admission refusal is definite: no transaction has begun and retry is safe.
+    fn before_write(&self, _path: &Path, _connection: &Connection) -> Result<()> {
+        Ok(())
+    }
     fn opened(&self, path: &Path, connection: &Connection) -> Result<()>;
     fn committed(&self, path: &Path, connection: &Connection, frames: u32) -> Result<bool>;
     fn closing(&self, path: &Path, connection: &Connection) -> Result<()>;
     fn checkpointed(&self, _path: &Path, _connection: &Connection) -> Result<()> {
         Ok(())
     }
+}
+
+/// Run only from an observer under the file writer, after syncing its feed.
+/// Returns SQLite's (busy, log frames, checkpointed frames), possibly -1 without WAL.
+pub fn checkpoint(connection: &Connection, truncate: bool) -> Result<(i64, i64, i64)> {
+    crate::sqlite::capture_checkpoint(connection, truncate)
 }
 
 type Observers = BTreeMap<PathBuf, Arc<dyn Observer>>;
@@ -113,5 +123,39 @@ mod tests {
         assert_eq!(db.scalar::<u32>("select count(*) from items")?, 4);
         assert!(store.close().is_err());
         Ok(())
+    }
+    #[derive(Debug, Default)]
+    struct Admission(AtomicBool);
+    impl Observer for Admission {
+        fn before_write(&self, _: &Path, _: &Connection) -> Result<()> {
+            if self.0.load(Ordering::SeqCst) { Err(Error::new(ErrorKind::Unavailable, "budget")) } else { Ok(()) }
+        }
+        fn opened(&self, _: &Path, _: &Connection) -> Result<()> {
+            Ok(())
+        }
+        fn committed(&self, _: &Path, _: &Connection, _: u32) -> Result<bool> {
+            Ok(false)
+        }
+        fn closing(&self, _: &Path, _: &Connection) -> Result<()> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn admission_refuses_before_begin_and_can_resume() -> Result<()> {
+        let root = tempfile::tempdir().unwrap();
+        let admission = Arc::new(Admission::default());
+        let _registered = register(root.path(), admission.clone())?;
+        let store = Store::open(root.path(), Options { background: false, ..Default::default() })?;
+        let db = store.database("app").open()?;
+        db.exec("create table items(value integer)")?;
+        admission.0.store(true, Ordering::SeqCst);
+        assert_eq!(db.exec("insert into items values(1)").unwrap_err().kind(), ErrorKind::Unavailable);
+        let result = db.tx::<_, Error>(|tx| tx.exec("insert into items values(2)"));
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::Unavailable);
+        assert_eq!(db.scalar::<u32>("select count(*) from items")?, 0);
+        admission.0.store(false, Ordering::SeqCst);
+        db.exec("insert into items values(3)")?;
+        assert_eq!(db.scalar::<u32>("select count(*) from items")?, 1);
+        store.close()
     }
 }

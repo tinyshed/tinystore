@@ -766,3 +766,5 @@ module defines.
 ## Experimental WAL capture (feature `capture-experiment`)
 
 - observation finishes before a write answers; capture failure returns an unknown outcome and refuses subsequent writes — `capture_runs_before_ack_and_failure_stops_further_writes` in `capture_experiment::tests`
+
+- experimental admission refuses before BEGIN without poisoning later retries — `admission_refuses_before_begin_and_can_resume` in `capture_experiment::tests`

@@ -365,7 +365,7 @@ fn commit(connection: &Connection, batch: &[Arc<Write>], capture: &Capture) -> V
     if batch.is_empty() {
         return Vec::new();
     }
-    if let Err(error) = capture.check() {
+    if let Err(error) = capture.before_write(connection) {
         return batch.iter().map(|_| Err(error.duplicate())).collect();
     }
     if let Err(error) = execute(connection, BEGIN) {

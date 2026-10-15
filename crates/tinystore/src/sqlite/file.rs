@@ -138,7 +138,7 @@ impl File {
         connection: &Connection,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.capture.check()?;
+        self.capture.before_write(connection)?;
         execute(connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let _held = Held::enter(self.address());
         let mut open = Open { connection, finished: false };
@@ -174,7 +174,7 @@ impl File {
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
         let connection = lock(&self.writer);
-        self.capture.check()?;
+        self.capture.before_write(&connection)?;
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         Ok(Begun { file: self, connection, committed: false })
     }
