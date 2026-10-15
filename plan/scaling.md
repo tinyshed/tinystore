@@ -311,6 +311,35 @@ After `v0.1.0`, proposed:
 | 11. Cells          | the directory, routing, moving a database                                        | a database moved while written loses no commit and serves from its new cell after the cut-over                     |
 | any time           | the exporters                                                                    | each takes its engine's test data out and names what it lost                                                       |
 
+## Research checkpoint — 15 October 2026
+
+The [sustained WAL capture round](https://github.com/tinyshed/research/blob/main/tinystore/reports/scaling-wal-load-2026-10-15.md)
+measures product seams at `31b10e4` on `experiment/wal-load`, with a separate
+research crate. Its three 60-second mixed-load passes use 64 writers, eight
+readers and periodic pinned snapshots under SQLite FULL. The bounded/owned
+candidate retains 89.5–91.8% of uncaptured write throughput and improves
+19.3–21.6% over the instrumented legacy capture. Sampled RSS is 52–54 MiB
+instead of 373–384 MiB. A 180-second soak confirms 2,358,498 ACKed writes;
+whole-process RSS still drifts slowly upward, so native allocation accounting
+remains open.
+
+The experiment admits a declared WAL reserve before BEGIN, refuses safely
+when a reader pins the watermark, and syncs the covered feed before checkpoint.
+Exceeding the declared reserve is discovered after native COMMIT and returns
+OutcomeUnknown until recovery. A strict arbitrary-SQL byte cap needs an
+enforceable transaction contract or VFS admission. The cache budget is per file;
+the feed disk budget eventually stops writes until retention exists.
+
+Status remains research. Owned encoding reduces codec work and batched tree
+updates reduce hash work, while their separate throughput effects vary. Syncing
+the feed every group costs another 16.8–26.7% in the controls without changing
+native FULL. The report contains raw traces, ACK/root/integrity checks,
+16 abrupt workers and the unresolved Linux SDK events CI teardown failure.
+The next implementation gates are global/native budgets, atomic snapshot plus
+stream position, segmented retention and a persistent sender with bounded
+shared frames and explicit durable positions, followed by cascade/140-child
+and WAN measurements. The ladder's product statuses above are unchanged.
+
 ## Open
 
 1. When: the log and the archive right after `v0.1.0`, before channels and
