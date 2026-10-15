@@ -8,6 +8,8 @@
 pub mod backup;
 #[cfg(feature = "blobs")]
 pub mod blobs;
+#[cfg(feature = "capture-experiment")]
+pub mod capture_experiment;
 mod clock;
 #[cfg(any(feature = "records", feature = "metrics", feature = "backup"))]
 mod compress;

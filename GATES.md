@@ -762,3 +762,7 @@ module defines.
 - what a release publishes says its version, stamped as it is built — `TestTheSDKPackageCarriesTheReleasesVersion`, `TestAPyprojectIsStampedWithTheReleasesVersion`
 - a platform wheel is one PyPI takes: every file in RECORD, each file's sizes before its bytes — `TestAPlatformWheelRecordsEveryFile`
 - `feat` and `fix` subjects are a release's notes — `TestNotesKeepFeaturesAndFixesUnderTheirSections`, `TestNotesBeginAfterThePreviousReleaseOfTheirKind`
+
+## Experimental WAL capture (feature `capture-experiment`)
+
+- observation finishes before a write answers; capture failure returns an unknown outcome and refuses subsequent writes — `capture_runs_before_ack_and_failure_stops_further_writes` in `capture_experiment::tests`

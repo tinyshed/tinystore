@@ -31,6 +31,8 @@ wire = ["kv"]
 # the bodies of the fuzz targets in fuzz/, which reach decoders the library
 # keeps to itself
 fuzzing = ["records", "metrics"]
+# Research-only commit observation; not the replication API.
+capture-experiment = ["sql"]
 
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the

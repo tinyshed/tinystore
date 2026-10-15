@@ -6,9 +6,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rusqlite::Connection;
 
+use super::capture::Capture;
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
-use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
+#[cfg(test)]
+use super::group::COMMIT;
+use super::group::{BEGIN, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Config, Tx};
@@ -30,6 +33,7 @@ pub(crate) struct File {
     group: Group,
     readers: Readers,
     closed: AtomicBool,
+    capture: Capture,
 }
 
 impl File {
@@ -40,12 +44,14 @@ impl File {
         }
         let config = Arc::new(config);
         let writer = connection::open(&path, &config, Role::Writer)?;
+        let capture = Capture::open(&path, &writer)?;
         Ok(Self {
-            group: Group::new(config.group),
+            group: Group::capturing(config.group, capture.clone()),
             readers: Readers::new(path.clone(), Arc::clone(&config)),
             writer: Mutex::new(writer),
             path,
             closed: AtomicBool::new(false),
+            capture,
         })
     }
 
@@ -132,6 +138,7 @@ impl File {
         connection: &Connection,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
+        self.capture.check()?;
         execute(connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let _held = Held::enter(self.address());
         let mut open = Open { connection, finished: false };
@@ -144,7 +151,7 @@ impl File {
     /// Commits the transaction on `connection`; a commit that fails may or may
     /// not be in the file.
     fn commit(&self, connection: &Connection) -> Result<()> {
-        execute(connection, COMMIT).map_err(|error| {
+        self.capture.commit(connection).map_err(|error| {
             if !connection.is_autocommit() {
                 let _ = execute(connection, ROLLBACK);
             }
@@ -167,6 +174,7 @@ impl File {
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
         let connection = lock(&self.writer);
+        self.capture.check()?;
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         Ok(Begun { file: self, connection, committed: false })
     }
@@ -247,6 +255,7 @@ impl File {
         self.group.close();
         self.readers.close();
         let connection = lock(&self.writer);
+        self.capture.close(&connection)?;
         // A truncated WAL leaves the directory as small as its data.
         connection
             .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))

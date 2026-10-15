@@ -8,6 +8,7 @@
 // are reached only from tests.
 #![allow(dead_code, unused_imports)]
 
+mod capture;
 mod config;
 mod connection;
 mod constraint;

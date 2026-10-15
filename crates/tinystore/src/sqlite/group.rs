@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
+use super::capture::Capture;
 use super::connection::{execute, sql_error};
 use super::given::own;
 use super::{GroupLimits, Tx};
@@ -53,6 +54,7 @@ pub(crate) struct Group {
     grew: Condvar,
     limits: GroupLimits,
     commits: AtomicU64,
+    capture: Capture,
 }
 
 #[derive(Default)]
@@ -97,7 +99,11 @@ struct Answer {
 
 impl Group {
     pub(crate) fn new(limits: GroupLimits) -> Self {
-        Self { queue: Mutex::new(Queue::default()), grew: Condvar::new(), limits, commits: AtomicU64::new(0) }
+        Self::capturing(limits, Capture::default())
+    }
+
+    pub(crate) fn capturing(limits: GroupLimits, capture: Capture) -> Self {
+        Self { queue: Mutex::new(Queue::default()), grew: Condvar::new(), limits, commits: AtomicU64::new(0), capture }
     }
 
     pub(crate) fn commits(&self) -> u64 {
@@ -175,7 +181,7 @@ impl Group {
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
             let started = Instant::now();
-            let answers = commit(&connection, &batch);
+            let answers = commit(&connection, &batch, &self.capture);
             let held = started.elapsed();
             drop(connection);
             if !batch.is_empty() {
@@ -355,23 +361,25 @@ fn answer_in_halves(mut callers: Vec<(Arc<Write>, Result<()>)>) {
 
 /// Runs a batch in one transaction, each write in a savepoint, and says how
 /// each one ended.
-fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
+fn commit(connection: &Connection, batch: &[Arc<Write>], capture: &Capture) -> Vec<Result<()>> {
     if batch.is_empty() {
         return Vec::new();
+    }
+    if let Err(error) = capture.check() {
+        return batch.iter().map(|_| Err(error.duplicate())).collect();
     }
     if let Err(error) = execute(connection, BEGIN) {
         let failure = sql_error("a grouped commit: its transaction", error);
         return batch.iter().map(|_| Err(failure.duplicate())).collect();
     }
     let answers: Vec<Result<()>> = batch.iter().map(|write| run(connection, write.take_work())).collect();
-    let Err(error) = execute(connection, COMMIT) else {
+    let Err(failure) = capture.commit(connection) else {
         return answers;
     };
     if !connection.is_autocommit() {
         // The commit failed and left the transaction open: nothing of it stays.
         let _ = execute(connection, ROLLBACK);
     }
-    let failure = sql_error("a grouped commit", error);
     let unknown = || Error::new(ErrorKind::OutcomeUnknown, failure.to_string());
     answers.into_iter().map(|answer| answer.and_then(|()| Err(unknown()))).collect()
 }
