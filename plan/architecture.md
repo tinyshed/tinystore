@@ -211,18 +211,23 @@ program and the command, in each SDK for its language
 
 ## Later modules
 
-**Channels (phase 5).** `publish` and `subscribe` on named channels. In
-memory, delivered at most once, a bounded queue a subscriber, and an overflow
-delivers a gap event rather than silence. A message published inside a
-transaction is delivered only after the commit. Engines emit their events
-(a key changed, a job finished) from their own code after the commit returns:
-SQLite's `update_hook` misses WITHOUT ROWID tables and `commit_hook` runs
-before the commit is final. Other processes subscribe through the server.
-Durable delivery is a job or a records follow, not a channel.
+**Channels (phase 5, [api/channels.md](api/channels.md)).** `publish` and
+`subscribe` on named channels. In memory, delivered at most once: a bounded
+log a branch someone listens to and each subscriber's place in it, and one
+that falls behind hears that it missed messages rather than silence. A message published inside
+a transaction is staged with its savepoints and handed over in commit order
+at the writer, after the commit. Engines emit their events (a key changed, a
+job finished) from their own code after the commit: SQLite's `update_hook`
+misses WITHOUT ROWID tables and `commit_hook` runs before the commit is
+final. Other processes subscribe through the server. Durable delivery is a
+job or a records follow, not a channel.
 
-**Locks (phase 5).** Leases with a time to live, and semaphores, kept in kv's
-file. jobs' `concurrency.group` is one of them, so the two share a word and an
-implementation.
+**Locks (phase 5, [api/locks.md](api/locks.md)).** Leases and semaphores in
+the memory of the process that holds the store, which sees every holder and
+waiter since `LOCK` keeps every other process out; kv.db keeps only the epoch
+their fences start from. A lease costs no commit, and a store that opens
+again holds none. jobs' `concurrency.group` is not a lock: a slot is taken in
+the same transaction as its job, in the queue's file.
 
 **Indexes (phase 6).** Declared in sqldb's schema: full text over columns,
 geo over coordinates. TinyStore keeps the virtual tables and their triggers,

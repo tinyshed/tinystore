@@ -232,8 +232,8 @@ target.
 
 ## 5. Channels and locks
 
-- [ ] Channels: publish and subscribe, after-commit delivery, gap events, through the server.
-- [ ] Leases and semaphores on kv; jobs' group concurrency on them.
+- [ ] Channels to their book ([api/channels.md](api/channels.md)), proposed on 16 October: publish and subscribe, after-commit delivery, missed messages said, through the server.
+- [ ] Locks and semaphores to their book ([api/locks.md](api/locks.md)), proposed on 16 October: leases in memory, fences from an epoch kept in kv.db, the SDK's leases across connections.
 
 **Gate:** a message published in a transaction that rolls back is never
 delivered; a subscriber that falls behind receives a gap event.
