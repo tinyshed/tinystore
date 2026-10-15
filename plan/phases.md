@@ -232,6 +232,10 @@ target.
 
 ## 5. Channels and locks
 
+The [15 October research handoff](channels-locks-research.md) records the
+standalone prototypes, measurements and implementation traps. It does not
+close the implementation gates below.
+
 - [ ] Channels: publish and subscribe, after-commit delivery, gap events, through the server.
 - [ ] Leases and semaphores on kv; jobs' group concurrency on them.
 
