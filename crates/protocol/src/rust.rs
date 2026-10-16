@@ -449,7 +449,7 @@ fn zero(kind: &Kind, member: &str) -> String {
 
 /// The engines, each a feature of the library; the connection's messages and
 /// the server's own are built always.
-const ENGINES: [&str; 8] = ["kv", "config", "jobs", "sql", "blobs", "records", "metrics", "backup"];
+const ENGINES: [&str; 9] = ["kv", "config", "locks", "jobs", "sql", "blobs", "records", "metrics", "backup"];
 
 /// The import of `Cell`, gated by the engines whose messages hold one, so
 /// that a build without them imports nothing it does not use.

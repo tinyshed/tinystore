@@ -234,6 +234,13 @@ target.
 
 - [ ] Channels to their book ([api/channels.md](api/channels.md)), proposed on 16 October: publish and subscribe, after-commit delivery, missed messages said, through the server.
 - [ ] Locks and semaphores to their book ([api/locks.md](api/locks.md)), proposed on 16 October: leases in memory, fences from an epoch kept in kv.db, the SDK's leases across connections.
+  Built, slices 1 and 2: the Rust core, `store.lock` and `store.semaphore`, `hold` and `try_hold` waiting in line
+  first come first served, `max_hold` revoking a lease at its time, `lost` and `in use`, a hold refused inside its
+  own hold of the key and inside a transaction, fences of the epoch kv.db keeps and a count, the store's locks'
+  timer; `protocol/locks.wire`, a hold answered once its key is given, a lease renewed and let go by its id from any
+  connection and asked for again by its request; the Bun SDK's `store.lock` and `store.semaphore`, `hold`,
+  `tryHold`, a lease renewed at a third of its ttl, its signal aborted at its own deadline or at `maxHold`, through
+  each way a store is reached. Python and Go come with their bindings; the book waits for the owner.
 
 **Gate:** a message published in a transaction that rolls back is never
 delivered; a subscriber that falls behind receives a gap event.

@@ -4714,6 +4714,274 @@ impl Message for KvTxResults {
     }
 }
 
+/// A key of a lock or a semaphore that a holder through a connection asks
+/// for, as plan/api/locks.md has it: the lease lasts `ttl` from its grant and
+/// from each renewal, so that a holder whose program froze loses it.
+#[cfg(feature = "locks")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LocksHold {
+    /// Lock or semaphore.
+    pub(crate) kind: String,
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    /// 1 to 1024 bytes.
+    pub(crate) key: String,
+    /// How many may hold the key at once: 1 for a lock, 1 to 1000.
+    pub(crate) limit: u64,
+    /// 1 s to 1 hour. Milliseconds.
+    pub(crate) ttl: u64,
+    /// From the grant, however the lease is renewed. Milliseconds.
+    pub(crate) max_hold: Option<u64>,
+    /// 0 takes the key only if it is free. Milliseconds.
+    pub(crate) wait: u64,
+    /// 16 random bytes: asked again, the lease given answers.
+    pub(crate) request: Vec<u8>,
+}
+
+#[cfg(feature = "locks")]
+impl Message for LocksHold {
+    const NAME: &'static str = "locks.Hold";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.kind = codec::str(r, "kind")?,
+                2 => message.name = codec::str(r, "name")?,
+                3 => message.key = codec::str(r, "key")?,
+                4 => message.limit = codec::uint(r, "limit")?,
+                5 => message.ttl = codec::uint(r, "ttl")?,
+                6 => message.max_hold = Some(codec::uint(r, "maxHold")?),
+                7 => message.wait = codec::uint(r, "wait")?,
+                8 => message.request = codec::bin(r, "request")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.kind.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.kind);
+        }
+        if !self.name.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.name);
+        }
+        if !self.key.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.key);
+        }
+        if self.limit != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.limit);
+        }
+        if self.ttl != 0 {
+            map.field(out, 5);
+            codec::write_uint(out, &self.ttl);
+        }
+        if let Some(max_hold) = &self.max_hold {
+            map.field(out, 6);
+            codec::write_uint(out, max_hold);
+        }
+        if self.wait != 0 {
+            map.field(out, 7);
+            codec::write_uint(out, &self.wait);
+        }
+        if !self.request.is_empty() {
+            map.field(out, 8);
+            codec::write_bin(out, &self.request);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.kind.len()
+            + 1 + 5 + self.name.len()
+            + 1 + 5 + self.key.len()
+            + 10
+            + 10
+            + self.max_hold.map_or(0, |_| 10)
+            + 10
+            + 1 + 5 + self.request.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.kind.is_empty()
+            && self.name.is_empty()
+            && self.key.is_empty()
+            && self.limit == 0
+            && self.ttl == 0
+            && self.max_hold.is_none()
+            && self.wait == 0
+            && self.request.is_empty()
+    }
+}
+
+/// A lease, or the key held by others when the hold would not wait.
+#[cfg(feature = "locks")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LocksHeld {
+    pub(crate) acquired: bool,
+    /// 16 random bytes only its holder learns.
+    pub(crate) lease: Vec<u8>,
+    /// A decimal integer of up to 128 bits; empty for a semaphore.
+    pub(crate) fence: String,
+    /// How long until maxHold revokes the lease, from now. Milliseconds.
+    pub(crate) revoke_in: Option<u64>,
+}
+
+#[cfg(feature = "locks")]
+impl Message for LocksHeld {
+    const NAME: &'static str = "locks.Held";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.acquired = codec::bool(r, "acquired")?,
+                2 => message.lease = codec::bin(r, "lease")?,
+                3 => message.fence = codec::str(r, "fence")?,
+                4 => message.revoke_in = Some(codec::uint(r, "revokeIn")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.acquired {
+            map.field(out, 1);
+            codec::write_bool(out, &self.acquired);
+        }
+        if !self.lease.is_empty() {
+            map.field(out, 2);
+            codec::write_bin(out, &self.lease);
+        }
+        if !self.fence.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.fence);
+        }
+        if let Some(revoke_in) = &self.revoke_in {
+            map.field(out, 4);
+            codec::write_uint(out, revoke_in);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+            + 1 + 5 + self.lease.len()
+            + 1 + 5 + self.fence.len()
+            + self.revoke_in.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.acquired
+            && self.lease.is_empty()
+            && self.fence.is_empty()
+            && self.revoke_in.is_none()
+    }
+}
+
+#[cfg(feature = "locks")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LocksRenew {
+    pub(crate) lease: Vec<u8>,
+    /// How long the lease lasts from now. Milliseconds.
+    pub(crate) ttl: u64,
+}
+
+#[cfg(feature = "locks")]
+impl Message for LocksRenew {
+    const NAME: &'static str = "locks.Renew";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.lease = codec::bin(r, "lease")?,
+                2 => message.ttl = codec::uint(r, "ttl")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.lease.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.lease);
+        }
+        if self.ttl != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.ttl);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.lease.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.lease.is_empty()
+            && self.ttl == 0
+    }
+}
+
+#[cfg(feature = "locks")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LocksLease {
+    pub(crate) lease: Vec<u8>,
+}
+
+#[cfg(feature = "locks")]
+impl Message for LocksLease {
+    const NAME: &'static str = "locks.Lease";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.lease = codec::bin(r, "lease")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.lease.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.lease);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.lease.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.lease.is_empty()
+    }
+}
+
 /// What a label's value must be: one of values, none of them with not, the
 /// label absent too, or a value that starts with prefix.
 #[cfg(feature = "metrics")]
@@ -9243,6 +9511,15 @@ pub(crate) mod method {
     pub(crate) const KV_ONCE_DELETE: u16 = 0x0133;
     #[cfg(feature = "kv")]
     pub(crate) const KV_TX: u16 = 0x0140;
+    /// Answers once the key is held, or held past the wait, `in_use`; a CANCEL
+    /// takes the ask out of its line.
+    #[cfg(feature = "locks")]
+    pub(crate) const LOCKS_HOLD: u16 = 0x0901;
+    /// A lease that ran out or was revoked is `lost`.
+    #[cfg(feature = "locks")]
+    pub(crate) const LOCKS_RENEW: u16 = 0x0902;
+    #[cfg(feature = "locks")]
+    pub(crate) const LOCKS_RELEASE: u16 = 0x0903;
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_READ: u16 = 0x0601;
     #[cfg(feature = "metrics")]
@@ -9439,6 +9716,12 @@ pub(crate) mod method {
             KV_ONCE_DELETE => Some(Access::Write),
             #[cfg(feature = "kv")]
             KV_TX => Some(Access::Write),
+            #[cfg(feature = "locks")]
+            LOCKS_HOLD => Some(Access::Write),
+            #[cfg(feature = "locks")]
+            LOCKS_RENEW => Some(Access::Write),
+            #[cfg(feature = "locks")]
+            LOCKS_RELEASE => Some(Access::Write),
             #[cfg(feature = "metrics")]
             METRICS_READ => Some(Access::Read),
             #[cfg(feature = "metrics")]
@@ -9630,6 +9913,12 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("kv.once.delete", 0x0133, "call"),
     #[cfg(feature = "kv")]
     ("kv.tx", 0x0140, "call"),
+    #[cfg(feature = "locks")]
+    ("locks.hold", 0x0901, "call"),
+    #[cfg(feature = "locks")]
+    ("locks.renew", 0x0902, "call"),
+    #[cfg(feature = "locks")]
+    ("locks.release", 0x0903, "call"),
     #[cfg(feature = "metrics")]
     ("metrics.read", 0x0601, "download"),
     #[cfg(feature = "metrics")]
@@ -9845,6 +10134,14 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "kv.Outcome" => KvOutcome::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
         "kv.TxResults" => KvTxResults::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "locks")]
+        "locks.Hold" => LocksHold::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "locks")]
+        "locks.Held" => LocksHeld::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "locks")]
+        "locks.Renew" => LocksRenew::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "locks")]
+        "locks.Lease" => LocksLease::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Condition" => MetricsCondition::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]

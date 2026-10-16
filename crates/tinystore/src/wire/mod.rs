@@ -13,6 +13,8 @@ pub(crate) mod frame;
 #[cfg(feature = "jobs")]
 mod jobs;
 mod kv;
+#[cfg(feature = "locks")]
+mod locks;
 mod message;
 #[cfg(feature = "metrics")]
 mod metrics;
@@ -72,6 +74,9 @@ pub(crate) enum Route {
     /// A backup's zip in pieces, then what it holds.
     #[cfg(feature = "backup")]
     Backup,
+    /// A hold, answered once its key is given, by whichever thread lets it go.
+    #[cfg(feature = "locks")]
+    Hold,
     Worker,
 }
 

@@ -13,7 +13,7 @@ import {
 	ProtocolError,
 	UnavailableError,
 } from '../src/errors.ts'
-import { LostError, Session, type SessionOptions } from '../src/session.ts'
+import { ConnectionLostError, Session, type SessionOptions } from '../src/session.ts'
 import { connect } from '../src/store.ts'
 import { credit, Flag, frame, headerSize, Kind, parseHeader } from '../src/wire/frame.ts'
 import { Empty, Failure, GoAway, Hello, KvEntry, Welcome } from '../src/wire/messages.ts'
@@ -305,9 +305,9 @@ describe('the end of a connection', () => {
 		await peer.frames()
 		peer.session.end(new Error('reset'))
 		const [a, b] = await Promise.all([sent, unsent])
-		expect(a).toBeInstanceOf(LostError)
+		expect(a).toBeInstanceOf(ConnectionLostError)
 		expect(a.sent).toBe(true)
-		expect(b).toBeInstanceOf(LostError)
+		expect(b).toBeInstanceOf(ConnectionLostError)
 		expect(b.sent).toBe(false)
 	})
 
@@ -329,7 +329,7 @@ describe('the end of a connection', () => {
 		await peer.frames()
 		peer.session.receive(frame(Kind.request, Flag.end, 0x0102, 1, new Uint8Array([0x80])))
 		expect(peer.session.ended).toBeInstanceOf(ProtocolError)
-		expect(await call).toBeInstanceOf(LostError)
+		expect(await call).toBeInstanceOf(ConnectionLostError)
 	})
 
 	test('frames split anywhere read as whole', async () => {

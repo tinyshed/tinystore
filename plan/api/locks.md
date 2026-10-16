@@ -112,9 +112,12 @@ renewal.
 
 ## Leases through a connection
 
-- `lock.hold` is an exchange: the server answers once the key is held, with
-  the lease's id, its fence and its deadline; the SDK renews over it and
-  ends it to let go.
+- `locks.hold` is a call the server answers once the key is held, with the
+  lease's id, its fence and how long until `maxHold` revokes it; a CANCEL
+  takes it out of its line. `locks.renew` and `locks.release` are calls of
+  their own that name the lease, so that they work from any connection. The
+  SDK counts `maxHold` from the answer itself, which no renewal moves, and
+  aborts the signal there; the store revokes the lease at the same moment.
 - The lease's id is 128 random bits only its holder learns. It, not the
   fence, which the holder hands to others, proves who holds: renewing and
   letting go name it, and a wrong one is refused. A connection admitted to
@@ -244,8 +247,9 @@ Proposed, to be measured before they are promised.
 1. The Rust core: locks and semaphores in memory, the epoch in kv.db,
    fences, the line of waiters and the timer, `hold`, `try_hold`, `maxHold`,
    `lost`, the two places `hold` is refused.
-2. The wire and the Bun SDK: the exchange, renewals from the SDK, the
-   lease's and the request's ids across connections, `lease.signal`.
+2. The wire and the Bun SDK: `locks.hold`, `locks.renew` and
+   `locks.release`, renewals from the SDK, the lease's and the request's ids
+   across connections, `lease.signal`.
 
 Python and Go come with their bindings.
 

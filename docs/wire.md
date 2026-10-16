@@ -363,12 +363,13 @@ An error is the final frame of its stream, with ERROR set:
 | `invalid`            | the request cannot be done as asked                                                                                                 | no                          |
 | `limit`              | a bound: memory, size or count; `what` names the `limit`, what the call `wanted` of it and the `bound`, where the engine knows them | later, or smaller           |
 | `closed`             | the store or the handle closed                                                                                                      | after opening again         |
-| `in_use`             | a name is taken                                                                                                                     | no                          |
+| `in_use`             | a name is taken, or a lock's key stayed held past a hold's wait                                                                     | later                       |
 | `conflict`           | a condition or a version no longer holds                                                                                            | after reading again         |
 | `corrupt`            | stored bytes no longer read                                                                                                         | no                          |
 | `too_old`, `too_new` | a time outside its engine's window                                                                                                  | no                          |
 | `suspended`          | a series in quarantine                                                                                                              | after its repair            |
 | `outcome_unknown`    | a commit whose result is unknown                                                                                                    | after reading what it wrote |
+| `lost`               | a lease ran out or was revoked at its maxHold: another holder may have run beside it                                                | no                          |
 | `permission`         | the connection's capability does not allow it, as a `read` connection opening an encrypted bucket                                   | no                          |
 | `unimplemented`      | a method, or a field of a request, this server does not have: `what` names the field, the message the server's version              | no                          |
 | `cancelled`          | the client cancelled it                                                                                                             | —                           |

@@ -43,6 +43,7 @@ import {
 	type RateLimitOptions,
 	rateLimitOpen,
 } from './limits.ts'
+import { Lock, type LockOptions, Semaphore, type SemaphoreOptions } from './locks.ts'
 import { type Logger, sayOwn } from './logger.ts'
 import { Metrics } from './metrics.ts'
 import { Once, type OnceOptions, onceOpen } from './once.ts'
@@ -220,6 +221,19 @@ export class Store implements AsyncDisposable {
 	 */
 	quota<W extends string>(name: string, windows: Record<W, Rate>): Quota<W> {
 		return new Quota<W>(this.#link, name, quotaOpen(name, windows), [])
+	}
+
+	/**
+	 * Keys held one holder at a time, across every program of the store:
+	 * `await store.lock('invoices').hold(invoice.id, lease => charge(invoice, lease.fence))`.
+	 */
+	lock(name: string, options?: LockOptions): Lock {
+		return new Lock(this.#link, name, options)
+	}
+
+	/** Keys held by up to `limit` at a time: `store.semaphore('uploads', { limit: 3 })`. */
+	semaphore(name: string, options: SemaphoreOptions): Semaphore {
+		return new Semaphore(this.#link, name, options)
 	}
 
 	/** A function run once a key, its JSON answer kept a day unless `keep` says: `store.once<Receipt>('charges')`. */

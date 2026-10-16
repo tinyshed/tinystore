@@ -1,0 +1,37 @@
+# A key of a lock or a semaphore that a holder through a connection asks
+# for, as plan/api/locks.md has it: the lease lasts `ttl` from its grant and
+# from each renewal, so that a holder whose program froze loses it.
+message locks.Hold {
+  1 kind: str            # lock or semaphore
+  2 name: str            # [a-z0-9][a-z0-9_-]{0,63}
+  3 key: str             # 1 to 1024 bytes
+  4 limit: uint          # how many may hold the key at once: 1 for a lock, 1 to 1000
+  5 ttl: duration        # 1 s to 1 hour
+  6 maxHold: duration?   # from the grant, however the lease is renewed
+  7 wait: duration       # 0 takes the key only if it is free
+  8 request: bin         # 16 random bytes: asked again, the lease given answers
+}
+
+# A lease, or the key held by others when the hold would not wait.
+message locks.Held {
+  1 acquired: bool
+  2 lease: bin           # 16 random bytes only its holder learns
+  3 fence: str           # a decimal integer of up to 128 bits; empty for a semaphore
+  4 revokeIn: duration?  # how long until maxHold revokes the lease, from now
+}
+
+message locks.Renew {
+  1 lease: bin
+  2 ttl: duration        # how long the lease lasts from now
+}
+
+message locks.Lease {
+  1 lease: bin
+}
+
+# Answers once the key is held, or held past the wait, `in_use`; a CANCEL
+# takes the ask out of its line.
+write 0x0901 locks.hold(locks.Hold)     -> locks.Held
+# A lease that ran out or was revoked is `lost`.
+write 0x0902 locks.renew(locks.Renew)   -> Empty
+write 0x0903 locks.release(locks.Lease) -> Empty

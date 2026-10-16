@@ -479,6 +479,21 @@ module defines.
 - the store's key is made once, its owner's alone and durable before it seals, or read from the file the options name and never made there; a store that seals nothing makes none — `a_key_is_made_once_and_read_after`, `a_file_that_is_not_a_key_or_not_there_says_so` in `encryption`; `the_key_is_the_file_the_options_name_which_the_store_never_makes`, `a_store_that_seals_nothing_makes_no_key` in `kv::encrypted`; `a_pipes_store_reads_its_encryption_key_from_the_file_its_options_name` in `pipe::tests`; `the_encryption_key_is_the_stores_own_file_unless_one_is_named` in `crates/cli/src/args.rs`; `its key is the file the options name, which the store only reads` in `sdk/js/test/encrypted.test.ts`
 - a read token opens no encrypted bucket, by its name or as a plain one — `an_encrypted_bucket_opens_for_a_connection_that_writes_and_for_none_that_only_reads` in `pipe::tests`
 
+## Locks
+
+- a key is held by one holder at a time and given to the next in line when it is let go, a later lease's fence larger — `a_key_is_held_by_one_holder_at_a_time_and_given_on_when_let_go` in `kv::locks`; `a key is held by one holder at a time, the next in line given it when it is let go` in `sdk/js/test/locks.test.ts`
+- waiters are served in the order they came — `waiters_are_served_in_the_order_they_came` in `kv::locks`
+- a key still held past a hold's wait is `in use`, and a hold that would not wait says the key is held — `a_key_still_held_after_the_wait_is_in_use` in `kv::locks`, `a_hold_answers_once_the_key_is_given_and_a_hold_that_would_not_wait_says_it_is_held` in `wire::locks`
+- `max_hold` revokes a lease, gives the key on and fails the hold `lost`, though its function succeeded — `max_hold_revokes_a_lease_gives_the_key_on_and_fails_the_hold_lost` in `kv::locks`; `maxHold revokes a lease, gives the key on and fails the hold LostError` in `sdk/js/test/locks.test.ts`
+- a hold inside its own hold of the key, or inside a transaction, is refused at once — `a_hold_inside_its_own_hold_or_inside_a_transaction_is_invalid` in `kv::locks`; `a hold inside its own hold of the key, or inside a transaction, is InvalidError` in `sdk/js/test/locks.test.ts`
+- fences grow with every lease and across a restart, whatever the clock does — `fences_grow_with_every_lease_and_across_a_restart` in `kv::locks`
+- a semaphore admits its limit a key, and its lease has no fence — `a_semaphore_admits_its_limit_a_key_and_a_lock_of_its_name_is_another` in `kv::locks`, `a_semaphore_held_over_the_wire_has_no_fence_and_names_are_checked` in `wire::locks`
+- a panic lets the key go — `a_panic_lets_the_key_go` in `kv::locks`
+- closing the store ends every lease and answers every waiter `closed` — `closing_the_store_ends_every_lease_and_answers_every_waiter` in `kv::locks`
+- a lease through a connection lasts its ttl from its last renewal, and one that ran out is never renewed nor lets go of the key another holds — `a_lease_through_a_connection_lasts_its_ttl_from_its_last_renewal` in `kv::locks`; `a lease renewed by this program outlives its ttl` in `sdk/js/test/locks.test.ts`
+- a request asked again answers the lease it was given, or takes over its place in line — `a_request_asked_again_answers_its_lease_or_takes_over_its_place_in_line` in `kv::locks`, `a_lease_outlives_its_connection_and_its_request_asked_again_answers_it` in `wire::locks`
+- a cancelled hold leaves its line and takes nothing — `a_cancelled_waiter_leaves_its_line` in `kv::locks`, `a_cancelled_hold_leaves_the_line_and_is_answered_cancelled` in `wire::locks`
+
 ## Jobs
 
 - a job in a batch commits with its rows or not at all — `TestAJobInABatchCommitsWithItsRows`, `TestAJobGoesOnlyInTheDatabaseItsQueueLivesIn`

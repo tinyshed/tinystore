@@ -79,6 +79,16 @@ export type {
 	WriteOptions,
 } from './kv.ts'
 export type { Allowance, Quota, Rate, RateLimit, RateLimitOptions, WindowUse } from './limits.ts'
+export type {
+	HoldOptions,
+	Lease,
+	Lock,
+	LockOptions,
+	Permit,
+	Semaphore,
+	SemaphoreOptions,
+	Tried,
+} from './locks.ts'
 export { type ConsoleOut, type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,

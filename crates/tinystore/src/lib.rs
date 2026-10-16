@@ -31,6 +31,8 @@ pub mod kv;
 mod log_config;
 #[cfg(feature = "config")]
 pub use kv::config;
+#[cfg(feature = "locks")]
+pub use kv::locks;
 #[cfg(feature = "store")]
 mod memory;
 #[cfg(feature = "metrics")]

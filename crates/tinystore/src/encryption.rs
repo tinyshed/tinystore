@@ -128,6 +128,13 @@ impl fmt::Debug for EncryptionKey {
     }
 }
 
+/// `N` bytes from the system's source of random bytes, the one the store's key
+/// and its nonces come from.
+#[cfg(feature = "locks")]
+pub(crate) fn random<const N: usize>() -> Result<[u8; N]> {
+    <[u8; N]>::try_generate().map_err(|error| Error::internal(format!("the system's random bytes: {error}")))
+}
+
 fn shown(file: &Path) -> String {
     format!("the encryption key {}", file.display())
 }

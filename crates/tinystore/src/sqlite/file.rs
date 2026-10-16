@@ -319,6 +319,12 @@ impl Drop for Begun<'_> {
     }
 }
 
+/// Whether this thread holds any file's writer in a transaction, or is marked
+/// inside one that has not begun yet: what waits there holds a writer too.
+pub(crate) fn in_a_transaction() -> bool {
+    HELD.with(|held| !held.borrow().is_empty())
+}
+
 /// A file's writer this thread holds, from its transaction's start to its end.
 struct Held(usize);
 

@@ -26,7 +26,7 @@ test:
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
 # console alone, the wire alone and every engine without the wire; CI lints on each platform, since cfg
 # hides one's code from another
-lint: && (lint-alone "console") (lint-alone "kv") (lint-alone "config") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,config,jobs,sql,blobs,records,metrics,backup")
+lint: && (lint-alone "console") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,config,locks,jobs,sql,blobs,records,metrics,backup")
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # run clippy on the library built with these features alone
@@ -53,11 +53,11 @@ protocol-check:
 build:
     cargo build --release --locked -p tinystore-ffi -p tinystore-cli
 
-# run the Bun SDK's kv, jobs, sql, files, events, metrics, configs and backups over the core in its own process, a private child, a sidecar and a remote server, its test clock, its codecs against the vectors, and its console lines
+# run the Bun SDK's kv, jobs, sql, files, events, metrics, configs, backups and locks over the core in its own process, a private child, a sidecar and a remote server, its test clock, its codecs against the vectors, and its console lines
 [working-directory: 'sdk/js']
 sdk: build
     bun install --frozen-lockfile
-    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts
+    bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts test/locks.test.ts
 
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']
@@ -67,7 +67,7 @@ sdk-check:
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
-    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console kv config jobs sql blobs records metrics wire kv,backup kv,config,jobs,sql,blobs,records,metrics,backup; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked'
+    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console kv config locks jobs sql blobs records metrics wire kv,backup kv,config,locks,jobs,sql,blobs,records,metrics,backup; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked'
 
 # lint the GitHub workflows
 lint-actions:

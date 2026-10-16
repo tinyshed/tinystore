@@ -12,7 +12,7 @@ import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './
 import { type Rate, rateOf } from './limits.ts'
 import { sayOwn } from './logger.ts'
 import { check, type StandardSchemaV1 } from './schema.ts'
-import { LostError, type Stream } from './session.ts'
+import { ConnectionLostError, type Stream } from './session.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import type { Read, Written } from './wire/codec.ts'
 import {
@@ -527,7 +527,7 @@ async function* watchJob<T>(source: Source<T>, id: string): AsyncGenerator<Job<T
 				}
 			}
 		} catch (err) {
-			if (!(err instanceof LostError || err instanceof UnavailableError)) {
+			if (!(err instanceof ConnectionLostError || err instanceof UnavailableError)) {
 				throw err
 			}
 		} finally {

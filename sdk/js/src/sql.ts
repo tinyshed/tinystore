@@ -662,6 +662,11 @@ interface Running {
 // context carries them: a thread's own stack, for a runtime of one thread.
 const running = new AsyncLocalStorage<readonly Running[]>()
 
+/** Whether the caller runs inside the function of a database's transaction. */
+export function insideDatabaseTx(): boolean {
+	return running.getStore()?.some(each => !each.ended) === true
+}
+
 /**
  * An application's database: `await store.database('app', { migrations })`.
  * The verb says what comes back: all the rows, one or none, one value, or

@@ -6,7 +6,7 @@
 import { type Connection, type Idempotence, type Link, pieceOf } from './connection.ts'
 import { ClosedError, InvalidError, OutcomeUnknownError } from './errors.ts'
 import { checkName, handleOn, type Via, viaLink } from './handles.ts'
-import { LostError, type Stream, watch } from './session.ts'
+import { ConnectionLostError, type Stream, watch } from './session.ts'
 import { type Duration, dateOf, ms, unixMs } from './time.ts'
 import {
 	BlobsAt,
@@ -743,9 +743,9 @@ async function uploaded(
 		await stream.next()
 		return writtenOf((await stream.next()).body)
 	} catch (err) {
-		if (err instanceof LostError && !ending && source.replayable) {
+		if (err instanceof ConnectionLostError && !ending && source.replayable) {
 			// the server aborted what it had of it, so the whole body goes again
-			throw new LostError(err.message, false)
+			throw new ConnectionLostError(err.message, false)
 		}
 		stream.cancel()
 		throw lostAs(err, ending)
@@ -756,7 +756,7 @@ async function uploaded(
 
 /** What a lost connection means for an upload: nothing left before its last DATA, unknown after. */
 function lostAs(err: unknown, ending: boolean): unknown {
-	if (!(err instanceof LostError)) {
+	if (!(err instanceof ConnectionLostError)) {
 		return err
 	}
 	if (ending) {

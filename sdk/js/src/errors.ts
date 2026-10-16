@@ -15,6 +15,7 @@ export type Code =
 	| 'too_new'
 	| 'suspended'
 	| 'outcome_unknown'
+	| 'lost'
 	| 'permission'
 	| 'unimplemented'
 	| 'cancelled'
@@ -240,6 +241,17 @@ export class InternalError extends TinystoreError {
 	}
 }
 
+/**
+ * A lease that ran out or was revoked at its maxHold while its function ran:
+ * another holder may have run beside it. The function's work stands, and a
+ * system that compares fences refused what came late.
+ */
+export class LostError extends TinystoreError {
+	constructor(message: string, what?: What) {
+		super('lost', message, what)
+	}
+}
+
 /** A frame or a message that breaks the protocol; the connection ends with it. */
 export class ProtocolError extends TinystoreError {
 	constructor(message: string, what?: What) {
@@ -266,6 +278,7 @@ const classes: Record<Code, new (message: string, what?: What) => TinystoreError
 	too_new: TooNewError,
 	suspended: SuspendedError,
 	outcome_unknown: OutcomeUnknownError,
+	lost: LostError,
 	permission: PermissionDeniedError,
 	unimplemented: UnimplementedError,
 	cancelled: CancelledError,

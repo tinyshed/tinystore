@@ -28,6 +28,8 @@ mod engine;
 #[cfg(test)]
 mod fixture;
 mod key_call;
+#[cfg(feature = "locks")]
+pub mod locks;
 mod once;
 mod path;
 mod quota;

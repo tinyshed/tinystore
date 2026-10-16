@@ -66,6 +66,7 @@ fn code_of(kind: ErrorKind) -> &'static str {
         ErrorKind::Unavailable => "unavailable",
         ErrorKind::Cancelled => "cancelled",
         ErrorKind::OutcomeUnknown => "outcome_unknown",
+        ErrorKind::Lost => "lost",
         _ => "internal",
     }
 }

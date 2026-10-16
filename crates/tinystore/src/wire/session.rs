@@ -17,6 +17,8 @@ use super::frame::{self, Frame, Kind};
 #[cfg(feature = "jobs")]
 use super::jobs;
 use super::kv::{self, Run};
+#[cfg(feature = "locks")]
+use super::locks;
 #[cfg(feature = "metrics")]
 use super::metrics;
 use super::protocol::method::{self, Access};
@@ -76,6 +78,8 @@ struct Shared {
     kv: kv::Handles,
     #[cfg(feature = "config")]
     config: config::Configs,
+    #[cfg(feature = "locks")]
+    locks: Arc<locks::Holds>,
     #[cfg(feature = "jobs")]
     jobs: jobs::Handles,
     #[cfg(feature = "sql")]
@@ -185,6 +189,8 @@ impl Session {
             kv: kv::Handles::default(),
             #[cfg(feature = "config")]
             config: config::Configs::default(),
+            #[cfg(feature = "locks")]
+            locks: Arc::default(),
             #[cfg(feature = "jobs")]
             jobs: jobs::Handles::default(),
             #[cfg(feature = "sql")]
@@ -344,6 +350,8 @@ impl Session {
         self.shared.metrics.end();
         #[cfg(feature = "config")]
         self.shared.config.end();
+        #[cfg(feature = "locks")]
+        self.shared.locks.end();
         #[cfg(feature = "backup")]
         self.shared.backups.end_all("the connection is gone");
     }
@@ -507,6 +515,8 @@ impl Shared {
             Route::Follow => self.follow(input, stream, &body),
             #[cfg(feature = "backup")]
             Route::Backup => self.backup(input, stream, &body),
+            #[cfg(feature = "locks")]
+            Route::Hold => self.hold(stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -525,6 +535,22 @@ impl Shared {
             shared.reads_away.fetch_sub(1, Ordering::AcqRel);
             shared.answer(stream, answered);
         }));
+    }
+
+    /// Asks for the key a hold names; the stream's RESPONSE goes once the key
+    /// is given, from whichever thread lets it go.
+    #[cfg(feature = "locks")]
+    fn hold(self: &Arc<Self>, stream: u32, body: &[u8]) {
+        let answering = Arc::downgrade(self);
+        let answer: locks::Answering = Box::new(move |answered| {
+            if let Some(shared) = answering.upgrade() {
+                shared.answer(stream, answered);
+            }
+        });
+        if let Err(failure) = guarded(|| locks::hold(&self.store, &self.locks, stream, body, answer)) {
+            self.locks.cancel(stream);
+            self.answer(stream, Err(failure));
+        }
     }
 
     /// Starts a client's worker: the stream's `RESPONSE`, then the jobs it
@@ -980,6 +1006,10 @@ impl Shared {
         if self.backups.cancel(stream) {
             return;
         }
+        #[cfg(feature = "locks")]
+        if self.locks.cancel(stream) {
+            return self.answer(stream, Err(Failure::cancelled("the client cancelled its hold")));
+        }
         #[cfg(feature = "jobs")]
         if self.jobs.work(stream).is_some() {
             return self.end_work(stream, Err(Failure::cancelled("the client cancelled its worker")));
@@ -1076,6 +1106,8 @@ impl Shared {
             0x06 => metrics::call(&self.store, method, body, max_body),
             #[cfg(feature = "config")]
             0x07 => config::call(&self.store, &self.config, method, body, self.read_only.load(Ordering::Relaxed)),
+            #[cfg(feature = "locks")]
+            0x09 => locks::call(&self.store, method, body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -1203,6 +1235,8 @@ fn route(method: u16) -> Route {
         0x07 => config::route(method),
         #[cfg(feature = "backup")]
         0x08 => Route::Backup,
+        #[cfg(feature = "locks")]
+        0x09 => locks::route(method),
         _ => Route::Worker,
     }
 }
@@ -1216,7 +1250,8 @@ fn engines() -> Vec<String> {
     let metrics = cfg!(feature = "metrics").then_some("metrics");
     let config = cfg!(feature = "config").then_some("config");
     let backup = cfg!(feature = "backup").then_some("backup");
-    let engines = [Some("kv"), config, jobs, sql, blobs, records, metrics, backup];
+    let locks = cfg!(feature = "locks").then_some("locks");
+    let engines = [Some("kv"), config, locks, jobs, sql, blobs, records, metrics, backup];
     engines.into_iter().flatten().map(str::to_owned).collect()
 }
 

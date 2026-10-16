@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises'
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { CancelledError, ConflictError, InvalidError, UnavailableError } from './errors.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
-import { LostError, type Stream } from './session.ts'
+import { ConnectionLostError, type Stream } from './session.ts'
 import { type DurationText, ms, spelled } from './time.ts'
 import type { Read } from './wire/codec.ts'
 import {
@@ -991,7 +991,7 @@ export class Config<D> {
 					return
 				}
 				const passing =
-					err instanceof LostError ||
+					err instanceof ConnectionLostError ||
 					err instanceof UnavailableError ||
 					err instanceof CancelledError
 				if (!passing) {

@@ -4,6 +4,8 @@
 // that every key it read is still as it read it. A check that fails runs the
 // function again.
 
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 import type { Link } from './connection.ts'
 import { ConflictError, InvalidError } from './errors.ts'
 import { handleOn } from './handles.ts'
@@ -28,6 +30,15 @@ import { KvCall, KvEntry, KvTx, type Method, methods } from './wire/protocol.ts'
 /** How many times tx runs its function before a key it read that keeps changing is ConflictError. */
 const runs = 5
 
+// Whether the caller runs inside a transaction's function, as its async
+// context carries it: a lock's hold refuses to wait there.
+const inside = new AsyncLocalStorage<boolean>()
+
+/** Whether the caller runs inside the function of a store's transaction. */
+export function insideStoreTx(): boolean {
+	return inside.getStore() === true
+}
+
 /**
  * Runs fn as one transaction and gives back what it returns: its writes all
  * commit or none do. When a key fn read changed before the commit, fn runs
@@ -36,7 +47,7 @@ const runs = 5
 export async function runTx<T>(link: Link, fn: (tx: Tx) => T | Promise<T>): Promise<T> {
 	for (let run = 1; ; run++) {
 		const tx = new Tx(link)
-		const returned = await fn(tx)
+		const returned = await inside.run(true, () => fn(tx))
 		try {
 			await tx.commit()
 			return returned

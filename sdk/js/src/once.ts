@@ -8,7 +8,7 @@ import type { Link } from './connection.ts'
 import { OutcomeUnknownError, ProtocolError } from './errors.ts'
 import { checkName, handleOn } from './handles.ts'
 import { callOn, jsonValues, keyText, underField, type Values } from './kv.ts'
-import { LostError, type Stream, watch } from './session.ts'
+import { ConnectionLostError, type Stream, watch } from './session.ts'
 import { type Duration, ms } from './time.ts'
 import type { Key } from './wire/codec.ts'
 import { KvAnswer, KvCall, KvFound, KvOnceOpen, methods } from './wire/protocol.ts'
@@ -125,7 +125,7 @@ class Run {
 			await this.#stream.send(answer, true)
 			await this.#stream.next()
 		} catch (err) {
-			if (err instanceof LostError) {
+			if (err instanceof ConnectionLostError) {
 				throw new OutcomeUnknownError(
 					`the connection was lost before the answer was kept; the next run may run again: ${err.message}`,
 				)

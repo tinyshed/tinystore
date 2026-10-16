@@ -16,7 +16,7 @@ import {
 	UnavailableError,
 } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
-import { LostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
+import { ConnectionLostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
 import { Empty, methods, StoreOptions } from './wire/protocol.ts'
 
 /**
@@ -592,10 +592,10 @@ export class Link {
  * thrown here; any other failure is the call's own.
  */
 export function goesAgain(err: unknown, idempotence: Idempotence): boolean {
-	if (!(err instanceof LostError || err instanceof UnavailableError)) {
+	if (!(err instanceof ConnectionLostError || err instanceof UnavailableError)) {
 		return false
 	}
-	const sent = err instanceof LostError && err.sent
+	const sent = err instanceof ConnectionLostError && err.sent
 	if (!sent || idempotence === 'read') {
 		return true
 	}

@@ -12,7 +12,7 @@ import { FailureLog, messageOf } from './background.ts'
 import type { Link } from './connection.ts'
 import { InvalidError, OutcomeUnknownError, UnavailableError } from './errors.ts'
 import { sayOwn } from './logger.ts'
-import { LostError, type Stream } from './session.ts'
+import { ConnectionLostError, type Stream } from './session.ts'
 import { type Duration, ms } from './time.ts'
 import { MetricsAck, MetricsBatch, MetricsSession, methods } from './wire/protocol.ts'
 
@@ -362,7 +362,7 @@ export class Instruments {
 				this.#failures.succeeded()
 				return
 			} catch (err) {
-				if (tries < 2 && err instanceof LostError) {
+				if (tries < 2 && err instanceof ConnectionLostError) {
 					continue
 				}
 				this.#failures.failed(err)

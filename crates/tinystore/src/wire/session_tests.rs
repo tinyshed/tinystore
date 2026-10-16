@@ -100,6 +100,8 @@ fn every_method_runs_as_the_shape_its_schema_line_says() {
             Route::Follow => "download",
             #[cfg(feature = "backup")]
             Route::Backup => "download",
+            #[cfg(feature = "locks")]
+            Route::Hold => "call",
         };
         assert_eq!(runs, shape, "{name}");
     }

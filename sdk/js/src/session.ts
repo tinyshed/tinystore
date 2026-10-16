@@ -68,7 +68,7 @@ export interface SessionOptions {
  * and one that had is a read to send again or a write whose outcome is
  * unknown.
  */
-export class LostError extends ClosedError {
+export class ConnectionLostError extends ClosedError {
 	readonly sent: boolean
 
 	constructor(message: string, sent: boolean) {
@@ -376,7 +376,7 @@ export class Session {
 	/** Why no stream may open now: the connection ended or is going away. */
 	#usable(): Error | undefined {
 		if (this.#ended !== undefined) {
-			return new LostError(`the connection ended: ${this.#ended.message}`, false)
+			return new ConnectionLostError(`the connection ended: ${this.#ended.message}`, false)
 		}
 		if (this.#goingAway) {
 			return new UnavailableError('the server is closing this connection')
@@ -761,16 +761,16 @@ export class Session {
 		this.#welcome.reject(err)
 		for (const stream of this.#streams.values()) {
 			if (stream instanceof Direct) {
-				stream.reject(new LostError(`the connection ended: ${err.message}`, true))
+				stream.reject(new ConnectionLostError(`the connection ended: ${err.message}`, true))
 				continue
 			}
-			stream.fail(new LostError(`the connection ended: ${err.message}`, stream.sent))
+			stream.fail(new ConnectionLostError(`the connection ended: ${err.message}`, stream.sent))
 			stream.finish()
 		}
 		this.#streams.clear()
 		this.#queue = []
 		for (const w of this.#waitingToOpen.splice(0)) {
-			w.reject(new LostError(`the connection ended: ${err.message}`, false))
+			w.reject(new ConnectionLostError(`the connection ended: ${err.message}`, false))
 		}
 		for (const listener of this.#endListeners.splice(0)) {
 			listener(err)

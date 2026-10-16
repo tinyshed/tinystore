@@ -84,6 +84,16 @@ export const methods = {
 	'kv.once.get': 0x0132,
 	'kv.once.delete': 0x0133,
 	'kv.tx': 0x0140,
+	/**
+	 * Answers once the key is held, or held past the wait, `in_use`; a CANCEL
+	 * takes the ask out of its line.
+	 */
+	'locks.hold': 0x0901,
+	/**
+	 * A lease that ran out or was revoked is `lost`.
+	 */
+	'locks.renew': 0x0902,
+	'locks.release': 0x0903,
 	'metrics.read': 0x0601,
 	'metrics.latest': 0x0602,
 	'metrics.aggregate': 0x0603,
@@ -4998,6 +5008,277 @@ export const KvTxResults = message(
 			}
 			r.leave()
 			return { outcomes: $outcomes }
+		},
+	},
+)
+
+/**
+ * A key of a lock or a semaphore that a holder through a connection asks
+ * for, as plan/api/locks.md has it: the lease lasts `ttl` from its grant and
+ * from each renewal, so that a holder whose program froze loses it.
+ */
+export const LocksHold = message(
+	'locks.Hold',
+	{
+		/** lock or semaphore */
+		kind: [1, str],
+		/** [a-z0-9][a-z0-9_-]{0,63} */
+		name: [2, str],
+		/** 1 to 1024 bytes */
+		key: [3, str],
+		/** how many may hold the key at once: 1 for a lock, 1 to 1000 */
+		limit: [4, uint],
+		/** 1 s to 1 hour */
+		ttl: [5, uint],
+		/** from the grant, however the lease is renewed */
+		maxHold: [6, uint],
+		/** 0 takes the key only if it is free */
+		wait: [7, uint],
+		/** 16 random bytes: asked again, the lease given answers */
+		request: [8, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.kind !== undefined) {
+				w.field(1)
+				w.str(v.kind)
+				n++
+			}
+			if (v.name !== undefined) {
+				w.field(2)
+				w.str(v.name)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(3)
+				w.str(v.key)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(4)
+				w.uint(v.limit)
+				n++
+			}
+			if (v.ttl !== undefined) {
+				w.field(5)
+				w.uint(v.ttl)
+				n++
+			}
+			if (v.maxHold !== undefined) {
+				w.field(6)
+				w.uint(v.maxHold)
+				n++
+			}
+			if (v.wait !== undefined) {
+				w.field(7)
+				w.uint(v.wait)
+				n++
+			}
+			if (v.request !== undefined) {
+				w.field(8)
+				w.bin(v.request)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $kind: string | undefined
+			let $name: string | undefined
+			let $key: string | undefined
+			let $limit: number | undefined
+			let $ttl: number | undefined
+			let $maxHold: number | undefined
+			let $wait: number | undefined
+			let $request: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$kind = r.str()
+						break
+					case 2:
+						$name = r.str()
+						break
+					case 3:
+						$key = r.str()
+						break
+					case 4:
+						$limit = r.uint()
+						break
+					case 5:
+						$ttl = r.uint()
+						break
+					case 6:
+						$maxHold = r.uint()
+						break
+					case 7:
+						$wait = r.uint()
+						break
+					case 8:
+						$request = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				kind: $kind,
+				name: $name,
+				key: $key,
+				limit: $limit,
+				ttl: $ttl,
+				maxHold: $maxHold,
+				wait: $wait,
+				request: $request,
+			}
+		},
+	},
+)
+
+/**
+ * A lease, or the key held by others when the hold would not wait.
+ */
+export const LocksHeld = message(
+	'locks.Held',
+	{
+		acquired: [1, bool],
+		/** 16 random bytes only its holder learns */
+		lease: [2, bin],
+		/** a decimal integer of up to 128 bits; empty for a semaphore */
+		fence: [3, str],
+		/** how long until maxHold revokes the lease, from now */
+		revokeIn: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.acquired !== undefined) {
+				w.field(1)
+				w.bool(v.acquired)
+				n++
+			}
+			if (v.lease !== undefined) {
+				w.field(2)
+				w.bin(v.lease)
+				n++
+			}
+			if (v.fence !== undefined) {
+				w.field(3)
+				w.str(v.fence)
+				n++
+			}
+			if (v.revokeIn !== undefined) {
+				w.field(4)
+				w.uint(v.revokeIn)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $acquired: boolean | undefined
+			let $lease: Uint8Array | undefined
+			let $fence: string | undefined
+			let $revokeIn: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$acquired = r.bool()
+						break
+					case 2:
+						$lease = r.bytes()
+						break
+					case 3:
+						$fence = r.str()
+						break
+					case 4:
+						$revokeIn = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { acquired: $acquired, lease: $lease, fence: $fence, revokeIn: $revokeIn }
+		},
+	},
+)
+
+export const LocksRenew = message(
+	'locks.Renew',
+	{
+		lease: [1, bin],
+		/** how long the lease lasts from now */
+		ttl: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.lease !== undefined) {
+				w.field(1)
+				w.bin(v.lease)
+				n++
+			}
+			if (v.ttl !== undefined) {
+				w.field(2)
+				w.uint(v.ttl)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $lease: Uint8Array | undefined
+			let $ttl: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$lease = r.bytes()
+						break
+					case 2:
+						$ttl = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { lease: $lease, ttl: $ttl }
+		},
+	},
+)
+
+export const LocksLease = message(
+	'locks.Lease',
+	{
+		lease: [1, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.lease !== undefined) {
+				w.field(1)
+				w.bin(v.lease)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $lease: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$lease = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { lease: $lease }
 		},
 	},
 )

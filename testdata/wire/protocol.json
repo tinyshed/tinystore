@@ -2270,6 +2270,103 @@
     },
     {
       "fields": {
+        "key": {
+          "str": "key"
+        },
+        "kind": {
+          "str": "kind"
+        },
+        "limit": {
+          "uint": "407"
+        },
+        "maxHold": {
+          "uint": "1500"
+        },
+        "name": {
+          "str": "name"
+        },
+        "request": {
+          "bin": "01ff"
+        },
+        "ttl": {
+          "uint": "1500"
+        },
+        "wait": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8801a46b696e6402a46e616d6503a36b657904cd019705cd05dc06cd05dc07cd05dc08c40201ff",
+      "message": "locks.Hold",
+      "name": "locks.Hold with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "locks.Hold",
+      "name": "locks.Hold with no field"
+    },
+    {
+      "fields": {
+        "acquired": {
+          "bool": true
+        },
+        "fence": {
+          "str": "fence"
+        },
+        "lease": {
+          "bin": "01ff"
+        },
+        "revokeIn": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8401c302c40201ff03a566656e636504cd05dc",
+      "message": "locks.Held",
+      "name": "locks.Held with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "locks.Held",
+      "name": "locks.Held with no field"
+    },
+    {
+      "fields": {
+        "lease": {
+          "bin": "01ff"
+        },
+        "ttl": {
+          "uint": "1500"
+        }
+      },
+      "hex": "8201c40201ff02cd05dc",
+      "message": "locks.Renew",
+      "name": "locks.Renew with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "locks.Renew",
+      "name": "locks.Renew with no field"
+    },
+    {
+      "fields": {
+        "lease": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8101c40201ff",
+      "message": "locks.Lease",
+      "name": "locks.Lease with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "locks.Lease",
+      "name": "locks.Lease with no field"
+    },
+    {
+      "fields": {
         "not": {
           "bool": true
         },
@@ -4960,6 +5057,9 @@
     "kv.set": 260,
     "kv.take": 262,
     "kv.tx": 320,
+    "locks.hold": 2305,
+    "locks.release": 2307,
+    "locks.renew": 2306,
     "metrics.aggregate": 1539,
     "metrics.damaged": 1545,
     "metrics.delete": 1548,

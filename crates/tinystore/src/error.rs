@@ -27,6 +27,9 @@ pub enum ErrorKind {
     /// A commit failed after the write ran: it may or may not be in the file,
     /// and the caller reconciles before retrying.
     OutcomeUnknown,
+    /// A lease ran out or was revoked while its holder worked: another holder
+    /// may have run beside it.
+    Lost,
     Io,
     Internal,
 }
@@ -47,6 +50,7 @@ impl ErrorKind {
             Self::Unavailable => "unavailable",
             Self::Cancelled => "cancelled",
             Self::OutcomeUnknown => "outcome unknown",
+            Self::Lost => "lost",
             Self::Io => "io",
             Self::Internal => "internal",
         }
